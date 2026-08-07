@@ -18,6 +18,10 @@ import cv2
 import numpy as np
 import pandas as pd
 
+from hydra_suite.core.canonicalization.geometry import (
+    ClippingStats,
+    canonical_geometry_from_params,
+)
 from hydra_suite.core.identity.dataset.generator import IndividualDatasetGenerator
 from hydra_suite.core.identity.properties.export import (
     POSE_SUMMARY_COLUMNS,
@@ -259,7 +263,7 @@ def _init_cnn_backends(params):
     return cnn_backends, cnn_labels
 
 
-def _init_headtail_analyzer(params):
+def _init_headtail_analyzer(params, geometry):
     """Initialize head-tail direction analyzer. Returns analyzer or None.
 
     Raises:
@@ -277,7 +281,7 @@ def _init_headtail_analyzer(params):
         resolved=_resolve_backend(params, "head_tail"),
         conf_threshold=float(params.get("YOLO_HEADTAIL_CONF_THRESHOLD", 0.5)),
         batch_size=max(1, int(params.get("HEADTAIL_BATCH_SIZE", 64))),
-        reference_aspect_ratio=float(params.get("REFERENCE_ASPECT_RATIO", 2.0)),
+        geometry=geometry,
     )
     if not analyzer.is_available:
         analyzer.close()
@@ -285,14 +289,14 @@ def _init_headtail_analyzer(params):
     return analyzer
 
 
-def _init_interpolation_backends(params, output_dir):
+def _init_interpolation_backends(params, output_dir, geometry):
     """Initialize optional analysis backends after eligible gap tasks exist."""
     pose_backend, pose_kpt_source_names, pose_kpt_labels = _init_pose_backend(
         params, output_dir
     )
     apriltag_detector = _init_apriltag_detector(params)
     cnn_backends, cnn_labels = _init_cnn_backends(params)
-    headtail_analyzer = _init_headtail_analyzer(params)
+    headtail_analyzer = _init_headtail_analyzer(params, geometry)
     interp_cnn_rows = {label: [] for label in cnn_labels}
     return (
         pose_backend,
@@ -525,12 +529,53 @@ def _flush_pose_batch(
     pose_kpt_source_names,
     pose_kpt_labels,
     profiler,
+    geometry,
 ):
-    """Run pose inference on accumulated crops and append results."""
+    """Run pose inference on accumulated crops and append results.
+
+    Pre-fits every canonical (Layer 1) crop through Layer 2
+    (``fit_to_model_input`` / ``apply_fit``) before handing it to the backend
+    -- the SAME call shape ``core/inference/stages/pose.py`` uses, so this
+    module's interpolated-frame keypoints agree on content scale with the
+    tracked-frame keypoints produced by the same model.  Every entry here is
+    Layer 1 canonical by construction: ``_extract_pose_crop`` skips (rather
+    than produces) a crop for the degenerate-OBB case where no rigid Layer 1
+    transform exists, so there is no non-canonical entry left to special-case.
+    The ``canonical`` check + raw-crop append below stays only as a defensive
+    fallback for an ``apply_fit`` failure on an otherwise-canonical crop, not
+    a geometry escape hatch.
+    """
     from hydra_suite.core.canonicalization.crop import invert_keypoints as _invert_kpts
+    from hydra_suite.core.canonicalization.fit import (
+        apply_fit,
+        fit_affine,
+        fit_to_model_input,
+    )
+    from hydra_suite.core.inference.stages.pose import compose_affine, model_input_wh
+
+    class _BackendHolder:
+        backend = pose_backend
+
+    model_wh = model_input_wh(_BackendHolder, geometry)
+    fit = fit_to_model_input(geometry.canvas_wh, model_wh)
+    fit_m = fit_affine(fit)
+
+    fitted_crops = []
+    for _crop, _entry in zip(pending_crops, pending_entries):
+        _crop_info = _entry.get("crop_info") or {}
+        if _crop_info.get("canonical"):
+            try:
+                fitted_crops.append(apply_fit(_crop, fit))
+                continue
+            except Exception:
+                logger.debug(
+                    "Interp pose Layer 2 fit failed; feeding raw crop.",
+                    exc_info=True,
+                )
+        fitted_crops.append(_crop)
 
     profiler.tick("interp_pose_inference")
-    pose_results = pose_backend.predict_batch(pending_crops)
+    pose_results = pose_backend.predict_batch(fitted_crops)
     profiler.tock("interp_pose_inference")
     for pidx, entry in enumerate(pending_entries):
         pose_out = pose_results[pidx] if pidx < len(pose_results) else None
@@ -548,8 +593,13 @@ def _flush_pose_batch(
             crop_info = entry.get("crop_info") or {}
             if keypoints is not None and len(keypoints) > 0:
                 gkpts = np.asarray(keypoints, dtype=np.float32).copy()
-                _M_inv = crop_info.get("M_inverse")
-                if _M_inv is not None and crop_info.get("canonical"):
+                _M_align = crop_info.get("M_forward")
+                if _M_align is not None and crop_info.get("canonical"):
+                    # Keypoints come back in MODEL-input coords, so the
+                    # back-projection must undo Layer 2 (fit) then Layer 1
+                    # (canonical align) -- invert the composed transform.
+                    _m_total = compose_affine(fit_m, _M_align)
+                    _M_inv = cv2.invertAffineTransform(_m_total.astype(np.float32))
                     gkpts = _invert_kpts(gkpts, _M_inv).astype(np.float32)
                 else:
                     crop_bbox = crop_info.get("crop_bbox")
@@ -584,13 +634,28 @@ def _flush_cnn_batch(
     pending_cnn_entries,
     interp_cnn_rows,
     profiler,
+    geometry,
 ):
-    """Run CNN identity inference on accumulated crops and append results."""
+    """Run CNN identity inference on accumulated crops and append results.
+
+    Pre-fits the shared Layer 1 canonical crops through Layer 2
+    (``fit_to_model_input`` / ``apply_fit``) per classifier, exactly as
+    ``core/inference/stages/cnn.py`` does -- each classifier may have a
+    different input size, so the fit is computed and applied fresh for every
+    backend rather than shared across them.  Without this,
+    ``core/identity/classification/backend.py`` would ANISOTROPICALLY stretch
+    the canonical crop to the model's input.
+    """
+    from hydra_suite.core.canonicalization.fit import apply_fit, fit_to_model_input
+
     profiler.tick("interp_cnn_inference")
     for _bi, _cnn_be in enumerate(cnn_backends):
         _cnn_label = cnn_labels[_bi]
         try:
-            _cnn_preds = _cnn_be.predict_batch(pending_cnn_crops)
+            _in_h, _in_w = _cnn_be.metadata.input_size  # documents (H, W)
+            _fit = fit_to_model_input(geometry.canvas_wh, (_in_w, _in_h))
+            _fitted_cnn_crops = [apply_fit(_c, _fit) for _c in pending_cnn_crops]
+            _cnn_preds = _cnn_be.predict_batch(_fitted_cnn_crops)
             for _pi, _pred in enumerate(_cnn_preds):
                 if _pi >= len(pending_cnn_entries):
                     break
@@ -886,21 +951,28 @@ def _build_prefetcher(cap, needed_frames, total_frames):
     return SparseFramePrefetcher(cap, needed_frames, buffer_size=4)
 
 
-def _compute_frame_corners_and_affines(
-    tasks, _compute_native_scale, _canonical_ref_ar, _canonical_padding
-):
+def _compute_frame_corners_and_affines(tasks, geometry, clipping_stats):
+    """Layer 1 affine per task against the ONE project-wide canonical canvas.
+
+    ``clipping_stats`` accumulates the per-detection overflow so a too-small
+    ``canonical_margin`` produces a visible end-of-run signal instead of
+    silently truncated animals -- the same guard the core tracking loop
+    applies (``core/tracking/worker.py``).
+    """
+    from hydra_suite.core.canonicalization.geometry import canonical_affine
     from hydra_suite.core.identity.geometry import ellipse_to_obb_corners as _e2obb
 
     corners = [_e2obb(t["cx"], t["cy"], t["w"], t["h"], t["theta"]) for t in tasks]
     affines = []
     for _c in corners:
         try:
-            _M, _cw, _ch, _ = _compute_native_scale(
-                _c, _canonical_ref_ar, _canonical_padding
-            )
-            affines.append((_M, _cw, _ch))
-        except (ValueError, Exception):
+            _M, _theta, _clipped = canonical_affine(_c, geometry)
+        except ValueError:
             affines.append(None)
+            continue
+        if clipping_stats is not None:
+            clipping_stats.record(_c, geometry)
+        affines.append((_M, geometry.canvas_w, geometry.canvas_h))
     return corners, affines
 
 
@@ -1002,37 +1074,54 @@ def _extract_pose_crop(
     gen,
     _extract_canonical,
 ):
+    """Extract the pose/CNN crop for one task via Layer 1 canonicalization.
+
+    ``_aff`` is None exactly when ``canonical_affine`` raised
+    (``core/canonicalization/geometry.py::_axes`` -- a degenerate OBB with a
+    zero-length edge). There is no rigid Layer 1 transform for a degenerate
+    box, and the un-canonicalized ``_extract_obb_masked_crop`` fallback this
+    used to feed the backend produces an arbitrary axis-aligned aspect ratio
+    for which Layer 2's ``fit_to_model_input`` cannot honestly be computed (it
+    assumes the source is the fixed canonical canvas) -- feeding it anyway
+    would hand the backend a wrongly-scaled crop, exactly the defect class
+    this work removes. A genuinely degenerate OBB has no salvageable animal
+    geometry to recover either way, so this loudly skips the detection.
+    """
+    if _aff is None:
+        logger.warning(
+            "Interp pose/CNN: skipping task_idx=%s -- degenerate OBB has no "
+            "Layer 1 canonical transform (canonical_affine raised); the old "
+            "masked-crop fallback fed the backend an un-canonicalized, "
+            "wrongly-scaled crop instead of skipping.",
+            task_idx,
+        )
+        return None, None
     pose_crop = None
     pose_crop_info = None
     try:
         _other_corners = [
             c for ci, c in enumerate(_frame_all_corners) if ci != task_idx
         ]
-        if _aff is not None:
-            _M_pose, _cw_pose, _ch_pose = _aff
-            _foreign = _other_corners if _other_corners else None
-            pose_crop = _extract_canonical(
-                frame,
-                _M_pose,
-                _cw_pose,
-                _ch_pose,
-                bg_color=gen.background_color,
-                foreign_corners=_foreign,
-            )
-            _M_inv = cv2.invertAffineTransform(_M_pose).astype(np.float32)
-            pose_crop_info = {
-                "crop_size": (_cw_pose, _ch_pose),
-                "M_inverse": _M_inv,
-                "canonical": True,
-            }
-        else:
-            pose_crop, pose_crop_info = gen._extract_obb_masked_crop(
-                frame,
-                corners,
-                frame.shape[0],
-                frame.shape[1],
-                other_corners_list=(_other_corners if _other_corners else None),
-            )
+        _M_pose, _cw_pose, _ch_pose = _aff
+        _foreign = _other_corners if _other_corners else None
+        pose_crop = _extract_canonical(
+            frame,
+            _M_pose,
+            _cw_pose,
+            _ch_pose,
+            bg_color=gen.background_color,
+            foreign_corners=_foreign,
+        )
+        _M_inv = cv2.invertAffineTransform(_M_pose).astype(np.float32)
+        pose_crop_info = {
+            "crop_size": (_cw_pose, _ch_pose),
+            "M_inverse": _M_inv,
+            # Layer 1 forward affine (image -> canonical canvas). Kept so the
+            # Layer 2 (model-fit) affine can be composed onto it at flush
+            # time -- see ``_flush_pose_batch``.
+            "M_forward": np.asarray(_M_pose, dtype=np.float64),
+            "canonical": True,
+        }
     except Exception:
         pose_crop = None
         pose_crop_info = None
@@ -1117,9 +1206,8 @@ def _process_single_frame(
     frame_tasks,
     gen,
     save_interpolated_outputs,
-    _compute_native_scale,
-    _canonical_ref_ar,
-    _canonical_padding,
+    geometry,
+    clipping_stats,
     _extract_canonical,
     pose_backend,
     cnn_backends,
@@ -1152,7 +1240,7 @@ def _process_single_frame(
             progress(v, m)
 
     _frame_all_corners, _frame_affines = _compute_frame_corners_and_affines(
-        frame_tasks[f], _compute_native_scale, _canonical_ref_ar, _canonical_padding
+        frame_tasks[f], geometry, clipping_stats
     )
     for task_idx, task in enumerate(frame_tasks[f]):
         interp_saved = _process_single_task(
@@ -1210,6 +1298,7 @@ def _process_single_frame(
             pose_kpt_source_names,
             pose_kpt_labels,
             profiler,
+            geometry,
         )
 
     if (
@@ -1224,6 +1313,7 @@ def _process_single_frame(
             _pending_cnn_entries,
             interp_cnn_rows,
             profiler,
+            geometry,
         )
 
     if idx % 25 == 0 or idx == total_frames:
@@ -1241,9 +1331,8 @@ def _run_frame_tasks_loop(
     cap,
     gen,
     save_interpolated_outputs,
-    _compute_native_scale,
-    _canonical_ref_ar,
-    _canonical_padding,
+    geometry,
+    clipping_stats,
     _extract_canonical,
     pose_backend,
     cnn_backends,
@@ -1297,9 +1386,8 @@ def _run_frame_tasks_loop(
             frame_tasks,
             gen,
             save_interpolated_outputs,
-            _compute_native_scale,
-            _canonical_ref_ar,
-            _canonical_padding,
+            geometry,
+            clipping_stats,
             _extract_canonical,
             pose_backend,
             cnn_backends,
@@ -1408,8 +1496,9 @@ def _validate_and_setup(
     )
     gen.enabled = cache_interpolated_artifacts
 
-    _canonical_ref_ar = gen._canonical_ref_ar
-    _canonical_padding = gen._canonical_padding
+    # The ONE project-wide Layer 1 canvas, built once from params. Every crop
+    # site below shares it -- there is no per-detection or per-worker canvas.
+    geometry = canonical_geometry_from_params(params)
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -1436,8 +1525,7 @@ def _validate_and_setup(
         cache_interpolated_artifacts,
         position_scale,
         size_scale,
-        _canonical_ref_ar,
-        _canonical_padding,
+        geometry,
     )
 
 
@@ -1459,9 +1547,6 @@ def run_interpolated_crops(
     that the worker used to emit via ``finished_signal``.
     """
     from hydra_suite.core.canonicalization.crop import (
-        compute_native_scale_affine as _compute_native_scale,
-    )
-    from hydra_suite.core.canonicalization.crop import (
         extract_canonical_crop as _extract_canonical,
     )
     from hydra_suite.core.tracking.profiler import TrackingProfiler
@@ -1469,6 +1554,9 @@ def run_interpolated_crops(
     def _stop():
         return bool(should_stop()) if should_stop is not None else False
 
+    # Run-scoped canonical-crop clipping accumulator; reported at the end of
+    # the pass, mirroring TrackingWorker's end-of-run summary.
+    clipping_stats = ClippingStats()
     profiler = TrackingProfiler(enabled=enable_profiling)
     profiler.phase_start("interp_setup")
 
@@ -1498,8 +1586,7 @@ def run_interpolated_crops(
             cache_interpolated_artifacts,
             position_scale,
             size_scale,
-            _canonical_ref_ar,
-            _canonical_padding,
+            geometry,
         ) = setup
 
         interp_saved = 0
@@ -1547,7 +1634,7 @@ def run_interpolated_crops(
                 cnn_labels,
                 headtail_analyzer,
                 interp_cnn_rows,
-            ) = _init_interpolation_backends(params, output_dir)
+            ) = _init_interpolation_backends(params, output_dir, geometry)
             interp_saved = _run_frame_tasks_loop(
                 params,
                 should_stop,
@@ -1556,9 +1643,8 @@ def run_interpolated_crops(
                 cap,
                 gen,
                 save_interpolated_outputs,
-                _compute_native_scale,
-                _canonical_ref_ar,
-                _canonical_padding,
+                geometry,
+                clipping_stats,
                 _extract_canonical,
                 pose_backend,
                 cnn_backends,
@@ -1606,6 +1692,15 @@ def run_interpolated_crops(
             gen.finalize()
 
         profiler.phase_end("interp_finalize")
+
+        # Report canonical-crop clipping, if any -- mirrors TrackingWorker's
+        # end-of-run clipping_stats summary (core/tracking/worker.py).
+        # ``canonical_margin`` is the operator's only dial against truncated
+        # animals, so this must never be silent.
+        _clip_msg = clipping_stats.summary()
+        if _clip_msg:
+            logger.warning("Canonicalization clipping summary: %s", _clip_msg)
+
         profiler.log_final_summary()
         if profile_export_path:
             profiler.export_summary(profile_export_path)

@@ -488,6 +488,9 @@ class ConfigOrchestrator:
         self._panels.detection.spin_reference_aspect_ratio.setValue(
             float(get_cfg("reference_aspect_ratio", default=2.0))
         )
+        self._panels.detection.spin_canonical_margin.setValue(
+            float(get_cfg("canonical_margin", default=1.3))
+        )
         self._panels.detection.chk_enable_aspect_ratio_filtering.setChecked(
             bool(get_cfg("enable_aspect_ratio_filtering", default=False))
         )
@@ -1588,6 +1591,7 @@ class ConfigOrchestrator:
                 "yolo_headtail_detect_conf_threshold": self._panels.identity.spin_yolo_headtail_detect_conf.value(),
                 "headtail_batch_size": self._panels.identity.spin_headtail_batch.value(),
                 "reference_aspect_ratio": self._panels.detection.spin_reference_aspect_ratio.value(),
+                "canonical_margin": self._panels.detection.spin_canonical_margin.value(),
                 "enable_aspect_ratio_filtering": self._panels.detection.chk_enable_aspect_ratio_filtering.isChecked(),
                 "min_aspect_ratio_multiplier": self._panels.detection.spin_min_ar_multiplier.value(),
                 "max_aspect_ratio_multiplier": self._panels.detection.spin_max_ar_multiplier.value(),

@@ -1459,6 +1459,9 @@ class TinyCNNInferenceWorker(QRunnable):
         import cv2
         import numpy as np
 
+        from ...training.canonical_transform import CanonicalFitTransform
+
+        fit_transform = CanonicalFitTransform((input_h, input_w))
         tensors = []
         for path in batch_paths:
             try:
@@ -1470,9 +1473,8 @@ class TinyCNNInferenceWorker(QRunnable):
                 if force_monochrome:
                     gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
                     img = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
-                img = cv2.resize(
-                    img, (input_w, input_h), interpolation=cv2.INTER_LINEAR
-                )
+                if img.shape[1] != input_w or img.shape[0] != input_h:
+                    img = fit_transform(img)
                 tensors.append(img.transpose(2, 0, 1).astype(np.float32) / 255.0)
             except Exception:
                 tensors.append(np.zeros((3, input_h, input_w), dtype=np.float32))
@@ -1581,13 +1583,22 @@ class TorchvisionInferenceWorker(QRunnable):
         self.signals = TaskSignals()
 
     def _build_transform(self):
+        import numpy as np
+        from PIL import Image
         from torchvision import transforms
 
+        from ...training.canonical_transform import CanonicalFitTransform
         from ...training.torchvision_model import get_classifier_normalization_stats
 
         sz = self.input_size
+        fit_transform = CanonicalFitTransform((sz, sz))
+
+        def _fit(img):
+            arr = np.asarray(img, dtype=np.uint8)
+            return Image.fromarray(fit_transform(arr))
+
         mean, std = get_classifier_normalization_stats(monochrome=self.force_monochrome)
-        transform_steps = [transforms.Resize((sz, sz))]
+        transform_steps = [_fit]
         if self.force_monochrome:
             transform_steps.append(transforms.Grayscale(num_output_channels=3))
         transform_steps.extend(

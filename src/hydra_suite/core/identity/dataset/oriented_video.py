@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 from collections import defaultdict
@@ -13,6 +14,12 @@ from typing import Any, Callable, Optional
 import cv2
 import numpy as np
 import pandas as pd
+
+from hydra_suite.core.canonicalization.geometry import (
+    CanonicalGeometry,
+    canonical_affine,
+    overflow_ratio,
+)
 
 # Correction 20 / Task 17d: rewire to new DetectionCache.
 # The new DetectionCacheHandle has a different API (read_frame returns OBBResult).
@@ -56,6 +63,15 @@ from ..geometry import ellipse_axes_from_area, ellipse_to_obb_corners
 from .naming import build_detection_image_filename, build_interpolated_image_filename
 
 logger = logging.getLogger(__name__)
+
+# Fallback canonical geometry for callers that construct an exporter without
+# an explicit ``geometry`` (mirrors core.inference.config's
+# _default_canonical_geometry / headtail.py's _DEFAULT_CANONICAL_GEOMETRY --
+# the project-wide default reference body size and aspect ratio). The margin
+# still honours the caller's ``padding_fraction`` (1 + padding), the one knob
+# this exporter has always exposed.
+_DEFAULT_REFERENCE_BODY_PX = 20.0
+_DEFAULT_REFERENCE_ASPECT_RATIO = 2.0
 
 
 @dataclass
@@ -178,6 +194,7 @@ class OrientedTrackVideoExporter:
         interpolated_roi_npz_path: str | Path | None = None,
         fps: float,
         padding_fraction: float = 0.1,
+        geometry: CanonicalGeometry | None = None,
         background_color: tuple[int, int, int] = (0, 0, 0),
         suppress_foreign_obb: bool = False,
         suppress_foreign_obb_images: bool | None = None,
@@ -205,6 +222,39 @@ class OrientedTrackVideoExporter:
         )
         self.fps = max(0.1, float(fps or 0.0))
         self.padding_fraction = max(0.0, float(padding_fraction or 0.0))
+        # Layer 1 canonical crop geometry (one fixed canvas for every task in
+        # this run). Callers that already resolved a project-wide geometry
+        # should pass it explicitly; otherwise this falls back to the same
+        # project-wide default every other consumer uses, with the margin
+        # driven by this exporter's own ``padding_fraction`` knob (1 +
+        # padding) -- the closest equivalent of the retired per-detection
+        # "own aspect" canvas this class used to compute.
+        if geometry is not None:
+            self._geometry: CanonicalGeometry = geometry
+        else:
+            self._geometry = CanonicalGeometry.from_reference(
+                reference_body_px=_DEFAULT_REFERENCE_BODY_PX,
+                aspect_ratio=_DEFAULT_REFERENCE_ASPECT_RATIO,
+                margin=1.0 + self.padding_fraction,
+            )
+            # No caller-supplied geometry: this canvas is NOT guaranteed to
+            # match the project's actual REFERENCE_BODY_SIZE/ADVANCED_CONFIG
+            # geometry (the one inference, head-tail, and the crop-dataset
+            # exporter all use). Log loudly rather than silently diverging --
+            # see trackerkit.canonical_geometry for the wired GUI path.
+            logger.warning(
+                "OrientedTrackVideoExporter: no project geometry supplied -- "
+                "falling back to canvas_wh=%s, margin=%.3f, aspect_ratio=%.3f "
+                "(reference_body_px=%.3f). This may diverge from the "
+                "project's actual canonical geometry; pass geometry= to "
+                "avoid a silent mismatch.",
+                self._geometry.canvas_wh,
+                self._geometry.margin,
+                self._geometry.aspect_ratio,
+                _DEFAULT_REFERENCE_BODY_PX,
+            )
+        self._clipped_count = 0
+        self._worst_overflow_ratio = 0.0
         self.background_color = self._normalize_background_color(background_color)
         self.suppress_foreign_obb = bool(suppress_foreign_obb)
         self.suppress_foreign_obb_images = bool(
@@ -274,6 +324,7 @@ class OrientedTrackVideoExporter:
             progress_callback=progress_callback,
         )
         missing_breakdown = dict(self._last_missing_breakdown)
+        self._write_canonical_metadata()
 
         if self.output_dir is not None:
             self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -329,6 +380,38 @@ class OrientedTrackVideoExporter:
             ),
             invalid_geometry_rows=int(missing_breakdown["invalid_geometry_rows"]),
         )
+
+    def _write_canonical_metadata(self) -> None:
+        """Record this run's Layer 1 geometry + clipping stats in provenance.
+
+        ``self.dataset_dir`` is the same individual-crops dataset directory
+        the crop-dataset generator writes ``metadata.json`` into, so this
+        merges into that existing file (see naming.read_canonical_provenance)
+        rather than adding a new sidecar convention next to it.
+        """
+        metadata_path = self.dataset_dir / "metadata.json"
+        try:
+            self.dataset_dir.mkdir(parents=True, exist_ok=True)
+            existing: dict[str, Any] = {}
+            if metadata_path.exists():
+                try:
+                    existing = json.loads(metadata_path.read_text(encoding="utf-8"))
+                except Exception:
+                    existing = {}
+            parameters = dict(existing.get("parameters") or {})
+            parameters["canonical"] = {
+                **self._geometry.to_dict(),
+                "clipped_count": self._clipped_count,
+                "worst_overflow_ratio": self._worst_overflow_ratio,
+            }
+            existing["parameters"] = parameters
+            metadata_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+        except Exception:
+            logger.warning(
+                "Failed to write canonical provenance metadata.json for %s",
+                self.dataset_dir,
+                exc_info=True,
+            )
 
     @staticmethod
     def _emit(
@@ -665,7 +748,7 @@ class OrientedTrackVideoExporter:
                 theta = self._smooth_angle_series(theta, window)
 
             for idx, task in enumerate(tasks):
-                affine, out_w, out_h = self._compute_affine(
+                affine, out_w, out_h = self._canonical_affine_for_task(
                     float(center_x[idx]),
                     float(center_y[idx]),
                     max(1.0, float(width[idx])),
@@ -880,7 +963,7 @@ class OrientedTrackVideoExporter:
             return None
         box_w = max(1.0, float(width))
         box_h = max(1.0, float(height))
-        affine, out_w, out_h = self._compute_affine(
+        affine, out_w, out_h = self._canonical_affine_for_task(
             center_x,
             center_y,
             box_w,
@@ -1142,7 +1225,8 @@ class OrientedTrackVideoExporter:
             task.affine,
             (task.out_w, task.out_h),
             flags=getattr(cv2, "INTER_LINEAR", 1),
-            borderMode=cv2.BORDER_REPLICATE,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=0,
         )
         if warped is None or warped.size == 0:
             return None
@@ -1195,7 +1279,7 @@ class OrientedTrackVideoExporter:
         canvas[y0:y1, x0:x1] = masked[: y1 - y0, : x1 - x0]
         return canvas
 
-    def _compute_affine(
+    def _canonical_affine_for_task(
         self,
         center_x: float,
         center_y: float,
@@ -1203,49 +1287,35 @@ class OrientedTrackVideoExporter:
         box_h: float,
         theta: float,
     ) -> tuple[np.ndarray, int, int]:
-        crop_w = max(8.0, float(box_w) * (1.0 + self.padding_fraction))
-        crop_h = max(8.0, float(box_h) * (1.0 + self.padding_fraction))
-        out_w, out_h = self._normalize_frame_size(
-            int(round(crop_w)), int(round(crop_h))
-        )
+        """Layer 1 canonical affine for one task, against the session geometry.
 
-        cos_a = float(math.cos(theta))
-        sin_a = float(math.sin(theta))
-        half_w = crop_w * 0.5
-        half_h = crop_h * 0.5
-        src_pts = np.array(
-            [
+        Replaces the retired per-task "own aspect at 1 + padding_fraction"
+        canvas: every task now maps onto the one fixed canvas (self._geometry)
+        that every other canonical-crop consumer shares, and clipping against
+        that fixed canvas is counted rather than compensated.
+        """
+        corners = ellipse_to_obb_corners(center_x, center_y, box_w, box_h, theta)
+        canvas_w, canvas_h = self._geometry.canvas_w, self._geometry.canvas_h
+        try:
+            m_align, _axis_theta, _clipped = canonical_affine(corners, self._geometry)
+        except ValueError:
+            # Degenerate OBB (zero-length edge) -- fall back to an identity
+            # placement centred on the canvas instead of raising, matching
+            # this method's previous never-raises contract.
+            m_align = np.array(
                 [
-                    center_x - half_w * cos_a + half_h * sin_a,
-                    center_y - half_w * sin_a - half_h * cos_a,
+                    [1.0, 0.0, canvas_w / 2.0 - center_x],
+                    [0.0, 1.0, canvas_h / 2.0 - center_y],
                 ],
-                [
-                    center_x + half_w * cos_a + half_h * sin_a,
-                    center_y + half_w * sin_a - half_h * cos_a,
-                ],
-                [
-                    center_x - half_w * cos_a - half_h * sin_a,
-                    center_y - half_w * sin_a + half_h * cos_a,
-                ],
-            ],
-            dtype=np.float32,
-        )
-        dst_pts = np.array(
-            [[0, 0], [out_w - 1, 0], [0, out_h - 1]],
-            dtype=np.float32,
-        )
-        affine = cv2.getAffineTransform(src_pts, dst_pts)
-        return affine, out_w, out_h
+                dtype=np.float64,
+            )
+            return m_align, canvas_w, canvas_h
 
-    @staticmethod
-    def _normalize_frame_size(width: int, height: int) -> tuple[int, int]:
-        out_w = max(8, int(width))
-        out_h = max(8, int(height))
-        if out_w % 2:
-            out_w += 1
-        if out_h % 2:
-            out_h += 1
-        return out_w, out_h
+        ratio = overflow_ratio(corners, self._geometry)
+        self._worst_overflow_ratio = max(self._worst_overflow_ratio, ratio)
+        if ratio > 1.0:
+            self._clipped_count += 1
+        return m_align, canvas_w, canvas_h
 
     @staticmethod
     def _expand_corners(corners: np.ndarray, padding_fraction: float) -> np.ndarray:

@@ -268,11 +268,22 @@ def build_engine_params(
             default=advanced.get("yolo_seq_individual_batch_size", 4),
         )
     )
+    # 2.0 matches _default_advanced_config, resources/configs/default.json and
+    # the GUI spin. This literal read 4.0 -- a disagreeing fourth default that
+    # applied whenever the advanced table lacked the key.
     advanced["reference_aspect_ratio"] = float(
         _cfg_get(
             cfg,
             "reference_aspect_ratio",
-            default=advanced.get("reference_aspect_ratio", 4.0),
+            default=advanced.get("reference_aspect_ratio", 2.0),
+        )
+    )
+    # The operator's dial against clipped animals under global canonicalization.
+    advanced["canonical_margin"] = float(
+        _cfg_get(
+            cfg,
+            "canonical_margin",
+            default=advanced.get("canonical_margin", 1.3),
         )
     )
     advanced["enable_aspect_ratio_filtering"] = bool(

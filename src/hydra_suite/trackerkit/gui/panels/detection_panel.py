@@ -979,10 +979,30 @@ class DetectionPanel(QWidget):
         self.spin_reference_aspect_ratio.setFixedHeight(30)
         self.spin_reference_aspect_ratio.setToolTip(
             "Species-typical major/minor axis ratio.\n"
-            "Used for adaptive canonical crop dimensions and aspect ratio filtering.\n"
-            "Click 'Auto-Set Aspect Ratio' to detect from sample frames."
+            "Sets the canonical crop canvas shape (a poor match costs background\n"
+            "pixels, not accuracy).\n"
+            "ALSO centres the detection aspect-ratio filter when that filter is\n"
+            "enabled — changing this with filtering on changes which detections\n"
+            "survive.\n"
+            "Click 'Auto-Set Aspect Ratio' to measure it from sample frames."
         )
         fl_ref.addRow("Reference aspect ratio", self.spin_reference_aspect_ratio)
+
+        self.spin_canonical_margin = QDoubleSpinBox()
+        self.spin_canonical_margin.setRange(1.0, 3.0)
+        self.spin_canonical_margin.setSingleStep(0.05)
+        self.spin_canonical_margin.setDecimals(2)
+        self.spin_canonical_margin.setValue(1.3)
+        self.spin_canonical_margin.setFixedHeight(30)
+        self.spin_canonical_margin.setToolTip(
+            "Canonical crop canvas margin over the reference major axis.\n"
+            "This is the operator's dial for avoiding clipped animals: raise it\n"
+            "if large/fast-moving animals get cut off in canonical crops, at the\n"
+            "cost of more background pixels per crop.\n"
+            "Click 'Auto-Set Margin from Max' to size it from the largest\n"
+            "detected animal in the sample frames."
+        )
+        fl_ref.addRow("Canonical margin", self.spin_canonical_margin)
 
         vl_ref_scale.addLayout(fl_ref)
 
@@ -1016,6 +1036,17 @@ class DetectionPanel(QWidget):
             "Set reference aspect ratio from the median detected major/minor ratio"
         )
         btn_layout.addWidget(self.btn_auto_set_aspect_ratio)
+
+        self.btn_auto_set_margin = QPushButton("Auto-Set Margin from Max")
+        self.btn_auto_set_margin.clicked.connect(
+            self._main_window._auto_set_margin_from_detection
+        )
+        self.btn_auto_set_margin.setEnabled(False)
+        self.btn_auto_set_margin.setToolTip(
+            "Set canonical margin so the largest detected animal's major axis\n"
+            "fits inside the canonical crop canvas"
+        )
+        btn_layout.addWidget(self.btn_auto_set_margin)
         vl_ref_scale.addLayout(btn_layout)
 
         vbox.addWidget(g_ref_scale)
@@ -1347,6 +1378,7 @@ class DetectionPanel(QWidget):
                 "No detections found.\nAdjust parameters and try again."
             )
             self.btn_auto_set_body_size.setEnabled(False)
+            self.btn_auto_set_margin.setEnabled(False)
             self._main_window.detected_sizes = None
             return
 
@@ -1417,6 +1449,7 @@ class DetectionPanel(QWidget):
         self.label_detection_stats.setText(stats_text)
         self.btn_auto_set_body_size.setEnabled(True)
         self.btn_auto_set_aspect_ratio.setEnabled(True)
+        self.btn_auto_set_margin.setEnabled(True)
 
     # =========================================================================
     # PREVIEW DISPLAY (moved from MainWindow)

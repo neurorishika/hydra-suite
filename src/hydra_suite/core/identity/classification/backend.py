@@ -592,6 +592,14 @@ class ClassifierBackend:
                 )
                 self._model = self._loader.load(self._model_path, loader_target)
                 self._active_execution_backend = "native"
+                if self._metadata.arch == "yolo":
+                    logger.warning(
+                        "ClassifierBackend: %s is a YOLO-classify model -- ultralytics "
+                        "applies its own Resize+CenterCrop on top of the Layer 2 "
+                        "pre-fit, so this family is a known-lossy, supported path "
+                        "(operator decision, 2026-08-05).",
+                        self._model_path,
+                    )
                 # Warm up native CUDA models immediately to trigger PyTorch/cuDNN
                 # kernel JIT compilation now rather than stalling Phase-1 batch 1
                 # for ~45 s on Ada/Hopper GPUs (e.g. EfficientNet-B0 head-tail).
@@ -923,7 +931,16 @@ class ClassifierBackend:
             if crop is None or crop.size == 0:
                 batch[i] = 0.0
                 continue
-            resized = cv2.resize(crop, (w, h), interpolation=cv2.INTER_LINEAR)
+            if crop.shape[0] == h and crop.shape[1] == w:
+                # Every pipeline caller now hands us a crop already fitted to
+                # the model input by Layer 2 (fit_to_model_input/apply_fit), so
+                # this resize is a same-size copy. cv2's INTER_LINEAR is the
+                # exact identity at scale 1, so skipping it is byte-identical
+                # (test_classifier_preprocess_same_size_resize_is_identity)
+                # and saves a full model-input-sized resample per crop.
+                resized = crop
+            else:
+                resized = cv2.resize(crop, (w, h), interpolation=cv2.INTER_LINEAR)
             rgb = resized[:, :, ::-1]
             if self._metadata.monochrome:
                 gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
@@ -948,7 +965,31 @@ class ClassifierBackend:
         return logits
 
     def _forward_yolo(self, crops: list[np.ndarray]) -> np.ndarray:
-        results = self._model(crops, verbose=False)
+        """Run the ultralytics YOLO-classify head on ``crops``.
+
+        Pre-fits every crop to ``self._metadata.input_size`` via the Layer 2
+        isotropic centred letterbox (same primitive as every other family)
+        BEFORE handing it to ultralytics. A square input makes ultralytics'
+        own ``Resize(shortest_edge)`` + ``CenterCrop(size)`` a no-op --
+        shortest edge == longest edge, so the centre crop cannot remove
+        anything. This does not make YOLO-classify byte-identical to the
+        rest of the pipeline: ultralytics still applies its own transform
+        on top of the pre-fit, so this family remains a known-lossy,
+        supported path (operator decision, 2026-08-05; see the load-time
+        warning and test_yolo_classify_canonical_fit.py).
+        """
+        from hydra_suite.core.canonicalization.fit import apply_fit, fit_to_model_input
+
+        in_h, in_w = self._metadata.input_size
+        fitted: list[np.ndarray] = []
+        for crop in crops:
+            if crop is None or crop.size == 0:
+                fitted.append(np.zeros((in_h, in_w, 3), dtype=np.uint8))
+                continue
+            src_h, src_w = crop.shape[:2]
+            fit = fit_to_model_input((src_w, src_h), (in_w, in_h))
+            fitted.append(apply_fit(crop, fit))
+        results = self._model(fitted, verbose=False)
         probs = np.array([r.probs.data.cpu().numpy() for r in results])
         return np.log(np.clip(probs, 1e-9, 1.0))
 

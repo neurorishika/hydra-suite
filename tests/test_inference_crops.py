@@ -1,13 +1,15 @@
 """Tests for the live canonical pose-crop builder ``extract_canonical_crops_batch``.
 
-The live pose path warps each detection to its NATIVE extent and pads (never
-resizes) to the window-wide max canvas, recording each crop's true native
-``[h, w]`` in ``native_sizes`` so ``run_pose_batch`` can slice back to native.
-This test verifies the native-extent contract for an oversize OBB.
+The live pose path now warps every detection onto ``geometry``'s FIXED canvas
+(Layer 1: rotation + translation only, no scale) regardless of the OBB's
+native pixel extent, so ``native_sizes`` rows are uniformly
+``[canvas_h, canvas_w]`` -- there is nothing left for ``run_pose_batch`` to
+slice back to a smaller native region.
 """
 
 import numpy as np
 
+from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
 from hydra_suite.core.inference.result import OBBResult
 from hydra_suite.core.inference.runtime import RuntimeContext
 from hydra_suite.core.inference.stages.crops import extract_canonical_crops_batch
@@ -48,39 +50,35 @@ def _make_large_obb(frame_h: int = 256, frame_w: int = 256) -> OBBResult:
     )
 
 
-def test_native_extent_crop_preserves_content_and_records_native_size():
-    """The live builder must warp to native extent (no resize) and record it.
+def test_fixed_canvas_crop_preserves_content_and_records_canvas_size():
+    """The live builder must warp onto the fixed canonical canvas and record it.
 
     Verifies that:
-      1. native_sizes records the true native crop dimensions (matching
-         compute_native_crop_dimensions for the OBB).
-      2. The crop content is preserved within its native extent (not zeroed).
-      3. The padded crop tensor is at least as large as the native extent.
+      1. native_sizes records the geometry's fixed canvas dimensions (every
+         crop is already that size -- nothing to slice back to).
+      2. The crop tensor is exactly the fixed canvas size.
+      3. The crop content is preserved (not zeroed).
     """
-    from hydra_suite.core.canonicalization.crop import compute_native_crop_dimensions
-
     frame = np.full((256, 256, 3), 128, dtype=np.uint8)
     obb = _make_large_obb(256, 256)
-    ar, mg = 2.0, 1.3
+    geometry = CanonicalGeometry.from_reference(
+        reference_body_px=40.0, aspect_ratio=2.0, margin=1.3
+    )
 
-    batch = extract_canonical_crops_batch([frame], [obb], ar, mg, _runtime_cpu())
+    batch = extract_canonical_crops_batch([frame], [obb], geometry, _runtime_cpu())
 
     assert batch.native_sizes.shape == (1, 2)
     native_h, native_w = int(batch.native_sizes[0, 0]), int(batch.native_sizes[0, 1])
-
-    pad = max(0.0, mg - 1.0)
-    cw, ch = compute_native_crop_dimensions(obb.corners[0], ar, pad)
     assert (native_h, native_w) == (
-        int(ch),
-        int(cw),
-    ), "native_sizes must record the true native crop dimensions"
+        geometry.canvas_h,
+        geometry.canvas_w,
+    ), "native_sizes must record the fixed canonical canvas dimensions"
 
-    # Padded crop tensor must accommodate the native extent.
+    # Crop tensor is exactly the fixed canvas size -- no padding to reconcile.
     assert batch.crops.shape[0] == 1
-    assert batch.crops.shape[2] >= native_h
-    assert batch.crops.shape[3] >= native_w
+    assert batch.crops.shape[2] == geometry.canvas_h
+    assert batch.crops.shape[3] == geometry.canvas_w
 
-    # The native region must contain preserved content (a uniform 128 frame
-    # warps to non-zero pixels), not be zeroed out.
-    native_region = batch.crops[0, :, :native_h, :native_w]
-    assert native_region.abs().sum() > 0, "native crop region is entirely zero"
+    # The crop must contain preserved content (a uniform 128 frame warps to
+    # non-zero pixels), not be zeroed out.
+    assert batch.crops[0].abs().sum() > 0, "canonical crop is entirely zero"

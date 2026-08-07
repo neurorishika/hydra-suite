@@ -22,7 +22,7 @@ def test_custom_cnn_params_defaults():
     assert p.backbone_lr_scale == 0.1
     assert p.layerwise_lr_decay == 0.75
     assert p.gradual_unfreeze_interval == 5
-    assert p.input_size == 224
+    assert p.input_size == (224, 224)
     assert p.epochs == 50
     assert p.batch == 32
     assert p.lr == 1e-3
@@ -782,7 +782,7 @@ def test_train_custom_classify_remaps_validation_targets_to_shared_class_indices
         augmentation_profile=AugmentationProfile(enabled=False),
         custom_params=CustomCNNParams(
             backbone="resnet18",
-            input_size=64,
+            input_size=(64, 64),
             epochs=1,
             batch=2,
             patience=1,

@@ -101,6 +101,13 @@ def _default_advanced_config() -> dict[str, Any]:
         "identity_swap_conf_margin": 0.2,
         "identity_rejoin_velocity_budget": 1.5,
         "identity_rejoin_dist_floor": None,
+        # Canonical crop geometry. reference_aspect_ratio sets the canvas
+        # SHAPE; canonical_margin sets how much of the reference animal the
+        # canvas holds and is the operator's only dial against clipped
+        # animals. They live here because this table is the declared single
+        # source of truth (see engine_params._default_advanced_config_fallback).
+        "reference_aspect_ratio": 2.0,
+        "canonical_margin": 1.3,
     }
 
 

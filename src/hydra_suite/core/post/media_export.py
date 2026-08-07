@@ -899,10 +899,17 @@ def export_final_media(
     export_videos,
     padding_fraction,
     background_color,
+    geometry=None,
     progress=None,
     should_stop=None,
 ):
     """Export final canonical stills and/or orientation-fixed per-track videos.
+
+    ``geometry`` is the session's project-wide Layer 1
+    :class:`~hydra_suite.core.canonicalization.geometry.CanonicalGeometry`.
+    It MUST be threaded through: without it the exporter falls back to its own
+    DEFAULT geometry, which silently diverges from the canvas every other
+    crop-consuming stage in the same session used.
 
     Returns the exporter result dict, or None if nothing is requested or the
     final CSV / detection cache is missing."""
@@ -971,6 +978,7 @@ def export_final_media(
             config.get("final_media_export_stabilization_window", 5)
         ),
         output_subdir="",
+        geometry=geometry,
     )
     result = exporter.export(progress_callback=progress, should_stop=should_stop)
     return result.to_dict()

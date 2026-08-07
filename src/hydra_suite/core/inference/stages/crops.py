@@ -10,13 +10,50 @@ import torch
 
 from hydra_suite.core.canonicalization.crop import (
     _apply_foreign_mask_canonical,
-    compute_alignment_affine,
-    compute_native_crop_dimensions,
     gpu_canonical_crop_batch,
 )
+from hydra_suite.core.canonicalization.fit import FitResult
+from hydra_suite.core.canonicalization.geometry import (
+    CanonicalGeometry,
+    canonical_affine,
+)
 
-from ..result import CropBatch, OBBResult
+from ..result import CropBatch, NumpyCropBatch, OBBResult
 from ..runtime import RuntimeContext
+
+
+def apply_fit_gpu(batch: torch.Tensor, fit: FitResult) -> torch.Tensor:
+    """On-device analogue of Layer 2's ``apply_fit``: the SAME isotropic
+    centred letterbox (one scale, both axes; zero pad) computed by ``fit``,
+    applied to a whole ``(N, C, H, W)`` batch with a single ``F.interpolate``
+    + zero-canvas paste instead of per-crop ``cv2.resize``.
+
+    This exists so the GPU (on-device, no-host-round-trip) crop path produces
+    the SAME crop geometry as the CPU path -- same scale, same offset, same
+    padded canvas size -- for a given ``fit`` (itself pure arithmetic over
+    ``geometry.canvas_wh`` and the model's input size, identical on both
+    paths). Only the resampling KERNEL differs: ``F.interpolate(...,
+    mode="bilinear")`` has no on-device equivalent of cv2's ``INTER_AREA``
+    downscale filter, so this is NOT bit-identical to ``apply_fit`` -- the
+    acceptance gate here is identity agreement, not byte-identity, matching
+    every other GPU/CPU crop divergence in this module (grid_sample != cv2).
+    """
+    import torch.nn.functional as F
+
+    n, c = batch.shape[0], batch.shape[1]
+    inner_w, inner_h = fit.inner_wh
+    model_w, model_h = fit.model_wh
+    resized = F.interpolate(
+        batch, size=(inner_h, inner_w), mode="bilinear", align_corners=False
+    )
+    if (inner_h, inner_w) == (model_h, model_w):
+        return resized
+    canvas = torch.zeros(
+        (n, c, model_h, model_w), dtype=batch.dtype, device=batch.device
+    )
+    ox, oy = fit.offset_xy
+    canvas[:, :, oy : oy + inner_h, ox : ox + inner_w] = resized
+    return canvas
 
 
 def _frame_to_chw_float(
@@ -51,18 +88,21 @@ def _frame_to_chw_float(
 def extract_canonical_crops(
     frame: np.ndarray | torch.Tensor,
     obb_result: OBBResult,
-    canonical_aspect_ratio: float,
-    canonical_margin: float,
+    geometry: CanonicalGeometry,
     runtime: RuntimeContext,
     suppress_foreign: bool = False,
     background_color: tuple[int, int, int] = (0, 0, 0),
 ) -> torch.Tensor:
-    """Extract OBB-aligned canonical crops. Returns (N, C, H, W) tensor on runtime.device.
+    """Extract OBB-aligned canonical crops. Returns (N, C, canvas_h, canvas_w) tensor on runtime.device.
 
     GPU path (tensor_on_cuda only): single batched affine_grid + grid_sample call.
     CPU path: cv2.warpAffine per crop -> stacked CPU tensor.
     onnx_cuda/tensorrt use CPU path even though cuda_mode=True; their downstream
     models take CPU numpy, so GPU crop upload+download would be pure waste.
+
+    Every crop is warped straight to ``geometry``'s fixed canvas: the rigid
+    Layer 1 transform (rotation + translation only, no scale), so there is no
+    per-detection canvas size to reconcile downstream.
 
     ``suppress_foreign=True`` blacks out the OTHER detections' OBB polygons in
     each crop (matching legacy's ``suppress_foreign_obb``, applied
@@ -73,28 +113,18 @@ def extract_canonical_crops(
     """
     n = obb_result.num_detections
     if n == 0:
-        return torch.zeros((0, 3, 64, 64), dtype=torch.float32)
+        return torch.zeros(
+            (0, 3, geometry.canvas_h, geometry.canvas_w), dtype=torch.float32
+        )
 
     if runtime.tensor_on_cuda:
-        crops = _extract_canonical_gpu(
-            frame,
-            obb_result,
-            canonical_aspect_ratio,
-            canonical_margin,
-            runtime.device,
-        )
+        crops = _extract_canonical_gpu(frame, obb_result, geometry, runtime.device)
     else:
-        crops = _extract_canonical_cpu(
-            frame, obb_result, canonical_aspect_ratio, canonical_margin
-        )
+        crops = _extract_canonical_cpu(frame, obb_result, geometry)
 
     if suppress_foreign and n > 1:
         crops = _apply_foreign_mask_canonical_batch(
-            crops,
-            obb_result,
-            canonical_aspect_ratio,
-            canonical_margin,
-            background_color,
+            crops, obb_result, geometry, background_color
         )
     return crops
 
@@ -181,20 +211,19 @@ def _get_warp_pool(n_workers: int) -> ThreadPoolExecutor | None:
 def _warp_crops_for_obb(
     arr: np.ndarray,
     obb: OBBResult,
-    aspect_ratio: float,
-    padding_fraction: float,
+    geometry: CanonicalGeometry,
 ) -> list[np.ndarray]:
-    """Warp each detection in *obb* to its native canonical extent.
+    """Warp each detection in *obb* onto the shared canonical canvas.
 
-    Returns a list of HWC numpy arrays, one per detection, at the native
-    (un-resized) crop size produced by :func:`_warp_canonical_crop`. When the
-    detection count is large enough to amortise pool overhead, the independent
-    warps run across a shared thread pool (byte-identical; see module note above).
+    Returns a list of HWC numpy arrays, one per detection, all sized
+    ``(geometry.canvas_h, geometry.canvas_w)``. When the detection count is
+    large enough to amortise pool overhead, the independent warps run across a
+    shared thread pool (byte-identical; see module note above).
     """
     n = obb.num_detections
 
     def _one(i: int) -> np.ndarray:
-        return _warp_canonical_crop(arr, obb.corners[i], aspect_ratio, padding_fraction)
+        return _warp_canonical_crop(arr, obb.corners[i], geometry)
 
     pool = _get_warp_pool(_crop_warp_threads()) if n >= _WARP_MIN_PARALLEL else None
     if pool is not None:
@@ -205,25 +234,14 @@ def _warp_crops_for_obb(
 def _extract_canonical_cpu(
     frame: np.ndarray | torch.Tensor,
     obb: OBBResult,
-    aspect_ratio: float,
-    margin: float,
+    geometry: CanonicalGeometry,
 ) -> torch.Tensor:
     arr = _frame_as_hwc_numpy(frame)
-    padding_fraction = max(0.0, float(margin) - 1.0)
-    crops = _warp_crops_for_obb(arr, obb, aspect_ratio, padding_fraction)
+    crops = _warp_crops_for_obb(arr, obb, geometry)
 
-    max_h = max(c.shape[0] for c in crops)
-    max_w = max(c.shape[1] for c in crops)
-    padded: list[np.ndarray] = []
-    for c in crops:
-        if c.shape[0] == max_h and c.shape[1] == max_w:
-            padded.append(c)
-        else:
-            pad_h = max_h - c.shape[0]
-            pad_w = max_w - c.shape[1]
-            padded.append(np.pad(c, ((0, pad_h), (0, pad_w), (0, 0)), mode="constant"))
-
-    stacked = np.stack(padded, axis=0)  # (N, H, W, C)
+    # Every crop is already the fixed geometry canvas size, so this is a
+    # plain stack -- no batch-max zero-pad reconciliation needed.
+    stacked = np.stack(crops, axis=0)  # (N, H, W, C)
     t = torch.from_numpy(stacked).permute(0, 3, 1, 2).float() / 255.0
     return t
 
@@ -231,20 +249,16 @@ def _extract_canonical_cpu(
 def extract_classifier_crops(
     frame: np.ndarray | torch.Tensor,
     obb_result: OBBResult,
-    target_size: tuple[int, int],
-    aspect_ratio: float,
-    margin: float,
+    geometry: CanonicalGeometry,
 ) -> list[np.ndarray]:
-    """Warp each OBB directly to the classifier's input size (BGR uint8).
+    """Warp each OBB onto the shared canonical canvas (BGR uint8).
 
-    Bit-identical to the legacy head-tail / CNN crop path
-    (HeadTailAnalyzer._canonicalize_obb + extract_canonical_crop): a SINGLE
-    ``cv2.warpAffine`` maps the padded OBB straight to (target_w, target_h) with
-    INTER_LINEAR + BORDER_REPLICATE. This avoids the double resample of going
-    through the shared native-extent crop tensor + a second (torch) interpolate,
-    which left ~1-2% of head-tail direction decisions flipping vs legacy near the
-    classifier's decision boundary. ``target_size`` is the model's (out_w, out_h)
-    using legacy's index convention (input_size[0], input_size[1]).
+    Produces a canonical crop at ``geometry``'s fixed canvas size, matching
+    every other crop entry point. The consumer is responsible for fitting the
+    crop to its model's input size via Layer 2 (``fit_to_model_input`` /
+    ``apply_fit``); this deliberately reinstates a double resample the old
+    single-warp-straight-to-model-input path avoided, in exchange for one
+    rigid Layer 1 transform shared by every consumer.
     """
     if isinstance(frame, torch.Tensor):
         arr = frame.cpu().numpy()
@@ -258,113 +272,103 @@ def extract_classifier_crops(
             )
     else:
         arr = frame
-    out_w, out_h = int(target_size[0]), int(target_size[1])
-    pad = max(0.0, float(margin) - 1.0)
+    out_h, out_w = geometry.canvas_h, geometry.canvas_w
     n_ch = arr.shape[2] if arr.ndim == 3 else 1
-    crops: list[np.ndarray] = []
-    for i in range(obb_result.num_detections):
+    n = obb_result.num_detections
+
+    def _one(i: int) -> np.ndarray:
         corners = obb_result.corners[i]
         try:
-            m_align, _ = compute_alignment_affine(corners, out_w, out_h, pad)
+            m_align, _theta, _clipped = canonical_affine(corners, geometry)
         except ValueError:
-            crops.append(np.zeros((out_h, out_w, n_ch), dtype=np.uint8))
-            continue
+            return np.zeros((out_h, out_w, n_ch), dtype=np.uint8)
         crop = cv2.warpAffine(
             arr,
             m_align,
             (out_w, out_h),
             flags=cv2.INTER_LINEAR,
-            borderMode=cv2.BORDER_REPLICATE,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=0,
         )
-        crops.append(np.ascontiguousarray(crop))
-    return crops
+        return np.ascontiguousarray(crop)
+
+    # Same embarrassingly-parallel warp batch as the pose path
+    # (``_warp_crops_for_obb``): independent output buffers, shared read-only
+    # frame, GIL released inside cv2 — and ``pool.map`` preserves order, so
+    # this is byte-identical to the serial loop.
+    pool = _get_warp_pool(_crop_warp_threads()) if n >= _WARP_MIN_PARALLEL else None
+    if pool is not None:
+        return list(pool.map(_one, range(n)))
+    return [_one(i) for i in range(n)]
 
 
 def _warp_canonical_crop(
     frame: np.ndarray,
     corners: np.ndarray,
-    aspect_ratio: float,
-    padding_fraction: float,
+    geometry: CanonicalGeometry,
 ) -> np.ndarray:
-    """Extract canonical crop using main's corner-triangle affine.
+    """Extract one canonical crop on ``geometry``'s fixed canvas.
 
-    Delegates to ``compute_native_crop_dimensions`` + ``compute_alignment_affine``
-    from ``core.canonicalization.crop`` so the new pipeline produces canvases
-    with native major-axis pixel extent matching main exactly.
+    Delegates to ``canonical_affine`` (Layer 1: rotation + translation only,
+    no scale) so every detection lands on the same canvas size regardless of
+    the animal's native pixel extent.
     """
-    canvas_w, canvas_h = compute_native_crop_dimensions(
-        corners, aspect_ratio, padding_fraction
-    )
     try:
-        M, _ = compute_alignment_affine(corners, canvas_w, canvas_h, padding_fraction)
+        m_align, _theta, _clipped = canonical_affine(corners, geometry)
     except ValueError:
         n_ch = frame.shape[2] if frame.ndim == 3 else 1
-        return np.zeros((canvas_h, canvas_w, n_ch), dtype=frame.dtype)
+        return np.zeros((geometry.canvas_h, geometry.canvas_w, n_ch), dtype=frame.dtype)
     return cv2.warpAffine(
         frame,
-        M,
-        (canvas_w, canvas_h),
+        m_align,
+        (geometry.canvas_w, geometry.canvas_h),
         flags=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_REPLICATE,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=0,
     )
 
 
 def _extract_canonical_gpu(
     frame: torch.Tensor | np.ndarray,
     obb: OBBResult,
-    aspect_ratio: float,
-    margin: float,
+    geometry: CanonicalGeometry,
     device: str,
 ) -> torch.Tensor:
     """Batched corner-affine crop extraction on CUDA via gpu_canonical_crop_batch.
 
-    Mirrors main's headtail GPU path: each detection's M_align is computed via
-    ``compute_alignment_affine`` (corner-triangle), then a single batched
-    ``F.affine_grid`` + ``F.grid_sample`` warp produces all crops at a uniform
-    canvas size = max(native_dims) so smaller OBBs are border-replicated.
+    Each detection's ``M_align`` is computed via ``canonical_affine`` (Layer 1:
+    rotation + translation, no scale), then a single batched ``F.affine_grid``
+    + ``F.grid_sample`` warp produces all crops at ``geometry``'s fixed canvas
+    size.
     """
     frame = _frame_to_chw_float(frame, device)
 
     n = obb.num_detections
-    padding_fraction = max(0.0, float(margin) - 1.0)
-
-    canvas_dims: list[tuple[int, int]] = []
-    M_aligns: list[np.ndarray] = []
+    m_aligns: list[np.ndarray] = []
     for i in range(n):
         try:
-            cw, ch = compute_native_crop_dimensions(
-                obb.corners[i], aspect_ratio, padding_fraction
-            )
-            M, _ = compute_alignment_affine(obb.corners[i], cw, ch, padding_fraction)
+            m_align, _theta, _clipped = canonical_affine(obb.corners[i], geometry)
         except ValueError:
-            cw, ch = 8, 8
-            M = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float64)
-        canvas_dims.append((cw, ch))
-        M_aligns.append(M)
+            m_align = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float64)
+        m_aligns.append(m_align)
 
-    out_w = max(cd[0] for cd in canvas_dims) if canvas_dims else 8
-    out_h = max(cd[1] for cd in canvas_dims) if canvas_dims else 8
-
-    crops = gpu_canonical_crop_batch(frame, M_aligns, out_w, out_h)
-    return crops
+    return gpu_canonical_crop_batch(frame, m_aligns, geometry=geometry)
 
 
 def extract_classifier_crops_batch(
     frames: list,
     obb_results: list[OBBResult],
-    target_size: tuple[int, int],
-    aspect_ratio: float,
-    margin: float,
+    geometry: CanonicalGeometry,
 ) -> CropBatch:
     """Extract classifier crops across a window of frames into a single CropBatch.
 
-    For each frame calls extract_classifier_crops (single warpAffine to model
-    input size, BGR uint8), then stacks results in detection-id order. HT and
-    CNN models may have different input sizes, so each calls this independently.
-    target_size is (out_w, out_h) per legacy convention (index 0 = width).
-    native_sizes rows are [out_h, out_w], reflecting the classifier crop dimensions.
+    For each frame calls extract_classifier_crops (single warpAffine onto the
+    shared canonical canvas, BGR uint8), then stacks results in detection-id
+    order. HT and CNN models may have different geometries, so each calls this
+    independently. native_sizes rows are ``[canvas_h, canvas_w]`` -- every crop
+    is already uniform, so there is nothing to slice back to.
     """
-    out_w, out_h = int(target_size[0]), int(target_size[1])
+    out_h, out_w = geometry.canvas_h, geometry.canvas_w
     crops_list: list[torch.Tensor] = []
     det_ids: list[np.ndarray] = []
     frame_idx_list: list[np.ndarray] = []
@@ -373,9 +377,7 @@ def extract_classifier_crops_batch(
     for frame, obb in zip(frames, obb_results):
         if obb.detection_ids.shape[0] == 0:
             continue
-        np_crops = extract_classifier_crops(
-            frame, obb, target_size, aspect_ratio, margin
-        )
+        np_crops = extract_classifier_crops(frame, obb, geometry)
         # Convert list of HWC uint8 numpy arrays -> (N, C, H, W) float [0,1] tensor
         stacked = np.stack(np_crops, axis=0)  # (N, H, W, C)
         crops_t = torch.from_numpy(stacked).permute(0, 3, 1, 2).float() / 255.0
@@ -407,6 +409,76 @@ def extract_classifier_crops_batch(
     )
 
 
+def extract_classifier_crops_batch_np(
+    frames: list,
+    obb_results: list[OBBResult],
+    geometry: CanonicalGeometry,
+) -> NumpyCropBatch:
+    """uint8 sibling of :func:`extract_classifier_crops_batch`.
+
+    Same crops, same row order, same metadata — but the HWC uint8 BGR arrays
+    ``extract_classifier_crops`` already produced are handed through as-is
+    instead of being stacked into a ``(N, C, H, W)`` float32 ``[0, 1]`` torch
+    tensor that the only CPU consumer immediately quantises back to uint8.
+    That round trip is value-preserving (see :class:`NumpyCropBatch`), so this
+    is byte-identical to ``extract_classifier_crops_batch`` followed by the
+    ``permute/cpu/*255/clip/astype`` unpack, minus ~4 full-batch float32
+    passes and two N-crop allocations per window.
+    """
+    out_h, out_w = geometry.canvas_h, geometry.canvas_w
+    crops: list[np.ndarray] = []
+    det_ids: list[np.ndarray] = []
+    frame_idx_list: list[np.ndarray] = []
+    native_sizes_list: list[np.ndarray] = []
+
+    for frame, obb in zip(frames, obb_results):
+        if obb.detection_ids.shape[0] == 0:
+            continue
+        crops.extend(extract_classifier_crops(frame, obb, geometry))
+        det_ids.append(obb.detection_ids)
+        frame_idx_list.append(
+            np.full(obb.detection_ids.shape[0], obb.frame_idx, np.int64)
+        )
+        native_sizes_list.append(
+            np.full((obb.detection_ids.shape[0], 2), [out_h, out_w], np.int64)
+        )
+
+    if not crops:
+        return NumpyCropBatch(
+            [],
+            np.zeros(0, np.int64),
+            np.zeros(0, np.int64),
+            {o.frame_idx: o for o in obb_results},
+            np.zeros((0, 2), np.int64),
+        )
+
+    return NumpyCropBatch(
+        crops=crops,
+        detection_ids=np.concatenate(det_ids),
+        frame_index=np.concatenate(frame_idx_list),
+        obb_by_frame={o.frame_idx: o for o in obb_results},
+        native_sizes=np.concatenate(native_sizes_list),
+    )
+
+
+def apply_fit_batch(crops: list, fit: FitResult) -> list:
+    """Layer 2 over a whole window's crops, across the shared warp pool.
+
+    ``apply_fit`` is one ``cv2.resize`` plus a zero-canvas paste per crop, all
+    independent and all releasing the GIL inside cv2 — the same shape of work
+    as the crop warp above. ``pool.map`` preserves order, and each call writes
+    its own output buffer, so this is byte-identical to
+    ``[apply_fit(c, fit) for c in crops]``.
+    """
+    from hydra_suite.core.canonicalization.fit import apply_fit
+
+    n = len(crops)
+    pool = _get_warp_pool(_crop_warp_threads()) if n >= _WARP_MIN_PARALLEL else None
+    if pool is None:
+        return [apply_fit(c, fit) for c in crops]
+    return list(pool.map(lambda c: apply_fit(c, fit), crops))
+
+
 def frames_on_cuda(runtime, frames) -> bool:
     """Whether the GPU classifier crop path should run for this window.
 
@@ -430,24 +502,22 @@ def frames_on_cuda(runtime, frames) -> bool:
 def extract_classifier_crops_gpu(
     frame: "torch.Tensor | np.ndarray",
     obb_result: OBBResult,
-    target_size: tuple[int, int],
-    aspect_ratio: float,
-    margin: float,
+    geometry: CanonicalGeometry,
     device: str,
 ) -> "torch.Tensor":
     """GPU-native analogue of :func:`extract_classifier_crops`.
 
-    Warps each OBB directly to the classifier input size ``(out_w, out_h)`` with a
-    single batched ``grid_sample`` on-device, using the SAME alignment affine the
-    CPU path feeds to ``cv2.warpAffine`` (``compute_alignment_affine(corners,
-    out_w, out_h, pad)`` — note ``aspect_ratio`` is unused here, matching the CPU
-    entry point). Returns ``(N, C, out_h, out_w)`` float32 on ``device`` in the
-    same BGR, ``[0, 1]`` convention as ``extract_classifier_crops_batch``'s tensor
-    (``crops.py`` ``/255`` path). Used only when the frame is a CUDA tensor (NVDEC
-    path); ``grid_sample`` != ``cv2`` bit-for-bit, so the CUDA pipeline's
-    acceptance gate is identity agreement, not byte-identity (see the design spec).
+    Warps each OBB onto ``geometry``'s fixed canonical canvas with a single
+    batched ``grid_sample`` on-device, using the SAME alignment affine
+    (``canonical_affine``) the CPU path feeds to ``cv2.warpAffine``. Returns
+    ``(N, C, canvas_h, canvas_w)`` float32 on ``device`` in the same BGR,
+    ``[0, 1]`` convention as ``extract_classifier_crops_batch``'s tensor
+    (``crops.py`` ``/255`` path). Used only when the frame is a CUDA tensor
+    (NVDEC path); ``grid_sample`` != ``cv2`` bit-for-bit, so the CUDA
+    pipeline's acceptance gate is identity agreement, not byte-identity (see
+    the design spec).
     """
-    out_w, out_h = int(target_size[0]), int(target_size[1])
+    out_h, out_w = geometry.canvas_h, geometry.canvas_w
     frame = _frame_to_chw_float(frame, device)
 
     n = obb_result.num_detections
@@ -455,26 +525,23 @@ def extract_classifier_crops_gpu(
     if n == 0:
         return torch.zeros((0, n_ch, out_h, out_w), dtype=torch.float32, device=device)
 
-    pad = max(0.0, float(margin) - 1.0)
     m_aligns: list[np.ndarray] = []
     for i in range(n):
         try:
-            m_align, _ = compute_alignment_affine(
-                obb_result.corners[i], out_w, out_h, pad
+            m_align, _theta, _clipped = canonical_affine(
+                obb_result.corners[i], geometry
             )
         except ValueError:
             m_align = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float64)
         m_aligns.append(m_align)
 
-    return gpu_canonical_crop_batch(frame, m_aligns, out_w, out_h)
+    return gpu_canonical_crop_batch(frame, m_aligns, geometry=geometry)
 
 
 def extract_classifier_crops_batch_gpu(
     frames: list,
     obb_results: list[OBBResult],
-    target_size: tuple[int, int],
-    aspect_ratio: float,
-    margin: float,
+    geometry: CanonicalGeometry,
     device: str,
 ) -> CropBatch:
     """GPU-native analogue of :func:`extract_classifier_crops_batch`.
@@ -482,9 +549,9 @@ def extract_classifier_crops_batch_gpu(
     Per-frame :func:`extract_classifier_crops_gpu`, concatenated into a
     :class:`CropBatch` whose ``crops`` tensor stays on ``device`` (no host
     round-trip). Field layout is identical to the CPU batch builder so downstream
-    ``select_frame`` / assembly is unchanged. ``target_size`` is ``(out_w, out_h)``.
+    ``select_frame`` / assembly is unchanged.
     """
-    out_w, out_h = int(target_size[0]), int(target_size[1])
+    out_h, out_w = geometry.canvas_h, geometry.canvas_w
     crops_list: list[torch.Tensor] = []
     det_ids: list[np.ndarray] = []
     frame_idx_list: list[np.ndarray] = []
@@ -493,11 +560,7 @@ def extract_classifier_crops_batch_gpu(
     for frame, obb in zip(frames, obb_results):
         if obb.detection_ids.shape[0] == 0:
             continue
-        crops_list.append(
-            extract_classifier_crops_gpu(
-                frame, obb, target_size, aspect_ratio, margin, device
-            )
-        )
+        crops_list.append(extract_classifier_crops_gpu(frame, obb, geometry, device))
         det_ids.append(obb.detection_ids)
         frame_idx_list.append(
             np.full(obb.detection_ids.shape[0], obb.frame_idx, np.int64)
@@ -528,35 +591,31 @@ def extract_classifier_crops_batch_gpu(
 def _apply_foreign_mask_canonical_batch(
     crops: torch.Tensor,
     obb: OBBResult,
-    aspect_ratio: float,
-    margin: float,
+    geometry: CanonicalGeometry,
     background_color: tuple[int, int, int],
 ) -> torch.Tensor:
     """Black out foreign OBB polygons in each crop of one frame's crop tensor.
 
-    ``crops`` is ``(N, C, H, W)`` float [0, 1] (the per-frame tensor padded to that
-    frame's max canvas, top-left origin). For each detection ``i`` the OTHER
-    detections (detection-id order) are projected into ``i``'s canonical space via
-    its ``M_align`` and filled with ``background_color`` using the shared
-    ``_apply_foreign_mask_canonical`` helper (cv2.fillPoly on a HWC uint8 view).
+    ``crops`` is ``(N, C, canvas_h, canvas_w)`` float [0, 1]. For each
+    detection ``i`` the OTHER detections (detection-id order) are projected
+    into ``i``'s canonical space via its ``M_align`` (``canonical_affine``)
+    and filled with ``background_color`` using the shared
+    ``_apply_foreign_mask_canonical`` helper (cv2.fillPoly on a HWC uint8
+    view).
 
     The crop tensor may be CUDA-resident; masking uses a CPU round-trip
     (on-device polygon rasterisation is non-trivial) — same documented approach
     the old resize-based ``extract_crops`` used.
     """
     n = obb.num_detections
-    padding_fraction = max(0.0, float(margin) - 1.0)
 
     m_aligns: list[np.ndarray] = []
     for i in range(n):
         try:
-            cw, ch = compute_native_crop_dimensions(
-                obb.corners[i], aspect_ratio, padding_fraction
-            )
-            M, _ = compute_alignment_affine(obb.corners[i], cw, ch, padding_fraction)
+            m_align, _theta, _clipped = canonical_affine(obb.corners[i], geometry)
         except ValueError:
-            M = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float64)
-        m_aligns.append(M)
+            m_align = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float64)
+        m_aligns.append(m_align)
 
     device = crops.device
     crops_np = (crops.detach().cpu().numpy() * 255.0).clip(0, 255).astype(np.uint8)
@@ -579,42 +638,27 @@ def _apply_foreign_mask_canonical_batch(
 def extract_canonical_crops_batch(
     frames: list,
     obb_results: list[OBBResult],
-    canonical_aspect_ratio: float,
-    canonical_margin: float,
+    geometry: CanonicalGeometry,
     runtime: RuntimeContext,
     suppress_foreign: bool = False,
     background_color: tuple[int, int, int] = (0, 0, 0),
 ) -> CropBatch:
     """Window-level canonical pose crops, bit-identical to ``extract_canonical_crops``.
 
-    The per-frame batch-pass path builds pose crops via ``extract_canonical_crops``
-    (native-extent warp, padded to the per-frame max, never resized). ``run_pose``
-    then recovers each detection's native crop with
-    ``compute_native_crop_dimensions`` and slices ``[:ch, :cw]``.
-
-    The resize-based ``extract_crops`` (now removed) could not reproduce that
-    numerically: it warped to native extent then *resized* every crop to a fixed
-    ``out_size``, so ``run_pose_batch``'s ``native_sizes`` slice recovered a
-    resampled (not bit-identical) crop. That would break the depth=1 correctness
-    contract (pose keypoints must match the old ``_run_batch`` exactly).
-
-    This builder instead warps each detection to its native extent (via the same
-    ``extract_canonical_crops`` CPU/GPU routine) and pads — never resizes — to the
-    WINDOW-wide max canvas, recording each crop's native ``[h, w]`` in
-    ``native_sizes``. ``run_pose_batch`` slices back to native, recovering the
-    exact pixels ``run_pose`` would have seen.
+    Every crop lands on ``geometry``'s fixed canvas, so unlike the old
+    native-extent-then-pad-to-window-max scheme, frames concatenate directly:
+    no per-frame max tracking, no window-wide re-pad, and nothing for
+    ``run_pose_batch`` to slice back to native (``native_sizes`` rows are all
+    ``[canvas_h, canvas_w]``, i.e. the full crop).
 
     Foreign-region suppression (``suppress_foreign=True``): to match legacy, each
     pose crop has the OTHER detections' OBB polygons in the SAME frame blacked out
     (filled with ``background_color``) in canonical space, via
-    ``_apply_foreign_mask_canonical`` (same approach the old resize-based path
-    used). The foreign set is the other detections in detection-id order
-    (deterministic). Masking is a no-op for single-detection frames. The masking
-    is applied to each detection's native crop (sliced out of the per-frame padded
-    tensor) using its ``M_align``; padding is bottom/right zeros so ``M_align``
-    still maps frame coords into the crop's top-left origin correctly. On CUDA the
-    masking uses a CPU round-trip (on-device polygon rasterisation is non-trivial),
-    documented as a follow-up optimisation — same as the old path.
+    ``_apply_foreign_mask_canonical_batch``. The foreign set is the other
+    detections in detection-id order (deterministic). Masking is a no-op for
+    single-detection frames. On CUDA the masking uses a CPU round-trip
+    (on-device polygon rasterisation is non-trivial), documented as a
+    follow-up optimisation — same as the old path.
     """
     per_frame: list[torch.Tensor] = []
     det_ids: list[np.ndarray] = []
@@ -624,36 +668,27 @@ def extract_canonical_crops_batch(
     for frame, obb in zip(frames, obb_results):
         if obb.detection_ids.shape[0] == 0:
             continue
-        # extract_canonical_crops pads each frame's crops to that frame's own max.
-        crops = extract_canonical_crops(
-            frame, obb, canonical_aspect_ratio, canonical_margin, runtime
-        )
+        crops = extract_canonical_crops(frame, obb, geometry, runtime)
         if suppress_foreign and obb.num_detections > 1:
             crops = _apply_foreign_mask_canonical_batch(
-                crops,
-                obb,
-                canonical_aspect_ratio,
-                canonical_margin,
-                background_color,
+                crops, obb, geometry, background_color
             )
         per_frame.append(crops)
         det_ids.append(obb.detection_ids)
         frame_idx_list.append(
             np.full(obb.detection_ids.shape[0], obb.frame_idx, np.int64)
         )
-        # Native pre-pad dims per detection (mirrors run_pose recovery).
-        pad = max(0.0, float(canonical_margin) - 1.0)
-        sizes = np.zeros((obb.num_detections, 2), np.int64)
-        for i in range(obb.num_detections):
-            cw, ch = compute_native_crop_dimensions(
-                obb.corners[i], canonical_aspect_ratio, pad
+        native_sizes_list.append(
+            np.full(
+                (obb.num_detections, 2),
+                [geometry.canvas_h, geometry.canvas_w],
+                np.int64,
             )
-            sizes[i] = (ch, cw)
-        native_sizes_list.append(sizes)
+        )
 
     if not per_frame:
         device = runtime.device if runtime.cuda_mode else "cpu"
-        empty = torch.zeros((0, 3, 8, 8), device=device)
+        empty = torch.zeros((0, 3, geometry.canvas_h, geometry.canvas_w), device=device)
         return CropBatch(
             empty,
             np.zeros(0, np.int64),
@@ -662,22 +697,8 @@ def extract_canonical_crops_batch(
             np.zeros((0, 2), np.int64),
         )
 
-    # Each frame's crop tensor is padded to that frame's max; concatenating
-    # across frames needs a single window-wide canvas, so pad every frame's
-    # tensor up to the window max (bottom/right zeros, same convention as
-    # extract_canonical_crops).
-    max_h = max(t.shape[2] for t in per_frame)
-    max_w = max(t.shape[3] for t in per_frame)
-    padded: list[torch.Tensor] = []
-    for t in per_frame:
-        ph = max_h - t.shape[2]
-        pw = max_w - t.shape[3]
-        if ph or pw:
-            t = torch.nn.functional.pad(t, (0, pw, 0, ph))
-        padded.append(t)
-
     return CropBatch(
-        crops=torch.cat(padded, dim=0),
+        crops=torch.cat(per_frame, dim=0),
         detection_ids=np.concatenate(det_ids),
         frame_index=np.concatenate(frame_idx_list),
         obb_by_frame={o.frame_idx: o for o in obb_results},

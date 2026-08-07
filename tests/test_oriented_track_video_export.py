@@ -1,3 +1,4 @@
+import json
 import math
 from pathlib import Path
 
@@ -5,6 +6,8 @@ import cv2
 import numpy as np
 import pandas as pd
 
+from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
+from hydra_suite.core.identity.dataset.naming import read_canonical_provenance
 from hydra_suite.core.identity.dataset.oriented_video import (
     OrientedTrackVideoExporter,
     resolve_individual_dataset_dir,
@@ -710,3 +713,58 @@ def test_final_media_export_reports_missing_geometry_breakdown(tmp_path: Path):
     assert result.missing_detected_rows == 1
     assert result.missing_interpolated_rows == 1
     assert result.invalid_geometry_rows == 1
+
+
+def test_exporter_uses_supplied_geometry_not_the_fallback(tmp_path: Path):
+    """A caller-supplied geometry must drive the canvas and the stamped
+    provenance -- not the padding-driven fallback default. This is the
+    wired path from trackerkit.canonical_geometry via video_worker.py."""
+    dataset_dir = tmp_path / "individual_crops" / "run_20260311"
+    supplied_geometry = CanonicalGeometry.from_reference(40.0, 3.0, 1.5)
+
+    exporter = OrientedTrackVideoExporter(
+        dataset_dir,
+        tmp_path / "final.csv",
+        video_path=tmp_path / "source.mp4",
+        detection_cache_path=tmp_path / "detections.npz",
+        fps=5.0,
+        padding_fraction=0.1,
+        geometry=supplied_geometry,
+    )
+
+    assert exporter._geometry == supplied_geometry
+
+    affine, out_w, out_h = exporter._canonical_affine_for_task(
+        50.0, 50.0, 40.0, 20.0, 0.0
+    )
+    assert (out_w, out_h) == supplied_geometry.canvas_wh
+    assert (out_w, out_h) != CanonicalGeometry.from_reference(20.0, 2.0, 1.1).canvas_wh
+
+    exporter._write_canonical_metadata()
+    stamped = json.loads((dataset_dir / "metadata.json").read_text(encoding="utf-8"))
+    assert stamped["parameters"]["canonical"]["canvas_wh"] == list(
+        supplied_geometry.canvas_wh
+    )
+    assert read_canonical_provenance(dataset_dir) == supplied_geometry
+
+
+def test_exporter_without_geometry_falls_back_and_warns(tmp_path, caplog):
+    """No geometry supplied -> padding-driven fallback, but it must announce
+    itself instead of silently diverging from the project's real geometry."""
+    dataset_dir = tmp_path / "individual_crops" / "run_20260311"
+
+    with caplog.at_level("WARNING"):
+        exporter = OrientedTrackVideoExporter(
+            dataset_dir,
+            tmp_path / "final.csv",
+            video_path=tmp_path / "source.mp4",
+            detection_cache_path=tmp_path / "detections.npz",
+            fps=5.0,
+            padding_fraction=0.1,
+        )
+
+    assert exporter._geometry == CanonicalGeometry.from_reference(20.0, 2.0, 1.1)
+    assert any(
+        "no project geometry supplied" in record.getMessage()
+        for record in caplog.records
+    )

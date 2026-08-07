@@ -2,8 +2,15 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import re
+from pathlib import Path
 from typing import Any
+
+from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
+
+logger = logging.getLogger(__name__)
 
 _DETECTION_IMAGE_RE = re.compile(
     r"^did(?P<detection_id>\d+)\.(?P<ext>png|jpe?g)$",
@@ -111,3 +118,41 @@ def parse_identity_image_filename(filename: str) -> dict[str, Any] | None:
         }
 
     return None
+
+
+def read_canonical_provenance(dataset_dir: Path) -> CanonicalGeometry | None:
+    """Read the Layer 1 ``CanonicalGeometry`` a dataset was exported with.
+
+    Reads ``parameters.canonical`` from ``<dataset_dir>/metadata.json`` (the
+    same metadata.json the crop-dataset generator and the oriented-video
+    exporter both write into -- no separate sidecar file). Returns ``None``
+    -- never a default -- whenever the file, the ``parameters`` block, or the
+    ``canonical`` sub-block is missing, so a dataset with unknown provenance
+    (e.g. exported before this migration) is visibly unknown rather than
+    silently assumed to match the current project geometry.
+    """
+    metadata_path = Path(dataset_dir) / "metadata.json"
+    if not metadata_path.exists():
+        return None
+    try:
+        data = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except Exception:
+        logger.warning(
+            "Failed to parse %s while reading canonical provenance.",
+            metadata_path,
+            exc_info=True,
+        )
+        return None
+
+    canonical = (data.get("parameters") or {}).get("canonical")
+    if not canonical:
+        return None
+    try:
+        return CanonicalGeometry.from_dict(canonical)
+    except Exception:
+        logger.warning(
+            "Malformed parameters.canonical in %s while reading canonical provenance.",
+            metadata_path,
+            exc_info=True,
+        )
+        return None

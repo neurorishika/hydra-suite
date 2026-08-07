@@ -101,7 +101,7 @@ class CustomCNNParams:
     backbone_lr_scale: float = 0.1  # LR multiplier for unfrozen backbone layers
     layerwise_lr_decay: float = 0.75
     gradual_unfreeze_interval: int = 5
-    input_size: int = 224  # Resize target (square) for torchvision backbones
+    input_size: tuple[int, int] = (224, 224)  # (H, W) resize target for backbones
     epochs: int = 50
     batch: int = 32
     lr: float = 1e-3

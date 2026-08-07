@@ -8,6 +8,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
+from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
+
 from .contracts import TrainingRole
 
 
@@ -716,6 +718,7 @@ def publish_trained_model(
     training_params: dict[str, Any] | None = None,
     classifier_v2_meta: dict[str, Any] | None = None,
     slice_geometry: dict[str, Any] | None = None,
+    canonical_geometry: CanonicalGeometry | None = None,
 ) -> tuple[str, str]:
     """Copy trained artifact into repository and register metadata.
 
@@ -799,6 +802,20 @@ def publish_trained_model(
         )
         slice_geom_sidecar_name = slice_sidecar.name
 
+    canonical_meta_sidecar_name: str | None = None
+    if canonical_geometry is not None and dst.suffix.lower() == ".pt":
+        # Append to the full name (foo.pt -> foo.pt.canonical_meta.json), matching
+        # the .slice_meta.json / .runtime_meta.json convention above -- NOT the
+        # .v2meta.json suffix-replace convention. Every model gets this stamp
+        # regardless of role: it records which CanonicalGeometry convention the
+        # checkpoint was trained under, so a mismatched load can be flagged
+        # instead of silently degrading.
+        canonical_sidecar = dst.with_suffix(dst.suffix + ".canonical_meta.json")
+        canonical_sidecar.write_text(
+            json.dumps(canonical_geometry.to_dict(), indent=2), encoding="utf-8"
+        )
+        canonical_meta_sidecar_name = canonical_sidecar.name
+
     key = _registry_key_for_model(dst)
     metadata = {
         "size": safe_size,
@@ -824,6 +841,10 @@ def publish_trained_model(
         metadata["slice_geometry"] = dict(slice_geometry)
         if slice_geom_sidecar_name:
             metadata["slice_meta_sidecar"] = slice_geom_sidecar_name
+    if canonical_geometry is not None:
+        metadata["canonical_geometry"] = canonical_geometry.to_dict()
+        if canonical_meta_sidecar_name:
+            metadata["canonical_meta_sidecar"] = canonical_meta_sidecar_name
 
     # v2 sidecar for YOLO-style artifacts whose weight file cannot embed our schema.
     if dst.suffix.lower() == ".pt" and dst_sidecar.exists():

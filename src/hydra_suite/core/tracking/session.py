@@ -11,6 +11,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
+from hydra_suite.core.canonicalization.geometry import canonical_geometry_from_params
 from hydra_suite.core.post import dataset_export, media_export
 from hydra_suite.core.post.interpolated_crops import run_interpolated_crops
 from hydra_suite.core.post.merge import merge_trajectories, rescale_coordinates
@@ -412,6 +413,10 @@ class TrackingSessionCore:
             background_color=tuple(
                 self.config.get("individual_background_color", [0, 0, 0])
             ),
+            # The session's own project-wide Layer 1 canvas -- without this the
+            # exporter falls back to a DEFAULT geometry that silently diverges
+            # from the canvas every other stage of this session used.
+            geometry=canonical_geometry_from_params(self.params),
             progress=self.callbacks.progress,
             should_stop=self.callbacks.should_stop,
         )

@@ -108,12 +108,69 @@ def _resolve_ultralytics_data_arg(spec: TrainingRunSpec, task: str) -> str:
     return str(spec.derived_dataset_dir)
 
 
+def _prefit_yolo_classify_dataset(
+    dataset_dir: Path, imgsz: int, dest_dir: Path
+) -> Path:
+    """Pre-fit a YOLO-classify ImageFolder dataset onto a square canvas.
+
+    Mirrors ``dataset_dir``'s ``<split>/<class>/`` layout into ``dest_dir``
+    with every image passed through the Layer 2 isotropic centred letterbox
+    (``CanonicalFitTransform``) at ``(imgsz, imgsz)``. Ultralytics' own
+    ``Resize(shortest_edge)`` + ``CenterCrop(size)`` then sees a square image
+    with shortest edge == longest edge, so the centre crop is a no-op -- the
+    same guarantee ``_forward_yolo`` (core/identity/classification/backend.py)
+    gives at inference time. YOLO-classify remains a known-lossy family
+    (operator decision, 2026-08-05): this closes the gap as far as the
+    vendor's own pipeline allows, it does not eliminate it. Idempotent --
+    skipped when ``dest_dir`` already exists.
+    """
+    import cv2
+
+    from .canonical_transform import CanonicalFitTransform, cv2_bgr_loader
+
+    if dest_dir.exists():
+        return dest_dir
+    transform = CanonicalFitTransform((int(imgsz), int(imgsz)))
+    for split_dir in sorted(p for p in dataset_dir.iterdir() if p.is_dir()):
+        for cls_dir in sorted(p for p in split_dir.iterdir() if p.is_dir()):
+            out_cls_dir = dest_dir / split_dir.name / cls_dir.name
+            out_cls_dir.mkdir(parents=True, exist_ok=True)
+            for img_path in sorted(cls_dir.iterdir()):
+                if not img_path.is_file():
+                    continue
+                try:
+                    img = cv2_bgr_loader(img_path)
+                except Exception:
+                    continue
+                cv2.imwrite(str(out_cls_dir / img_path.name), transform(img))
+    return dest_dir
+
+
 def build_ultralytics_command(spec: TrainingRunSpec, run_dir: str | Path) -> list[str]:
     """Build deterministic Ultralytics train command for a role."""
 
     task = _ultralytics_task_for_role(spec.role)
     run_dir = Path(run_dir).expanduser().resolve()
     data_arg = _resolve_ultralytics_data_arg(spec, task)
+
+    classify_scale_override: float | None = None
+    if task == "classify":
+        prefit_dir = run_dir / "prefit_dataset"
+        _prefit_yolo_classify_dataset(
+            Path(spec.derived_dataset_dir).expanduser(),
+            int(spec.hyperparams.imgsz),
+            prefit_dir,
+        )
+        data_arg = str(prefit_dir)
+        # Ultralytics computes RandomResizedCrop's internal scale range as
+        # (1.0 - args.scale, 1.0) (ultralytics.data.dataset.ClassificationDataset).
+        # scale=0.0 -> internal (1.0, 1.0): RandomResizedCrop always samples the
+        # full source area, so on an already-square pre-fitted image it
+        # degenerates to a no-op crop. Measured round-trip: max abs pixel diff
+        # 0/255 with scale=0.0 vs ~250/255 with the naively-plausible scale=1.0
+        # (which instead widens the crop range to (0.0, 1.0) -- maximally
+        # lossy). See task-9-report.md for the measurement.
+        classify_scale_override = 0.0
 
     args = [
         task,
@@ -140,6 +197,11 @@ def build_ultralytics_command(spec: TrainingRunSpec, run_dir: str | Path) -> lis
             args.append(f"{k}={v}")
     if spec.resume_from:
         args.append("resume=True")
+    if classify_scale_override is not None:
+        # RandomResizedCrop(scale=...) degenerates to a centre crop of the
+        # whole already-square pre-fitted image. Appended last so it wins
+        # over any `scale=` the augmentation profile set above.
+        args.append(f"scale={classify_scale_override}")
 
     yolo_exe = shutil.which("yolo")
     if yolo_exe:
@@ -296,6 +358,10 @@ def _build_tiny_dataset_class(input_w, input_h):
     import torch
     from torch.utils.data import Dataset
 
+    from hydra_suite.training.canonical_transform import CanonicalFitTransform
+
+    fit_transform = CanonicalFitTransform((input_h, input_w))
+
     class TinyDataset(Dataset):
         """Image dataset that loads crops, applies optional augmentation, and normalizes for TinyClassifier training."""
 
@@ -318,9 +384,7 @@ def _build_tiny_dataset_class(input_w, input_h):
                 img, self.augment, self.profile, rng=getattr(self, "_rng", None)
             )
             if img.shape[1] != input_w or img.shape[0] != input_h:
-                img = cv2.resize(
-                    img, (input_w, input_h), interpolation=cv2.INTER_LINEAR
-                )
+                img = fit_transform(img)
             x = torch.from_numpy(img.copy()).permute(2, 0, 1).float() / 255.0
             y = torch.tensor(label, dtype=torch.long)
             return x, y
@@ -1061,7 +1125,7 @@ def _run_torchvision_training_loop(
 
     import torch
 
-    sz = params.input_size
+    in_h, in_w = params.input_size  # (H, W)
     best_val_acc = None
     best_epoch = 0
     patience_count = 0
@@ -1167,7 +1231,7 @@ def _run_torchvision_training_loop(
                     backbone=backbone,
                     class_names=class_names,
                     factor_names=[],
-                    input_size=(sz, sz),
+                    input_size=(in_h, in_w),
                     best_val_acc=best_val_acc,
                     history=history,
                     trainable_layers=params.trainable_layers,
@@ -1192,7 +1256,7 @@ def _run_torchvision_training_loop(
             backbone=backbone,
             class_names=class_names,
             factor_names=[],
-            input_size=(sz, sz),
+            input_size=(in_h, in_w),
             best_val_acc=None,
             history=history,
             trainable_layers=params.trainable_layers,
@@ -1288,13 +1352,22 @@ def _train_custom_classify(
     weights_dir.mkdir(parents=True, exist_ok=True)
 
     dataset_dir = Path(spec.derived_dataset_dir)
-    sz = params.input_size
+    resize_hw = tuple(params.input_size)  # (H, W)
+
+    from hydra_suite.training.canonical_transform import (
+        CanonicalFitTransform,
+        bgr_to_rgb_pil,
+        cv2_bgr_loader,
+    )
 
     profile = spec.augmentation_profile
     mean, std = get_classifier_normalization_stats(
         monochrome=bool(getattr(profile, "monochrome", False))
     )
-    train_transforms = [transforms.Resize((sz, sz))]
+    train_transforms = [
+        CanonicalFitTransform(resize_hw),
+        transforms.Lambda(bgr_to_rgb_pil),
+    ]
     if profile.fliplr > 0:
         train_transforms.append(transforms.RandomHorizontalFlip(p=profile.fliplr))
     if profile.flipud > 0:
@@ -1334,7 +1407,8 @@ def _train_custom_classify(
     train_tf = transforms.Compose(train_transforms)
     val_tf = transforms.Compose(
         [
-            transforms.Resize((sz, sz)),
+            CanonicalFitTransform(resize_hw),
+            transforms.Lambda(bgr_to_rgb_pil),
             *(
                 [transforms.Grayscale(num_output_channels=3)]
                 if getattr(profile, "monochrome", False)
@@ -1352,13 +1426,17 @@ def _train_custom_classify(
     shared_class_to_idx = _build_class_to_idx(dataset_dir)
     class_names = sorted(shared_class_to_idx.keys())
 
-    train_ds = datasets.ImageFolder(str(dataset_dir / "train"), transform=train_tf)
+    train_ds = datasets.ImageFolder(
+        str(dataset_dir / "train"), transform=train_tf, loader=cv2_bgr_loader
+    )
     val_dir = dataset_dir / "val"
     has_validation = val_dir.exists() and any(
         path.is_file() for path in val_dir.rglob("*")
     )
     val_ds = (
-        datasets.ImageFolder(str(val_dir), transform=val_tf) if has_validation else None
+        datasets.ImageFolder(str(val_dir), transform=val_tf, loader=cv2_bgr_loader)
+        if has_validation
+        else None
     )
 
     for ds in [train_ds] + ([val_ds] if val_ds else []):
@@ -1628,11 +1706,19 @@ def _train_multihead_shared_classify(
     weights_dir.mkdir(parents=True, exist_ok=True)
     best_ckpt_path = weights_dir / "best.pth"
 
-    sz = int(params.input_size)
+    resize_hw = tuple(params.input_size)  # (H, W)
     profile = spec.augmentation_profile
     mean, std = get_classifier_normalization_stats(monochrome=bool(profile.monochrome))
 
-    train_tf_steps = [transforms.Resize((sz, sz))]
+    from hydra_suite.training.canonical_transform import (
+        CanonicalFitTransform,
+        bgr_to_rgb_pil,
+    )
+
+    train_tf_steps = [
+        CanonicalFitTransform(resize_hw),
+        transforms.Lambda(bgr_to_rgb_pil),
+    ]
     if profile.fliplr > 0:
         train_tf_steps.append(transforms.RandomHorizontalFlip(p=profile.fliplr))
     if profile.flipud > 0:
@@ -1661,7 +1747,7 @@ def _train_multihead_shared_classify(
     train_tf_steps += [transforms.ToTensor(), transforms.Normalize(mean, std)]
     train_tf = transforms.Compose(train_tf_steps)
     val_tf = transforms.Compose(
-        [transforms.Resize((sz, sz))]
+        [CanonicalFitTransform(resize_hw), transforms.Lambda(bgr_to_rgb_pil)]
         + ([transforms.Grayscale(num_output_channels=3)] if profile.monochrome else [])
         + [transforms.ToTensor(), transforms.Normalize(mean, std)]
     )
@@ -1720,7 +1806,7 @@ def _train_multihead_shared_classify(
         trainable_layers=int(params.trainable_layers),
         head_hidden_dim=int(params.head_hidden_dim),
         head_dropout=float(params.head_dropout),
-        input_size=sz,
+        input_size=resize_hw,
     )
     model.to(device)
 
@@ -1829,7 +1915,7 @@ def _train_multihead_shared_classify(
                     class_names=[],
                     factor_names=list(factor_names),
                     class_names_per_factor=[list(c) for c in cnpf],
-                    input_size=(sz, sz),
+                    input_size=resize_hw,
                     best_val_acc=best_val_acc,
                     history=history,
                     trainable_layers=int(params.trainable_layers),
@@ -1852,7 +1938,7 @@ def _train_multihead_shared_classify(
             class_names=[],
             factor_names=list(factor_names),
             class_names_per_factor=[list(c) for c in cnpf],
-            input_size=(sz, sz),
+            input_size=resize_hw,
             best_val_acc=None,
             history=history,
             trainable_layers=int(params.trainable_layers),

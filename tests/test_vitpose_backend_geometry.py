@@ -63,3 +63,31 @@ def test_backend_predicts_end_to_end_at_a_square_geometry(tmp_path):
     assert len(results) == 1
     assert results[0].keypoints.shape == (9, 3)
     assert results[0].num_keypoints == 9
+
+
+NON_SQUARE = PoseGeometry((192, 256))
+
+
+def _write_non_square_ckpt(tmp_path):
+    model = build_vitpose("B", "classic", num_keypoints=9, geom=NON_SQUARE)
+    path = tmp_path / "nonsquare.pt"
+    torch.save(
+        {
+            "model_state": model.state_dict(),
+            "variant": "B",
+            "num_keypoints": 9,
+            "input_size": NON_SQUARE.to_hw(),
+        },
+        path,
+    )
+    return path
+
+
+def test_preferred_input_wh_is_the_true_non_square_size_not_a_square(tmp_path):
+    """Regression (Deviation C): preferred_input_wh must return the model's
+    actual (W, H) -- e.g. (192, 256) -- not max(W, H) collapsed to a square.
+    """
+    backend = ViTPoseBackend(str(_write_non_square_ckpt(tmp_path)), device="cpu")
+    assert backend.preferred_input_size == 256  # legacy scalar: the long side
+    assert backend.preferred_input_wh == (192, 256)
+    assert backend.preferred_input_wh[0] != backend.preferred_input_wh[1]

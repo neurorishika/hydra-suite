@@ -5,9 +5,14 @@ import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
+
+from hydra_suite.core.canonicalization.geometry import ClippingStats
+
+if TYPE_CHECKING:
+    from .config import PoseConfig
 
 from .cache.keys import (
     apriltag_cache_key,
@@ -210,6 +215,36 @@ def _load_obb_for_config(
     return load_obb_models(config.obb, runtime, batch_size=batch_size)
 
 
+def _pose_config_model_path(pose_config: PoseConfig) -> str:
+    """The active backend's checkpoint path for ``pose_config``, or "" if unset."""
+    if pose_config.backend == "yolo" and pose_config.yolo is not None:
+        return pose_config.yolo.model_path
+    if pose_config.backend == "sleap" and pose_config.sleap is not None:
+        return pose_config.sleap.model_path
+    if pose_config.backend == "vitpose" and pose_config.vitpose is not None:
+        return pose_config.vitpose.model_path
+    return ""
+
+
+def _warn_geometry_mismatch(model_path: str, session_geometry) -> None:
+    """F2 guard: log ``warn_on_geometry_mismatch``'s message, if any.
+
+    ``warn_on_geometry_mismatch`` (core/inference/canonical_meta.py) had no
+    production caller before this -- the model-side provenance stamp existed
+    but nothing ever consulted it, so a model trained under a different
+    canonical geometry than the current session loaded silently. Called once
+    per model at load time, here, the single place every stage's model path
+    and the session's ``CanonicalGeometry`` are both already in scope.
+    """
+    if not model_path:
+        return
+    from .canonical_meta import warn_on_geometry_mismatch
+
+    message = warn_on_geometry_mismatch(model_path, session_geometry)
+    if message:
+        logger.warning(message)
+
+
 def _load_all_models(
     config: InferenceConfig,
     runtime: RuntimeContext,
@@ -259,8 +294,19 @@ def _load_all_models(
         if config.headtail is not None
         else None
     )
+    if config.headtail is not None:
+        _warn_geometry_mismatch(config.headtail.model_path, config.canonical)
+
     cnn = [load_cnn_model(c, runtime) for c in config.cnn_phases]
+    for _cnn_cfg in config.cnn_phases:
+        _warn_geometry_mismatch(_cnn_cfg.model_path, config.canonical)
+
     pose = load_pose_model(config.pose, runtime) if config.pose is not None else None
+    if config.pose is not None:
+        _pose_model_path = _pose_config_model_path(config.pose)
+        if _pose_model_path:
+            _warn_geometry_mismatch(_pose_model_path, config.canonical)
+
     apriltag = load_apriltag_model(config.apriltag) if config.apriltag.enabled else None
     return _AllModels(
         obb=obb,
@@ -300,7 +346,7 @@ def _open_caches(
         headtail=(
             HeadTailCacheHandle(
                 path=cache_dir / "headtail.npz",
-                key=_k(headtail_cache_key(config.headtail)),
+                key=_k(headtail_cache_key(config.headtail, config.canonical)),
             )
             if config.headtail is not None
             else None
@@ -308,7 +354,7 @@ def _open_caches(
         cnn=[
             CNNCacheHandle(
                 path=cache_dir / f"cnn_{c.label}.npz",
-                key=_k(cnn_cache_key(c)),
+                key=_k(cnn_cache_key(c, config.canonical)),
                 label=c.label,
             )
             for c in config.cnn_phases
@@ -316,7 +362,7 @@ def _open_caches(
         pose=(
             PoseCacheHandle(
                 path=cache_dir / "pose.npz",
-                key=_k(pose_cache_key(config.pose)),
+                key=_k(pose_cache_key(config.pose, config.canonical)),
             )
             if config.pose is not None
             else None
@@ -505,6 +551,12 @@ class InferenceRunner:
         # False when opened read-only by load_frame. close() only flushes when
         # writable, so a backward (read) pass never overwrites the forward cache.
         self._caches_writable = False
+        # Run-scoped: counts detections clipped by the fixed canonical canvas
+        # and the worst overflow_ratio seen, across the life of this runner
+        # (one tracking pass). See ClippingStats; surfaced by the caller (e.g.
+        # TrackingWorker) in its end-of-run summary alongside the other
+        # tracking-loop counters.
+        self.clipping_stats = ClippingStats()
 
     @property
     def obb_class_names(self) -> "dict[int, str] | None":
@@ -662,10 +714,21 @@ class InferenceRunner:
                 empty_result.bg_u8 = self._models.bgsub.last_bg_u8
             return empty_result
 
-        ar = (
-            self.config.headtail.canonical_aspect_ratio if self.config.headtail else 2.0
-        )
-        mg = self.config.headtail.canonical_margin if self.config.headtail else 1.3
+        geometry = self.config.canonical
+        # F1 guard: every detection that will be canonicalized by ANY consumer
+        # (headtail, cnn, pose all warp through this one geometry -- see the
+        # comment below) gets its overflow_ratio recorded here, once, in the
+        # single place that already has both `filtered_obb` and `geometry` in
+        # scope -- rather than duplicating this at each of the many internal
+        # canonical_affine call sites (which would double-count a detection
+        # once per consumer stage).
+        if (
+            self._models.headtail is not None
+            or self._models.cnn
+            or self._models.pose is not None
+        ):
+            for _corners in filtered_obb.corners:
+                self.clipping_stats.record(_corners, geometry)
         # Canonical (native-extent) crops are now only consumed by the pose stage;
         # head-tail / CNN warp directly from the frame. Skip the extraction
         # entirely when there is no pose model (e.g. OBB-only / identity clips).
@@ -676,15 +739,15 @@ class InferenceRunner:
         suppress_foreign = (
             pose_cfg.suppress_foreign_regions if pose_cfg is not None else False
         )
-        background_color = (
-            pose_cfg.background_color if pose_cfg is not None else (0, 0, 0)
-        )
+        # PoseConfig.background_color was deleted: it was never populated by
+        # from_parameters (always (0, 0, 0)), a dead second home for the fill
+        # colour. Zero is now the one honest fill value everywhere.
+        background_color = (0, 0, 0)
         canonical_crops = (
             extract_canonical_crops(
                 frame,
                 filtered_obb,
-                ar,
-                mg,
+                geometry,
                 self.runtime,
                 suppress_foreign=suppress_foreign,
                 background_color=background_color,
@@ -714,13 +777,12 @@ class InferenceRunner:
                 self._models.headtail,
                 self.config.headtail,
                 self.runtime,
-                ar,
-                mg,
+                geometry,
             )
 
         def _do_cnn() -> list[CNNResult]:
             return [
-                run_cnn(frame, filtered_obb, mdl, cfg, self.runtime, ar, mg)
+                run_cnn(frame, filtered_obb, mdl, cfg, self.runtime, geometry)
                 for cfg, mdl in zip(self.config.cnn_phases, self._models.cnn)
             ]
 
@@ -733,8 +795,7 @@ class InferenceRunner:
                 self._models.pose,
                 self.config.pose,
                 self.runtime,
-                ar,
-                mg,
+                geometry,
             )
 
         def _do_at() -> AprilTagResult | None:
@@ -942,7 +1003,13 @@ class InferenceRunner:
         # layout is byte-identical to the synchronous depth=1 writer.
         async_mode = self.config.pipeline_depth >= 2
         writer = CacheWriter(handles, self.config.cnn_phases, async_mode=async_mode)
-        return Pipeline(stages, self.runtime, writer, depth=self.config.pipeline_depth)
+        return Pipeline(
+            stages,
+            self.runtime,
+            writer,
+            depth=self.config.pipeline_depth,
+            clipping_stats=self.clipping_stats,
+        )
 
     def run_batch_pass(
         self,
