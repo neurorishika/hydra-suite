@@ -839,6 +839,14 @@ class OrientedTrackVideoExporter:
         frame_data = detection_cache.get_frame(frame_id)
         from hydra_suite.core.inference.result import OBBResult as _OBBResult
 
+        if frame_data is None:
+            # No cached detection for this frame: every actual row is
+            # unresolvable. Count them as missing and return, rather than
+            # falling through to the legacy-tuple unpack, which would raise
+            # ``TypeError: cannot unpack non-iterable NoneType``.
+            missing["missing_detected_rows"] += len(rows)
+            return missing
+
         if isinstance(frame_data, _OBBResult):
             obb = frame_data
             meas = np.concatenate(

@@ -66,17 +66,17 @@ def test_apply_fit_no_pad_fast_path_matches_canvas_paste():
 
 
 def test_apply_fit_no_pad_fast_path_handles_single_channel():
-    # NOTE: see cv2->torch kernel-change comment above; tolerance, not exact.
+    # Identity fast path: model == inner == source at scale 1, so the resize is
+    # a pure copy on both sides -- this must be BYTE-EXACT. (The earlier atol=12
+    # was borrowed from the genuine cv2->torch downscale-kernel divergence and
+    # was too loose here: it would have hidden a several-level regression in
+    # this fast path, where there is no kernel disagreement at all.)
     rng = np.random.default_rng(2)
     fit = FitResult(model_wh=(16, 16), inner_wh=(16, 16), offset_xy=(0, 0), scale=1.0)
     img = rng.integers(0, 256, (16, 16), dtype=np.uint8)
     got = apply_fit(img, fit)
     assert got.shape == (16, 16, 1)
-    np.testing.assert_allclose(
-        got.astype(np.int16),
-        _reference_apply_fit(img, fit).astype(np.int16),
-        atol=12,
-    )
+    np.testing.assert_array_equal(got, _reference_apply_fit(img, fit))
 
 
 def test_classifier_preprocess_same_size_resize_is_identity():
