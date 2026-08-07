@@ -619,6 +619,33 @@ def _slice_config_from_params(
     )
 
 
+def _resolve_cnn_temperature(cnn_cfg_dict: dict, model_path: str) -> float:
+    """Resolve the calibration temperature for a CNN classifier phase.
+
+    Params win when they specify ``calibration_temperature`` (or the legacy
+    ``temperature`` key) explicitly. Otherwise, fall back to the artifact's
+    own stored per-factor temperature (Task 5's ``ClassifierMetadata``);
+    the flat/scalar consume path here uses the first factor's value. Any
+    missing/unreadable/uncalibrated artifact defaults to ``1.0`` (today's
+    behavior — no regression).
+    """
+    explicit = cnn_cfg_dict.get(
+        "calibration_temperature", cnn_cfg_dict.get("temperature")
+    )
+    if explicit is not None:
+        return float(explicit)
+    try:
+        from hydra_suite.core.individual.classification.backend import _select_loader
+
+        metadata = _select_loader(model_path).parse_metadata(model_path)
+        temps = metadata.calibration_temperature
+        if temps:
+            return float(temps[0])
+    except Exception:
+        pass
+    return 1.0
+
+
 def build_inference_config_from_params(params: dict) -> InferenceConfig:
     """Build an InferenceConfig from a tracking-worker params dict.
 
@@ -864,10 +891,8 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
                 scoring_mode=str(cnn_cfg_dict.get("scoring_mode", "atomic")),
                 match_bonus=float(cnn_cfg_dict.get("match_bonus", 0.1)),
                 mismatch_penalty=float(cnn_cfg_dict.get("mismatch_penalty", 0.3)),
-                calibration_temperature=float(
-                    cnn_cfg_dict.get(
-                        "calibration_temperature", cnn_cfg_dict.get("temperature", 1.0)
-                    )
+                calibration_temperature=_resolve_cnn_temperature(
+                    cnn_cfg_dict, cnn_model_path
                 ),
             )
         )
