@@ -15,8 +15,8 @@ import numpy as np
 
 from hydra_suite.core.canonicalization.geometry import (
     CanonicalGeometry,
+    ClippingStats,
     canonical_affine,
-    overflow_ratio,
 )
 from hydra_suite.core.identity.dataset.naming import (
     build_detection_image_filename,
@@ -126,8 +126,7 @@ class IndividualDatasetGenerator:
         # were clipped by the fixed canvas, and the worst overflow_ratio seen
         # (<= 1.0 means "fit"; written into metadata.json's parameters.canonical
         # block, see _write_metadata).
-        self._clipped_count = 0
-        self._worst_overflow_ratio = 0.0
+        self._clipping_stats = ClippingStats()
 
         # Save interval (use detections as-is, just control frequency)
         self.save_every_n_frames = params.get("INDIVIDUAL_SAVE_INTERVAL", 1)
@@ -377,10 +376,7 @@ class IndividualDatasetGenerator:
                 if M_can is not None:
                     _cw, _ch = self._geometry.canvas_w, self._geometry.canvas_h
 
-                    _ratio = overflow_ratio(corners, self._geometry)
-                    self._worst_overflow_ratio = max(self._worst_overflow_ratio, _ratio)
-                    if _ratio > 1.0:
-                        self._clipped_count += 1
+                    self._clipping_stats.record(corners, self._geometry)
 
                     M_canonical_i = M_can
                     crop = extract_canonical_crop(
@@ -565,10 +561,7 @@ class IndividualDatasetGenerator:
             if M_can is not None:
                 _cw, _ch = self._geometry.canvas_w, self._geometry.canvas_h
 
-                _ratio = overflow_ratio(corners, self._geometry)
-                self._worst_overflow_ratio = max(self._worst_overflow_ratio, _ratio)
-                if _ratio > 1.0:
-                    self._clipped_count += 1
+                self._clipping_stats.record(corners, self._geometry)
 
                 crop = extract_canonical_crop(
                     frame,
@@ -843,13 +836,18 @@ class IndividualDatasetGenerator:
                 "output_format": self.output_format,
                 "canonical": {
                     **self._geometry.to_dict(),
-                    "clipped_count": self._clipped_count,
-                    "worst_overflow_ratio": self._worst_overflow_ratio,
+                    "clipped_count": self._clipping_stats.clipped_count,
+                    "worst_overflow_ratio": self._clipping_stats.worst_overflow_ratio,
                 },
             },
             "images": self.metadata,
             "crops": self.metadata,  # Backward compatibility for older consumers.
         }
+
+        _clip_summary = self._clipping_stats.summary()
+        if _clip_summary:
+            logger.warning("Canonicalization clipping summary: %s", _clip_summary)
+        dataset_info["clipping_summary"] = _clip_summary
 
         try:
             with open(self.metadata_path, "w") as f:
@@ -880,6 +878,9 @@ class IndividualDatasetGenerator:
                 f.write("- Training individual identity classifiers\n")
                 f.write("- Pose estimation model training\n")
                 f.write("- Behavior classification\n")
+                if _clip_summary:
+                    f.write("\n## Clipping Warning\n\n")
+                    f.write(f"{_clip_summary}\n")
 
             return str(self.crops_dir.parent)
 

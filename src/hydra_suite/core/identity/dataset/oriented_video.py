@@ -17,8 +17,8 @@ import pandas as pd
 
 from hydra_suite.core.canonicalization.geometry import (
     CanonicalGeometry,
+    ClippingStats,
     canonical_affine,
-    overflow_ratio,
 )
 
 # Correction 20 / Task 17d: rewire to new DetectionCache.
@@ -123,6 +123,10 @@ class OrientedTrackVideoExportResult:
     missing_detected_rows: int = 0
     missing_interpolated_rows: int = 0
     invalid_geometry_rows: int = 0
+    clipped_count: int = 0
+    clipped_total_count: int = 0
+    worst_overflow_ratio: float = 0.0
+    clipping_summary: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the export result to a plain dictionary."""
@@ -253,8 +257,7 @@ class OrientedTrackVideoExporter:
                 self._geometry.aspect_ratio,
                 _DEFAULT_REFERENCE_BODY_PX,
             )
-        self._clipped_count = 0
-        self._worst_overflow_ratio = 0.0
+        self._clipping_stats = ClippingStats()
         self.background_color = self._normalize_background_color(background_color)
         self.suppress_foreign_obb = bool(suppress_foreign_obb)
         self.suppress_foreign_obb_images = bool(
@@ -350,6 +353,10 @@ class OrientedTrackVideoExporter:
                     missing_breakdown["missing_interpolated_rows"]
                 ),
                 invalid_geometry_rows=int(missing_breakdown["invalid_geometry_rows"]),
+                clipped_count=self._clipping_stats.clipped_count,
+                clipped_total_count=self._clipping_stats.total_count,
+                worst_overflow_ratio=self._clipping_stats.worst_overflow_ratio,
+                clipping_summary=self._clipping_stats.summary(),
             )
 
         self._emit(
@@ -379,6 +386,10 @@ class OrientedTrackVideoExporter:
                 missing_breakdown["missing_interpolated_rows"]
             ),
             invalid_geometry_rows=int(missing_breakdown["invalid_geometry_rows"]),
+            clipped_count=self._clipping_stats.clipped_count,
+            clipped_total_count=self._clipping_stats.total_count,
+            worst_overflow_ratio=self._clipping_stats.worst_overflow_ratio,
+            clipping_summary=self._clipping_stats.summary(),
         )
 
     def _write_canonical_metadata(self) -> None:
@@ -401,8 +412,8 @@ class OrientedTrackVideoExporter:
             parameters = dict(existing.get("parameters") or {})
             parameters["canonical"] = {
                 **self._geometry.to_dict(),
-                "clipped_count": self._clipped_count,
-                "worst_overflow_ratio": self._worst_overflow_ratio,
+                "clipped_count": self._clipping_stats.clipped_count,
+                "worst_overflow_ratio": self._clipping_stats.worst_overflow_ratio,
             }
             existing["parameters"] = parameters
             metadata_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
@@ -412,6 +423,10 @@ class OrientedTrackVideoExporter:
                 self.dataset_dir,
                 exc_info=True,
             )
+
+        _msg = self._clipping_stats.summary()
+        if _msg:
+            logger.warning("Canonicalization clipping summary: %s", _msg)
 
     @staticmethod
     def _emit(
@@ -1311,10 +1326,7 @@ class OrientedTrackVideoExporter:
             )
             return m_align, canvas_w, canvas_h
 
-        ratio = overflow_ratio(corners, self._geometry)
-        self._worst_overflow_ratio = max(self._worst_overflow_ratio, ratio)
-        if ratio > 1.0:
-            self._clipped_count += 1
+        self._clipping_stats.record(corners, self._geometry)
         return m_align, canvas_w, canvas_h
 
     @staticmethod
