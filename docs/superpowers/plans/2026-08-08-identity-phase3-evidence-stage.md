@@ -280,3 +280,13 @@ The honesty-relevant cutover: the tracker reads the inference-written sidecar; t
 - **Type consistency:** `EvidenceBuilder.build_frame_evidences(det_ids, per_det_factor_probs)` and `IdentityEvidenceStage.evidences_for_frame(...)` return `list[IdentityEvidence]`; the sidecar key signature is used identically in Tasks 1 and 4.
 
 **Risk to watch at execution:** the emitter today may, in some path, feed evidence from top-1 predictions rather than true posteriors — if so, switching to true per-factor softmax would change evidence and break byte-identical. Task 2's parity test MUST use the same input contract the live pipeline actually feeds the emitter; if the live pipeline feeds top-1 (not posteriors), that is itself the bug Phase 3 fixes and the "byte-identical" expectation must be renegotiated with the user (surface it, don't silently accept a diff). Confirm during Task 2 which the live pipeline uses (posteriors vs predictions) and report before proceeding to deletion.
+
+---
+
+## Phase-End Gate — RESULT (accepted)
+
+**Positions/geometry: byte-identical on all 7 clips, MPS + CUDA.** Evidence *values*: byte-identical (proven by `tests/identity/test_evidence_phase_basis_parity.py` for CNN+AprilTag and multi-CNN catalogs, and by direct sidecar comparison on `ant_cnn_identity`).
+
+**Accepted divergence (documented, not a regression) — `ant_cnn_identity` identity coverage:** the new inference `IdentityEvidenceStage` emits identity evidence for ~7.5% more detections than the old during-tracking `IdentityEvidenceEmitter` (10841 vs 10083), yielding a ~7% identity-label delta (mostly new-commits-where-baseline-was-empty; 12 genuine disagreements). Root cause (verified, 100%/0% split): the **baseline emitter had two bugs the new stage fixes** — (1) a det-id fallback (`precompute.py:690-693`) fed garbage stable-ids → phantom evidence on non-existent detection ids (the baseline-only "missing" rows appear in no tracking CSV); (2) crop extraction silently dropped some newly-spawned detections' CNN crops → no evidence (the new-only "extra" rows are real detections present in both CSVs). Matching the baseline would mean reintroducing these bugs. **This is a correctness improvement, treated like the documented head/tail π-flip noise floor.** Note: current `origin/main` carries this latent identity-evidence bug on colortag-style configs; Phase 3 corrects it.
+
+Durable guards: `test_evidence_phase_basis_parity` (evidence values) + `test_evidence_sidecar_consumption` (batch consumption) + this documented rationale.
