@@ -974,6 +974,17 @@ class TrackingEngineCore:
         use_cached_detections = False
         cached_frame_indices = set()
 
+        # Identity Phase 3, Task 4: resolve the catalog + per-phase calibration
+        # ONCE, ahead of every InferenceRunner construction below (both the
+        # yolo_obb and bg-sub paths), so run_realtime/run_batch_pass can write
+        # the identity-evidence sidecar during inference. None when no
+        # unique-identifier CNN classifier / tag label is configured -- every
+        # InferenceRunner below still takes identity_evidence=None in that
+        # case, which is a strict no-op (see InferenceRunner.__init__).
+        # The tracking-time emitter (below, per-CNN-phase) still runs too —
+        # deleted only in Task 5, once the tracker reads this sidecar instead.
+        _identity_evidence_run_config = self._resolve_identity_evidence_run_config(p)
+
         if detection_method == "yolo_obb":
             # ── YOLO OBB: InferenceRunner path ──────────────────────────────
             if self.backward_mode and not self.detection_cache_path:
@@ -1013,6 +1024,7 @@ class TrackingEngineCore:
                 # backward/replay run reproduce the same cache key and read the
                 # forward cache. None / non-sliced runs => key unchanged.
                 roi_mask=p.get("ROI_MASK"),
+                identity_evidence=_identity_evidence_run_config,
             )
 
             if self.backward_mode:
@@ -4189,6 +4201,132 @@ class TrackingEngineCore:
         video_path = Path(self.video_path)
         return video_path.parent / f".inference_cache_{video_path.stem}"
 
+    @staticmethod
+    def _resolve_cnn_phase_factor_labels(cnn_cfg_dict: dict) -> list[list[str]]:
+        """Per-factor class-label lists for one CNN phase config, or ``[]``.
+
+        Prefers ``class_names_per_factor`` stored on the config; falls back to
+        loading the artifact metadata (cheap; reads schema-version header
+        only, no weights). Shared by ``_build_cnn_evidence_emitter`` (the
+        tracking-time emitter) and ``_resolve_identity_evidence_run_config``
+        (Identity Phase 3, Task 4's inference-time stage config) so the two
+        paths can never diverge on what "this phase's classes" means.
+        """
+        label = str(cnn_cfg_dict.get("label", "cnn_identity"))
+        model_path = str(cnn_cfg_dict.get("model_path", "")).strip()
+        if not model_path:
+            return []
+        factor_labels = cnn_cfg_dict.get("class_names_per_factor") or []
+        factor_labels = [list(f) for f in factor_labels if f]
+        if factor_labels:
+            return factor_labels
+        try:
+            from hydra_suite.core.individual.classification.backend import (
+                ClassifierBackend,
+            )
+            from hydra_suite.runtime.resolver import ResolvedBackend
+
+            # Metadata-only read (class_names_per_factor); parsing the
+            # artifact header never loads weights, so CPU/torch is sufficient
+            # and device-independent here.
+            _backend = ClassifierBackend(
+                model_path,
+                ResolvedBackend("torch", "cpu", False),
+            )
+            _meta = getattr(_backend, "metadata", None)
+            if _meta is not None and hasattr(_meta, "class_names_per_factor"):
+                return [list(f) for f in _meta.class_names_per_factor]
+        except Exception:
+            logger.debug(
+                "Could not resolve class_names_per_factor for CNN '%s'",
+                label,
+                exc_info=True,
+            )
+        return []
+
+    @staticmethod
+    def _resolve_cnn_phase_calibration(cnn_cfg_dict: dict):
+        """Return ``(CalibrationModel | None, calibration_signature)`` for one CNN phase.
+
+        ``None`` (with an empty signature) when the configured temperature is
+        the identity (``1.0``) — matches ``EvidenceBuilder``'s no-op
+        contract. Shared by the tracking-time emitter and the inference-time
+        stage config so both apply the exact same calibration.
+        """
+        from hydra_suite.core.individual.identity.calibration import CalibrationModel
+
+        _calibration_temperature = float(
+            cnn_cfg_dict.get(
+                "calibration_temperature",
+                cnn_cfg_dict.get("temperature", 1.0),
+            )
+        )
+        _calibration_model = (
+            CalibrationModel(temperature=_calibration_temperature)
+            if abs(_calibration_temperature - 1.0) > 1e-6
+            else None
+        )
+        _calibration_signature = (
+            _calibration_model.signature if _calibration_model is not None else ""
+        )
+        return _calibration_model, _calibration_signature
+
+    def _resolve_identity_evidence_run_config(self, p: dict):
+        """Resolve `IdentityEvidenceRunConfig` for `InferenceRunner` (Task 4).
+
+        Reuses ``resolve_catalog_spec`` and the same per-phase factor-label /
+        calibration resolution the tracking-time emitter uses
+        (``_resolve_cnn_phase_factor_labels`` / ``_resolve_cnn_phase_calibration``),
+        so the inference-time ``IdentityEvidenceStage`` and the (still-running,
+        deleted only in Task 5) emitter can never diverge on catalog domain or
+        calibration.
+
+        Returns ``None`` when no unique-identifier CNN classifier or tag
+        label is configured — the caller passes that straight through to
+        ``InferenceRunner(identity_evidence=...)``, which treats ``None`` as
+        a strict no-op.
+        """
+        from hydra_suite.core.individual.identity.resolve import resolve_catalog_spec
+        from hydra_suite.core.inference.identity_evidence_config import (
+            IdentityEvidenceCNNPhaseConfig,
+            IdentityEvidenceRunConfig,
+        )
+
+        catalog_spec = resolve_catalog_spec(
+            p.get("CNN_CLASSIFIERS", []) or [], p.get("TAG_IDENTITY_LABELS", []) or []
+        )
+        if not catalog_spec.entries:
+            return None
+
+        cnn_phases = []
+        for cnn_cfg_dict in p.get("CNN_CLASSIFIERS", []) or []:
+            factor_labels = self._resolve_cnn_phase_factor_labels(cnn_cfg_dict)
+            if not factor_labels:
+                continue
+            calibration, calibration_signature = self._resolve_cnn_phase_calibration(
+                cnn_cfg_dict
+            )
+            cnn_phases.append(
+                IdentityEvidenceCNNPhaseConfig(
+                    label=str(cnn_cfg_dict.get("label", "cnn_identity")),
+                    class_names_per_factor=factor_labels,
+                    calibration=calibration,
+                    calibration_signature=calibration_signature,
+                )
+            )
+
+        tag_to_label = {
+            idx: str(lbl)
+            for idx, lbl in enumerate(p.get("TAG_IDENTITY_LABELS", []) or [])
+            if str(lbl).strip()
+        }
+
+        return IdentityEvidenceRunConfig(
+            catalog_spec=catalog_spec,
+            cnn_phases=tuple(cnn_phases),
+            tag_to_label=tag_to_label,
+        )
+
     def _build_cnn_evidence_emitter(
         self,
         cnn_cfg_dict: dict,
@@ -4219,56 +4357,16 @@ class TrackingEngineCore:
         model_path = str(cnn_cfg_dict.get("model_path", "")).strip()
         if not model_path:
             return None
-        # Prefer per-factor labels stored on the config; fall back to loading
-        # the artifact metadata (cheap; reads schema-version header only).
-        factor_labels = cnn_cfg_dict.get("class_names_per_factor") or []
-        factor_labels = [list(f) for f in factor_labels if f]
-        if not factor_labels:
-            try:
-                from hydra_suite.core.individual.classification.backend import (
-                    ClassifierBackend,
-                )
-                from hydra_suite.runtime.resolver import ResolvedBackend
-
-                # Metadata-only read (class_names_per_factor); parsing the
-                # artifact header never loads weights, so CPU/torch is sufficient
-                # and device-independent here.
-                _backend = ClassifierBackend(
-                    model_path,
-                    ResolvedBackend("torch", "cpu", False),
-                )
-                _meta = getattr(_backend, "metadata", None)
-                if _meta is not None and hasattr(_meta, "class_names_per_factor"):
-                    factor_labels = [list(f) for f in _meta.class_names_per_factor]
-            except Exception:
-                logger.debug(
-                    "Could not resolve class_names_per_factor for CNN '%s'; "
-                    "evidence emitter disabled.",
-                    label,
-                    exc_info=True,
-                )
-                return None
+        factor_labels = self._resolve_cnn_phase_factor_labels(cnn_cfg_dict)
         if not factor_labels:
             return None
 
-        from hydra_suite.core.individual.identity.calibration import CalibrationModel
         from hydra_suite.core.individual.properties.cache import (
             compute_classify_cache_id,
         )
 
-        _calibration_temperature = float(
-            cnn_cfg_dict.get(
-                "calibration_temperature",
-                cnn_cfg_dict.get("temperature", 1.0),
-            )
-        )
-        _calibration_model = (
-            CalibrationModel(temperature=_calibration_temperature)
-            if abs(_calibration_temperature - 1.0) > 1e-6
-            else None
-        )
-        _calibration_signature = (
-            _calibration_model.signature if _calibration_model is not None else ""
+        _calibration_model, _calibration_signature = (
+            self._resolve_cnn_phase_calibration(cnn_cfg_dict)
         )
 
         try:

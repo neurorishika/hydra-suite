@@ -12,7 +12,11 @@ import numpy as np
 from hydra_suite.core.canonicalization.geometry import ClippingStats
 
 if TYPE_CHECKING:
+    from hydra_suite.core.individual.identity.catalog import IdentityCatalog
+
     from .config import PoseConfig
+    from .identity_evidence_config import IdentityEvidenceRunConfig
+    from .stages.identity_evidence import IdentityEvidenceStage
 
 from .cache.keys import (
     apriltag_cache_key,
@@ -378,6 +382,103 @@ def _open_caches(
     )
 
 
+def _build_identity_evidence_stage(
+    identity_evidence: "IdentityEvidenceRunConfig",
+) -> tuple["IdentityCatalog", "IdentityEvidenceStage"]:
+    """Build the (catalog, stage) pair for one resolved identity-evidence config.
+
+    One ``EvidenceBuilder`` per CNN phase, keyed by the same phase label used
+    for ``_CacheSet.cnn`` / the ``cnn_reads`` dict passed to
+    ``IdentityEvidenceStage.evidences_for_frame`` -- Task 3's "unmatched key"
+    skip only ever triggers on a genuinely absent phase, never a naming
+    mismatch introduced here.
+    """
+    from hydra_suite.core.individual.identity.catalog import IdentityCatalog
+    from hydra_suite.core.individual.identity.evidence_builder import EvidenceBuilder
+
+    from .stages.identity_evidence import IdentityEvidenceStage
+
+    catalog = IdentityCatalog.from_spec(identity_evidence.catalog_spec)
+    cnn_builders = {
+        phase.label: EvidenceBuilder(
+            catalog,
+            phase.label,
+            phase.class_names_per_factor,
+            calibration=phase.calibration,
+            calibration_signature=phase.calibration_signature,
+        )
+        for phase in identity_evidence.cnn_phases
+    }
+    stage = IdentityEvidenceStage(catalog, cnn_builders, identity_evidence.tag_to_label)
+    return catalog, stage
+
+
+def write_identity_evidence_sidecar(
+    caches: "_CacheSet",
+    config: InferenceConfig,
+    stage: "IdentityEvidenceStage",
+    frame_range: "range",
+    out_path: Path,
+    catalog_labels: "tuple[str, ...]",
+) -> None:
+    """Read back raw per-frame caches over `frame_range` and write the evidence sidecar.
+
+    The batch seam Task 4 wires into ``run_batch_pass``: for each frame, reads
+    the raw (pre-filter) detection cache, re-derives the SAME filtered
+    detection set + order the pipeline used when it ran HeadTail/CNN/AprilTag
+    for that frame (``filter_for_source(config, raw_obb)`` -- deterministic,
+    no ``roi_mask``, exactly mirroring ``Pipeline._process_window``'s
+    ``filter_for_source(cfg, obb_result)`` call and ``InferenceRunner.load_frame``'s
+    own re-filter), and uses the resulting ``filtered_obb.detection_ids`` as the
+    stable ``det_ids`` list `IdentityEvidenceStage` expects -- aligned by
+    position with the CNN/AprilTag stages' own ``det_index`` (both are
+    sequential 0..N-1 over that SAME filtered set, since CNN/AprilTag ran
+    against the pipeline's filtered_obb, not the raw one).
+
+    ``caches`` must already be flushed to disk (``read_frame`` is disk-backed
+    only -- it never sees an unflushed in-memory write buffer), so this is
+    called with a cache set whose handles were opened AFTER the raw caches
+    were closed (either freshly reopened via ``_open_caches``, or the same
+    handles post-``close()``).
+    """
+    from hydra_suite.core.individual.identity.cache import IdentityEvidenceCache
+
+    evidence_cache = IdentityEvidenceCache(
+        out_path, catalog_labels=catalog_labels, mode="w"
+    )
+    if caches.detection is None:
+        evidence_cache.flush()
+        return
+
+    cnn_caches = list(caches.cnn)
+    for frame_idx in frame_range:
+        raw_obb = caches.detection.read_frame(frame_idx)
+        if raw_obb is None:
+            continue
+        filtered_obb, _ = filter_for_source(config, raw_obb)
+        if filtered_obb.num_detections == 0:
+            continue
+        det_ids = [int(d) for d in filtered_obb.detection_ids]
+
+        cnn_reads: dict[str, list] = {}
+        for cnn_cache in cnn_caches:
+            preds = cnn_cache.read_frame(frame_idx)
+            if preds:
+                cnn_reads[cnn_cache.label] = preds
+
+        tag_read = (
+            caches.apriltag.read_frame(frame_idx)
+            if caches.apriltag is not None
+            else None
+        )
+
+        evidences = stage.evidences_for_frame(frame_idx, det_ids, cnn_reads, tag_read)
+        if evidences:
+            evidence_cache.save_frame(frame_idx, evidences)
+
+    evidence_cache.flush()
+
+
 def _build_frame_result(
     frame_idx: int,
     filtered_obb: OBBResult,
@@ -521,6 +622,7 @@ class InferenceRunner:
         video_path: str | Path | None = None,
         cache_only: bool = False,
         roi_mask: "np.ndarray | None" = None,
+        identity_evidence: "IdentityEvidenceRunConfig | None" = None,
     ) -> None:
         self.config = config
         self.cache_dir = cache_dir
@@ -551,6 +653,23 @@ class InferenceRunner:
         # False when opened read-only by load_frame. close() only flushes when
         # writable, so a backward (read) pass never overwrites the forward cache.
         self._caches_writable = False
+        # Identity Phase 3, Task 4: when set, both run_realtime and
+        # run_batch_pass write an IdentityEvidence sidecar during the
+        # inference pass, ahead of tracking (Task 5 flips the tracker to read
+        # it). None (no identity configured) is a strict no-op -- neither pass
+        # touches identity evidence at all.
+        self._identity_evidence = identity_evidence
+        self._identity_catalog: "IdentityCatalog | None" = None
+        self._identity_stage: "IdentityEvidenceStage | None" = None
+        if identity_evidence is not None:
+            self._identity_catalog, self._identity_stage = (
+                _build_identity_evidence_stage(identity_evidence)
+            )
+        # Realtime-only: the evidence sidecar for the live/streaming pass,
+        # opened lazily on the first frame that has caches to write into
+        # (mirrors self._caches' own lazy-open-for-writing pattern) and
+        # flushed once in close().
+        self._identity_evidence_cache = None
         # Run-scoped: counts detections clipped by the fixed canonical canvas
         # and the worst overflow_ratio seen, across the life of this runner
         # (one tracking pass). See ClippingStats; surfaced by the caller (e.g.
@@ -850,6 +969,20 @@ class InferenceRunner:
             if caches.apriltag is not None and at_result is not None:
                 caches.apriltag.write_frame(frame_idx, result=at_result)
 
+        # Identity Phase 3, Task 4 (realtime seam): build + persist this
+        # frame's identity evidence inline, from the SAME in-hand
+        # filtered_obb/cnn_results/at_result -- no read-back needed (unlike
+        # the batch seam, which re-derives det_ids from a disk read-back
+        # after the pass). Identical evidence contract to the batch path:
+        # det_ids come from filtered_obb.detection_ids (stable ids, aligned
+        # by position with CNN/AprilTag det_index, both 0..N-1 over this same
+        # filtered_obb). Only runs when caches are open for writing -- a pure
+        # in-memory/preview realtime call (cache_dir=None) writes nothing.
+        if caches is not None and self._identity_stage is not None:
+            self._write_identity_evidence_realtime(
+                frame_idx, filtered_obb, cnn_results, at_result
+            )
+
         frame_result = _build_frame_result(
             frame_idx,
             filtered_obb,
@@ -895,6 +1028,83 @@ class InferenceRunner:
             _rt_prof_flush()
 
         return frame_result
+
+    def _identity_evidence_sidecar_path(self, source_name: str) -> Path:
+        """`<cache_dir>/detection.npz`-based sidecar path for `source_name` ("batch"/"live").
+
+        The signature slot is the Task 1 content hash (catalog + per-phase
+        calibration temps + this run's video signature) rather than a bare
+        pass-name string, so a catalog or calibration change invalidates only
+        the sidecar -- never the raw detection/CNN/AprilTag caches, whose keys
+        do not carry identity information at all.
+        """
+        from hydra_suite.core.tracking.identity.evidence_emitter import (
+            build_evidence_cache_path,
+        )
+
+        from .identity_evidence_key import identity_evidence_cache_key
+
+        assert self._identity_evidence is not None  # caller-guaranteed
+        key = identity_evidence_cache_key(
+            self._identity_evidence.catalog_spec,
+            self._identity_evidence.per_factor_temps(),
+            self._video_sig,
+        )
+        return build_evidence_cache_path(
+            str(self.cache_dir / "detection.npz"), source_name, key
+        )
+
+    def _write_identity_evidence_realtime(
+        self,
+        frame_idx: int,
+        filtered_obb: OBBResult,
+        cnn_results: list[CNNResult],
+        at_result: AprilTagResult | None,
+    ) -> None:
+        from hydra_suite.core.individual.identity.cache import IdentityEvidenceCache
+
+        if self._identity_evidence_cache is None:
+            self._identity_evidence_cache = IdentityEvidenceCache(
+                self._identity_evidence_sidecar_path("live"),
+                catalog_labels=self._identity_catalog.labels,
+                mode="w",
+            )
+
+        det_ids = [int(d) for d in filtered_obb.detection_ids]
+        cnn_reads = {
+            cnn_result.label: cnn_result.predictions
+            for cnn_result in cnn_results
+            if cnn_result is not None and cnn_result.predictions
+        }
+        evidences = self._identity_stage.evidences_for_frame(
+            frame_idx, det_ids, cnn_reads, at_result
+        )
+        if evidences:
+            self._identity_evidence_cache.save_frame(frame_idx, evidences)
+
+    def _write_identity_evidence_batch(self, start_frame: int, end_frame: int) -> None:
+        """Batch seam: read back the just-flushed raw caches, write the sidecar.
+
+        Called AFTER `run_batch_pass`'s caches are closed (flushed to disk) --
+        `CacheHandle.read_frame` is disk-backed only, so a read-back against
+        still-buffered (unflushed) writes would see nothing. Opens a fresh
+        `_CacheSet` (read-only use; no key/`is_valid()` surprises from reusing
+        already-closed write handles).
+        """
+        if self._identity_evidence is None or self.cache_dir is None:
+            return
+        read_caches = _open_caches(
+            self.config, self.cache_dir, self._video_sig, self._roi_mask
+        )
+        out_path = self._identity_evidence_sidecar_path("batch")
+        write_identity_evidence_sidecar(
+            read_caches,
+            self.config,
+            self._identity_stage,
+            range(start_frame, end_frame + 1),
+            out_path,
+            self._identity_catalog.labels,
+        )
 
     def detect_batch(
         self,
@@ -1082,6 +1292,15 @@ class InferenceRunner:
             for h in caches.all_handles():
                 h.close()
 
+        # Identity Phase 3, Task 4 (batch seam): write the evidence sidecar
+        # AFTER the raw caches above are flushed to disk -- and only on a
+        # successful pass (an exception in `pipeline.run` propagates out of
+        # the `try/finally` above and this line is never reached, matching
+        # the raw caches' own "no sidecar from a failed pass" behavior).
+        # `_write_identity_evidence_batch` is itself a no-op when no identity
+        # config was passed to this runner.
+        self._write_identity_evidence_batch(start_frame, end_frame)
+
     def _run_batch(
         self,
         frames: list[np.ndarray],
@@ -1159,6 +1378,13 @@ class InferenceRunner:
                 h.close()
             self._caches = None
             self._caches_writable = False
+        # Flush the realtime identity-evidence sidecar (Task 4), if any frame
+        # ever wrote to it. Mirrors the raw caches' write-mode-only flush
+        # above: this cache is only ever opened in mode="w" by
+        # _write_identity_evidence_realtime.
+        if self._identity_evidence_cache is not None:
+            self._identity_evidence_cache.flush()
+            self._identity_evidence_cache = None
         if self._models.obb is not None:
             self._models.obb.close()
         if self._models.bgsub is not None:
