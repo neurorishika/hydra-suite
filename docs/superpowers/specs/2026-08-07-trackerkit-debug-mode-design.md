@@ -151,7 +151,8 @@ cleaned up via the existing cleanup behavior (now forced on when `debug_mode` is
 
 Column naming: `lower_snake_case`. Columns are **conditional** — identity columns appear
 only if an identity/tag method ran; pose columns appear only if pose ran. A pure-tracking
-run yields just the 7 core columns.
+run yields the 8 core columns (`id, frame, time_s, x, y, heading_deg, state,
+detection_confidence`).
 
 | Clean column | Source | Notes |
 |---|---|---|
@@ -162,28 +163,39 @@ run yields just the 7 core columns.
 | `y` | `Y` | pixels |
 | `heading_deg` | `degrees(Theta)`, normalized to `[0, 360)` | **converted** from radians |
 | `state` | `State` | `active` / `occluded` / `interpolated` / `lost` |
+| `detection_confidence` | `DetectionConfidence` | **always** — the primary downstream filter signal |
 | `identity` | best stable label: `UniqueIdentityKey` → `IdentitySmoothedLabel` → `IdentityAssignedLabel`, or AprilTag id | **only if** identity/tags computed |
-| `<kpt>_x`, `<kpt>_y` | `PoseKpt_<kpt>_X` / `_Y` | **only if** pose computed; one pair per keypoint name |
+| `identity_confidence` | `IdentityAssignedConfidence` | **only if** identity/tags computed |
+| `<kpt>_x`, `<kpt>_y`, `<kpt>_conf` | `PoseKpt_<kpt>_X` / `_Y` / `_Conf` | **only if** pose computed; one triple per keypoint name |
+
+**Confidence policy:** User mode includes the *curated, actionable* confidences people
+filter on downstream — `detection_confidence` (always), `identity_confidence` (if identity
+ran), and per-keypoint `<kpt>_conf` (if pose ran). These are per-row **data-quality
+signals**, not tracer diagnostics, so they belong in the clean output. Pure tracer
+internals (`PositionUncertainty`, `AssignmentConfidence`, `IdentityPosteriorMargin`,
+`IdentityEntropy`, `IdentityEvidenceSources`, `IdentityConflictFlag`) remain Debug-only.
 
 **Row policy:** keep **all rows** for all animals across all frames, including
 `occluded` / `lost` / `interpolated` frames, with the `state` column indicating provenance
 (`lost` rows may have NaN `x`/`y`). This is the most transparent option for the user.
 
 **Dropped in User mode (Debug-only):** `TrackID`, `Index`, `DetectionID`,
-`DetectionConfidence`, `AssignmentConfidence`, `PositionUncertainty`, all `Identity*`
-diagnostics (`IdentityPosteriorMargin`, `IdentityEntropy`, `IdentityEvidenceSources`,
-`IdentityConflictFlag`, `IdentitySlotLockLabel`, `IdentityCommitted`), `PoseKpt_*_Conf`
-and pose-summary columns (`PoseMeanConf`, `PoseValidFraction`, `PoseNumValid`,
-`PoseNumKeypoints`), heading diagnostics (`HeadingMethod`, `HeadingIsDirected`,
-`HeadTailAngleRad`, `HeadTailClassifierConf`), CNN per-class probability columns, and
-AprilTag `Conf` / `Hamming`.
+`AssignmentConfidence`, `PositionUncertainty`, `Identity*` diagnostics
+(`IdentityPosteriorMargin`, `IdentityEntropy`, `IdentityEvidenceSources`,
+`IdentityConflictFlag`, `IdentitySlotLockLabel`, `IdentityCommitted`), pose-summary
+columns (`PoseMeanConf`, `PoseValidFraction`, `PoseNumValid`, `PoseNumKeypoints`),
+heading diagnostics (`HeadingMethod`, `HeadingIsDirected`, `HeadTailAngleRad`,
+`HeadTailClassifierConf`), CNN per-class probability columns, and AprilTag `Hamming`.
+(`DetectionConfidence`, `IdentityAssignedConfidence`, and `PoseKpt_*_Conf` are **kept** —
+see the curated confidence policy above.)
 
 ## Testing
 
 - **User-mode golden:** commit a golden for the consolidated schema — column set, renames,
   radian→degree conversion, `time_s` derivation, and conditional pose/identity columns —
-  across three fixtures: `fly_obb` (pure tracking, 7 core columns), `ant_cnn_identity`
-  (adds `identity`), and `ant_pose_headtail` (adds pose keypoint columns).
+  including the curated confidences, across three fixtures: `fly_obb` (pure tracking —
+  core columns + `detection_confidence`), `ant_cnn_identity` (adds `identity` +
+  `identity_confidence`), and `ant_pose_headtail` (adds `<kpt>_x/_y/_conf`).
 - **Debug-mode equivalence:** assert Debug-mode output is byte-identical to today via the
   existing equivalence harness (`tools/equivalence/run_matrix.sh`); debug schema is
   unchanged, so legacy-vs-current stays at the determinism floor on **MPS and CUDA**.
