@@ -76,6 +76,7 @@ from hydra_suite.core.inference.config import (  # noqa: E402
 from hydra_suite.core.inference.runner import InferenceRunner  # noqa: E402
 from hydra_suite.core.tracking.ingest.frame_result_bridge import (  # noqa: E402
     build_density_cache_dict,
+    evidence_cache_for_cnn_phase_state,
     frame_result_to_meas,
     populate_live_cnn_store,
     populate_live_pose_store,
@@ -1598,13 +1599,24 @@ class TrackingEngineCore:
             _is_identity_provider = bool(cnn_cfg_dict.get("unique_identifier", False))
             live_or_path = live_cnn_caches.get(label)
             if isinstance(live_or_path, LiveCNNIdentityStore):
+                # A LiveCNNIdentityStore backs BOTH true realtime/streaming
+                # passes AND the ordinary non-realtime batch/cached tracking
+                # pass (InferenceRunner-driven precompute is active either
+                # way) -- but only realtime passes populate
+                # inference_runner.identity_evidence_cache (via
+                # run_realtime). Non-realtime passes must read the on-disk
+                # batch sidecar instead, or the online decoder gets zero
+                # evidence (Identity Phase 3 regression, 2026-08-08).
+                _phase_evidence_cache = evidence_cache_for_cnn_phase_state(
+                    effective_realtime_tracking_mode, _batch_evidence_cache
+                )
                 _cnn_phase_states.append(
                     {
                         "label": label,
                         "cache": live_or_path,
                         "model_labels": model_labels,
                         "class_names_per_factor": _cnpf_phase,
-                        "evidence_cache": None,
+                        "evidence_cache": _phase_evidence_cache,
                         "is_identity_provider": _is_identity_provider,
                     }
                 )

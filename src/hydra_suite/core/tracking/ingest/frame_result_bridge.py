@@ -157,6 +157,36 @@ def populate_live_cnn_store(
     store.update_frame(frame_idx, class_preds)
 
 
+def evidence_cache_for_cnn_phase_state(
+    effective_realtime_tracking_mode: bool,
+    batch_evidence_cache,
+):
+    """Which ``IdentityEvidenceCache`` a CNN phase's ``_cnn_phase_states`` entry
+    should carry for the online identity decoder to consume.
+
+    Identity Phase 3 regression fix: a phase state is built with a
+    ``LiveCNNIdentityStore`` (for its top-1 per-frame predictions, used in the
+    pre-assignment cost term) whenever ``InferenceRunner``-driven precompute
+    is active -- this happens for BOTH true realtime/streaming passes AND the
+    ordinary non-realtime batch/cached tracking pass (which pre-runs
+    ``InferenceRunner.run_batch_pass`` up front, then replays from cache).
+    Only the realtime path populates ``inference_runner.identity_evidence_cache``
+    (via ``run_realtime`` -> ``_write_identity_evidence_realtime``); the batch
+    path never calls ``run_realtime``, so that in-memory cache stays empty and
+    the on-disk "batch" sidecar (``batch_evidence_cache``, opened once up front
+    from ``identity_evidence_sidecar_path("batch")``) is the only place with
+    evidence for non-realtime passes.
+
+    Returns ``batch_evidence_cache`` for non-realtime passes (so the tracking
+    loop reads the disk sidecar) and ``None`` for realtime passes (so the
+    tracking loop's fallback reads ``inference_runner.identity_evidence_cache``
+    instead, which is the ONLY cache populated live during ``run_realtime``).
+    """
+    if effective_realtime_tracking_mode:
+        return None
+    return batch_evidence_cache
+
+
 def populate_live_pose_store(
     store: "LivePosePropertiesStore",
     pose: "PoseResult | None",
