@@ -974,17 +974,30 @@ class TrackingEngineCore:
         cached_frame_indices = set()
 
         # Identity Phase 3, Task 4: resolve the catalog + per-phase calibration
-        # ONCE, ahead of every InferenceRunner construction below (both the
-        # yolo_obb and bg-sub paths), so run_realtime/run_batch_pass can write
-        # the identity-evidence sidecar during inference. None when no
-        # unique-identifier CNN classifier / tag label is configured -- every
-        # InferenceRunner below still takes identity_evidence=None in that
-        # case, which is a strict no-op (see InferenceRunner.__init__).
+        # ONCE, ahead of the yolo_obb InferenceRunner construction below, so
+        # run_realtime/run_batch_pass can write the identity-evidence sidecar
+        # during inference. None when no unique-identifier CNN classifier /
+        # tag label is configured -- the InferenceRunner below still takes
+        # identity_evidence=None in that case, which is a strict no-op (see
+        # InferenceRunner.__init__).
         # Identity Phase 3, Task 5: the tracker's online decoder reads this
         # sidecar directly (inference_runner.identity_evidence_cache /
         # identity_evidence_sidecar_path("batch")) -- the tracking-time
         # emitter has been removed.
-        _identity_evidence_run_config = self._resolve_identity_evidence_run_config(p)
+        #
+        # bg-sub does NOT get this (final-fix wave, IMPORTANT #2): the
+        # bg-sub InferenceRunner's InferenceConfig (below, `bgsub_inference_config`)
+        # never sets `cnn_phases`, so its Pipeline never runs the CNN stage and
+        # never writes CNN caches -- there is nothing for an identity-evidence
+        # sidecar to be built from on the bg-sub path (bg-sub + CNN online
+        # identity is unsupported today). Resolving this config unconditionally
+        # for bg-sub runs was dead work; only resolve it for the path that can
+        # use it.
+        _identity_evidence_run_config = (
+            self._resolve_identity_evidence_run_config(p)
+            if detection_method == "yolo_obb"
+            else None
+        )
 
         if detection_method == "yolo_obb":
             # ── YOLO OBB: InferenceRunner path ──────────────────────────────
@@ -1541,10 +1554,35 @@ class TrackingEngineCore:
                     _batch_evidence_cache = IdentityEvidenceCache(
                         str(_batch_ev_path), mode="r"
                     )
+                elif _identity_evidence_run_config is not None:
+                    # A catalog IS configured (identity is expected to work),
+                    # but the sidecar this pass's InferenceRunner should have
+                    # just written is missing (final-fix wave, IMPORTANT #3).
+                    # Silently continuing here means zero CNN evidence for the
+                    # whole pass with no diagnostic -- loud enough to be
+                    # diagnosable (write/read cache-key drift), but still
+                    # non-fatal: identity is best-effort.
+                    logger.warning(
+                        "Identity evidence sidecar not found at expected path "
+                        "%s -- CNN identity evidence will be unavailable for "
+                        "this pass (catalog is configured, so this is likely "
+                        "a cache-key mismatch or the inference pass failed to "
+                        "write the sidecar).",
+                        _batch_ev_path,
+                    )
             except Exception:
-                logger.debug(
-                    "Identity evidence sidecar unavailable (batch)", exc_info=True
-                )
+                if _identity_evidence_run_config is not None:
+                    logger.warning(
+                        "Identity evidence sidecar unreadable (batch) -- CNN "
+                        "identity evidence will be unavailable for this pass "
+                        "(catalog is configured; this is likely a corrupt or "
+                        "incompatible sidecar file).",
+                        exc_info=True,
+                    )
+                else:
+                    logger.debug(
+                        "Identity evidence sidecar unavailable (batch)", exc_info=True
+                    )
 
         # Open CNN identity caches for reading during tracking loop (multi-phase).
         _cnn_phase_states = []
@@ -3040,7 +3078,15 @@ class TrackingEngineCore:
                                 )
                                 if _ev.source_name == _label
                             }
-                            _source_labels = _evidence_cache.catalog_labels
+                            # Phase-local basis for THIS source, not the
+                            # shared global catalog (final-fix wave, CRITICAL):
+                            # each CNN phase's evidence was built against its
+                            # own phase catalog, so the remap below must be
+                            # given that phase's labels to reproduce the old
+                            # emitter's phase->global remap byte-identically.
+                            _source_labels = _evidence_cache.catalog_labels_for_source(
+                                _label
+                            )
 
                             for _r, _c in _all_matched_pairs:
                                 _det_id = (
@@ -4195,6 +4241,9 @@ class TrackingEngineCore:
             catalog_spec=catalog_spec,
             cnn_phases=tuple(cnn_phases),
             tag_to_label=tag_to_label,
+            # Provenance only (final-fix wave, MINOR): matches the old
+            # tracking-time IdentityEvidenceEmitter's runtime_signature field.
+            runtime_signature=str(p.get("RUNTIME_TIER", "") or ""),
         )
 
     def _emit_inference_progress(self, done: int, total: int) -> None:

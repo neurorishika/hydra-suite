@@ -26,7 +26,10 @@ from hydra_suite.core.individual.classification.cnn import ClassPrediction
 from hydra_suite.core.individual.identity.cache import IdentityEvidenceCache
 from hydra_suite.core.individual.identity.catalog import IdentityCatalog
 from hydra_suite.core.individual.identity.evidence import IdentityEvidence
-from hydra_suite.core.individual.identity.evidence_builder import EvidenceBuilder
+from hydra_suite.core.individual.identity.evidence_builder import (
+    EvidenceBuilder,
+    build_phase_catalog_labels,
+)
 
 if TYPE_CHECKING:
     from hydra_suite.core.individual.identity.calibration import CalibrationModel
@@ -81,8 +84,6 @@ class IdentityEvidenceEmitter:
         calibration_signature: str = "",
         calibration: "CalibrationModel | None" = None,
     ) -> None:
-        import itertools
-
         self._source_name = source_name
         self._runtime_signature = runtime_signature
         self._calibration_signature = calibration_signature
@@ -92,22 +93,10 @@ class IdentityEvidenceEmitter:
         non_empty_factors = [fl for fl in class_labels_per_factor if fl]
         self._is_composite = len(non_empty_factors) > 1
 
-        if self._is_composite:
-            # Multi-factor: composite catalog as cartesian product of factor labels.
-            catalog_labels: list[str] = ["unknown"]
-            for combo in itertools.product(*non_empty_factors):
-                label = "_".join(str(c) for c in combo if c)
-                if label and label not in catalog_labels:
-                    catalog_labels.append(label)
-        else:
-            # Single factor or atomic: flat catalog (original behaviour).
-            catalog_labels = ["unknown"]
-            for factor_labels in class_labels_per_factor:
-                for lbl in factor_labels:
-                    if lbl and lbl not in catalog_labels:
-                        catalog_labels.append(lbl)
-
-        self._catalog_labels = tuple(catalog_labels)
+        # Shared with the inference-time evidence stage (Identity Phase 3
+        # final-fix wave): both build a CNN phase's own cartesian catalog
+        # basis with this exact algorithm.
+        self._catalog_labels = build_phase_catalog_labels(class_labels_per_factor)
         self._builder = EvidenceBuilder(
             IdentityCatalog(labels=self._catalog_labels),
             source_name,

@@ -73,6 +73,11 @@ class IdentityEvidenceRunConfig:
     catalog_spec: "IdentityCatalogSpec"
     cnn_phases: tuple[IdentityEvidenceCNNPhaseConfig, ...] = ()
     tag_to_label: dict = field(default_factory=dict)
+    runtime_signature: str = ""
+    """Provenance-only (RUNTIME_TIER string). Stamped onto every CNN
+    ``IdentityEvidence`` this run produces, matching the old
+    ``IdentityEvidenceEmitter``'s ``runtime_signature`` field. Never affects
+    the evidence values themselves."""
 
     def per_factor_temps(self) -> Mapping[str, tuple[float, ...]]:
         """Per-phase calibration temperature(s), for the sidecar cache key.

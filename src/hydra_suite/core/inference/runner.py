@@ -393,23 +393,46 @@ def _build_identity_evidence_stage(
     ``IdentityEvidenceStage.evidences_for_frame`` -- Task 3's "unmatched key"
     skip only ever triggers on a genuinely absent phase, never a naming
     mismatch introduced here.
+
+    Catalog basis (final-fix wave, CRITICAL): each CNN phase's
+    ``EvidenceBuilder`` is built against that phase's OWN phase-local
+    cartesian catalog (``build_phase_catalog_labels``), not the shared
+    global catalog. This reproduces the old tracking-time
+    ``IdentityEvidenceEmitter``'s per-source catalog basis: a phase with
+    fewer reachable labels than the global catalog (CNN+AprilTag configs, or
+    multi-CNN-phase configs where each phase only covers its own labels)
+    never sees "phase-unreachable" global entries floored to the builder's
+    internal ``1e-6`` -- those entries simply do not exist in the phase
+    catalog. The global catalog is still built here (and used for AprilTag
+    evidence, which is already global-basis). The tracking worker's
+    ``_remap_source_log_probs_to_catalog`` (``core/tracking/worker.py``)
+    then remaps each phase's evidence from its phase basis to the global
+    catalog with the SAME ``1e-300`` floor + renormalize the old emitter
+    path relied on, via ``IdentityEvidenceStage.catalog_labels_by_source``
+    persisted alongside the sidecar.
     """
     from hydra_suite.core.individual.identity.catalog import IdentityCatalog
-    from hydra_suite.core.individual.identity.evidence_builder import EvidenceBuilder
+    from hydra_suite.core.individual.identity.evidence_builder import (
+        EvidenceBuilder,
+        build_phase_catalog_labels,
+    )
 
     from .stages.identity_evidence import IdentityEvidenceStage
 
     catalog = IdentityCatalog.from_spec(identity_evidence.catalog_spec)
-    cnn_builders = {
-        phase.label: EvidenceBuilder(
-            catalog,
+    cnn_builders = {}
+    for phase in identity_evidence.cnn_phases:
+        phase_catalog = IdentityCatalog(
+            labels=build_phase_catalog_labels(phase.class_names_per_factor)
+        )
+        cnn_builders[phase.label] = EvidenceBuilder(
+            phase_catalog,
             phase.label,
             phase.class_names_per_factor,
             calibration=phase.calibration,
             calibration_signature=phase.calibration_signature,
+            runtime_signature=identity_evidence.runtime_signature,
         )
-        for phase in identity_evidence.cnn_phases
-    }
     stage = IdentityEvidenceStage(catalog, cnn_builders, identity_evidence.tag_to_label)
     return catalog, stage
 
@@ -445,7 +468,10 @@ def write_identity_evidence_sidecar(
     from hydra_suite.core.individual.identity.cache import IdentityEvidenceCache
 
     evidence_cache = IdentityEvidenceCache(
-        out_path, catalog_labels=catalog_labels, mode="w"
+        out_path,
+        catalog_labels=catalog_labels,
+        mode="w",
+        catalog_labels_by_source=stage.catalog_labels_by_source,
     )
     if caches.detection is None:
         evidence_cache.flush()
@@ -1090,6 +1116,7 @@ class InferenceRunner:
                 self._identity_evidence_sidecar_path("live"),
                 catalog_labels=self._identity_catalog.labels,
                 mode="w",
+                catalog_labels_by_source=self._identity_stage.catalog_labels_by_source,
             )
 
         det_ids = [int(d) for d in filtered_obb.detection_ids]

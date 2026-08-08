@@ -39,6 +39,47 @@ if TYPE_CHECKING:
     from hydra_suite.core.individual.identity.catalog import IdentityCatalog
 
 
+def build_phase_catalog_labels(
+    class_labels_per_factor: list[list[str]],
+) -> tuple[str, ...]:
+    """Build one CNN phase's own cartesian catalog label tuple.
+
+    This is the exact label-construction algorithm
+    ``IdentityEvidenceEmitter.__init__`` used to build its per-source
+    (phase-scoped) catalog: for composite (multi-factor) sources, the
+    cartesian product of the non-empty factors' labels, joined with ``"_"``,
+    deduplicated in first-seen order; for a single (or atomic) factor, the
+    flat union of that factor's labels. ``"unknown"`` is always the leading
+    entry.
+
+    Extracted as a standalone, shared function (Identity Phase 3 final-fix
+    wave) so both the emitter and the inference-time
+    ``_build_identity_evidence_stage`` build a CNN phase's ``EvidenceBuilder``
+    against the *same* phase-local catalog basis -- required for the tracking
+    worker's ``_remap_source_log_probs_to_catalog`` to reproduce the old
+    emitter's phase-basis -> global-catalog remap byte-identically.
+    """
+    import itertools
+
+    non_empty_factors = [fl for fl in class_labels_per_factor if fl]
+    is_composite = len(non_empty_factors) > 1
+
+    if is_composite:
+        catalog_labels: list[str] = ["unknown"]
+        for combo in itertools.product(*non_empty_factors):
+            label = "_".join(str(c) for c in combo if c)
+            if label and label not in catalog_labels:
+                catalog_labels.append(label)
+    else:
+        catalog_labels = ["unknown"]
+        for factor_labels in class_labels_per_factor:
+            for lbl in factor_labels:
+                if lbl and lbl not in catalog_labels:
+                    catalog_labels.append(lbl)
+
+    return tuple(catalog_labels)
+
+
 class EvidenceBuilder:
     """Map per-detection per-factor raw posteriors to catalog-level evidence.
 
@@ -137,6 +178,10 @@ class EvidenceBuilder:
     @property
     def catalog_labels(self) -> tuple[str, ...]:
         return self._catalog_labels
+
+    @property
+    def source_name(self) -> str:
+        return self._source_name
 
     def build_frame_evidences(
         self,

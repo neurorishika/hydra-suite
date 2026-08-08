@@ -67,6 +67,26 @@ class IdentityEvidenceStage:
         self._tag_to_label = tag_to_label
         self._tag_source_name = tag_source_name
 
+    @property
+    def catalog_labels_by_source(self) -> dict[str, tuple[str, ...]]:
+        """Per-source catalog-label basis for every evidence-producing source.
+
+        Each CNN phase's entry is that phase's own (possibly smaller)
+        phase-local catalog -- the basis its ``EvidenceBuilder`` was built
+        against, NOT the shared global catalog. ``tag_source_name`` maps to
+        the global catalog (AprilTag evidence is already global-basis).
+        Persisted alongside the sidecar so the tracking worker's
+        ``_remap_source_log_probs_to_catalog`` can remap each CNN phase's
+        evidence from its own phase basis to the global catalog exactly as
+        the old ``IdentityEvidenceEmitter`` path did.
+        """
+        labels_by_source = {
+            label: builder.catalog_labels
+            for label, builder in self._cnn_builders.items()
+        }
+        labels_by_source[self._tag_source_name] = self._catalog.labels
+        return labels_by_source
+
     def evidences_for_frame(
         self,
         frame_idx: int,
