@@ -152,6 +152,9 @@ def write_classifier_multihead_manifest(
     input_size: tuple[int, int],
     monochrome: bool,
     recommended_confidence_threshold: float | None = None,
+    calibration_temperature: list[float] | None = None,
+    calibration_signature: str | None = None,
+    calibration_ece: list[float] | None = None,
     kind: str = _TRACKERKIT_MULTIHEAD_KIND,
 ) -> Path:
     """Write a TrackerKit-readable multi-head classifier manifest.
@@ -177,6 +180,12 @@ def write_classifier_multihead_manifest(
         payload["recommended_confidence_threshold"] = float(
             min(1.0, max(0.0, recommended_confidence_threshold))
         )
+    if calibration_temperature is not None:
+        payload["calibration_temperature"] = list(calibration_temperature)
+    if calibration_signature is not None:
+        payload["calibration_signature"] = str(calibration_signature)
+    if calibration_ece is not None:
+        payload["calibration_ece"] = list(calibration_ece)
     manifest_abs.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return manifest_abs
 
@@ -226,6 +235,15 @@ def _normalize_classifier_meta(meta: dict[str, Any]) -> dict[str, Any]:
             )
         except (TypeError, ValueError):
             pass
+    calibration_temperature = meta.get("calibration_temperature")
+    if calibration_temperature is not None:
+        normalized["calibration_temperature"] = list(calibration_temperature)
+    calibration_signature = meta.get("calibration_signature")
+    if calibration_signature is not None:
+        normalized["calibration_signature"] = str(calibration_signature)
+    calibration_ece = meta.get("calibration_ece")
+    if calibration_ece is not None:
+        normalized["calibration_ece"] = list(calibration_ece)
     if len(class_names_per_factor) == 1:
         normalized["class_names"] = list(class_names_per_factor[0])
     return normalized
@@ -263,6 +281,9 @@ def classifier_metadata_for_artifact(
                 "input_size": list(meta.input_size),
                 "monochrome": meta.monochrome,
                 "recommended_confidence_threshold": meta.recommended_confidence_threshold,
+                "calibration_temperature": meta.calibration_temperature,
+                "calibration_signature": meta.calibration_signature,
+                "calibration_ece": meta.calibration_ece,
             }
         )
 

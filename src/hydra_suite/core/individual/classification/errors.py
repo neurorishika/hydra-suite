@@ -26,3 +26,14 @@ class ClassifierConfigError(ClassifierError):
 
 class HeadTailFormatError(ClassifierFormatError):
     """Model does not satisfy head-tail consumer constraints."""
+
+
+class CalibrationRequiredError(ClassifierConfigError):
+    """A ``unique_identifier`` CNN model is uncalibrated but calibration is
+    mandatory for this config (``IDENTITY_CALIBRATION_REQUIRED``).
+
+    Raised by ``build_inference_config_from_params``'s mandatory-calibration
+    gate. Callers that want to proceed anyway should set the
+    ``IDENTITY_CALIBRATION_OVERRIDE`` param, which downgrades this to a
+    logged warning instead of raising.
+    """

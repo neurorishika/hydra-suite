@@ -132,7 +132,12 @@ class IdentityConfig:
                 cfg_get(cfg, "identity_gates_trajectory_structure", True)
             ),
         )
-        return cls(realtime=realtime, posthoc=posthoc)
+        calibration_required = bool(cfg_get(cfg, "calibration_required", False))
+        return cls(
+            calibration_required=calibration_required,
+            realtime=realtime,
+            posthoc=posthoc,
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

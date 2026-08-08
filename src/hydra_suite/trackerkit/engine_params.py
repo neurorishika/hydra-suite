@@ -1139,6 +1139,10 @@ def build_engine_params(
             identity_cfg.realtime.slot_lock.rejoin_velocity_budget
         ),
         "IDENTITY_REJOIN_DIST_FLOOR": identity_cfg.realtime.slot_lock.rejoin_dist_floor,
+        "IDENTITY_CALIBRATION_REQUIRED": identity_cfg.calibration_required,
+        "IDENTITY_CALIBRATION_OVERRIDE": bool(
+            _cfg_get(cfg, "identity_calibration_override", default=False)
+        ),
         "APRILTAG_FAMILY": str(_cfg_get(cfg, "apriltag_family", default="tag36h11")),
         "APRILTAG_DECIMATE": float(_cfg_get(cfg, "apriltag_decimate", default=1.0)),
         "COLOR_TAG_MODEL_PATH": str(_cfg_get(cfg, "color_tag_model_path", default="")),

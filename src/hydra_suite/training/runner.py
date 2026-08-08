@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import dataclasses
+import logging
 import random
 import re
 import shutil
@@ -17,6 +18,8 @@ from .contracts import CustomCNNParams, TrainingRole, TrainingRunSpec
 LogCallback = Callable[[str], None]
 ProgressCallback = Callable[[int, int], None]
 CancelCheck = Callable[[], bool]
+
+logger = logging.getLogger(__name__)
 
 
 def _safe_log(cb: LogCallback | None, message: str) -> None:
@@ -642,6 +645,46 @@ def _run_tiny_validation(model, val_loader, device, ignore_index=None):
     return correct / max(1, total)
 
 
+def _calibrate_and_pack(
+    model, val_loader, device, *, num_factors: int = 1, split_logits=None
+) -> dict:
+    """Fit calibration on the (best) model + val loader; return save kwargs (or {} if no val).
+
+    Calibration is best-effort: an empty/degenerate val loader or any other
+    fit failure must never sink an otherwise fully-trained run, so any
+    exception here degrades to "uncalibrated but saved" ({}) rather than
+    propagating.
+    """
+    if val_loader is None:
+        return {}
+    from hydra_suite.training.calibration_fit import fit_calibration_from_val
+
+    try:
+        res = fit_calibration_from_val(
+            model,
+            val_loader,
+            device,
+            split_logits=split_logits,
+            num_factors=num_factors,
+        )
+    except Exception as exc:  # calibration is best-effort; never lose the trained model
+        logger.warning(
+            "Calibration fit failed (%s); saving model without calibration.", exc
+        )
+        return {}
+    logger.info(
+        "Calibration fit: T=%s  ECE %s -> %s",
+        [round(t, 3) for t in res.temperatures],
+        [round(e, 4) for e in res.ece_before],
+        [round(e, 4) for e in res.ece_after],
+    )
+    return {
+        "calibration_temperature": res.temperatures,
+        "calibration_signature": res.signature,
+        "calibration_ece": res.ece_after,
+    }
+
+
 def _save_tiny_checkpoint(
     *,
     model,
@@ -654,6 +697,9 @@ def _save_tiny_checkpoint(
     dropout: float,
     best_val_acc,
     history,
+    calibration_temperature: list | None = None,
+    calibration_signature: str | None = None,
+    calibration_ece: list | None = None,
 ) -> None:
     """Save a TinyClassifier checkpoint in the v2 classifier-artifact format.
 
@@ -684,6 +730,15 @@ def _save_tiny_checkpoint(
         "best_val_acc": (float(best_val_acc) if best_val_acc is not None else None),
         "history": history if history is not None else [],
         "model_state_dict": model.state_dict(),
+        "calibration_temperature": (
+            list(calibration_temperature)
+            if calibration_temperature is not None
+            else None
+        ),
+        "calibration_signature": calibration_signature,
+        "calibration_ece": (
+            list(calibration_ece) if calibration_ece is not None else None
+        ),
     }
     ckpt_dict.update(tiny_model_checkpoint_metadata(model))
     _torch.save(ckpt_dict, str(save_path))
@@ -937,6 +992,8 @@ def _train_tiny_classify(
     if best_state is not None:
         model.load_state_dict(best_state, strict=True)
 
+    cal = _calibrate_and_pack(model, val_loader, device, num_factors=1)
+
     _safe_log(log_cb, "Saving checkpoint...")
 
     # Path derivation
@@ -964,6 +1021,7 @@ def _train_tiny_classify(
         dropout=float(spec.tiny_params.dropout),
         best_val_acc=best_val_acc,
         history=history,
+        **cal,
     )
 
     # Metrics JSON
@@ -1656,6 +1714,28 @@ def _train_custom_classify(
             "task": "custom_classify",
         }
 
+    cal: dict = {}
+    if val_loader is not None:
+        _best_ckpt = torch.load(best_ckpt_path, map_location=device, weights_only=False)
+        model.load_state_dict(_best_ckpt["model_state_dict"], strict=True)
+        cal = _calibrate_and_pack(model, val_loader, device, num_factors=1)
+    if cal:
+        save_torchvision_checkpoint(
+            model=model,
+            backbone=params.backbone,
+            class_names=class_names,
+            factor_names=[],
+            input_size=resize_hw,
+            best_val_acc=best_val_acc,
+            history=history,
+            trainable_layers=params.trainable_layers,
+            backbone_lr_scale=params.backbone_lr_scale,
+            monochrome=bool(checkpoint_extra_meta.get("monochrome", False)),
+            extra_meta=checkpoint_extra_meta,
+            path=best_ckpt_path,
+            **cal,
+        )
+
     _total_elapsed = _time.monotonic() - _t0
     _safe_log(
         log_cb,
@@ -1977,6 +2057,35 @@ def _train_multihead_shared_classify(
             path=best_ckpt_path,
         )
         _safe_log(log_cb, "Final checkpoint saved (no validation).")
+
+    cal: dict = {}
+    if has_val and best_ckpt_path.exists():
+        _best_ckpt = torch.load(best_ckpt_path, map_location=device, weights_only=False)
+        model.load_state_dict(_best_ckpt["model_state_dict"], strict=True)
+        cal = _calibrate_and_pack(
+            model,
+            val_loader,
+            device,
+            num_factors=len(factor_names),
+            split_logits=_split_logits_per_factor,
+        )
+    if cal:
+        save_torchvision_checkpoint(
+            model=model,
+            backbone=params.backbone,
+            class_names=[],
+            factor_names=list(factor_names),
+            class_names_per_factor=[list(c) for c in cnpf],
+            input_size=resize_hw,
+            best_val_acc=best_val_acc,
+            history=history,
+            trainable_layers=int(params.trainable_layers),
+            backbone_lr_scale=float(params.backbone_lr_scale),
+            monochrome=bool(profile.monochrome),
+            extra_meta=checkpoint_extra_meta,
+            path=best_ckpt_path,
+            **cal,
+        )
 
     elapsed = _time.monotonic() - _t0
     _safe_log(
