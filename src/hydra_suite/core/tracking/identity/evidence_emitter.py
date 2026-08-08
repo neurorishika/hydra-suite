@@ -189,6 +189,10 @@ class IdentityEvidenceEmitter:
 
         for pred, det_posteriors in zip(predictions, posteriors):
             if det_posteriors is not None:
+                # Intentional friend-class access: the emitter and its
+                # internal EvidenceBuilder are co-designed (same module
+                # family, Identity Phase 3) and share the underscore-private
+                # posteriors-path methods rather than duplicating them.
                 log_p, observed_mask = self._builder._build_log_probs_from_posteriors(
                     det_posteriors
                 )

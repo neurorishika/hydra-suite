@@ -165,3 +165,72 @@ def test_builder_matches_emitter_with_calibration_temperature(tmp_path):
         assert b.calibration_signature == e.calibration_signature == "calsig"
         assert np.array_equal(b.observed_mask, e.observed_mask)
         assert b.detection_id == e.detection_id
+
+
+def test_builder_matches_emitter_with_gapped_empty_factor(tmp_path):
+    """Fix round 1: `class_labels_per_factor` with an empty factor list
+    sandwiched between two non-empty ones. The composite index space is
+    always compacted (non-empty factors only, gap-skipping), matching the
+    original emitter's `_factor_class_to_catalog` construction exactly --
+    the middle empty factor participates in neither the cartesian product
+    nor the map keys.
+    """
+    labels = [["a", "b"], [], ["c", "d"]]
+    catalog_known_labels = ["a_c", "a_d", "b_c", "b_d"]
+    # Aligned to the two NON-EMPTY factors (per the builder's documented
+    # contract): posteriors never carry an entry for a classless gap factor.
+    probs = [
+        [np.array([0.6, 0.4]), np.array([0.3, 0.7])],
+        [np.array([0.2, 0.8]), np.array([0.9, 0.1])],
+    ]
+    det_ids = [40, 41]
+    builder, emitter = _build_pair(labels, catalog_known_labels, None, tmp_path)
+
+    ev_b = builder.build_frame_evidences(11, det_ids, probs)
+    ev_e = emitter.build_frame_evidences(
+        11,
+        _dummy_predictions(det_ids, 2),
+        posteriors=probs,
+        detection_ids=det_ids,
+    )
+
+    assert len(ev_b) == len(ev_e) == len(det_ids)
+    for b, e in zip(ev_b, ev_e):
+        assert np.array_equal(b.log_probs, e.log_probs)
+        assert np.array_equal(b.observed_mask, e.observed_mask)
+        assert b.detection_id == e.detection_id
+
+
+def test_builder_matches_emitter_with_colliding_composite_labels(tmp_path):
+    """Fix round 1: two distinct factor-value combos that join (via "_") to
+    the SAME display string -- factor0=["a", "a_b"] x factor1=["b_c", "c"]
+    gives combo ("a", "b_c") -> "a_b_c" AND combo ("a_b", "c") -> "a_b_c".
+    The original emitter registers only the FIRST occurrence
+    (product-traversal order) of a novel joined label; later combos that
+    collide with an already-seen label are dropped entirely. The catalog
+    passed in here reflects that same first-occurrence-wins dedup.
+    """
+    labels = [["a", "a_b"], ["b_c", "c"]]
+    # product order: (a,b_c)->"a_b_c" [kept], (a,c)->"a_c" [kept],
+    # (a_b,b_c)->"a_b_b_c" [kept], (a_b,c)->"a_b_c" [collision, DROPPED].
+    catalog_known_labels = ["a_b_c", "a_c", "a_b_b_c"]
+    probs = [
+        [np.array([0.6, 0.4]), np.array([0.7, 0.3])],
+        [np.array([0.3, 0.7]), np.array([0.2, 0.8])],
+    ]
+    det_ids = [50, 51]
+    builder, emitter = _build_pair(labels, catalog_known_labels, None, tmp_path)
+
+    ev_b = builder.build_frame_evidences(13, det_ids, probs)
+    ev_e = emitter.build_frame_evidences(
+        13,
+        _dummy_predictions(det_ids, 2),
+        posteriors=probs,
+        detection_ids=det_ids,
+    )
+
+    assert len(ev_b) == len(ev_e) == len(det_ids)
+    for b, e in zip(ev_b, ev_e):
+        assert np.array_equal(b.log_probs, e.log_probs)
+        assert np.array_equal(b.observed_mask, e.observed_mask)
+        assert b.detection_id == e.detection_id

@@ -54,7 +54,16 @@ class EvidenceBuilder:
     class_labels_per_factor:
         List of class label lists, one per raw-posterior factor. Used to
         resolve each factor's per-class probability into the catalog's index
-        space.
+        space. May contain empty ``[]`` entries for "gap" factors that carry
+        no classes; the composite index space is always **compacted**: only
+        non-empty factors participate, in their relative (gap-skipping)
+        order (matching the original emitter's ``_factor_class_to_catalog``
+        semantics exactly -- this is bug-for-bug parity, not a new
+        contract). Correspondingly, ``per_det_factor_probs`` passed to
+        :meth:`build_frame_evidences` must be aligned to the *non-empty*
+        factors only (i.e. gap factors contribute no entry), matching how
+        real per-factor posteriors are produced upstream (a model never
+        emits a probability vector for a factor with no classes).
     calibration:
         Optional ``CalibrationModel``. When provided, raw per-factor softmax
         posteriors are temperature-scaled before being mapped to catalog
@@ -89,15 +98,30 @@ class EvidenceBuilder:
         # label to its *actual* index in `catalog` (never assumed positional
         # alignment, never split a composite label back apart -- composite
         # class names may themselves contain "_").
+        #
+        # Two semantics must match the original emitter EXACTLY (bug-for-bug
+        # parity, since Task 3's evidence stage calls this builder directly
+        # and must be a faithful drop-in):
+        #   1. Index compaction: `fi` below is the position within `combo`
+        #      (i.e. within the non-empty factors only, gap-skipping) --
+        #      NOT the raw index into `class_labels_per_factor`.
+        #   2. Collision dedup: only the FIRST combo (in
+        #      itertools.product traversal order) that produces a given
+        #      joined label is registered; later combos joining to an
+        #      already-seen label are skipped entirely, even if that label
+        #      is present in `catalog`.
         self._factor_class_to_catalog: dict[tuple[int, str], list[int]] = {}
         if self._is_composite:
-            factor_indices = [fi for fi, fl in enumerate(class_labels_per_factor) if fl]
+            seen_labels: set[str] = set()
             for combo in itertools.product(*non_empty_factors):
                 label = "_".join(str(c) for c in combo if c)
-                if not label or not catalog.contains(label):
+                if not label or label in seen_labels:
+                    continue
+                seen_labels.add(label)
+                if not catalog.contains(label):
                     continue
                 cat_idx = catalog.index_of(label)
-                for fi, cls in zip(factor_indices, combo):
+                for fi, cls in enumerate(combo):
                     key = (fi, cls)
                     self._factor_class_to_catalog.setdefault(key, []).append(cat_idx)
 
