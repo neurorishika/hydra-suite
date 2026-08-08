@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 
+from hydra_suite.core.individual.identity import substrate
 from hydra_suite.core.individual.identity.evidence import IdentityEvidence
 
 if TYPE_CHECKING:
@@ -237,46 +238,22 @@ class EvidenceBuilder:
         all composite entries that contain that factor's class, so the sum
         over factors (in log space) gives the joint probability. For flat
         catalogs the original direct lookup is used.
+
+        Delegates to the shared ``substrate._factor_log_prob`` (Identity
+        Phase 4, Task 4) so this builder and any future offline consumer
+        share one implementation of the math; kept as a builder method
+        (rather than inlined) because ``IdentityEvidenceEmitter``'s top-1
+        prediction fallback also calls it directly per factor.
         """
-        C = len(self._catalog_labels)
-        label_map = []
-        if 0 <= factor_index < len(self._class_labels_per_factor):
-            label_map = list(self._class_labels_per_factor[factor_index] or [])
-
-        floor = 1e-6
-        probs = np.full(C, floor, dtype=np.float64)
-        observed = np.zeros(C, dtype=bool)
-        observed[0] = True
-
-        factor_arr = np.asarray(factor_probs, dtype=np.float64)
-
-        if self._is_composite:
-            for class_idx, cls in enumerate(label_map):
-                if class_idx >= len(factor_arr):
-                    break
-                if not cls:
-                    continue
-                prob = max(float(factor_arr[class_idx]), floor)
-                for cat_idx in self._factor_class_to_catalog.get(
-                    (factor_index, cls), []
-                ):
-                    probs[cat_idx] = prob
-                    observed[cat_idx] = True
-        else:
-            for class_idx, label in enumerate(label_map):
-                if class_idx >= len(factor_arr):
-                    break
-                if not label:
-                    continue
-                try:
-                    catalog_idx = self._catalog.index_of(str(label))
-                except KeyError:
-                    continue
-                probs[catalog_idx] = max(float(factor_arr[class_idx]), floor)
-                observed[catalog_idx] = True
-
-        probs /= probs.sum()
-        return np.log(np.clip(probs, 1e-300, None)), observed
+        return substrate._factor_log_prob(
+            factor_index,
+            factor_probs,
+            class_labels_per_factor=self._class_labels_per_factor,
+            factor_class_to_catalog=self._factor_class_to_catalog,
+            is_composite=self._is_composite,
+            catalog_size=len(self._catalog_labels),
+            catalog=self._catalog,
+        )
 
     def _calibrate_posterior(self, factor_probs: np.ndarray) -> np.ndarray:
         """Temperature-scale a raw softmax posterior, returning a probability
@@ -299,19 +276,26 @@ class EvidenceBuilder:
         self,
         det_posteriors: Optional[list[np.ndarray]],
     ) -> tuple[np.ndarray, Optional[np.ndarray]]:
-        C = len(self._catalog_labels)
-        if not det_posteriors:
-            return np.full(C, -np.log(C), dtype=np.float64), None
+        """Product-over-factors combination of calibrated per-factor
+        posteriors into one catalog log-prob vector.
 
-        combined = np.zeros(C, dtype=np.float64)
-        observed_mask = np.zeros(C, dtype=bool)
-        for factor_index, factor_probs in enumerate(det_posteriors):
-            factor_log, factor_observed = self._factor_log_prob(
-                factor_index,
-                self._calibrate_posterior(factor_probs),
-            )
-            combined += factor_log
-            observed_mask |= factor_observed
-
-        combined -= np.logaddexp.reduce(combined)
-        return combined, observed_mask
+        Delegates to the shared ``substrate.map_cnn_to_catalog`` (Identity
+        Phase 4, Task 4): calibration (this builder's own concern) is
+        applied here per factor, then the calibrated posteriors are handed
+        to the substrate for the factor->catalog mapping + product-over-
+        factors combination, so Layer 2 (this builder) and any future
+        offline consumer (Phase 5) share one implementation of that math.
+        """
+        calibrated = (
+            [self._calibrate_posterior(factor_probs) for factor_probs in det_posteriors]
+            if det_posteriors
+            else det_posteriors
+        )
+        return substrate.map_cnn_to_catalog(
+            calibrated,
+            class_labels_per_factor=self._class_labels_per_factor,
+            factor_class_to_catalog=self._factor_class_to_catalog,
+            is_composite=self._is_composite,
+            catalog_size=len(self._catalog_labels),
+            catalog=self._catalog,
+        )

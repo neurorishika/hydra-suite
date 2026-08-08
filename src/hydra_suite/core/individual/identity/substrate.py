@@ -10,14 +10,28 @@ future offline/batch consumers.
 core (`core/individual/identity/online.py`), plus a no-op-by-default
 robustness cap/floor.
 
-This module is Core: it must only depend on numpy/scipy/stdlib.
+`map_cnn_to_catalog` / `map_tag_to_catalog` are lifted from
+`EvidenceBuilder._factor_log_prob` + `_build_log_probs_from_posteriors`
+(`core/individual/identity/evidence_builder.py`) and
+`IdentityCatalog.apriltag_log_prior` (`core/individual/identity/catalog.py`)
+respectively, so the one factor->catalog / tag->catalog mapping is shared by
+Layer 2 (the evidence stage, via `EvidenceBuilder`) and any future offline
+consumer (Phase 5).
+
+This module is Core: it must only depend on numpy/scipy/stdlib (the
+`IdentityCatalog` reference in `map_cnn_to_catalog`'s flat-catalog branch is
+only used for type-checking and its already-Core `index_of`/`contains` API,
+so no cycle is introduced).
 """
 
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from typing import TYPE_CHECKING, Optional, Sequence
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from hydra_suite.core.individual.identity.catalog import IdentityCatalog
 
 
 def fuse_log_evidence(
@@ -215,3 +229,149 @@ def _greedy_assignment(
         else:
             result.append(None)
     return result
+
+
+def _factor_log_prob(
+    factor_index: int,
+    factor_probs: np.ndarray,
+    *,
+    class_labels_per_factor: list[list[str]],
+    factor_class_to_catalog: dict[tuple[int, str], list[int]],
+    is_composite: bool,
+    catalog_size: int,
+    catalog: Optional["IdentityCatalog"],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Map one factor's posterior to the catalog label space.
+
+    Lifted verbatim from ``EvidenceBuilder._factor_log_prob``. For composite
+    catalogs each factor's probabilities are distributed to all composite
+    entries that contain that factor's class (via `factor_class_to_catalog`),
+    so the sum over factors (in log space) gives the joint probability. For
+    flat catalogs the original direct lookup (`catalog.index_of`) is used.
+    """
+    C = catalog_size
+    label_map = []
+    if 0 <= factor_index < len(class_labels_per_factor):
+        label_map = list(class_labels_per_factor[factor_index] or [])
+
+    floor = 1e-6
+    probs = np.full(C, floor, dtype=np.float64)
+    observed = np.zeros(C, dtype=bool)
+    observed[0] = True
+
+    factor_arr = np.asarray(factor_probs, dtype=np.float64)
+
+    if is_composite:
+        for class_idx, cls in enumerate(label_map):
+            if class_idx >= len(factor_arr):
+                break
+            if not cls:
+                continue
+            prob = max(float(factor_arr[class_idx]), floor)
+            for cat_idx in factor_class_to_catalog.get((factor_index, cls), []):
+                probs[cat_idx] = prob
+                observed[cat_idx] = True
+    else:
+        for class_idx, label in enumerate(label_map):
+            if class_idx >= len(factor_arr):
+                break
+            if not label:
+                continue
+            try:
+                catalog_idx = catalog.index_of(str(label))
+            except KeyError:
+                continue
+            probs[catalog_idx] = max(float(factor_arr[class_idx]), floor)
+            observed[catalog_idx] = True
+
+    probs /= probs.sum()
+    return np.log(np.clip(probs, 1e-300, None)), observed
+
+
+def map_cnn_to_catalog(
+    per_factor_probs: Optional[Sequence[np.ndarray]],
+    *,
+    class_labels_per_factor: list[list[str]],
+    factor_class_to_catalog: dict[tuple[int, str], list[int]],
+    is_composite: bool,
+    catalog_size: int,
+    catalog: Optional["IdentityCatalog"] = None,
+) -> tuple[np.ndarray, Optional[np.ndarray]]:
+    """CNN per-factor posteriors -> calibrated catalog log-probs.
+
+    Bit-for-bit reproduction of ``EvidenceBuilder._factor_log_prob`` +
+    ``EvidenceBuilder._build_log_probs_from_posteriors``: product over
+    factors in log-space (``combined += factor_log`` per factor), then
+    renormalized via ``np.logaddexp.reduce``.
+
+    ``per_factor_probs`` must already be calibrated (temperature-scaled)
+    probability vectors -- calibration is the caller's responsibility (e.g.
+    ``EvidenceBuilder._calibrate_posterior``), not this function's; this
+    keeps the substrate a pure map/fuse/solve layer with no calibration
+    state of its own.
+
+    ``catalog`` is only required for the flat (non-composite) branch, which
+    resolves each factor class label directly via ``catalog.index_of``; it
+    is unused (and may be omitted) when ``is_composite`` is True.
+
+    Args:
+        per_factor_probs: one already-calibrated probability vector per
+            class-label factor, aligned to `class_labels_per_factor`'s
+            non-empty entries. ``None`` or empty falls back to a uniform
+            log-prior over the catalog with no observed mask.
+        class_labels_per_factor: list of class label lists, one per raw
+            posterior factor (may contain empty ``[]`` gap entries).
+        factor_class_to_catalog: ``(factor_index, class_name) ->
+            [catalog_indices]`` lookup for the composite branch (index
+            compacted to the non-empty factors, gap-skipping; see
+            `EvidenceBuilder.__init__` for construction semantics).
+        is_composite: whether more than one non-empty class-label factor is
+            in play (selects the composite-distribution vs. flat-lookup
+            branch).
+        catalog_size: size of the target catalog (including the leading
+            "unknown" entry).
+        catalog: the target `IdentityCatalog`, required by the flat branch's
+            `index_of` lookup.
+
+    Returns:
+        ``(log_probs, observed_mask)`` -- `log_probs` has shape
+        ``(catalog_size,)``; `observed_mask` is `None` only in the
+        no-posteriors fallback case, else a boolean array of the same shape.
+    """
+    C = catalog_size
+    if not per_factor_probs:
+        return np.full(C, -np.log(C), dtype=np.float64), None
+
+    combined = np.zeros(C, dtype=np.float64)
+    observed_mask = np.zeros(C, dtype=bool)
+    for factor_index, factor_probs in enumerate(per_factor_probs):
+        factor_log, factor_observed = _factor_log_prob(
+            factor_index,
+            factor_probs,
+            class_labels_per_factor=class_labels_per_factor,
+            factor_class_to_catalog=factor_class_to_catalog,
+            is_composite=is_composite,
+            catalog_size=C,
+            catalog=catalog,
+        )
+        combined += factor_log
+        observed_mask |= factor_observed
+
+    combined -= np.logaddexp.reduce(combined)
+    return combined, observed_mask
+
+
+def map_tag_to_catalog(
+    catalog: "IdentityCatalog",
+    tag_id: int,
+    tag_to_label: dict[int, str],
+    floor: float = 1e-4,
+) -> np.ndarray:
+    """AprilTag observation -> catalog log-prior.
+
+    Delegates to `IdentityCatalog.apriltag_log_prior` -- the one tag->catalog
+    mapping, exposed here so Layer 2 (evidence stage) and future offline
+    consumers go through the same substrate entry point as
+    `map_cnn_to_catalog`.
+    """
+    return catalog.apriltag_log_prior(tag_id, tag_to_label, floor=floor)
