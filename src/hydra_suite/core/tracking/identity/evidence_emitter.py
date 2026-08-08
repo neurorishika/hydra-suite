@@ -24,7 +24,9 @@ import numpy as np
 
 from hydra_suite.core.individual.classification.cnn import ClassPrediction
 from hydra_suite.core.individual.identity.cache import IdentityEvidenceCache
+from hydra_suite.core.individual.identity.catalog import IdentityCatalog
 from hydra_suite.core.individual.identity.evidence import IdentityEvidence
+from hydra_suite.core.individual.identity.evidence_builder import EvidenceBuilder
 
 if TYPE_CHECKING:
     from hydra_suite.core.individual.identity.calibration import CalibrationModel
@@ -93,24 +95,12 @@ class IdentityEvidenceEmitter:
         if self._is_composite:
             # Multi-factor: composite catalog as cartesian product of factor labels.
             catalog_labels: list[str] = ["unknown"]
-            # Store per-entry factor decomposition for fast lookup.
-            self._catalog_factor_tuples: list[tuple[str, ...]] = []
             for combo in itertools.product(*non_empty_factors):
                 label = "_".join(str(c) for c in combo if c)
                 if label and label not in catalog_labels:
                     catalog_labels.append(label)
-                    self._catalog_factor_tuples.append(combo)
-            # Build (factor_index, class_name) → [catalog_indices] lookup.
-            self._factor_class_to_catalog: dict[tuple[int, str], list[int]] = {}
-            for entry_idx, combo in enumerate(self._catalog_factor_tuples):
-                cat_idx = entry_idx + 1  # offset by 1 for "unknown"
-                for fi, cls in enumerate(combo):
-                    key = (fi, cls)
-                    self._factor_class_to_catalog.setdefault(key, []).append(cat_idx)
         else:
             # Single factor or atomic: flat catalog (original behaviour).
-            self._catalog_factor_tuples = []
-            self._factor_class_to_catalog = {}
             catalog_labels = ["unknown"]
             for factor_labels in class_labels_per_factor:
                 for lbl in factor_labels:
@@ -118,6 +108,14 @@ class IdentityEvidenceEmitter:
                         catalog_labels.append(lbl)
 
         self._catalog_labels = tuple(catalog_labels)
+        self._builder = EvidenceBuilder(
+            IdentityCatalog(labels=self._catalog_labels),
+            source_name,
+            class_labels_per_factor,
+            calibration=calibration,
+            calibration_signature=calibration_signature,
+            runtime_signature=runtime_signature,
+        )
         self._cache = IdentityEvidenceCache(
             cache_path,
             catalog_labels=self._catalog_labels,
@@ -191,7 +189,7 @@ class IdentityEvidenceEmitter:
 
         for pred, det_posteriors in zip(predictions, posteriors):
             if det_posteriors is not None:
-                log_p, observed_mask = self._build_log_probs_from_posteriors(
+                log_p, observed_mask = self._builder._build_log_probs_from_posteriors(
                     det_posteriors
                 )
             else:
@@ -219,96 +217,6 @@ class IdentityEvidenceEmitter:
         """Persist pre-built evidence rows for one frame."""
         if evidences:
             self._cache.save_frame(frame_idx, evidences)
-
-    def _factor_log_prob(
-        self,
-        factor_index: int,
-        factor_probs: np.ndarray,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Map one factor posterior to the catalog label space.
-
-        For composite catalogs each factor's probabilities are distributed to
-        all composite entries that contain that factor's class, so the sum over
-        factors (in log space) gives the joint probability.  For flat catalogs
-        the original direct lookup is used.
-        """
-        C = len(self._catalog_labels)
-        label_map = []
-        if 0 <= factor_index < len(self._class_labels_per_factor):
-            label_map = list(self._class_labels_per_factor[factor_index] or [])
-
-        floor = 1e-6
-        probs = np.full(C, floor, dtype=np.float64)
-        observed = np.zeros(C, dtype=bool)
-        observed[0] = True
-
-        factor_arr = np.asarray(factor_probs, dtype=np.float64)
-
-        if self._is_composite:
-            for class_idx, cls in enumerate(label_map):
-                if class_idx >= len(factor_arr):
-                    break
-                if not cls:
-                    continue
-                prob = max(float(factor_arr[class_idx]), floor)
-                for cat_idx in self._factor_class_to_catalog.get(
-                    (factor_index, cls), []
-                ):
-                    probs[cat_idx] = prob
-                    observed[cat_idx] = True
-        else:
-            for class_idx, label in enumerate(label_map):
-                if class_idx >= len(factor_arr):
-                    break
-                if not label:
-                    continue
-                try:
-                    catalog_idx = self._catalog_labels.index(str(label))
-                except ValueError:
-                    continue
-                probs[catalog_idx] = max(float(factor_arr[class_idx]), floor)
-                observed[catalog_idx] = True
-
-        probs /= probs.sum()
-        return np.log(np.clip(probs, 1e-300, None)), observed
-
-    def _calibrate_posterior(self, factor_probs: np.ndarray) -> np.ndarray:
-        """Temperature-scale a raw softmax posterior, returning a probability
-        vector. No-op when no calibration model is configured.
-
-        Mirrors legacy ``predict_batch_posteriors`` (cnn.py): apply
-        ``calibrate_probs`` (log-softmax temperature scaling), then exponentiate
-        and renormalise back to probabilities so the downstream catalog mapping
-        (which expects probabilities) is unchanged.
-        """
-        arr = np.asarray(factor_probs, dtype=np.float64)
-        if self._calibration is None or arr.size == 0:
-            return arr
-        log_p = self._calibration.calibrate_probs(arr[None, :])[0]
-        cal = np.exp(log_p - log_p.max())
-        total = cal.sum()
-        return cal / total if total > 0 else cal
-
-    def _build_log_probs_from_posteriors(
-        self,
-        det_posteriors: Optional[list[np.ndarray]],
-    ) -> tuple[np.ndarray, Optional[np.ndarray]]:
-        C = len(self._catalog_labels)
-        if not det_posteriors:
-            return np.full(C, -np.log(C), dtype=np.float64), None
-
-        combined = np.zeros(C, dtype=np.float64)
-        observed_mask = np.zeros(C, dtype=bool)
-        for factor_index, factor_probs in enumerate(det_posteriors):
-            factor_log, factor_observed = self._factor_log_prob(
-                factor_index,
-                self._calibrate_posterior(factor_probs),
-            )
-            combined += factor_log
-            observed_mask |= factor_observed
-
-        combined -= np.logaddexp.reduce(combined)
-        return combined, observed_mask
 
     def _build_log_probs_from_prediction(
         self,
@@ -343,7 +251,7 @@ class IdentityEvidenceEmitter:
                     factor_probs[top_idx] = max(float(conf), other_p)
                 except ValueError:
                     pass
-                factor_log, factor_obs = self._factor_log_prob(
+                factor_log, factor_obs = self._builder._factor_log_prob(
                     factor_index, factor_probs
                 )
                 combined += factor_log
