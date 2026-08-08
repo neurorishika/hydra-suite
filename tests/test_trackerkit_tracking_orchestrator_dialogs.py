@@ -970,16 +970,13 @@ def test_collect_worker_props_path_stores_detected_export_caches(
 ) -> None:
     orchestrator, _main_window = _make_orchestrator()
     detected_props_path = tmp_path / "detected_props.npz"
-    detected_cnn_path = tmp_path / "detected_cnn.npz"
     orchestrator._mw = SimpleNamespace(
         tracking_worker=SimpleNamespace(
             individual_properties_cache_path="",
             detected_properties_cache_path=str(detected_props_path),
-            detected_cnn_cache_paths={"demo": str(detected_cnn_path)},
         ),
         current_individual_properties_cache_path=None,
         current_detected_properties_cache_path=None,
-        current_detected_cnn_cache_paths={},
     )
 
     orchestrator._collect_worker_props_path()
@@ -987,9 +984,6 @@ def test_collect_worker_props_path_stores_detected_export_caches(
     assert orchestrator._mw.current_detected_properties_cache_path == str(
         detected_props_path
     )
-    assert orchestrator._mw.current_detected_cnn_cache_paths == {
-        "demo": str(detected_cnn_path)
-    }
 
 
 def test_format_video_track_label_prefers_unique_identity_key() -> None:

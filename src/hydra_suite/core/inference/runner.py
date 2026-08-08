@@ -12,6 +12,7 @@ import numpy as np
 from hydra_suite.core.canonicalization.geometry import ClippingStats
 
 if TYPE_CHECKING:
+    from hydra_suite.core.individual.identity.cache import IdentityEvidenceCache
     from hydra_suite.core.individual.identity.catalog import IdentityCatalog
 
     from .config import PoseConfig
@@ -1053,6 +1054,27 @@ class InferenceRunner:
         return build_evidence_cache_path(
             str(self.cache_dir / "detection.npz"), source_name, key
         )
+
+    def identity_evidence_sidecar_path(self, source_name: str) -> "Path | None":
+        """Public accessor: where the ``source_name`` ("batch"/"live") identity
+        evidence sidecar is/will be written, or ``None`` when this runner has no
+        identity-evidence config. Lets read-side consumers (the tracking worker)
+        locate the sidecar this runner writes without recomputing the Task-1
+        content-hash key themselves.
+        """
+        if self._identity_evidence is None:
+            return None
+        return self._identity_evidence_sidecar_path(source_name)
+
+    @property
+    def identity_evidence_cache(self) -> "IdentityEvidenceCache | None":
+        """The realtime (write-mode) identity evidence cache, or ``None``.
+
+        ``IdentityEvidenceCache.load_frame`` reads straight from its in-memory
+        buffer regardless of read/write mode, so this lets the tracking loop
+        read a just-written frame's evidence back before ``close()``/flush.
+        """
+        return self._identity_evidence_cache
 
     def _write_identity_evidence_realtime(
         self,

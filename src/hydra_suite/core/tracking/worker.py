@@ -150,7 +150,6 @@ class TrackingEngineCore:
         self.parameters = {}
         self.individual_properties_cache_path = None
         self.detected_properties_cache_path = None
-        self.detected_cnn_cache_paths = {}
         # Stats tracking for FPS/ETA
         self.start_time = None
         self.frame_times = deque(maxlen=30)  # Keep last 30 frames for FPS calculation
@@ -981,8 +980,10 @@ class TrackingEngineCore:
         # unique-identifier CNN classifier / tag label is configured -- every
         # InferenceRunner below still takes identity_evidence=None in that
         # case, which is a strict no-op (see InferenceRunner.__init__).
-        # The tracking-time emitter (below, per-CNN-phase) still runs too —
-        # deleted only in Task 5, once the tracker reads this sidecar instead.
+        # Identity Phase 3, Task 5: the tracker's online decoder reads this
+        # sidecar directly (inference_runner.identity_evidence_cache /
+        # identity_evidence_sidecar_path("batch")) -- the tracking-time
+        # emitter has been removed.
         _identity_evidence_run_config = self._resolve_identity_evidence_run_config(p)
 
         if detection_method == "yolo_obb":
@@ -1474,25 +1475,16 @@ class TrackingEngineCore:
                     "Live tag store ready for InferenceRunner per-frame population."
                 )
 
-            # Build IdentityEvidenceEmitter per CNN phase so populate_live_cnn_store
-            # can push calibrated full-catalog log_probs into the live store. The
-            # online identity decoder reads these via load_evidences() to do
-            # Bayesian updates; without them it can only commit identity on top-1
-            # confidence and dramatically under-commits (regression observed:
-            # 4/26 labels committed, 80/324 rows vs main's 14/26 and 267/329).
-            cnn_evidence_emitters: dict = {}
+            # Live CNN identity stores: populated per-frame from FrameResult.cnn
+            # (top-1 predictions only). Identity-evidence log_probs for the
+            # online decoder now come from the inference-time
+            # IdentityEvidenceStage sidecar (Identity Phase 3 Task 4/5),
+            # read via inference_runner.identity_evidence_cache -- not from
+            # a tracking-time emitter.
             for cnn_cfg_dict in p.get("CNN_CLASSIFIERS", []):
                 _cnn_label = str(cnn_cfg_dict.get("label", "cnn_identity"))
                 _live_cnn_store = LiveCNNIdentityStore()
                 live_cnn_caches[_cnn_label] = _live_cnn_store
-                _ev_emitter = self._build_cnn_evidence_emitter(
-                    cnn_cfg_dict, _live_cnn_store, p
-                )
-                if _ev_emitter is not None:
-                    cnn_evidence_emitters[_cnn_label] = _ev_emitter
-                    if not hasattr(self, "_evidence_emitters"):
-                        self._evidence_emitters = []
-                    self._evidence_emitters.append(_ev_emitter)
                 logger.info(
                     "Live CNN store ready for InferenceRunner per-frame population (%s)",
                     _cnn_label,
@@ -1526,6 +1518,33 @@ class TrackingEngineCore:
                 for idx, _lbl in enumerate(p.get("TAG_IDENTITY_LABELS", []) or [])
                 if str(_lbl).strip()
             }
+
+        # Open the inference-time identity-evidence sidecar (Identity Phase 3
+        # Task 4/5): a single catalog-wide cache per pass, written by
+        # InferenceRunner's IdentityEvidenceStage during inference, BEFORE
+        # tracking runs. Opened once here for backward/replay (non-realtime)
+        # passes, which read the on-disk "batch" file; realtime/streaming
+        # passes instead read the runner's in-progress "live" cache lazily
+        # (inference_runner.identity_evidence_cache, below) since it is not
+        # flushed to disk until the pass ends.
+        _batch_evidence_cache = None
+        if inference_runner is not None and not effective_realtime_tracking_mode:
+            try:
+                from hydra_suite.core.individual.identity.cache import (
+                    IdentityEvidenceCache,
+                )
+
+                _batch_ev_path = inference_runner.identity_evidence_sidecar_path(
+                    "batch"
+                )
+                if _batch_ev_path is not None and os.path.exists(str(_batch_ev_path)):
+                    _batch_evidence_cache = IdentityEvidenceCache(
+                        str(_batch_ev_path), mode="r"
+                    )
+            except Exception:
+                logger.debug(
+                    "Identity evidence sidecar unavailable (batch)", exc_info=True
+                )
 
         # Open CNN identity caches for reading during tracking loop (multi-phase).
         _cnn_phase_states = []
@@ -1587,39 +1606,15 @@ class TrackingEngineCore:
                     from hydra_suite.core.individual.classification.cnn import (
                         CNNIdentityCache,
                     )
-                    from hydra_suite.core.tracking.identity.evidence_emitter import (
-                        build_evidence_cache_path,
-                    )
 
                     _cache = CNNIdentityCache(_path)
-                    _evidence_cache = None
-                    try:
-                        from hydra_suite.core.individual.identity.cache import (
-                            IdentityEvidenceCache,
-                        )
-
-                        for _signature in ("batch", "live", ""):
-                            _ev_path = build_evidence_cache_path(
-                                _path, label, _signature
-                            )
-                            if os.path.exists(str(_ev_path)):
-                                _evidence_cache = IdentityEvidenceCache(
-                                    str(_ev_path), mode="r"
-                                )
-                                break
-                    except Exception:
-                        logger.debug(
-                            "Posterior sidecar unavailable for CNN phase '%s'",
-                            label,
-                            exc_info=True,
-                        )
                     _cnn_phase_states.append(
                         {
                             "label": label,
                             "cache": _cache,
                             "model_labels": model_labels,
                             "class_names_per_factor": _cnpf_phase,
-                            "evidence_cache": _evidence_cache,
+                            "evidence_cache": _batch_evidence_cache,
                             "is_identity_provider": _is_identity_provider,
                         }
                     )
@@ -2476,11 +2471,6 @@ class TrackingEngineCore:
                         _det_ids_arr,
                         actual_frame_index,
                         _cnn_label,
-                        evidence_emitter=(
-                            cnn_evidence_emitters.get(_cnn_label)
-                            if "cnn_evidence_emitters" in locals()
-                            else None
-                        ),
                     )
 
             profiler.tick("features")
@@ -3021,32 +3011,36 @@ class TrackingEngineCore:
                                         )
                                         _slot_evs.setdefault(_r, []).append(_ev)
 
-                        # Build CNN evidence for matched detections (identity-providing phases only)
+                        # Build CNN evidence for matched detections (identity-providing
+                        # phases only). Source: the inference-time IdentityEvidenceStage
+                        # sidecar (Identity Phase 3 Task 4/5) -- a single catalog-wide
+                        # evidence cache per pass, not one per CNN phase, so rows are
+                        # filtered by source_name == this phase's label. On-disk "batch"
+                        # cache for backward/replay passes; the runner's in-progress
+                        # "live" cache (read straight from its in-memory buffer, before
+                        # flush) for realtime/streaming passes. No top-1 reconstruction
+                        # fallback: a detection with no sidecar evidence this frame is
+                        # simply skipped, matching the sidecar's own missing-observation
+                        # contract (IdentityEvidenceStage docstring).
                         for _state in _cnn_phase_states:
                             if not _state.get("is_identity_provider", False):
                                 continue
                             _label = _state["label"]
-                            _cache = _state["cache"]
                             _evidence_cache = _state.get("evidence_cache")
-                            _fps = _cnn_frame_preds_all.get(_label)
-                            if _fps is None:
+                            if _evidence_cache is None and inference_runner is not None:
+                                _evidence_cache = (
+                                    inference_runner.identity_evidence_cache
+                                )
+                            if _evidence_cache is None:
                                 continue
-                            _live_evidence_map = {}
-                            _source_labels = None
-                            if isinstance(_cache, LiveCNNIdentityStore):
-                                _live_evidence_map = {
-                                    int(_ev.detection_id): _ev
-                                    for _ev in _cache.load_evidences(actual_frame_index)
-                                }
-                                _source_labels = _cache.catalog_labels
-                            elif _evidence_cache is not None:
-                                _live_evidence_map = {
-                                    int(_ev.detection_id): _ev
-                                    for _ev in _evidence_cache.load_frame(
-                                        actual_frame_index
-                                    )
-                                }
-                                _source_labels = _evidence_cache.catalog_labels
+                            _live_evidence_map = {
+                                int(_ev.detection_id): _ev
+                                for _ev in _evidence_cache.load_frame(
+                                    actual_frame_index
+                                )
+                                if _ev.source_name == _label
+                            }
+                            _source_labels = _evidence_cache.catalog_labels
 
                             for _r, _c in _all_matched_pairs:
                                 _det_id = (
@@ -3073,107 +3067,6 @@ class TrackingEngineCore:
                                             observed_mask=_cached_ev.observed_mask,
                                         )
                                     )
-                                    continue
-
-                                _pred = _fps[_c] if _c < len(_fps) else None
-                                if _pred is None:
-                                    continue
-                                if hasattr(_identity_online_decoder, "_catalog"):
-                                    _cat = _identity_online_decoder._catalog
-                                    _phase_cnpf = (
-                                        _state.get("class_names_per_factor") or []
-                                    )
-                                    _non_empty_factors = [
-                                        fl for fl in _phase_cnpf if fl
-                                    ]
-                                    if len(_non_empty_factors) > 1:
-                                        # Multi-factor: build joint log-prior over composite catalog.
-                                        # Reconstruct per-factor soft distributions from top-1 and
-                                        # compute P(composite) = product of per-factor probabilities.
-                                        _per_factor_dist: list[dict[str, float]] = []
-                                        for _k, (_cn, _conf_raw) in enumerate(
-                                            zip(_pred.class_names, _pred.confidences)
-                                        ):
-                                            _fk_labels = (
-                                                _non_empty_factors[_k]
-                                                if _k < len(_non_empty_factors)
-                                                else []
-                                            )
-                                            _nk = len(_fk_labels)
-                                            if _nk == 0:
-                                                _per_factor_dist.append({})
-                                                continue
-                                            _conf_k = max(float(_conf_raw), 1e-9)
-                                            _other_p = max(
-                                                1e-9, (1.0 - _conf_k) / max(_nk - 1, 1)
-                                            )
-                                            _per_factor_dist.append(
-                                                {
-                                                    lbl: (
-                                                        _conf_k
-                                                        if lbl == _cn
-                                                        else _other_p
-                                                    )
-                                                    for lbl in _fk_labels
-                                                }
-                                            )
-                                        _n_factors_local = len(_non_empty_factors)
-                                        _n_cat = _cat.size
-                                        _lp_arr = np.full(
-                                            _n_cat, np.log(1e-9), dtype=np.float64
-                                        )
-                                        for _ci in range(1, _n_cat):
-                                            _cl = _cat.label_of(_ci)
-                                            _parts = _cl.split("_")
-                                            if len(_parts) != _n_factors_local:
-                                                continue
-                                            _joint = 0.0
-                                            for _k, _part in enumerate(_parts):
-                                                _fk_p = (
-                                                    _per_factor_dist[_k].get(
-                                                        _part, 1e-9
-                                                    )
-                                                    if _k < len(_per_factor_dist)
-                                                    else 1e-9
-                                                )
-                                                _joint += np.log(max(_fk_p, 1e-300))
-                                            _lp_arr[_ci] = _joint
-                                        _lp_arr -= np.logaddexp.reduce(_lp_arr)
-                                        _ev = IdentityEvidence.from_cnn(
-                                            actual_frame_index,
-                                            _det_id,
-                                            _label,
-                                            _lp_arr,
-                                        )
-                                        _slot_evs.setdefault(_r, []).append(_ev)
-                                    else:
-                                        # Single factor: original per-label top-1 logic.
-                                        for _k, _cn in enumerate(_pred.class_names):
-                                            if _cn and _cat.contains(_cn):
-                                                _conf = (
-                                                    float(_pred.confidences[_k])
-                                                    if _k < len(_pred.confidences)
-                                                    else 0.5
-                                                )
-                                                _lp = _cat.cnn_log_prior(
-                                                    [
-                                                        (
-                                                            _conf
-                                                            if _l == _cn
-                                                            else (1.0 - _conf)
-                                                            / max(_cat.num_known - 1, 1)
-                                                        )
-                                                        for _l in list(_cat.labels[1:])
-                                                    ],
-                                                    list(_cat.labels[1:]),
-                                                )
-                                                _ev = IdentityEvidence.from_cnn(
-                                                    actual_frame_index,
-                                                    _det_id,
-                                                    _label,
-                                                    _lp,
-                                                )
-                                                _slot_evs.setdefault(_r, []).append(_ev)
 
                         _online_assignments = _identity_online_decoder.update_frame(
                             actual_frame_index, _visible_slots, _slot_evs
@@ -4001,23 +3894,6 @@ class TrackingEngineCore:
                 "Skipping realtime analysis finalization because stop was requested."
             )
 
-        # === Streaming Phase 3+4 / Identity Phase 0 ===
-        # Flush any pending evidence emitters so all buffered frames are written.
-        if (
-            hasattr(self, "_evidence_emitters")
-            and self._evidence_emitters
-            and not stop_requested
-        ):
-            for _emitter in self._evidence_emitters:
-                try:
-                    _emitter.flush()
-                except Exception as _flush_exc:
-                    logger.warning("Evidence emitter flush failed: %s", _flush_exc)
-            self._evidence_emitters.clear()
-        elif hasattr(self, "_evidence_emitters") and self._evidence_emitters:
-            logger.info("Skipping evidence cache flush because stop was requested.")
-            self._evidence_emitters.clear()
-
         cap.release()
         if self.video_writer:
             self.video_writer.release()
@@ -4207,10 +4083,8 @@ class TrackingEngineCore:
 
         Prefers ``class_names_per_factor`` stored on the config; falls back to
         loading the artifact metadata (cheap; reads schema-version header
-        only, no weights). Shared by ``_build_cnn_evidence_emitter`` (the
-        tracking-time emitter) and ``_resolve_identity_evidence_run_config``
-        (Identity Phase 3, Task 4's inference-time stage config) so the two
-        paths can never diverge on what "this phase's classes" means.
+        only, no weights). Used by ``_resolve_identity_evidence_run_config``
+        (Identity Phase 3, Task 4's inference-time stage config).
         """
         label = str(cnn_cfg_dict.get("label", "cnn_identity"))
         model_path = str(cnn_cfg_dict.get("model_path", "")).strip()
@@ -4250,8 +4124,7 @@ class TrackingEngineCore:
 
         ``None`` (with an empty signature) when the configured temperature is
         the identity (``1.0``) — matches ``EvidenceBuilder``'s no-op
-        contract. Shared by the tracking-time emitter and the inference-time
-        stage config so both apply the exact same calibration.
+        contract. Used by ``_resolve_identity_evidence_run_config``.
         """
         from hydra_suite.core.individual.identity.calibration import CalibrationModel
 
@@ -4274,12 +4147,9 @@ class TrackingEngineCore:
     def _resolve_identity_evidence_run_config(self, p: dict):
         """Resolve `IdentityEvidenceRunConfig` for `InferenceRunner` (Task 4).
 
-        Reuses ``resolve_catalog_spec`` and the same per-phase factor-label /
-        calibration resolution the tracking-time emitter uses
-        (``_resolve_cnn_phase_factor_labels`` / ``_resolve_cnn_phase_calibration``),
-        so the inference-time ``IdentityEvidenceStage`` and the (still-running,
-        deleted only in Task 5) emitter can never diverge on catalog domain or
-        calibration.
+        Reuses ``resolve_catalog_spec`` and the per-phase factor-label /
+        calibration resolution helpers (``_resolve_cnn_phase_factor_labels`` /
+        ``_resolve_cnn_phase_calibration``).
 
         Returns ``None`` when no unique-identifier CNN classifier or tag
         label is configured — the caller passes that straight through to
@@ -4326,91 +4196,6 @@ class TrackingEngineCore:
             cnn_phases=tuple(cnn_phases),
             tag_to_label=tag_to_label,
         )
-
-    def _build_cnn_evidence_emitter(
-        self,
-        cnn_cfg_dict: dict,
-        live_store,
-        params: dict,
-    ):
-        """Construct an IdentityEvidenceEmitter for one CNN phase, or None on failure.
-
-        The emitter converts per-detection per-factor full posteriors into
-        catalog-level ``IdentityEvidence`` rows (calibrated log_probs over
-        catalog_size). populate_live_cnn_store calls
-        ``emitter.build_frame_evidences`` and pushes the result into the live
-        store via ``update_frame(..., evidences=...)`` so the online identity
-        decoder can read them through ``live_store.load_evidences()``.
-
-        Returns None if CNN classifier metadata can't be resolved (degraded
-        mode: top-1 predictions only — the online decoder will under-commit).
-        """
-        try:
-            from hydra_suite.core.tracking.identity.evidence_emitter import (
-                IdentityEvidenceEmitter,
-                build_evidence_cache_path,
-            )
-        except Exception:
-            return None
-
-        label = str(cnn_cfg_dict.get("label", "cnn_identity"))
-        model_path = str(cnn_cfg_dict.get("model_path", "")).strip()
-        if not model_path:
-            return None
-        factor_labels = self._resolve_cnn_phase_factor_labels(cnn_cfg_dict)
-        if not factor_labels:
-            return None
-
-        from hydra_suite.core.individual.properties.cache import (
-            compute_classify_cache_id,
-        )
-
-        _calibration_model, _calibration_signature = (
-            self._resolve_cnn_phase_calibration(cnn_cfg_dict)
-        )
-
-        try:
-            classify_id = compute_classify_cache_id(
-                model_path=model_path,
-                compute_runtime=_classify_cache_runtime_string(params),
-                inference_model_id=str(params.get("INFERENCE_MODEL_ID", "")),
-                calibration_signature=_calibration_signature,
-            )
-            start_frame = int(params.get("START_FRAME", 0))
-            end_frame = int(params.get("END_FRAME", -1))
-            if end_frame < 0:
-                end_frame = start_frame
-            cnn_cache_path = self._build_cnn_identity_cache_path(
-                label, classify_id, start_frame, end_frame
-            )
-            ev_path = build_evidence_cache_path(cnn_cache_path, label, "live")
-        except Exception:
-            return None
-
-        try:
-            emitter = IdentityEvidenceEmitter(
-                cache_path=ev_path,
-                source_name=label,
-                class_labels_per_factor=factor_labels,
-                runtime_signature=str(params.get("RUNTIME_TIER", "cpu")),
-                calibration_signature=_calibration_signature,
-                calibration=_calibration_model,
-            )
-        except Exception:
-            logger.debug(
-                "IdentityEvidenceEmitter construction failed for '%s'",
-                label,
-                exc_info=True,
-            )
-            return None
-
-        live_store.set_catalog_labels(emitter.catalog_labels)
-        logger.info(
-            "Identity evidence emitter enabled for '%s': %s",
-            label,
-            ev_path,
-        )
-        return emitter
 
     def _emit_inference_progress(self, done: int, total: int) -> None:
         """Translate batch-pass progress to the progress callback (surfaced as

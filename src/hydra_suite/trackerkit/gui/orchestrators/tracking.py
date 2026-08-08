@@ -86,7 +86,6 @@ class TrackingOrchestrator:
             self._mw.current_detection_cache_path = None
             self._mw.current_individual_properties_cache_path = None
             self._mw.current_detected_properties_cache_path = None
-            self._mw.current_detected_cnn_cache_paths = {}
             self._mw.current_interpolated_roi_npz_path = None
             self._mw.current_interpolated_pose_csv_path = None
             self._mw.current_interpolated_pose_df = None
@@ -289,7 +288,6 @@ class TrackingOrchestrator:
         self._mw.current_detection_cache_path = None
         self._mw.current_individual_properties_cache_path = None
         self._mw.current_detected_properties_cache_path = None
-        self._mw.current_detected_cnn_cache_paths = {}
         self._mw.current_interpolated_roi_npz_path = None
         self._mw.current_interpolated_pose_csv_path = None
         self._mw.current_interpolated_pose_df = None
@@ -720,7 +718,6 @@ class TrackingOrchestrator:
         """Read export-relevant cache paths from tracking_worker and store them."""
         worker_props_path = ""
         worker_detected_props_path = ""
-        worker_detected_cnn_paths = {}
         if self._mw.tracking_worker is not None:
             worker_props_path = str(
                 getattr(
@@ -732,14 +729,6 @@ class TrackingOrchestrator:
                 getattr(self._mw.tracking_worker, "detected_properties_cache_path", "")
                 or ""
             ).strip()
-            worker_detected_cnn_paths = {
-                str(label): str(path).strip()
-                for label, path in (
-                    getattr(self._mw.tracking_worker, "detected_cnn_cache_paths", {})
-                    or {}
-                ).items()
-                if str(path).strip()
-            }
         if worker_props_path:
             self._mw.current_individual_properties_cache_path = worker_props_path
             logger.info(
@@ -751,12 +740,6 @@ class TrackingOrchestrator:
             logger.info(
                 "Using detected properties cache for export: %s",
                 worker_detected_props_path,
-            )
-        if worker_detected_cnn_paths:
-            self._mw.current_detected_cnn_cache_paths = worker_detected_cnn_paths
-            logger.info(
-                "Using detected CNN caches for export: %s",
-                worker_detected_cnn_paths,
             )
 
     def _accumulate_session_fps(self, fps_list, is_backward_mode):
@@ -856,9 +839,6 @@ class TrackingOrchestrator:
             ),
             "detected_properties_cache_path": getattr(
                 self._mw, "current_detected_properties_cache_path", None
-            ),
-            "detected_cnn_cache_paths": getattr(
-                self._mw, "current_detected_cnn_cache_paths", None
             ),
         }
         worker = SessionWorker(
