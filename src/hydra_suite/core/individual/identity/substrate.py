@@ -6,6 +6,10 @@
 instead of instance state so it can be shared by both the online and any
 future offline/batch consumers.
 
+`fuse_log_evidence` is lifted from the online decoder's `_fuse_evidence`
+core (`core/individual/identity/online.py`), plus a no-op-by-default
+robustness cap/floor.
+
 This module is Core: it must only depend on numpy/scipy/stdlib.
 """
 
@@ -14,6 +18,106 @@ from __future__ import annotations
 from typing import Optional, Sequence
 
 import numpy as np
+
+
+def fuse_log_evidence(
+    log_posterior: np.ndarray,
+    evidence_log_probs: np.ndarray,
+    *,
+    per_frame_cap: float = float("inf"),
+    prob_floor: float = 0.0,
+) -> np.ndarray:
+    """One log-space Bayesian update: fuse one evidence vector into a belief.
+
+    Lifted from the online decoder's `_fuse_evidence` core: for a single
+    evidence item, ``log_posterior = log_posterior + evidence_log_probs``,
+    then renormalized via ``np.logaddexp.reduce`` to prevent float
+    underflow. Returns the *new* normalized log-posterior; does not mutate
+    either input array.
+
+    With default arguments (``per_frame_cap=inf``, ``prob_floor=0.0``) this
+    is exactly ``renorm(log_posterior + evidence_log_probs)`` — bit-for-bit
+    identical to online's `_fuse_evidence`. The caller (online) retains its
+    own size-mismatch skip+warning guard and `hit_count` bookkeeping; this
+    function is pure and raises on mismatch instead of skipping.
+
+    Args:
+        log_posterior: current log-space posterior over the catalog
+            (``[unknown, k1, k2, ...]``), already normalized.
+        evidence_log_probs: one evidence item's log-probabilities over the
+            same catalog, same shape as `log_posterior`.
+        per_frame_cap: robustness cap — bounds the log-shift this single
+            evidence item can contribute per catalog entry to
+            ``[-per_frame_cap, +per_frame_cap]`` before it is added. A
+            finite cap prevents one frame's evidence from dominating the
+            belief. ``inf`` (default) is an exact no-op: the clip bounds
+            are unreachable, so ``evidence_log_probs`` passes through
+            unchanged.
+        prob_floor: robustness floor — after renormalization, no catalog
+            entry's probability is allowed to fall below `prob_floor`
+            (water-filled: floored entries are pinned at `prob_floor` and
+            the remaining mass is redistributed among the rest, iterated
+            to convergence), so no single frame can drive the belief to
+            full certainty. ``0.0`` (default) is an exact no-op: the
+            branch is skipped entirely (avoiding any exp/log round-trip).
+
+    Returns:
+        The new normalized log-posterior (same shape as `log_posterior`).
+
+    Raises:
+        ValueError: if `log_posterior` and `evidence_log_probs` shapes
+            differ.
+    """
+    if log_posterior.shape != evidence_log_probs.shape:
+        raise ValueError(
+            f"log_posterior shape {log_posterior.shape} != "
+            f"evidence_log_probs shape {evidence_log_probs.shape}"
+        )
+
+    if np.isfinite(per_frame_cap):
+        contribution = np.clip(evidence_log_probs, -per_frame_cap, per_frame_cap)
+    else:
+        contribution = evidence_log_probs
+
+    fused = log_posterior + contribution
+    fused = fused - np.logaddexp.reduce(fused)
+
+    if prob_floor > 0.0:
+        probs = _apply_prob_floor(np.exp(fused), prob_floor)
+        fused = np.log(probs)
+
+    return fused
+
+
+def _apply_prob_floor(probs: np.ndarray, prob_floor: float) -> np.ndarray:
+    """Water-fill `probs` so every entry is >= `prob_floor`, then renormalize.
+
+    A single floor-then-renormalize pass can push a floored entry back
+    below `prob_floor` (dividing by a sum > 1 shrinks everything,
+    including the just-floored entries). This iterates: entries below the
+    floor are pinned to `prob_floor`, and the remaining probability mass is
+    redistributed proportionally among the still-free entries, repeating
+    until no free entry is below the floor.
+    """
+    probs = probs.astype(np.float64, copy=True)
+    n = probs.size
+    fixed = np.zeros(n, dtype=bool)
+    for _ in range(n):
+        below = (~fixed) & (probs < prob_floor)
+        if not below.any():
+            break
+        probs[below] = prob_floor
+        fixed |= below
+        remaining = 1.0 - probs[fixed].sum()
+        free = ~fixed
+        if not free.any():
+            break
+        free_sum = probs[free].sum()
+        if free_sum > 0.0:
+            probs[free] *= remaining / free_sum
+        else:
+            probs[free] = remaining / free.sum()
+    return probs / probs.sum()
 
 
 def solve_unique_assignment(
