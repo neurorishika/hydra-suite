@@ -840,3 +840,108 @@ def test_iterative_solver_returns_assignments_dict():
     # Each value is either a known label or None (Unknown).
     for v in out.values():
         assert v is None or v in {"blue", "green"}
+
+
+# === substrate.solve_unique_assignment base-assignment tests (Task 4) ===
+
+
+def _make_two_fragment_df(t1_range, t2_range, label="blue", x_offset=0.0):
+    """Two single-identity-favoring trajectories over the given frame ranges,
+    both strongly favoring ``label`` with matching online labels."""
+    rows = []
+    for f in t1_range:
+        rows.append(
+            {
+                "TrajectoryID": 1,
+                "FrameID": f,
+                "X": float(f),
+                "Y": 0.0,
+                "IdentityAssignedLabel": label,
+                "IdentityAssignedConfidence": 0.9,
+                "CNN_test_blue_Prob": 0.95 if label == "blue" else 0.05,
+                "CNN_test_green_Prob": 0.05 if label == "blue" else 0.95,
+            }
+        )
+    for f in t2_range:
+        rows.append(
+            {
+                "TrajectoryID": 2,
+                "FrameID": f,
+                "X": float(f) + x_offset,
+                "Y": 0.0,
+                "IdentityAssignedLabel": label,
+                "IdentityAssignedConfidence": 0.9,
+                "CNN_test_blue_Prob": 0.95 if label == "blue" else 0.05,
+                "CNN_test_green_Prob": 0.05 if label == "blue" else 0.95,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def test_substrate_solver_overlapping_fragments_get_injective_assignment():
+    """Two time-overlapping fragments both favoring the same identity must not
+    both keep it — the substrate solver enforces uniqueness within the
+    overlap group; the loser is reassigned or Unknown."""
+    catalog = _make_catalog()
+    df = _make_two_fragment_df(range(0, 50), range(20, 70), label="blue")
+    params = {
+        "FRAGMENT_CNN_WEIGHT": 0.6,
+        "ONLINE_PRIOR_WEIGHT": 0.25,
+        "ASSIGNMENT_MARGIN_THRESHOLD": 0.01,
+    }
+    result = solve_global_assignment(df, catalog, params)
+    label_t1 = result[result["TrajectoryID"] == 1]["IdentityAssignedLabel"].iloc[0]
+    label_t2 = result[result["TrajectoryID"] == 2]["IdentityAssignedLabel"].iloc[0]
+    labels = {label_t1, label_t2}
+    assert not (
+        label_t1 == "blue" and label_t2 == "blue"
+    ), f"overlapping fragments both got 'blue' (t1={label_t1!r}, t2={label_t2!r})"
+    # One of the two must still be blue (the injective winner).
+    assert "blue" in labels
+
+
+def test_substrate_solver_nonoverlapping_fragments_may_share_label():
+    """Two fragments that never share a frame may both legitimately be
+    assigned the same identity — the substrate solver's uniqueness
+    constraint must be scoped to the temporal-overlap group, not global."""
+    catalog = _make_catalog()
+    df = _make_two_fragment_df(range(0, 50), range(100, 150), label="blue")
+    params = {
+        "FRAGMENT_CNN_WEIGHT": 0.6,
+        "ONLINE_PRIOR_WEIGHT": 0.25,
+        "ASSIGNMENT_MARGIN_THRESHOLD": 0.01,
+    }
+    result = solve_global_assignment(df, catalog, params)
+    label_t1 = result[result["TrajectoryID"] == 1]["IdentityAssignedLabel"].iloc[0]
+    label_t2 = result[result["TrajectoryID"] == 2]["IdentityAssignedLabel"].iloc[0]
+    assert (
+        label_t1 == "blue" and label_t2 == "blue"
+    ), f"non-overlapping fragments should both be able to keep 'blue', got t1={label_t1!r}, t2={label_t2!r}"
+
+
+def test_iterative_assign_routes_through_substrate_solve_unique_assignment(
+    monkeypatch,
+):
+    """`_iterative_assign`'s base assignment is literally produced by
+    `substrate.solve_unique_assignment` — not a re-implementation."""
+    from hydra_suite.core.individual.identity import offline as offline_mod
+    from hydra_suite.core.individual.identity import substrate as substrate_mod
+
+    calls = []
+    original = substrate_mod.solve_unique_assignment
+
+    def _spy(posterior_probs, num_known, display_threshold, **kwargs):
+        calls.append((len(posterior_probs), num_known, display_threshold))
+        return original(posterior_probs, num_known, display_threshold, **kwargs)
+
+    monkeypatch.setattr(offline_mod.substrate, "solve_unique_assignment", _spy)
+
+    catalog = _make_catalog()
+    df = _make_two_trajectory_df()
+    summaries = _build_traj_summaries(df, catalog).reset_index(drop=True)
+    _iterative_assign(
+        summaries,
+        list(catalog.labels[1:]),
+        {"FRAGMENT_CNN_WEIGHT": 0.7, "ONLINE_PRIOR_WEIGHT": 0.1},
+    )
+    assert calls, "solve_unique_assignment was never called by _iterative_assign"

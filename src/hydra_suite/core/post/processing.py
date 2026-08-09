@@ -1401,6 +1401,89 @@ def _strip_identity_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+# Tiny additive bonus for forward-pass claims so exact-score ties resolve
+# deterministically (mirrors the old lexicographic (score, is_forward) tiebreak)
+# without perturbing any real score separation seen in practice — the smallest
+# separation between distinct claim scores in the current scoring scheme is
+# many orders of magnitude larger than this.
+_FORWARD_TIEBREAK_EPS = 1e-9
+
+
+def _resolve_overlap_group_losers(candidates: list[tuple]) -> set[int]:
+    """Partition one label's claimants into temporal-overlap connected
+    components and resolve each via ``substrate.solve_unique_assignment``
+    (a single shared catalog column — the one contested label). Every
+    claimant the solver does not seat for that column is a loser.
+    Components with a single member (no frame overlap with any other
+    claimant of the label) are left untouched — same label, disjoint time,
+    both valid.
+
+    ``candidates``: list of ``(result_dfs_index, label, frames, score)``.
+    """
+    from hydra_suite.core.individual.identity import substrate
+
+    n = len(candidates)
+    parent = list(range(n))
+
+    def _find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def _union(a: int, b: int) -> None:
+        ra, rb = _find(a), _find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            if not candidates[i][2].isdisjoint(candidates[j][2]):
+                _union(i, j)
+
+    groups: dict[int, list[int]] = {}
+    for i in range(n):
+        groups.setdefault(_find(i), []).append(i)
+
+    losers: set[int] = set()
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        # Single shared catalog column (the contested label): each
+        # claimant's probability of deserving it is its share of the
+        # group's total claim score (a within-group softmax-like
+        # normalization, not an absolute-confidence probability) — so the
+        # dominant claimant's probability clears 0.5 (favored over the
+        # solver's dummy/unknown column) while the rest fall below it,
+        # regardless of the raw score's absolute scale.
+        eps = 1e-9
+        total = sum(candidates[m][3] for m in members)
+        denom = total + eps * len(members)
+        posteriors = []
+        for m in members:
+            p = (candidates[m][3] + eps) / denom
+            p = min(max(p, 1e-12), 1.0 - 1e-12)
+            posteriors.append(np.array([1.0 - p, p], dtype=np.float64))
+        assignment = substrate.solve_unique_assignment(
+            posteriors, num_known=1, display_threshold=0.0
+        )
+        winner_idx = None
+        for member_pos, cat_idx in zip(members, assignment):
+            if cat_idx is not None:
+                winner_idx = candidates[member_pos][0]
+        for member_pos, cat_idx in zip(members, assignment):
+            df_idx = candidates[member_pos][0]
+            if cat_idx is None:
+                losers.add(df_idx)
+                logger.debug(
+                    "Identity conflict on label '%s': trajectory index %s wins over %d",
+                    candidates[member_pos][1],
+                    winner_idx,
+                    df_idx,
+                )
+    return losers
+
+
 def resolve_simultaneous_identity_conflicts(
     result_dfs: list,
     params: dict | None = None,
@@ -1408,17 +1491,21 @@ def resolve_simultaneous_identity_conflicts(
     """Demote the weaker of two tracks that simultaneously claim the same identity.
 
     Enforces the physical constraint that a given identity can belong to at most
-    one trajectory at any point in time.  For each pair of trajectories with the
-    same majority ``IdentityAssignedLabel`` and at least one shared frame, the
-    lower-scoring one has its identity columns cleared and
-    ``IdentityConflictResolved`` set to ``True``.
+    one trajectory at any point in time.  For each group of trajectories that
+    share the same majority ``IdentityAssignedLabel`` AND at least one shared
+    frame, the shared ``substrate.solve_unique_assignment`` uniqueness solver
+    (the same partial-injective Hungarian used by the online decoder and the
+    offline fragment solver) picks the injective winner over a single shared
+    catalog column (the contested label); every loser has its identity columns
+    cleared and ``IdentityConflictResolved`` set to ``True``.
 
     Scoring follows the same shape as the iterative fragment solver: a unary
     quality term ``agreement × mean_conf × length_factor`` plus an additive
-    AprilTag bonus, with the forward-pass flag as the lex tiebreaker. A long
-    track with consistent labels and a clear margin therefore wins over a
-    short, jittery, or low-confidence one — the loser is the one that gets
-    cleared to Unknown.
+    AprilTag bonus, with a forward-pass tiebreak. A long track with consistent
+    labels and a clear margin therefore wins over a short, jittery, or
+    low-confidence one — the loser is the one that gets cleared to Unknown.
+    Trajectories with the same label but NO shared frame never compete (they
+    fall into separate temporal-overlap groups and both keep the label).
     """
     if not result_dfs:
         return result_dfs
@@ -1446,7 +1533,8 @@ def resolve_simultaneous_identity_conflicts(
     for idx, label, frames, features in labeled:
         score = _claim_score(features, max_frame_count, max_tag_votes)
         is_forward = features[4]
-        scored.append((idx, label, frames, (score, is_forward)))
+        score_adj = score + (_FORWARD_TIEBREAK_EPS if is_forward else 0.0)
+        scored.append((idx, label, frames, score_adj))
 
     by_label: dict[str, list] = {}
     for item in scored:
@@ -1456,22 +1544,7 @@ def resolve_simultaneous_identity_conflicts(
     for candidates in by_label.values():
         if len(candidates) < 2:
             continue
-        for i in range(len(candidates)):
-            for j in range(i + 1, len(candidates)):
-                idx_a, _, frames_a, score_a = candidates[i]
-                idx_b, _, frames_b, score_b = candidates[j]
-                if idx_a in loser_indices or idx_b in loser_indices:
-                    continue
-                if frames_a.isdisjoint(frames_b):
-                    continue
-                loser = idx_b if score_a >= score_b else idx_a
-                loser_indices.add(loser)
-                logger.debug(
-                    "Identity conflict on label '%s': trajectory index %d wins over %d",
-                    candidates[i][1],
-                    idx_a if score_a >= score_b else idx_b,
-                    loser,
-                )
+        loser_indices.update(_resolve_overlap_group_losers(candidates))
 
     for idx in loser_indices:
         result_dfs[idx] = _strip_identity_columns(result_dfs[idx].copy())

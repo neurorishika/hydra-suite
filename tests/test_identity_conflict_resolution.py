@@ -247,6 +247,31 @@ def test_long_high_conf_wins_over_short_high_conf_at_zero_tags() -> None:
     assert pd.isna(_label(result[1]))
 
 
+def test_conflict_resolution_routes_through_substrate_solve_unique_assignment() -> None:
+    """The conflict resolver's uniqueness decision is literally produced by
+    `substrate.solve_unique_assignment` (the same solver used by the online
+    decoder and the offline fragment solver), not a re-implementation."""
+    from hydra_suite.core.individual.identity import substrate as substrate_mod
+
+    calls: list = []
+    original = substrate_mod.solve_unique_assignment
+
+    def _spy(posterior_probs, num_known, display_threshold, **kwargs):
+        calls.append((len(posterior_probs), num_known, display_threshold))
+        return original(posterior_probs, num_known, display_threshold, **kwargs)
+
+    import unittest.mock as mock
+
+    with mock.patch.object(substrate_mod, "solve_unique_assignment", _spy):
+        a = _make_traj([1, 2, 3], label="ant_r", conf=0.9, tag_votes=5)
+        b = _make_traj([2, 3, 4], label="ant_r", conf=0.5, tag_votes=0)
+        result = resolve_simultaneous_identity_conflicts([a.copy(), b.copy()])
+
+    assert calls, "solve_unique_assignment was never called by the conflict resolver"
+    assert _label(result[0]) == "ant_r"
+    assert pd.isna(_label(result[1]))
+
+
 def test_strong_tag_evidence_overrides_long_low_margin_track() -> None:
     """A short track with strong AprilTag confirmation must beat a long track
     with weaker mean confidence and no tags — tag-vote bonus is additive and

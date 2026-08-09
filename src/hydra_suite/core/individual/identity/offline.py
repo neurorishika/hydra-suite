@@ -22,6 +22,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from hydra_suite.core.individual.identity import substrate
 from hydra_suite.core.individual.identity.catalog import IdentityCatalog
 
 log = logging.getLogger(__name__)
@@ -725,6 +726,110 @@ def _seg_from_row(row: pd.Series) -> dict:
     }
 
 
+def _support_to_slot_posterior(
+    support: dict[str, float],
+    length_factor: float,
+    known_labels: list[str],
+) -> np.ndarray:
+    """Convert a per-fragment normalized evidence support + length factor into a
+    full catalog posterior ``[unknown, k1, ..., kK]`` for the substrate solver.
+
+    ``support`` is already normalized to sum to 1 over ``known_labels``
+    (``_normalize_support_scores``). Scaling by ``length_factor`` (the same
+    multiplicative length discount used everywhere else in this module)
+    naturally reserves ``1 - length_factor`` of posterior mass for
+    "unknown" — a short fragment's evidence competes weaker for a slot in
+    the Hungarian assignment than a long fragment's, mirroring the doubt
+    engine below without pre-empting its spatial refinement.
+    """
+    factor = float(np.clip(length_factor, 0.0, 1.0))
+    known = np.array(
+        [factor * float(support.get(label, 0.0)) for label in known_labels],
+        dtype=np.float64,
+    )
+    known = np.clip(known, 0.0, None)
+    unknown = max(0.0, 1.0 - float(known.sum()))
+    posterior = np.concatenate(([unknown], known))
+    total = float(posterior.sum())
+    if total <= 1e-12:
+        # Degenerate (no evidence at all): uniform over unknown + knowns.
+        return np.full(len(known_labels) + 1, 1.0 / (len(known_labels) + 1))
+    return posterior / total
+
+
+def _base_assignment_via_substrate(
+    frags: pd.DataFrame,
+    known_labels: list[str],
+    combined_supports: list[dict[str, float]],
+    length_factors: np.ndarray,
+    display_threshold: float,
+) -> list[str | None]:
+    """Base injective fragment->label assignment via
+    ``substrate.solve_unique_assignment``, solved independently per
+    temporal-overlap connected component.
+
+    The partial-injective Hungarian solver assumes every slot handed to it
+    is simultaneously visible, so two fragments that never share a frame
+    must NOT be forced to compete for the same catalog label — grouping by
+    temporal-overlap connected components (rather than one global solve)
+    preserves that: fragments in disjoint components may independently
+    receive the same identity, exactly as two non-overlapping trajectories
+    legitimately can. Fragments within one component are made mutually
+    exclusive over the catalog by the solver's uniqueness constraint. This
+    is the *base* assignment; ``_iterative_assign``'s doubt-ordered
+    veto/swap refinement (below) still runs afterward to resolve spatial
+    plausibility that this temporal-only grouping cannot see (e.g. two
+    disjoint-time fragments claiming the same label at implausibly distant
+    positions).
+    """
+    n = len(frags)
+    if n == 0:
+        return []
+
+    starts = [int(frags.iloc[i]["StartFrame"]) for i in range(n)]
+    ends = [int(frags.iloc[i]["EndFrame"]) for i in range(n)]
+
+    parent = list(range(n))
+
+    def _find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def _union(a: int, b: int) -> None:
+        ra, rb = _find(a), _find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            if starts[i] <= ends[j] and starts[j] <= ends[i]:
+                _union(i, j)
+
+    groups: dict[int, list[int]] = {}
+    for i in range(n):
+        groups.setdefault(_find(i), []).append(i)
+
+    num_known = len(known_labels)
+    result: list[str | None] = [None] * n
+    for members in groups.values():
+        posteriors = [
+            _support_to_slot_posterior(
+                combined_supports[i], float(length_factors[i]), known_labels
+            )
+            for i in members
+        ]
+        assignment = substrate.solve_unique_assignment(
+            posteriors, num_known, display_threshold
+        )
+        for member_idx, cat_idx in zip(members, assignment):
+            if cat_idx is not None and 1 <= cat_idx <= num_known:
+                result[member_idx] = known_labels[cat_idx - 1]
+
+    return result
+
+
 def _iterative_assign(
     frags: pd.DataFrame,
     known_labels: list[str],
@@ -763,7 +868,7 @@ def _iterative_assign(
     if n_frags == 0:
         return {}
 
-    known_label_set = set(known_labels)
+    display_threshold = float(params.get("IDENTITY_DISPLAY_THRESHOLD", 0.6))
 
     # Pre-compute durations and length factors.
     durations = np.array(
@@ -805,15 +910,15 @@ def _iterative_assign(
         dtype=np.float64,
     )
 
-    def _sanitize(lbl: Any) -> str | None:
-        s = str(lbl)
-        if s in _UNKNOWN_VALUES or s not in known_label_set:
-            return None
-        return s
-
-    current: list[str | None] = [
-        _sanitize(frags.iloc[i]["OnlineLabel"]) for i in range(n_frags)
-    ]
+    # Base assignment: the shared substrate uniqueness solver, applied per
+    # temporal-overlap connected component (see `_base_assignment_via_substrate`).
+    # This is the "one uniqueness solver" — collision-free by construction for
+    # simultaneously-visible fragments, while disjoint-time fragments remain
+    # free to share a label. The doubt-ordered refinement below then handles
+    # spatial plausibility this temporal-only base assignment cannot see.
+    current: list[str | None] = _base_assignment_via_substrate(
+        frags, known_labels, combined_supports, length_factors, display_threshold
+    )
 
     # Schedule: dict[label] -> list of (frag_idx, segment_dict), unordered;
     # spatial helpers don't require sortedness.
