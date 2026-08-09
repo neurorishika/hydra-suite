@@ -151,3 +151,178 @@ def load_trajectory_evidence(
             result[int(traj_id)] = sequence
 
     return result
+
+
+def _normalize_log_probs(log_probs: np.ndarray) -> np.ndarray:
+    """Renormalize a log-probability vector via log-sum-exp."""
+    out = np.asarray(log_probs, dtype=np.float64).copy()
+    out -= np.logaddexp.reduce(out)
+    return out
+
+
+def _build_log_transition(catalog_size: int, transition_epsilon: float) -> np.ndarray:
+    """Sticky-Markov log-transition of shape ``(catalog_size, catalog_size)``.
+
+    Mirrors ``online.py``'s ``TrackIdentityDecoder._build_log_transition``
+    exactly: off-diagonal mass ``eps / (C - 1)`` spread evenly, diagonal
+    (stay-in-state) mass ``1 - eps``, then logged with a numerical floor.
+    """
+    eps = float(transition_epsilon)
+    c = int(catalog_size)
+    transition = np.full((c, c), eps / max(c - 1, 1), dtype=np.float64)
+    np.fill_diagonal(transition, 1.0 - eps)
+    return np.log(np.clip(transition, 1e-300, None))
+
+
+def _predict(log_posterior: np.ndarray, log_transition: np.ndarray) -> np.ndarray:
+    """Apply the sticky log-transition to a log-posterior: ``T^T . posterior``.
+
+    Mirrors ``online.py``'s ``TrackIdentityDecoder._predict_belief`` exactly
+    (pure function instead of an in-place mutation): for each destination
+    state ``j``, ``new[j] = logsumexp_i(log_posterior[i] + log_transition[i, j])``.
+    """
+    c = log_posterior.shape[0]
+    new_log = np.empty_like(log_posterior)
+    for j in range(c):
+        new_log[j] = np.logaddexp.reduce(log_posterior + log_transition[:, j])
+    return new_log
+
+
+def smooth_trajectory_posteriors(
+    frame_log_probs: list[np.ndarray],
+    transition_epsilon: float,
+) -> list[np.ndarray]:
+    """Forward-backward (two-filter) smoothing over one trajectory's evidence.
+
+    Each element of ``frame_log_probs`` is a per-frame, already-normalized
+    log-posterior over the catalog (as produced by
+    :func:`load_trajectory_evidence`). This combines each frame's evidence
+    with both the frames *before* it and the frames *after* it (propagated
+    through a sticky-Markov transition), so a confident late burst of
+    evidence corrects ambiguous early frames -- and vice versa -- instead of
+    the online decoder's forward-only, causal-only belief.
+
+    Two-filter combination (no double-counting)
+    ---------------------------------------------
+    FORWARD pass (causal, mirrors the online decoder exactly):
+        ``alpha_0 = evidence_0``
+        ``alpha_t = fuse(predict(alpha_{t-1}), evidence_t)``    for t > 0
+
+    BACKWARD pass (anti-causal, same recursion run in reverse time):
+        ``beta_T = evidence_T``
+        ``beta_t = fuse(predict(beta_{t+1}), evidence_t)``      for t < T
+
+    Both ``alpha_t`` and ``beta_t`` independently fold in ``evidence_t``
+    itself (each is a self-sufficient one-sided posterior), so summing them
+    directly in log-space would double-count frame ``t``'s own evidence.
+    Instead:
+
+        ``smoothed_t = normalize(alpha_t + beta_t - evidence_t)``
+
+    Subtracting one copy of ``evidence_t`` (already normalized, so this is
+    a plain log-space cancellation, not a division-by-near-zero hazard)
+    leaves exactly the desired mixture: ``predict(alpha_{t-1})
+    + predict(beta_{t+1}) + evidence_t``, i.e. left-context prediction +
+    right-context prediction + the frame's own evidence, each counted once.
+
+    This reduces to the fused evidence at the two properties this module is
+    tested against:
+      * A single-frame trajectory has no left/right context: ``alpha_0 ==
+        beta_0 == evidence_0``, so ``smoothed_0 == evidence_0`` exactly.
+      * At the trajectory's own boundaries (``t=0``: no left context since
+        ``alpha_0 = evidence_0`` exactly; ``t=T``: no right context since
+        ``beta_T = evidence_T`` exactly), ``smoothed_0 == beta_0`` and
+        ``smoothed_T == alpha_T`` -- i.e. exactly the one-sided filter that
+        actually has context to offer.
+
+    Args:
+        frame_log_probs: ordered per-frame normalized log-posteriors over
+            the catalog (one trajectory's sequence, as returned by
+            :func:`load_trajectory_evidence`, e.g. ``[lp for _, lp in
+            sequence]``).
+        transition_epsilon: sticky-Markov transition leak probability (same
+            semantics/knob as the online decoder's
+            ``IDENTITY_TRANSITION_EPSILON``); the total probability mass
+            per step that a state is allowed to have moved away from its
+            previous frame's identity. Smaller values propagate confident
+            evidence further along the trajectory before it decays.
+
+    Returns:
+        Per-frame normalized log-posteriors, same length and order as
+        ``frame_log_probs``. Empty input returns ``[]``.
+    """
+    n = len(frame_log_probs)
+    if n == 0:
+        return []
+
+    evidence = [_normalize_log_probs(lp) for lp in frame_log_probs]
+    catalog_size = evidence[0].shape[0]
+    log_transition = _build_log_transition(catalog_size, transition_epsilon)
+
+    alpha: list[np.ndarray] = [evidence[0]]
+    for t in range(1, n):
+        predicted = _predict(alpha[t - 1], log_transition)
+        alpha.append(fuse_log_evidence(predicted, evidence[t]))
+
+    beta: list[np.ndarray] = [np.empty(0)] * n
+    beta[n - 1] = evidence[n - 1]
+    for t in range(n - 2, -1, -1):
+        predicted = _predict(beta[t + 1], log_transition)
+        beta[t] = fuse_log_evidence(predicted, evidence[t])
+
+    smoothed: list[np.ndarray] = []
+    for t in range(n):
+        combined = alpha[t] + beta[t] - evidence[t]
+        smoothed.append(_normalize_log_probs(combined))
+
+    return smoothed
+
+
+def smoothed_label_and_conf(
+    smoothed: list[np.ndarray],
+    catalog: IdentityCatalog,
+    display_threshold: float,
+) -> list[tuple[str, float]]:
+    """Per-frame ``(label, confidence)`` from smoothed catalog posteriors.
+
+    For each frame's smoothed log-posterior, picks the argmax over the
+    *known* identities (catalog index >= 1, i.e. excluding ``unknown`` at
+    index 0) and reports its probability as the confidence. When that
+    probability is below ``display_threshold`` the label is reported as
+    ``''`` (unknown/undecided) -- mirroring the online decoder's
+    display-threshold gate (``substrate.solve_unique_assignment`` /
+    ``TrackIdentityDecoder._display_threshold``) -- but the confidence
+    value returned is always the raw best-known probability (not zeroed),
+    so callers can inspect how close a sub-threshold frame came.
+
+    Args:
+        smoothed: per-frame normalized log-posteriors (e.g. the output of
+            :func:`smooth_trajectory_posteriors`).
+        catalog: the catalog the posteriors are indexed against.
+        display_threshold: minimum best-known probability required to
+            report a label instead of ``''``.
+
+    Returns:
+        A list aligned to ``smoothed`` of ``(label, confidence)`` pairs.
+        Empty input returns ``[]``.
+    """
+    results: list[tuple[str, float]] = []
+    for log_probs in smoothed:
+        shifted = np.asarray(log_probs, dtype=np.float64)
+        shifted = shifted - np.max(shifted)
+        probs = np.exp(shifted)
+        probs /= np.clip(probs.sum(), 1e-300, None)
+
+        known_probs = probs[1:]
+        if known_probs.size == 0:
+            results.append(("", 0.0))
+            continue
+
+        best_known_idx = int(np.argmax(known_probs)) + 1
+        best_conf = float(probs[best_known_idx])
+        label = (
+            catalog.label_of(best_known_idx) if best_conf >= display_threshold else ""
+        )
+        results.append((label, best_conf))
+
+    return results
