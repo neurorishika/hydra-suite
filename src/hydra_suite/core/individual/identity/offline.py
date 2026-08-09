@@ -1,7 +1,7 @@
 """Global identity fragment solver.
 
 Identity post-processing pipeline:
-1. PELT changepoint detection on per-trajectory CNN probability matrices.
+1. PELT changepoint detection on per-trajectory smoothed identity posteriors.
 2. Fragment building from detected changepoints.
 3. Iterative greedy label refinement: walks fragments in order of doubt score
    (low CNN stability × short length × poor spatial fit + Unknown bonus),
@@ -486,20 +486,34 @@ def _build_prior_log_scores(
 
 
 def detect_identity_changepoints(
-    df: pd.DataFrame,
+    smoothed_by_traj: dict[Any, list[tuple[int, np.ndarray]]],
     catalog: IdentityCatalog,
     params: dict[str, Any],
 ) -> dict[Any, list[int]]:
-    """Return {traj_id: [split_frame_indices]} using PELT on CNN prob matrix.
+    """Return {traj_id: [split_frame_indices]} using PELT on the smoothed
+    per-frame identity posterior (Phase 5 Task 2's forward-backward
+    smoothing output), not the ``CNN_*_Prob`` CSV columns.
 
     Each split_frame_index is the *inclusive end* (last FrameID) of a segment.
     ``build_fragments`` treats these as inclusive boundaries: segment k spans
     FrameIDs [split_indices[k-1]+1, split_indices[k]].
-    Trajectories with no CNN evidence or fewer than min_fragment_frames*2
+    Trajectories with no evidence or fewer than min_fragment_frames*2
     rows are returned with no splits.
 
     PELT model is read from params["PELT_MODEL"] (l1 / l2 / rbf; default rbf).
     Z-scoring is skipped for l1 since l1 is already median-based.
+
+    Args:
+        smoothed_by_traj: ``{TrajectoryID: [(FrameID, smoothed_log_probs), ...]}``,
+            e.g. ``zip(frame_ids, smooth_trajectory_posteriors(...))`` per
+            trajectory (see ``identity/smoothing.py``). Each ``smoothed_log_probs``
+            is a normalized log-posterior over the full catalog (``unknown`` at
+            index 0, known labels at 1..N). Sequences need not be pre-sorted by
+            FrameID; this function sorts defensively.
+        catalog: the identity catalog the smoothed posteriors are indexed
+            against (used only to size the known-label slice of the signal).
+        params: see module docstring; keys ``CHANGEPOINT_PENALTY``,
+            ``MIN_FRAGMENT_FRAMES``, ``PELT_MODEL``.
     """
     try:
         import ruptures as rpt
@@ -514,33 +528,27 @@ def detect_identity_changepoints(
     pelt_model = str(params.get("PELT_MODEL", "rbf")).lower()
     if pelt_model not in ("l1", "l2", "rbf"):
         pelt_model = "rbf"
-    known_labels = list(catalog.labels[1:])
 
-    # Find CNN_*_Prob columns for known labels only.
-    prob_cols: list[str] = []
-    for label in known_labels:
-        suffix = f"_{label}_Prob"
-        for col in df.columns:
-            if str(col).endswith(suffix):
-                prob_cols.append(col)
-                break
-
-    if not prob_cols:
+    if len(catalog.labels) <= 1:
         return {}
 
     result: dict[Any, list[int]] = {}
 
-    for traj_id, grp in df.groupby("TrajectoryID", sort=False):
-        grp_sorted = grp.sort_values("FrameID")
-        if len(grp_sorted) < min_frames * 2:
+    for traj_id, sequence in smoothed_by_traj.items():
+        if len(sequence) < min_frames * 2:
             continue
 
-        signal = (
-            grp_sorted[prob_cols]
-            .apply(pd.to_numeric, errors="coerce")
-            .fillna(0.5)
-            .values
-        )
+        ordered = sorted(sequence, key=lambda item: item[0])
+        frame_ids = np.array([frame_id for frame_id, _ in ordered])
+        log_probs = np.stack([lp for _, lp in ordered]).astype(np.float64)
+
+        # Known-label probabilities (exp of the smoothed log-posterior),
+        # dropping the leading `unknown` column -- mirrors the old CNN_*_Prob
+        # column set (one column per known identity label).
+        probs = np.exp(log_probs - log_probs.max(axis=1, keepdims=True))
+        probs /= np.clip(probs.sum(axis=1, keepdims=True), 1e-300, None)
+        signal = probs[:, 1:]
+
         # Z-score per column to suppress magnitude drift.
         # Skipped for l1 which is already median-based and scale-insensitive.
         if pelt_model != "l1":
@@ -558,9 +566,9 @@ def detect_identity_changepoints(
             log.warning("PELT failed for traj %s: %s", traj_id, exc)
             continue
 
-        # ruptures returns end-of-segment indices (1-indexed frame position in grp_sorted).
-        # Convert to FrameID values (drop the final sentinel which equals len).
-        frame_ids = grp_sorted["FrameID"].values
+        # ruptures returns end-of-segment indices (1-indexed frame position in
+        # `ordered`). Convert to FrameID values (drop the final sentinel which
+        # equals len).
         split_frames = [
             int(frame_ids[s - 1]) for s in splits[:-1] if s < len(frame_ids)
         ]

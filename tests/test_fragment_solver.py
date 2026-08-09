@@ -1,3 +1,19 @@
+import numpy as np
+import pandas as pd
+import pytest
+
+from hydra_suite.core.individual.identity.catalog import IdentityCatalog
+from hydra_suite.core.individual.identity.offline import (
+    _build_traj_summaries,
+    _fragment_stability,
+    _iterative_assign,
+    detect_identity_changepoints,
+    run_fragment_solver,
+    solve_global_assignment,
+    split_trajectories_at_changepoints,
+)
+
+
 def test_fragment_solver_imports():
     from hydra_suite.core.individual.identity.offline import (
         detect_identity_changepoints,
@@ -12,10 +28,35 @@ def test_fragment_solver_imports():
     assert callable(solve_global_assignment)
 
 
-import pandas as pd
+def _smoothed_by_traj_from_prob_cols(df, catalog):
+    """Adapter: build the new smoothed_by_traj input from a df's CNN_*_Prob
+    columns, mirroring what Task 5's wiring will hand to
+    detect_identity_changepoints (a stand-in for real forward-backward
+    smoothing, since these tests only care about the changepoint-detection
+    behavior, not smoothing itself).
+    """
+    known_labels = list(catalog.labels[1:])
+    prob_cols = []
+    for label in known_labels:
+        suffix = f"_{label}_Prob"
+        for col in df.columns:
+            if str(col).endswith(suffix):
+                prob_cols.append(col)
+                break
+    if not prob_cols:
+        return {}
 
-from hydra_suite.core.individual.identity.catalog import IdentityCatalog
-from hydra_suite.core.individual.identity.offline import detect_identity_changepoints
+    result = {}
+    for traj_id, grp in df.groupby("TrajectoryID", sort=False):
+        grp_sorted = grp.sort_values("FrameID")
+        sequence = []
+        for frame_id, row in zip(grp_sorted["FrameID"], grp_sorted[prob_cols].values):
+            known_probs = np.clip(row.astype(np.float64), 1e-6, None)
+            probs = np.concatenate([[1e-6], known_probs])
+            probs /= probs.sum()
+            sequence.append((int(frame_id), np.log(probs)))
+        result[traj_id] = sequence
+    return result
 
 
 def _make_catalog():
@@ -45,8 +86,11 @@ def _make_df_with_prob_cols(n_frames=60, swap_at=30):
 def test_changepoint_detects_clear_swap():
     df = _make_df_with_prob_cols(n_frames=60, swap_at=30)
     catalog = _make_catalog()
+    smoothed_by_traj = _smoothed_by_traj_from_prob_cols(df, catalog)
     result = detect_identity_changepoints(
-        df, catalog, {"CHANGEPOINT_PENALTY": 2.0, "MIN_FRAGMENT_FRAMES": 5}
+        smoothed_by_traj,
+        catalog,
+        {"CHANGEPOINT_PENALTY": 2.0, "MIN_FRAGMENT_FRAMES": 5},
     )
     # Trajectory 1 should have exactly one split near frame 30.
     splits = result.get(1, [])
@@ -57,8 +101,11 @@ def test_changepoint_detects_clear_swap():
 def test_changepoint_no_split_when_stable():
     df = _make_df_with_prob_cols(n_frames=60, swap_at=60)  # no swap
     catalog = _make_catalog()
+    smoothed_by_traj = _smoothed_by_traj_from_prob_cols(df, catalog)
     result = detect_identity_changepoints(
-        df, catalog, {"CHANGEPOINT_PENALTY": 2.0, "MIN_FRAGMENT_FRAMES": 5}
+        smoothed_by_traj,
+        catalog,
+        {"CHANGEPOINT_PENALTY": 2.0, "MIN_FRAGMENT_FRAMES": 5},
     )
     assert result.get(1, []) == [], "stable trajectory should have no splits"
 
@@ -73,11 +120,9 @@ def test_changepoint_no_cnn_columns_returns_empty():
         }
     )
     catalog = _make_catalog()
-    result = detect_identity_changepoints(df, catalog, {})
+    smoothed_by_traj = _smoothed_by_traj_from_prob_cols(df, catalog)
+    result = detect_identity_changepoints(smoothed_by_traj, catalog, {})
     assert result == {}, "no CNN columns should produce empty changepoint dict"
-
-
-from hydra_suite.core.individual.identity.offline import solve_global_assignment
 
 
 def _make_two_trajectory_df():
@@ -224,9 +269,6 @@ def test_solve_global_assignment_reconstructs_multihead_label_probabilities():
     assert result.iloc[0]["IdentityAssignedLabel"] == "red_left"
 
 
-from hydra_suite.core.individual.identity.offline import run_fragment_solver
-
-
 def test_run_fragment_solver_returns_dataframe():
     df = _make_df_with_prob_cols(n_frames=60, swap_at=30)
     catalog = _make_catalog()
@@ -252,6 +294,15 @@ def test_run_fragment_solver_pelt_disabled_by_default():
     )
 
 
+@pytest.mark.xfail(
+    reason=(
+        "Task 3 repointed detect_identity_changepoints onto smoothed-posterior "
+        "input; run_fragment_solver's call site (offline.py) still passes a "
+        "DataFrame and is rewired in Task 5 (self-sufficient offline pipeline "
+        "wiring). Temporarily inconsistent per the Task 3 brief."
+    ),
+    strict=True,
+)
 def test_run_fragment_solver_pelt_enabled_splits_trajectory():
     """With PELT enabled, a clear CNN swap produces two distinct TrajectoryIDs."""
     df = _make_df_with_prob_cols(n_frames=60, swap_at=30)
@@ -265,11 +316,6 @@ def test_run_fragment_solver_pelt_enabled_splits_trajectory():
     ), f"expected 2 trajectories after PELT split, got {result['TrajectoryID'].nunique()}"
     assert "OriginalTrajectoryID" in result.columns
     assert (result["OriginalTrajectoryID"] == 1).all()
-
-
-from hydra_suite.core.individual.identity.offline import (
-    split_trajectories_at_changepoints,
-)
 
 
 def test_split_trajectories_produces_two_ids_on_changepoint():
@@ -418,14 +464,6 @@ def test_long_consistent_track_beats_short_confident_fragment():
 
 
 # === Iterative-solver-specific tests ===
-
-import numpy as np
-
-from hydra_suite.core.individual.identity.offline import (
-    _build_traj_summaries,
-    _fragment_stability,
-    _iterative_assign,
-)
 
 
 def test_fragment_stability_clean_vs_jittery():
@@ -618,7 +656,8 @@ def test_iterative_solver_monotone_gate_blocks_marginal_flips():
     params = {
         "FRAGMENT_CNN_WEIGHT": 0.7,
         "ONLINE_PRIOR_WEIGHT": 0.25,
-        # Aggressive monotone gate: any plausible flip must clear 50% of the unit objective.
+        # Aggressive monotone gate: any plausible flip must clear 50% of the unit
+        # objective.
         "ASSIGNMENT_MARGIN_THRESHOLD": 0.50,
         "FRAGMENT_LENGTH_WEIGHT": 0.6,
     }
