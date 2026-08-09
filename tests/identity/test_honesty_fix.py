@@ -76,6 +76,15 @@ def _build_realtime_off_df() -> pd.DataFrame:
     """A tracking-output df exactly as a realtime-identity-OFF run produces
     it: TrajectoryID/FrameID/DetectionID + EMPTY IdentityAssignedLabel/
     IdentityAssignedConfidence, no CNN_*_Prob/DetectedTag* columns at all.
+
+    Faithful to production dtype: a realtime-OFF final CSV has an
+    all-empty IdentityAssignedLabel column, which pandas reads back as
+    all-NaN *float64* (NOT object ""). That dtype is load-bearing -- the
+    fragment solver must coerce it to object before writing string labels,
+    or the write raises a pandas LossySetitemError (pandas>=3) that the
+    caller silently swallows, re-breaking the honesty fix. Building the
+    column as float64 NaN here is what makes this a real regression guard
+    for that crash (an object-"" column hides it).
     """
     n = 30
     rows = []
@@ -88,7 +97,7 @@ def _build_realtime_off_df() -> pd.DataFrame:
                 "DetectionID": f,
                 "X": 0.0,
                 "Y": 0.0,
-                "IdentityAssignedLabel": "",
+                "IdentityAssignedLabel": np.nan,
                 "IdentityAssignedConfidence": np.nan,
             }
         )
@@ -103,11 +112,14 @@ def _build_realtime_off_df() -> pd.DataFrame:
                 "DetectionID": 1000 + f,
                 "X": 500.0,
                 "Y": 500.0,
-                "IdentityAssignedLabel": "",
+                "IdentityAssignedLabel": np.nan,
                 "IdentityAssignedConfidence": np.nan,
             }
         )
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    # Guarantee the production dtype regardless of pandas' inference.
+    df["IdentityAssignedLabel"] = df["IdentityAssignedLabel"].astype("float64")
+    return df
 
 
 def _write_cache(tmp_path, df: pd.DataFrame) -> str:

@@ -1535,7 +1535,21 @@ def solve_global_assignment(
     # Write one label per trajectory back to every row.
     out = df.copy()
     if "IdentityAssignedLabel" not in out.columns:
-        out["IdentityAssignedLabel"] = np.nan
+        # object dtype (not the float64 a bare `np.nan` column init would get)
+        # -- otherwise the string label writes below raise a pandas
+        # LossySetitemError. See IdentityOfflineLabel below for the same reason.
+        out["IdentityAssignedLabel"] = pd.Series(
+            [np.nan] * len(out), index=out.index, dtype=object
+        )
+    else:
+        # The honesty fix's target scenario (ENABLE_IDENTITY_IN_TRACKING off)
+        # leaves this column present but all-NaN float64 -- the realtime
+        # decoder wrote no strings. Writing a string label into a float64
+        # column raises a pandas LossySetitemError (pandas>=3), which the
+        # caller's broad except would swallow, silently reverting the solver
+        # to "results unchanged" -- i.e. exactly re-breaking the honesty fix.
+        # Coerce to object so the per-trajectory writes below can land.
+        out["IdentityAssignedLabel"] = out["IdentityAssignedLabel"].astype(object)
     if "IdentityCommitted" not in out.columns:
         out["IdentityCommitted"] = False
     out["IdentityCommitted"] = out["IdentityCommitted"].fillna(False).astype(bool)
