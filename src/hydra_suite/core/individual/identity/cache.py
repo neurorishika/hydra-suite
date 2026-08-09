@@ -326,3 +326,51 @@ class IdentityEvidenceCache:
     def close(self) -> None:
         """Match cache-style interfaces used elsewhere in the tracking stack."""
         return None
+
+
+def find_identity_evidence_cache_path(
+    video_path: str | Path,
+    source_names: tuple[str, ...] = ("batch", "live"),
+) -> Optional[Path]:
+    """Locate the identity-evidence sidecar this run's ``InferenceRunner``
+    wrote, without needing the live runner instance.
+
+    Identity Phase 5: post-processing (``postprocess_df.apply_identity_
+    postprocessing_to_df``) runs as a separate step from the tracking worker
+    that wrote the sidecar, and does not have the live ``InferenceRunner``
+    (whose exact sidecar filename embeds a content-hash signature computed
+    from the catalog spec + per-phase calibration temps + video signature --
+    internal state this seam should not need to reconstruct). Instead this
+    mirrors the two conventions that ARE stable and cheaply recomputed from
+    just the video path:
+
+    - the per-video cache directory, ``core.tracking.worker.TrackingWorker.
+      _resolve_cache_dir``: ``<video_dir>/.inference_cache_<video_stem>/``;
+    - the sidecar filename pattern, ``core.tracking.identity.evidence_
+      emitter.build_evidence_cache_path``: ``detection_identity_evidence_
+      <source_name>_<signature>.npz`` (the base is always
+      ``<cache_dir>/detection.npz``, whose stem is exactly ``"detection"``).
+
+    Globs for that pattern per ``source_names`` in order (default
+    ``("batch", "live")`` -- the non-realtime/replay sidecar first, since
+    that is what every ordinary tracking pass writes; realtime/streaming
+    passes only ever populate ``"live"``), returning the most-recently
+    modified match for the first source name that has any. Returns ``None``
+    when the cache directory doesn't exist or no sidecar matches -- callers
+    must treat that as "no cache available" and proceed without one (no
+    identity classifier was configured for this run, or inference hasn't
+    run yet), never as an error.
+    """
+    video_path = Path(video_path)
+    cache_dir = video_path.parent / f".inference_cache_{video_path.stem}"
+    if not cache_dir.is_dir():
+        return None
+
+    for source_name in source_names:
+        pattern = f"detection_identity_evidence_{source_name}_*.npz"
+        matches = sorted(
+            cache_dir.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True
+        )
+        if matches:
+            return matches[0]
+    return None

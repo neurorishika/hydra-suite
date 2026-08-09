@@ -289,11 +289,11 @@ def smoothed_label_and_conf(
     *known* identities (catalog index >= 1, i.e. excluding ``unknown`` at
     index 0) and reports its probability as the confidence. When that
     probability is below ``display_threshold`` the label is reported as
-    ``''`` (unknown/undecided) -- mirroring the online decoder's
-    display-threshold gate (``substrate.solve_unique_assignment`` /
-    ``TrackIdentityDecoder._display_threshold``) -- but the confidence
-    value returned is always the raw best-known probability (not zeroed),
-    so callers can inspect how close a sub-threshold frame came.
+    ``''`` (unknown/undecided) and the confidence is zeroed -- matching the
+    online decoder's display-threshold convention exactly
+    (``substrate.solve_unique_assignment`` / ``TrackIdentityDecoder.
+    _display_threshold``, which both report 0.0 confidence alongside an
+    unassigned/blank label rather than a raw sub-threshold probability).
 
     Args:
         smoothed: per-frame normalized log-posteriors (e.g. the output of
@@ -320,9 +320,11 @@ def smoothed_label_and_conf(
 
         best_known_idx = int(np.argmax(known_probs)) + 1
         best_conf = float(probs[best_known_idx])
-        label = (
-            catalog.label_of(best_known_idx) if best_conf >= display_threshold else ""
-        )
+        if best_conf >= display_threshold:
+            label = catalog.label_of(best_known_idx)
+        else:
+            label = ""
+            best_conf = 0.0
         results.append((label, best_conf))
 
     return results

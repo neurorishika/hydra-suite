@@ -1,8 +1,9 @@
 import numpy as np
 import pandas as pd
-import pytest
 
+from hydra_suite.core.individual.identity.cache import IdentityEvidenceCache
 from hydra_suite.core.individual.identity.catalog import IdentityCatalog
+from hydra_suite.core.individual.identity.evidence import IdentityEvidence
 from hydra_suite.core.individual.identity.offline import (
     _build_traj_summaries,
     _fragment_stability,
@@ -12,6 +13,16 @@ from hydra_suite.core.individual.identity.offline import (
     solve_global_assignment,
     split_trajectories_at_changepoints,
 )
+
+
+def _write_cache(tmp_path, catalog_labels, evidences_by_frame):
+    """Write a real IdentityEvidenceCache (mirrors tests/identity's helper)."""
+    path = tmp_path / "evidence_cache.npz"
+    cache = IdentityEvidenceCache(path, catalog_labels=catalog_labels, mode="w")
+    for frame_idx, evidences in evidences_by_frame.items():
+        cache.save_frame(frame_idx, evidences)
+    cache.flush()
+    return IdentityEvidenceCache(path, mode="r")
 
 
 def test_fragment_solver_imports():
@@ -294,21 +305,44 @@ def test_run_fragment_solver_pelt_disabled_by_default():
     )
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Task 3 repointed detect_identity_changepoints onto smoothed-posterior "
-        "input; run_fragment_solver's call site (offline.py) still passes a "
-        "DataFrame and is rewired in Task 5 (self-sufficient offline pipeline "
-        "wiring). Temporarily inconsistent per the Task 3 brief."
-    ),
-    strict=True,
-)
-def test_run_fragment_solver_pelt_enabled_splits_trajectory():
-    """With PELT enabled, a clear CNN swap produces two distinct TrajectoryIDs."""
-    df = _make_df_with_prob_cols(n_frames=60, swap_at=30)
+def test_run_fragment_solver_pelt_enabled_splits_trajectory(tmp_path):
+    """With PELT enabled and a real identity-evidence cache (Task 5's
+    self-sufficient wiring), a clear CNN swap sourced from the cache -- NOT
+    the CNN_*_Prob CSV columns -- produces two distinct TrajectoryIDs.
+
+    This is the end-to-end proof that run_fragment_solver's PELT dispatch
+    now feeds detect_identity_changepoints the cache-sourced, smoothed
+    per-frame posterior (Task 2/3's new signature) instead of the retired
+    DataFrame-based reconstruction.
+    """
+    n_frames = 60
+    swap_at = 30
     catalog = _make_catalog()
+    df = _make_df_with_prob_cols(n_frames=n_frames, swap_at=swap_at)
+    # Cache join key -- one detection per frame.
+    df["DetectionID"] = df["FrameID"]
+    # Drop the CNN_*_Prob columns: the whole point is that the split comes
+    # from the cache, not these columns (which a realtime-off run would
+    # never have populated anyway).
+    df = df.drop(columns=["CNN_test_blue_Prob", "CNN_test_green_Prob"])
+
+    def _lp(favor_blue: bool) -> np.ndarray:
+        probs = (
+            np.array([0.02, 0.96, 0.02]) if favor_blue else np.array([0.02, 0.02, 0.96])
+        )
+        return np.log(probs)
+
+    evidences_by_frame = {
+        f: [IdentityEvidence.from_cnn(f, f, "cnn_test", _lp(f < swap_at))]
+        for f in range(n_frames)
+    }
+    cache = _write_cache(tmp_path, catalog.labels, evidences_by_frame)
+
     result = run_fragment_solver(
-        df, catalog, {"ENABLE_PELT_SPLITTING": True, "CHANGEPOINT_PENALTY": 2.0}
+        df,
+        catalog,
+        {"ENABLE_PELT_SPLITTING": True, "CHANGEPOINT_PENALTY": 2.0},
+        cache=cache,
     )
     assert isinstance(result, pd.DataFrame)
     assert (
@@ -316,6 +350,13 @@ def test_run_fragment_solver_pelt_enabled_splits_trajectory():
     ), f"expected 2 trajectories after PELT split, got {result['TrajectoryID'].nunique()}"
     assert "OriginalTrajectoryID" in result.columns
     assert (result["OriginalTrajectoryID"] == 1).all()
+    # The cache-sourced pipeline also writes the raw per-frame smoothed decode.
+    assert "IdentitySmoothedLabel" in result.columns
+    assert (result["IdentitySmoothedLabel"] != "").any()
+    # And the fragment solver's own committed decision, independent of any
+    # (absent) realtime IdentityAssignedLabel input.
+    assert "IdentityOfflineLabel" in result.columns
+    assert (result["IdentityOfflineLabel"] != "unknown").any()
 
 
 def test_split_trajectories_produces_two_ids_on_changepoint():

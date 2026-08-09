@@ -183,8 +183,8 @@ def test_smoothed_label_and_conf_below_threshold_returns_empty_label(catalog):
     assert len(result) == 1
     label, conf = result[0]
     assert label == ""
-    # confidence is still the raw best-known probability, not zeroed
-    assert conf == pytest.approx(1.0 / catalog.size, abs=1e-9)
+    # confidence is zeroed below the display threshold (online-decoder convention)
+    assert conf == 0.0
 
 
 def test_smoothed_label_and_conf_preserves_length_and_order(catalog):
