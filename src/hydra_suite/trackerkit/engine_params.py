@@ -1126,6 +1126,7 @@ def build_engine_params(
         "ENABLE_IDENTITY_FRAGMENT_SOLVER": (
             identity_cfg.posthoc.fragment_solver_enabled
         ),
+        "IDENTITY_POSTHOC_ENABLED": identity_cfg.posthoc.enabled,
         "ASSOCIATION_IDENTITY_HINT_SCALE": identity_cfg.realtime.association_weight,
         "IDENTITY_COMMIT_THRESHOLD": identity_cfg.realtime.commit_threshold,
         "IDENTITY_DISPLAY_THRESHOLD": identity_cfg.realtime.display_threshold,

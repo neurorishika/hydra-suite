@@ -94,3 +94,30 @@ def test_defaults_match_builder_defaults():
 def test_roundtrip():
     ic = IdentityConfig.from_engine_config({}, {}, cfg_get=_get)
     assert IdentityConfig.from_dict(ic.to_dict()) == ic
+
+
+def test_posthoc_enabled_true_by_default_independent_of_realtime():
+    # Task 6: the post-hoc master toggle defaults True and is NOT gated on
+    # `enable_identity_in_tracking` -- offline identity post-processing must
+    # keep working whether or not realtime identity influence is on.
+    ic = IdentityConfig.from_engine_config({}, {}, cfg_get=_get)
+    assert ic.posthoc.enabled is True
+
+    cfg_realtime_off = {"enable_identity_in_tracking": False}
+    ic_off = IdentityConfig.from_engine_config(cfg_realtime_off, {}, cfg_get=_get)
+    assert ic_off.realtime.enabled is False
+    assert ic_off.posthoc.enabled is True
+
+    cfg_realtime_on = {"enable_identity_in_tracking": True}
+    ic_on = IdentityConfig.from_engine_config(cfg_realtime_on, {}, cfg_get=_get)
+    assert ic_on.realtime.enabled is True
+    assert ic_on.posthoc.enabled is True
+
+
+def test_posthoc_enabled_tracks_enable_postprocessing_only():
+    # posthoc.enabled mirrors `enable_postprocessing` -- the one flag that
+    # governs whether offline post-processing runs at all -- not any
+    # realtime-identity flag.
+    cfg = {"enable_postprocessing": False}
+    ic = IdentityConfig.from_engine_config(cfg, {}, cfg_get=_get)
+    assert ic.posthoc.enabled is False

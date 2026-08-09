@@ -115,7 +115,8 @@ def apply_identity_postprocessing_to_df(
         )
 
         if (
-            params.get("ENABLE_IDENTITY_FRAGMENT_SOLVER", False)
+            params.get("IDENTITY_POSTHOC_ENABLED", True)
+            and params.get("ENABLE_IDENTITY_FRAGMENT_SOLVER", False)
             and catalog_spec.entries
         ):
             try:
