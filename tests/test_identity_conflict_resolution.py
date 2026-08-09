@@ -247,29 +247,55 @@ def test_long_high_conf_wins_over_short_high_conf_at_zero_tags() -> None:
     assert pd.isna(_label(result[1]))
 
 
-def test_conflict_resolution_routes_through_substrate_solve_unique_assignment() -> None:
-    """The conflict resolver's uniqueness decision is literally produced by
-    `substrate.solve_unique_assignment` (the same solver used by the online
-    decoder and the offline fragment solver), not a re-implementation."""
-    from hydra_suite.core.individual.identity import substrate as substrate_mod
-
-    calls: list = []
-    original = substrate_mod.solve_unique_assignment
-
-    def _spy(posterior_probs, num_known, display_threshold, **kwargs):
-        calls.append((len(posterior_probs), num_known, display_threshold))
-        return original(posterior_probs, num_known, display_threshold, **kwargs)
-
-    import unittest.mock as mock
-
-    with mock.patch.object(substrate_mod, "solve_unique_assignment", _spy):
-        a = _make_traj([1, 2, 3], label="ant_r", conf=0.9, tag_votes=5)
-        b = _make_traj([2, 3, 4], label="ant_r", conf=0.5, tag_votes=0)
-        result = resolve_simultaneous_identity_conflicts([a.copy(), b.copy()])
-
-    assert calls, "solve_unique_assignment was never called by the conflict resolver"
-    assert _label(result[0]) == "ant_r"
+def test_near_tied_three_way_overlap_only_highest_survives() -> None:
+    """Three mutually-overlapping same-label trajectories with near-tied
+    (but distinct) scores: exactly the highest-scoring one keeps the label,
+    the other two are cleared. Regression for the CRITICAL bug where a
+    group-wide `solve_unique_assignment` over per-slot `score/sum(scores)`
+    shares put EVERY slot below the solver's implicit "dummy beats me"
+    line for n>=3 (average share 1/n < 0.5), stripping all three at once."""
+    # Scores ~0.4 / ~0.35 / ~0.45 via conf alone (agreement=1, length_factor=1
+    # for equal-length tracks, tag_votes=0 so no tag bonus).
+    a = _make_traj([1, 2, 3], label="ant_tri", conf=0.45, tag_votes=0)
+    b = _make_traj([1, 2, 3], label="ant_tri", conf=0.40, tag_votes=0)
+    c = _make_traj([1, 2, 3], label="ant_tri", conf=0.35, tag_votes=0)
+    result = resolve_simultaneous_identity_conflicts([a.copy(), b.copy(), c.copy()])
+    assert _label(result[0]) == "ant_tri", "highest-scoring claimant must survive"
     assert pd.isna(_label(result[1]))
+    assert pd.isna(_label(result[2]))
+
+
+def test_disjoint_ends_of_overlap_chain_both_keep_label() -> None:
+    """A-B-C chain where A and C are temporally DISJOINT but both overlap B:
+    A and C must BOTH keep the label (they never actually compete with each
+    other); only B — which overlaps both higher scorers — is cleared.
+    Regression for the CRITICAL bug where union-find grouped A-B-C into one
+    transitive component and a whole-component Hunganrian solve wrongly
+    stripped A and C too, despite them sharing zero frames."""
+    a = _make_traj(list(range(1, 11)), label="ant_chain", conf=0.95, tag_votes=0)
+    b = _make_traj(list(range(8, 21)), label="ant_chain", conf=0.5, tag_votes=0)
+    c = _make_traj(list(range(18, 31)), label="ant_chain", conf=0.95, tag_votes=0)
+    assert set(range(1, 11)).isdisjoint(set(range(18, 31))), "A and C must be disjoint"
+    result = resolve_simultaneous_identity_conflicts([a.copy(), b.copy(), c.copy()])
+    assert _label(result[0]) == "ant_chain", "A does not overlap C; must keep label"
+    assert pd.isna(_label(result[1])), "B overlaps two higher scorers; must lose"
+    assert _label(result[2]) == "ant_chain", "C does not overlap A; must keep label"
+
+
+def test_two_independent_conflicts_resolve_independently() -> None:
+    """Two unrelated same-label overlap conflicts in one call are resolved
+    independently of each other."""
+    a1 = _make_traj([1, 2, 3], label="ant_p", conf=0.9, tag_votes=0)
+    a2 = _make_traj([2, 3, 4], label="ant_p", conf=0.4, tag_votes=0)
+    b1 = _make_traj([100, 101, 102], label="ant_q", conf=0.3, tag_votes=0)
+    b2 = _make_traj([101, 102, 103], label="ant_q", conf=0.9, tag_votes=0)
+    result = resolve_simultaneous_identity_conflicts(
+        [a1.copy(), a2.copy(), b1.copy(), b2.copy()]
+    )
+    assert _label(result[0]) == "ant_p"
+    assert pd.isna(_label(result[1]))
+    assert pd.isna(_label(result[2]))
+    assert _label(result[3]) == "ant_q"
 
 
 def test_strong_tag_evidence_overrides_long_low_margin_track() -> None:

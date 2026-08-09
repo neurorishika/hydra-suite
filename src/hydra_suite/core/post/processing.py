@@ -1410,77 +1410,65 @@ _FORWARD_TIEBREAK_EPS = 1e-9
 
 
 def _resolve_overlap_group_losers(candidates: list[tuple]) -> set[int]:
-    """Partition one label's claimants into temporal-overlap connected
-    components and resolve each via ``substrate.solve_unique_assignment``
-    (a single shared catalog column — the one contested label). Every
-    claimant the solver does not seat for that column is a loser.
-    Components with a single member (no frame overlap with any other
-    claimant of the label) are left untouched — same label, disjoint time,
-    both valid.
+    """Resolve one label's claimants via per-label PAIRWISE-OVERLAP dominance:
+    a claimant loses the label iff it shares >=1 frame with a
+    strictly-higher-scoring claimant of the *same* label. Claimants that
+    never overlap any higher scorer both/all keep the label.
+
+    This deliberately does NOT route through
+    ``substrate.solve_unique_assignment``. That solver assumes every slot
+    handed to it is part of ONE simultaneous-visibility problem and enforces
+    injectivity across the WHOLE slot set it is given; grouping this site's
+    claimants by transitive (union-find) temporal-overlap and solving each
+    component as one Hungarian problem is a categorically different — and
+    WRONG — uniqueness problem here for two reasons:
+      1. A transitive component can contain claimants that never actually
+         overlap each other (A-B overlap, B-C overlap, A-C disjoint), yet a
+         whole-component Hungarian solve would still force them to compete,
+         wrongly denying A and C's legitimate right to share the label.
+      2. Per-slot "known vs. dummy" probabilities only carry solver-relevant
+         information when calibrated against a fixed absolute reference
+         (e.g. a real posterior). This site's claim scores are a bespoke,
+         unbounded, relative ranking (agreement x conf x length + tag
+         bonus); any group-size-independent transform of them either loses
+         monotonic separation or (as happened here) can put EVERY slot's
+         probability under the solver's implicit "dummy beats me" line for
+         n>=3, stripping every claimant in the group at once even when most
+         of them never overlap each other at all.
+    The correct uniqueness relation for this site is pairwise ("does THIS
+    claimant overlap a stronger claimant of the SAME label"), not "which
+    subset of a whole transitive component is mutually consistent" — so it
+    is solved directly and cheaply without the Hungarian machinery. The
+    offline fragment solver (``offline.py::_iterative_assign``) has the
+    opposite shape — its slots ARE genuinely one simultaneous-visibility
+    problem across a temporal-overlap component (a fragment can legitimately
+    contend for any of K labels, not just one already-claimed label) — so it
+    correctly uses the shared solver.
 
     ``candidates``: list of ``(result_dfs_index, label, frames, score)``.
     """
-    from hydra_suite.core.individual.identity import substrate
-
     n = len(candidates)
-    parent = list(range(n))
-
-    def _find(x: int) -> int:
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    def _union(a: int, b: int) -> None:
-        ra, rb = _find(a), _find(b)
-        if ra != rb:
-            parent[ra] = rb
-
-    for i in range(n):
-        for j in range(i + 1, n):
-            if not candidates[i][2].isdisjoint(candidates[j][2]):
-                _union(i, j)
-
-    groups: dict[int, list[int]] = {}
-    for i in range(n):
-        groups.setdefault(_find(i), []).append(i)
-
     losers: set[int] = set()
-    for members in groups.values():
-        if len(members) < 2:
+    for i in range(n):
+        idx_i, label, frames_i, score_i = candidates[i]
+        if idx_i in losers:
             continue
-        # Single shared catalog column (the contested label): each
-        # claimant's probability of deserving it is its share of the
-        # group's total claim score (a within-group softmax-like
-        # normalization, not an absolute-confidence probability) — so the
-        # dominant claimant's probability clears 0.5 (favored over the
-        # solver's dummy/unknown column) while the rest fall below it,
-        # regardless of the raw score's absolute scale.
-        eps = 1e-9
-        total = sum(candidates[m][3] for m in members)
-        denom = total + eps * len(members)
-        posteriors = []
-        for m in members:
-            p = (candidates[m][3] + eps) / denom
-            p = min(max(p, 1e-12), 1.0 - 1e-12)
-            posteriors.append(np.array([1.0 - p, p], dtype=np.float64))
-        assignment = substrate.solve_unique_assignment(
-            posteriors, num_known=1, display_threshold=0.0
-        )
-        winner_idx = None
-        for member_pos, cat_idx in zip(members, assignment):
-            if cat_idx is not None:
-                winner_idx = candidates[member_pos][0]
-        for member_pos, cat_idx in zip(members, assignment):
-            df_idx = candidates[member_pos][0]
-            if cat_idx is None:
-                losers.add(df_idx)
-                logger.debug(
-                    "Identity conflict on label '%s': trajectory index %s wins over %d",
-                    candidates[member_pos][1],
-                    winner_idx,
-                    df_idx,
-                )
+        for j in range(n):
+            if i == j:
+                continue
+            idx_j, _, frames_j, score_j = candidates[j]
+            if score_j <= score_i:
+                continue
+            if frames_i.isdisjoint(frames_j):
+                continue
+            losers.add(idx_i)
+            logger.debug(
+                "Identity conflict on label '%s': trajectory index %d wins over %d",
+                label,
+                idx_j,
+                idx_i,
+            )
+            break
     return losers
 
 
@@ -1491,21 +1479,23 @@ def resolve_simultaneous_identity_conflicts(
     """Demote the weaker of two tracks that simultaneously claim the same identity.
 
     Enforces the physical constraint that a given identity can belong to at most
-    one trajectory at any point in time.  For each group of trajectories that
-    share the same majority ``IdentityAssignedLabel`` AND at least one shared
-    frame, the shared ``substrate.solve_unique_assignment`` uniqueness solver
-    (the same partial-injective Hungarian used by the online decoder and the
-    offline fragment solver) picks the injective winner over a single shared
-    catalog column (the contested label); every loser has its identity columns
-    cleared and ``IdentityConflictResolved`` set to ``True``.
+    one trajectory at any point in time.  For each pair of trajectories with the
+    same majority ``IdentityAssignedLabel`` and at least one shared frame, the
+    lower-scoring one has its identity columns cleared and
+    ``IdentityConflictResolved`` set to ``True`` — via a per-label
+    PAIRWISE-OVERLAP dominance rule (see ``_resolve_overlap_group_losers`` for
+    why this site does not route through the shared
+    ``substrate.solve_unique_assignment`` solver: it is a differently-shaped
+    uniqueness problem than the offline fragment solver's).
 
     Scoring follows the same shape as the iterative fragment solver: a unary
     quality term ``agreement × mean_conf × length_factor`` plus an additive
-    AprilTag bonus, with a forward-pass tiebreak. A long track with consistent
-    labels and a clear margin therefore wins over a short, jittery, or
-    low-confidence one — the loser is the one that gets cleared to Unknown.
-    Trajectories with the same label but NO shared frame never compete (they
-    fall into separate temporal-overlap groups and both keep the label).
+    AprilTag bonus, with the forward-pass flag as a tiebreak. A long track
+    with consistent labels and a clear margin therefore wins over a short,
+    jittery, or low-confidence one — the loser is the one that gets cleared
+    to Unknown. Trajectories with the same label but NO shared frame never
+    compete, however many other same-label trajectories separate them in
+    time — each keeps the label independently.
     """
     if not result_dfs:
         return result_dfs
