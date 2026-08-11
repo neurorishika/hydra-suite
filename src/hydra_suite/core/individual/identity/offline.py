@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import logging
 import math
-import re
 from typing import Any
 
 import numpy as np
@@ -36,326 +35,6 @@ log = logging.getLogger(__name__)
 _LABEL_COL = C.FINAL_LABEL
 _CONF_COL = C.FINAL_CONFIDENCE
 _UNKNOWN_VALUES = frozenset({"", "unknown"})
-_CNN_CLASS_SUFFIX = "_Class"
-_CNN_PROB_SUFFIX = "_Prob"
-
-
-def _sanitize_probability_token(value: Any) -> str:
-    token = re.sub(r"[^0-9A-Za-z]+", "_", str(value)).strip("_").lower()
-    return token
-
-
-def _build_cnn_probability_prefix_map(columns: pd.Index) -> dict[str, dict[str, str]]:
-    """Return ``prefix -> class_token -> prob_column`` for exported CNN columns.
-
-    Exported wide CSVs always include ``CNN_*_Class`` columns that identify the
-    phase/factor prefix. Probability columns share that prefix and append the
-    sanitized class token before ``_Prob``.
-    """
-    prefixes = sorted(
-        {
-            str(col)[: -len(_CNN_CLASS_SUFFIX)]
-            for col in columns
-            if str(col).startswith("CNN_") and str(col).endswith(_CNN_CLASS_SUFFIX)
-        },
-        key=len,
-        reverse=True,
-    )
-    if not prefixes:
-        return {}
-
-    result: dict[str, dict[str, str]] = {}
-    for col in columns:
-        token = str(col)
-        if not token.startswith("CNN_") or not token.endswith(_CNN_PROB_SUFFIX):
-            continue
-        for prefix in prefixes:
-            prefix_token = f"{prefix}_"
-            if not token.startswith(prefix_token):
-                continue
-            class_token = token[len(prefix_token) : -len(_CNN_PROB_SUFFIX)]
-            if class_token:
-                result.setdefault(prefix, {})[class_token] = token
-            break
-    return result
-
-
-def _build_cnn_label_specs(
-    known_labels: list[str],
-    prefix_prob_cols: dict[str, dict[str, str]],
-    columns: pd.Index,
-) -> dict[str, dict[str, Any]]:
-    """Precompute how each downstream label is reconstructed from CNN columns."""
-    specs: dict[str, dict[str, Any]] = {}
-    for label in known_labels:
-        label_token = _sanitize_probability_token(label)
-        if not label_token:
-            specs[label] = {"direct_cols": [], "part_cols": {}, "parts": set()}
-            continue
-
-        direct_cols = [
-            str(col)
-            for col in columns
-            if str(col).startswith("CNN_")
-            and str(col).endswith(f"_{label_token}{_CNN_PROB_SUFFIX}")
-        ]
-        part_cols: dict[str, list[str]] = {}
-        parts = tuple(part for part in label_token.split("_") if part)
-        for class_token_map in prefix_prob_cols.values():
-            direct_col = class_token_map.get(label_token)
-            if direct_col is not None and direct_col not in direct_cols:
-                direct_cols.append(direct_col)
-                continue
-
-            matched_parts = [part for part in parts if part in class_token_map]
-            if len(matched_parts) == 1:
-                part = matched_parts[0]
-                part_cols.setdefault(part, []).append(class_token_map[part])
-
-        specs[label] = {
-            "direct_cols": direct_cols,
-            "part_cols": part_cols,
-            "parts": set(parts),
-        }
-    return specs
-
-
-def _trajectory_mean_cnn_probs(
-    grp_sorted: pd.DataFrame,
-    known_labels: list[str],
-    label_specs: dict[str, dict[str, Any]],
-) -> dict[str, float]:
-    """Return mean downstream-label probabilities reconstructed from CNN exports."""
-    mean_probs: dict[str, float] = {}
-    for label in known_labels:
-        spec = label_specs.get(label, {})
-        direct_cols = [col for col in spec.get("direct_cols", []) if col in grp_sorted]
-        part_cols = {
-            part: [col for col in cols if col in grp_sorted]
-            for part, cols in (spec.get("part_cols", {}) or {}).items()
-        }
-        parts = set(spec.get("parts", set()))
-
-        direct_vals: list[np.ndarray] = []
-        for col in direct_cols:
-            vals = pd.to_numeric(grp_sorted[col], errors="coerce").to_numpy(
-                dtype=np.float64
-            )
-            direct_vals.append(np.clip(vals, 1e-9, 1.0))
-
-        part_vals: list[np.ndarray] = []
-        part_mask = np.ones(len(grp_sorted), dtype=bool)
-        use_parts = bool(parts)
-        if use_parts:
-            for part in parts:
-                cols = part_cols.get(part, [])
-                if not cols:
-                    use_parts = False
-                    break
-                part_present = np.zeros(len(grp_sorted), dtype=bool)
-                for col in cols:
-                    vals = pd.to_numeric(grp_sorted[col], errors="coerce").to_numpy(
-                        dtype=np.float64
-                    )
-                    part_present |= np.isfinite(vals)
-                    part_vals.append(np.clip(vals, 1e-9, 1.0))
-                part_mask &= part_present
-
-        row_prob = np.full(len(grp_sorted), np.nan, dtype=np.float64)
-        any_used = False
-        if direct_vals:
-            any_used = True
-            direct_stack = np.stack(direct_vals, axis=0)
-            direct_mask = np.all(np.isfinite(direct_stack), axis=0)
-            if np.any(direct_mask):
-                row_prob[direct_mask] = np.prod(direct_stack[:, direct_mask], axis=0)
-
-        if use_parts and part_vals:
-            any_used = True
-            part_stack = np.stack(part_vals, axis=0)
-            valid_part_mask = part_mask & np.all(np.isfinite(part_stack), axis=0)
-            if np.any(valid_part_mask):
-                part_prod = np.full(len(grp_sorted), np.nan, dtype=np.float64)
-                part_prod[valid_part_mask] = np.prod(
-                    part_stack[:, valid_part_mask], axis=0
-                )
-                missing_mask = valid_part_mask & np.isnan(row_prob)
-                overlap_mask = valid_part_mask & np.isfinite(row_prob)
-                if np.any(missing_mask):
-                    row_prob[missing_mask] = part_prod[missing_mask]
-                if np.any(overlap_mask):
-                    row_prob[overlap_mask] *= part_prod[overlap_mask]
-
-        if any_used and np.isfinite(row_prob).any():
-            mean_probs[label] = float(np.nanmean(row_prob))
-
-    return mean_probs
-
-
-def _trajectory_cnn_log_evidence(
-    grp_sorted: pd.DataFrame,
-    known_labels: list[str],
-    label_specs: dict[str, dict[str, Any]],
-) -> dict[str, float]:
-    """Return mean log-evidence per downstream label from exported CNN columns.
-
-    Rows without CNN evidence are treated as neutral for that row so sparse
-    detections do not dominate long fragments simply because only observed rows
-    contribute to the average.
-    """
-    log_scores: dict[str, float] = {}
-    n_rows = len(grp_sorted)
-    if n_rows == 0:
-        return log_scores
-
-    for label in known_labels:
-        spec = label_specs.get(label, {})
-        direct_cols = [col for col in spec.get("direct_cols", []) if col in grp_sorted]
-        part_cols = {
-            part: [col for col in cols if col in grp_sorted]
-            for part, cols in (spec.get("part_cols", {}) or {}).items()
-        }
-        parts = set(spec.get("parts", set()))
-
-        direct_vals: list[np.ndarray] = []
-        for col in direct_cols:
-            vals = pd.to_numeric(grp_sorted[col], errors="coerce").to_numpy(
-                dtype=np.float64
-            )
-            direct_vals.append(np.clip(vals, 1e-9, 1.0))
-
-        part_vals: list[np.ndarray] = []
-        part_mask = np.ones(n_rows, dtype=bool)
-        use_parts = bool(parts)
-        if use_parts:
-            for part in parts:
-                cols = part_cols.get(part, [])
-                if not cols:
-                    use_parts = False
-                    break
-                part_present = np.zeros(n_rows, dtype=bool)
-                for col in cols:
-                    vals = pd.to_numeric(grp_sorted[col], errors="coerce").to_numpy(
-                        dtype=np.float64
-                    )
-                    part_present |= np.isfinite(vals)
-                    part_vals.append(np.clip(vals, 1e-9, 1.0))
-                part_mask &= part_present
-
-        row_prob = np.full(n_rows, np.nan, dtype=np.float64)
-        any_used = False
-        if direct_vals:
-            any_used = True
-            direct_stack = np.stack(direct_vals, axis=0)
-            direct_mask = np.all(np.isfinite(direct_stack), axis=0)
-            if np.any(direct_mask):
-                row_prob[direct_mask] = np.prod(direct_stack[:, direct_mask], axis=0)
-
-        if use_parts and part_vals:
-            any_used = True
-            part_stack = np.stack(part_vals, axis=0)
-            valid_part_mask = part_mask & np.all(np.isfinite(part_stack), axis=0)
-            if np.any(valid_part_mask):
-                part_prod = np.full(n_rows, np.nan, dtype=np.float64)
-                part_prod[valid_part_mask] = np.prod(
-                    part_stack[:, valid_part_mask], axis=0
-                )
-                missing_mask = valid_part_mask & np.isnan(row_prob)
-                overlap_mask = valid_part_mask & np.isfinite(row_prob)
-                if np.any(missing_mask):
-                    row_prob[missing_mask] = part_prod[missing_mask]
-                if np.any(overlap_mask):
-                    row_prob[overlap_mask] *= part_prod[overlap_mask]
-
-        if any_used:
-            row_log = np.zeros(n_rows, dtype=np.float64)
-            finite_mask = np.isfinite(row_prob)
-            if np.any(finite_mask):
-                row_log[finite_mask] = np.log(
-                    np.clip(row_prob[finite_mask], 1e-12, 1.0)
-                )
-                log_scores[label] = float(np.mean(row_log))
-
-    return log_scores
-
-
-def _trajectory_per_row_probs(
-    grp_sorted: pd.DataFrame,
-    known_labels: list[str],
-    label_specs: dict[str, dict[str, Any]],
-) -> np.ndarray:
-    """Return ``(n_rows, n_labels)`` per-row reconstructed CNN probabilities.
-
-    Cells where no CNN evidence is present remain NaN. Direct probability
-    columns and part-product columns are combined identically to the mean-prob
-    helper so the per-row matrix stays consistent with the fragment-level
-    aggregates.
-    """
-    n_rows = len(grp_sorted)
-    n_labels = len(known_labels)
-    out = np.full((n_rows, n_labels), np.nan, dtype=np.float64)
-    if n_rows == 0 or n_labels == 0:
-        return out
-
-    for j, label in enumerate(known_labels):
-        spec = label_specs.get(label, {})
-        direct_cols = [col for col in spec.get("direct_cols", []) if col in grp_sorted]
-        part_cols = {
-            part: [col for col in cols if col in grp_sorted]
-            for part, cols in (spec.get("part_cols", {}) or {}).items()
-        }
-        parts = set(spec.get("parts", set()))
-
-        direct_vals: list[np.ndarray] = []
-        for col in direct_cols:
-            vals = pd.to_numeric(grp_sorted[col], errors="coerce").to_numpy(
-                dtype=np.float64
-            )
-            direct_vals.append(np.clip(vals, 1e-9, 1.0))
-
-        part_vals: list[np.ndarray] = []
-        part_mask = np.ones(n_rows, dtype=bool)
-        use_parts = bool(parts)
-        if use_parts:
-            for part in parts:
-                cols = part_cols.get(part, [])
-                if not cols:
-                    use_parts = False
-                    break
-                part_present = np.zeros(n_rows, dtype=bool)
-                for col in cols:
-                    vals = pd.to_numeric(grp_sorted[col], errors="coerce").to_numpy(
-                        dtype=np.float64
-                    )
-                    part_present |= np.isfinite(vals)
-                    part_vals.append(np.clip(vals, 1e-9, 1.0))
-                part_mask &= part_present
-
-        row_prob = np.full(n_rows, np.nan, dtype=np.float64)
-        if direct_vals:
-            direct_stack = np.stack(direct_vals, axis=0)
-            direct_mask = np.all(np.isfinite(direct_stack), axis=0)
-            if np.any(direct_mask):
-                row_prob[direct_mask] = np.prod(direct_stack[:, direct_mask], axis=0)
-
-        if use_parts and part_vals:
-            part_stack = np.stack(part_vals, axis=0)
-            valid_part_mask = part_mask & np.all(np.isfinite(part_stack), axis=0)
-            if np.any(valid_part_mask):
-                part_prod = np.full(n_rows, np.nan, dtype=np.float64)
-                part_prod[valid_part_mask] = np.prod(
-                    part_stack[:, valid_part_mask], axis=0
-                )
-                missing_mask = valid_part_mask & np.isnan(row_prob)
-                overlap_mask = valid_part_mask & np.isfinite(row_prob)
-                if np.any(missing_mask):
-                    row_prob[missing_mask] = part_prod[missing_mask]
-                if np.any(overlap_mask):
-                    row_prob[overlap_mask] *= part_prod[overlap_mask]
-
-        out[:, j] = row_prob
-
-    return out
 
 
 def _fragment_stability(per_row_probs: np.ndarray) -> float:
@@ -367,7 +46,9 @@ def _fragment_stability(per_row_probs: np.ndarray) -> float:
     a small margin scores low even though it has many rows; a short fragment
     that is internally consistent and confident scores high.
 
-    Returns 0.0 when no per-frame CNN evidence is present.
+    Returns 0.0 when no per-frame evidence is present. Used by
+    ``_evidence_dicts_for_fragment`` on cache-sourced per-frame catalog
+    posteriors (Task 5: the only evidence source; no CSV-column fallback).
     """
     if per_row_probs.size == 0:
         return 0.0
@@ -392,61 +73,6 @@ def _fragment_stability(per_row_probs: np.ndarray) -> float:
     agreement = float(counts.max()) / float(n)
     margin = float(np.mean(top1 - top2))
     return float(agreement * max(0.0, margin))
-
-
-def _trajectory_tag_evidence(
-    grp_sorted: pd.DataFrame,
-    known_labels: list[str],
-) -> tuple[dict[str, float], dict[str, float]]:
-    """Return mean tag probabilities and mean tag log-evidence per label."""
-    mean_probs: dict[str, float] = {}
-    log_scores: dict[str, float] = {}
-    n_rows = len(grp_sorted)
-    if n_rows == 0 or "DetectedTagLabel" not in grp_sorted.columns:
-        return mean_probs, log_scores
-
-    tag_vals = grp_sorted["DetectedTagLabel"].astype(object)
-    tag_labels = tag_vals.where(tag_vals.notna(), np.nan).astype(str).str.strip()
-    detected_mask = (~tag_vals.isna()) & (~tag_labels.isin(_UNKNOWN_VALUES))
-    if not detected_mask.any():
-        return mean_probs, log_scores
-
-    if "DetectedTagConf" in grp_sorted.columns:
-        conf_vals = pd.to_numeric(
-            grp_sorted["DetectedTagConf"], errors="coerce"
-        ).to_numpy(dtype=np.float64)
-    elif "DetectedTagHamming" in grp_sorted.columns:
-        hammings = pd.to_numeric(
-            grp_sorted["DetectedTagHamming"], errors="coerce"
-        ).to_numpy(dtype=np.float64)
-        conf_vals = 1.0 / (1.0 + np.clip(hammings, 0.0, None))
-    else:
-        conf_vals = np.ones(n_rows, dtype=np.float64)
-
-    conf_vals = np.clip(conf_vals, 1e-4, 1.0 - 1e-4)
-    detected_mask_arr = detected_mask.to_numpy(dtype=bool)
-    tag_labels_arr = tag_labels.to_numpy(dtype=object)
-    n_known = len(known_labels)
-
-    for label in known_labels:
-        row_prob = np.full(n_rows, np.nan, dtype=np.float64)
-        match_mask = detected_mask_arr & (tag_labels_arr == label)
-        other_mask = detected_mask_arr & (tag_labels_arr != label)
-        if np.any(match_mask):
-            row_prob[match_mask] = conf_vals[match_mask]
-        if np.any(other_mask):
-            if n_known > 1:
-                row_prob[other_mask] = (1.0 - conf_vals[other_mask]) / (n_known - 1)
-            else:
-                row_prob[other_mask] = 1e-4
-        finite_mask = np.isfinite(row_prob)
-        if np.any(finite_mask):
-            mean_probs[label] = float(np.nanmean(row_prob))
-            row_log = np.zeros(n_rows, dtype=np.float64)
-            row_log[finite_mask] = np.log(np.clip(row_prob[finite_mask], 1e-12, 1.0))
-            log_scores[label] = float(np.mean(row_log))
-
-    return mean_probs, log_scores
 
 
 def _normalize_support_scores(
@@ -1272,23 +898,25 @@ def _build_traj_summaries(
     MeanCNNProbs (dict), MeanTagProbs (dict), CNNLogEvidence (dict),
     TagLogEvidence (dict), Stability (float), OnlineLabel, OnlineConfidence.
 
-    Identity Phase 5 (the honesty fix): when ``evidence_by_traj`` is given
-    (``{OriginalTrajectoryID/TrajectoryID: [(FrameID, catalog_log_probs), ...]}``,
-    e.g. the cache-sourced + forward-backward-smoothed sequences
-    ``run_fragment_solver`` builds via ``identity/smoothing.py``), each
+    Identity Phase 7 Task 5 (clean-break retirement): this solver is
+    CACHE-ONLY. ``evidence_by_traj`` (``{OriginalTrajectoryID/TrajectoryID:
+    [(FrameID, catalog_log_probs), ...]}``, the cache-sourced + optionally
+    forward-backward-smoothed sequences ``run_fragment_solver`` builds via
+    ``identity/smoothing.py``) is the *only* evidence source; each
     fragment's ``MeanCNNProbs``/``CNNLogEvidence``/``Stability`` are derived
-    from that cache evidence (restricted to the fragment's own FrameID
-    range) instead of reconstructing them from ``CNN_*_Prob`` wide-CSV
-    columns -- the CSV reconstruction (``_trajectory_mean_cnn_probs`` /
-    ``_trajectory_cnn_log_evidence`` / ``_trajectory_per_row_probs``) is only
-    used as a fallback when no cache evidence is available (``
-    evidence_by_traj is None``, or a specific trajectory has no matched
-    evidence), which keeps the iterative-solver unit tests (which exercise
-    scoring/veto/swap behavior directly via hand-built ``CNN_*_Prob``
-    columns, not a cache) unaffected. ``TagLogEvidence``/``MeanTagProbs`` are
-    empty when cache-sourced, since ``load_trajectory_evidence`` already
-    fuses every source (CNN + tag) into one catalog posterior per detection
-    -- there is nothing left for a separate tag term to add.
+    from it, restricted to the fragment's own FrameID range. There is no
+    ``CNN_*_Prob``/``DetectedTag*`` wide-CSV column reconstruction fallback
+    -- the live pipeline (``postprocess_df.py``) always opens the evidence
+    cache Phase 3 writes unconditionally and passes ``evidence_by_traj``, so
+    that fallback was dead in production. When ``evidence_by_traj`` is
+    ``None``/empty, or a specific trajectory has no matched cache evidence,
+    this produces the documented no-sidecar degrade: empty evidence dicts
+    (``MeanCNNProbs``/``CNNLogEvidence`` = ``{}``, ``Stability`` = 0.0) --
+    "no evidence, no belief" (Task 1's convention) -- rather than a
+    reconstructed guess. ``TagLogEvidence``/``MeanTagProbs`` are always
+    empty now, since ``load_trajectory_evidence`` already fuses every
+    source (CNN + tag) into one catalog posterior per detection -- there is
+    nothing left for a separate tag term to add.
 
     ``OnlineLabel``/``OnlineConfidence`` are always read from the
     ``IdentityFinalLabel``/``IdentityFinalConfidence`` CSV columns when
@@ -1298,8 +926,6 @@ def _build_traj_summaries(
     is the honesty fix).
     """
     known_labels = list(catalog.labels[1:])
-    prefix_prob_cols = _build_cnn_probability_prefix_map(df.columns)
-    label_specs = _build_cnn_label_specs(known_labels, prefix_prob_cols, df.columns)
     has_orig_col = "OriginalTrajectoryID" in df.columns
     rows: list[dict] = []
 
@@ -1324,7 +950,7 @@ def _build_traj_summaries(
             sx = sy = ex = ey = math.nan
 
         fragment_evidence: list[tuple[int, np.ndarray]] = []
-        if evidence_by_traj is not None:
+        if evidence_by_traj:
             orig_id = (
                 grp_sorted["OriginalTrajectoryID"].iloc[0] if has_orig_col else traj_id
             )
@@ -1337,26 +963,12 @@ def _build_traj_summaries(
             mean_probs, cnn_log_scores, stability = _evidence_dicts_for_fragment(
                 known_labels, fragment_evidence
             )
-            tag_probs, tag_log_scores = {}, {}
-        elif evidence_by_traj is not None:
-            # Cache-sourced pipeline, but this trajectory has no matched
-            # cache evidence -- "no evidence, no belief" (Task 1 convention).
-            mean_probs, cnn_log_scores, stability = {}, {}, 0.0
-            tag_probs, tag_log_scores = {}, {}
         else:
-            mean_probs = _trajectory_mean_cnn_probs(
-                grp_sorted, known_labels, label_specs
-            )
-            cnn_log_scores = _trajectory_cnn_log_evidence(
-                grp_sorted, known_labels, label_specs
-            )
-            per_row_probs = _trajectory_per_row_probs(
-                grp_sorted, known_labels, label_specs
-            )
-            stability = _fragment_stability(per_row_probs)
-            tag_probs, tag_log_scores = _trajectory_tag_evidence(
-                grp_sorted, known_labels
-            )
+            # No cache evidence for this trajectory (or none supplied at
+            # all) -- "no evidence, no belief" (Task 1 convention). No
+            # CSV-column reconstruction fallback.
+            mean_probs, cnn_log_scores, stability = {}, {}, 0.0
+        tag_probs, tag_log_scores = {}, {}
 
         label_col = grp_sorted.get(
             _LABEL_COL, pd.Series("unknown", index=grp_sorted.index, dtype=object)
@@ -1441,10 +1053,13 @@ def solve_global_assignment(
     visible proof surface), and it never clobbers whatever the realtime
     decoder separately wrote. Returns a modified copy of df.
 
-    ``evidence_by_traj`` (optional): ``{OriginalTrajectoryID/TrajectoryID:
-    [(FrameID, catalog_log_probs), ...]}`` -- when given, per-fragment
-    evidence is sourced from this (see ``_build_traj_summaries``) instead of
-    reconstructed from ``CNN_*_Prob`` CSV columns.
+    ``evidence_by_traj`` (cache-sourced; the only evidence input -- Phase 7
+    Task 5 deleted the ``CNN_*_Prob``/``DetectedTag*`` CSV-column
+    reconstruction fallback): ``{OriginalTrajectoryID/TrajectoryID:
+    [(FrameID, catalog_log_probs), ...]}`` -- see ``_build_traj_summaries``.
+    When ``None``/empty (no evidence sidecar available), every trajectory
+    degrades to the documented no-sidecar outcome (empty evidence; see
+    ``_build_traj_summaries``), not a CSV-reconstructed guess.
     """
     known_labels = list(catalog.labels[1:])
     if not known_labels or df is None or df.empty:
@@ -1661,22 +1276,23 @@ def run_fragment_solver(
     """End-to-end fragment solver: cache evidence → forward-backward smoothing
     → (optional PELT split on the smoothed posterior) → iterative assign.
 
-    Identity Phase 5 (the honesty fix): when ``cache`` (an open, read-mode
-    ``IdentityEvidenceCache``) is given, every trajectory's identity evidence
-    is sourced from it -- via ``identity/smoothing.py``'s
-    ``load_trajectory_evidence`` (join on ``(FrameID, DetectionID)``) then
-    ``smooth_trajectory_posteriors`` (forward-backward chaining) -- instead
-    of reconstructed from the ``CNN_*_Prob``/``DetectedTag*`` wide-CSV
-    columns the realtime decoder writes. This makes the solver
-    self-sufficient: it produces real identities even when
-    ``ENABLE_IDENTITY_IN_TRACKING`` was off for the whole run (nothing in
-    the CSV to reconstruct from), as long as Phase 3's evidence sidecar was
-    written (which happens unconditionally). When ``cache`` is ``None`` (or
-    it has no evidence for any trajectory in ``trajectories_df``), this
-    degrades gracefully: PELT splitting is skipped (nothing to split on) and
-    ``solve_global_assignment`` falls back to the legacy CSV-column
-    reconstruction, matching pre-Phase-5 behavior exactly for callers that
-    still only have the CSV columns available (e.g. isolated unit tests).
+    Identity Phase 5 (the honesty fix) + Phase 7 Task 5 (clean-break
+    retirement): when ``cache`` (an open, read-mode ``IdentityEvidenceCache``)
+    is given, every trajectory's identity evidence is sourced from it -- via
+    ``identity/smoothing.py``'s ``load_trajectory_evidence`` (join on
+    ``(FrameID, DetectionID)``) then ``smooth_trajectory_posteriors``
+    (forward-backward chaining). This makes the solver self-sufficient: it
+    produces real identities even when ``ENABLE_IDENTITY_IN_TRACKING`` was
+    off for the whole run, as long as Phase 3's evidence sidecar was written
+    (which happens unconditionally -- the live pipeline always supplies
+    ``cache``). When ``cache`` is ``None`` (or it has no evidence for any
+    trajectory in ``trajectories_df``), this degrades gracefully: PELT
+    splitting is skipped (nothing to split on) and
+    ``solve_global_assignment`` produces the documented no-sidecar outcome
+    (empty evidence per trajectory -- "no evidence, no belief") rather than
+    reconstructing from ``CNN_*_Prob``/``DetectedTag*`` wide-CSV columns --
+    that reconstruction fallback was dead in production (the live pipeline
+    always supplies a cache) and was deleted in Phase 7 Task 5.
 
     Per-row ``IdentityFinalSmoothedLabel``/``IdentityFinalSmoothedConfidence``
     (the raw per-frame smoothed decode, pre-fragment-solving) are written
@@ -1736,8 +1352,8 @@ def run_fragment_solver(
             IdentityFinalSmoothedLabel instead of "" (also used by the
             substrate assignment solver's display gate).
     cache : an open (mode="r") IdentityEvidenceCache, or None. Required for
-        the self-sufficient/cache-sourced path; the solver falls back to
-        CSV-column reconstruction when omitted.
+        the self-sufficient/cache-sourced path; when omitted the solver
+        produces the no-sidecar degrade (empty evidence, no reconstruction).
     """
     params = params or {}
 

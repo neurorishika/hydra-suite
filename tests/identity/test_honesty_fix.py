@@ -11,6 +11,15 @@ work from, even though Phase 3 unconditionally writes a calibrated
 per-frame ``IdentityEvidenceCache`` sidecar during inference regardless of
 the realtime flags.
 
+Phase 7 Task 5 subsequently DELETED that CSV-column reconstruction fallback
+entirely (it was dead in production -- ``postprocess_df.py`` always opens
+the Phase-3 sidecar and passes ``evidence_by_traj``): the offline solver is
+now CACHE-ONLY. This module's fixture already builds a realtime-off df with
+no ``CNN_*_Prob``/``DetectedTag*`` columns at all, so it was never exercising
+that fallback in the first place -- the no-cache negative control below
+continues to hold post-Task-5 for the same reason it held pre-Task-5 (there
+was nothing to reconstruct from either way); see its docstring.
+
 Phase 5 rewires the offline solver to source directly from that
 always-written cache (``identity_evidence_cache_path`` threaded into
 ``apply_identity_postprocessing_to_df``), making post-hoc identity
@@ -201,10 +210,24 @@ def test_honesty_fix_self_sufficient_from_cache_alone(tmp_path):
 
 def test_without_cache_the_same_starved_df_cannot_tell_trajectories_apart(tmp_path):
     """Negative control proving the RED condition: the identical
-    realtime-off df, with no cache path threaded in (pre-Phase-5 shaped
-    input -- no CNN_*_Prob columns to reconstruct from either), cannot
+    realtime-off df, with no cache path threaded in, cannot
     correctly/confidently distinguish the two trajectories from each
-    other -- unlike the cache-sourced run above."""
+    other -- unlike the cache-sourced run above.
+
+    Phase 7 Task 5 deleted the ``CNN_*_Prob``/``DetectedTag*`` CSV-column
+    reconstruction fallback entirely, so the offline solver is now
+    CACHE-ONLY: with no cache, ``_build_traj_summaries`` gives every
+    trajectory empty evidence ("no evidence, no belief" -- Task 1's
+    convention), full stop, not merely "no CNN columns to reconstruct
+    from" (this df never had any CSV columns to reconstruct from either
+    way, pre- or post-Task-5, so this scenario was already the fully-starved
+    case both before and after the deletion). This assertion is
+    unavoidably weak for the same reason documented at module scope below:
+    a pre-existing, Phase-5/Task-5-independent quirk in the iterative
+    solver's zero-evidence fallback still commits *some* label per
+    trajectory even with zero real evidence, so the decisive signal remains
+    CORRECTNESS + CONFIDENCE (i.e. NOT reproducing the cache-sourced run's
+    result), not mere non-emptiness."""
     df = _build_realtime_off_df()
 
     result = apply_identity_postprocessing_to_df(

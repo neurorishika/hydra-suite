@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 
+from hydra_suite.core.individual.identity import substrate
 from hydra_suite.core.individual.identity.cache import IdentityEvidenceCache
 from hydra_suite.core.individual.identity.catalog import IdentityCatalog
 from hydra_suite.core.individual.identity.evidence import IdentityEvidence
@@ -25,6 +26,74 @@ def _write_cache(tmp_path, catalog_labels, evidences_by_frame):
     return IdentityEvidenceCache(path, mode="r")
 
 
+def _catalog_log_probs(catalog, known_probs: dict) -> np.ndarray:
+    """Build a full-catalog normalized log-probability vector (unknown at
+    index 0) from a ``{label: probability}`` mapping over the known labels
+    -- the same per-frame shape a real ``IdentityEvidenceCache`` load
+    produces (see ``load_trajectory_evidence``/``_evidence_dicts_for_
+    fragment``), and the shape ``solve_global_assignment``'s
+    ``evidence_by_traj`` entries carry.
+    """
+    known_labels = list(catalog.labels[1:])
+    vals = np.array(
+        [max(1e-6, float(known_probs.get(label, 1e-6))) for label in known_labels],
+        dtype=np.float64,
+    )
+    probs = np.concatenate([[1e-6], vals])
+    probs /= probs.sum()
+    return np.log(probs)
+
+
+def _evidence_by_traj_const(df, catalog, probs_by_traj: dict, tag_by_traj: dict = None):
+    """Build ``{TrajectoryID: [(FrameID, catalog_log_probs), ...]}`` -- the
+    exact shape ``solve_global_assignment``'s ``evidence_by_traj`` parameter
+    accepts (what a real ``IdentityEvidenceCache`` load + fuse produces via
+    ``load_trajectory_evidence`` in production) -- from a constant
+    per-trajectory ``{label: prob}`` evidence mapping applied to every row's
+    FrameID.
+
+    Phase 7 Task 5 deleted the ``CNN_*_Prob``/``DetectedTag*`` CSV-column
+    reconstruction fallback these tests used to rely on inside
+    ``solve_global_assignment``/``_build_traj_summaries``; this helper
+    constructs the same evidence directly, at the level those functions
+    actually consume it (cache-sourced ``evidence_by_traj``), rather than
+    round-tripping through on-disk cache files or hand-built wide columns.
+
+    ``tag_by_traj`` (optional): ``{TrajectoryID: {label: prob}}`` tag
+    evidence, fused with the CNN evidence via the same
+    ``substrate.fuse_log_evidence`` the real cache-loading path uses to
+    combine multiple sources for one detection (mirrors
+    ``load_trajectory_evidence``'s per-detection fusion loop), instead of
+    being kept as a separate additive ``TagLogEvidence`` term the way the
+    deleted fallback modeled it -- post-Task-5 the solver only ever sees one
+    fused evidence vector per detection, exactly like a real cache.
+    """
+    tag_by_traj = tag_by_traj or {}
+    result = {}
+    for traj_id, grp in df.groupby("TrajectoryID", sort=False):
+        cnn_log = _catalog_log_probs(catalog, probs_by_traj.get(traj_id, {}))
+        if traj_id in tag_by_traj:
+            tag_log = _catalog_log_probs(catalog, tag_by_traj[traj_id])
+            fused = substrate.fuse_log_evidence(catalog.uniform_log_prior(), cnn_log)
+            fused = substrate.fuse_log_evidence(fused, tag_log)
+        else:
+            fused = cnn_log
+        sequence = [(int(f), fused) for f in sorted(grp["FrameID"].tolist())]
+        result[traj_id] = sequence
+    return result
+
+
+def _binary_probs(label: str, high: float = 0.95, low: float = 0.05) -> dict:
+    """``{"blue": high, "green": low}`` if ``label == "blue"`` else swapped --
+    matches the ``0.95 if label == "blue" else 0.05`` convention
+    ``_make_two_fragment_df`` uses for its ``CNN_test_*_Prob`` columns."""
+    return (
+        {"blue": high, "green": low}
+        if label == "blue"
+        else {"blue": low, "green": high}
+    )
+
+
 def test_fragment_solver_imports():
     from hydra_suite.core.individual.identity.offline import (
         detect_identity_changepoints,
@@ -37,6 +106,78 @@ def test_fragment_solver_imports():
     assert callable(detect_identity_changepoints)
     assert callable(split_trajectories_at_changepoints)
     assert callable(solve_global_assignment)
+
+
+def test_solve_global_assignment_no_cache_evidence_does_not_reconstruct_from_csv():
+    """Phase 7 Task 5: with no ``evidence_by_traj`` supplied, the presence of
+    legacy ``CNN_*_Prob`` wide-CSV columns in ``df`` must NOT be reconstructed
+    into identity evidence -- the offline solver is cache-only.
+
+    Fixture: two trajectories with a HIGH-confidence (0.9) online label each
+    (deliberately high, so the online-label prior alone -- with no CNN
+    evidence at all -- favors keeping it, isolating the CNN-columns effect)
+    and ``CNN_test_blue_Prob``/``CNN_test_green_Prob`` columns that strongly
+    favor the OPPOSITE label (traj 1 online "blue" but CNN says green; traj
+    2 online "green" but CNN says blue). Pre-Task-5, calling
+    ``solve_global_assignment`` on this df WITHOUT an explicit
+    ``evidence_by_traj`` reconstructs that CNN evidence from the columns and
+    corrects the "swap" (t1->green, t2->blue, confirmed against the
+    pre-Task-5 module directly). Post-Task-5, with no reconstruction
+    available, the CNN columns are inert: the solver has nothing but the
+    (self-reinforcing, high-confidence) online-label prior to go on, so it
+    must retain the online labels instead (t1 stays "blue", t2 stays
+    "green") -- NOT reproduce the CNN-driven swap-correction.
+
+    (An unrelated pre-existing quirk in ``_normalize_support_scores``'s
+    zero-evidence branch -- documented in
+    ``tests/identity/test_honesty_fix.py`` -- means *some* label still gets
+    committed even with literally no evidence at all; that quirk is why this
+    test checks for the specific swap-corrected outcome rather than
+    "unknown"/empty, mirroring that test's own approach.)
+
+    This is RED against pre-Task-5 code (produces t1="green", t2="blue" via
+    CSV reconstruction) and GREEN after Task 5's deletion (t1="blue",
+    t2="green" -- the online labels, unperturbed by the now-inert columns).
+    """
+    catalog = _make_catalog()
+    n = 30
+    df = pd.DataFrame(
+        {
+            "TrajectoryID": [1] * n + [2] * n,
+            "FrameID": list(range(n)) + list(range(n, 2 * n)),
+            "X": [float(i) for i in range(2 * n)],
+            "Y": [0.0] * (2 * n),
+            "IdentityFinalLabel": ["blue"] * n + ["green"] * n,
+            "IdentityFinalConfidence": [0.9] * (2 * n),
+            "CNN_test_blue_Prob": [0.1] * n + [0.9] * n,
+            "CNN_test_green_Prob": [0.9] * n + [0.1] * n,
+        }
+    )
+    assert any(
+        str(c).startswith("CNN_") and str(c).endswith("_Prob") for c in df.columns
+    )
+    params = {
+        "ONLINE_PRIOR_WEIGHT": 0.1,
+        "ASSIGNMENT_MARGIN_THRESHOLD": 0.05,
+        "FRAGMENT_CNN_WEIGHT": 0.7,
+        "MAX_VELOCITY_BREAK": 50.0,
+    }
+
+    result = solve_global_assignment(df, catalog, params)  # no evidence_by_traj
+
+    label_t1 = result[result["TrajectoryID"] == 1]["IdentityFinalLabel"].iloc[0]
+    label_t2 = result[result["TrajectoryID"] == 2]["IdentityFinalLabel"].iloc[0]
+    assert not (label_t1 == "green" and label_t2 == "blue"), (
+        f"CNN_*_Prob columns were reconstructed into evidence despite no "
+        f"evidence_by_traj being supplied (t1={label_t1!r}, t2={label_t2!r})"
+    )
+    # The decisive, precise assertion: with the CNN columns inert, the
+    # high-confidence online-label prior alone determines the outcome, so
+    # both trajectories retain their (un-"corrected") online labels.
+    assert label_t1 == "blue" and label_t2 == "green", (
+        f"expected the online labels to survive untouched (t1='blue', "
+        f"t2='green'), got t1={label_t1!r}, t2={label_t2!r}"
+    )
 
 
 def _smoothed_by_traj_from_prob_cols(df, catalog):
@@ -156,6 +297,13 @@ def _make_two_trajectory_df():
     )
 
 
+def _two_traj_probs():
+    """Cache-sourced evidence mirroring ``_make_two_trajectory_df``'s
+    ``CNN_test_blue_Prob``/``CNN_test_green_Prob`` columns: traj 1 favors
+    green, traj 2 favors blue (an online-label swap the solver must fix)."""
+    return {1: {"blue": 0.1, "green": 0.9}, 2: {"blue": 0.9, "green": 0.1}}
+
+
 def test_solve_global_assignment_corrects_swap():
     catalog = _make_catalog()
     df = _make_two_trajectory_df()
@@ -165,7 +313,10 @@ def test_solve_global_assignment_corrects_swap():
         "FRAGMENT_CNN_WEIGHT": 0.7,
         "MAX_VELOCITY_BREAK": 50.0,
     }
-    result = solve_global_assignment(df, catalog, params)
+    evidence_by_traj = _evidence_by_traj_const(df, catalog, _two_traj_probs())
+    result = solve_global_assignment(
+        df, catalog, params, evidence_by_traj=evidence_by_traj
+    )
     assert "IdentityFinalLabel" in result.columns
     label_t1 = result[result["TrajectoryID"] == 1]["IdentityFinalLabel"].iloc[0]
     label_t2 = result[result["TrajectoryID"] == 2]["IdentityFinalLabel"].iloc[0]
@@ -183,7 +334,10 @@ def test_solve_global_assignment_uniform_labels_per_trajectory():
         "FRAGMENT_CNN_WEIGHT": 0.7,
         "MAX_VELOCITY_BREAK": 50.0,
     }
-    result = solve_global_assignment(df, catalog, params)
+    evidence_by_traj = _evidence_by_traj_const(df, catalog, _two_traj_probs())
+    result = solve_global_assignment(
+        df, catalog, params, evidence_by_traj=evidence_by_traj
+    )
     for tid in result["TrajectoryID"].unique():
         labels = result[result["TrajectoryID"] == tid]["IdentityFinalLabel"].unique()
         assert len(labels) == 1, f"trajectory {tid} has mixed labels: {labels}"
@@ -200,8 +354,6 @@ def test_solve_global_assignment_keeps_online_label_when_margin_too_small():
             "Y": [0.0] * n,
             "IdentityFinalLabel": ["blue"] * n,
             "IdentityFinalConfidence": [0.9] * n,
-            "CNN_test_blue_Prob": [0.52] * n,
-            "CNN_test_green_Prob": [0.48] * n,
         }
     )
     params = {
@@ -210,11 +362,31 @@ def test_solve_global_assignment_keeps_online_label_when_margin_too_small():
         "FRAGMENT_CNN_WEIGHT": 0.7,
         "MAX_VELOCITY_BREAK": 50.0,
     }
-    result = solve_global_assignment(df, catalog, params)
+    evidence_by_traj = _evidence_by_traj_const(
+        df, catalog, {1: {"blue": 0.52, "green": 0.48}}
+    )
+    result = solve_global_assignment(
+        df, catalog, params, evidence_by_traj=evidence_by_traj
+    )
     assert result.iloc[0]["IdentityFinalLabel"] == "blue"
 
 
 def test_solve_global_assignment_combines_multiple_cnn_phases():
+    """Pre-Task-5 this exercised the deleted multi-head partial-column
+    reconstruction (``_build_cnn_label_specs``): two separate CNN phase
+    heads (color/side-style factors) whose per-phase probabilities were
+    multiplied together to reconstruct one composite label's probability.
+    That reconstruction mechanism no longer exists in production -- a real
+    ``IdentityEvidenceCache`` load already hands the solver ONE fused
+    per-detection posterior (``load_trajectory_evidence`` fuses every
+    source before the solver ever sees it; see
+    ``smoothing.load_trajectory_evidence``). This test now supplies that
+    already-fused composite probability directly (the same numeric product
+    the deleted reconstruction used to compute: 0.7*0.1=0.07 for "blue",
+    0.3*0.9=0.27 for "green"), preserving the outcome-level assertion
+    (evidence favors "green" enough to override the "blue" online label)
+    without re-testing the deleted per-phase-column parsing mechanism.
+    """
     catalog = _make_catalog()
     n = 20
     df = pd.DataFrame(
@@ -225,14 +397,6 @@ def test_solve_global_assignment_combines_multiple_cnn_phases():
             "Y": [0.0] * n,
             "IdentityFinalLabel": ["blue"] * n,
             "IdentityFinalConfidence": [0.2] * n,
-            "CNN_phase_a_Class": ["blue"] * n,
-            "CNN_phase_a_Conf": [0.7] * n,
-            "CNN_phase_b_Class": ["green"] * n,
-            "CNN_phase_b_Conf": [0.9] * n,
-            "CNN_phase_a_blue_Prob": [0.7] * n,
-            "CNN_phase_a_green_Prob": [0.3] * n,
-            "CNN_phase_b_blue_Prob": [0.1] * n,
-            "CNN_phase_b_green_Prob": [0.9] * n,
         }
     )
     params = {
@@ -241,13 +405,25 @@ def test_solve_global_assignment_combines_multiple_cnn_phases():
         "FRAGMENT_CNN_WEIGHT": 0.9,
         "MAX_VELOCITY_BREAK": 50.0,
     }
+    evidence_by_traj = _evidence_by_traj_const(
+        df, catalog, {1: {"blue": 0.7 * 0.1, "green": 0.3 * 0.9}}
+    )
 
-    result = solve_global_assignment(df, catalog, params)
+    result = solve_global_assignment(
+        df, catalog, params, evidence_by_traj=evidence_by_traj
+    )
 
     assert result.iloc[0]["IdentityFinalLabel"] == "green"
 
 
 def test_solve_global_assignment_reconstructs_multihead_label_probabilities():
+    """See ``test_solve_global_assignment_combines_multiple_cnn_phases``'s
+    docstring: the deleted multi-head CSV reconstruction (``color`` x
+    ``side`` factor product -> composite label) has no production
+    equivalent post-Task-5; this supplies the same composite probability
+    (0.9*0.9=0.81 for "red_left", 0.1*0.1=0.01 for "blue_right") directly as
+    cache-sourced evidence.
+    """
     catalog = IdentityCatalog.from_labels(["red_left", "blue_right"])
     n = 20
     df = pd.DataFrame(
@@ -258,14 +434,6 @@ def test_solve_global_assignment_reconstructs_multihead_label_probabilities():
             "Y": [0.0] * n,
             "IdentityFinalLabel": ["blue_right"] * n,
             "IdentityFinalConfidence": [0.2] * n,
-            "CNN_identity_color_Class": ["red"] * n,
-            "CNN_identity_color_Conf": [0.9] * n,
-            "CNN_identity_side_Class": ["left"] * n,
-            "CNN_identity_side_Conf": [0.9] * n,
-            "CNN_identity_color_red_Prob": [0.9] * n,
-            "CNN_identity_color_blue_Prob": [0.1] * n,
-            "CNN_identity_side_left_Prob": [0.9] * n,
-            "CNN_identity_side_right_Prob": [0.1] * n,
         }
     )
     params = {
@@ -274,8 +442,15 @@ def test_solve_global_assignment_reconstructs_multihead_label_probabilities():
         "FRAGMENT_CNN_WEIGHT": 0.95,
         "MAX_VELOCITY_BREAK": 50.0,
     }
+    evidence_by_traj = _evidence_by_traj_const(
+        df,
+        catalog,
+        {1: {"red_left": 0.9 * 0.9, "blue_right": 0.1 * 0.1}},
+    )
 
-    result = solve_global_assignment(df, catalog, params)
+    result = solve_global_assignment(
+        df, catalog, params, evidence_by_traj=evidence_by_traj
+    )
 
     assert result.iloc[0]["IdentityFinalLabel"] == "red_left"
 
@@ -497,6 +672,18 @@ def test_long_consistent_track_beats_short_confident_fragment():
     Note: the small fragment may also retain "blue" via the online-label fallback
     (dual-assignment is a separate known issue); the critical assertion is that the
     large track is not displaced.
+
+    Phase 7 Task 5: the deleted CSV fallback kept CNN and DetectedTag evidence
+    as two separate additive terms (``FRAGMENT_CNN_WEIGHT`` /
+    ``FRAGMENT_TAG_WEIGHT``). A real cache instead fuses every source into
+    ONE per-detection posterior before the solver ever sees it (see
+    ``smoothing.load_trajectory_evidence``), so traj 2's very-high CNN +
+    tag evidence is folded together here via ``substrate.fuse_log_evidence``
+    (mirroring that same fusion) into a single evidence vector, passed as
+    ``evidence_by_traj``. The tag confidence value (0.9999) matches what the
+    deleted ``_trajectory_tag_evidence`` helper computed for a
+    ``DetectedTagLabel`` with no ``DetectedTagConf``/``DetectedTagHamming``
+    column present (``conf_vals = ones(n)`` clipped to ``1 - 1e-4``).
     """
     catalog = _make_catalog()
 
@@ -515,9 +702,6 @@ def test_long_consistent_track_beats_short_confident_fragment():
                 # "id consistent" — online tracker labeled it "blue" throughout
                 "IdentityFinalLabel": "blue",
                 "IdentityFinalConfidence": 0.80,
-                "CNN_test_blue_Prob": 0.70,
-                "CNN_test_green_Prob": 0.30,
-                "DetectedTagLabel": float("nan"),
             }
         )
     for f in range(small_start, small_start + n_small):
@@ -529,9 +713,6 @@ def test_long_consistent_track_beats_short_confident_fragment():
                 "Y": 500.0,
                 "IdentityFinalLabel": "blue",
                 "IdentityFinalConfidence": 0.95,
-                "CNN_test_blue_Prob": 0.99,
-                "CNN_test_green_Prob": 0.01,
-                "DetectedTagLabel": "blue",
             }
         )
 
@@ -547,7 +728,18 @@ def test_long_consistent_track_beats_short_confident_fragment():
         "MAX_VELOCITY_BREAK": 50.0,
         "ASSIGNMENT_MARGIN_THRESHOLD": 0.05,
     }
-    result = solve_global_assignment(df, catalog, params)
+    evidence_by_traj = _evidence_by_traj_const(
+        df,
+        catalog,
+        probs_by_traj={
+            1: {"blue": 0.70, "green": 0.30},
+            2: {"blue": 0.99, "green": 0.01},
+        },
+        tag_by_traj={2: {"blue": 0.9999, "green": 0.0001}},
+    )
+    result = solve_global_assignment(
+        df, catalog, params, evidence_by_traj=evidence_by_traj
+    )
 
     label_large = result[result["TrajectoryID"] == 1]["IdentityFinalLabel"].iloc[0]
 
@@ -590,9 +782,17 @@ def test_fragment_stability_no_evidence_returns_zero():
 
 
 def test_per_row_probs_extracts_direct_columns():
+    """Pre-Task-5 this exercised the deleted ``_trajectory_per_row_probs``
+    CSV-column extraction. Stability is now computed from cache-sourced
+    ``evidence_by_traj`` (``_evidence_dicts_for_fragment``); this supplies a
+    consistent (per-frame-identical) "blue"-favoring evidence sequence,
+    which should still yield high Stability."""
     catalog = _make_catalog()
-    df = _make_df_with_prob_cols(n_frames=10, swap_at=10)
-    summaries = _build_traj_summaries(df, catalog)
+    df = _make_df_with_prob_cols(n_frames=10, swap_at=10)  # no swap: constant blue
+    evidence_by_traj = _evidence_by_traj_const(
+        df, catalog, {1: {"blue": 0.9, "green": 0.1}}
+    )
+    summaries = _build_traj_summaries(df, catalog, evidence_by_traj)
     assert len(summaries) == 1
     # The single fragment is consistent "blue" → high stability.
     assert float(summaries.iloc[0]["Stability"]) > 0.5
@@ -617,9 +817,6 @@ def test_iterative_solver_resolves_spurious_blocking_fragment():
                 "Y": 0.0,
                 "IdentityFinalLabel": "blue",
                 "IdentityFinalConfidence": 0.85,
-                "CNN_test_blue_Prob": 0.80,
-                "CNN_test_green_Prob": 0.20,
-                "DetectedTagLabel": float("nan"),
             }
         )
     # Long green track (correctly online-labeled) frames 0-99 at X=0..99 but Y=200.
@@ -632,9 +829,6 @@ def test_iterative_solver_resolves_spurious_blocking_fragment():
                 "Y": 200.0,
                 "IdentityFinalLabel": "green",
                 "IdentityFinalConfidence": 0.85,
-                "CNN_test_blue_Prob": 0.20,
-                "CNN_test_green_Prob": 0.80,
-                "DetectedTagLabel": float("nan"),
             }
         )
     # Spurious 5-frame fragment claiming "green" but spatially aligned with the
@@ -649,9 +843,6 @@ def test_iterative_solver_resolves_spurious_blocking_fragment():
                 "Y": 0.0,
                 "IdentityFinalLabel": "green",
                 "IdentityFinalConfidence": 0.92,
-                "CNN_test_blue_Prob": 0.05,
-                "CNN_test_green_Prob": 0.95,
-                "DetectedTagLabel": float("nan"),
             }
         )
 
@@ -666,7 +857,18 @@ def test_iterative_solver_resolves_spurious_blocking_fragment():
         "MAX_VELOCITY_BREAK": 50.0,
         "ASSIGNMENT_MARGIN_THRESHOLD": 0.01,
     }
-    result = solve_global_assignment(df, catalog, params)
+    evidence_by_traj = _evidence_by_traj_const(
+        df,
+        catalog,
+        {
+            1: {"blue": 0.80, "green": 0.20},
+            2: {"blue": 0.20, "green": 0.80},
+            3: {"blue": 0.05, "green": 0.95},
+        },
+    )
+    result = solve_global_assignment(
+        df, catalog, params, evidence_by_traj=evidence_by_traj
+    )
 
     label_t1 = result[result["TrajectoryID"] == 1]["IdentityFinalLabel"].iloc[0]
     label_t2 = result[result["TrajectoryID"] == 2]["IdentityFinalLabel"].iloc[0]
@@ -697,8 +899,6 @@ def test_iterative_solver_unknown_promotion_when_feasible():
                 "Y": 0.0,
                 "IdentityFinalLabel": "blue",
                 "IdentityFinalConfidence": 0.9,
-                "CNN_test_blue_Prob": 0.9,
-                "CNN_test_green_Prob": 0.1,
             }
         )
     # Unknown fragment with strong green CNN, far from blue.
@@ -711,8 +911,6 @@ def test_iterative_solver_unknown_promotion_when_feasible():
                 "Y": 500.0,
                 "IdentityFinalLabel": "unknown",
                 "IdentityFinalConfidence": 0.0,
-                "CNN_test_blue_Prob": 0.05,
-                "CNN_test_green_Prob": 0.95,
             }
         )
 
@@ -723,7 +921,14 @@ def test_iterative_solver_unknown_promotion_when_feasible():
         "FRAGMENT_LENGTH_WEIGHT": 0.6,
         "ASSIGNMENT_MARGIN_THRESHOLD": 0.01,
     }
-    result = solve_global_assignment(df, catalog, params)
+    evidence_by_traj = _evidence_by_traj_const(
+        df,
+        catalog,
+        {1: {"blue": 0.9, "green": 0.1}, 2: {"blue": 0.05, "green": 0.95}},
+    )
+    result = solve_global_assignment(
+        df, catalog, params, evidence_by_traj=evidence_by_traj
+    )
     label_t2 = result[result["TrajectoryID"] == 2]["IdentityFinalLabel"].iloc[0]
     assert label_t2 == "green", f"expected Unknown→green promotion, got {label_t2!r}"
 
@@ -741,9 +946,6 @@ def test_iterative_solver_monotone_gate_blocks_marginal_flips():
             "Y": [0.0] * n,
             "IdentityFinalLabel": ["blue"] * n,
             "IdentityFinalConfidence": [0.9] * n,
-            # CNN very near 50/50 — minimal margin.
-            "CNN_test_blue_Prob": [0.51] * n,
-            "CNN_test_green_Prob": [0.49] * n,
         }
     )
     params = {
@@ -754,7 +956,13 @@ def test_iterative_solver_monotone_gate_blocks_marginal_flips():
         "ASSIGNMENT_MARGIN_THRESHOLD": 0.50,
         "FRAGMENT_LENGTH_WEIGHT": 0.6,
     }
-    result = solve_global_assignment(df, catalog, params)
+    # CNN evidence very near 50/50 — minimal margin.
+    evidence_by_traj = _evidence_by_traj_const(
+        df, catalog, {1: {"blue": 0.51, "green": 0.49}}
+    )
+    result = solve_global_assignment(
+        df, catalog, params, evidence_by_traj=evidence_by_traj
+    )
     assert result.iloc[0]["IdentityFinalLabel"] == "blue"
 
 
@@ -791,8 +999,6 @@ def test_long_gap_does_not_excuse_implausible_distance():
                 "Y": 0.0,
                 "IdentityFinalLabel": "blue",
                 "IdentityFinalConfidence": 0.9,
-                "CNN_test_blue_Prob": 0.9,
-                "CNN_test_green_Prob": 0.1,
             }
         )
     # Two short fragments online-labeled "green" at distant positions, separated
@@ -807,8 +1013,6 @@ def test_long_gap_does_not_excuse_implausible_distance():
                 "Y": 0.0,
                 "IdentityFinalLabel": "green",
                 "IdentityFinalConfidence": 0.9,
-                "CNN_test_blue_Prob": 0.05,
-                "CNN_test_green_Prob": 0.95,
             }
         )
     for f in range(1050, 1060):
@@ -820,8 +1024,6 @@ def test_long_gap_does_not_excuse_implausible_distance():
                 "Y": 5000.0,
                 "IdentityFinalLabel": "green",
                 "IdentityFinalConfidence": 0.9,
-                "CNN_test_blue_Prob": 0.05,
-                "CNN_test_green_Prob": 0.95,
             }
         )
 
@@ -833,7 +1035,18 @@ def test_long_gap_does_not_excuse_implausible_distance():
         "ASSIGNMENT_MARGIN_THRESHOLD": 0.01,
         "MAX_VELOCITY_BREAK": 50.0,
     }
-    result = solve_global_assignment(df, catalog, params)
+    evidence_by_traj = _evidence_by_traj_const(
+        df,
+        catalog,
+        {
+            1: {"blue": 0.9, "green": 0.1},
+            2: {"blue": 0.05, "green": 0.95},
+            3: {"blue": 0.05, "green": 0.95},
+        },
+    )
+    result = solve_global_assignment(
+        df, catalog, params, evidence_by_traj=evidence_by_traj
+    )
 
     label_t2 = result[result["TrajectoryID"] == 2]["IdentityFinalLabel"].iloc[0]
     label_t3 = result[result["TrajectoryID"] == 3]["IdentityFinalLabel"].iloc[0]
@@ -875,8 +1088,6 @@ def test_iterative_solver_breaks_label_lockin_via_swap():
                 "Y": 0.0,
                 "IdentityFinalLabel": "blue",
                 "IdentityFinalConfidence": 0.5,
-                "CNN_test_blue_Prob": 0.05,
-                "CNN_test_green_Prob": 0.95,
             }
         )
     for f in range(200, 300):
@@ -888,8 +1099,6 @@ def test_iterative_solver_breaks_label_lockin_via_swap():
                 "Y": 3000.0,
                 "IdentityFinalLabel": "green",
                 "IdentityFinalConfidence": 0.5,
-                "CNN_test_blue_Prob": 0.95,
-                "CNN_test_green_Prob": 0.05,
             }
         )
 
@@ -901,7 +1110,14 @@ def test_iterative_solver_breaks_label_lockin_via_swap():
         "ASSIGNMENT_MARGIN_THRESHOLD": 0.01,
         "MAX_VELOCITY_BREAK": 50.0,
     }
-    result = solve_global_assignment(df, catalog, params)
+    evidence_by_traj = _evidence_by_traj_const(
+        df,
+        catalog,
+        {1: {"blue": 0.05, "green": 0.95}, 2: {"blue": 0.95, "green": 0.05}},
+    )
+    result = solve_global_assignment(
+        df, catalog, params, evidence_by_traj=evidence_by_traj
+    )
 
     label_t1 = result[result["TrajectoryID"] == 1]["IdentityFinalLabel"].iloc[0]
     label_t2 = result[result["TrajectoryID"] == 2]["IdentityFinalLabel"].iloc[0]
@@ -919,7 +1135,10 @@ def test_iterative_solver_returns_assignments_dict():
     """Direct call to _iterative_assign returns one entry per fragment."""
     catalog = _make_catalog()
     df = _make_two_trajectory_df()
-    summaries = _build_traj_summaries(df, catalog).reset_index(drop=True)
+    evidence_by_traj = _evidence_by_traj_const(df, catalog, _two_traj_probs())
+    summaries = _build_traj_summaries(df, catalog, evidence_by_traj).reset_index(
+        drop=True
+    )
     out = _iterative_assign(
         summaries,
         list(catalog.labels[1:]),
@@ -951,8 +1170,6 @@ def _make_two_fragment_df(t1_range, t2_range, label="blue", x_offset=0.0):
                 "Y": 0.0,
                 "IdentityFinalLabel": label,
                 "IdentityFinalConfidence": 0.9,
-                "CNN_test_blue_Prob": 0.95 if label == "blue" else 0.05,
-                "CNN_test_green_Prob": 0.05 if label == "blue" else 0.95,
             }
         )
     for f in t2_range:
@@ -964,8 +1181,6 @@ def _make_two_fragment_df(t1_range, t2_range, label="blue", x_offset=0.0):
                 "Y": 0.0,
                 "IdentityFinalLabel": label,
                 "IdentityFinalConfidence": 0.9,
-                "CNN_test_blue_Prob": 0.95 if label == "blue" else 0.05,
-                "CNN_test_green_Prob": 0.05 if label == "blue" else 0.95,
             }
         )
     return pd.DataFrame(rows)
@@ -982,7 +1197,11 @@ def test_substrate_solver_overlapping_fragments_get_injective_assignment():
         "ONLINE_PRIOR_WEIGHT": 0.25,
         "ASSIGNMENT_MARGIN_THRESHOLD": 0.01,
     }
-    result = solve_global_assignment(df, catalog, params)
+    probs = _binary_probs("blue")
+    evidence_by_traj = _evidence_by_traj_const(df, catalog, {1: probs, 2: probs})
+    result = solve_global_assignment(
+        df, catalog, params, evidence_by_traj=evidence_by_traj
+    )
     label_t1 = result[result["TrajectoryID"] == 1]["IdentityFinalLabel"].iloc[0]
     label_t2 = result[result["TrajectoryID"] == 2]["IdentityFinalLabel"].iloc[0]
     labels = {label_t1, label_t2}
@@ -1004,7 +1223,11 @@ def test_substrate_solver_nonoverlapping_fragments_may_share_label():
         "ONLINE_PRIOR_WEIGHT": 0.25,
         "ASSIGNMENT_MARGIN_THRESHOLD": 0.01,
     }
-    result = solve_global_assignment(df, catalog, params)
+    probs = _binary_probs("blue")
+    evidence_by_traj = _evidence_by_traj_const(df, catalog, {1: probs, 2: probs})
+    result = solve_global_assignment(
+        df, catalog, params, evidence_by_traj=evidence_by_traj
+    )
     label_t1 = result[result["TrajectoryID"] == 1]["IdentityFinalLabel"].iloc[0]
     label_t2 = result[result["TrajectoryID"] == 2]["IdentityFinalLabel"].iloc[0]
     assert (
@@ -1031,7 +1254,10 @@ def test_iterative_assign_routes_through_substrate_solve_unique_assignment(
 
     catalog = _make_catalog()
     df = _make_two_trajectory_df()
-    summaries = _build_traj_summaries(df, catalog).reset_index(drop=True)
+    evidence_by_traj = _evidence_by_traj_const(df, catalog, _two_traj_probs())
+    summaries = _build_traj_summaries(df, catalog, evidence_by_traj).reset_index(
+        drop=True
+    )
     _iterative_assign(
         summaries,
         list(catalog.labels[1:]),
