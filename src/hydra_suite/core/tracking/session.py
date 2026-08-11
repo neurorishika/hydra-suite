@@ -176,7 +176,6 @@ class TrackingSessionCore:
             detected_properties_cache_path=self.paths.get(
                 "detected_properties_cache_path"
             ),
-            detected_cnn_cache_paths=self.paths.get("detected_cnn_cache_paths"),
         )
 
     def _stopped_result(self) -> SessionResult:

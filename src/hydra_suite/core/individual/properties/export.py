@@ -23,10 +23,10 @@ from .detected_cache import DetectedPropertiesCache
 # from the new per-type caches directly, this module stays on the legacy
 # classes.
 #
-# NOTE (Identity Phase 7 Task 1): the V3 ``CNNIdentityCache`` this module used
-# to read was orphaned -- nothing in src/ ever wrote that .npz -- and has been
-# deleted from cnn.py. ``augment_trajectories_with_detected_cnn_cache`` below
-# is now a stub; Task 2 removes it and its (already-dead) callers.
+# NOTE (Identity Phase 7): the V3 CNN-identity cache this module used to read
+# was orphaned -- nothing in src/ ever wrote that .npz -- so the cache class
+# was deleted (Task 1) and its dead reader function + call-path plumbing were
+# removed (Task 2).
 
 
 POSE_SUMMARY_COLUMNS = [
@@ -648,62 +648,6 @@ def augment_trajectories_with_detected_properties_cache(
     return augment_trajectories_with_detected_properties_df(trajectories_df, lookup)
 
 
-def build_detected_cnn_lookup_dataframe(
-    cache: Any,
-    label: str = "cnn_identity",
-) -> pd.DataFrame:
-    """Flatten detected-frame CNN predictions into frame+detection keyed rows.
-
-    When the cache stores per-class probability vectors (v3 schema), one
-    ``CNN_{label}_{class}_Prob`` column is added per class per factor so that
-    the full output distribution is available in the exported CSV.
-    """
-    specs = build_cnn_output_columns(label, cache.factor_names)
-    output_cols = [
-        col for _factor, class_col, conf_col in specs for col in (class_col, conf_col)
-    ]
-    prob_specs = build_cnn_prob_columns(
-        label, cache.factor_names, cache.class_names_per_factor
-    )
-    prob_cols = [col for _fi, _ci, col in prob_specs]
-
-    rows: List[Dict[str, Any]] = []
-    for frame_idx in cache.get_cached_frames():
-        preds = cache.load(int(frame_idx))
-        probs_list = cache.load_probs(int(frame_idx)) if prob_specs else None
-        for pred_idx, pred in enumerate(preds):
-            row: Dict[str, Any] = {
-                "_cnn_frame_id": int(frame_idx),
-                "_cnn_detection_id": int(frame_idx) * 10000 + int(pred.det_index),
-            }
-            row.update(
-                flatten_cnn_prediction_row(
-                    label,
-                    pred.factor_names,
-                    pred.class_names,
-                    pred.confidences,
-                )
-            )
-            if prob_specs:
-                per_det_probs = (
-                    probs_list[pred_idx]
-                    if probs_list is not None and pred_idx < len(probs_list)
-                    else None
-                )
-                for factor_idx, class_idx, col in prob_specs:
-                    val: float = np.nan
-                    if per_det_probs is not None and factor_idx < len(per_det_probs):
-                        fprobs = per_det_probs[factor_idx]
-                        if fprobs is not None and class_idx < len(fprobs):
-                            val = float(fprobs[class_idx])
-                    row[col] = val
-            rows.append(row)
-    return pd.DataFrame(
-        rows,
-        columns=["_cnn_frame_id", "_cnn_detection_id", *output_cols, *prob_cols],
-    )
-
-
 def augment_trajectories_with_detected_cnn_df(
     trajectories_df: pd.DataFrame,
     detected_cnn_df: pd.DataFrame,
@@ -762,28 +706,6 @@ def augment_trajectories_with_detected_cnn_df(
         errors="ignore",
     )
     return _ensure_interp_columns(merged, output_cols)
-
-
-def augment_trajectories_with_detected_cnn_cache(
-    trajectories_df: pd.DataFrame,
-    cache_path: str,
-    label: str = "cnn_identity",
-) -> pd.DataFrame:
-    """Load detected-frame CNN cache and merge class/confidence columns.
-
-    Stubbed in Identity Phase 7 Task 1: the on-disk V3 ``CNNIdentityCache``
-    this used to read was orphaned (no writer in src/), so the class was
-    deleted. This function is unreachable in practice (its only caller,
-    ``pose_merge.merge_pose_sources_into_df``, is itself gated on
-    ``state.detected_cnn_cache_paths``, which nothing in src/ ever
-    populates); Task 2 removes this function and its dead caller outright.
-    """
-    raise NotImplementedError(
-        "augment_trajectories_with_detected_cnn_cache: the V3 CNNIdentityCache "
-        "it read was orphaned and has been removed (Identity Phase 7 Task 1); "
-        "this call path should be unreachable and is slated for deletion in "
-        "Task 2."
-    )
 
 
 # ---------------------------------------------------------------------------

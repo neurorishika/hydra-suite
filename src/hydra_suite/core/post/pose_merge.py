@@ -21,7 +21,6 @@ logger = logging.getLogger(__name__)
 class PoseSourceState:
     individual_properties_cache_path: str | None = None
     detected_properties_cache_path: str | None = None
-    detected_cnn_cache_paths: dict | None = None
     detection_cache_path: str | None = None
     interpolated_pose_csv_path: str | None = None
     interpolated_pose_df: object | None = None
@@ -40,11 +39,6 @@ def check_pose_export_sources(state):
     _has_detected_props = bool(
         _detected_props_path and os.path.exists(_detected_props_path)
     )
-    _detected_cnn_paths = state.detected_cnn_cache_paths or {}
-    _has_detected_cnn = any(
-        str(path).strip() and os.path.exists(str(path).strip())
-        for path in _detected_cnn_paths.values()
-    )
     _has_interp_tag = bool(
         state.interpolated_tag_csv_path
         or isinstance(state.interpolated_tag_df, pd.DataFrame)
@@ -57,11 +51,7 @@ def check_pose_export_sources(state):
         or isinstance(state.interpolated_headtail_df, pd.DataFrame)
     )
     _has_other_analyses = (
-        _has_detected_props
-        or _has_detected_cnn
-        or _has_interp_tag
-        or _has_interp_cnn
-        or _has_interp_ht
+        _has_detected_props or _has_interp_tag or _has_interp_cnn or _has_interp_ht
     )
     cache_path = str(state.individual_properties_cache_path or "").strip()
     cache_available = bool(cache_path and os.path.exists(cache_path))
@@ -104,7 +94,6 @@ def merge_pose_sources_into_df(
 ):
     """Merge pose cache, interpolated pose, AprilTag, CNN, and head-tail into trajectories_df."""
     from hydra_suite.core.individual.properties.export import (
-        augment_trajectories_with_detected_cnn_cache,
         augment_trajectories_with_detected_properties_cache,
         augment_trajectories_with_pose_cache,
         merge_interpolated_pose_df,
@@ -125,17 +114,6 @@ def merge_pose_sources_into_df(
         with_pose_df = augment_trajectories_with_detected_properties_cache(
             with_pose_df,
             _detected_props_path,
-        )
-
-    _detected_cnn_paths = state.detected_cnn_cache_paths or {}
-    for _cnn_label, _cnn_path in _detected_cnn_paths.items():
-        _cnn_path = str(_cnn_path or "").strip()
-        if not _cnn_path or not os.path.exists(_cnn_path):
-            continue
-        with_pose_df = augment_trajectories_with_detected_cnn_cache(
-            with_pose_df,
-            _cnn_path,
-            label=str(_cnn_label),
         )
 
     _tag_cache_path = resolve_current_tag_cache_path(params, state.detection_cache_path)

@@ -148,7 +148,6 @@ def test_stop_tracking_stops_preview_detection_worker(monkeypatch) -> None:
         current_detection_cache_path="cache.npz",
         current_individual_properties_cache_path="individual_props.npz",
         current_detected_properties_cache_path="detected_props.npz",
-        current_detected_cnn_cache_paths={"model": "cnn.npz"},
         current_interpolated_roi_npz_path="roi.npz",
         current_interpolated_pose_csv_path="pose_interp.csv",
         current_interpolated_pose_df=object(),

@@ -156,7 +156,6 @@ def test_gui_run_session_worker_matches_cli(qapp, tmp_path, clip_name):
         current_detection_cache_path=detection_cache_path,
         current_individual_properties_cache_path=None,
         current_detected_properties_cache_path=None,
-        current_detected_cnn_cache_paths={},
         get_parameters_dict=lambda: params,
         progress_bar=SimpleNamespace(
             setVisible=lambda *_: None, setValue=lambda *_: None
