@@ -1056,7 +1056,7 @@ def test_build_video_track_color_key_array_prefers_identity_when_available() -> 
             {
                 "FrameID": 2,
                 "TrajectoryID": 4,
-                "IdentityAssignedLabel": "worker_a",
+                "IdentityFinalLabel": "worker_a",
             },
             {
                 "FrameID": 3,

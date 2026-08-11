@@ -16,6 +16,8 @@ import numpy as np
 import pandas as pd
 from scipy.interpolate import CubicSpline, UnivariateSpline, interp1d
 
+from hydra_suite.core.individual.identity import columns as C
+
 # Import Numba from gpu_utils (handles availability detection).
 # Fallback keeps post-processing importable in lightweight test environments.
 try:
@@ -399,10 +401,10 @@ def _enrich_candidates_with_identity(
         bwd = backward_dfs[bi]
         identity_agreeing = 0
         if (
-            "IdentityCommitted" in fwd.columns
-            and "IdentityAssignedLabel" in fwd.columns
-            and "IdentityCommitted" in bwd.columns
-            and "IdentityAssignedLabel" in bwd.columns
+            C.FINAL_SOURCE in fwd.columns
+            and C.FINAL_LABEL in fwd.columns
+            and C.FINAL_SOURCE in bwd.columns
+            and C.FINAL_LABEL in bwd.columns
         ):
             fwd_map = {f: i for i, f in enumerate(fwd["FrameID"].values)}
             bwd_map = {f: i for i, f in enumerate(bwd["FrameID"].values)}
@@ -410,10 +412,20 @@ def _enrich_candidates_with_identity(
             fwd_y = fwd["Y"].values
             bwd_x = bwd["X"].values
             bwd_y = bwd["Y"].values
-            fwd_c = fwd["IdentityCommitted"].values
-            bwd_c = bwd["IdentityCommitted"].values
-            fwd_lbl = fwd["IdentityAssignedLabel"].values
-            bwd_lbl = bwd["IdentityAssignedLabel"].values
+            # "Committed" now means a non-empty IdentityFinalSource -- the
+            # offline solver (or the realtime/tag mirror) actually resolved
+            # this row's identity, rather than the old realtime-only
+            # IdentityCommitted==1 flag.
+            fwd_c = (
+                fwd[C.FINAL_SOURCE].notna()
+                & (fwd[C.FINAL_SOURCE].astype(str).str.strip() != "")
+            ).values
+            bwd_c = (
+                bwd[C.FINAL_SOURCE].notna()
+                & (bwd[C.FINAL_SOURCE].astype(str).str.strip() != "")
+            ).values
+            fwd_lbl = fwd[C.FINAL_LABEL].values
+            bwd_lbl = bwd[C.FINAL_LABEL].values
             for f, fi_k in fwd_map.items():
                 bi_k = bwd_map.get(f)
                 if bi_k is None:
@@ -424,7 +436,7 @@ def _enrich_candidates_with_identity(
                 dy = fwd_y[fi_k] - bwd_y[bi_k]
                 if np.sqrt(dx * dx + dy * dy) > agreement_distance:
                     continue
-                if fwd_c[fi_k] != 1 or bwd_c[bi_k] != 1:
+                if not fwd_c[fi_k] or not bwd_c[bi_k]:
                     continue
                 l1 = str(fwd_lbl[fi_k] or "")
                 l2 = str(bwd_lbl[bi_k] or "")
@@ -1308,11 +1320,10 @@ def resolve_trajectories(
 # Identity conflict arbitration
 # ---------------------------------------------------------------------------
 
-_IDENTITY_LABEL_COL = "IdentityAssignedLabel"
-_IDENTITY_ID_COL = "IdentityAssignedID"
-_IDENTITY_CONF_COL = "IdentityAssignedConfidence"
-_IDENTITY_SLOT_COL = "IdentitySlotLockLabel"
-_IDENTITY_CONFLICT_COL = "IdentityConflictResolved"
+_IDENTITY_LABEL_COL = C.FINAL_LABEL
+_IDENTITY_ID_COL = C.FINAL_ID
+_IDENTITY_CONF_COL = C.FINAL_CONFIDENCE
+_IDENTITY_CONFLICT_COL = C.FINAL_CONFLICT_RESOLVED
 
 
 _CLAIM_TAG_WEIGHT = 1.5
@@ -1324,7 +1335,7 @@ def _claim_features(df: pd.DataFrame, modal_label: str) -> tuple:
     Components (in declaration order):
     - tag_votes: sum of AprilTag agreements
     - agreement: fraction of labelled rows whose label matches ``modal_label``
-    - mean_conf: mean of ``IdentityAssignedConfidence`` over labelled rows
+    - mean_conf: mean of ``IdentityFinalConfidence`` over labelled rows
     - frame_count: number of rows in the trajectory
     - is_forward: 1 when any row was contributed by the forward pass
     """
@@ -1389,14 +1400,17 @@ def _claim_score(
 
 
 def _strip_identity_columns(df: pd.DataFrame) -> pd.DataFrame:
+    # SlotLock (C.REALTIME_SLOTLOCK) is a realtime-owned column -- this
+    # arbitration operates purely on the IdentityFinal* family and must
+    # never write a realtime column.
     if _IDENTITY_LABEL_COL in df.columns:
         df[_IDENTITY_LABEL_COL] = np.nan
     if _IDENTITY_ID_COL in df.columns:
         df[_IDENTITY_ID_COL] = np.nan
     if _IDENTITY_CONF_COL in df.columns:
         df[_IDENTITY_CONF_COL] = 0.0
-    if _IDENTITY_SLOT_COL in df.columns:
-        df[_IDENTITY_SLOT_COL] = np.nan
+    if C.FINAL_SOURCE in df.columns:
+        df[C.FINAL_SOURCE] = C.IdentityFinalSource.NONE
     df[_IDENTITY_CONFLICT_COL] = True
     return df
 
@@ -1480,9 +1494,9 @@ def resolve_simultaneous_identity_conflicts(
 
     Enforces the physical constraint that a given identity can belong to at most
     one trajectory at any point in time.  For each pair of trajectories with the
-    same majority ``IdentityAssignedLabel`` and at least one shared frame, the
+    same majority ``IdentityFinalLabel`` and at least one shared frame, the
     lower-scoring one has its identity columns cleared and
-    ``IdentityConflictResolved`` set to ``True`` — via a per-label
+    ``IdentityFinalConflictResolved`` set to ``True`` — via a per-label
     PAIRWISE-OVERLAP dominance rule (see ``_resolve_overlap_group_losers`` for
     why this site does not route through the shared
     ``substrate.solve_unique_assignment`` solver: it is a differently-shaped
@@ -1542,21 +1556,34 @@ def resolve_simultaneous_identity_conflicts(
     return result_dfs
 
 
-def _committed_identity_disagrees(r1: dict, r2: dict) -> bool:
-    """True when both rows carry committed, non-empty identity labels that differ."""
-    if r1.get("IdentityCommitted") != 1 or r2.get("IdentityCommitted") != 1:
+def _row_final_committed(row: dict) -> bool:
+    """True when a row's ``IdentityFinalSource`` is non-empty (a resolved Final identity)."""
+    source = row.get(C.FINAL_SOURCE)
+    if source is None:
         return False
-    l1 = r1.get("IdentityAssignedLabel") or ""
-    l2 = r2.get("IdentityAssignedLabel") or ""
+    try:
+        if pd.isna(source):
+            return False
+    except (TypeError, ValueError):
+        pass
+    return bool(str(source).strip())
+
+
+def _committed_identity_disagrees(r1: dict, r2: dict) -> bool:
+    """True when both rows carry committed, non-empty Final identity labels that differ."""
+    if not _row_final_committed(r1) or not _row_final_committed(r2):
+        return False
+    l1 = r1.get(C.FINAL_LABEL) or ""
+    l2 = r2.get(C.FINAL_LABEL) or ""
     return bool(l1) and bool(l2) and l1 != l2
 
 
 def _committed_identity_agrees(r1: dict, r2: dict) -> bool:
-    """True when both rows carry committed, non-empty identity labels that are equal."""
-    if r1.get("IdentityCommitted") != 1 or r2.get("IdentityCommitted") != 1:
+    """True when both rows carry committed, non-empty Final identity labels that are equal."""
+    if not _row_final_committed(r1) or not _row_final_committed(r2):
         return False
-    l1 = r1.get("IdentityAssignedLabel") or ""
-    l2 = r2.get("IdentityAssignedLabel") or ""
+    l1 = r1.get(C.FINAL_LABEL) or ""
+    l2 = r2.get(C.FINAL_LABEL) or ""
     return bool(l1) and bool(l2) and l1 == l2
 
 
@@ -2651,31 +2678,30 @@ def _merge_overlapping_agreeing_trajectories(
     return trajectories
 
 
+def _committed_rows(df: pd.DataFrame) -> pd.DataFrame | None:
+    """Rows with a non-empty ``IdentityFinalSource`` (a resolved Final identity)."""
+    if C.FINAL_SOURCE not in df.columns or C.FINAL_LABEL not in df.columns:
+        return None
+    source = df[C.FINAL_SOURCE]
+    committed_mask = source.notna() & (source.astype(str).str.strip() != "")
+    return df[committed_mask]
+
+
 def _last_committed_label(df: pd.DataFrame) -> str:
-    """Return the most recent committed identity label in df, or empty string."""
-    if (
-        "IdentityCommitted" not in df.columns
-        or "IdentityAssignedLabel" not in df.columns
-    ):
+    """Return the most recent committed Final identity label in df, or empty string."""
+    committed = _committed_rows(df)
+    if committed is None or committed.empty:
         return ""
-    committed = df[df["IdentityCommitted"] == 1]
-    if committed.empty:
-        return ""
-    lbl = committed["IdentityAssignedLabel"].iloc[-1]
+    lbl = committed[C.FINAL_LABEL].iloc[-1]
     return str(lbl) if lbl and not pd.isna(lbl) else ""
 
 
 def _first_committed_label(df: pd.DataFrame) -> str:
-    """Return the earliest committed identity label in df, or empty string."""
-    if (
-        "IdentityCommitted" not in df.columns
-        or "IdentityAssignedLabel" not in df.columns
-    ):
+    """Return the earliest committed Final identity label in df, or empty string."""
+    committed = _committed_rows(df)
+    if committed is None or committed.empty:
         return ""
-    committed = df[df["IdentityCommitted"] == 1]
-    if committed.empty:
-        return ""
-    lbl = committed["IdentityAssignedLabel"].iloc[0]
+    lbl = committed[C.FINAL_LABEL].iloc[0]
     return str(lbl) if lbl and not pd.isna(lbl) else ""
 
 

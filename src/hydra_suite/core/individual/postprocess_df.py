@@ -44,8 +44,8 @@ def apply_identity_postprocessing_to_df(
     TrackingSessionCore``, which resolves and threads it through from the
     tracking worker's cache directory). When given and openable, the
     fragment solver sources identity evidence from it directly -- making
-    post-hoc identity self-sufficient from realtime (``IdentityAssignedLabel``/
-    ``IdentityAssignedConfidence`` written by the realtime decoder are no
+    post-hoc identity self-sufficient from realtime (``IdentityRealtimeLabel``/
+    ``IdentityRealtimeConfidence`` written by the realtime decoder are no
     longer required for the offline solver to produce real identities).
     ``None``/unopenable degrades gracefully: the solver falls back to
     whatever CSV columns (if any) are present, matching pre-Phase-5
@@ -79,10 +79,28 @@ def apply_identity_postprocessing_to_df(
                 sources.append("apriltag")
             if any(pd.notna(row.get(col)) for col in cnn_class_columns):
                 sources.append("cnn")
-            if pd.notna(row.get(C.FINAL_LABEL)) or pd.notna(
+            final_label_present = pd.notna(row.get(C.FINAL_LABEL)) or pd.notna(
                 row.get(C.FINAL_SMOOTHED_LABEL)
-            ):
-                sources.append("offline")
+            )
+            if final_label_present:
+                # Prefer the explicit IdentityFinalSource when present -- it
+                # is the authoritative provenance signal (Task 5's
+                # realtime/tag mirror leaves it "realtime"/"tag" so a
+                # merely-mirrored row is not misreported as "offline"). Rows
+                # with a Final label but no source recorded (legacy/synthetic
+                # data written directly by the offline solver's own tests)
+                # fall back to "offline", the pre-mirror default.
+                final_source = row.get(C.FINAL_SOURCE)
+                final_source_token = (
+                    str(final_source).strip() if pd.notna(final_source) else ""
+                )
+                if final_source_token == C.IdentityFinalSource.REALTIME:
+                    pass  # already covered by the C.REALTIME_LABEL check below
+                elif final_source_token == C.IdentityFinalSource.TAG:
+                    if "apriltag" not in sources:
+                        sources.append("apriltag")
+                else:
+                    sources.append("offline")
             if pd.notna(row.get(C.REALTIME_LABEL)) and not sources:
                 sources.append("realtime")
             if not sources:
@@ -148,6 +166,92 @@ def apply_identity_postprocessing_to_df(
             out[C.EVIDENCE_CONFIDENCE] = pd.to_numeric(top_evidence[1], errors="coerce")
         return out
 
+    def _mirror_realtime_and_tag_into_final(df: pd.DataFrame) -> pd.DataFrame:
+        """Non-destructive ``IdentityRealtime*``/tag -> ``IdentityFinal*`` mirror.
+
+        For every row where ``C.FINAL_LABEL`` is still empty (the fragment
+        solver either did not run, or catalog_spec had no entries, or the
+        row fell outside the solver's scope), fall back to a cheaper already
+        -resolved identity: first the realtime decoder's per-frame decision
+        (``C.REALTIME_LABEL``), then a detected AprilTag (``DetectedTagLabel``).
+        Rows the offline solver already resolved (``C.FINAL_SOURCE`` already
+        non-empty) are never touched, and ``IdentityRealtime*``/tag columns
+        are read-only here -- this function writes only the Final family.
+
+        A true no-op (no columns created/touched) when there is nothing to
+        mirror from and no prior stage wrote ``C.FINAL_LABEL`` -- keeps the
+        "no Final family without evidence" invariant for rows/runs with
+        neither realtime nor tag nor offline identity data.
+        """
+        if (
+            C.FINAL_LABEL not in df.columns
+            and C.REALTIME_LABEL not in df.columns
+            and "DetectedTagLabel" not in df.columns
+        ):
+            return df
+
+        out = df.copy()
+
+        if C.FINAL_LABEL not in out.columns:
+            out[C.FINAL_LABEL] = pd.Series(
+                [np.nan] * len(out), index=out.index, dtype=object
+            )
+        elif out[C.FINAL_LABEL].dtype != object:
+            out[C.FINAL_LABEL] = out[C.FINAL_LABEL].astype(object)
+        if C.FINAL_SOURCE not in out.columns:
+            out[C.FINAL_SOURCE] = pd.Series(
+                [C.IdentityFinalSource.NONE] * len(out), index=out.index, dtype=object
+            )
+        elif out[C.FINAL_SOURCE].dtype != object:
+            out[C.FINAL_SOURCE] = out[C.FINAL_SOURCE].astype(object)
+        if C.FINAL_ID not in out.columns:
+            out[C.FINAL_ID] = np.nan
+        if C.FINAL_CONFIDENCE not in out.columns:
+            out[C.FINAL_CONFIDENCE] = np.nan
+
+        empty_final = out[C.FINAL_LABEL].isna() | (
+            out[C.FINAL_LABEL].astype(str).str.strip() == ""
+        )
+        if not empty_final.any():
+            return out
+
+        if C.REALTIME_LABEL in out.columns:
+            realtime_label = out[C.REALTIME_LABEL]
+            has_realtime = (
+                empty_final
+                & realtime_label.notna()
+                & (realtime_label.astype(str).str.strip() != "")
+            )
+            if has_realtime.any():
+                out.loc[has_realtime, C.FINAL_LABEL] = realtime_label.loc[has_realtime]
+                if C.REALTIME_ID in out.columns:
+                    out.loc[has_realtime, C.FINAL_ID] = out.loc[
+                        has_realtime, C.REALTIME_ID
+                    ]
+                if C.REALTIME_CONFIDENCE in out.columns:
+                    out.loc[has_realtime, C.FINAL_CONFIDENCE] = out.loc[
+                        has_realtime, C.REALTIME_CONFIDENCE
+                    ]
+                out.loc[has_realtime, C.FINAL_SOURCE] = C.IdentityFinalSource.REALTIME
+                empty_final = empty_final & ~has_realtime
+
+        if "DetectedTagLabel" in out.columns and empty_final.any():
+            tag_label = out["DetectedTagLabel"]
+            has_tag = (
+                empty_final
+                & tag_label.notna()
+                & (tag_label.astype(str).str.strip() != "")
+            )
+            if has_tag.any():
+                out.loc[has_tag, C.FINAL_LABEL] = tag_label.loc[has_tag]
+                if "DetectedTagConf" in out.columns:
+                    out.loc[has_tag, C.FINAL_CONFIDENCE] = pd.to_numeric(
+                        out.loc[has_tag, "DetectedTagConf"], errors="coerce"
+                    )
+                out.loc[has_tag, C.FINAL_SOURCE] = C.IdentityFinalSource.TAG
+
+        return out
+
     try:
         # Identity Phase 5: catalog resolution is the single shared resolver
         # (also used by the tracking worker to build the SAME catalog for the
@@ -182,6 +286,7 @@ def apply_identity_postprocessing_to_df(
             except Exception:
                 logger.exception("Fragment solver failed; results unchanged.")
 
+        with_pose_df = _mirror_realtime_and_tag_into_final(with_pose_df)
         with_pose_df = fill_identity_nans_with_consensus(with_pose_df)
         with_pose_df = sort_trajectories_by_identity(with_pose_df)
     except Exception:

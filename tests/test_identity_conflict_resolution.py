@@ -31,6 +31,7 @@ mod = load_src_module(
 
 resolve_simultaneous_identity_conflicts = mod.resolve_simultaneous_identity_conflicts
 _IDENTITY_LABEL_COL = mod._IDENTITY_LABEL_COL
+_IDENTITY_ID_COL = mod._IDENTITY_ID_COL
 _IDENTITY_CONF_COL = mod._IDENTITY_CONF_COL
 _IDENTITY_CONFLICT_COL = mod._IDENTITY_CONFLICT_COL
 
@@ -53,9 +54,9 @@ def _make_traj(
             "FrameID": f,
             "X": float(f),
             "Y": 0.0,
-            "IdentityAssignedLabel": label,
-            "IdentityAssignedConfidence": conf if label is not None else np.nan,
-            "IdentityAssignedID": 0 if label is not None else np.nan,
+            _IDENTITY_LABEL_COL: label,
+            _IDENTITY_CONF_COL: conf if label is not None else np.nan,
+            _IDENTITY_ID_COL: 0 if label is not None else np.nan,
             "TagVotes": tag_votes,
             "_source": source,
         }
@@ -141,19 +142,19 @@ def test_forward_source_breaks_tie() -> None:
 
 
 def test_loser_identity_columns_cleared() -> None:
-    """Loser has label/id/conf stripped and IdentityConflictResolved set."""
+    """Loser has label/id/conf stripped and IdentityFinalConflictResolved set."""
     a = _make_traj([1, 2, 3], label="ant_5", conf=0.9, tag_votes=5)
     b = _make_traj([2, 3, 4], label="ant_5", conf=0.5, tag_votes=0)
     result = resolve_simultaneous_identity_conflicts([a.copy(), b.copy()])
     loser = result[1]
-    assert pd.isna(loser["IdentityAssignedLabel"].iloc[0])
-    assert pd.isna(loser["IdentityAssignedID"].iloc[0])
-    assert float(loser["IdentityAssignedConfidence"].iloc[0]) == 0.0
+    assert pd.isna(loser[_IDENTITY_LABEL_COL].iloc[0])
+    assert pd.isna(loser[_IDENTITY_ID_COL].iloc[0])
+    assert float(loser[_IDENTITY_CONF_COL].iloc[0]) == 0.0
     assert bool(loser[_IDENTITY_CONFLICT_COL].iloc[0])
 
 
 def test_unlabeled_tracks_ignored() -> None:
-    """Tracks without IdentityAssignedLabel are untouched."""
+    """Tracks without IdentityFinalLabel are untouched."""
     a = _make_traj([1, 2, 3], label=None)
     b = _make_traj([2, 3, 4], label="ant_6", conf=0.9)
     result = resolve_simultaneous_identity_conflicts([a.copy(), b.copy()])
@@ -209,9 +210,9 @@ def _make_traj_mixed_labels(
                 "FrameID": f,
                 "X": float(f),
                 "Y": 0.0,
-                "IdentityAssignedLabel": lbl,
-                "IdentityAssignedConfidence": conf,
-                "IdentityAssignedID": 0,
+                _IDENTITY_LABEL_COL: lbl,
+                _IDENTITY_CONF_COL: conf,
+                _IDENTITY_ID_COL: 0,
                 "TagVotes": tag_votes,
                 "_source": source,
             }

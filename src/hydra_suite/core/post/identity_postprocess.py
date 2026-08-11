@@ -17,6 +17,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from hydra_suite.core.individual.identity import columns as C
+
 _KEY_SEP = "|"
 _PAIR_SEP = "="
 _UNKNOWN_LABEL = "unknown"
@@ -129,89 +131,65 @@ def parse_identity_key(identity_key: Any) -> dict[str, str]:
 
 
 def fill_identity_nans_with_consensus(df: pd.DataFrame) -> pd.DataFrame:
-    """Fill NaN identity columns using per-trajectory majority label.
+    """Fill NaN ``IdentityFinal*`` columns using per-trajectory majority label.
 
     Strategy per column:
-    - ``IdentityAssignedLabel``: trajectory consensus; ``"unknown"`` when the
-      entire trajectory has no label evidence.
-    - ``IdentityAssignedID``: catalog index inferred from existing label→ID
-      pairs in the data; 0 for rows whose label resolved to ``"unknown"``.
-    - ``IdentityAssignedConfidence``: 0.0 for every filled/unknown row.
-    - ``IdentitySlotLockLabel``: trajectory consensus; ``"unknown"`` fallback.
-    - ``IdentityPosteriorMargin``: 0.0 (no detection → no discriminating
-      information between any two identities).
-    - ``IdentityEntropy``: forward-fill then backward-fill within each
-      trajectory (belief state persists between frames); 0.0 for trajectories
-      that never had a detection.
+    - ``C.FINAL_LABEL``: trajectory consensus; ``"unknown"`` when the entire
+      trajectory has no label evidence.
+    - ``C.FINAL_ID``: catalog index inferred from existing label->ID pairs in
+      the data; 0 for rows whose label resolved to ``"unknown"``.
+    - ``C.FINAL_CONFIDENCE``: 0.0 for every filled/unknown row.
+
+    This is a Final-family (resolved identity) operation only. It never
+    reads or writes ``IdentityRealtime*`` columns -- ``IdentityRealtimeMargin``
+    /``IdentityRealtimeEntropy``/``IdentityRealtimeSlotLock`` are realtime
+    inputs and stay untouched here.
     """
     if df is None or df.empty or "TrajectoryID" not in df.columns:
         return df
-    if "IdentityAssignedLabel" not in df.columns:
+    if C.FINAL_LABEL not in df.columns:
         return df
 
     df = df.copy()
-    df["IdentityAssignedLabel"] = df["IdentityAssignedLabel"].astype(object)
-    if "IdentityAssignedConfidence" not in df.columns:
-        df["IdentityAssignedConfidence"] = np.nan
+    df[C.FINAL_LABEL] = df[C.FINAL_LABEL].astype(object)
+    if C.FINAL_CONFIDENCE not in df.columns:
+        df[C.FINAL_CONFIDENCE] = np.nan
 
-    label_missing = df["IdentityAssignedLabel"].isna() | (
-        df["IdentityAssignedLabel"].astype(str).str.strip() == ""
+    label_missing = df[C.FINAL_LABEL].isna() | (
+        df[C.FINAL_LABEL].astype(str).str.strip() == ""
     )
     for _traj_id, group in df.groupby("TrajectoryID", sort=False):
         grp_missing = label_missing.loc[group.index]
         if not grp_missing.any():
             continue
-        present = group.loc[~grp_missing, "IdentityAssignedLabel"]
+        present = group.loc[~grp_missing, C.FINAL_LABEL]
         consensus = present.mode().iloc[0] if not present.empty else _UNKNOWN_LABEL
         fill_idx = group.index[grp_missing]
-        df.loc[fill_idx, "IdentityAssignedLabel"] = consensus
-        df.loc[fill_idx, "IdentityAssignedConfidence"] = 0.0
+        df.loc[fill_idx, C.FINAL_LABEL] = consensus
+        df.loc[fill_idx, C.FINAL_CONFIDENCE] = 0.0
 
-    if "IdentityAssignedID" in df.columns:
+    if C.FINAL_ID in df.columns:
         valid = (
-            df["IdentityAssignedLabel"].notna()
-            & (df["IdentityAssignedLabel"].astype(str).str.strip() != "")
-            & df["IdentityAssignedID"].notna()
+            df[C.FINAL_LABEL].notna()
+            & (df[C.FINAL_LABEL].astype(str).str.strip() != "")
+            & df[C.FINAL_ID].notna()
         )
         label_to_id: dict[str, float] = {}
         for lbl, idx in zip(
-            df.loc[valid, "IdentityAssignedLabel"].astype(str),
-            df.loc[valid, "IdentityAssignedID"],
+            df.loc[valid, C.FINAL_LABEL].astype(str),
+            df.loc[valid, C.FINAL_ID],
         ):
             label_to_id.setdefault(lbl, float(idx))
         label_to_id[_UNKNOWN_LABEL] = 0.0
 
-        id_missing = df["IdentityAssignedID"].isna()
+        id_missing = df[C.FINAL_ID].isna()
         if id_missing.any():
-            df.loc[id_missing, "IdentityAssignedID"] = (
-                df.loc[id_missing, "IdentityAssignedLabel"]
+            df.loc[id_missing, C.FINAL_ID] = (
+                df.loc[id_missing, C.FINAL_LABEL]
                 .astype(str)
                 .map(label_to_id)
                 .fillna(0.0)
             )
-
-    if "IdentitySlotLockLabel" in df.columns:
-        df["IdentitySlotLockLabel"] = df["IdentitySlotLockLabel"].astype(object)
-        slot_missing = df["IdentitySlotLockLabel"].isna() | (
-            df["IdentitySlotLockLabel"].astype(str).str.strip() == ""
-        )
-        for _traj_id, group in df.groupby("TrajectoryID", sort=False):
-            grp_missing = slot_missing.loc[group.index]
-            if not grp_missing.any():
-                continue
-            present = group.loc[~grp_missing, "IdentitySlotLockLabel"]
-            consensus = present.mode().iloc[0] if not present.empty else _UNKNOWN_LABEL
-            df.loc[group.index[grp_missing], "IdentitySlotLockLabel"] = consensus
-
-    if "IdentityPosteriorMargin" in df.columns:
-        df["IdentityPosteriorMargin"] = df["IdentityPosteriorMargin"].fillna(0.0)
-
-    if "IdentityEntropy" in df.columns:
-        df["IdentityEntropy"] = (
-            df.groupby("TrajectoryID", sort=False)["IdentityEntropy"]
-            .transform(lambda s: s.ffill().bfill())
-            .fillna(0.0)
-        )
 
     return df
 
@@ -227,7 +205,7 @@ def sort_trajectories_by_identity(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
     identity_col = next(
-        (c for c in ("IdentityAssignedLabel", "UniqueIdentityKey") if c in df.columns),
+        (c for c in (C.FINAL_LABEL, C.UNIQUE_IDENTITY_KEY) if c in df.columns),
         None,
     )
     frame_col = "FrameID" if "FrameID" in df.columns else None

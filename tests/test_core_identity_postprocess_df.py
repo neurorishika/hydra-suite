@@ -77,6 +77,74 @@ def test_evidence_summary_no_evidence_columns_leaves_toplabel_nan():
     assert out[C.EVIDENCE_TOPLABEL].dtype == object
 
 
+def test_realtime_to_final_mirror_is_non_destructive():
+    """Phase 6 Task 5: with the fragment solver OFF and IdentityRealtimeLabel
+    populated, apply_identity_postprocessing_to_df must mirror it into
+    IdentityFinalLabel with IdentityFinalSource == "realtime", and must
+    leave IdentityRealtimeLabel itself untouched (realtime is read-only)."""
+    df = pd.DataFrame(
+        {
+            "TrajectoryID": [0, 0],
+            "FrameID": [0, 1],
+            C.REALTIME_LABEL: ["antA", "antA"],
+            C.REALTIME_ID: [1.0, 1.0],
+            C.REALTIME_CONFIDENCE: [0.8, 0.8],
+        }
+    )
+    out = apply_identity_postprocessing_to_df(
+        df, {"ENABLE_IDENTITY_FRAGMENT_SOLVER": False}
+    )
+
+    assert out[C.FINAL_LABEL].tolist() == ["antA", "antA"]
+    assert out[C.FINAL_SOURCE].tolist() == ["realtime", "realtime"]
+    assert out[C.FINAL_ID].tolist() == [1.0, 1.0]
+    assert out[C.FINAL_CONFIDENCE].tolist() == [0.8, 0.8]
+    # Realtime columns are read-only for this stage -- unchanged.
+    assert out[C.REALTIME_LABEL].tolist() == ["antA", "antA"]
+    assert out[C.REALTIME_ID].tolist() == [1.0, 1.0]
+    assert out[C.REALTIME_CONFIDENCE].tolist() == [0.8, 0.8]
+
+
+def test_realtime_to_final_mirror_does_not_overwrite_offline_rows():
+    """Rows the offline solver already resolved (IdentityFinalSource ==
+    "offline") must never be clobbered by the realtime mirror, even when a
+    (possibly stale/disagreeing) realtime label is present on the same row."""
+    df = pd.DataFrame(
+        {
+            "TrajectoryID": [0],
+            "FrameID": [0],
+            C.FINAL_LABEL: ["antB"],
+            C.FINAL_SOURCE: [C.IdentityFinalSource.OFFLINE],
+            C.REALTIME_LABEL: ["antA"],
+        }
+    )
+    out = apply_identity_postprocessing_to_df(
+        df, {"ENABLE_IDENTITY_FRAGMENT_SOLVER": False}
+    )
+
+    assert out[C.FINAL_LABEL].tolist() == ["antB"]
+    assert out[C.FINAL_SOURCE].tolist() == ["offline"]
+
+
+def test_tag_resolved_rows_get_final_source_tag():
+    """Rows with no realtime evidence but a detected AprilTag are mirrored
+    into Final with IdentityFinalSource == "tag"."""
+    df = pd.DataFrame(
+        {
+            "TrajectoryID": [0],
+            "FrameID": [0],
+            "DetectedTagLabel": ["antC"],
+            "DetectedTagConf": [0.99],
+        }
+    )
+    out = apply_identity_postprocessing_to_df(
+        df, {"ENABLE_IDENTITY_FRAGMENT_SOLVER": False}
+    )
+
+    assert out[C.FINAL_LABEL].tolist() == ["antC"]
+    assert out[C.FINAL_SOURCE].tolist() == ["tag"]
+
+
 def test_evidence_summary_does_not_write_realtime_or_final_columns():
     df = pd.DataFrame(
         {

@@ -71,6 +71,30 @@ def test_color_key_array_prefers_identity_then_trajectory():
     assert keys[1] == "trajectory:1"
 
 
+def test_overlay_priority_is_unique_key_then_final_then_final_smoothed():
+    """Phase 6 Task 5: the overlay reads the IdentityFinal* family (not the
+    retired IdentityAssignedLabel/IdentityOfflineLabel/IdentitySmoothedLabel
+    names), in priority order [UniqueIdentityKey, IdentityFinalLabel,
+    IdentityFinalSmoothedLabel]."""
+    df = pd.DataFrame(
+        {
+            "TrajectoryID": [0, 1, 2],
+            "UniqueIdentityKey": [np.nan, np.nan, np.nan],
+            "IdentityFinalLabel": ["ant_a", np.nan, np.nan],
+            "IdentityFinalSmoothedLabel": ["ant_a_smoothed", "ant_b", np.nan],
+        }
+    )
+    labels = media_export.build_video_track_label_array(df)
+    assert labels[0] == "ant_a"
+    assert labels[1] == "ant_b"
+    assert labels[2] == "ID2"
+
+    keys = media_export.build_video_track_color_key_array(df)
+    assert keys[0] == "identity:ant_a"
+    assert keys[1] == "identity:ant_b"
+    assert keys[2] == "trajectory:2"
+
+
 def test_precomputed_palette_uses_trajectory_colors_for_plain_tracks():
     colors = [(10, 20, 30), (40, 50, 60), (70, 80, 90)]
     track_ids = np.asarray([0, 1, 2], dtype=np.int32)

@@ -22,8 +22,8 @@ def _row(frame: int, x: float, y: float, label: str = "", committed: int = 0) ->
         "FrameID": frame,
         "X": x,
         "Y": y,
-        "IdentityCommitted": committed,
-        "IdentityAssignedLabel": label,
+        "IdentityFinalSource": "offline" if committed else "",
+        "IdentityFinalLabel": label,
     }
 
 
