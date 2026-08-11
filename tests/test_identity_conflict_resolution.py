@@ -11,14 +11,19 @@ from tests.helpers.module_loader import load_src_module
 
 
 def _scipy_stub() -> dict[str, object]:
+    # processing.py now also imports `hydra_suite.core.individual.identity.columns`
+    # (Phase 6), which transitively imports the real `hydra_suite.core` package
+    # (via `core/__init__.py` -> assigners -> `scipy.optimize`, and numba's
+    # own import-time scipy version check). Only stub the `scipy.interpolate`
+    # submodule (to keep this test lightweight); leave the top-level `scipy`
+    # module -- and everything else under it -- real, so those transitive
+    # imports keep working.
     interp_ns = types.SimpleNamespace(
         CubicSpline=object,
         UnivariateSpline=object,
         interp1d=object,
     )
-    scipy_ns = types.SimpleNamespace(interpolate=interp_ns)
     return {
-        "scipy": scipy_ns,
         "scipy.interpolate": interp_ns,
     }
 

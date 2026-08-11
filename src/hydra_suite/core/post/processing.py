@@ -401,10 +401,10 @@ def _enrich_candidates_with_identity(
         bwd = backward_dfs[bi]
         identity_agreeing = 0
         if (
-            C.FINAL_SOURCE in fwd.columns
-            and C.FINAL_LABEL in fwd.columns
-            and C.FINAL_SOURCE in bwd.columns
-            and C.FINAL_LABEL in bwd.columns
+            C.REALTIME_COMMITTED in fwd.columns
+            and C.REALTIME_LABEL in fwd.columns
+            and C.REALTIME_COMMITTED in bwd.columns
+            and C.REALTIME_LABEL in bwd.columns
         ):
             fwd_map = {f: i for i, f in enumerate(fwd["FrameID"].values)}
             bwd_map = {f: i for i, f in enumerate(bwd["FrameID"].values)}
@@ -412,20 +412,14 @@ def _enrich_candidates_with_identity(
             fwd_y = fwd["Y"].values
             bwd_x = bwd["X"].values
             bwd_y = bwd["Y"].values
-            # "Committed" now means a non-empty IdentityFinalSource -- the
-            # offline solver (or the realtime/tag mirror) actually resolved
-            # this row's identity, rather than the old realtime-only
-            # IdentityCommitted==1 flag.
-            fwd_c = (
-                fwd[C.FINAL_SOURCE].notna()
-                & (fwd[C.FINAL_SOURCE].astype(str).str.strip() != "")
-            ).values
-            bwd_c = (
-                bwd[C.FINAL_SOURCE].notna()
-                & (bwd[C.FINAL_SOURCE].astype(str).str.strip() != "")
-            ).values
-            fwd_lbl = fwd[C.FINAL_LABEL].values
-            bwd_lbl = bwd[C.FINAL_LABEL].values
+            # "Committed" means the online decoder's IdentityRealtimeCommitted
+            # flag is truthy -- the IdentityFinal* family does not exist yet
+            # at merge time (it is written later, in the rich-export stage),
+            # so this mirrors the old realtime-only IdentityCommitted==1 flag.
+            fwd_c = (fwd[C.REALTIME_COMMITTED] == 1).values
+            bwd_c = (bwd[C.REALTIME_COMMITTED] == 1).values
+            fwd_lbl = fwd[C.REALTIME_LABEL].values
+            bwd_lbl = bwd[C.REALTIME_LABEL].values
             for f, fi_k in fwd_map.items():
                 bi_k = bwd_map.get(f)
                 if bi_k is None:
@@ -1320,9 +1314,9 @@ def resolve_trajectories(
 # Identity conflict arbitration
 # ---------------------------------------------------------------------------
 
-_IDENTITY_LABEL_COL = C.FINAL_LABEL
-_IDENTITY_ID_COL = C.FINAL_ID
-_IDENTITY_CONF_COL = C.FINAL_CONFIDENCE
+_IDENTITY_LABEL_COL = C.REALTIME_LABEL
+_IDENTITY_ID_COL = C.REALTIME_ID
+_IDENTITY_CONF_COL = C.REALTIME_CONFIDENCE
 _IDENTITY_CONFLICT_COL = C.FINAL_CONFLICT_RESOLVED
 
 
@@ -1400,17 +1394,19 @@ def _claim_score(
 
 
 def _strip_identity_columns(df: pd.DataFrame) -> pd.DataFrame:
-    # SlotLock (C.REALTIME_SLOTLOCK) is a realtime-owned column -- this
-    # arbitration operates purely on the IdentityFinal* family and must
-    # never write a realtime column.
+    # This arbitration runs at merge time, before the IdentityFinal* family
+    # exists (it is written later, in the rich-export stage). It clears the
+    # realtime label/id/confidence for the losing claimant and sets the
+    # additive IdentityFinalConflictResolved marker (see _IDENTITY_CONFLICT_COL
+    # above) so the downstream Final-family writer knows this row lost the
+    # merge-time identity arbitration. SlotLock (C.REALTIME_SLOTLOCK) is left
+    # untouched, mirroring pre-Phase-6 behavior.
     if _IDENTITY_LABEL_COL in df.columns:
         df[_IDENTITY_LABEL_COL] = np.nan
     if _IDENTITY_ID_COL in df.columns:
         df[_IDENTITY_ID_COL] = np.nan
     if _IDENTITY_CONF_COL in df.columns:
         df[_IDENTITY_CONF_COL] = 0.0
-    if C.FINAL_SOURCE in df.columns:
-        df[C.FINAL_SOURCE] = C.IdentityFinalSource.NONE
     df[_IDENTITY_CONFLICT_COL] = True
     return df
 
@@ -1556,34 +1552,43 @@ def resolve_simultaneous_identity_conflicts(
     return result_dfs
 
 
-def _row_final_committed(row: dict) -> bool:
-    """True when a row's ``IdentityFinalSource`` is non-empty (a resolved Final identity)."""
-    source = row.get(C.FINAL_SOURCE)
-    if source is None:
+def _row_realtime_committed(row: dict) -> bool:
+    """True when a row's ``IdentityRealtimeCommitted`` flag is truthy (==1).
+
+    Merge runs before the IdentityFinal* family exists (it is written later,
+    in the rich-export stage), so "committed" here reads the online decoder's
+    Realtime family -- mirroring the old realtime-only IdentityCommitted==1
+    flag.
+    """
+    committed = row.get(C.REALTIME_COMMITTED)
+    if committed is None:
         return False
     try:
-        if pd.isna(source):
+        if pd.isna(committed):
             return False
     except (TypeError, ValueError):
         pass
-    return bool(str(source).strip())
+    try:
+        return committed == 1
+    except (TypeError, ValueError):
+        return False
 
 
 def _committed_identity_disagrees(r1: dict, r2: dict) -> bool:
-    """True when both rows carry committed, non-empty Final identity labels that differ."""
-    if not _row_final_committed(r1) or not _row_final_committed(r2):
+    """True when both rows carry committed, non-empty Realtime identity labels that differ."""
+    if not _row_realtime_committed(r1) or not _row_realtime_committed(r2):
         return False
-    l1 = r1.get(C.FINAL_LABEL) or ""
-    l2 = r2.get(C.FINAL_LABEL) or ""
+    l1 = r1.get(C.REALTIME_LABEL) or ""
+    l2 = r2.get(C.REALTIME_LABEL) or ""
     return bool(l1) and bool(l2) and l1 != l2
 
 
 def _committed_identity_agrees(r1: dict, r2: dict) -> bool:
-    """True when both rows carry committed, non-empty Final identity labels that are equal."""
-    if not _row_final_committed(r1) or not _row_final_committed(r2):
+    """True when both rows carry committed, non-empty Realtime identity labels that are equal."""
+    if not _row_realtime_committed(r1) or not _row_realtime_committed(r2):
         return False
-    l1 = r1.get(C.FINAL_LABEL) or ""
-    l2 = r2.get(C.FINAL_LABEL) or ""
+    l1 = r1.get(C.REALTIME_LABEL) or ""
+    l2 = r2.get(C.REALTIME_LABEL) or ""
     return bool(l1) and bool(l2) and l1 == l2
 
 
@@ -2679,29 +2684,30 @@ def _merge_overlapping_agreeing_trajectories(
 
 
 def _committed_rows(df: pd.DataFrame) -> pd.DataFrame | None:
-    """Rows with a non-empty ``IdentityFinalSource`` (a resolved Final identity)."""
-    if C.FINAL_SOURCE not in df.columns or C.FINAL_LABEL not in df.columns:
+    """Rows with a truthy ``IdentityRealtimeCommitted`` flag (merge runs before
+    the IdentityFinal* family exists, so committed status reads the online
+    decoder's Realtime family)."""
+    if C.REALTIME_COMMITTED not in df.columns or C.REALTIME_LABEL not in df.columns:
         return None
-    source = df[C.FINAL_SOURCE]
-    committed_mask = source.notna() & (source.astype(str).str.strip() != "")
+    committed_mask = df[C.REALTIME_COMMITTED] == 1
     return df[committed_mask]
 
 
 def _last_committed_label(df: pd.DataFrame) -> str:
-    """Return the most recent committed Final identity label in df, or empty string."""
+    """Return the most recent committed Realtime identity label in df, or empty string."""
     committed = _committed_rows(df)
     if committed is None or committed.empty:
         return ""
-    lbl = committed[C.FINAL_LABEL].iloc[-1]
+    lbl = committed[C.REALTIME_LABEL].iloc[-1]
     return str(lbl) if lbl and not pd.isna(lbl) else ""
 
 
 def _first_committed_label(df: pd.DataFrame) -> str:
-    """Return the earliest committed Final identity label in df, or empty string."""
+    """Return the earliest committed Realtime identity label in df, or empty string."""
     committed = _committed_rows(df)
     if committed is None or committed.empty:
         return ""
-    lbl = committed[C.FINAL_LABEL].iloc[0]
+    lbl = committed[C.REALTIME_LABEL].iloc[0]
     return str(lbl) if lbl and not pd.isna(lbl) else ""
 
 
