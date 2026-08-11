@@ -11,7 +11,6 @@ from hydra_suite.core.individual.classification.backend import (
 from hydra_suite.core.individual.classification.cnn import (
     ClassPrediction,
     CNNIdentityBackend,
-    CNNIdentityCache,
     CNNIdentityConfig,
     TrackCNNHistory,
     apply_cnn_identity_cost,
@@ -35,7 +34,6 @@ __all__ = [
     "ClassifierMetadata",
     "ClassifierRuntimeError",
     "CNNIdentityBackend",
-    "CNNIdentityCache",
     "CNNIdentityConfig",
     "ClassPrediction",
     "HeadTailAnalyzer",

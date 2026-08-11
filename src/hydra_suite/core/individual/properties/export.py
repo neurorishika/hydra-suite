@@ -8,21 +8,26 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 import numpy as np
 import pandas as pd
 
-# DetectedPropertiesCache, IndividualPropertiesCache, and CNNIdentityCache are
-# legacy combined-schema caches that aggregate detection + head-tail + pose +
-# CNN results in a single .npz. They are NOT structurally interchangeable with
-# the per-type CacheHandle objects in core/inference/cache/store.py — the
-# legacy classes accept ``(cache_path, mode="r"|"w")`` constructors and expose
-# their own ``read_*``/``save_*``/``is_compatible`` API. A previous attempt
+from .cache import IndividualPropertiesCache
+from .detected_cache import DetectedPropertiesCache
+
+# DetectedPropertiesCache and IndividualPropertiesCache are legacy
+# combined-schema caches that aggregate detection + head-tail + pose results
+# in a single .npz. They are NOT structurally interchangeable with the
+# per-type CacheHandle objects in core/inference/cache/store.py — the legacy
+# classes accept ``(cache_path, mode="r"|"w")`` constructors and expose their
+# own ``read_*``/``save_*``/``is_compatible`` API. A previous attempt
 # (Task 17c) aliased the new DetectionCacheHandle to DetectedPropertiesCache,
 # which broke the rich-export path with ``TypeError: ... unexpected keyword
 # argument 'mode'`` at runtime. Until the rich-export path is rewired to read
 # from the new per-type caches directly, this module stays on the legacy
 # classes.
-from hydra_suite.core.individual.classification.cnn import CNNIdentityCache
+#
+# NOTE (Identity Phase 7 Task 1): the V3 ``CNNIdentityCache`` this module used
+# to read was orphaned -- nothing in src/ ever wrote that .npz -- and has been
+# deleted from cnn.py. ``augment_trajectories_with_detected_cnn_cache`` below
+# is now a stub; Task 2 removes it and its (already-dead) callers.
 
-from .cache import IndividualPropertiesCache
-from .detected_cache import DetectedPropertiesCache
 
 POSE_SUMMARY_COLUMNS = [
     "PoseMeanConf",
@@ -35,7 +40,8 @@ DETECTED_HEADING_COLUMNS = [
     "HeadingResolved",  # final disambiguated heading angle after head-tail
     "HeadingMethod",  # source used: "headtail", "pose", "velocity", "default"
     "HeadingIsDirected",  # True when head-vs-tail direction was successfully resolved
-    "HeadTailAngleRad",  # angle from head-tail classifier (may differ from HeadingResolved)
+    # angle from head-tail classifier (may differ from HeadingResolved)
+    "HeadTailAngleRad",
     "HeadTailClassifierConf",  # raw confidence from the head-tail model
 ]
 
@@ -643,7 +649,7 @@ def augment_trajectories_with_detected_properties_cache(
 
 
 def build_detected_cnn_lookup_dataframe(
-    cache: CNNIdentityCache,
+    cache: Any,
     label: str = "cnn_identity",
 ) -> pd.DataFrame:
     """Flatten detected-frame CNN predictions into frame+detection keyed rows.
@@ -763,11 +769,20 @@ def augment_trajectories_with_detected_cnn_cache(
     cache_path: str,
     label: str = "cnn_identity",
 ) -> pd.DataFrame:
-    """Load detected-frame CNN cache and merge class/confidence columns."""
-    cache = CNNIdentityCache(cache_path)
-    lookup = build_detected_cnn_lookup_dataframe(cache, label=label)
-    return augment_trajectories_with_detected_cnn_df(
-        trajectories_df, lookup, label=label
+    """Load detected-frame CNN cache and merge class/confidence columns.
+
+    Stubbed in Identity Phase 7 Task 1: the on-disk V3 ``CNNIdentityCache``
+    this used to read was orphaned (no writer in src/), so the class was
+    deleted. This function is unreachable in practice (its only caller,
+    ``pose_merge.merge_pose_sources_into_df``, is itself gated on
+    ``state.detected_cnn_cache_paths``, which nothing in src/ ever
+    populates); Task 2 removes this function and its dead caller outright.
+    """
+    raise NotImplementedError(
+        "augment_trajectories_with_detected_cnn_cache: the V3 CNNIdentityCache "
+        "it read was orphaned and has been removed (Identity Phase 7 Task 1); "
+        "this call path should be unreachable and is slated for deletion in "
+        "Task 2."
     )
 
 

@@ -12,7 +12,6 @@ from .classification.apriltag import AprilTagConfig, AprilTagDetector
 from .classification.cnn import (
     ClassPrediction,
     CNNIdentityBackend,
-    CNNIdentityCache,
     CNNIdentityConfig,
     TrackCNNHistory,
     apply_cnn_identity_cost,
@@ -51,7 +50,6 @@ __all__ = [
     "AprilTagDetector",
     "CNNIdentityConfig",
     "CNNIdentityBackend",
-    "CNNIdentityCache",
     "ClassPrediction",
     "TrackCNNHistory",
     "apply_cnn_identity_cost",

@@ -677,28 +677,6 @@ class TrackingEngineCore:
         d1 = TrackingEngineCore._circular_abs_diff_rad(theta1, ref)
         return theta0 if d0 <= d1 else theta1
 
-    def _build_cnn_identity_cache_path(
-        self, label: str, classify_id: str, start_frame: int, end_frame: int
-    ):
-        """Build an independent, hash-keyed classify cache path."""
-        from hydra_suite.utils.video_artifacts import build_classify_cache_path
-
-        return str(
-            build_classify_cache_path(
-                self.video_path,
-                classify_id,
-                label,
-                start_frame,
-                end_frame,
-                artifact_base_dir=(
-                    Path(self.detection_cache_path).parent
-                    if self.detection_cache_path
-                    else None
-                ),
-                create_dir=True,
-            )
-        )
-
     def run_tracking(self: object) -> object:  # noqa: C901
         """Execute tracking pipeline for the configured video and parameters."""
         # === 1. INITIALIZATION (Identical to Original) ===
@@ -1623,52 +1601,11 @@ class TrackingEngineCore:
                 logger.info(
                     "Using live CNN identity outputs for realtime tracking (%s)", label
                 )
-            elif not effective_realtime_tracking_mode:
-                from hydra_suite.core.individual.identity.calibration import (
-                    CalibrationModel,
-                )
-                from hydra_suite.core.individual.properties.cache import (
-                    compute_classify_cache_id,
-                )
-
-                _calibration_temperature = float(
-                    cnn_cfg_dict.get(
-                        "calibration_temperature",
-                        cnn_cfg_dict.get("temperature", 1.0),
-                    )
-                )
-                _calibration_signature = (
-                    CalibrationModel(temperature=_calibration_temperature).signature
-                    if abs(_calibration_temperature - 1.0) > 1e-6
-                    else ""
-                )
-
-                classify_id = compute_classify_cache_id(
-                    model_path=model_path,
-                    compute_runtime=_classify_cache_runtime_string(p),
-                    inference_model_id=str(p.get("INFERENCE_MODEL_ID", "")),
-                    calibration_signature=_calibration_signature,
-                )
-                _path = self._build_cnn_identity_cache_path(
-                    label, classify_id, start_frame, end_frame
-                )
-                if _path and os.path.exists(_path):
-                    from hydra_suite.core.individual.classification.cnn import (
-                        CNNIdentityCache,
-                    )
-
-                    _cache = CNNIdentityCache(_path)
-                    _cnn_phase_states.append(
-                        {
-                            "label": label,
-                            "cache": _cache,
-                            "model_labels": model_labels,
-                            "class_names_per_factor": _cnpf_phase,
-                            "evidence_cache": _batch_evidence_cache,
-                            "is_identity_provider": _is_identity_provider,
-                        }
-                    )
-                    logger.info("CNN identity cache loaded (%s): %s", label, _path)
+            # NOTE: previously there was an `elif not effective_realtime_tracking_mode`
+            # branch here that built a classify-cache path and, if it happened to
+            # exist on disk, loaded a `CNNIdentityCache` from it. Nothing in src/
+            # ever wrote that .npz (the V3 on-disk CNN identity cache was orphaned),
+            # so the branch was permanently dead. Removed in Phase 7 Task 1.
 
         # Optional pose-properties reader for directional orientation override.
         pose_props_cache = live_pose_props_cache

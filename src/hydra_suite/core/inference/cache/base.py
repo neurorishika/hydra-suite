@@ -6,7 +6,7 @@ from dataclasses import dataclass
 # - Adding/removing/renaming fields
 # - Changing dtype or shape conventions
 # - Changing whether the cache stores raw vs calibrated outputs
-# v1 = legacy pre-redesign caches (DetectionCache, CNNIdentityCache, etc.)
+# v1 = legacy pre-redesign caches (DetectionCache, etc.)
 # v2 = new pipeline (this redesign)
 # v3 = bumped for bg-sub: every prior bgsub cache was produced under unseeded
 #      random priming and keyed by a hash that ignored THRESHOLD_VALUE. Those
