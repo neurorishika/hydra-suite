@@ -16,6 +16,7 @@ from typing import Any, Callable
 
 import pandas as pd
 
+from hydra_suite.core.individual.identity import columns as C
 from hydra_suite.core.tracking.session import (
     SessionCallbacks,
     SessionResult,
@@ -34,7 +35,7 @@ def build_tracking_csv_header(
 ) -> list[str]:
     """Build the raw tracking CSV header used by the GUI path."""
     if save_confidence_metrics:
-        header = [
+        base_cols = [
             "TrackID",
             "TrajectoryID",
             "Index",
@@ -47,18 +48,9 @@ def build_tracking_csv_header(
             "AssignmentConfidence",
             "PositionUncertainty",
             "DetectionID",
-            "IdentityAssignedID",
-            "IdentityAssignedLabel",
-            "IdentityAssignedConfidence",
-            "IdentityPosteriorMargin",
-            "IdentityEntropy",
-            "IdentityCommitted",
-            "IdentityEvidenceSources",
-            "IdentityConflictFlag",
-            "IdentitySlotLockLabel",
         ]
     else:
-        header = [
+        base_cols = [
             "TrackID",
             "TrajectoryID",
             "Index",
@@ -68,16 +60,8 @@ def build_tracking_csv_header(
             "FrameID",
             "State",
             "DetectionID",
-            "IdentityAssignedID",
-            "IdentityAssignedLabel",
-            "IdentityAssignedConfidence",
-            "IdentityPosteriorMargin",
-            "IdentityEntropy",
-            "IdentityCommitted",
-            "IdentityEvidenceSources",
-            "IdentityConflictFlag",
-            "IdentitySlotLockLabel",
         ]
+    header = list(base_cols) + C.identity_realtime_columns()
     if str(identity_method).strip().lower() == "apriltags":
         header.extend(
             [

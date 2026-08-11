@@ -20,6 +20,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from hydra_suite.trackerkit.cli_config import legacy_detection_runtime_fields
 from hydra_suite.trackerkit.gui.orchestrators.config import _get_video_config_path
 from hydra_suite.trackerkit.gui.workers.session_worker import SessionWorker
+from hydra_suite.trackerkit.headless_tracking import build_tracking_csv_header
 from hydra_suite.trackerkit.session_plan import resolve_video_plan
 from hydra_suite.trackerkit.tracking_cache import (
     plan_tracking_cache,
@@ -1407,60 +1408,9 @@ class TrackingOrchestrator:
         if not self._panels.setup.csv_line.text():
             return
         save_confidence = self._panels.setup.check_save_confidence.isChecked()
-        if save_confidence:
-            hdr = [
-                "TrackID",
-                "TrajectoryID",
-                "Index",
-                "X",
-                "Y",
-                "Theta",
-                "FrameID",
-                "State",
-                "DetectionConfidence",
-                "AssignmentConfidence",
-                "PositionUncertainty",
-                "DetectionID",
-                "IdentityAssignedID",
-                "IdentityAssignedLabel",
-                "IdentityAssignedConfidence",
-                "IdentityPosteriorMargin",
-                "IdentityEntropy",
-                "IdentityCommitted",
-                "IdentityEvidenceSources",
-                "IdentityConflictFlag",
-                "IdentitySlotLockLabel",
-            ]
-        else:
-            hdr = [
-                "TrackID",
-                "TrajectoryID",
-                "Index",
-                "X",
-                "Y",
-                "Theta",
-                "FrameID",
-                "State",
-                "DetectionID",
-                "IdentityAssignedID",
-                "IdentityAssignedLabel",
-                "IdentityAssignedConfidence",
-                "IdentityPosteriorMargin",
-                "IdentityEntropy",
-                "IdentityCommitted",
-                "IdentityEvidenceSources",
-                "IdentityConflictFlag",
-                "IdentitySlotLockLabel",
-            ]
-        if self._mw._selected_identity_method() == "apriltags":
-            hdr.extend(
-                [
-                    "DetectedTagID",
-                    "DetectedTagLabel",
-                    "DetectedTagConf",
-                    "DetectedTagHamming",
-                ]
-            )
+        hdr = build_tracking_csv_header(
+            save_confidence, identity_method=self._mw._selected_identity_method()
+        )
         csv_path = self._panels.setup.csv_line.text()
         base, ext = os.path.splitext(csv_path)
         if backward_mode:

@@ -686,6 +686,14 @@ def test_start_tracking_on_video_restores_csv_and_worker_imports(
         tmp_path / "cache.npz"
     )
     assert captured["worker_kwargs"]["preview_mode"] is False
+    from hydra_suite.core.individual.identity import columns as C
+    from hydra_suite.trackerkit.headless_tracking import build_tracking_csv_header
+
+    assert captured["csv_header"] == build_tracking_csv_header(
+        False, identity_method=main_window._selected_identity_method()
+    )
+    assert C.REALTIME_LABEL in captured["csv_header"]
+    assert "IdentityAssignedLabel" not in captured["csv_header"]
 
 
 def test_start_preview_on_video_uses_tracking_worker_when_cache_is_valid(

@@ -1967,6 +1967,11 @@ class TrackingEngineCore:
                 entropy = float(assignment.entropy)
                 committed = 1 if assignment.committed else committed
 
+            # Positional order matches
+            # columns.identity_realtime_columns(): REALTIME_ID, REALTIME_LABEL,
+            # REALTIME_CONFIDENCE, REALTIME_MARGIN, REALTIME_ENTROPY,
+            # REALTIME_COMMITTED, EVIDENCE_SOURCES, EVIDENCE_CONFLICT_FLAG,
+            # REALTIME_SLOTLOCK.
             return [
                 catalog_index,
                 label,
