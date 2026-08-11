@@ -1725,6 +1725,12 @@ def run_fragment_solver(
         IDENTITY_TRANSITION_EPSILON      float  default 0.02
             Sticky-Markov transition leak used by the forward-backward
             smoother (same knob/semantics as the realtime decoder's).
+        IDENTITY_ENABLE_SMOOTHING        bool   default True
+            When True (default), cache evidence is forward-backward
+            smoothed via ``smooth_trajectory_posteriors`` before being used
+            for changepoint detection and assignment. When False, the
+            smoothing step is skipped entirely and the raw per-frame cache
+            evidence is used directly instead.
         IDENTITY_DISPLAY_THRESHOLD       float  default 0.6
             Minimum smoothed-posterior confidence to report a per-row
             IdentityFinalSmoothedLabel instead of "" (also used by the
@@ -1754,15 +1760,30 @@ def run_fragment_solver(
             raw_evidence = {}
 
         if raw_evidence:
-            transition_epsilon = float(params.get("IDENTITY_TRANSITION_EPSILON", 0.02))
-            smoothed_by_traj = {}
-            for traj_id, sequence in raw_evidence.items():
-                frame_ids = [f for f, _ in sequence]
-                log_probs_list = [lp for _, lp in sequence]
-                smoothed = smooth_trajectory_posteriors(
-                    log_probs_list, transition_epsilon
+            if bool(params.get("IDENTITY_ENABLE_SMOOTHING", True)):
+                transition_epsilon = float(
+                    params.get("IDENTITY_TRANSITION_EPSILON", 0.02)
                 )
-                smoothed_by_traj[traj_id] = list(zip(frame_ids, smoothed))
+                smoothed_by_traj = {}
+                for traj_id, sequence in raw_evidence.items():
+                    frame_ids = [f for f, _ in sequence]
+                    log_probs_list = [lp for _, lp in sequence]
+                    smoothed = smooth_trajectory_posteriors(
+                        log_probs_list, transition_epsilon
+                    )
+                    smoothed_by_traj[traj_id] = list(zip(frame_ids, smoothed))
+            else:
+                # Smoothing disabled: use the raw (already-normalized,
+                # per-frame) cache evidence directly -- no forward-backward
+                # chaining -- for changepoint detection and assignment.
+                log.info(
+                    "fragment_solver: IDENTITY_ENABLE_SMOOTHING is False; "
+                    "using unsmoothed per-frame evidence."
+                )
+                smoothed_by_traj = {
+                    traj_id: list(sequence)
+                    for traj_id, sequence in raw_evidence.items()
+                }
         else:
             log.info(
                 "fragment_solver: identity evidence cache provided but no "

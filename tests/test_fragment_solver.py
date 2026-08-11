@@ -359,6 +359,58 @@ def test_run_fragment_solver_pelt_enabled_splits_trajectory(tmp_path):
     assert (result["IdentityFinalLabel"] != "unknown").any()
 
 
+def test_run_fragment_solver_smoothing_disabled_still_produces_labels(tmp_path):
+    """Phase 6 Task 7: IDENTITY_ENABLE_SMOOTHING=False must skip the
+    forward-backward smoothing pass but still run PELT/assignment off the
+    raw (unsmoothed) cache evidence, producing Final labels -- and default
+    (True/absent) must preserve the pre-Task-7 behavior of always smoothing
+    when a cache is present.
+    """
+    n_frames = 60
+    swap_at = 30
+    catalog = _make_catalog()
+    df = _make_df_with_prob_cols(n_frames=n_frames, swap_at=swap_at)
+    df["DetectionID"] = df["FrameID"]
+    df = df.drop(columns=["CNN_test_blue_Prob", "CNN_test_green_Prob"])
+
+    def _lp(favor_blue: bool) -> np.ndarray:
+        probs = (
+            np.array([0.02, 0.96, 0.02]) if favor_blue else np.array([0.02, 0.02, 0.96])
+        )
+        return np.log(probs)
+
+    evidences_by_frame = {
+        f: [IdentityEvidence.from_cnn(f, f, "cnn_test", _lp(f < swap_at))]
+        for f in range(n_frames)
+    }
+
+    cache_unsmoothed = _write_cache(tmp_path, catalog.labels, evidences_by_frame)
+    result_unsmoothed = run_fragment_solver(
+        df,
+        catalog,
+        {"IDENTITY_ENABLE_SMOOTHING": False},
+        cache=cache_unsmoothed,
+    )
+    assert isinstance(result_unsmoothed, pd.DataFrame)
+    assert "IdentityFinalLabel" in result_unsmoothed.columns
+    assert (result_unsmoothed["IdentityFinalLabel"] != "unknown").any()
+
+    # Default (absent) and explicit True must behave identically to
+    # pre-Task-7 (always-smoothed) behavior.
+    cache_default = _write_cache(tmp_path, catalog.labels, evidences_by_frame)
+    result_default = run_fragment_solver(df, catalog, {}, cache=cache_default)
+    cache_true = _write_cache(tmp_path, catalog.labels, evidences_by_frame)
+    result_true = run_fragment_solver(
+        df, catalog, {"IDENTITY_ENABLE_SMOOTHING": True}, cache=cache_true
+    )
+    assert (
+        result_default["IdentityFinalSmoothedLabel"].tolist()
+        == result_true["IdentityFinalSmoothedLabel"].tolist()
+    )
+    assert "IdentityFinalLabel" in result_default.columns
+    assert (result_default["IdentityFinalLabel"] != "unknown").any()
+
+
 def test_split_trajectories_produces_two_ids_on_changepoint():
     """A 60-frame trajectory split at frame 29 becomes two trajectories."""
     df = _make_df_with_prob_cols(n_frames=60, swap_at=30)

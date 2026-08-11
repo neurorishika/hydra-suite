@@ -48,8 +48,12 @@ class PostHocIdentityConfig:
     # enabled`) -- post-hoc identity reads the evidence cache + final
     # trajectories and works regardless of the realtime setting.
     enabled: bool = True
+    # Forward-backward smoothing over the cached identity evidence
+    # (Phase 6 Task 7). Default True preserves the pre-Task-7 behavior of
+    # the fragment solver (which always smoothed when a cache was
+    # present); unchecking it makes the solver use raw per-frame evidence.
+    smoothing_enabled: bool = True
     # Reserved (Phase 6):
-    smoothing_enabled: bool = False
     changepoint_enabled: bool = False
     fragment_min_frames: int = 0
     ambiguity_margin: float = 0.0
@@ -137,6 +141,8 @@ class IdentityConfig:
                 cfg_get(cfg, "identity_gates_trajectory_structure", True)
             ),
             enabled=enable_postprocessing,
+            smoothing_enabled=bool(cfg_get(cfg, "enable_identity_smoothing", True)),
+            changepoint_enabled=bool(cfg_get(cfg, "enable_pelt_splitting", False)),
         )
         calibration_required = bool(cfg_get(cfg, "calibration_required", False))
         return cls(

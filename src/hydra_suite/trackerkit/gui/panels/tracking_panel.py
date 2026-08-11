@@ -536,15 +536,14 @@ class TrackingPanel(QWidget):
         )
         self.chk_enable_identity_in_tracking.setChecked(True)
         self.chk_enable_identity_in_tracking.setToolTip(
-            "Master switch for identity influence on tracking.\n"
-            "When OFF, identity has zero effect on tracking: no online decoder is built,\n"
-            "no Bayesian cost term is added, no identity-based rejoin or commit logic runs.\n"
-            "Identity classification still runs and labels are still written to the\n"
-            "*_with_individual.csv. Offline post-processing (e.g. the fragment solver)\n"
-            "is a fully independent stage: it reads the inference-time identity evidence\n"
-            "cache and the final trajectories directly, so it runs and produces identity\n"
-            "labels regardless of this setting. With this OFF, the live tracking pipeline\n"
-            "is purely geometric and identity is resolved entirely post-hoc."
+            "Master switch for realtime identity influence on tracking (this stage\n"
+            "only — while frames are being tracked, live).\n"
+            "When ON, the online Bayesian decoder's belief can nudge assignment cost,\n"
+            "gate identity-based rejoin, and drive commit/swap logic during tracking.\n"
+            "When OFF, identity has zero effect on tracking: no online decoder is\n"
+            "built, no Bayesian cost term is added, no identity-based rejoin or\n"
+            "commit logic runs — the live tracking pipeline is purely geometric.\n"
+            "Identity classification (CNN/AprilTag) still runs either way."
         )
         self.chk_enable_identity_in_tracking.toggled.connect(
             self._on_identity_in_tracking_toggled
