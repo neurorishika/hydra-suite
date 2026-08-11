@@ -1,14 +1,14 @@
 """Shared, Qt-free per-factor posterior to catalog-evidence builder.
 
-Identity Phase 3: this class lifts the structured ``(factor_index,
+Identity Phase 3: this class lifted the structured ``(factor_index,
 class_name) -> catalog_index`` mapping, per-factor calibration, and
-``IdentityEvidence`` construction out of
-``core.tracking.identity.evidence_emitter.IdentityEvidenceEmitter`` so both
-the live tracking-time emitter and the offline evidence stage share one exact
-implementation of the math. ``IdentityEvidenceEmitter`` delegates to this
-class; a parity test
-(``tests/identity/test_evidence_builder_parity.py``) proves the two agree
-exactly for identical inputs.
+``IdentityEvidence`` construction out of the (now-retired, Identity Phase 7)
+tracking-time ``IdentityEvidenceEmitter`` so both the live emitter and the
+inference-time ``IdentityEvidenceStage`` shared one exact implementation of
+the math. The emitter has since been deleted -- ``IdentityEvidenceStage`` is
+now the sole production consumer -- and a parity test
+(``tests/identity/test_evidence_builder_parity.py``) checks this builder's
+output against a committed golden snapshot of the emitter's former output.
 
 Unlike the emitter, ``EvidenceBuilder`` does not construct its own internal
 catalog: it is handed an already-built :class:`IdentityCatalog` (typically

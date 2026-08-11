@@ -1,5 +1,5 @@
-"""Characterization test: OLD emitter path vs. NEW stage+worker-remap path
-must produce bit-equal GLOBAL evidence.
+"""Characterization test: retired emitter+remap path vs. NEW stage+worker-remap
+path must produce bit-equal GLOBAL evidence.
 
 Identity Phase 3 final-fix wave, Issue #1 (CRITICAL). The old tracking-time
 ``IdentityEvidenceEmitter`` built CNN evidence on its OWN per-phase cartesian
@@ -20,13 +20,22 @@ CNN+AprilTag configs where the CNN doesn't define the whole identity domain,
 or multi-CNN-phase configs where each phase only covers its own labels --
 the resulting global ``log_probs`` were NOT bit-equal between the two paths.
 
-This test drives both producers on identical synthetic raw per-factor
-softmax and asserts bit-equal (``np.array_equal``) global ``log_probs`` for:
+This test drives the NEW producer on identical synthetic raw per-factor
+softmax and asserts bit-equal (``np.array_equal``) global ``log_probs``
+against a COMMITTED golden snapshot of the OLD emitter+remap path's output
+for:
   1. A CNN+AprilTag catalog (CNN is an auxiliary, non-identity-providing
      phase; AprilTag alone defines the identity domain -- so the CNN's own
      label set is entirely disjoint from the global catalog).
   2. A two-CNN-phase catalog (each phase's own label set is a proper subset
      of the union global catalog).
+
+Identity Phase 7 / Task 4: ``IdentityEvidenceEmitter`` has since been
+deleted. The "old" side of the comparison is now a committed golden
+(``tests/data/identity_evidence_goldens/phase_basis_parity_*.npz``), frozen
+while the emitter still existed via
+``tests/data/identity_evidence_goldens/generate_goldens.py`` (historical,
+non-runnable generation script).
 
 ``_remap_source_log_probs_to_catalog`` is a nested closure inside
 ``TrackingWorker`` (``core/tracking/worker.py``, not a module-level
@@ -38,10 +47,11 @@ closure that changes its semantics should be mirrored here deliberately.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
-from hydra_suite.core.individual.classification.cnn import ClassPrediction
 from hydra_suite.core.individual.identity.catalog import IdentityCatalog
 from hydra_suite.core.individual.identity.resolve import resolve_catalog_spec
 from hydra_suite.core.inference.identity_evidence_config import (
@@ -53,7 +63,8 @@ from hydra_suite.core.inference.result import (
     CNNFactorPrediction,
 )
 from hydra_suite.core.inference.runner import _build_identity_evidence_stage
-from hydra_suite.core.tracking.identity.evidence_emitter import IdentityEvidenceEmitter
+
+GOLDEN_DIR = Path(__file__).parent.parent / "data" / "identity_evidence_goldens"
 
 
 def _remap_verbatim(
@@ -88,45 +99,6 @@ def _remap_verbatim(
         remapped[identity_catalog.index_of(label)] += float(probs[src_idx])
     remapped /= np.clip(remapped.sum(), 1e-300, None)
     return np.log(np.clip(remapped, 1e-300, None))
-
-
-def _dummy_predictions(det_ids: list[int], n_factors: int) -> list[ClassPrediction]:
-    preds = []
-    for slot, _det_id in enumerate(det_ids):
-        preds.append(
-            ClassPrediction(
-                det_index=slot,
-                factor_names=tuple(f"factor_{i}" for i in range(n_factors)),
-                class_names=tuple(None for _ in range(n_factors)),
-                confidences=tuple(0.0 for _ in range(n_factors)),
-            )
-        )
-    return preds
-
-
-def _old_global_log_probs(
-    identity_catalog: IdentityCatalog,
-    source_name: str,
-    class_labels_per_factor: list[list[str]],
-    raw_probs: list[np.ndarray],
-    tmp_path,
-) -> np.ndarray:
-    """Build one detection's evidence via the OLD emitter path, remapped to
-    the global catalog -- the pre-Task-5 tracking-time behavior."""
-    emitter = IdentityEvidenceEmitter(
-        cache_path=tmp_path / f"{source_name}_old.npz",
-        source_name=source_name,
-        class_labels_per_factor=class_labels_per_factor,
-    )
-    evidences = emitter.build_frame_evidences(
-        frame_idx=0,
-        predictions=_dummy_predictions([0], len(class_labels_per_factor)),
-        posteriors=[raw_probs],
-    )
-    assert len(evidences) == 1
-    return _remap_verbatim(
-        evidences[0].log_probs, emitter.catalog_labels, identity_catalog
-    )
 
 
 def _new_global_log_probs(
@@ -165,7 +137,7 @@ def _new_global_log_probs(
     return _remap_verbatim(matching[0].log_probs, source_labels, identity_catalog)
 
 
-def test_cnn_apriltag_catalog_phase_basis_parity(tmp_path):
+def test_cnn_apriltag_catalog_phase_basis_parity():
     """CNN is an auxiliary (non-identity-providing) phase whose own label set
     is entirely disjoint from the global (AprilTag-only) catalog."""
     cnn_classifiers = [
@@ -197,13 +169,9 @@ def test_cnn_apriltag_catalog_phase_basis_parity(tmp_path):
 
     raw_probs = [np.array([0.7, 0.2, 0.1], dtype=np.float32)]
 
-    old = _old_global_log_probs(
-        identity_catalog,
-        "cnn_color",
-        [["white", "black", "brown"]],
-        raw_probs,
-        tmp_path,
-    )
+    golden = np.load(GOLDEN_DIR / "phase_basis_parity_cnn_apriltag.npz")
+    assert tuple(golden["catalog_labels"]) == identity_catalog.labels
+    old = golden["old_log_probs"]
     new = _new_global_log_probs(
         identity_catalog,
         run_config,
@@ -217,7 +185,7 @@ def test_cnn_apriltag_catalog_phase_basis_parity(tmp_path):
     ), f"CNN+AprilTag phase-basis divergence: old={old!r} new={new!r}"
 
 
-def test_two_cnn_phase_catalog_phase_basis_parity(tmp_path):
+def test_two_cnn_phase_catalog_phase_basis_parity():
     """Two CNN phases, each contributing its own disjoint subset of the
     union global catalog."""
     cnn_classifiers = [
@@ -252,9 +220,10 @@ def test_two_cnn_phase_catalog_phase_basis_parity(tmp_path):
     raw_probs_p = [np.array([0.6, 0.4], dtype=np.float32)]
     raw_probs_q = [np.array([0.5, 0.3, 0.2], dtype=np.float32)]
 
-    old_p = _old_global_log_probs(
-        identity_catalog, "cnn_p", [["p1", "p2"]], raw_probs_p, tmp_path
-    )
+    golden = np.load(GOLDEN_DIR / "phase_basis_parity_two_cnn_phase.npz")
+    assert tuple(golden["catalog_labels"]) == identity_catalog.labels
+
+    old_p = golden["old_log_probs_p"]
     new_p = _new_global_log_probs(
         identity_catalog, run_config, "cnn_p", [["p1", "p2"]], raw_probs_p
     )
@@ -262,9 +231,7 @@ def test_two_cnn_phase_catalog_phase_basis_parity(tmp_path):
         old_p, new_p
     ), f"phase cnn_p diverged: old={old_p!r} new={new_p!r}"
 
-    old_q = _old_global_log_probs(
-        identity_catalog, "cnn_q", [["q1", "q2", "q3"]], raw_probs_q, tmp_path
-    )
+    old_q = golden["old_log_probs_q"]
     new_q = _new_global_log_probs(
         identity_catalog, run_config, "cnn_q", [["q1", "q2", "q3"]], raw_probs_q
     )
