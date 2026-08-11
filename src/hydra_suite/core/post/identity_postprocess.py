@@ -11,6 +11,7 @@ fragment solver has assigned labels:
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from typing import Any
 
@@ -128,6 +129,89 @@ def parse_identity_key(identity_key: Any) -> dict[str, str]:
         if source and value:
             parsed[source] = value
     return parsed
+
+
+def format_identity_key(sources: dict[str, str]) -> str:
+    """Serialize a source-keyed identity dict into a ``UniqueIdentityKey`` token.
+
+    Inverse of :func:`parse_identity_key`. Tokens are sorted ascending by
+    source key and joined by ``_KEY_SEP``. Sources with an empty/missing
+    value are omitted. Returns ``""`` when there is nothing to serialize --
+    callers writing a dataframe column should map that to ``np.nan``.
+    """
+    parts = []
+    for source in sorted(sources):
+        value = _normalize_string(sources[source])
+        source_token = _normalize_string(source)
+        if not source_token or not value:
+            continue
+        parts.append(f"{source_token}{_PAIR_SEP}{value}")
+    return _KEY_SEP.join(parts)
+
+
+_CNN_CLASS_COLUMN_RE = re.compile(r"^CNN_(.+)_Class$")
+
+
+def _cnn_identity_sources_for_row(row: "pd.Series", cnn_class_columns: list) -> dict:
+    """Build ``cnn:<head>``/``cnn:<head>:<factor>`` tokens from CNN_* columns.
+
+    A column is a CNN class column iff it matches ``^CNN_(.+)_Class$``.
+    Within the captured middle: no further ``_`` -> 2-part head-only source
+    (``cnn:<head>``); otherwise split on the FIRST ``_`` -> 3-part factor
+    source (``cnn:<head>:<factor>``), matching the old serializer's
+    convention. ``CNN_<head>_Conf`` sibling columns are never class columns.
+    """
+    sources: dict[str, str] = {}
+    for col in cnn_class_columns:
+        match = _CNN_CLASS_COLUMN_RE.match(str(col))
+        if not match:
+            continue
+        value = _normalize_string(row.get(col))
+        if not value:
+            continue
+        middle = match.group(1)
+        if "_" in middle:
+            head, factor = middle.split("_", 1)
+            source = f"cnn:{head}:{factor}"
+        else:
+            source = f"cnn:{middle}"
+        sources[source] = value
+    return sources
+
+
+def derive_unique_identity_key_series(df: pd.DataFrame) -> pd.Series:
+    """Re-derive the ``UniqueIdentityKey`` column from per-row evidence columns.
+
+    Builds, per row, a ``source -> value`` dict from ``DetectedTagLabel``
+    (preferred) / ``DetectedTagID`` for the ``apriltag`` source and every
+    ``CNN_<head>_Class`` / ``CNN_<head>_<factor>_Class`` column for the CNN
+    sources, then serializes it with :func:`format_identity_key`. Rows with
+    no evidence get ``np.nan`` (never an empty string or a bare label).
+    """
+    if df is None or df.empty:
+        return pd.Series([], index=getattr(df, "index", None), dtype=object)
+
+    cnn_class_columns = [
+        col for col in df.columns if _CNN_CLASS_COLUMN_RE.match(str(col))
+    ]
+    has_tag_label = "DetectedTagLabel" in df.columns
+    has_tag_id = "DetectedTagID" in df.columns
+
+    def _row_key(row: "pd.Series") -> Any:
+        sources: dict[str, str] = {}
+        tag_value = ""
+        if has_tag_label:
+            tag_value = _normalize_string(row.get("DetectedTagLabel"))
+        if not tag_value and has_tag_id:
+            tag_value = _normalize_string(row.get("DetectedTagID"))
+        if tag_value:
+            sources["apriltag"] = tag_value
+        sources.update(_cnn_identity_sources_for_row(row, cnn_class_columns))
+        key = format_identity_key(sources)
+        return key if key else np.nan
+
+    result = df.apply(_row_key, axis=1)
+    return result.astype(object)
 
 
 def fill_identity_nans_with_consensus(df: pd.DataFrame) -> pd.DataFrame:

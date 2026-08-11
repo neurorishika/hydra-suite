@@ -293,4 +293,15 @@ def apply_identity_postprocessing_to_df(
         logger.exception(
             "Identity-aware post-processing failed; using unmodified rich dataframe."
         )
-    return _annotate_identity_summary_columns(with_pose_df)
+    with_pose_df = _annotate_identity_summary_columns(with_pose_df)
+    try:
+        from hydra_suite.core.post.identity_postprocess import (
+            derive_unique_identity_key_series,
+        )
+
+        with_pose_df[C.UNIQUE_IDENTITY_KEY] = derive_unique_identity_key_series(
+            with_pose_df
+        )
+    except Exception:
+        logger.exception("UniqueIdentityKey derivation failed; column left unset.")
+    return with_pose_df
