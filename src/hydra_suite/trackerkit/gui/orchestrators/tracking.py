@@ -20,6 +20,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from hydra_suite.trackerkit.cli_config import legacy_detection_runtime_fields
 from hydra_suite.trackerkit.gui.orchestrators.config import _get_video_config_path
 from hydra_suite.trackerkit.gui.workers.session_worker import SessionWorker
+from hydra_suite.trackerkit.headless_tracking import build_tracking_csv_header
 from hydra_suite.trackerkit.session_plan import resolve_video_plan
 from hydra_suite.trackerkit.tracking_cache import (
     plan_tracking_cache,
@@ -86,7 +87,6 @@ class TrackingOrchestrator:
             self._mw.current_detection_cache_path = None
             self._mw.current_individual_properties_cache_path = None
             self._mw.current_detected_properties_cache_path = None
-            self._mw.current_detected_cnn_cache_paths = {}
             self._mw.current_interpolated_roi_npz_path = None
             self._mw.current_interpolated_pose_csv_path = None
             self._mw.current_interpolated_pose_df = None
@@ -289,7 +289,6 @@ class TrackingOrchestrator:
         self._mw.current_detection_cache_path = None
         self._mw.current_individual_properties_cache_path = None
         self._mw.current_detected_properties_cache_path = None
-        self._mw.current_detected_cnn_cache_paths = {}
         self._mw.current_interpolated_roi_npz_path = None
         self._mw.current_interpolated_pose_csv_path = None
         self._mw.current_interpolated_pose_df = None
@@ -720,7 +719,6 @@ class TrackingOrchestrator:
         """Read export-relevant cache paths from tracking_worker and store them."""
         worker_props_path = ""
         worker_detected_props_path = ""
-        worker_detected_cnn_paths = {}
         if self._mw.tracking_worker is not None:
             worker_props_path = str(
                 getattr(
@@ -732,14 +730,6 @@ class TrackingOrchestrator:
                 getattr(self._mw.tracking_worker, "detected_properties_cache_path", "")
                 or ""
             ).strip()
-            worker_detected_cnn_paths = {
-                str(label): str(path).strip()
-                for label, path in (
-                    getattr(self._mw.tracking_worker, "detected_cnn_cache_paths", {})
-                    or {}
-                ).items()
-                if str(path).strip()
-            }
         if worker_props_path:
             self._mw.current_individual_properties_cache_path = worker_props_path
             logger.info(
@@ -751,12 +741,6 @@ class TrackingOrchestrator:
             logger.info(
                 "Using detected properties cache for export: %s",
                 worker_detected_props_path,
-            )
-        if worker_detected_cnn_paths:
-            self._mw.current_detected_cnn_cache_paths = worker_detected_cnn_paths
-            logger.info(
-                "Using detected CNN caches for export: %s",
-                worker_detected_cnn_paths,
             )
 
     def _accumulate_session_fps(self, fps_list, is_backward_mode):
@@ -856,9 +840,6 @@ class TrackingOrchestrator:
             ),
             "detected_properties_cache_path": getattr(
                 self._mw, "current_detected_properties_cache_path", None
-            ),
-            "detected_cnn_cache_paths": getattr(
-                self._mw, "current_detected_cnn_cache_paths", None
             ),
         }
         worker = SessionWorker(
@@ -1427,60 +1408,9 @@ class TrackingOrchestrator:
         if not self._panels.setup.csv_line.text():
             return
         save_confidence = self._panels.setup.check_save_confidence.isChecked()
-        if save_confidence:
-            hdr = [
-                "TrackID",
-                "TrajectoryID",
-                "Index",
-                "X",
-                "Y",
-                "Theta",
-                "FrameID",
-                "State",
-                "DetectionConfidence",
-                "AssignmentConfidence",
-                "PositionUncertainty",
-                "DetectionID",
-                "IdentityAssignedID",
-                "IdentityAssignedLabel",
-                "IdentityAssignedConfidence",
-                "IdentityPosteriorMargin",
-                "IdentityEntropy",
-                "IdentityCommitted",
-                "IdentityEvidenceSources",
-                "IdentityConflictFlag",
-                "IdentitySlotLockLabel",
-            ]
-        else:
-            hdr = [
-                "TrackID",
-                "TrajectoryID",
-                "Index",
-                "X",
-                "Y",
-                "Theta",
-                "FrameID",
-                "State",
-                "DetectionID",
-                "IdentityAssignedID",
-                "IdentityAssignedLabel",
-                "IdentityAssignedConfidence",
-                "IdentityPosteriorMargin",
-                "IdentityEntropy",
-                "IdentityCommitted",
-                "IdentityEvidenceSources",
-                "IdentityConflictFlag",
-                "IdentitySlotLockLabel",
-            ]
-        if self._mw._selected_identity_method() == "apriltags":
-            hdr.extend(
-                [
-                    "DetectedTagID",
-                    "DetectedTagLabel",
-                    "DetectedTagConf",
-                    "DetectedTagHamming",
-                ]
-            )
+        hdr = build_tracking_csv_header(
+            save_confidence, identity_method=self._mw._selected_identity_method()
+        )
         csv_path = self._panels.setup.csv_line.text()
         base, ext = os.path.splitext(csv_path)
         if backward_mode:

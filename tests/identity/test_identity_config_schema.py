@@ -94,3 +94,63 @@ def test_defaults_match_builder_defaults():
 def test_roundtrip():
     ic = IdentityConfig.from_engine_config({}, {}, cfg_get=_get)
     assert IdentityConfig.from_dict(ic.to_dict()) == ic
+
+
+def test_posthoc_enabled_true_by_default_independent_of_realtime():
+    # Task 6: the post-hoc master toggle defaults True and is NOT gated on
+    # `enable_identity_in_tracking` -- offline identity post-processing must
+    # keep working whether or not realtime identity influence is on.
+    ic = IdentityConfig.from_engine_config({}, {}, cfg_get=_get)
+    assert ic.posthoc.enabled is True
+
+    cfg_realtime_off = {"enable_identity_in_tracking": False}
+    ic_off = IdentityConfig.from_engine_config(cfg_realtime_off, {}, cfg_get=_get)
+    assert ic_off.realtime.enabled is False
+    assert ic_off.posthoc.enabled is True
+
+    cfg_realtime_on = {"enable_identity_in_tracking": True}
+    ic_on = IdentityConfig.from_engine_config(cfg_realtime_on, {}, cfg_get=_get)
+    assert ic_on.realtime.enabled is True
+
+
+def test_smoothing_enabled_defaults_true_and_maps_from_cfg_key():
+    # Phase 6 Task 7: smoothing defaults True (preserves the fragment
+    # solver's pre-Task-7 always-smooth behavior) and maps from the
+    # `enable_identity_smoothing` cfg key, independent of the realtime flag.
+    ic = IdentityConfig.from_engine_config({}, {}, cfg_get=_get)
+    assert ic.posthoc.smoothing_enabled is True
+
+    cfg_off = {"enable_identity_smoothing": False}
+    ic_off = IdentityConfig.from_engine_config(cfg_off, {}, cfg_get=_get)
+    assert ic_off.posthoc.smoothing_enabled is False
+
+    cfg_realtime_off = {
+        "enable_identity_in_tracking": False,
+        "enable_identity_smoothing": False,
+    }
+    ic_realtime_off = IdentityConfig.from_engine_config(
+        cfg_realtime_off, {}, cfg_get=_get
+    )
+    assert ic_realtime_off.realtime.enabled is False
+    assert ic_realtime_off.posthoc.smoothing_enabled is False
+    assert ic_realtime_off.posthoc.enabled is True
+
+
+def test_changepoint_enabled_maps_from_pelt_cfg_key():
+    ic = IdentityConfig.from_engine_config({}, {}, cfg_get=_get)
+    assert ic.posthoc.changepoint_enabled is False
+
+    ic_on = IdentityConfig.from_engine_config(
+        {"enable_pelt_splitting": True}, {}, cfg_get=_get
+    )
+    assert ic_on.posthoc.changepoint_enabled is True
+    assert ic_on.posthoc.enabled is True
+
+
+def test_posthoc_enabled_tracks_enable_postprocessing_only():
+    # posthoc.enabled mirrors `enable_postprocessing` -- the one flag that
+    # governs whether offline post-processing runs at all -- not any
+    # realtime-identity flag.
+    cfg = {"enable_postprocessing": False}
+    ic = IdentityConfig.from_engine_config(cfg, {}, cfg_get=_get)
+    assert ic.posthoc.enabled is False

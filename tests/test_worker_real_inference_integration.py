@@ -305,7 +305,6 @@ def test_backward_mode_refuses_without_valid_caches(tmp_path):
         worker_obj._stop_requested = False
         worker_obj.frame_prefetcher = None
         worker_obj._density_regions = []
-        worker_obj._evidence_emitters = []
         worker_obj.kf_manager = None
 
         # Verify batch pass is never called when backward caches are missing

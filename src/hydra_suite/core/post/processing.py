@@ -16,6 +16,8 @@ import numpy as np
 import pandas as pd
 from scipy.interpolate import CubicSpline, UnivariateSpline, interp1d
 
+from hydra_suite.core.individual.identity import columns as C
+
 # Import Numba from gpu_utils (handles availability detection).
 # Fallback keeps post-processing importable in lightweight test environments.
 try:
@@ -399,10 +401,10 @@ def _enrich_candidates_with_identity(
         bwd = backward_dfs[bi]
         identity_agreeing = 0
         if (
-            "IdentityCommitted" in fwd.columns
-            and "IdentityAssignedLabel" in fwd.columns
-            and "IdentityCommitted" in bwd.columns
-            and "IdentityAssignedLabel" in bwd.columns
+            C.REALTIME_COMMITTED in fwd.columns
+            and C.REALTIME_LABEL in fwd.columns
+            and C.REALTIME_COMMITTED in bwd.columns
+            and C.REALTIME_LABEL in bwd.columns
         ):
             fwd_map = {f: i for i, f in enumerate(fwd["FrameID"].values)}
             bwd_map = {f: i for i, f in enumerate(bwd["FrameID"].values)}
@@ -410,10 +412,14 @@ def _enrich_candidates_with_identity(
             fwd_y = fwd["Y"].values
             bwd_x = bwd["X"].values
             bwd_y = bwd["Y"].values
-            fwd_c = fwd["IdentityCommitted"].values
-            bwd_c = bwd["IdentityCommitted"].values
-            fwd_lbl = fwd["IdentityAssignedLabel"].values
-            bwd_lbl = bwd["IdentityAssignedLabel"].values
+            # "Committed" means the online decoder's IdentityRealtimeCommitted
+            # flag is truthy -- the IdentityFinal* family does not exist yet
+            # at merge time (it is written later, in the rich-export stage),
+            # so this mirrors the old realtime-only IdentityCommitted==1 flag.
+            fwd_c = (fwd[C.REALTIME_COMMITTED] == 1).values
+            bwd_c = (bwd[C.REALTIME_COMMITTED] == 1).values
+            fwd_lbl = fwd[C.REALTIME_LABEL].values
+            bwd_lbl = bwd[C.REALTIME_LABEL].values
             for f, fi_k in fwd_map.items():
                 bi_k = bwd_map.get(f)
                 if bi_k is None:
@@ -424,7 +430,7 @@ def _enrich_candidates_with_identity(
                 dy = fwd_y[fi_k] - bwd_y[bi_k]
                 if np.sqrt(dx * dx + dy * dy) > agreement_distance:
                     continue
-                if fwd_c[fi_k] != 1 or bwd_c[bi_k] != 1:
+                if not fwd_c[fi_k] or not bwd_c[bi_k]:
                     continue
                 l1 = str(fwd_lbl[fi_k] or "")
                 l2 = str(bwd_lbl[bi_k] or "")
@@ -1308,11 +1314,10 @@ def resolve_trajectories(
 # Identity conflict arbitration
 # ---------------------------------------------------------------------------
 
-_IDENTITY_LABEL_COL = "IdentityAssignedLabel"
-_IDENTITY_ID_COL = "IdentityAssignedID"
-_IDENTITY_CONF_COL = "IdentityAssignedConfidence"
-_IDENTITY_SLOT_COL = "IdentitySlotLockLabel"
-_IDENTITY_CONFLICT_COL = "IdentityConflictResolved"
+_IDENTITY_LABEL_COL = C.REALTIME_LABEL
+_IDENTITY_ID_COL = C.REALTIME_ID
+_IDENTITY_CONF_COL = C.REALTIME_CONFIDENCE
+_IDENTITY_CONFLICT_COL = C.FINAL_CONFLICT_RESOLVED
 
 
 _CLAIM_TAG_WEIGHT = 1.5
@@ -1324,7 +1329,7 @@ def _claim_features(df: pd.DataFrame, modal_label: str) -> tuple:
     Components (in declaration order):
     - tag_votes: sum of AprilTag agreements
     - agreement: fraction of labelled rows whose label matches ``modal_label``
-    - mean_conf: mean of ``IdentityAssignedConfidence`` over labelled rows
+    - mean_conf: mean of ``IdentityFinalConfidence`` over labelled rows
     - frame_count: number of rows in the trajectory
     - is_forward: 1 when any row was contributed by the forward pass
     """
@@ -1389,16 +1394,92 @@ def _claim_score(
 
 
 def _strip_identity_columns(df: pd.DataFrame) -> pd.DataFrame:
+    # This arbitration runs at merge time, before the IdentityFinal* family
+    # exists (it is written later, in the rich-export stage). It clears the
+    # realtime label/id/confidence for the losing claimant and sets the
+    # additive IdentityFinalConflictResolved marker (see _IDENTITY_CONFLICT_COL
+    # above) so the downstream Final-family writer knows this row lost the
+    # merge-time identity arbitration. SlotLock (C.REALTIME_SLOTLOCK) is left
+    # untouched, mirroring pre-Phase-6 behavior.
     if _IDENTITY_LABEL_COL in df.columns:
         df[_IDENTITY_LABEL_COL] = np.nan
     if _IDENTITY_ID_COL in df.columns:
         df[_IDENTITY_ID_COL] = np.nan
     if _IDENTITY_CONF_COL in df.columns:
         df[_IDENTITY_CONF_COL] = 0.0
-    if _IDENTITY_SLOT_COL in df.columns:
-        df[_IDENTITY_SLOT_COL] = np.nan
     df[_IDENTITY_CONFLICT_COL] = True
     return df
+
+
+# Tiny additive bonus for forward-pass claims so exact-score ties resolve
+# deterministically (mirrors the old lexicographic (score, is_forward) tiebreak)
+# without perturbing any real score separation seen in practice — the smallest
+# separation between distinct claim scores in the current scoring scheme is
+# many orders of magnitude larger than this.
+_FORWARD_TIEBREAK_EPS = 1e-9
+
+
+def _resolve_overlap_group_losers(candidates: list[tuple]) -> set[int]:
+    """Resolve one label's claimants via per-label PAIRWISE-OVERLAP dominance:
+    a claimant loses the label iff it shares >=1 frame with a
+    strictly-higher-scoring claimant of the *same* label. Claimants that
+    never overlap any higher scorer both/all keep the label.
+
+    This deliberately does NOT route through
+    ``substrate.solve_unique_assignment``. That solver assumes every slot
+    handed to it is part of ONE simultaneous-visibility problem and enforces
+    injectivity across the WHOLE slot set it is given; grouping this site's
+    claimants by transitive (union-find) temporal-overlap and solving each
+    component as one Hungarian problem is a categorically different — and
+    WRONG — uniqueness problem here for two reasons:
+      1. A transitive component can contain claimants that never actually
+         overlap each other (A-B overlap, B-C overlap, A-C disjoint), yet a
+         whole-component Hungarian solve would still force them to compete,
+         wrongly denying A and C's legitimate right to share the label.
+      2. Per-slot "known vs. dummy" probabilities only carry solver-relevant
+         information when calibrated against a fixed absolute reference
+         (e.g. a real posterior). This site's claim scores are a bespoke,
+         unbounded, relative ranking (agreement x conf x length + tag
+         bonus); any group-size-independent transform of them either loses
+         monotonic separation or (as happened here) can put EVERY slot's
+         probability under the solver's implicit "dummy beats me" line for
+         n>=3, stripping every claimant in the group at once even when most
+         of them never overlap each other at all.
+    The correct uniqueness relation for this site is pairwise ("does THIS
+    claimant overlap a stronger claimant of the SAME label"), not "which
+    subset of a whole transitive component is mutually consistent" — so it
+    is solved directly and cheaply without the Hungarian machinery. The
+    offline fragment solver (``offline.py::_iterative_assign``) has the
+    opposite shape — its slots ARE genuinely one simultaneous-visibility
+    problem across a temporal-overlap component (a fragment can legitimately
+    contend for any of K labels, not just one already-claimed label) — so it
+    correctly uses the shared solver.
+
+    ``candidates``: list of ``(result_dfs_index, label, frames, score)``.
+    """
+    n = len(candidates)
+    losers: set[int] = set()
+    for i in range(n):
+        idx_i, label, frames_i, score_i = candidates[i]
+        if idx_i in losers:
+            continue
+        for j in range(n):
+            if i == j:
+                continue
+            idx_j, _, frames_j, score_j = candidates[j]
+            if score_j <= score_i:
+                continue
+            if frames_i.isdisjoint(frames_j):
+                continue
+            losers.add(idx_i)
+            logger.debug(
+                "Identity conflict on label '%s': trajectory index %d wins over %d",
+                label,
+                idx_j,
+                idx_i,
+            )
+            break
+    return losers
 
 
 def resolve_simultaneous_identity_conflicts(
@@ -1409,16 +1490,22 @@ def resolve_simultaneous_identity_conflicts(
 
     Enforces the physical constraint that a given identity can belong to at most
     one trajectory at any point in time.  For each pair of trajectories with the
-    same majority ``IdentityAssignedLabel`` and at least one shared frame, the
+    same majority ``IdentityFinalLabel`` and at least one shared frame, the
     lower-scoring one has its identity columns cleared and
-    ``IdentityConflictResolved`` set to ``True``.
+    ``IdentityFinalConflictResolved`` set to ``True`` — via a per-label
+    PAIRWISE-OVERLAP dominance rule (see ``_resolve_overlap_group_losers`` for
+    why this site does not route through the shared
+    ``substrate.solve_unique_assignment`` solver: it is a differently-shaped
+    uniqueness problem than the offline fragment solver's).
 
     Scoring follows the same shape as the iterative fragment solver: a unary
     quality term ``agreement × mean_conf × length_factor`` plus an additive
-    AprilTag bonus, with the forward-pass flag as the lex tiebreaker. A long
-    track with consistent labels and a clear margin therefore wins over a
-    short, jittery, or low-confidence one — the loser is the one that gets
-    cleared to Unknown.
+    AprilTag bonus, with the forward-pass flag as a tiebreak. A long track
+    with consistent labels and a clear margin therefore wins over a short,
+    jittery, or low-confidence one — the loser is the one that gets cleared
+    to Unknown. Trajectories with the same label but NO shared frame never
+    compete, however many other same-label trajectories separate them in
+    time — each keeps the label independently.
     """
     if not result_dfs:
         return result_dfs
@@ -1446,7 +1533,8 @@ def resolve_simultaneous_identity_conflicts(
     for idx, label, frames, features in labeled:
         score = _claim_score(features, max_frame_count, max_tag_votes)
         is_forward = features[4]
-        scored.append((idx, label, frames, (score, is_forward)))
+        score_adj = score + (_FORWARD_TIEBREAK_EPS if is_forward else 0.0)
+        scored.append((idx, label, frames, score_adj))
 
     by_label: dict[str, list] = {}
     for item in scored:
@@ -1456,22 +1544,7 @@ def resolve_simultaneous_identity_conflicts(
     for candidates in by_label.values():
         if len(candidates) < 2:
             continue
-        for i in range(len(candidates)):
-            for j in range(i + 1, len(candidates)):
-                idx_a, _, frames_a, score_a = candidates[i]
-                idx_b, _, frames_b, score_b = candidates[j]
-                if idx_a in loser_indices or idx_b in loser_indices:
-                    continue
-                if frames_a.isdisjoint(frames_b):
-                    continue
-                loser = idx_b if score_a >= score_b else idx_a
-                loser_indices.add(loser)
-                logger.debug(
-                    "Identity conflict on label '%s': trajectory index %d wins over %d",
-                    candidates[i][1],
-                    idx_a if score_a >= score_b else idx_b,
-                    loser,
-                )
+        loser_indices.update(_resolve_overlap_group_losers(candidates))
 
     for idx in loser_indices:
         result_dfs[idx] = _strip_identity_columns(result_dfs[idx].copy())
@@ -1479,21 +1552,43 @@ def resolve_simultaneous_identity_conflicts(
     return result_dfs
 
 
-def _committed_identity_disagrees(r1: dict, r2: dict) -> bool:
-    """True when both rows carry committed, non-empty identity labels that differ."""
-    if r1.get("IdentityCommitted") != 1 or r2.get("IdentityCommitted") != 1:
+def _row_realtime_committed(row: dict) -> bool:
+    """True when a row's ``IdentityRealtimeCommitted`` flag is truthy (==1).
+
+    Merge runs before the IdentityFinal* family exists (it is written later,
+    in the rich-export stage), so "committed" here reads the online decoder's
+    Realtime family -- mirroring the old realtime-only IdentityCommitted==1
+    flag.
+    """
+    committed = row.get(C.REALTIME_COMMITTED)
+    if committed is None:
         return False
-    l1 = r1.get("IdentityAssignedLabel") or ""
-    l2 = r2.get("IdentityAssignedLabel") or ""
+    try:
+        if pd.isna(committed):
+            return False
+    except (TypeError, ValueError):
+        pass
+    try:
+        return committed == 1
+    except (TypeError, ValueError):
+        return False
+
+
+def _committed_identity_disagrees(r1: dict, r2: dict) -> bool:
+    """True when both rows carry committed, non-empty Realtime identity labels that differ."""
+    if not _row_realtime_committed(r1) or not _row_realtime_committed(r2):
+        return False
+    l1 = r1.get(C.REALTIME_LABEL) or ""
+    l2 = r2.get(C.REALTIME_LABEL) or ""
     return bool(l1) and bool(l2) and l1 != l2
 
 
 def _committed_identity_agrees(r1: dict, r2: dict) -> bool:
-    """True when both rows carry committed, non-empty identity labels that are equal."""
-    if r1.get("IdentityCommitted") != 1 or r2.get("IdentityCommitted") != 1:
+    """True when both rows carry committed, non-empty Realtime identity labels that are equal."""
+    if not _row_realtime_committed(r1) or not _row_realtime_committed(r2):
         return False
-    l1 = r1.get("IdentityAssignedLabel") or ""
-    l2 = r2.get("IdentityAssignedLabel") or ""
+    l1 = r1.get(C.REALTIME_LABEL) or ""
+    l2 = r2.get(C.REALTIME_LABEL) or ""
     return bool(l1) and bool(l2) and l1 == l2
 
 
@@ -2588,31 +2683,31 @@ def _merge_overlapping_agreeing_trajectories(
     return trajectories
 
 
+def _committed_rows(df: pd.DataFrame) -> pd.DataFrame | None:
+    """Rows with a truthy ``IdentityRealtimeCommitted`` flag (merge runs before
+    the IdentityFinal* family exists, so committed status reads the online
+    decoder's Realtime family)."""
+    if C.REALTIME_COMMITTED not in df.columns or C.REALTIME_LABEL not in df.columns:
+        return None
+    committed_mask = df[C.REALTIME_COMMITTED] == 1
+    return df[committed_mask]
+
+
 def _last_committed_label(df: pd.DataFrame) -> str:
-    """Return the most recent committed identity label in df, or empty string."""
-    if (
-        "IdentityCommitted" not in df.columns
-        or "IdentityAssignedLabel" not in df.columns
-    ):
+    """Return the most recent committed Realtime identity label in df, or empty string."""
+    committed = _committed_rows(df)
+    if committed is None or committed.empty:
         return ""
-    committed = df[df["IdentityCommitted"] == 1]
-    if committed.empty:
-        return ""
-    lbl = committed["IdentityAssignedLabel"].iloc[-1]
+    lbl = committed[C.REALTIME_LABEL].iloc[-1]
     return str(lbl) if lbl and not pd.isna(lbl) else ""
 
 
 def _first_committed_label(df: pd.DataFrame) -> str:
-    """Return the earliest committed identity label in df, or empty string."""
-    if (
-        "IdentityCommitted" not in df.columns
-        or "IdentityAssignedLabel" not in df.columns
-    ):
+    """Return the earliest committed Realtime identity label in df, or empty string."""
+    committed = _committed_rows(df)
+    if committed is None or committed.empty:
         return ""
-    committed = df[df["IdentityCommitted"] == 1]
-    if committed.empty:
-        return ""
-    lbl = committed["IdentityAssignedLabel"].iloc[0]
+    lbl = committed[C.REALTIME_LABEL].iloc[0]
     return str(lbl) if lbl and not pd.isna(lbl) else ""
 
 

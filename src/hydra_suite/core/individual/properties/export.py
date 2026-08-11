@@ -8,21 +8,26 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 import numpy as np
 import pandas as pd
 
-# DetectedPropertiesCache, IndividualPropertiesCache, and CNNIdentityCache are
-# legacy combined-schema caches that aggregate detection + head-tail + pose +
-# CNN results in a single .npz. They are NOT structurally interchangeable with
-# the per-type CacheHandle objects in core/inference/cache/store.py — the
-# legacy classes accept ``(cache_path, mode="r"|"w")`` constructors and expose
-# their own ``read_*``/``save_*``/``is_compatible`` API. A previous attempt
+from .cache import IndividualPropertiesCache
+from .detected_cache import DetectedPropertiesCache
+
+# DetectedPropertiesCache and IndividualPropertiesCache are legacy
+# combined-schema caches that aggregate detection + head-tail + pose results
+# in a single .npz. They are NOT structurally interchangeable with the
+# per-type CacheHandle objects in core/inference/cache/store.py — the legacy
+# classes accept ``(cache_path, mode="r"|"w")`` constructors and expose their
+# own ``read_*``/``save_*``/``is_compatible`` API. A previous attempt
 # (Task 17c) aliased the new DetectionCacheHandle to DetectedPropertiesCache,
 # which broke the rich-export path with ``TypeError: ... unexpected keyword
 # argument 'mode'`` at runtime. Until the rich-export path is rewired to read
 # from the new per-type caches directly, this module stays on the legacy
 # classes.
-from hydra_suite.core.individual.classification.cnn import CNNIdentityCache
+#
+# NOTE (Identity Phase 7): the V3 CNN-identity cache this module used to read
+# was orphaned -- nothing in src/ ever wrote that .npz -- so the cache class
+# was deleted (Task 1) and its dead reader function + call-path plumbing were
+# removed (Task 2).
 
-from .cache import IndividualPropertiesCache
-from .detected_cache import DetectedPropertiesCache
 
 POSE_SUMMARY_COLUMNS = [
     "PoseMeanConf",
@@ -35,7 +40,8 @@ DETECTED_HEADING_COLUMNS = [
     "HeadingResolved",  # final disambiguated heading angle after head-tail
     "HeadingMethod",  # source used: "headtail", "pose", "velocity", "default"
     "HeadingIsDirected",  # True when head-vs-tail direction was successfully resolved
-    "HeadTailAngleRad",  # angle from head-tail classifier (may differ from HeadingResolved)
+    # angle from head-tail classifier (may differ from HeadingResolved)
+    "HeadTailAngleRad",
     "HeadTailClassifierConf",  # raw confidence from the head-tail model
 ]
 
@@ -642,62 +648,6 @@ def augment_trajectories_with_detected_properties_cache(
     return augment_trajectories_with_detected_properties_df(trajectories_df, lookup)
 
 
-def build_detected_cnn_lookup_dataframe(
-    cache: CNNIdentityCache,
-    label: str = "cnn_identity",
-) -> pd.DataFrame:
-    """Flatten detected-frame CNN predictions into frame+detection keyed rows.
-
-    When the cache stores per-class probability vectors (v3 schema), one
-    ``CNN_{label}_{class}_Prob`` column is added per class per factor so that
-    the full output distribution is available in the exported CSV.
-    """
-    specs = build_cnn_output_columns(label, cache.factor_names)
-    output_cols = [
-        col for _factor, class_col, conf_col in specs for col in (class_col, conf_col)
-    ]
-    prob_specs = build_cnn_prob_columns(
-        label, cache.factor_names, cache.class_names_per_factor
-    )
-    prob_cols = [col for _fi, _ci, col in prob_specs]
-
-    rows: List[Dict[str, Any]] = []
-    for frame_idx in cache.get_cached_frames():
-        preds = cache.load(int(frame_idx))
-        probs_list = cache.load_probs(int(frame_idx)) if prob_specs else None
-        for pred_idx, pred in enumerate(preds):
-            row: Dict[str, Any] = {
-                "_cnn_frame_id": int(frame_idx),
-                "_cnn_detection_id": int(frame_idx) * 10000 + int(pred.det_index),
-            }
-            row.update(
-                flatten_cnn_prediction_row(
-                    label,
-                    pred.factor_names,
-                    pred.class_names,
-                    pred.confidences,
-                )
-            )
-            if prob_specs:
-                per_det_probs = (
-                    probs_list[pred_idx]
-                    if probs_list is not None and pred_idx < len(probs_list)
-                    else None
-                )
-                for factor_idx, class_idx, col in prob_specs:
-                    val: float = np.nan
-                    if per_det_probs is not None and factor_idx < len(per_det_probs):
-                        fprobs = per_det_probs[factor_idx]
-                        if fprobs is not None and class_idx < len(fprobs):
-                            val = float(fprobs[class_idx])
-                    row[col] = val
-            rows.append(row)
-    return pd.DataFrame(
-        rows,
-        columns=["_cnn_frame_id", "_cnn_detection_id", *output_cols, *prob_cols],
-    )
-
-
 def augment_trajectories_with_detected_cnn_df(
     trajectories_df: pd.DataFrame,
     detected_cnn_df: pd.DataFrame,
@@ -756,19 +706,6 @@ def augment_trajectories_with_detected_cnn_df(
         errors="ignore",
     )
     return _ensure_interp_columns(merged, output_cols)
-
-
-def augment_trajectories_with_detected_cnn_cache(
-    trajectories_df: pd.DataFrame,
-    cache_path: str,
-    label: str = "cnn_identity",
-) -> pd.DataFrame:
-    """Load detected-frame CNN cache and merge class/confidence columns."""
-    cache = CNNIdentityCache(cache_path)
-    lookup = build_detected_cnn_lookup_dataframe(cache, label=label)
-    return augment_trajectories_with_detected_cnn_df(
-        trajectories_df, lookup, label=label
-    )
 
 
 # ---------------------------------------------------------------------------

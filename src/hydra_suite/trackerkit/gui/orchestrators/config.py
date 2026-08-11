@@ -871,6 +871,9 @@ class ConfigOrchestrator:
         self._panels.postprocess.chk_enable_pelt_splitting.setChecked(
             bool(get_cfg("enable_pelt_splitting", default=False))
         )
+        self._panels.postprocess.chk_enable_identity_smoothing.setChecked(
+            bool(get_cfg("enable_identity_smoothing", default=True))
+        )
         self._panels.postprocess.spin_heading_flip_max_burst.setValue(
             int(get_cfg("heading_flip_max_burst", default=5))
         )
@@ -1733,6 +1736,7 @@ class ConfigOrchestrator:
                 "pelt_model": self._panels.postprocess.cmb_pelt_model.currentText(),
                 "enable_fragment_scoring": self._panels.postprocess.chk_enable_fragment_scoring.isChecked(),
                 "enable_pelt_splitting": self._panels.postprocess.chk_enable_pelt_splitting.isChecked(),
+                "enable_identity_smoothing": self._panels.postprocess.chk_enable_identity_smoothing.isChecked(),
                 "heading_flip_max_burst": self._panels.postprocess.spin_heading_flip_max_burst.value(),
                 "cleanup_temp_files": self._panels.postprocess.chk_cleanup_temp_files.isChecked(),
                 # === TRAJECTORY MERGING (Conservative Strategy) ===

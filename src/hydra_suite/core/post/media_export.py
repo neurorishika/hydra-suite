@@ -17,6 +17,7 @@ import pandas as pd
 from hydra_suite.core.individual.dataset.oriented_video import (
     OrientedTrackVideoExporter,
 )
+from hydra_suite.core.individual.identity import columns as C
 from hydra_suite.core.individual.properties.export import build_pose_keypoint_labels
 from hydra_suite.utils.pose_visualization import (
     is_renderable_pose_keypoint,
@@ -191,10 +192,9 @@ def build_video_track_label_array(trajectories_df):
     if trajectories_df is None or len(trajectories_df) == 0:
         return np.asarray([], dtype=object)
     identity_columns = [
-        "UniqueIdentityKey",
-        "IdentityAssignedLabel",
-        "IdentityOfflineLabel",
-        "IdentitySmoothedLabel",
+        C.UNIQUE_IDENTITY_KEY,
+        C.FINAL_LABEL,
+        C.FINAL_SMOOTHED_LABEL,
     ]
     track_ids = trajectories_df["TrajectoryID"].tolist()
     labels = []
@@ -218,10 +218,9 @@ def build_video_track_color_key_array(trajectories_df):
     if trajectories_df is None or len(trajectories_df) == 0:
         return np.asarray([], dtype=object)
     identity_columns = [
-        "UniqueIdentityKey",
-        "IdentityAssignedLabel",
-        "IdentityOfflineLabel",
-        "IdentitySmoothedLabel",
+        C.UNIQUE_IDENTITY_KEY,
+        C.FINAL_LABEL,
+        C.FINAL_SMOOTHED_LABEL,
     ]
     track_ids = trajectories_df["TrajectoryID"].tolist()
     color_keys = []

@@ -4,8 +4,8 @@ Single source of truth for identity state. ``build_engine_params`` derives the
 flat ``IDENTITY_*`` engine params from this object (Phase 1); later phases
 convert consumers to read it directly. Fields marked "reserved" are persisted
 for round-trip stability but are not emitted into engine params until the phase
-that wires them (calibration → Phase 2, robustness → Phase 3, smoothing /
-changepoint / independent post-hoc toggle → Phases 5/6).
+that wires them (calibration → Phase 2, robustness → Phase 3, independent
+post-hoc toggle → Phase 5, smoothing / changepoint → Phase 6).
 """
 
 from __future__ import annotations
@@ -42,9 +42,18 @@ class PostHocIdentityConfig:
     fragment_solver_enabled: bool = False
     disagree_min_run: int = 5
     gates_trajectory_structure: bool = True
-    # Reserved (Phases 5/6):
-    enabled: bool = False  # independent of realtime; wired in Phase 6
-    smoothing_enabled: bool = False
+    # Independent post-hoc master gate (Phase 5 Task 6): whether offline
+    # identity post-processing runs at all. Mirrors `enable_postprocessing`
+    # and is deliberately NOT ANDed with realtime (`RealtimeIdentityConfig.
+    # enabled`) -- post-hoc identity reads the evidence cache + final
+    # trajectories and works regardless of the realtime setting.
+    enabled: bool = True
+    # Forward-backward smoothing over the cached identity evidence
+    # (Phase 6 Task 7). Default True preserves the pre-Task-7 behavior of
+    # the fragment solver (which always smoothed when a cache was
+    # present); unchecking it makes the solver use raw per-frame evidence.
+    smoothing_enabled: bool = True
+    # Reserved (Phase 6):
     changepoint_enabled: bool = False
     fragment_min_frames: int = 0
     ambiguity_margin: float = 0.0
@@ -131,6 +140,9 @@ class IdentityConfig:
             gates_trajectory_structure=bool(
                 cfg_get(cfg, "identity_gates_trajectory_structure", True)
             ),
+            enabled=enable_postprocessing,
+            smoothing_enabled=bool(cfg_get(cfg, "enable_identity_smoothing", True)),
+            changepoint_enabled=bool(cfg_get(cfg, "enable_pelt_splitting", False)),
         )
         calibration_required = bool(cfg_get(cfg, "calibration_required", False))
         return cls(

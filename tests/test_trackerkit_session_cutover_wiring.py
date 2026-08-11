@@ -38,7 +38,6 @@ def _orchestrator(tmp_path):
         current_detection_cache_path=str(tmp_path / "cache.npz"),
         current_individual_properties_cache_path=None,
         current_detected_properties_cache_path=None,
-        current_detected_cnn_cache_paths={},
         get_parameters_dict=lambda: {"FPS": 30.0},
     )
     orch = TrackingOrchestrator(main_window=mw, config=object(), panels=panels)
@@ -141,7 +140,6 @@ def _populate_stop_tracking_attrs(mw, *, session_worker) -> None:
     mw.current_detection_cache_path = "cache.npz"
     mw.current_individual_properties_cache_path = "individual_props.npz"
     mw.current_detected_properties_cache_path = "detected_props.npz"
-    mw.current_detected_cnn_cache_paths = {}
     mw.current_interpolated_roi_npz_path = None
     mw.current_interpolated_pose_csv_path = None
     mw.current_interpolated_pose_df = None

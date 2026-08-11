@@ -335,7 +335,6 @@ class MainWindow(QMainWindow):
         self.current_detection_cache_path = None
         self.current_individual_properties_cache_path = None
         self.current_detected_properties_cache_path = None
-        self.current_detected_cnn_cache_paths = {}
         self.current_interpolated_roi_npz_path = None
         self.current_interpolated_pose_csv_path = None
         self.current_interpolated_pose_df = None

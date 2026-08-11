@@ -36,6 +36,7 @@ from typing import Any, Optional
 
 import numpy as np
 
+from hydra_suite.core.individual.identity import substrate
 from hydra_suite.core.individual.identity.catalog import IdentityCatalog
 from hydra_suite.core.individual.identity.evidence import IdentityEvidence
 
@@ -345,9 +346,9 @@ class OnlineIdentityDecoder:
                     self._catalog.size,
                 )
                 continue
-            belief.log_posterior = belief.log_posterior + ev.log_probs
-            # Renormalise to prevent float underflow over long runs
-            belief.log_posterior -= np.logaddexp.reduce(belief.log_posterior)
+            belief.log_posterior = substrate.fuse_log_evidence(
+                belief.log_posterior, ev.log_probs
+            )
             belief.hit_count += 1
 
     def _apply_slot_lock_bias(self, belief: TrackIdentityBelief) -> None:
@@ -499,73 +500,25 @@ class OnlineIdentityDecoder:
     ) -> dict[int, Optional[str]]:
         """Solve the partial injective assignment of slots to known identities.
 
-        Uses the Hungarian algorithm when scipy is available, with dummy
-        unassigned columns so slots can remain unassigned.
-        Falls back to greedy argmax if scipy is absent.
+        Delegates to `substrate.solve_unique_assignment`, which uses the
+        Hungarian algorithm when scipy is available (dummy unassigned
+        columns so slots can remain unassigned), falling back to greedy
+        argmax if scipy is absent — same dispatch as before, now shared.
         """
         if not visible_slots:
             return {}
-        try:
-            from scipy.optimize import linear_sum_assignment
-
-            return self._hungarian_assignment(visible_slots, linear_sum_assignment)
-        except ImportError:
-            return self._greedy_assignment(visible_slots)
-
-    def _hungarian_assignment(
-        self,
-        visible_slots: list[int],
-        linear_sum_assignment,
-    ) -> dict[int, Optional[str]]:
-        """Hungarian-based uniqueness-constrained assignment."""
-        N = len(visible_slots)
-        K = self._catalog.num_known
-
-        # N × (K + N) cost matrix: K identity columns + N dummy columns
-        cost = np.zeros((N, K + N), dtype=np.float64)
-        for i, slot in enumerate(visible_slots):
-            belief = self._beliefs[slot]
-            probs = self._posterior_probs(belief)
-            # Known identity columns: cost = -log(prob)
-            for j in range(K):
-                cost[i, j] = -np.log(max(probs[j + 1], 1e-300))  # j+1 skips unknown
-            # Dummy columns: cost = -log(unknown_prob)
-            unknown_cost = -np.log(max(probs[0], 1e-300))
-            for j in range(N):
-                cost[i, K + j] = unknown_cost
-
-        rows, cols = linear_sum_assignment(cost)
+        posterior_probs = [
+            self._posterior_probs(self._beliefs[slot]) for slot in visible_slots
+        ]
+        idxs = substrate.solve_unique_assignment(
+            posterior_probs,
+            self._catalog.num_known,
+            self._display_threshold,
+            use_scipy=True,
+        )
         result: dict[int, Optional[str]] = {}
-        for r, c in zip(rows, cols):
-            slot = visible_slots[r]
-            if c < K:
-                belief = self._beliefs[slot]
-                probs = self._posterior_probs(belief)
-                label_idx = c + 1  # skip unknown at 0
-                if float(probs[label_idx]) >= self._display_threshold:
-                    result[slot] = self._catalog.label_of(label_idx)
-                else:
-                    result[slot] = None
-            else:
-                result[slot] = None  # unassigned
-        return result
-
-    def _greedy_assignment(self, visible_slots: list[int]) -> dict[int, Optional[str]]:
-        """Greedy argmax fallback (no uniqueness guarantee among low-confidence cases)."""
-        result: dict[int, Optional[str]] = {}
-        used: set[int] = set()
-        for slot in visible_slots:
-            belief = self._beliefs[slot]
-            probs = self._posterior_probs(belief)
-            known_probs = probs[1:]
-            best_k = int(np.argmax(known_probs))  # 0-based over knowns
-            best_idx = best_k + 1  # catalog index
-            best_conf = float(probs[best_idx])
-            if best_conf >= self._display_threshold and best_idx not in used:
-                result[slot] = self._catalog.label_of(best_idx)
-                used.add(best_idx)
-            else:
-                result[slot] = None
+        for slot, idx in zip(visible_slots, idxs):
+            result[slot] = self._catalog.label_of(idx) if idx is not None else None
         return result
 
     def _update_commitment(

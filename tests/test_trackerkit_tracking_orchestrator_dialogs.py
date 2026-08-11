@@ -148,7 +148,6 @@ def test_stop_tracking_stops_preview_detection_worker(monkeypatch) -> None:
         current_detection_cache_path="cache.npz",
         current_individual_properties_cache_path="individual_props.npz",
         current_detected_properties_cache_path="detected_props.npz",
-        current_detected_cnn_cache_paths={"model": "cnn.npz"},
         current_interpolated_roi_npz_path="roi.npz",
         current_interpolated_pose_csv_path="pose_interp.csv",
         current_interpolated_pose_df=object(),
@@ -686,6 +685,14 @@ def test_start_tracking_on_video_restores_csv_and_worker_imports(
         tmp_path / "cache.npz"
     )
     assert captured["worker_kwargs"]["preview_mode"] is False
+    from hydra_suite.core.individual.identity import columns as C
+    from hydra_suite.trackerkit.headless_tracking import build_tracking_csv_header
+
+    assert captured["csv_header"] == build_tracking_csv_header(
+        False, identity_method=main_window._selected_identity_method()
+    )
+    assert C.REALTIME_LABEL in captured["csv_header"]
+    assert "IdentityAssignedLabel" not in captured["csv_header"]
 
 
 def test_start_preview_on_video_uses_tracking_worker_when_cache_is_valid(
@@ -970,16 +977,13 @@ def test_collect_worker_props_path_stores_detected_export_caches(
 ) -> None:
     orchestrator, _main_window = _make_orchestrator()
     detected_props_path = tmp_path / "detected_props.npz"
-    detected_cnn_path = tmp_path / "detected_cnn.npz"
     orchestrator._mw = SimpleNamespace(
         tracking_worker=SimpleNamespace(
             individual_properties_cache_path="",
             detected_properties_cache_path=str(detected_props_path),
-            detected_cnn_cache_paths={"demo": str(detected_cnn_path)},
         ),
         current_individual_properties_cache_path=None,
         current_detected_properties_cache_path=None,
-        current_detected_cnn_cache_paths={},
     )
 
     orchestrator._collect_worker_props_path()
@@ -987,9 +991,6 @@ def test_collect_worker_props_path_stores_detected_export_caches(
     assert orchestrator._mw.current_detected_properties_cache_path == str(
         detected_props_path
     )
-    assert orchestrator._mw.current_detected_cnn_cache_paths == {
-        "demo": str(detected_cnn_path)
-    }
 
 
 def test_format_video_track_label_prefers_unique_identity_key() -> None:
@@ -1054,7 +1055,7 @@ def test_build_video_track_color_key_array_prefers_identity_when_available() -> 
             {
                 "FrameID": 2,
                 "TrajectoryID": 4,
-                "IdentityAssignedLabel": "worker_a",
+                "IdentityFinalLabel": "worker_a",
             },
             {
                 "FrameID": 3,

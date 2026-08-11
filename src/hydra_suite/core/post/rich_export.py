@@ -212,9 +212,23 @@ def log_rich_export_summary(df: pd.DataFrame) -> None:
 
 
 def build_rich_export_dataframe(
-    final_csv_path, state, *, params, min_valid_conf, ignore_keypoints
+    final_csv_path,
+    state,
+    *,
+    params,
+    min_valid_conf,
+    ignore_keypoints,
+    identity_evidence_cache_path=None,
 ):
-    """Load final CSV and merge all available analysis sources into a rich export dataframe."""
+    """Load final CSV and merge all available analysis sources into a rich export dataframe.
+
+    ``identity_evidence_cache_path`` (Identity Phase 5): the Phase-3 evidence
+    sidecar path for this run, forwarded to
+    ``apply_identity_postprocessing_to_df`` so the offline fragment solver is
+    self-sufficient from the realtime decoder. ``None`` when the caller
+    couldn't resolve one (identity post-processing then falls back to
+    whatever CSV columns are present).
+    """
     if not final_csv_path or not os.path.exists(final_csv_path):
         return None
 
@@ -289,14 +303,26 @@ def build_rich_export_dataframe(
             individual_properties_cache_path=state.individual_properties_cache_path,
         )
 
-    with_pose_df = apply_identity_postprocessing_to_df(with_pose_df, params)
+    with_pose_df = apply_identity_postprocessing_to_df(
+        with_pose_df,
+        params,
+        identity_evidence_cache_path=identity_evidence_cache_path,
+    )
 
     log_rich_export_summary(with_pose_df)
 
     return with_pose_df
 
 
-def export_rich_csv(final_csv_path, state, *, params, min_valid_conf, ignore_keypoints):
+def export_rich_csv(
+    final_csv_path,
+    state,
+    *,
+    params,
+    min_valid_conf,
+    ignore_keypoints,
+    identity_evidence_cache_path=None,
+):
     """Write the rich individual-analysis CSV next to the final CSV."""
     with_pose_df = build_rich_export_dataframe(
         final_csv_path,
@@ -304,6 +330,7 @@ def export_rich_csv(final_csv_path, state, *, params, min_valid_conf, ignore_key
         params=params,
         min_valid_conf=min_valid_conf,
         ignore_keypoints=ignore_keypoints,
+        identity_evidence_cache_path=identity_evidence_cache_path,
     )
     if with_pose_df is None or with_pose_df.empty:
         return None
@@ -312,7 +339,13 @@ def export_rich_csv(final_csv_path, state, *, params, min_valid_conf, ignore_key
 
 
 def relink_and_export_rich_csv(
-    final_csv_path, state, *, params, min_valid_conf, ignore_keypoints
+    final_csv_path,
+    state,
+    *,
+    params,
+    min_valid_conf,
+    ignore_keypoints,
+    identity_evidence_cache_path=None,
 ):
     """Rewrite final CSV IDs after pose-aware relinking and regenerate the rich export CSV."""
     if not final_csv_path or not os.path.exists(final_csv_path):
@@ -324,6 +357,7 @@ def relink_and_export_rich_csv(
         params=params,
         min_valid_conf=min_valid_conf,
         ignore_keypoints=ignore_keypoints,
+        identity_evidence_cache_path=identity_evidence_cache_path,
     )
 
     try:

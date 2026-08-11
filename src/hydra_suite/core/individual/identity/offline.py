@@ -1,7 +1,7 @@
 """Global identity fragment solver.
 
 Identity post-processing pipeline:
-1. PELT changepoint detection on per-trajectory CNN probability matrices.
+1. PELT changepoint detection on per-trajectory smoothed identity posteriors.
 2. Fragment building from detected changepoints.
 3. Iterative greedy label refinement: walks fragments in order of doubt score
    (low CNN stability × short length × poor spatial fit + Unknown bonus),
@@ -16,339 +16,25 @@ from __future__ import annotations
 
 import logging
 import math
-import re
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
+from hydra_suite.core.individual.identity import columns as C
+from hydra_suite.core.individual.identity import substrate
 from hydra_suite.core.individual.identity.catalog import IdentityCatalog
+from hydra_suite.core.individual.identity.smoothing import (
+    load_trajectory_evidence,
+    smooth_trajectory_posteriors,
+    smoothed_label_and_conf,
+)
 
 log = logging.getLogger(__name__)
 
-_LABEL_COL = "IdentityAssignedLabel"
-_CONF_COL = "IdentityAssignedConfidence"
+_LABEL_COL = C.FINAL_LABEL
+_CONF_COL = C.FINAL_CONFIDENCE
 _UNKNOWN_VALUES = frozenset({"", "unknown"})
-_CNN_CLASS_SUFFIX = "_Class"
-_CNN_PROB_SUFFIX = "_Prob"
-
-
-def _sanitize_probability_token(value: Any) -> str:
-    token = re.sub(r"[^0-9A-Za-z]+", "_", str(value)).strip("_").lower()
-    return token
-
-
-def _build_cnn_probability_prefix_map(columns: pd.Index) -> dict[str, dict[str, str]]:
-    """Return ``prefix -> class_token -> prob_column`` for exported CNN columns.
-
-    Exported wide CSVs always include ``CNN_*_Class`` columns that identify the
-    phase/factor prefix. Probability columns share that prefix and append the
-    sanitized class token before ``_Prob``.
-    """
-    prefixes = sorted(
-        {
-            str(col)[: -len(_CNN_CLASS_SUFFIX)]
-            for col in columns
-            if str(col).startswith("CNN_") and str(col).endswith(_CNN_CLASS_SUFFIX)
-        },
-        key=len,
-        reverse=True,
-    )
-    if not prefixes:
-        return {}
-
-    result: dict[str, dict[str, str]] = {}
-    for col in columns:
-        token = str(col)
-        if not token.startswith("CNN_") or not token.endswith(_CNN_PROB_SUFFIX):
-            continue
-        for prefix in prefixes:
-            prefix_token = f"{prefix}_"
-            if not token.startswith(prefix_token):
-                continue
-            class_token = token[len(prefix_token) : -len(_CNN_PROB_SUFFIX)]
-            if class_token:
-                result.setdefault(prefix, {})[class_token] = token
-            break
-    return result
-
-
-def _build_cnn_label_specs(
-    known_labels: list[str],
-    prefix_prob_cols: dict[str, dict[str, str]],
-    columns: pd.Index,
-) -> dict[str, dict[str, Any]]:
-    """Precompute how each downstream label is reconstructed from CNN columns."""
-    specs: dict[str, dict[str, Any]] = {}
-    for label in known_labels:
-        label_token = _sanitize_probability_token(label)
-        if not label_token:
-            specs[label] = {"direct_cols": [], "part_cols": {}, "parts": set()}
-            continue
-
-        direct_cols = [
-            str(col)
-            for col in columns
-            if str(col).startswith("CNN_")
-            and str(col).endswith(f"_{label_token}{_CNN_PROB_SUFFIX}")
-        ]
-        part_cols: dict[str, list[str]] = {}
-        parts = tuple(part for part in label_token.split("_") if part)
-        for class_token_map in prefix_prob_cols.values():
-            direct_col = class_token_map.get(label_token)
-            if direct_col is not None and direct_col not in direct_cols:
-                direct_cols.append(direct_col)
-                continue
-
-            matched_parts = [part for part in parts if part in class_token_map]
-            if len(matched_parts) == 1:
-                part = matched_parts[0]
-                part_cols.setdefault(part, []).append(class_token_map[part])
-
-        specs[label] = {
-            "direct_cols": direct_cols,
-            "part_cols": part_cols,
-            "parts": set(parts),
-        }
-    return specs
-
-
-def _trajectory_mean_cnn_probs(
-    grp_sorted: pd.DataFrame,
-    known_labels: list[str],
-    label_specs: dict[str, dict[str, Any]],
-) -> dict[str, float]:
-    """Return mean downstream-label probabilities reconstructed from CNN exports."""
-    mean_probs: dict[str, float] = {}
-    for label in known_labels:
-        spec = label_specs.get(label, {})
-        direct_cols = [col for col in spec.get("direct_cols", []) if col in grp_sorted]
-        part_cols = {
-            part: [col for col in cols if col in grp_sorted]
-            for part, cols in (spec.get("part_cols", {}) or {}).items()
-        }
-        parts = set(spec.get("parts", set()))
-
-        direct_vals: list[np.ndarray] = []
-        for col in direct_cols:
-            vals = pd.to_numeric(grp_sorted[col], errors="coerce").to_numpy(
-                dtype=np.float64
-            )
-            direct_vals.append(np.clip(vals, 1e-9, 1.0))
-
-        part_vals: list[np.ndarray] = []
-        part_mask = np.ones(len(grp_sorted), dtype=bool)
-        use_parts = bool(parts)
-        if use_parts:
-            for part in parts:
-                cols = part_cols.get(part, [])
-                if not cols:
-                    use_parts = False
-                    break
-                part_present = np.zeros(len(grp_sorted), dtype=bool)
-                for col in cols:
-                    vals = pd.to_numeric(grp_sorted[col], errors="coerce").to_numpy(
-                        dtype=np.float64
-                    )
-                    part_present |= np.isfinite(vals)
-                    part_vals.append(np.clip(vals, 1e-9, 1.0))
-                part_mask &= part_present
-
-        row_prob = np.full(len(grp_sorted), np.nan, dtype=np.float64)
-        any_used = False
-        if direct_vals:
-            any_used = True
-            direct_stack = np.stack(direct_vals, axis=0)
-            direct_mask = np.all(np.isfinite(direct_stack), axis=0)
-            if np.any(direct_mask):
-                row_prob[direct_mask] = np.prod(direct_stack[:, direct_mask], axis=0)
-
-        if use_parts and part_vals:
-            any_used = True
-            part_stack = np.stack(part_vals, axis=0)
-            valid_part_mask = part_mask & np.all(np.isfinite(part_stack), axis=0)
-            if np.any(valid_part_mask):
-                part_prod = np.full(len(grp_sorted), np.nan, dtype=np.float64)
-                part_prod[valid_part_mask] = np.prod(
-                    part_stack[:, valid_part_mask], axis=0
-                )
-                missing_mask = valid_part_mask & np.isnan(row_prob)
-                overlap_mask = valid_part_mask & np.isfinite(row_prob)
-                if np.any(missing_mask):
-                    row_prob[missing_mask] = part_prod[missing_mask]
-                if np.any(overlap_mask):
-                    row_prob[overlap_mask] *= part_prod[overlap_mask]
-
-        if any_used and np.isfinite(row_prob).any():
-            mean_probs[label] = float(np.nanmean(row_prob))
-
-    return mean_probs
-
-
-def _trajectory_cnn_log_evidence(
-    grp_sorted: pd.DataFrame,
-    known_labels: list[str],
-    label_specs: dict[str, dict[str, Any]],
-) -> dict[str, float]:
-    """Return mean log-evidence per downstream label from exported CNN columns.
-
-    Rows without CNN evidence are treated as neutral for that row so sparse
-    detections do not dominate long fragments simply because only observed rows
-    contribute to the average.
-    """
-    log_scores: dict[str, float] = {}
-    n_rows = len(grp_sorted)
-    if n_rows == 0:
-        return log_scores
-
-    for label in known_labels:
-        spec = label_specs.get(label, {})
-        direct_cols = [col for col in spec.get("direct_cols", []) if col in grp_sorted]
-        part_cols = {
-            part: [col for col in cols if col in grp_sorted]
-            for part, cols in (spec.get("part_cols", {}) or {}).items()
-        }
-        parts = set(spec.get("parts", set()))
-
-        direct_vals: list[np.ndarray] = []
-        for col in direct_cols:
-            vals = pd.to_numeric(grp_sorted[col], errors="coerce").to_numpy(
-                dtype=np.float64
-            )
-            direct_vals.append(np.clip(vals, 1e-9, 1.0))
-
-        part_vals: list[np.ndarray] = []
-        part_mask = np.ones(n_rows, dtype=bool)
-        use_parts = bool(parts)
-        if use_parts:
-            for part in parts:
-                cols = part_cols.get(part, [])
-                if not cols:
-                    use_parts = False
-                    break
-                part_present = np.zeros(n_rows, dtype=bool)
-                for col in cols:
-                    vals = pd.to_numeric(grp_sorted[col], errors="coerce").to_numpy(
-                        dtype=np.float64
-                    )
-                    part_present |= np.isfinite(vals)
-                    part_vals.append(np.clip(vals, 1e-9, 1.0))
-                part_mask &= part_present
-
-        row_prob = np.full(n_rows, np.nan, dtype=np.float64)
-        any_used = False
-        if direct_vals:
-            any_used = True
-            direct_stack = np.stack(direct_vals, axis=0)
-            direct_mask = np.all(np.isfinite(direct_stack), axis=0)
-            if np.any(direct_mask):
-                row_prob[direct_mask] = np.prod(direct_stack[:, direct_mask], axis=0)
-
-        if use_parts and part_vals:
-            any_used = True
-            part_stack = np.stack(part_vals, axis=0)
-            valid_part_mask = part_mask & np.all(np.isfinite(part_stack), axis=0)
-            if np.any(valid_part_mask):
-                part_prod = np.full(n_rows, np.nan, dtype=np.float64)
-                part_prod[valid_part_mask] = np.prod(
-                    part_stack[:, valid_part_mask], axis=0
-                )
-                missing_mask = valid_part_mask & np.isnan(row_prob)
-                overlap_mask = valid_part_mask & np.isfinite(row_prob)
-                if np.any(missing_mask):
-                    row_prob[missing_mask] = part_prod[missing_mask]
-                if np.any(overlap_mask):
-                    row_prob[overlap_mask] *= part_prod[overlap_mask]
-
-        if any_used:
-            row_log = np.zeros(n_rows, dtype=np.float64)
-            finite_mask = np.isfinite(row_prob)
-            if np.any(finite_mask):
-                row_log[finite_mask] = np.log(
-                    np.clip(row_prob[finite_mask], 1e-12, 1.0)
-                )
-                log_scores[label] = float(np.mean(row_log))
-
-    return log_scores
-
-
-def _trajectory_per_row_probs(
-    grp_sorted: pd.DataFrame,
-    known_labels: list[str],
-    label_specs: dict[str, dict[str, Any]],
-) -> np.ndarray:
-    """Return ``(n_rows, n_labels)`` per-row reconstructed CNN probabilities.
-
-    Cells where no CNN evidence is present remain NaN. Direct probability
-    columns and part-product columns are combined identically to the mean-prob
-    helper so the per-row matrix stays consistent with the fragment-level
-    aggregates.
-    """
-    n_rows = len(grp_sorted)
-    n_labels = len(known_labels)
-    out = np.full((n_rows, n_labels), np.nan, dtype=np.float64)
-    if n_rows == 0 or n_labels == 0:
-        return out
-
-    for j, label in enumerate(known_labels):
-        spec = label_specs.get(label, {})
-        direct_cols = [col for col in spec.get("direct_cols", []) if col in grp_sorted]
-        part_cols = {
-            part: [col for col in cols if col in grp_sorted]
-            for part, cols in (spec.get("part_cols", {}) or {}).items()
-        }
-        parts = set(spec.get("parts", set()))
-
-        direct_vals: list[np.ndarray] = []
-        for col in direct_cols:
-            vals = pd.to_numeric(grp_sorted[col], errors="coerce").to_numpy(
-                dtype=np.float64
-            )
-            direct_vals.append(np.clip(vals, 1e-9, 1.0))
-
-        part_vals: list[np.ndarray] = []
-        part_mask = np.ones(n_rows, dtype=bool)
-        use_parts = bool(parts)
-        if use_parts:
-            for part in parts:
-                cols = part_cols.get(part, [])
-                if not cols:
-                    use_parts = False
-                    break
-                part_present = np.zeros(n_rows, dtype=bool)
-                for col in cols:
-                    vals = pd.to_numeric(grp_sorted[col], errors="coerce").to_numpy(
-                        dtype=np.float64
-                    )
-                    part_present |= np.isfinite(vals)
-                    part_vals.append(np.clip(vals, 1e-9, 1.0))
-                part_mask &= part_present
-
-        row_prob = np.full(n_rows, np.nan, dtype=np.float64)
-        if direct_vals:
-            direct_stack = np.stack(direct_vals, axis=0)
-            direct_mask = np.all(np.isfinite(direct_stack), axis=0)
-            if np.any(direct_mask):
-                row_prob[direct_mask] = np.prod(direct_stack[:, direct_mask], axis=0)
-
-        if use_parts and part_vals:
-            part_stack = np.stack(part_vals, axis=0)
-            valid_part_mask = part_mask & np.all(np.isfinite(part_stack), axis=0)
-            if np.any(valid_part_mask):
-                part_prod = np.full(n_rows, np.nan, dtype=np.float64)
-                part_prod[valid_part_mask] = np.prod(
-                    part_stack[:, valid_part_mask], axis=0
-                )
-                missing_mask = valid_part_mask & np.isnan(row_prob)
-                overlap_mask = valid_part_mask & np.isfinite(row_prob)
-                if np.any(missing_mask):
-                    row_prob[missing_mask] = part_prod[missing_mask]
-                if np.any(overlap_mask):
-                    row_prob[overlap_mask] *= part_prod[overlap_mask]
-
-        out[:, j] = row_prob
-
-    return out
 
 
 def _fragment_stability(per_row_probs: np.ndarray) -> float:
@@ -360,7 +46,9 @@ def _fragment_stability(per_row_probs: np.ndarray) -> float:
     a small margin scores low even though it has many rows; a short fragment
     that is internally consistent and confident scores high.
 
-    Returns 0.0 when no per-frame CNN evidence is present.
+    Returns 0.0 when no per-frame evidence is present. Used by
+    ``_evidence_dicts_for_fragment`` on cache-sourced per-frame catalog
+    posteriors (Task 5: the only evidence source; no CSV-column fallback).
     """
     if per_row_probs.size == 0:
         return 0.0
@@ -385,61 +73,6 @@ def _fragment_stability(per_row_probs: np.ndarray) -> float:
     agreement = float(counts.max()) / float(n)
     margin = float(np.mean(top1 - top2))
     return float(agreement * max(0.0, margin))
-
-
-def _trajectory_tag_evidence(
-    grp_sorted: pd.DataFrame,
-    known_labels: list[str],
-) -> tuple[dict[str, float], dict[str, float]]:
-    """Return mean tag probabilities and mean tag log-evidence per label."""
-    mean_probs: dict[str, float] = {}
-    log_scores: dict[str, float] = {}
-    n_rows = len(grp_sorted)
-    if n_rows == 0 or "DetectedTagLabel" not in grp_sorted.columns:
-        return mean_probs, log_scores
-
-    tag_vals = grp_sorted["DetectedTagLabel"].astype(object)
-    tag_labels = tag_vals.where(tag_vals.notna(), np.nan).astype(str).str.strip()
-    detected_mask = (~tag_vals.isna()) & (~tag_labels.isin(_UNKNOWN_VALUES))
-    if not detected_mask.any():
-        return mean_probs, log_scores
-
-    if "DetectedTagConf" in grp_sorted.columns:
-        conf_vals = pd.to_numeric(
-            grp_sorted["DetectedTagConf"], errors="coerce"
-        ).to_numpy(dtype=np.float64)
-    elif "DetectedTagHamming" in grp_sorted.columns:
-        hammings = pd.to_numeric(
-            grp_sorted["DetectedTagHamming"], errors="coerce"
-        ).to_numpy(dtype=np.float64)
-        conf_vals = 1.0 / (1.0 + np.clip(hammings, 0.0, None))
-    else:
-        conf_vals = np.ones(n_rows, dtype=np.float64)
-
-    conf_vals = np.clip(conf_vals, 1e-4, 1.0 - 1e-4)
-    detected_mask_arr = detected_mask.to_numpy(dtype=bool)
-    tag_labels_arr = tag_labels.to_numpy(dtype=object)
-    n_known = len(known_labels)
-
-    for label in known_labels:
-        row_prob = np.full(n_rows, np.nan, dtype=np.float64)
-        match_mask = detected_mask_arr & (tag_labels_arr == label)
-        other_mask = detected_mask_arr & (tag_labels_arr != label)
-        if np.any(match_mask):
-            row_prob[match_mask] = conf_vals[match_mask]
-        if np.any(other_mask):
-            if n_known > 1:
-                row_prob[other_mask] = (1.0 - conf_vals[other_mask]) / (n_known - 1)
-            else:
-                row_prob[other_mask] = 1e-4
-        finite_mask = np.isfinite(row_prob)
-        if np.any(finite_mask):
-            mean_probs[label] = float(np.nanmean(row_prob))
-            row_log = np.zeros(n_rows, dtype=np.float64)
-            row_log[finite_mask] = np.log(np.clip(row_prob[finite_mask], 1e-12, 1.0))
-            log_scores[label] = float(np.mean(row_log))
-
-    return mean_probs, log_scores
 
 
 def _normalize_support_scores(
@@ -486,20 +119,34 @@ def _build_prior_log_scores(
 
 
 def detect_identity_changepoints(
-    df: pd.DataFrame,
+    smoothed_by_traj: dict[Any, list[tuple[int, np.ndarray]]],
     catalog: IdentityCatalog,
     params: dict[str, Any],
 ) -> dict[Any, list[int]]:
-    """Return {traj_id: [split_frame_indices]} using PELT on CNN prob matrix.
+    """Return {traj_id: [split_frame_indices]} using PELT on the smoothed
+    per-frame identity posterior (Phase 5 Task 2's forward-backward
+    smoothing output), not the ``CNN_*_Prob`` CSV columns.
 
     Each split_frame_index is the *inclusive end* (last FrameID) of a segment.
     ``build_fragments`` treats these as inclusive boundaries: segment k spans
     FrameIDs [split_indices[k-1]+1, split_indices[k]].
-    Trajectories with no CNN evidence or fewer than min_fragment_frames*2
+    Trajectories with no evidence or fewer than min_fragment_frames*2
     rows are returned with no splits.
 
     PELT model is read from params["PELT_MODEL"] (l1 / l2 / rbf; default rbf).
     Z-scoring is skipped for l1 since l1 is already median-based.
+
+    Args:
+        smoothed_by_traj: ``{TrajectoryID: [(FrameID, smoothed_log_probs), ...]}``,
+            e.g. ``zip(frame_ids, smooth_trajectory_posteriors(...))`` per
+            trajectory (see ``identity/smoothing.py``). Each ``smoothed_log_probs``
+            is a normalized log-posterior over the full catalog (``unknown`` at
+            index 0, known labels at 1..N). Sequences need not be pre-sorted by
+            FrameID; this function sorts defensively.
+        catalog: the identity catalog the smoothed posteriors are indexed
+            against (used only to size the known-label slice of the signal).
+        params: see module docstring; keys ``CHANGEPOINT_PENALTY``,
+            ``MIN_FRAGMENT_FRAMES``, ``PELT_MODEL``.
     """
     try:
         import ruptures as rpt
@@ -514,33 +161,32 @@ def detect_identity_changepoints(
     pelt_model = str(params.get("PELT_MODEL", "rbf")).lower()
     if pelt_model not in ("l1", "l2", "rbf"):
         pelt_model = "rbf"
-    known_labels = list(catalog.labels[1:])
 
-    # Find CNN_*_Prob columns for known labels only.
-    prob_cols: list[str] = []
-    for label in known_labels:
-        suffix = f"_{label}_Prob"
-        for col in df.columns:
-            if str(col).endswith(suffix):
-                prob_cols.append(col)
-                break
-
-    if not prob_cols:
+    if len(catalog.labels) <= 1:
         return {}
 
     result: dict[Any, list[int]] = {}
 
-    for traj_id, grp in df.groupby("TrajectoryID", sort=False):
-        grp_sorted = grp.sort_values("FrameID")
-        if len(grp_sorted) < min_frames * 2:
+    for traj_id, sequence in smoothed_by_traj.items():
+        if len(sequence) < min_frames * 2:
             continue
 
-        signal = (
-            grp_sorted[prob_cols]
-            .apply(pd.to_numeric, errors="coerce")
-            .fillna(0.5)
-            .values
-        )
+        ordered = sorted(sequence, key=lambda item: item[0])
+        frame_ids = np.array([frame_id for frame_id, _ in ordered])
+        log_probs = np.stack([lp for _, lp in ordered]).astype(np.float64)
+        # Guard against NaN/inf leaking in from upstream evidence/smoothing
+        # (e.g. a degenerate all-zero-mass fusion) before the softmax below --
+        # real cache-sourced wiring (Task 5) must never let a non-finite value
+        # propagate into ruptures.
+        log_probs = np.nan_to_num(log_probs, nan=-700.0, posinf=700.0, neginf=-700.0)
+
+        # Known-label probabilities (exp of the smoothed log-posterior),
+        # dropping the leading `unknown` column -- mirrors the old CNN_*_Prob
+        # column set (one column per known identity label).
+        probs = np.exp(log_probs - log_probs.max(axis=1, keepdims=True))
+        probs /= np.clip(probs.sum(axis=1, keepdims=True), 1e-300, None)
+        signal = probs[:, 1:]
+
         # Z-score per column to suppress magnitude drift.
         # Skipped for l1 which is already median-based and scale-insensitive.
         if pelt_model != "l1":
@@ -558,9 +204,9 @@ def detect_identity_changepoints(
             log.warning("PELT failed for traj %s: %s", traj_id, exc)
             continue
 
-        # ruptures returns end-of-segment indices (1-indexed frame position in grp_sorted).
-        # Convert to FrameID values (drop the final sentinel which equals len).
-        frame_ids = grp_sorted["FrameID"].values
+        # ruptures returns end-of-segment indices (1-indexed frame position in
+        # `ordered`). Convert to FrameID values (drop the final sentinel which
+        # equals len).
         split_frames = [
             int(frame_ids[s - 1]) for s in splits[:-1] if s < len(frame_ids)
         ]
@@ -717,6 +363,110 @@ def _seg_from_row(row: pd.Series) -> dict:
     }
 
 
+def _support_to_slot_posterior(
+    support: dict[str, float],
+    length_factor: float,
+    known_labels: list[str],
+) -> np.ndarray:
+    """Convert a per-fragment normalized evidence support + length factor into a
+    full catalog posterior ``[unknown, k1, ..., kK]`` for the substrate solver.
+
+    ``support`` is already normalized to sum to 1 over ``known_labels``
+    (``_normalize_support_scores``). Scaling by ``length_factor`` (the same
+    multiplicative length discount used everywhere else in this module)
+    naturally reserves ``1 - length_factor`` of posterior mass for
+    "unknown" — a short fragment's evidence competes weaker for a slot in
+    the Hungarian assignment than a long fragment's, mirroring the doubt
+    engine below without pre-empting its spatial refinement.
+    """
+    factor = float(np.clip(length_factor, 0.0, 1.0))
+    known = np.array(
+        [factor * float(support.get(label, 0.0)) for label in known_labels],
+        dtype=np.float64,
+    )
+    known = np.clip(known, 0.0, None)
+    unknown = max(0.0, 1.0 - float(known.sum()))
+    posterior = np.concatenate(([unknown], known))
+    total = float(posterior.sum())
+    if total <= 1e-12:
+        # Degenerate (no evidence at all): uniform over unknown + knowns.
+        return np.full(len(known_labels) + 1, 1.0 / (len(known_labels) + 1))
+    return posterior / total
+
+
+def _base_assignment_via_substrate(
+    frags: pd.DataFrame,
+    known_labels: list[str],
+    combined_supports: list[dict[str, float]],
+    length_factors: np.ndarray,
+    display_threshold: float,
+) -> list[str | None]:
+    """Base injective fragment->label assignment via
+    ``substrate.solve_unique_assignment``, solved independently per
+    temporal-overlap connected component.
+
+    The partial-injective Hungarian solver assumes every slot handed to it
+    is simultaneously visible, so two fragments that never share a frame
+    must NOT be forced to compete for the same catalog label — grouping by
+    temporal-overlap connected components (rather than one global solve)
+    preserves that: fragments in disjoint components may independently
+    receive the same identity, exactly as two non-overlapping trajectories
+    legitimately can. Fragments within one component are made mutually
+    exclusive over the catalog by the solver's uniqueness constraint. This
+    is the *base* assignment; ``_iterative_assign``'s doubt-ordered
+    veto/swap refinement (below) still runs afterward to resolve spatial
+    plausibility that this temporal-only grouping cannot see (e.g. two
+    disjoint-time fragments claiming the same label at implausibly distant
+    positions).
+    """
+    n = len(frags)
+    if n == 0:
+        return []
+
+    starts = [int(frags.iloc[i]["StartFrame"]) for i in range(n)]
+    ends = [int(frags.iloc[i]["EndFrame"]) for i in range(n)]
+
+    parent = list(range(n))
+
+    def _find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def _union(a: int, b: int) -> None:
+        ra, rb = _find(a), _find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            if starts[i] <= ends[j] and starts[j] <= ends[i]:
+                _union(i, j)
+
+    groups: dict[int, list[int]] = {}
+    for i in range(n):
+        groups.setdefault(_find(i), []).append(i)
+
+    num_known = len(known_labels)
+    result: list[str | None] = [None] * n
+    for members in groups.values():
+        posteriors = [
+            _support_to_slot_posterior(
+                combined_supports[i], float(length_factors[i]), known_labels
+            )
+            for i in members
+        ]
+        assignment = substrate.solve_unique_assignment(
+            posteriors, num_known, display_threshold
+        )
+        for member_idx, cat_idx in zip(members, assignment):
+            if cat_idx is not None and 1 <= cat_idx <= num_known:
+                result[member_idx] = known_labels[cat_idx - 1]
+
+    return result
+
+
 def _iterative_assign(
     frags: pd.DataFrame,
     known_labels: list[str],
@@ -755,7 +505,7 @@ def _iterative_assign(
     if n_frags == 0:
         return {}
 
-    known_label_set = set(known_labels)
+    display_threshold = float(params.get("IDENTITY_DISPLAY_THRESHOLD", 0.6))
 
     # Pre-compute durations and length factors.
     durations = np.array(
@@ -797,15 +547,15 @@ def _iterative_assign(
         dtype=np.float64,
     )
 
-    def _sanitize(lbl: Any) -> str | None:
-        s = str(lbl)
-        if s in _UNKNOWN_VALUES or s not in known_label_set:
-            return None
-        return s
-
-    current: list[str | None] = [
-        _sanitize(frags.iloc[i]["OnlineLabel"]) for i in range(n_frags)
-    ]
+    # Base assignment: the shared substrate uniqueness solver, applied per
+    # temporal-overlap connected component (see `_base_assignment_via_substrate`).
+    # This is the "one uniqueness solver" — collision-free by construction for
+    # simultaneously-visible fragments, while disjoint-time fragments remain
+    # free to share a label. The doubt-ordered refinement below then handles
+    # spatial plausibility this temporal-only base assignment cannot see.
+    current: list[str | None] = _base_assignment_via_substrate(
+        frags, known_labels, combined_supports, length_factors, display_threshold
+    )
 
     # Schedule: dict[label] -> list of (frag_idx, segment_dict), unordered;
     # spatial helpers don't require sortedness.
@@ -1097,19 +847,86 @@ def _iterative_assign(
     return {i: current[i] for i in range(n_frags)}
 
 
+def _evidence_dicts_for_fragment(
+    known_labels: list[str],
+    sequence: list[tuple[int, np.ndarray]],
+) -> tuple[dict[str, float], dict[str, float], float]:
+    """Build ``(MeanCNNProbs, CNNLogEvidence, Stability)`` for one fragment from
+    cache-sourced (smoothed) per-frame catalog posteriors instead of the
+    reconstructed ``CNN_*_Prob`` CSV columns.
+
+    ``sequence`` is this fragment's slice of a Task-5-resolved
+    ``evidence_by_traj`` sequence (already restricted to this fragment's own
+    FrameID set by the caller): ``[(FrameID, catalog_log_probs), ...]``, each
+    ``catalog_log_probs`` a normalized log-posterior over the full catalog
+    (unknown at index 0). Rows with no matched cache evidence contribute
+    nothing (frames simply absent from ``sequence``) -- "no evidence, no
+    belief", matching Task 1/2's join semantics.
+
+    ``CNNLogEvidence``'s convention (mean of per-row log-probabilities, i.e.
+    a geometric mean, not the log of an arithmetic mean) is preserved from
+    the CSV-based reconstruction so ``_iterative_assign``'s downstream
+    weighted blend is unaffected by the evidence source.
+    """
+    if not sequence:
+        return {}, {}, 0.0
+
+    log_probs = np.stack([lp for _, lp in sequence]).astype(np.float64)
+    known_log = log_probs[:, 1:]  # drop the leading `unknown` column
+    known_probs = np.exp(known_log)
+
+    mean_probs = {
+        label: float(np.mean(known_probs[:, idx]))
+        for idx, label in enumerate(known_labels)
+    }
+    cnn_log_scores = {
+        label: float(np.mean(known_log[:, idx]))
+        for idx, label in enumerate(known_labels)
+    }
+    stability = _fragment_stability(known_probs)
+    return mean_probs, cnn_log_scores, stability
+
+
 def _build_traj_summaries(
     df: pd.DataFrame,
     catalog: IdentityCatalog,
+    evidence_by_traj: dict[Any, list[tuple[int, np.ndarray]]] | None = None,
 ) -> pd.DataFrame:
     """Build a per-trajectory summary DataFrame consumed by the iterative solver.
 
     Columns: TrajectoryID, StartFrame, EndFrame, StartX, StartY, EndX, EndY,
     MeanCNNProbs (dict), MeanTagProbs (dict), CNNLogEvidence (dict),
     TagLogEvidence (dict), Stability (float), OnlineLabel, OnlineConfidence.
+
+    Identity Phase 7 Task 5 (clean-break retirement): this solver is
+    CACHE-ONLY. ``evidence_by_traj`` (``{OriginalTrajectoryID/TrajectoryID:
+    [(FrameID, catalog_log_probs), ...]}``, the cache-sourced + optionally
+    forward-backward-smoothed sequences ``run_fragment_solver`` builds via
+    ``identity/smoothing.py``) is the *only* evidence source; each
+    fragment's ``MeanCNNProbs``/``CNNLogEvidence``/``Stability`` are derived
+    from it, restricted to the fragment's own FrameID range. There is no
+    ``CNN_*_Prob``/``DetectedTag*`` wide-CSV column reconstruction fallback
+    -- the live pipeline (``postprocess_df.py``) always opens the evidence
+    cache Phase 3 writes unconditionally and passes ``evidence_by_traj``, so
+    that fallback was dead in production. When ``evidence_by_traj`` is
+    ``None``/empty, or a specific trajectory has no matched cache evidence,
+    this produces the documented no-sidecar degrade: empty evidence dicts
+    (``MeanCNNProbs``/``CNNLogEvidence`` = ``{}``, ``Stability`` = 0.0) --
+    "no evidence, no belief" (Task 1's convention) -- rather than a
+    reconstructed guess. ``TagLogEvidence``/``MeanTagProbs`` are always
+    empty now, since ``load_trajectory_evidence`` already fuses every
+    source (CNN + tag) into one catalog posterior per detection -- there is
+    nothing left for a separate tag term to add.
+
+    ``OnlineLabel``/``OnlineConfidence`` are always read from the
+    ``IdentityFinalLabel``/``IdentityFinalConfidence`` CSV columns when
+    present (an OPTIONAL weak prior from a prior resolution pass -- never a
+    required input; a fragment with no such label defaults to "unknown"/0.0
+    confidence and the cache evidence alone still drives assignment, which
+    is the honesty fix).
     """
     known_labels = list(catalog.labels[1:])
-    prefix_prob_cols = _build_cnn_probability_prefix_map(df.columns)
-    label_specs = _build_cnn_label_specs(known_labels, prefix_prob_cols, df.columns)
+    has_orig_col = "OriginalTrajectoryID" in df.columns
     rows: list[dict] = []
 
     for traj_id, grp in df.groupby("TrajectoryID", sort=False):
@@ -1132,13 +949,26 @@ def _build_traj_summaries(
         else:
             sx = sy = ex = ey = math.nan
 
-        mean_probs = _trajectory_mean_cnn_probs(grp_sorted, known_labels, label_specs)
-        cnn_log_scores = _trajectory_cnn_log_evidence(
-            grp_sorted, known_labels, label_specs
-        )
-        per_row_probs = _trajectory_per_row_probs(grp_sorted, known_labels, label_specs)
-        stability = _fragment_stability(per_row_probs)
-        tag_probs, tag_log_scores = _trajectory_tag_evidence(grp_sorted, known_labels)
+        fragment_evidence: list[tuple[int, np.ndarray]] = []
+        if evidence_by_traj:
+            orig_id = (
+                grp_sorted["OriginalTrajectoryID"].iloc[0] if has_orig_col else traj_id
+            )
+            frame_set = {int(f) for f in grp_sorted["FrameID"]}
+            fragment_evidence = [
+                (f, lp) for f, lp in evidence_by_traj.get(orig_id, []) if f in frame_set
+            ]
+
+        if fragment_evidence:
+            mean_probs, cnn_log_scores, stability = _evidence_dicts_for_fragment(
+                known_labels, fragment_evidence
+            )
+        else:
+            # No cache evidence for this trajectory (or none supplied at
+            # all) -- "no evidence, no belief" (Task 1 convention). No
+            # CSV-column reconstruction fallback.
+            mean_probs, cnn_log_scores, stability = {}, {}, 0.0
+        tag_probs, tag_log_scores = {}, {}
 
         label_col = grp_sorted.get(
             _LABEL_COL, pd.Series("unknown", index=grp_sorted.index, dtype=object)
@@ -1207,20 +1037,35 @@ def solve_global_assignment(
     df: pd.DataFrame,
     catalog: IdentityCatalog,
     params: dict[str, Any],
+    evidence_by_traj: dict[Any, list[tuple[int, np.ndarray]]] | None = None,
 ) -> pd.DataFrame:
     """Assign one identity label per trajectory via the iterative solver.
 
     Builds per-trajectory summaries internally, runs ``_iterative_assign`` with
     spatial continuity + CNN/tag evidence + online-label prior + per-fragment
-    stability, then writes IdentityAssignedLabel, IdentityFragmentScore, and
-    IdentityCommitted back into every row of each trajectory. Returns a
-    modified copy of df.
+    stability, then writes the ``IdentityFinal*`` family (``IdentityFinalLabel``,
+    ``IdentityFinalID``, ``IdentityFinalConfidence``, ``IdentityFinalFragmentScore``,
+    ``IdentityFinalSource``) back into every row of each trajectory -- a
+    provenance-explicit record of what THIS (offline/post-hoc) solver decided.
+    This function NEVER writes any ``IdentityRealtime*`` column: the offline
+    solver's decision is cache-sourced when ``evidence_by_traj`` is given, so
+    it is populated even when realtime identity never ran (the honesty fix's
+    visible proof surface), and it never clobbers whatever the realtime
+    decoder separately wrote. Returns a modified copy of df.
+
+    ``evidence_by_traj`` (cache-sourced; the only evidence input -- Phase 7
+    Task 5 deleted the ``CNN_*_Prob``/``DetectedTag*`` CSV-column
+    reconstruction fallback): ``{OriginalTrajectoryID/TrajectoryID:
+    [(FrameID, catalog_log_probs), ...]}`` -- see ``_build_traj_summaries``.
+    When ``None``/empty (no evidence sidecar available), every trajectory
+    degrades to the documented no-sidecar outcome (empty evidence; see
+    ``_build_traj_summaries``), not a CSV-reconstructed guess.
     """
     known_labels = list(catalog.labels[1:])
     if not known_labels or df is None or df.empty:
         return df if df is not None else pd.DataFrame()
 
-    traj_summaries = _build_traj_summaries(df, catalog)
+    traj_summaries = _build_traj_summaries(df, catalog, evidence_by_traj)
     if traj_summaries.empty:
         return df
 
@@ -1303,15 +1148,37 @@ def solve_global_assignment(
         raw = evidence * spatial_s if has_neighbors else evidence
         assigned_scores.append(float(raw * float(length_factors[i])))
 
-    # Write one label per trajectory back to every row.
+    # Write one label per trajectory back to every row -- the IdentityFinal*
+    # family only. This function must NEVER write an IdentityRealtime* column.
     out = df.copy()
-    if "IdentityAssignedLabel" not in out.columns:
-        out["IdentityAssignedLabel"] = np.nan
-    if "IdentityCommitted" not in out.columns:
-        out["IdentityCommitted"] = False
-    out["IdentityCommitted"] = out["IdentityCommitted"].fillna(False).astype(bool)
-    if "IdentityFragmentScore" not in out.columns:
-        out["IdentityFragmentScore"] = np.nan
+    if C.FINAL_LABEL not in out.columns:
+        # object dtype (not the float64 a bare `np.nan` column init would get)
+        # -- otherwise the string label writes below raise a pandas
+        # LossySetitemError.
+        out[C.FINAL_LABEL] = pd.Series(
+            [np.nan] * len(out), index=out.index, dtype=object
+        )
+    elif out[C.FINAL_LABEL].dtype != object:
+        # The honesty fix's target scenario (ENABLE_IDENTITY_IN_TRACKING off)
+        # leaves this column present but all-NaN float64 (no prior pass wrote
+        # strings). Writing a string label into a float64 column raises a
+        # pandas LossySetitemError (pandas>=3), which the caller's broad
+        # except would swallow, silently reverting the solver to "results
+        # unchanged" -- i.e. exactly re-breaking the honesty fix. Coerce to
+        # object so the per-trajectory writes below can land.
+        out[C.FINAL_LABEL] = out[C.FINAL_LABEL].astype(object)
+    if C.FINAL_SOURCE not in out.columns:
+        out[C.FINAL_SOURCE] = pd.Series(
+            [C.IdentityFinalSource.NONE] * len(out), index=out.index, dtype=object
+        )
+    elif out[C.FINAL_SOURCE].dtype != object:
+        out[C.FINAL_SOURCE] = out[C.FINAL_SOURCE].astype(object)
+    if C.FINAL_ID not in out.columns:
+        out[C.FINAL_ID] = np.nan
+    if C.FINAL_CONFIDENCE not in out.columns:
+        out[C.FINAL_CONFIDENCE] = np.nan
+    if C.FINAL_FRAGMENT_SCORE not in out.columns:
+        out[C.FINAL_FRAGMENT_SCORE] = np.nan
 
     for i in range(n_trajs):
         label = assigned.get(i)
@@ -1319,15 +1186,83 @@ def solve_global_assignment(
         mask = out["TrajectoryID"] == traj_id
         if label is None or label in _UNKNOWN_VALUES:
             # The solver explicitly chose Unknown for this fragment (e.g. its
-            # spatial fit under every feasible label fails the veto). Clear the
-            # online label so the user sees the solver's decision.
-            out.loc[mask, "IdentityAssignedLabel"] = "unknown"
-            out.loc[mask, "IdentityFragmentScore"] = 0.0
-            out.loc[mask, "IdentityCommitted"] = False
+            # spatial fit under every feasible label fails the veto). Record
+            # the solver's decision, but with no attributable source (no
+            # identity was actually resolved for this fragment).
+            out.loc[mask, C.FINAL_LABEL] = "unknown"
+            out.loc[mask, C.FINAL_ID] = catalog.unknown_index
+            out.loc[mask, C.FINAL_CONFIDENCE] = 0.0
+            out.loc[mask, C.FINAL_FRAGMENT_SCORE] = 0.0
+            out.loc[mask, C.FINAL_SOURCE] = C.IdentityFinalSource.NONE
             continue
-        out.loc[mask, "IdentityAssignedLabel"] = label
-        out.loc[mask, "IdentityFragmentScore"] = assigned_scores[i]
-        out.loc[mask, "IdentityCommitted"] = True
+        try:
+            catalog_index = catalog.index_of(label)
+        except KeyError:
+            catalog_index = np.nan
+        out.loc[mask, C.FINAL_LABEL] = label
+        out.loc[mask, C.FINAL_ID] = catalog_index
+        out.loc[mask, C.FINAL_CONFIDENCE] = assigned_scores[i]
+        out.loc[mask, C.FINAL_FRAGMENT_SCORE] = assigned_scores[i]
+        out.loc[mask, C.FINAL_SOURCE] = C.IdentityFinalSource.OFFLINE
+
+    return out
+
+
+def _annotate_smoothed_labels(
+    df: pd.DataFrame,
+    smoothed_by_traj: dict[Any, list[tuple[int, np.ndarray]]],
+    catalog: IdentityCatalog,
+    params: dict[str, Any],
+) -> pd.DataFrame:
+    """Write per-row ``IdentityFinalSmoothedLabel``/``IdentityFinalSmoothedConfidence``
+    from the forward-backward-smoothed per-frame posterior (Task 2), joined
+    on ``(OriginalTrajectoryID or TrajectoryID, FrameID)``.
+
+    This is the raw per-frame smoothed decode, independent of (and written
+    before) the fragment solver's per-fragment committed decision
+    (``IdentityFinalLabel``) -- rows with no matched cache evidence are left
+    with an empty label / 0.0 confidence, same as the fragment-level "no
+    evidence, no belief" convention.
+    """
+    out = df.copy()
+    if C.FINAL_SMOOTHED_LABEL not in out.columns:
+        # object dtype -- see the FINAL_LABEL note in solve_global_assignment
+        # for why a bare `""` column init can still land as float64 in some
+        # pandas construction paths and raise LossySetitemError on write.
+        out[C.FINAL_SMOOTHED_LABEL] = pd.Series(
+            [""] * len(out), index=out.index, dtype=object
+        )
+    elif out[C.FINAL_SMOOTHED_LABEL].dtype != object:
+        out[C.FINAL_SMOOTHED_LABEL] = out[C.FINAL_SMOOTHED_LABEL].astype(object)
+    if C.FINAL_SMOOTHED_CONFIDENCE not in out.columns:
+        out[C.FINAL_SMOOTHED_CONFIDENCE] = 0.0
+
+    display_threshold = float(params.get("IDENTITY_DISPLAY_THRESHOLD", 0.6))
+    id_col = (
+        "OriginalTrajectoryID"
+        if "OriginalTrajectoryID" in out.columns
+        else "TrajectoryID"
+    )
+
+    for traj_id, sequence in smoothed_by_traj.items():
+        if not sequence:
+            continue
+        mask = out[id_col] == traj_id
+        if not mask.any():
+            continue
+        frame_ids = [f for f, _ in sequence]
+        log_probs = [lp for _, lp in sequence]
+        labels_confs = smoothed_label_and_conf(log_probs, catalog, display_threshold)
+        by_frame = dict(zip(frame_ids, labels_confs))
+
+        sub_frames = out.loc[mask, "FrameID"]
+        for row_idx, frame_id in sub_frames.items():
+            hit = by_frame.get(int(frame_id))
+            if hit is None:
+                continue
+            label, conf = hit
+            out.at[row_idx, C.FINAL_SMOOTHED_LABEL] = label
+            out.at[row_idx, C.FINAL_SMOOTHED_CONFIDENCE] = conf
 
     return out
 
@@ -1336,8 +1271,32 @@ def run_fragment_solver(
     trajectories_df: pd.DataFrame,
     catalog: IdentityCatalog,
     params: dict[str, Any] | None = None,
+    cache: Any = None,
 ) -> pd.DataFrame:
-    """End-to-end fragment solver: (optional PELT split) → iterative assign.
+    """End-to-end fragment solver: cache evidence → forward-backward smoothing
+    → (optional PELT split on the smoothed posterior) → iterative assign.
+
+    Identity Phase 5 (the honesty fix) + Phase 7 Task 5 (clean-break
+    retirement): when ``cache`` (an open, read-mode ``IdentityEvidenceCache``)
+    is given, every trajectory's identity evidence is sourced from it -- via
+    ``identity/smoothing.py``'s ``load_trajectory_evidence`` (join on
+    ``(FrameID, DetectionID)``) then ``smooth_trajectory_posteriors``
+    (forward-backward chaining). This makes the solver self-sufficient: it
+    produces real identities even when ``ENABLE_IDENTITY_IN_TRACKING`` was
+    off for the whole run, as long as Phase 3's evidence sidecar was written
+    (which happens unconditionally -- the live pipeline always supplies
+    ``cache``). When ``cache`` is ``None`` (or it has no evidence for any
+    trajectory in ``trajectories_df``), this degrades gracefully: PELT
+    splitting is skipped (nothing to split on) and
+    ``solve_global_assignment`` produces the documented no-sidecar outcome
+    (empty evidence per trajectory -- "no evidence, no belief") rather than
+    reconstructing from ``CNN_*_Prob``/``DetectedTag*`` wide-CSV columns --
+    that reconstruction fallback was dead in production (the live pipeline
+    always supplies a cache) and was deleted in Phase 7 Task 5.
+
+    Per-row ``IdentityFinalSmoothedLabel``/``IdentityFinalSmoothedConfidence``
+    (the raw per-frame smoothed decode, pre-fragment-solving) are written
+    whenever cache evidence was available, via ``_annotate_smoothed_labels``.
 
     Parameters
     ----------
@@ -1379,6 +1338,22 @@ def run_fragment_solver(
         FRAGMENT_UNKNOWN_DOUBT_BONUS     float  default 0.5
             Additive doubt bonus for currently-Unknown fragments so they get
             re-evaluated early in each pass.
+        IDENTITY_TRANSITION_EPSILON      float  default 0.02
+            Sticky-Markov transition leak used by the forward-backward
+            smoother (same knob/semantics as the realtime decoder's).
+        IDENTITY_ENABLE_SMOOTHING        bool   default True
+            When True (default), cache evidence is forward-backward
+            smoothed via ``smooth_trajectory_posteriors`` before being used
+            for changepoint detection and assignment. When False, the
+            smoothing step is skipped entirely and the raw per-frame cache
+            evidence is used directly instead.
+        IDENTITY_DISPLAY_THRESHOLD       float  default 0.6
+            Minimum smoothed-posterior confidence to report a per-row
+            IdentityFinalSmoothedLabel instead of "" (also used by the
+            substrate assignment solver's display gate).
+    cache : an open (mode="r") IdentityEvidenceCache, or None. Required for
+        the self-sufficient/cache-sourced path; when omitted the solver
+        produces the no-sidecar degrade (empty evidence, no reconstruction).
     """
     params = params or {}
 
@@ -1389,8 +1364,51 @@ def run_fragment_solver(
     if not known_labels:
         return trajectories_df
 
-    if params.get("ENABLE_PELT_SPLITTING", False):
-        changepoints = detect_identity_changepoints(trajectories_df, catalog, params)
+    smoothed_by_traj: dict[Any, list[tuple[int, np.ndarray]]] | None = None
+    if cache is not None:
+        try:
+            raw_evidence = load_trajectory_evidence(trajectories_df, cache, catalog)
+        except Exception:
+            log.exception(
+                "fragment_solver: failed to load evidence from the identity "
+                "evidence cache; proceeding without cache evidence."
+            )
+            raw_evidence = {}
+
+        if raw_evidence:
+            if bool(params.get("IDENTITY_ENABLE_SMOOTHING", True)):
+                transition_epsilon = float(
+                    params.get("IDENTITY_TRANSITION_EPSILON", 0.02)
+                )
+                smoothed_by_traj = {}
+                for traj_id, sequence in raw_evidence.items():
+                    frame_ids = [f for f, _ in sequence]
+                    log_probs_list = [lp for _, lp in sequence]
+                    smoothed = smooth_trajectory_posteriors(
+                        log_probs_list, transition_epsilon
+                    )
+                    smoothed_by_traj[traj_id] = list(zip(frame_ids, smoothed))
+            else:
+                # Smoothing disabled: use the raw (already-normalized,
+                # per-frame) cache evidence directly -- no forward-backward
+                # chaining -- for changepoint detection and assignment.
+                log.info(
+                    "fragment_solver: IDENTITY_ENABLE_SMOOTHING is False; "
+                    "using unsmoothed per-frame evidence."
+                )
+                smoothed_by_traj = {
+                    traj_id: list(sequence)
+                    for traj_id, sequence in raw_evidence.items()
+                }
+        else:
+            log.info(
+                "fragment_solver: identity evidence cache provided but no "
+                "trajectory evidence matched; solver will no-op for identity "
+                "(falls back to any CSV columns present)."
+            )
+
+    if params.get("ENABLE_PELT_SPLITTING", False) and smoothed_by_traj:
+        changepoints = detect_identity_changepoints(smoothed_by_traj, catalog, params)
         split_df = split_trajectories_at_changepoints(
             trajectories_df, changepoints, params
         )
@@ -1402,10 +1420,22 @@ def run_fragment_solver(
             split_df["TrajectoryID"].nunique(),
         )
     else:
+        if params.get("ENABLE_PELT_SPLITTING", False):
+            log.info(
+                "fragment_solver: PELT splitting requested but no smoothed "
+                "cache evidence is available; skipping split."
+            )
         split_df = trajectories_df
         log.info(
-            "fragment_solver: PELT splitting disabled; iteratively assigning labels to %d existing trajectories.",
+            "fragment_solver: iteratively assigning labels to %d existing trajectories.",
             trajectories_df["TrajectoryID"].nunique(),
         )
 
-    return solve_global_assignment(split_df, catalog, params)
+    if smoothed_by_traj:
+        split_df = _annotate_smoothed_labels(
+            split_df, smoothed_by_traj, catalog, params
+        )
+
+    return solve_global_assignment(
+        split_df, catalog, params, evidence_by_traj=smoothed_by_traj
+    )

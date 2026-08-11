@@ -16,6 +16,7 @@ from typing import Any, Callable
 
 import pandas as pd
 
+from hydra_suite.core.individual.identity import columns as C
 from hydra_suite.core.tracking.session import (
     SessionCallbacks,
     SessionResult,
@@ -34,7 +35,7 @@ def build_tracking_csv_header(
 ) -> list[str]:
     """Build the raw tracking CSV header used by the GUI path."""
     if save_confidence_metrics:
-        header = [
+        base_cols = [
             "TrackID",
             "TrajectoryID",
             "Index",
@@ -47,18 +48,9 @@ def build_tracking_csv_header(
             "AssignmentConfidence",
             "PositionUncertainty",
             "DetectionID",
-            "IdentityAssignedID",
-            "IdentityAssignedLabel",
-            "IdentityAssignedConfidence",
-            "IdentityPosteriorMargin",
-            "IdentityEntropy",
-            "IdentityCommitted",
-            "IdentityEvidenceSources",
-            "IdentityConflictFlag",
-            "IdentitySlotLockLabel",
         ]
     else:
-        header = [
+        base_cols = [
             "TrackID",
             "TrajectoryID",
             "Index",
@@ -68,16 +60,8 @@ def build_tracking_csv_header(
             "FrameID",
             "State",
             "DetectionID",
-            "IdentityAssignedID",
-            "IdentityAssignedLabel",
-            "IdentityAssignedConfidence",
-            "IdentityPosteriorMargin",
-            "IdentityEntropy",
-            "IdentityCommitted",
-            "IdentityEvidenceSources",
-            "IdentityConflictFlag",
-            "IdentitySlotLockLabel",
         ]
+    header = list(base_cols) + C.identity_realtime_columns()
     if str(identity_method).strip().lower() == "apriltags":
         header.extend(
             [
@@ -110,8 +94,17 @@ def _run_engine_pass(
     detection_cache_path: str,
     use_cached_detections: bool,
     should_stop: Callable[[], bool],
-) -> tuple[bool, list[float], pd.DataFrame | None]:
-    """Run one tracking pass on a plain thread; return (success, fps, raw_df).
+) -> tuple[bool, list[float], pd.DataFrame | None, dict[str, str | None]]:
+    """Run one tracking pass on a plain thread; return
+    (success, fps, raw_df, analysis_cache_paths).
+
+    ``analysis_cache_paths`` carries the pose/properties analysis-cache paths
+    the engine wrote this pass (``individual_properties_cache_path``,
+    ``detected_properties_cache_path``) -- the same values the GUI reads off
+    the live worker (``TrackingOrchestrator._collect_worker_props_path``) and
+    threads into the post-tracking ``paths`` dict. The rich export (and thus
+    the offline identity fragment solver) is skipped when none of these are
+    set, so the headless path must forward them for parity with the GUI.
 
     The engine writes its raw rows through ``CSVWriterThread`` (already a plain
     thread). We run ``run_tracking`` on a worker thread and join with a timeout
@@ -171,10 +164,22 @@ def _run_engine_pass(
     csv_writer.stop()
     csv_writer.join(timeout=10)
 
+    # Parity with the GUI (TrackingOrchestrator._collect_worker_props_path):
+    # surface the engine's analysis-cache paths so the post-tracking rich
+    # export has a source and can run the offline identity fragment solver.
+    analysis_cache_paths: dict[str, str | None] = {
+        "individual_properties_cache_path": getattr(
+            engine, "individual_properties_cache_path", None
+        ),
+        "detected_properties_cache_path": getattr(
+            engine, "detected_properties_cache_path", None
+        ),
+    }
+
     if not captured["success"]:
-        return False, [], None
+        return False, [], None, analysis_cache_paths
     raw_df = _read_raw_trajectories(raw_csv_path)
-    return True, list(captured["fps_list"]), raw_df
+    return True, list(captured["fps_list"]), raw_df, analysis_cache_paths
 
 
 def _install_sigint_stop() -> tuple[threading.Event, Any, bool]:
@@ -248,7 +253,7 @@ def run_headless_tracking_session(
             forward_raw_csv = session.raw_csv_path
             backward_raw_csv = None
 
-        forward_ok, fps_fwd, forward_df = _run_engine_pass(
+        forward_ok, fps_fwd, forward_df, forward_cache_paths = _run_engine_pass(
             session,
             params=params,
             raw_csv_path=forward_raw_csv,
@@ -268,7 +273,7 @@ def run_headless_tracking_session(
         backward_df = None
         fps_bwd: list[float] = []
         if session.enable_backward_tracking:
-            backward_ok, fps_bwd, backward_df = _run_engine_pass(
+            backward_ok, fps_bwd, backward_df, _ = _run_engine_pass(
                 session,
                 params=params,
                 raw_csv_path=backward_raw_csv,
@@ -300,6 +305,16 @@ def run_headless_tracking_session(
                 "raw_csv_path": session.raw_csv_path,
                 "final_csv_path": session.final_csv_path,
                 "detection_cache_path": detection_cache_path,
+                # Analysis-cache paths from the forward pass -- without these
+                # the rich export finds no source and skips (so the offline
+                # identity fragment solver never runs). Parity with the GUI's
+                # post-tracking paths dict (orchestrators/tracking.py).
+                "individual_properties_cache_path": forward_cache_paths.get(
+                    "individual_properties_cache_path"
+                ),
+                "detected_properties_cache_path": forward_cache_paths.get(
+                    "detected_properties_cache_path"
+                ),
             },
             callbacks=callbacks,
         )

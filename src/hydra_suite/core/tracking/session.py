@@ -176,7 +176,6 @@ class TrackingSessionCore:
             detected_properties_cache_path=self.paths.get(
                 "detected_properties_cache_path"
             ),
-            detected_cnn_cache_paths=self.paths.get("detected_cnn_cache_paths"),
         )
 
     def _stopped_result(self) -> SessionResult:
@@ -254,6 +253,29 @@ class TrackingSessionCore:
             should_stop=self.callbacks.should_stop,
         )
 
+    def _identity_evidence_cache_path(self):
+        """Resolve the Phase-3 evidence sidecar path for this run's video, or
+        ``None`` (Identity Phase 5: threads the cache path into the offline
+        fragment solver without needing the tracking worker's live
+        ``InferenceRunner`` instance -- see ``find_identity_evidence_cache_path``).
+        """
+        if not self.video_path:
+            return None
+        try:
+            from hydra_suite.core.individual.identity.cache import (
+                find_identity_evidence_cache_path,
+            )
+
+            path = find_identity_evidence_cache_path(self.video_path)
+            return str(path) if path is not None else None
+        except Exception:
+            logger.warning(
+                "Failed to resolve identity evidence cache path for %s",
+                self.video_path,
+                exc_info=True,
+            )
+            return None
+
     def _export_rich(self, final_csv):
         return export_rich_csv(
             final_csv,
@@ -261,6 +283,7 @@ class TrackingSessionCore:
             params=self.params,
             min_valid_conf=float(self.params.get("POSE_MIN_KPT_CONF_VALID", 0.2)),
             ignore_keypoints=self.config.get("pose_ignore_keypoints"),
+            identity_evidence_cache_path=self._identity_evidence_cache_path(),
         )
 
     def _relink_export_rich(self, final_csv):
@@ -270,6 +293,7 @@ class TrackingSessionCore:
             params=self.params,
             min_valid_conf=float(self.params.get("POSE_MIN_KPT_CONF_VALID", 0.2)),
             ignore_keypoints=self.config.get("pose_ignore_keypoints"),
+            identity_evidence_cache_path=self._identity_evidence_cache_path(),
         )
 
     def _run_interp_crops(self, final_csv) -> None:

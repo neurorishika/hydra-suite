@@ -75,7 +75,7 @@ def test_forward_only_drives_engine_then_session(monkeypatch, tmp_path):
     ):
         calls["engine_passes"].append(backward_mode)
         assert params["INFERENCE_MODEL_ID"] == "bgsub_test"
-        return True, [30.0, 30.0], pd.DataFrame({"TrajectoryID": [0], "X": [1]})
+        return True, [30.0, 30.0], pd.DataFrame({"TrajectoryID": [0], "X": [1]}), {}
 
     monkeypatch.setattr(ht, "_run_engine_pass", _fake_engine_pass)
 
@@ -126,7 +126,7 @@ def test_backward_enabled_runs_two_passes(monkeypatch, tmp_path):
         should_stop,
     ):
         seen["passes"].append((backward_mode, use_cached_detections))
-        return True, [30.0], pd.DataFrame({"TrajectoryID": [0]})
+        return True, [30.0], pd.DataFrame({"TrajectoryID": [0]}), {}
 
     monkeypatch.setattr(ht, "_run_engine_pass", _fake_engine_pass)
 
@@ -157,7 +157,7 @@ def test_forward_failure_short_circuits_before_session(monkeypatch, tmp_path):
     monkeypatch.setattr(
         ht,
         "_run_engine_pass",
-        lambda *a, **k: (False, [], None),
+        lambda *a, **k: (False, [], None, {}),
     )
 
     def _must_not_run(*a, **k):

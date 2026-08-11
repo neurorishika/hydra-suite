@@ -4,10 +4,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from hydra_suite.core.individual.classification.cnn import (
-    ClassPrediction,
-    CNNIdentityCache,
-)
 from hydra_suite.core.individual.properties.cache import IndividualPropertiesCache
 from hydra_suite.core.individual.properties.detected_cache import (
     DetectedPropertiesCache,
@@ -17,7 +13,6 @@ from hydra_suite.core.individual.properties.export import (
     POSE_SUMMARY_COLUMNS,
     augment_trajectories_with_detected_apriltag_cache,
     augment_trajectories_with_detected_apriltag_df,
-    augment_trajectories_with_detected_cnn_cache,
     augment_trajectories_with_detected_properties_cache,
     augment_trajectories_with_pose_cache,
     build_detected_apriltag_lookup_dataframe,
@@ -66,7 +61,8 @@ def test_augment_trajectories_with_pose_cache_merges_by_frame_and_detection(tmp_
 
     # First detection: keypoints [[1, 2, 0.9], [3, 4, 0.8]]
     # Mean conf = (0.9 + 0.8) / 2 = 0.85
-    # With min_valid_conf=0.2 (default), both keypoints valid: num_valid=2, valid_fraction=1.0
+    # With min_valid_conf=0.2 (default), both keypoints valid: num_valid=2,
+    # valid_fraction=1.0
     first = out.iloc[0]
     assert first["PoseMeanConf"] == pytest.approx(0.85)
     assert first["PoseNumValid"] == 2
@@ -291,93 +287,6 @@ def test_augment_trajectories_with_detected_properties_cache_merges_by_detection
     assert out.iloc[0]["HeadingDirected"] == 1
     assert out.iloc[0]["HeadTailConfidence"] == pytest.approx(0.92)
     assert np.isnan(out.iloc[1]["ThetaRaw"])
-
-
-def test_augment_trajectories_with_detected_cnn_cache_merges_by_detection(tmp_path):
-    cache_path = tmp_path / "cnn_cache.npz"
-    cache = CNNIdentityCache(cache_path)
-    cache.save(
-        5,
-        [
-            ClassPrediction(
-                det_index=0,
-                factor_names=("flat",),
-                class_names=("alpha",),
-                confidences=(0.83,),
-            ),
-            ClassPrediction(
-                det_index=2,
-                factor_names=("flat",),
-                class_names=(None,),
-                confidences=(0.1,),
-            ),
-        ],
-    )
-    cache.flush()
-
-    trajectories = pd.DataFrame(
-        [
-            {"FrameID": 5, "DetectionID": 50000, "TrajectoryID": 1},
-            {"FrameID": 5, "DetectionID": 50002, "TrajectoryID": 2},
-            {"FrameID": 6, "DetectionID": 60000, "TrajectoryID": 3},
-        ]
-    )
-    out = augment_trajectories_with_detected_cnn_cache(
-        trajectories, str(cache_path), label="idA"
-    )
-
-    assert out.iloc[0]["CNN_idA_Class"] == "alpha"
-    assert out.iloc[0]["CNN_idA_Conf"] == pytest.approx(0.83)
-    assert pd.isna(out.iloc[1]["CNN_idA_Class"])
-    assert out.iloc[1]["CNN_idA_Conf"] == pytest.approx(0.1)
-    assert pd.isna(out.iloc[2]["CNN_idA_Class"])
-
-
-def test_augment_trajectories_with_detected_cnn_cache_expands_multihead_columns(
-    tmp_path,
-):
-    cache_path = tmp_path / "cnn_cache_multi.npz"
-    cache = CNNIdentityCache(cache_path, factor_names=("color", "side"))
-    cache.save(
-        5,
-        [
-            ClassPrediction(
-                det_index=0,
-                factor_names=("color", "side"),
-                class_names=("red", "left"),
-                confidences=(0.83, 0.74),
-            ),
-            ClassPrediction(
-                det_index=1,
-                factor_names=("color", "side"),
-                class_names=(None, "right"),
-                confidences=(0.1, 0.91),
-            ),
-        ],
-    )
-    cache.flush()
-
-    trajectories = pd.DataFrame(
-        [
-            {"FrameID": 5, "DetectionID": 50000, "TrajectoryID": 1},
-            {"FrameID": 5, "DetectionID": 50001, "TrajectoryID": 2},
-            {"FrameID": 6, "DetectionID": 60000, "TrajectoryID": 3},
-        ]
-    )
-    out = augment_trajectories_with_detected_cnn_cache(
-        trajectories, str(cache_path), label="idA"
-    )
-
-    assert out.iloc[0]["CNN_idA_color_Class"] == "red"
-    assert out.iloc[0]["CNN_idA_color_Conf"] == pytest.approx(0.83)
-    assert out.iloc[0]["CNN_idA_side_Class"] == "left"
-    assert out.iloc[0]["CNN_idA_side_Conf"] == pytest.approx(0.74)
-    assert pd.isna(out.iloc[1]["CNN_idA_color_Class"])
-    assert out.iloc[1]["CNN_idA_color_Conf"] == pytest.approx(0.1)
-    assert out.iloc[1]["CNN_idA_side_Class"] == "right"
-    assert out.iloc[1]["CNN_idA_side_Conf"] == pytest.approx(0.91)
-    assert pd.isna(out.iloc[2]["CNN_idA_color_Class"])
-    assert pd.isna(out.iloc[2]["CNN_idA_side_Class"])
 
 
 def test_merge_interpolated_cnn_df_backfills_multihead_columns():

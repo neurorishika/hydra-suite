@@ -9,12 +9,18 @@ consecutive fragments.
 
 from __future__ import annotations
 
+import os
+
 import pandas as pd
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from hydra_suite.core.post.processing import (
     _compute_identity_disagree_frames,
     _stitch_broken_trajectory_fragments,
 )
+from hydra_suite.trackerkit import cli_config
+from hydra_suite.trackerkit.engine_params import RuntimeContext, build_engine_params
 
 
 def _row(frame: int, x: float, y: float, label: str = "", committed: int = 0) -> dict:
@@ -22,8 +28,8 @@ def _row(frame: int, x: float, y: float, label: str = "", committed: int = 0) ->
         "FrameID": frame,
         "X": x,
         "Y": y,
-        "IdentityCommitted": committed,
-        "IdentityAssignedLabel": label,
+        "IdentityFinalSource": "offline" if committed else "",
+        "IdentityFinalLabel": label,
     }
 
 
@@ -102,3 +108,68 @@ def test_stitch_allows_when_identity_gates_stitching_false() -> None:
         "with identity gating disabled, geometry alone should stitch the "
         f"fragments — got {len(out)} trajectories"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 Task 7: post-hoc identity is a first-class, realtime-independent
+# toggle, and build_engine_params threads the new smoothing knob.
+# ---------------------------------------------------------------------------
+
+_MINIMAL_PROBE_KWARGS = dict(fps=30.0, total_frames=100, width=640, height=480)
+
+
+def _build_params(cfg: dict) -> dict:
+    probe = cli_config.TrackerCliVideoProbe(**_MINIMAL_PROBE_KWARGS)
+    rt = RuntimeContext(
+        fps=probe.fps,
+        total_frames=probe.total_frames,
+        frame_width=probe.width,
+        frame_height=probe.height,
+    )
+    return build_engine_params(cfg, runtime=rt)
+
+
+def test_posthoc_enabled_independent_of_realtime_toggle():
+    """IDENTITY_POSTHOC_ENABLED must not move when the realtime toggle does."""
+    base = {"detection_method": "background_subtraction", "max_targets": 2}
+
+    realtime_on = _build_params({**base, "enable_identity_in_tracking": True})
+    realtime_off = _build_params({**base, "enable_identity_in_tracking": False})
+
+    assert realtime_on["IDENTITY_POSTHOC_ENABLED"] is True
+    assert realtime_off["IDENTITY_POSTHOC_ENABLED"] is True
+    assert realtime_on["ENABLE_IDENTITY_IN_TRACKING"] is True
+    assert realtime_off["ENABLE_IDENTITY_IN_TRACKING"] is False
+
+
+def test_build_engine_params_emits_identity_enable_smoothing():
+    base = {"detection_method": "background_subtraction", "max_targets": 2}
+
+    default_params = _build_params(base)
+    assert default_params["IDENTITY_ENABLE_SMOOTHING"] is True
+
+    off_params = _build_params({**base, "enable_identity_smoothing": False})
+    assert off_params["IDENTITY_ENABLE_SMOOTHING"] is False
+
+    on_params = _build_params({**base, "enable_identity_smoothing": True})
+    assert on_params["IDENTITY_ENABLE_SMOOTHING"] is True
+
+
+def test_tracking_panel_realtime_tooltip_makes_no_posthoc_claims():
+    """The realtime master-toggle tooltip (~:538) must describe only the
+    realtime/online effect on tracking and say nothing about post-hoc
+    (which now runs as an independent stage -- see postprocess_panel.py).
+    """
+    import inspect
+
+    from hydra_suite.trackerkit.gui.panels import tracking_panel
+
+    source = inspect.getsource(tracking_panel)
+    idx = source.index("self.chk_enable_identity_in_tracking.setToolTip(")
+    tooltip_src = source[idx : idx + 700]
+    lowered = tooltip_src.lower()
+    assert "post-hoc" not in lowered
+    assert "post hoc" not in lowered
+    assert "post process" not in lowered
+    assert "post-process" not in lowered
+    assert "realtime" in lowered or "tracking" in lowered

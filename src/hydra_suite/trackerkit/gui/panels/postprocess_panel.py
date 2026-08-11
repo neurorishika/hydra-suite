@@ -575,11 +575,16 @@ class PostProcessPanel(QWidget):
         vl_identity_postprocess = QVBoxLayout(self.g_identity_postprocess)
         vl_identity_postprocess.addWidget(
             self._main_window._create_help_label(
-                "All identity-driven decisions that run after tracking. "
-                "Two independent stages: (1) trajectory-structure edits during "
-                "forward/backward merge — splits and stitch vetos triggered by "
-                "committed-label conflicts, and (2) final label refinement — "
-                "optional PELT changepoint splitting and iterative greedy relabeling."
+                "All identity-driven decisions that run after tracking, independent "
+                "of the realtime tracking-time identity setting. Two independent "
+                "stages: (1) trajectory-structure edits during forward/backward "
+                "merge — splits and stitch vetos triggered by committed-label "
+                "conflicts, and (2) final label refinement — reading the "
+                "inference-time identity evidence cache directly, with optional "
+                "forward-backward smoothing, optional PELT changepoint splitting, "
+                "and iterative greedy relabeling. This entire section runs "
+                "regardless of whether 'Use identity to influence tracking' "
+                "(Tracking panel) is on or off."
             )
         )
 
@@ -642,7 +647,12 @@ class PostProcessPanel(QWidget):
         self.cmb_identity_postprocess_mode.setCurrentText("Fragment Solver")
         self.cmb_identity_postprocess_mode.setToolTip(
             "None: skip identity post-processing entirely.\n"
-            "Fragment Solver: optional PELT splitting + iterative label refinement."
+            "Fragment Solver: reads the inference-time identity evidence cache and\n"
+            "the final trajectories directly and assigns identities from them —\n"
+            "optional forward-backward smoothing, optional PELT changepoint\n"
+            "splitting, and iterative label refinement. Runs independently of the\n"
+            "Tracking panel's 'Use identity to influence tracking' setting; it\n"
+            "still produces identity labels when that setting is off."
         )
         self.cmb_identity_postprocess_mode.currentTextChanged.connect(
             self._on_identity_postprocess_mode_changed
@@ -653,6 +663,20 @@ class PostProcessPanel(QWidget):
         fs_layout = QFormLayout(self.fragment_solver_content)
         fs_layout.setContentsMargins(0, 4, 0, 0)
         fs_layout.setSpacing(4)
+
+        # ── Forward-backward smoothing ───────────────────────────────────────
+        self.chk_enable_identity_smoothing = QCheckBox(
+            "Smooth identity evidence (forward-backward)"
+        )
+        self.chk_enable_identity_smoothing.setChecked(True)
+        self.chk_enable_identity_smoothing.setToolTip(
+            "When checked (default), the cached per-frame identity evidence is\n"
+            "forward-backward smoothed before changepoint detection and label\n"
+            "assignment — a confident late burst of evidence corrects ambiguous\n"
+            "early frames, and vice versa. When unchecked, the raw per-frame\n"
+            "evidence is used directly, with no smoothing pass."
+        )
+        fs_layout.addRow(self.chk_enable_identity_smoothing)
 
         # ── PELT changepoint splitting (subgroup) ───────────────────────────
         self.chk_enable_pelt_splitting = QCheckBox(
@@ -777,9 +801,11 @@ class PostProcessPanel(QWidget):
         self.spin_online_prior_weight.setValue(0.25)
         self.spin_online_prior_weight.setToolTip(
             "Relative weight for the online decoder's label as a soft prior.\n"
-            "Scaled by each fragment's IdentityAssignedConfidence and combined with\n"
-            "CNN and AprilTag evidence before scoring.\n"
-            "Higher → harder to override confident online assignments."
+            "Scaled by each fragment's IdentityFinalConfidence and combined with\n"
+            "CNN and AprilTag evidence before scoring. This runs even when realtime\n"
+            "identity influence on tracking is off, since the prior is read from the\n"
+            "identity evidence cache and final trajectories, not from live assignment.\n"
+            "Higher → harder to override confident evidence-derived assignments."
         )
         self.lbl_online_prior_weight = QLabel("Online label prior")
 
