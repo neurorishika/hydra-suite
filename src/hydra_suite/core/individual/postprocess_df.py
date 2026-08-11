@@ -3,6 +3,8 @@ import logging
 import numpy as np
 import pandas as pd
 
+from hydra_suite.core.individual.identity import columns as C
+
 logger = logging.getLogger(__name__)
 
 
@@ -53,12 +55,23 @@ def apply_identity_postprocessing_to_df(
         return with_pose_df
 
     def _annotate_identity_summary_columns(df: pd.DataFrame) -> pd.DataFrame:
+        """Single owner of the ``IdentityEvidence*`` family (rich-export summary).
+
+        Reads the Final family (``C.FINAL_LABEL``/``C.FINAL_SMOOTHED_LABEL``,
+        Task 3) for the ``offline`` source signal and the Realtime family
+        (``C.REALTIME_LABEL``) for the ``realtime`` source signal. Never
+        writes any ``IdentityRealtime*``/``IdentityFinal*`` column -- this
+        function only summarizes evidence already present on the row.
+        """
         out = df.copy()
         cnn_class_columns = [
             col
             for col in out.columns
             if str(col).startswith("CNN_") and str(col).endswith("_Class")
         ]
+        cnn_conf_columns = {
+            col: f"{str(col)[: -len('_Class')]}_Conf" for col in cnn_class_columns
+        }
 
         def _row_sources(row: pd.Series) -> object:
             sources = []
@@ -66,18 +79,18 @@ def apply_identity_postprocessing_to_df(
                 sources.append("apriltag")
             if any(pd.notna(row.get(col)) for col in cnn_class_columns):
                 sources.append("cnn")
-            if pd.notna(row.get("IdentityOfflineLabel")) or pd.notna(
-                row.get("IdentitySmoothedLabel")
+            if pd.notna(row.get(C.FINAL_LABEL)) or pd.notna(
+                row.get(C.FINAL_SMOOTHED_LABEL)
             ):
                 sources.append("offline")
-            if pd.notna(row.get("IdentityAssignedLabel")) and not sources:
-                sources.append("online")
+            if pd.notna(row.get(C.REALTIME_LABEL)) and not sources:
+                sources.append("realtime")
             if not sources:
                 return np.nan
             return ",".join(sorted(set(sources)))
 
         def _row_conflict(row: pd.Series) -> int:
-            assigned = row.get("IdentityAssignedLabel")
+            assigned = row.get(C.REALTIME_LABEL)
             observed = set()
             detected_tag_label = row.get("DetectedTagLabel")
             if pd.notna(detected_tag_label):
@@ -92,8 +105,47 @@ def apply_identity_postprocessing_to_df(
                     return 1
             return 1 if len(observed) > 1 else 0
 
-        out["IdentityEvidenceSources"] = out.apply(_row_sources, axis=1)
-        out["IdentityConflictFlag"] = out.apply(_row_conflict, axis=1).astype(int)
+        def _row_top_evidence(row: pd.Series) -> tuple:
+            """Per-row top calibrated evidence: (top_label, confidence).
+
+            Prefers the CNN classifier head with the highest reported
+            confidence (``CNN_*_Class``/``CNN_*_Conf`` pairs); falls back to
+            a detected AprilTag label/confidence when no CNN evidence is
+            present on the row.
+            """
+            best_label = np.nan
+            best_conf = np.nan
+            for class_col, conf_col in cnn_conf_columns.items():
+                label = row.get(class_col)
+                conf = row.get(conf_col)
+                if pd.isna(label) or pd.isna(conf):
+                    continue
+                conf = float(conf)
+                if pd.isna(best_conf) or conf > best_conf:
+                    best_label = label
+                    best_conf = conf
+            if pd.isna(best_label):
+                tag_label = row.get("DetectedTagLabel")
+                if pd.notna(tag_label):
+                    tag_conf = row.get("DetectedTagConf")
+                    best_label = tag_label
+                    best_conf = float(tag_conf) if pd.notna(tag_conf) else np.nan
+            return best_label, best_conf
+
+        out[C.EVIDENCE_SOURCES] = out.apply(_row_sources, axis=1)
+        out[C.EVIDENCE_CONFLICT_FLAG] = out.apply(_row_conflict, axis=1).astype(int)
+
+        top_evidence = out.apply(_row_top_evidence, axis=1, result_type="expand")
+        if top_evidence.empty:
+            out[C.EVIDENCE_TOPLABEL] = pd.Series(
+                [np.nan] * len(out), index=out.index, dtype=object
+            )
+            out[C.EVIDENCE_CONFIDENCE] = pd.Series(
+                [np.nan] * len(out), index=out.index, dtype=float
+            )
+        else:
+            out[C.EVIDENCE_TOPLABEL] = top_evidence[0].astype(object)
+            out[C.EVIDENCE_CONFIDENCE] = pd.to_numeric(top_evidence[1], errors="coerce")
         return out
 
     try:
