@@ -69,10 +69,8 @@ def _cnn_det_pred_to_class_prediction(
 
     Mirrors legacy ``CNNClassifier.predict_batch`` (cnn.py:404-407): when the
     top-class confidence is below ``confidence_threshold`` the class name is
-    collapsed to ``None`` (the confidence is still recorded). The downstream
-    majority vote (``TrackCNNHistory.majority_class``) excludes ``None`` /
-    ``"unknown"``, so without this gate low-confidence guesses would be counted
-    that legacy discarded.
+    collapsed to ``None`` (the confidence is still recorded), so without this
+    gate low-confidence guesses would be counted that legacy discarded.
     """
     from hydra_suite.core.individual.classification.cnn import ClassPrediction
 

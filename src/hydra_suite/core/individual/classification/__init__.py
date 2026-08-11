@@ -12,7 +12,6 @@ from hydra_suite.core.individual.classification.cnn import (
     ClassPrediction,
     CNNIdentityBackend,
     CNNIdentityConfig,
-    TrackCNNHistory,
     apply_cnn_identity_cost,
 )
 from hydra_suite.core.individual.classification.errors import (
@@ -38,6 +37,5 @@ __all__ = [
     "ClassPrediction",
     "HeadTailAnalyzer",
     "HeadTailFormatError",
-    "TrackCNNHistory",
     "apply_cnn_identity_cost",
 ]

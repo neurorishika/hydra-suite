@@ -13,7 +13,6 @@ from .classification.cnn import (
     ClassPrediction,
     CNNIdentityBackend,
     CNNIdentityConfig,
-    TrackCNNHistory,
     apply_cnn_identity_cost,
 )
 from .classification.headtail import HeadTailAnalyzer
@@ -51,7 +50,6 @@ __all__ = [
     "CNNIdentityConfig",
     "CNNIdentityBackend",
     "ClassPrediction",
-    "TrackCNNHistory",
     "apply_cnn_identity_cost",
     "HeadTailAnalyzer",
     # Geometry
