@@ -86,8 +86,8 @@ def _make_df_with_prob_cols(n_frames=60, swap_at=30):
             "FrameID": frames,
             "X": [float(i) for i in range(n_frames)],
             "Y": [0.0] * n_frames,
-            "IdentityAssignedLabel": ["blue"] * n_frames,
-            "IdentityAssignedConfidence": [0.8] * n_frames,
+            "IdentityFinalLabel": ["blue"] * n_frames,
+            "IdentityFinalConfidence": [0.8] * n_frames,
             "CNN_test_blue_Prob": blue_probs,
             "CNN_test_green_Prob": green_probs,
         }
@@ -126,8 +126,8 @@ def test_changepoint_no_cnn_columns_returns_empty():
         {
             "TrajectoryID": [1] * 10,
             "FrameID": list(range(10)),
-            "IdentityAssignedLabel": ["blue"] * 10,
-            "IdentityAssignedConfidence": [0.8] * 10,
+            "IdentityFinalLabel": ["blue"] * 10,
+            "IdentityFinalConfidence": [0.8] * 10,
         }
     )
     catalog = _make_catalog()
@@ -148,8 +148,8 @@ def _make_two_trajectory_df():
             "FrameID": frames_t1 + frames_t2,
             "X": [float(i) for i in range(2 * n)],
             "Y": [0.0] * (2 * n),
-            "IdentityAssignedLabel": ["blue"] * n + ["green"] * n,
-            "IdentityAssignedConfidence": [0.3] * (2 * n),
+            "IdentityFinalLabel": ["blue"] * n + ["green"] * n,
+            "IdentityFinalConfidence": [0.3] * (2 * n),
             "CNN_test_blue_Prob": [0.1] * n + [0.9] * n,
             "CNN_test_green_Prob": [0.9] * n + [0.1] * n,
         }
@@ -166,9 +166,9 @@ def test_solve_global_assignment_corrects_swap():
         "MAX_VELOCITY_BREAK": 50.0,
     }
     result = solve_global_assignment(df, catalog, params)
-    assert "IdentityAssignedLabel" in result.columns
-    label_t1 = result[result["TrajectoryID"] == 1]["IdentityAssignedLabel"].iloc[0]
-    label_t2 = result[result["TrajectoryID"] == 2]["IdentityAssignedLabel"].iloc[0]
+    assert "IdentityFinalLabel" in result.columns
+    label_t1 = result[result["TrajectoryID"] == 1]["IdentityFinalLabel"].iloc[0]
+    label_t2 = result[result["TrajectoryID"] == 2]["IdentityFinalLabel"].iloc[0]
     assert label_t1 == "green", f"expected green for traj 1, got {label_t1}"
     assert label_t2 == "blue", f"expected blue for traj 2, got {label_t2}"
 
@@ -185,7 +185,7 @@ def test_solve_global_assignment_uniform_labels_per_trajectory():
     }
     result = solve_global_assignment(df, catalog, params)
     for tid in result["TrajectoryID"].unique():
-        labels = result[result["TrajectoryID"] == tid]["IdentityAssignedLabel"].unique()
+        labels = result[result["TrajectoryID"] == tid]["IdentityFinalLabel"].unique()
         assert len(labels) == 1, f"trajectory {tid} has mixed labels: {labels}"
 
 
@@ -198,8 +198,8 @@ def test_solve_global_assignment_keeps_online_label_when_margin_too_small():
             "FrameID": list(range(n)),
             "X": [float(i) for i in range(n)],
             "Y": [0.0] * n,
-            "IdentityAssignedLabel": ["blue"] * n,
-            "IdentityAssignedConfidence": [0.9] * n,
+            "IdentityFinalLabel": ["blue"] * n,
+            "IdentityFinalConfidence": [0.9] * n,
             "CNN_test_blue_Prob": [0.52] * n,
             "CNN_test_green_Prob": [0.48] * n,
         }
@@ -211,7 +211,7 @@ def test_solve_global_assignment_keeps_online_label_when_margin_too_small():
         "MAX_VELOCITY_BREAK": 50.0,
     }
     result = solve_global_assignment(df, catalog, params)
-    assert result.iloc[0]["IdentityAssignedLabel"] == "blue"
+    assert result.iloc[0]["IdentityFinalLabel"] == "blue"
 
 
 def test_solve_global_assignment_combines_multiple_cnn_phases():
@@ -223,8 +223,8 @@ def test_solve_global_assignment_combines_multiple_cnn_phases():
             "FrameID": list(range(n)),
             "X": [float(i) for i in range(n)],
             "Y": [0.0] * n,
-            "IdentityAssignedLabel": ["blue"] * n,
-            "IdentityAssignedConfidence": [0.2] * n,
+            "IdentityFinalLabel": ["blue"] * n,
+            "IdentityFinalConfidence": [0.2] * n,
             "CNN_phase_a_Class": ["blue"] * n,
             "CNN_phase_a_Conf": [0.7] * n,
             "CNN_phase_b_Class": ["green"] * n,
@@ -244,7 +244,7 @@ def test_solve_global_assignment_combines_multiple_cnn_phases():
 
     result = solve_global_assignment(df, catalog, params)
 
-    assert result.iloc[0]["IdentityAssignedLabel"] == "green"
+    assert result.iloc[0]["IdentityFinalLabel"] == "green"
 
 
 def test_solve_global_assignment_reconstructs_multihead_label_probabilities():
@@ -256,8 +256,8 @@ def test_solve_global_assignment_reconstructs_multihead_label_probabilities():
             "FrameID": list(range(n)),
             "X": [float(i) for i in range(n)],
             "Y": [0.0] * n,
-            "IdentityAssignedLabel": ["blue_right"] * n,
-            "IdentityAssignedConfidence": [0.2] * n,
+            "IdentityFinalLabel": ["blue_right"] * n,
+            "IdentityFinalConfidence": [0.2] * n,
             "CNN_identity_color_Class": ["red"] * n,
             "CNN_identity_color_Conf": [0.9] * n,
             "CNN_identity_side_Class": ["left"] * n,
@@ -277,7 +277,7 @@ def test_solve_global_assignment_reconstructs_multihead_label_probabilities():
 
     result = solve_global_assignment(df, catalog, params)
 
-    assert result.iloc[0]["IdentityAssignedLabel"] == "red_left"
+    assert result.iloc[0]["IdentityFinalLabel"] == "red_left"
 
 
 def test_run_fragment_solver_returns_dataframe():
@@ -286,7 +286,7 @@ def test_run_fragment_solver_returns_dataframe():
     result = run_fragment_solver(df, catalog, {})
     assert isinstance(result, pd.DataFrame)
     assert len(result) == len(df)
-    assert "IdentityAssignedLabel" in result.columns
+    assert "IdentityFinalLabel" in result.columns
 
 
 def test_run_fragment_solver_empty_df():
@@ -351,12 +351,12 @@ def test_run_fragment_solver_pelt_enabled_splits_trajectory(tmp_path):
     assert "OriginalTrajectoryID" in result.columns
     assert (result["OriginalTrajectoryID"] == 1).all()
     # The cache-sourced pipeline also writes the raw per-frame smoothed decode.
-    assert "IdentitySmoothedLabel" in result.columns
-    assert (result["IdentitySmoothedLabel"] != "").any()
+    assert "IdentityFinalSmoothedLabel" in result.columns
+    assert (result["IdentityFinalSmoothedLabel"] != "").any()
     # And the fragment solver's own committed decision, independent of any
-    # (absent) realtime IdentityAssignedLabel input.
-    assert "IdentityOfflineLabel" in result.columns
-    assert (result["IdentityOfflineLabel"] != "unknown").any()
+    # (absent) realtime IdentityRealtimeLabel input.
+    assert "IdentityFinalLabel" in result.columns
+    assert (result["IdentityFinalLabel"] != "unknown").any()
 
 
 def test_split_trajectories_produces_two_ids_on_changepoint():
@@ -461,8 +461,8 @@ def test_long_consistent_track_beats_short_confident_fragment():
                 "X": float(f),
                 "Y": 0.0,
                 # "id consistent" — online tracker labeled it "blue" throughout
-                "IdentityAssignedLabel": "blue",
-                "IdentityAssignedConfidence": 0.80,
+                "IdentityFinalLabel": "blue",
+                "IdentityFinalConfidence": 0.80,
                 "CNN_test_blue_Prob": 0.70,
                 "CNN_test_green_Prob": 0.30,
                 "DetectedTagLabel": float("nan"),
@@ -475,8 +475,8 @@ def test_long_consistent_track_beats_short_confident_fragment():
                 "FrameID": f,
                 "X": 500.0,  # far from traj 1's position — spatially inconsistent
                 "Y": 500.0,
-                "IdentityAssignedLabel": "blue",
-                "IdentityAssignedConfidence": 0.95,
+                "IdentityFinalLabel": "blue",
+                "IdentityFinalConfidence": 0.95,
                 "CNN_test_blue_Prob": 0.99,
                 "CNN_test_green_Prob": 0.01,
                 "DetectedTagLabel": "blue",
@@ -497,7 +497,7 @@ def test_long_consistent_track_beats_short_confident_fragment():
     }
     result = solve_global_assignment(df, catalog, params)
 
-    label_large = result[result["TrajectoryID"] == 1]["IdentityAssignedLabel"].iloc[0]
+    label_large = result[result["TrajectoryID"] == 1]["IdentityFinalLabel"].iloc[0]
 
     assert (
         label_large == "blue"
@@ -563,8 +563,8 @@ def test_iterative_solver_resolves_spurious_blocking_fragment():
                 "FrameID": f,
                 "X": float(f),
                 "Y": 0.0,
-                "IdentityAssignedLabel": "blue",
-                "IdentityAssignedConfidence": 0.85,
+                "IdentityFinalLabel": "blue",
+                "IdentityFinalConfidence": 0.85,
                 "CNN_test_blue_Prob": 0.80,
                 "CNN_test_green_Prob": 0.20,
                 "DetectedTagLabel": float("nan"),
@@ -578,8 +578,8 @@ def test_iterative_solver_resolves_spurious_blocking_fragment():
                 "FrameID": f,
                 "X": float(f),
                 "Y": 200.0,
-                "IdentityAssignedLabel": "green",
-                "IdentityAssignedConfidence": 0.85,
+                "IdentityFinalLabel": "green",
+                "IdentityFinalConfidence": 0.85,
                 "CNN_test_blue_Prob": 0.20,
                 "CNN_test_green_Prob": 0.80,
                 "DetectedTagLabel": float("nan"),
@@ -595,8 +595,8 @@ def test_iterative_solver_resolves_spurious_blocking_fragment():
                 "FrameID": f,
                 "X": float(f),
                 "Y": 0.0,
-                "IdentityAssignedLabel": "green",
-                "IdentityAssignedConfidence": 0.92,
+                "IdentityFinalLabel": "green",
+                "IdentityFinalConfidence": 0.92,
                 "CNN_test_blue_Prob": 0.05,
                 "CNN_test_green_Prob": 0.95,
                 "DetectedTagLabel": float("nan"),
@@ -616,9 +616,9 @@ def test_iterative_solver_resolves_spurious_blocking_fragment():
     }
     result = solve_global_assignment(df, catalog, params)
 
-    label_t1 = result[result["TrajectoryID"] == 1]["IdentityAssignedLabel"].iloc[0]
-    label_t2 = result[result["TrajectoryID"] == 2]["IdentityAssignedLabel"].iloc[0]
-    label_t3 = result[result["TrajectoryID"] == 3]["IdentityAssignedLabel"].iloc[0]
+    label_t1 = result[result["TrajectoryID"] == 1]["IdentityFinalLabel"].iloc[0]
+    label_t2 = result[result["TrajectoryID"] == 2]["IdentityFinalLabel"].iloc[0]
+    label_t3 = result[result["TrajectoryID"] == 3]["IdentityFinalLabel"].iloc[0]
 
     # The two long anchor tracks must keep their correct online labels.
     assert label_t1 == "blue", f"long blue track lost label, got {label_t1!r}"
@@ -643,8 +643,8 @@ def test_iterative_solver_unknown_promotion_when_feasible():
                 "FrameID": f,
                 "X": float(f),
                 "Y": 0.0,
-                "IdentityAssignedLabel": "blue",
-                "IdentityAssignedConfidence": 0.9,
+                "IdentityFinalLabel": "blue",
+                "IdentityFinalConfidence": 0.9,
                 "CNN_test_blue_Prob": 0.9,
                 "CNN_test_green_Prob": 0.1,
             }
@@ -657,8 +657,8 @@ def test_iterative_solver_unknown_promotion_when_feasible():
                 "FrameID": f,
                 "X": 500.0,
                 "Y": 500.0,
-                "IdentityAssignedLabel": "unknown",
-                "IdentityAssignedConfidence": 0.0,
+                "IdentityFinalLabel": "unknown",
+                "IdentityFinalConfidence": 0.0,
                 "CNN_test_blue_Prob": 0.05,
                 "CNN_test_green_Prob": 0.95,
             }
@@ -672,7 +672,7 @@ def test_iterative_solver_unknown_promotion_when_feasible():
         "ASSIGNMENT_MARGIN_THRESHOLD": 0.01,
     }
     result = solve_global_assignment(df, catalog, params)
-    label_t2 = result[result["TrajectoryID"] == 2]["IdentityAssignedLabel"].iloc[0]
+    label_t2 = result[result["TrajectoryID"] == 2]["IdentityFinalLabel"].iloc[0]
     assert label_t2 == "green", f"expected Unknown→green promotion, got {label_t2!r}"
 
 
@@ -687,8 +687,8 @@ def test_iterative_solver_monotone_gate_blocks_marginal_flips():
             "FrameID": list(range(n)),
             "X": [float(i) for i in range(n)],
             "Y": [0.0] * n,
-            "IdentityAssignedLabel": ["blue"] * n,
-            "IdentityAssignedConfidence": [0.9] * n,
+            "IdentityFinalLabel": ["blue"] * n,
+            "IdentityFinalConfidence": [0.9] * n,
             # CNN very near 50/50 — minimal margin.
             "CNN_test_blue_Prob": [0.51] * n,
             "CNN_test_green_Prob": [0.49] * n,
@@ -703,7 +703,7 @@ def test_iterative_solver_monotone_gate_blocks_marginal_flips():
         "FRAGMENT_LENGTH_WEIGHT": 0.6,
     }
     result = solve_global_assignment(df, catalog, params)
-    assert result.iloc[0]["IdentityAssignedLabel"] == "blue"
+    assert result.iloc[0]["IdentityFinalLabel"] == "blue"
 
 
 def test_long_gap_does_not_excuse_implausible_distance():
@@ -737,8 +737,8 @@ def test_long_gap_does_not_excuse_implausible_distance():
                 "FrameID": f,
                 "X": float(f),
                 "Y": 0.0,
-                "IdentityAssignedLabel": "blue",
-                "IdentityAssignedConfidence": 0.9,
+                "IdentityFinalLabel": "blue",
+                "IdentityFinalConfidence": 0.9,
                 "CNN_test_blue_Prob": 0.9,
                 "CNN_test_green_Prob": 0.1,
             }
@@ -753,8 +753,8 @@ def test_long_gap_does_not_excuse_implausible_distance():
                 "FrameID": f,
                 "X": 0.0,
                 "Y": 0.0,
-                "IdentityAssignedLabel": "green",
-                "IdentityAssignedConfidence": 0.9,
+                "IdentityFinalLabel": "green",
+                "IdentityFinalConfidence": 0.9,
                 "CNN_test_blue_Prob": 0.05,
                 "CNN_test_green_Prob": 0.95,
             }
@@ -766,8 +766,8 @@ def test_long_gap_does_not_excuse_implausible_distance():
                 "FrameID": f,
                 "X": 5000.0,
                 "Y": 5000.0,
-                "IdentityAssignedLabel": "green",
-                "IdentityAssignedConfidence": 0.9,
+                "IdentityFinalLabel": "green",
+                "IdentityFinalConfidence": 0.9,
                 "CNN_test_blue_Prob": 0.05,
                 "CNN_test_green_Prob": 0.95,
             }
@@ -783,8 +783,8 @@ def test_long_gap_does_not_excuse_implausible_distance():
     }
     result = solve_global_assignment(df, catalog, params)
 
-    label_t2 = result[result["TrajectoryID"] == 2]["IdentityAssignedLabel"].iloc[0]
-    label_t3 = result[result["TrajectoryID"] == 3]["IdentityAssignedLabel"].iloc[0]
+    label_t2 = result[result["TrajectoryID"] == 2]["IdentityFinalLabel"].iloc[0]
+    label_t3 = result[result["TrajectoryID"] == 3]["IdentityFinalLabel"].iloc[0]
     # Both cannot be "green": they would imply a single animal occupying
     # (0,0) and (5000,5000) at frames separated by 1000 — an implausible
     # bridge regardless of how large the gap is.
@@ -821,8 +821,8 @@ def test_iterative_solver_breaks_label_lockin_via_swap():
                 "FrameID": f,
                 "X": float(f),
                 "Y": 0.0,
-                "IdentityAssignedLabel": "blue",
-                "IdentityAssignedConfidence": 0.5,
+                "IdentityFinalLabel": "blue",
+                "IdentityFinalConfidence": 0.5,
                 "CNN_test_blue_Prob": 0.05,
                 "CNN_test_green_Prob": 0.95,
             }
@@ -834,8 +834,8 @@ def test_iterative_solver_breaks_label_lockin_via_swap():
                 "FrameID": f,
                 "X": float(f - 200),
                 "Y": 3000.0,
-                "IdentityAssignedLabel": "green",
-                "IdentityAssignedConfidence": 0.5,
+                "IdentityFinalLabel": "green",
+                "IdentityFinalConfidence": 0.5,
                 "CNN_test_blue_Prob": 0.95,
                 "CNN_test_green_Prob": 0.05,
             }
@@ -851,8 +851,8 @@ def test_iterative_solver_breaks_label_lockin_via_swap():
     }
     result = solve_global_assignment(df, catalog, params)
 
-    label_t1 = result[result["TrajectoryID"] == 1]["IdentityAssignedLabel"].iloc[0]
-    label_t2 = result[result["TrajectoryID"] == 2]["IdentityAssignedLabel"].iloc[0]
+    label_t1 = result[result["TrajectoryID"] == 1]["IdentityFinalLabel"].iloc[0]
+    label_t2 = result[result["TrajectoryID"] == 2]["IdentityFinalLabel"].iloc[0]
     assert label_t1 == "green", (
         f"swap move should let track 1 reach 'green' despite track 2 sitting "
         f"on it; got {label_t1!r}"
@@ -897,8 +897,8 @@ def _make_two_fragment_df(t1_range, t2_range, label="blue", x_offset=0.0):
                 "FrameID": f,
                 "X": float(f),
                 "Y": 0.0,
-                "IdentityAssignedLabel": label,
-                "IdentityAssignedConfidence": 0.9,
+                "IdentityFinalLabel": label,
+                "IdentityFinalConfidence": 0.9,
                 "CNN_test_blue_Prob": 0.95 if label == "blue" else 0.05,
                 "CNN_test_green_Prob": 0.05 if label == "blue" else 0.95,
             }
@@ -910,8 +910,8 @@ def _make_two_fragment_df(t1_range, t2_range, label="blue", x_offset=0.0):
                 "FrameID": f,
                 "X": float(f) + x_offset,
                 "Y": 0.0,
-                "IdentityAssignedLabel": label,
-                "IdentityAssignedConfidence": 0.9,
+                "IdentityFinalLabel": label,
+                "IdentityFinalConfidence": 0.9,
                 "CNN_test_blue_Prob": 0.95 if label == "blue" else 0.05,
                 "CNN_test_green_Prob": 0.05 if label == "blue" else 0.95,
             }
@@ -931,8 +931,8 @@ def test_substrate_solver_overlapping_fragments_get_injective_assignment():
         "ASSIGNMENT_MARGIN_THRESHOLD": 0.01,
     }
     result = solve_global_assignment(df, catalog, params)
-    label_t1 = result[result["TrajectoryID"] == 1]["IdentityAssignedLabel"].iloc[0]
-    label_t2 = result[result["TrajectoryID"] == 2]["IdentityAssignedLabel"].iloc[0]
+    label_t1 = result[result["TrajectoryID"] == 1]["IdentityFinalLabel"].iloc[0]
+    label_t2 = result[result["TrajectoryID"] == 2]["IdentityFinalLabel"].iloc[0]
     labels = {label_t1, label_t2}
     assert not (
         label_t1 == "blue" and label_t2 == "blue"
@@ -953,8 +953,8 @@ def test_substrate_solver_nonoverlapping_fragments_may_share_label():
         "ASSIGNMENT_MARGIN_THRESHOLD": 0.01,
     }
     result = solve_global_assignment(df, catalog, params)
-    label_t1 = result[result["TrajectoryID"] == 1]["IdentityAssignedLabel"].iloc[0]
-    label_t2 = result[result["TrajectoryID"] == 2]["IdentityAssignedLabel"].iloc[0]
+    label_t1 = result[result["TrajectoryID"] == 1]["IdentityFinalLabel"].iloc[0]
+    label_t2 = result[result["TrajectoryID"] == 2]["IdentityFinalLabel"].iloc[0]
     assert (
         label_t1 == "blue" and label_t2 == "blue"
     ), f"non-overlapping fragments should both be able to keep 'blue', got t1={label_t1!r}, t2={label_t2!r}"

@@ -16,19 +16,19 @@ always-written cache (``identity_evidence_cache_path`` threaded into
 ``apply_identity_postprocessing_to_df``), making post-hoc identity
 self-sufficient. This test builds a tracking-output DataFrame that mimics a
 realtime-off run exactly: no ``CNN_*_Prob``/``DetectedTag*`` columns, and
-EMPTY ``IdentityAssignedLabel``/``IdentityAssignedConfidence`` columns (the
+EMPTY ``IdentityFinalLabel``/``IdentityFinalConfidence`` columns (the
 realtime decoder never ran, so it never wrote anything there) -- plus a
 real, confident, per-detection ``IdentityEvidenceCache`` (exactly what
 Phase 3 writes during inference). It asserts:
 
 1. WITH the cache path threaded in, each trajectory is correctly and
-   confidently identified purely from the cache (``IdentityAssignedLabel``
+   confidently identified purely from the cache (``IdentityFinalLabel``
    becomes non-empty AND matches the identity the cache evidence actually
    supports, with a high fragment score).
 2. WITHOUT a cache path (the pre-Phase-5 starved condition -- no CNN_*_Prob
    columns to reconstruct from either), the solver cannot tell the two
    trajectories apart: both fall back to the same low-confidence guess.
-   (A bare "IdentityAssignedLabel is non-empty" check is NOT by itself a
+   (A bare "IdentityFinalLabel is non-empty" check is NOT by itself a
    valid discriminator here -- a pre-existing, Phase-5-independent quirk in
    the iterative solver's zero-evidence fallback [``_normalize_support_
    scores`` returns a uniform distribution when there is no evidence at
@@ -48,6 +48,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from hydra_suite.core.individual.identity import columns as C
 from hydra_suite.core.individual.identity.cache import IdentityEvidenceCache
 from hydra_suite.core.individual.identity.evidence import IdentityEvidence
 from hydra_suite.core.individual.postprocess_df import (
@@ -74,11 +75,12 @@ def _confident_log_probs(favor_label: str) -> np.ndarray:
 
 def _build_realtime_off_df() -> pd.DataFrame:
     """A tracking-output df exactly as a realtime-identity-OFF run produces
-    it: TrajectoryID/FrameID/DetectionID + EMPTY IdentityAssignedLabel/
-    IdentityAssignedConfidence, no CNN_*_Prob/DetectedTag* columns at all.
+    it: TrajectoryID/FrameID/DetectionID + EMPTY IdentityFinalLabel/
+    IdentityFinalConfidence (no prior offline pass has run yet either), no
+    CNN_*_Prob/DetectedTag* columns at all.
 
     Faithful to production dtype: a realtime-OFF final CSV has an
-    all-empty IdentityAssignedLabel column, which pandas reads back as
+    all-empty IdentityFinalLabel column, which pandas reads back as
     all-NaN *float64* (NOT object ""). That dtype is load-bearing -- the
     fragment solver must coerce it to object before writing string labels,
     or the write raises a pandas LossySetitemError (pandas>=3) that the
@@ -97,8 +99,8 @@ def _build_realtime_off_df() -> pd.DataFrame:
                 "DetectionID": f,
                 "X": 0.0,
                 "Y": 0.0,
-                "IdentityAssignedLabel": np.nan,
-                "IdentityAssignedConfidence": np.nan,
+                C.FINAL_LABEL: np.nan,
+                C.FINAL_CONFIDENCE: np.nan,
             }
         )
     # Trajectory 2: stationary far away at (500, 500), same frame range
@@ -112,13 +114,13 @@ def _build_realtime_off_df() -> pd.DataFrame:
                 "DetectionID": 1000 + f,
                 "X": 500.0,
                 "Y": 500.0,
-                "IdentityAssignedLabel": np.nan,
-                "IdentityAssignedConfidence": np.nan,
+                C.FINAL_LABEL: np.nan,
+                C.FINAL_CONFIDENCE: np.nan,
             }
         )
     df = pd.DataFrame(rows)
     # Guarantee the production dtype regardless of pandas' inference.
-    df["IdentityAssignedLabel"] = df["IdentityAssignedLabel"].astype("float64")
+    df[C.FINAL_LABEL] = df[C.FINAL_LABEL].astype("float64")
     return df
 
 
@@ -154,7 +156,7 @@ def _params(enable_solver: bool = True) -> dict:
 
 
 def test_honesty_fix_self_sufficient_from_cache_alone(tmp_path):
-    """THE test: realtime never ran (empty IdentityAssignedLabel columns,
+    """THE test: realtime never ran (empty IdentityFinalLabel columns,
     no CNN_*_Prob columns) + a real evidence cache -> the offline solver
     still produces correct, confident, non-empty identities."""
     df = _build_realtime_off_df()
@@ -165,8 +167,8 @@ def test_honesty_fix_self_sufficient_from_cache_alone(tmp_path):
     )
 
     assert result is not None and not result.empty
-    label_t1 = result.loc[result["X"] == 0.0, "IdentityAssignedLabel"].iloc[0]
-    label_t2 = result.loc[result["X"] == 500.0, "IdentityAssignedLabel"].iloc[0]
+    label_t1 = result.loc[result["X"] == 0.0, C.FINAL_LABEL].iloc[0]
+    label_t2 = result.loc[result["X"] == 500.0, C.FINAL_LABEL].iloc[0]
 
     # The primary honesty assertion the brief specifies.
     assert pd.notna(label_t1) and str(label_t1).strip() not in ("", "unknown")
@@ -177,8 +179,8 @@ def test_honesty_fix_self_sufficient_from_cache_alone(tmp_path):
     assert label_t1 == "ant_c", f"expected traj 1 -> ant_c from cache, got {label_t1!r}"
     assert label_t2 == "ant_b", f"expected traj 2 -> ant_b from cache, got {label_t2!r}"
 
-    score_t1 = result.loc[result["X"] == 0.0, "IdentityFragmentScore"].iloc[0]
-    score_t2 = result.loc[result["X"] == 500.0, "IdentityFragmentScore"].iloc[0]
+    score_t1 = result.loc[result["X"] == 0.0, C.FINAL_FRAGMENT_SCORE].iloc[0]
+    score_t2 = result.loc[result["X"] == 500.0, C.FINAL_FRAGMENT_SCORE].iloc[0]
     uniform_guess = 1.0 / 3.0  # 3 known labels, zero-evidence fallback score
     assert (
         score_t1 > uniform_guess
@@ -187,10 +189,14 @@ def test_honesty_fix_self_sufficient_from_cache_alone(tmp_path):
         score_t2 > uniform_guess
     ), f"traj 2 score {score_t2} not above uniform-guess floor"
 
-    # Provenance columns Task 5 wires: the offline solver's own record,
-    # populated purely from the cache (no realtime decoder ever ran here).
-    assert (result["IdentityOfflineLabel"] == result["IdentityAssignedLabel"]).all()
-    assert (result["IdentitySmoothedLabel"] != "").any()
+    # Provenance (Phase 6): the offline solver's own record, populated
+    # purely from the cache (no realtime decoder ever ran here) and
+    # explicitly attributed to "offline" -- not silently mirrored from
+    # some other stage.
+    assigned_mask = result[C.FINAL_LABEL].notna() & (result[C.FINAL_LABEL] != "unknown")
+    assert assigned_mask.any()
+    assert result.loc[assigned_mask, C.FINAL_SOURCE].eq("offline").all()
+    assert (result[C.FINAL_SMOOTHED_LABEL] != "").any()
 
 
 def test_without_cache_the_same_starved_df_cannot_tell_trajectories_apart(tmp_path):
@@ -205,8 +211,8 @@ def test_without_cache_the_same_starved_df_cannot_tell_trajectories_apart(tmp_pa
         df, _params(), identity_evidence_cache_path=None
     )
 
-    label_t1 = result.loc[result["X"] == 0.0, "IdentityAssignedLabel"].iloc[0]
-    label_t2 = result.loc[result["X"] == 500.0, "IdentityAssignedLabel"].iloc[0]
+    label_t1 = result.loc[result["X"] == 0.0, C.FINAL_LABEL].iloc[0]
+    label_t2 = result.loc[result["X"] == 500.0, C.FINAL_LABEL].iloc[0]
 
     # Starved of any real per-trajectory evidence, the solver cannot land on
     # the SAME correct labels the cache-sourced run above reaches.

@@ -22,6 +22,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from hydra_suite.core.individual.identity import columns as C
 from hydra_suite.core.individual.identity import substrate
 from hydra_suite.core.individual.identity.catalog import IdentityCatalog
 from hydra_suite.core.individual.identity.smoothing import (
@@ -32,8 +33,8 @@ from hydra_suite.core.individual.identity.smoothing import (
 
 log = logging.getLogger(__name__)
 
-_LABEL_COL = "IdentityAssignedLabel"
-_CONF_COL = "IdentityAssignedConfidence"
+_LABEL_COL = C.FINAL_LABEL
+_CONF_COL = C.FINAL_CONFIDENCE
 _UNKNOWN_VALUES = frozenset({"", "unknown"})
 _CNN_CLASS_SUFFIX = "_Class"
 _CNN_PROB_SUFFIX = "_Prob"
@@ -1290,11 +1291,11 @@ def _build_traj_summaries(
     -- there is nothing left for a separate tag term to add.
 
     ``OnlineLabel``/``OnlineConfidence`` are always read from the
-    ``IdentityAssignedLabel``/``IdentityAssignedConfidence`` CSV columns when
-    present (an OPTIONAL weak prior the realtime decoder may have written --
-    never a required input; a fragment with no online label defaults to
-    "unknown"/0.0 confidence and the cache evidence alone still drives
-    assignment, which is the honesty fix).
+    ``IdentityFinalLabel``/``IdentityFinalConfidence`` CSV columns when
+    present (an OPTIONAL weak prior from a prior resolution pass -- never a
+    required input; a fragment with no such label defaults to "unknown"/0.0
+    confidence and the cache evidence alone still drives assignment, which
+    is the honesty fix).
     """
     known_labels = list(catalog.labels[1:])
     prefix_prob_cols = _build_cnn_probability_prefix_map(df.columns)
@@ -1430,15 +1431,15 @@ def solve_global_assignment(
 
     Builds per-trajectory summaries internally, runs ``_iterative_assign`` with
     spatial continuity + CNN/tag evidence + online-label prior + per-fragment
-    stability, then writes IdentityAssignedLabel, IdentityFragmentScore, and
-    IdentityCommitted back into every row of each trajectory. Also mirrors the
-    final decision into IdentityOfflineLabel/IdentityOfflineConfidence -- a
-    provenance-explicit record of what THIS (offline/post-hoc) solver decided,
-    independent of whatever IdentityAssignedLabel may separately hold from a
-    realtime decoder (the honesty fix's visible proof surface: this pair is
-    written by the offline solver alone, cache-sourced when
-    ``evidence_by_traj`` is given, so it is populated even when realtime
-    identity never ran). Returns a modified copy of df.
+    stability, then writes the ``IdentityFinal*`` family (``IdentityFinalLabel``,
+    ``IdentityFinalID``, ``IdentityFinalConfidence``, ``IdentityFinalFragmentScore``,
+    ``IdentityFinalSource``) back into every row of each trajectory -- a
+    provenance-explicit record of what THIS (offline/post-hoc) solver decided.
+    This function NEVER writes any ``IdentityRealtime*`` column: the offline
+    solver's decision is cache-sourced when ``evidence_by_traj`` is given, so
+    it is populated even when realtime identity never ran (the honesty fix's
+    visible proof surface), and it never clobbers whatever the realtime
+    decoder separately wrote. Returns a modified copy of df.
 
     ``evidence_by_traj`` (optional): ``{OriginalTrajectoryID/TrajectoryID:
     [(FrameID, catalog_log_probs), ...]}`` -- when given, per-fragment
@@ -1532,38 +1533,37 @@ def solve_global_assignment(
         raw = evidence * spatial_s if has_neighbors else evidence
         assigned_scores.append(float(raw * float(length_factors[i])))
 
-    # Write one label per trajectory back to every row.
+    # Write one label per trajectory back to every row -- the IdentityFinal*
+    # family only. This function must NEVER write an IdentityRealtime* column.
     out = df.copy()
-    if "IdentityAssignedLabel" not in out.columns:
+    if C.FINAL_LABEL not in out.columns:
         # object dtype (not the float64 a bare `np.nan` column init would get)
         # -- otherwise the string label writes below raise a pandas
-        # LossySetitemError. See IdentityOfflineLabel below for the same reason.
-        out["IdentityAssignedLabel"] = pd.Series(
-            [np.nan] * len(out), index=out.index, dtype=object
-        )
-    else:
-        # The honesty fix's target scenario (ENABLE_IDENTITY_IN_TRACKING off)
-        # leaves this column present but all-NaN float64 -- the realtime
-        # decoder wrote no strings. Writing a string label into a float64
-        # column raises a pandas LossySetitemError (pandas>=3), which the
-        # caller's broad except would swallow, silently reverting the solver
-        # to "results unchanged" -- i.e. exactly re-breaking the honesty fix.
-        # Coerce to object so the per-trajectory writes below can land.
-        out["IdentityAssignedLabel"] = out["IdentityAssignedLabel"].astype(object)
-    if "IdentityCommitted" not in out.columns:
-        out["IdentityCommitted"] = False
-    out["IdentityCommitted"] = out["IdentityCommitted"].fillna(False).astype(bool)
-    if "IdentityFragmentScore" not in out.columns:
-        out["IdentityFragmentScore"] = np.nan
-    if "IdentityOfflineLabel" not in out.columns:
-        # object dtype (not the float64 a bare `np.nan` column init would
-        # get) -- otherwise the first string write below raises a pandas
         # LossySetitemError.
-        out["IdentityOfflineLabel"] = pd.Series(
+        out[C.FINAL_LABEL] = pd.Series(
             [np.nan] * len(out), index=out.index, dtype=object
         )
-    if "IdentityOfflineConfidence" not in out.columns:
-        out["IdentityOfflineConfidence"] = np.nan
+    elif out[C.FINAL_LABEL].dtype != object:
+        # The honesty fix's target scenario (ENABLE_IDENTITY_IN_TRACKING off)
+        # leaves this column present but all-NaN float64 (no prior pass wrote
+        # strings). Writing a string label into a float64 column raises a
+        # pandas LossySetitemError (pandas>=3), which the caller's broad
+        # except would swallow, silently reverting the solver to "results
+        # unchanged" -- i.e. exactly re-breaking the honesty fix. Coerce to
+        # object so the per-trajectory writes below can land.
+        out[C.FINAL_LABEL] = out[C.FINAL_LABEL].astype(object)
+    if C.FINAL_SOURCE not in out.columns:
+        out[C.FINAL_SOURCE] = pd.Series(
+            [C.IdentityFinalSource.NONE] * len(out), index=out.index, dtype=object
+        )
+    elif out[C.FINAL_SOURCE].dtype != object:
+        out[C.FINAL_SOURCE] = out[C.FINAL_SOURCE].astype(object)
+    if C.FINAL_ID not in out.columns:
+        out[C.FINAL_ID] = np.nan
+    if C.FINAL_CONFIDENCE not in out.columns:
+        out[C.FINAL_CONFIDENCE] = np.nan
+    if C.FINAL_FRAGMENT_SCORE not in out.columns:
+        out[C.FINAL_FRAGMENT_SCORE] = np.nan
 
     for i in range(n_trajs):
         label = assigned.get(i)
@@ -1571,19 +1571,24 @@ def solve_global_assignment(
         mask = out["TrajectoryID"] == traj_id
         if label is None or label in _UNKNOWN_VALUES:
             # The solver explicitly chose Unknown for this fragment (e.g. its
-            # spatial fit under every feasible label fails the veto). Clear the
-            # online label so the user sees the solver's decision.
-            out.loc[mask, "IdentityAssignedLabel"] = "unknown"
-            out.loc[mask, "IdentityFragmentScore"] = 0.0
-            out.loc[mask, "IdentityCommitted"] = False
-            out.loc[mask, "IdentityOfflineLabel"] = "unknown"
-            out.loc[mask, "IdentityOfflineConfidence"] = 0.0
+            # spatial fit under every feasible label fails the veto). Record
+            # the solver's decision, but with no attributable source (no
+            # identity was actually resolved for this fragment).
+            out.loc[mask, C.FINAL_LABEL] = "unknown"
+            out.loc[mask, C.FINAL_ID] = catalog.unknown_index
+            out.loc[mask, C.FINAL_CONFIDENCE] = 0.0
+            out.loc[mask, C.FINAL_FRAGMENT_SCORE] = 0.0
+            out.loc[mask, C.FINAL_SOURCE] = C.IdentityFinalSource.NONE
             continue
-        out.loc[mask, "IdentityAssignedLabel"] = label
-        out.loc[mask, "IdentityFragmentScore"] = assigned_scores[i]
-        out.loc[mask, "IdentityCommitted"] = True
-        out.loc[mask, "IdentityOfflineLabel"] = label
-        out.loc[mask, "IdentityOfflineConfidence"] = assigned_scores[i]
+        try:
+            catalog_index = catalog.index_of(label)
+        except KeyError:
+            catalog_index = np.nan
+        out.loc[mask, C.FINAL_LABEL] = label
+        out.loc[mask, C.FINAL_ID] = catalog_index
+        out.loc[mask, C.FINAL_CONFIDENCE] = assigned_scores[i]
+        out.loc[mask, C.FINAL_FRAGMENT_SCORE] = assigned_scores[i]
+        out.loc[mask, C.FINAL_SOURCE] = C.IdentityFinalSource.OFFLINE
 
     return out
 
@@ -1594,21 +1599,28 @@ def _annotate_smoothed_labels(
     catalog: IdentityCatalog,
     params: dict[str, Any],
 ) -> pd.DataFrame:
-    """Write per-row ``IdentitySmoothedLabel``/``IdentitySmoothedConfidence``
+    """Write per-row ``IdentityFinalSmoothedLabel``/``IdentityFinalSmoothedConfidence``
     from the forward-backward-smoothed per-frame posterior (Task 2), joined
     on ``(OriginalTrajectoryID or TrajectoryID, FrameID)``.
 
     This is the raw per-frame smoothed decode, independent of (and written
     before) the fragment solver's per-fragment committed decision
-    (``IdentityAssignedLabel``/``IdentityOfflineLabel``) -- rows with no
-    matched cache evidence are left with an empty label / 0.0 confidence,
-    same as the fragment-level "no evidence, no belief" convention.
+    (``IdentityFinalLabel``) -- rows with no matched cache evidence are left
+    with an empty label / 0.0 confidence, same as the fragment-level "no
+    evidence, no belief" convention.
     """
     out = df.copy()
-    if "IdentitySmoothedLabel" not in out.columns:
-        out["IdentitySmoothedLabel"] = ""
-    if "IdentitySmoothedConfidence" not in out.columns:
-        out["IdentitySmoothedConfidence"] = 0.0
+    if C.FINAL_SMOOTHED_LABEL not in out.columns:
+        # object dtype -- see the FINAL_LABEL note in solve_global_assignment
+        # for why a bare `""` column init can still land as float64 in some
+        # pandas construction paths and raise LossySetitemError on write.
+        out[C.FINAL_SMOOTHED_LABEL] = pd.Series(
+            [""] * len(out), index=out.index, dtype=object
+        )
+    elif out[C.FINAL_SMOOTHED_LABEL].dtype != object:
+        out[C.FINAL_SMOOTHED_LABEL] = out[C.FINAL_SMOOTHED_LABEL].astype(object)
+    if C.FINAL_SMOOTHED_CONFIDENCE not in out.columns:
+        out[C.FINAL_SMOOTHED_CONFIDENCE] = 0.0
 
     display_threshold = float(params.get("IDENTITY_DISPLAY_THRESHOLD", 0.6))
     id_col = (
@@ -1634,8 +1646,8 @@ def _annotate_smoothed_labels(
             if hit is None:
                 continue
             label, conf = hit
-            out.at[row_idx, "IdentitySmoothedLabel"] = label
-            out.at[row_idx, "IdentitySmoothedConfidence"] = conf
+            out.at[row_idx, C.FINAL_SMOOTHED_LABEL] = label
+            out.at[row_idx, C.FINAL_SMOOTHED_CONFIDENCE] = conf
 
     return out
 
@@ -1666,9 +1678,9 @@ def run_fragment_solver(
     reconstruction, matching pre-Phase-5 behavior exactly for callers that
     still only have the CSV columns available (e.g. isolated unit tests).
 
-    Per-row ``IdentitySmoothedLabel``/``IdentitySmoothedConfidence`` (the raw
-    per-frame smoothed decode, pre-fragment-solving) are written whenever
-    cache evidence was available, via ``_annotate_smoothed_labels``.
+    Per-row ``IdentityFinalSmoothedLabel``/``IdentityFinalSmoothedConfidence``
+    (the raw per-frame smoothed decode, pre-fragment-solving) are written
+    whenever cache evidence was available, via ``_annotate_smoothed_labels``.
 
     Parameters
     ----------
@@ -1715,7 +1727,7 @@ def run_fragment_solver(
             smoother (same knob/semantics as the realtime decoder's).
         IDENTITY_DISPLAY_THRESHOLD       float  default 0.6
             Minimum smoothed-posterior confidence to report a per-row
-            IdentitySmoothedLabel instead of "" (also used by the
+            IdentityFinalSmoothedLabel instead of "" (also used by the
             substrate assignment solver's display gate).
     cache : an open (mode="r") IdentityEvidenceCache, or None. Required for
         the self-sufficient/cache-sourced path; the solver falls back to
