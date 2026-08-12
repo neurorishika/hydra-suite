@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any, Sequence
 
-from hydra_suite.core.identity.dataset.naming import parse_identity_image_filename
+from hydra_suite.core.individual.dataset.naming import parse_identity_image_filename
 
 FRAME_MODE_CONFIRMATION_TEMPLATE = (
     "This will add {frame_count} frame(s) comprising {total_count} total "
