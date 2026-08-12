@@ -311,7 +311,7 @@ def _corners_from_xywhr(
     by ``angle_fixed``, ordered [TL, TR, BR, BL].
 
     Ultralytics' raw ``xyxyxyxy`` corner order differs from this, which makes
-    ``compute_alignment_affine`` build the canonical crop mirrored/180-rotated vs
+    ``canonical_affine`` build the canonical crop mirrored/180-rotated vs
     legacy. SLEAP then predicts keypoints ~86px off (vs ~2.7px with this order),
     and the head-tail classifier sees a differently-posed crop. Reconstructing
     here makes every canonical crop (head-tail / CNN / pose) and its alignment

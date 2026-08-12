@@ -1,6 +1,6 @@
 import pytest
 
-from hydra_suite.core.identity.pose.vitpose.training.config import (
+from hydra_suite.core.individual.pose.vitpose.training.config import (
     RunConfig,
     validate_run_config,
 )
@@ -35,6 +35,13 @@ def test_valid_config_roundtrips(tmp_path):
     p = tmp_path / "run.json"
     cfg.to_json(p)
     assert RunConfig.from_json(p).num_keypoints == 6
+
+
+def test_omitted_epochs_falls_back_to_forty():
+    d = _good()
+    del d["epochs"]
+    cfg = validate_run_config(d)
+    assert cfg.epochs == 40
 
 
 @pytest.mark.parametrize(

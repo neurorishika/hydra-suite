@@ -110,12 +110,51 @@ run() {  # src outdir config video label skeleton
     ${skel_arg[@]+"${skel_arg[@]}"}
 }
 
-cmp() {  # a b title
+# Clips whose comparison could not be trusted. A harness that prints a green
+# verdict for a run that crashed is worse than one that prints nothing, so every
+# untrustworthy outcome lands here and makes the whole matrix exit non-zero.
+FAILED_CLIPS=()
+
+note_failure() {  # clip reason
+  FAILED_CLIPS+=("$1: $2")
+}
+
+# A CSV with only a header is NOT a result. Tracking writes the header before it
+# runs, so a crashed run leaves a well-formed, existent, empty file behind --
+# which every existence check in this script used to accept.
+has_rows() {  # path
+  [ -f "$1" ] || return 1
+  [ "$(wc -l < "$1")" -gt 1 ] || return 1
+}
+
+cmp() {  # a b title clip
   echo "--- $3 ---"
-  if [ -f "$1" ] && [ -f "$2" ]; then
-    python "$WT/tools/equivalence/compare.py" "$1" "$2" || true
-  else
-    echo "  (missing CSV: $1 or $2)"
+  # Not every clip config produces every CSV kind: a clip with streaming
+  # individual analysis (e.g. ant_pose_headtail) writes only *_final.csv and
+  # *_final_with_individual.csv, never an intermediate *_forward.csv. Absent on
+  # BOTH sides is that config property and is not a failure. Absent on ONE side
+  # means the trees disagree about what they produced, which is.
+  if ! [ -f "$1" ] && ! [ -f "$2" ]; then
+    echo "  (not produced by either tree for this clip -- config does not emit it)"
+    return
+  fi
+  if ! [ -f "$1" ] || ! [ -f "$2" ]; then
+    echo "  ❌ MISSING ON ONE SIDE ONLY: exists=$([ -f "$1" ] && echo a || echo b), missing=$([ -f "$1" ] && echo b || echo a)"
+    note_failure "${4:-?}" "$3 -- CSV produced by one tree but not the other"
+    return
+  fi
+  if ! has_rows "$1" || ! has_rows "$2"; then
+    echo "  ❌ EMPTY CSV (header only): legacy=$(wc -l < "$1") lines, new=$(wc -l < "$2") lines"
+    echo "     A crashed run leaves a header-only CSV; comparing two of them"
+    echo "     satisfies every criterion vacuously. Check the tracking log."
+    note_failure "${4:-?}" "$3 -- empty CSV (header only)"
+    return
+  fi
+  python "$WT/tools/equivalence/compare.py" "$1" "$2"
+  rc=$?
+  # compare.py: 0 = equivalent, 1 = real differences, 2 = no data
+  if [ "$rc" = "2" ]; then
+    note_failure "${4:-?}" "$3 -- compare.py reported NO DATA"
   fi
 }
 
@@ -149,22 +188,34 @@ for entry in "${VIDEOS[@]}"; do
   echo; echo "============================================================"
   echo "=== $name  ($RUNTIME)"
   echo "============================================================"
-  run "$MAIN_SRC" "$base/legacy" "$config" "$video" "legacy" "$skeleton" || echo "!! legacy run failed"
-  run "$WT_SRC"   "$base/new_a"  "$config" "$video" "new_a"  "$skeleton" || echo "!! new_a run failed"
-  run "$WT_SRC"   "$base/new_b"  "$config" "$video" "new_b"  "$skeleton" || echo "!! new_b run failed"
+  run "$MAIN_SRC" "$base/legacy" "$config" "$video" "legacy" "$skeleton" \
+    || { echo "!! legacy run FAILED"; note_failure "$name" "legacy run exited non-zero"; }
+  run "$WT_SRC"   "$base/new_a"  "$config" "$video" "new_a"  "$skeleton" \
+    || { echo "!! new_a run FAILED";  note_failure "$name" "new_a run exited non-zero"; }
+  run "$WT_SRC"   "$base/new_b"  "$config" "$video" "new_b"  "$skeleton" \
+    || { echo "!! new_b run FAILED";  note_failure "$name" "new_b run exited non-zero"; }
 
   stem=$(basename "$video"); stem=${stem%.*}
   for kind in forward final; do
     echo; echo ">>> $name : $kind"
     cmp "$base/new_a/${stem}_tracking_${kind}.csv" \
         "$base/new_b/${stem}_tracking_${kind}.csv" \
-        "DETERMINISM  new_a vs new_b"
+        "DETERMINISM  new_a vs new_b" "$name"
     cmp "$base/legacy/${stem}_tracking_${kind}.csv" \
         "$base/new_a/${stem}_tracking_${kind}.csv" \
-        "EQUIVALENCE  legacy vs new_a"
+        "EQUIVALENCE  legacy vs new_a" "$name"
   done
 
   echo; echo ">>> $name : performance"
   perfcmp "$base/legacy/meta.json" "$base/new_a/meta.json"
 done
 echo; echo "### done. outputs under $OUT/$RUNTIME/"
+echo
+if [ ${#FAILED_CLIPS[@]} -gt 0 ]; then
+  echo "############################################################"
+  echo "### ${#FAILED_CLIPS[@]} UNTRUSTWORTHY RESULT(S) -- do NOT read this matrix as a pass:"
+  for f in "${FAILED_CLIPS[@]}"; do echo "###   - $f"; done
+  echo "############################################################"
+  exit 1
+fi
+echo "### all clips produced comparable output."

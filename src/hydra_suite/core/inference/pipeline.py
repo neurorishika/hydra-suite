@@ -47,6 +47,8 @@ from typing import Any, Callable, Iterable, Iterator
 
 import numpy as np
 
+from hydra_suite.core.canonicalization.geometry import ClippingStats
+
 from .result import FrameResult, OBBResult
 from .stages.apriltag import run_apriltag
 from .stages.bgsub import run_bgsub_batch
@@ -142,9 +144,17 @@ class Pipeline:
         *,
         depth: int = 1,
         queue_bound: int | None = None,
+        clipping_stats: "ClippingStats | None" = None,
     ) -> None:
         if depth < 1:
             raise ValueError(f"pipeline depth must be >= 1, got {depth}")
+        # F1 guard: run-scoped clipped-detection counter (see ClippingStats).
+        # Owned by the caller (InferenceRunner) when given so the realtime and
+        # batch passes share one running tally; a fresh instance otherwise so
+        # constructing a Pipeline directly (tests) never needs to supply one.
+        self.clipping_stats = (
+            clipping_stats if clipping_stats is not None else ClippingStats()
+        )
         # depth=1 -> synchronous (no threads). depth>=2 -> producer/consumer
         # with a single in-order consumer and a bounded prefetch queue. Increasing
         # depth deepens the prefetch (the OBB producer may run up to ``depth-1``
@@ -263,8 +273,7 @@ class Pipeline:
         frames = window.frames
         frame_indices = window.frame_indices
 
-        ar = cfg.headtail.canonical_aspect_ratio if cfg.headtail else 2.0
-        mg = cfg.headtail.canonical_margin if cfg.headtail else 1.3
+        geometry = cfg.canonical
 
         # Consumer-side stream-sync: wait on the producer's handoff events for the
         # SAME tensor objects before the first device read (no-op on CPU/MPS).
@@ -314,6 +323,20 @@ class Pipeline:
         if not nonempty_obbs:
             return []
 
+        # F1 guard: record overflow_ratio once per detection here -- the one
+        # place that already has every non-empty frame's OBBs and `geometry`
+        # in scope, before any of the (possibly several) downstream consumer
+        # stages re-derive canonical_affine for the same corners. Mirrors
+        # InferenceRunner's realtime insertion point.
+        if (
+            self.stages.headtail_model is not None
+            or self.stages.cnn_models
+            or self.stages.pose_model is not None
+        ):
+            for _obb in nonempty_obbs:
+                for _corners in _obb.corners:
+                    self.clipping_stats.record(_corners, geometry)
+
         # --- downstream batch stages over the non-empty frames -------------
         headtail: dict[int, Any] | None = None
         if self.stages.headtail_model is not None:
@@ -323,8 +346,7 @@ class Pipeline:
                 self.stages.headtail_model,
                 cfg.headtail,
                 self.runtime,
-                ar,
-                mg,
+                geometry,
             )
 
         cnns_by_frame: dict[int, list] = {idx: [] for idx in filtered_by_frame}
@@ -336,8 +358,7 @@ class Pipeline:
                 mdl,
                 cfg_cnn,
                 self.runtime,
-                ar,
-                mg,
+                geometry,
             )
             cnn_per_phase.append(phase)
             for idx, result in phase.items():
@@ -348,20 +369,21 @@ class Pipeline:
             suppress_foreign = (
                 cfg.pose.suppress_foreign_regions if cfg.pose is not None else False
             )
-            background_color = (
-                cfg.pose.background_color if cfg.pose is not None else (0, 0, 0)
-            )
+            # PoseConfig.background_color was deleted: it was never populated
+            # by from_parameters (always (0, 0, 0)), a dead second home for
+            # the fill colour. Zero is now the one honest fill value
+            # everywhere.
+            background_color = (0, 0, 0)
             crop_batch = extract_canonical_crops_batch(
                 nonempty_frames,
                 nonempty_obbs,
-                ar,
-                mg,
+                geometry,
                 self.runtime,
                 suppress_foreign=suppress_foreign,
                 background_color=background_color,
             )
             pose = run_pose_batch(
-                crop_batch, self.stages.pose_model, cfg.pose, self.runtime
+                crop_batch, self.stages.pose_model, cfg.pose, self.runtime, geometry
             )
 
         apriltag: dict[int, Any] | None = None

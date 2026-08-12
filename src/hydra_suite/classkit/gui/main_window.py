@@ -429,6 +429,11 @@ class MainWindow(QMainWindow):
         load_checkpoint_action.triggered.connect(self.load_classifier_checkpoint)
         compute_menu.addAction(load_checkpoint_action)
 
+        self._recalibrate_action = QAction("&Recalibrate model...", self)
+        self._recalibrate_action.triggered.connect(self.recalibrate_model)
+        self._recalibrate_action.setEnabled(self.project_path is not None)
+        compute_menu.addAction(self._recalibrate_action)
+
         model_history_action = QAction("&Previously Trained Models...", self)
         model_history_action.setShortcut("Ctrl+Shift+H")
         model_history_action.setStatusTip(
@@ -1952,6 +1957,8 @@ class MainWindow(QMainWindow):
             self._machine_label_action.setEnabled(self.project_path is not None)
         if hasattr(self, "_machine_label_toolbar_action"):
             self._machine_label_toolbar_action.setEnabled(self.project_path is not None)
+        if hasattr(self, "_recalibrate_action"):
+            self._recalibrate_action.setEnabled(self.project_path is not None)
         if hasattr(self, "_recents_store"):
             self._recents_store.add(str(self.project_path))
         if hasattr(self, "_stacked"):
@@ -2558,6 +2565,8 @@ class MainWindow(QMainWindow):
             self._machine_label_action.setEnabled(self.project_path is not None)
         if hasattr(self, "_machine_label_toolbar_action"):
             self._machine_label_toolbar_action.setEnabled(self.project_path is not None)
+        if hasattr(self, "_recalibrate_action"):
+            self._recalibrate_action.setEnabled(self.project_path is not None)
 
     def _update_labeling_progress_indicator(self):
         """Update the status bar progress label and context panel progress bar."""
@@ -7278,6 +7287,9 @@ class MainWindow(QMainWindow):
             augmentation_profile=aug,
         )
         if mode in ("flat_custom", "multihead_custom", "multihead_custom_shared"):
+            # The GUI only exposes a single square input-size spinbox; expand
+            # it to the (H, W) pair CustomCNNParams.input_size now requires.
+            _custom_sz = int(settings.get("custom_input_size", 224) or 224)
             spec = dataclasses.replace(
                 spec,
                 custom_params=CustomCNNParams(
@@ -7291,7 +7303,7 @@ class MainWindow(QMainWindow):
                     gradual_unfreeze_interval=settings.get(
                         "custom_gradual_unfreeze_interval", 5
                     ),
-                    input_size=settings.get("custom_input_size", 224),
+                    input_size=(_custom_sz, _custom_sz),
                     epochs=settings.get("epochs", 50),
                     batch=settings.get("batch", 32),
                     lr=settings.get("lr", 1e-3),
@@ -7529,7 +7541,11 @@ class MainWindow(QMainWindow):
                 )
                 if _arch != "tinyclassifier":
                     _sz = _ckpt.get("input_size", (224, 224))
-                    _sz = _sz[0] if isinstance(_sz, (list, tuple)) else int(_sz)
+                    _sz = (
+                        (int(_sz[0]), int(_sz[1]))
+                        if isinstance(_sz, (list, tuple))
+                        else int(_sz)
+                    )
                     self._run_torchvision_inference(
                         Path(artifact),
                         class_names=_class_names,
@@ -7574,6 +7590,9 @@ class MainWindow(QMainWindow):
             publish_trained_model,
             write_classifier_multihead_manifest,
         )
+        from ..core.data.canonical_provenance import (
+            canonical_geometry_for_training_images,
+        )
 
         fallback_input_size: tuple[int, int] | None = None
         if "yolo" in mode:
@@ -7582,6 +7601,20 @@ class MainWindow(QMainWindow):
             size = int(settings.get("custom_input_size", 224) or 224)
             fallback_input_size = (size, size)
         fallback_monochrome = bool(settings.get("monochrome", False))
+
+        # These crops ARE canonical-crop-trained (classify roles consume the
+        # Layer 1 fixed-canvas crop) -- unlike OBB/detect roles, which train
+        # on full frames/tiles and never pass a geometry (see
+        # training/service.py::_publish_training_artifacts). Recover the
+        # geometry every training image's import source agrees on, if any;
+        # ClassKit does not itself capture provenance at ingestion, so mixed
+        # or unrecorded sources correctly yield None (visibly unstamped)
+        # rather than a guessed geometry.
+        training_image_paths = list(getattr(dialog, "_image_paths", None) or [])
+        canonical_geometry = canonical_geometry_for_training_images(
+            training_image_paths,
+            getattr(self, "_image_metadata_by_path", None) or {},
+        )
 
         role_val = role_map.get(mode, "classify_flat_custom")
         role = TrainingRole(role_val)
@@ -7628,6 +7661,7 @@ class MainWindow(QMainWindow):
                         scheme.factors[fi].name if (multi_head and scheme) else None
                     ),
                     classifier_v2_meta=classifier_v2_meta,
+                    canonical_geometry=canonical_geometry,
                 )
                 published_paths.append(Path(published_path))
                 input_size_list = classifier_v2_meta.get("input_size") or [224, 224]
@@ -7960,6 +7994,31 @@ class MainWindow(QMainWindow):
         )
         dialog.append_log("Training Complete. Metrics tab updated.")
 
+    def _log_calibration_ece(self, dialog, results: list) -> None:
+        """Best-effort: append a "Calibration ECE (after): ..." log line per
+        trained artifact. Reads calibration_ece off the produced checkpoint's
+        metadata (results don't carry it directly) -- never breaks training
+        completion on failure.
+        """
+        try:
+            from ...training.model_publish import classifier_metadata_for_artifact
+
+            for result in results or []:
+                artifact_path = (result or {}).get("artifact_path")
+                if not artifact_path:
+                    continue
+                try:
+                    meta = classifier_metadata_for_artifact(artifact_path)
+                except Exception:
+                    continue
+                ece = meta.get("calibration_ece")
+                if not ece:
+                    continue
+                ece_str = ", ".join(f"{e:.4f}" for e in ece)
+                dialog.append_log(f"Calibration ECE (after): {ece_str}")
+        except Exception:
+            pass
+
     def _on_training_success(self, dialog, context, results: list) -> None:
         """Handle successful training completion before post-training inference."""
         self._set_heldout_validation_summary(
@@ -7978,6 +8037,7 @@ class MainWindow(QMainWindow):
         dialog.append_log("Training finished. Refreshing predictions and metrics...")
         dialog.start_btn.setEnabled(True)
         dialog.cancel_btn.setEnabled(False)
+        self._log_calibration_ece(dialog, results)
 
         self._save_training_results_to_db(
             results,
@@ -8412,6 +8472,22 @@ class MainWindow(QMainWindow):
 
         self._load_checkpoint_from_path(selected_path)
 
+    def recalibrate_model(self):
+        """Open the Recalibrate dialog: refit calibration for a trained
+        classifier against a labeled validation set, in place."""
+        if not self.project_path:
+            QMessageBox.warning(
+                self,
+                "No Project",
+                "Open a ClassKit project first.",
+            )
+            return
+
+        from .dialogs.recalibrate_dialog import RecalibrateDialog
+
+        dialog = RecalibrateDialog(project_path=self.project_path, parent=self)
+        dialog.exec()
+
     def _load_embedding_head_checkpoint(
         self,
         path: Path,
@@ -8541,7 +8617,9 @@ class MainWindow(QMainWindow):
         ckpt_names = ckpt.get("class_names")
         input_size = ckpt.get("input_size", (224, 224))
         size = (
-            input_size[0] if isinstance(input_size, (list, tuple)) else int(input_size)
+            (int(input_size[0]), int(input_size[1]))
+            if isinstance(input_size, (list, tuple))
+            else int(input_size)
         )
         arch = (
             ckpt.get("arch", "tinyclassifier")
@@ -9341,7 +9419,7 @@ class MainWindow(QMainWindow):
         self,
         model_path: Path,
         class_names: list,
-        input_size: int = 224,
+        input_size: int | tuple[int, int] = 224,
         on_success=None,
         force_monochrome: bool = False,
         prediction_confidence_threshold: float | None = None,
@@ -9531,7 +9609,7 @@ class MainWindow(QMainWindow):
                     else (224, 224)
                 )
                 input_size = (
-                    raw_size[0]
+                    (int(raw_size[0]), int(raw_size[1]))
                     if isinstance(raw_size, (list, tuple))
                     else int(raw_size)
                 )
@@ -9831,7 +9909,7 @@ class MainWindow(QMainWindow):
                     else (224, 224)
                 )
                 size = (
-                    raw_size[0]
+                    (int(raw_size[0]), int(raw_size[1]))
                     if isinstance(raw_size, (list, tuple))
                     else int(raw_size)
                 )

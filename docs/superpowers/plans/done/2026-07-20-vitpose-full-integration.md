@@ -4,7 +4,7 @@
 
 **Goal:** Make ViTPose a selectable pose backend that runs in the live tracking pipeline on all four runtimes (torch cpu/mps/cuda, TensorRT, CoreML), so a user can fine-tune a ViTPose model and immediately track with it.
 
-**Architecture:** A thin `backends/vitpose.py` (mirroring the 294-line `yolo.py`, not the 1743-line `sleap.py`) drives the Spec-1 leaf (`core/identity/pose/vitpose/`): compose numpy/cv2 preprocess → torch/engine forward → on-device `decode_udp_torch` → numpy inverse. Runtime selection flows through Gen-2 (`runtime_tier` → `ResolvedBackend`), translated to the pose layer's `(device, runtime_flavor)` strings at `stages/pose.py` exactly as SLEAP/YOLO already are. Accelerated runtimes use a shared `core/identity/pose/runtime/` package *moved out of* `sleap.py` (not duplicated) plus a new CoreML runner.
+**Architecture:** A thin `backends/vitpose.py` (mirroring the 294-line `yolo.py`, not the 1743-line `sleap.py`) drives the Spec-1 leaf (`core/individual/pose/vitpose/`): compose numpy/cv2 preprocess → torch/engine forward → on-device `decode_udp_torch` → numpy inverse. Runtime selection flows through Gen-2 (`runtime_tier` → `ResolvedBackend`), translated to the pose layer's `(device, runtime_flavor)` strings at `stages/pose.py` exactly as SLEAP/YOLO already are. Accelerated runtimes use a shared `core/individual/pose/runtime/` package *moved out of* `sleap.py` (not duplicated) plus a new CoreML runner.
 
 **Tech Stack:** PyTorch (fp32), onnxruntime, tensorrt, coremltools; the Spec-1 ViTPose leaf; Gen-2 runtime resolver.
 
@@ -15,7 +15,7 @@
 Every task's requirements implicitly include these. Exact values, copied from the design spec and repo conventions:
 
 - **Environment:** use the `hydra-mps` conda env (base env torch is broken). Do **not** run `make format` (broken: black `pathspec.patterns.gitignore` error); run `black <files>` and `isort <files>` directly on the task's files.
-- **Leaf purity:** everything under `core/identity/pose/vitpose/` imports nothing from `hydra_suite` app layers; the new `core/identity/pose/runtime/` and `backends/vitpose.py` live in Core and must not import from any app layer (posekit/trackerkit) — CLAUDE.md dependency direction.
+- **Leaf purity:** everything under `core/individual/pose/vitpose/` imports nothing from `hydra_suite` app layers; the new `core/individual/pose/runtime/` and `backends/vitpose.py` live in Core and must not import from any app layer (posekit/trackerkit) — CLAUDE.md dependency direction.
 - **Precision: FP32 everywhere.** No fp16. (`build_tensorrt_engine(fp16=False)` default; keypoint precision.) Matches every leaf export default.
 - **Fixed geometry:** `IMAGE_SIZE_WH = (192, 256)` (W,H), `HEATMAP_SIZE_WH = (48, 64)`, from `vitpose/config.py`. ViTPose input is `(B, 3, 256, 192)`; heatmaps `(B, K, 64, 48)`.
 - **Runtime vocabulary:** the pose layer's `runtime_flavor` for ViTPose is one of `native | tensorrt | coreml` (there is no `onnx` tier post-Gen-2; ONNX Runtime is only the TRT-EP/CoreML-EP fallback mechanism). `ResolvedBackend.backend ∈ {torch, tensorrt, coreml}`, `device ∈ {cpu, cuda, mps}`.
@@ -32,7 +32,7 @@ Every task's requirements implicitly include these. Exact values, copied from th
 - `runtime/onnx_providers.py`: `execution_providers_for(resolved, include_cpu_fallback: bool = True) -> List[object]` (`:60`).
 - `core/inference/runtime.py`: `RuntimeContext.resolved: ResolvedBackend | None` (`:59`); `resolved_backend_for(runtime: RuntimeContext) -> ResolvedBackend` (`:158`).
 
-**Pose leaf** (`core/identity/pose/vitpose/`):
+**Pose leaf** (`core/individual/pose/vitpose/`):
 - `vitpose.py:27` `build_vitpose(variant: str, head: str, num_keypoints: int = 17) -> ViTPose`; `ViTPose.forward(x: torch.Tensor) -> torch.Tensor` (heatmaps `(n,k,64,48)`).
 - `weights.py:11` `class CheckpointKeyError(RuntimeError)`; `weights.py:15` `load_checkpoint(model, path: Path, strict: bool = True) -> None` (reads `blob["state_dict"]` else `blob`).
 - `export.py:24` `class ExportError(RuntimeError)`; `export_onnx(model, path, *, opset=17, dynamic_batch=True, dataset_index=None) -> Path` (`:49`); `build_tensorrt_engine(onnx_path, engine_path, *, fp16=False, workspace_gb=4.0, max_batch=64) -> Path` (`:129`); `export_coreml(model, path, *, compute_units="ALL") -> Path` (`:219`).
@@ -41,7 +41,7 @@ Every task's requirements implicitly include these. Exact values, copied from th
 - `config.py`: `IMAGE_SIZE_WH=(192,256)`, `HEATMAP_SIZE_WH=(48,64)`, `PADDING_FACTOR=1.25`; `VARIANTS: dict[str, ViTPoseVariant]` keyed `"S"/"B"/"L"/"H"` with fields `embed_dim, depth, num_heads, part_features, drop_path_rate, layer_decay`.
 - Training checkpoint (`training/train.py:131`): `{"model_state", "optim_state", "variant", "num_keypoints", "epoch", "pck", "sched_state"}`. Always classic head (`training/model_setup.py:19` hardcodes `"classic"`).
 
-**Pose family** (`core/identity/pose/`):
+**Pose family** (`core/individual/pose/`):
 - `types.py:56` `PoseInferenceBackend` Protocol: attr `output_keypoint_names: List[str]`; `preferred_input_size` property `-> int`; `warmup() -> None`; `predict_batch(crops: Sequence[np.ndarray]) -> List[PoseResult]`; `close() -> None`.
 - `types.py:11` `PoseResult(keypoints: Optional[np.ndarray], mean_conf: float, valid_fraction: float, num_valid: int, num_keypoints: int)`. Helper `summarize_keypoints(...)` and `empty_pose_result(...)` exist in the pose package (used by yolo/sleap; grep `pose/utils.py`).
 - `types.py:22` `PoseRuntimeConfig` (flat): `backend_family, runtime_flavor="auto", device="auto", batch_size=4, model_path="", exported_model_path="", out_root=".", min_valid_conf=0.2, yolo_*, sleap_*, keypoint_names, skeleton_edges`.
@@ -61,14 +61,14 @@ Every task's requirements implicitly include these. Exact values, copied from th
 ## File Structure
 
 **New files:**
-- `src/hydra_suite/core/identity/pose/vitpose/adapter.py` — `load_finetuned_checkpoint` (checkpoint → module + metadata, head inference). *In the leaf; PoseKit-free.*
-- `src/hydra_suite/core/identity/pose/vitpose/infer.py` — the pure crop→keypoints driver (compose pre/forward/decode/inverse + batching). *In the leaf.*
-- `src/hydra_suite/core/identity/pose/backends/vitpose.py` — `ViTPoseBackend` (Protocol impl) + `auto_export_vitpose_model`.
-- `src/hydra_suite/core/identity/pose/runtime/__init__.py`
-- `src/hydra_suite/core/identity/pose/runtime/onnx_session.py` — `OnnxSessionRunner` (moved from sleap).
-- `src/hydra_suite/core/identity/pose/runtime/tensorrt_engine.py` — `TensorRTEngineRunner` + `build_trt_engine_from_onnx` (moved).
-- `src/hydra_suite/core/identity/pose/runtime/coreml_runner.py` — `CoreMLRunner` (new).
-- `src/hydra_suite/core/identity/pose/runtime/accelerated.py` — `build_accelerated_runner` fallback ladder (moved).
+- `src/hydra_suite/core/individual/pose/vitpose/adapter.py` — `load_finetuned_checkpoint` (checkpoint → module + metadata, head inference). *In the leaf; PoseKit-free.*
+- `src/hydra_suite/core/individual/pose/vitpose/infer.py` — the pure crop→keypoints driver (compose pre/forward/decode/inverse + batching). *In the leaf.*
+- `src/hydra_suite/core/individual/pose/backends/vitpose.py` — `ViTPoseBackend` (Protocol impl) + `auto_export_vitpose_model`.
+- `src/hydra_suite/core/individual/pose/runtime/__init__.py`
+- `src/hydra_suite/core/individual/pose/runtime/onnx_session.py` — `OnnxSessionRunner` (moved from sleap).
+- `src/hydra_suite/core/individual/pose/runtime/tensorrt_engine.py` — `TensorRTEngineRunner` + `build_trt_engine_from_onnx` (moved).
+- `src/hydra_suite/core/individual/pose/runtime/coreml_runner.py` — `CoreMLRunner` (new).
+- `src/hydra_suite/core/individual/pose/runtime/accelerated.py` — `build_accelerated_runner` fallback ladder (moved).
 - `tools/equivalence/verify_vitpose_runtimes.py` — parity harness.
 - Test files under `tests/` per task.
 
@@ -92,7 +92,7 @@ Delivers: select ViTPose in the GUI, load a fine-tuned `best.pt`, track a video 
 ## Task 1: Fine-tuned checkpoint adapter (leaf)
 
 **Files:**
-- Create: `src/hydra_suite/core/identity/pose/vitpose/adapter.py`
+- Create: `src/hydra_suite/core/individual/pose/vitpose/adapter.py`
 - Test: `tests/test_vitpose_adapter.py`
 
 **Interfaces:**
@@ -107,12 +107,12 @@ from pathlib import Path
 
 import torch
 
-from hydra_suite.core.identity.pose.vitpose.adapter import (
+from hydra_suite.core.individual.pose.vitpose.adapter import (
     FinetuneMeta,
     infer_head_from_state,
     load_finetuned_checkpoint,
 )
-from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
+from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose
 
 
 def _save_training_ckpt(tmp_path: Path, variant: str, head: str, k: int) -> Path:
@@ -171,7 +171,7 @@ Expected: FAIL — `ModuleNotFoundError: ...vitpose.adapter`.
 - [ ] **Step 3: Write the implementation**
 
 ```python
-# src/hydra_suite/core/identity/pose/vitpose/adapter.py
+# src/hydra_suite/core/individual/pose/vitpose/adapter.py
 """Load a fine-tuned or user-supplied ViTPose checkpoint, recovering the
 variant/head/num_keypoints needed to rebuild the module.
 
@@ -274,16 +274,16 @@ Expected: PASS (3 tests).
 - [ ] **Step 5: Format + commit**
 
 ```bash
-conda run -n hydra-mps black src/hydra_suite/core/identity/pose/vitpose/adapter.py tests/test_vitpose_adapter.py
-conda run -n hydra-mps isort src/hydra_suite/core/identity/pose/vitpose/adapter.py tests/test_vitpose_adapter.py
-git add src/hydra_suite/core/identity/pose/vitpose/adapter.py tests/test_vitpose_adapter.py
+conda run -n hydra-mps black src/hydra_suite/core/individual/pose/vitpose/adapter.py tests/test_vitpose_adapter.py
+conda run -n hydra-mps isort src/hydra_suite/core/individual/pose/vitpose/adapter.py tests/test_vitpose_adapter.py
+git add src/hydra_suite/core/individual/pose/vitpose/adapter.py tests/test_vitpose_adapter.py
 git commit -m "feat(vitpose): fine-tuned checkpoint adapter with head inference"
 ```
 
 ## Task 2: Pure crop→keypoints inference driver (leaf)
 
 **Files:**
-- Create: `src/hydra_suite/core/identity/pose/vitpose/infer.py`
+- Create: `src/hydra_suite/core/individual/pose/vitpose/infer.py`
 - Test: `tests/test_vitpose_infer.py`
 
 **Interfaces:**
@@ -297,7 +297,7 @@ git commit -m "feat(vitpose): fine-tuned checkpoint adapter with head inference"
 import numpy as np
 import torch
 
-from hydra_suite.core.identity.pose.vitpose.infer import (
+from hydra_suite.core.individual.pose.vitpose.infer import (
     decode_and_project,
     preprocess_crop,
 )
@@ -334,7 +334,7 @@ Expected: FAIL — module not found.
 - [ ] **Step 3: Write the implementation**
 
 ```python
-# src/hydra_suite/core/identity/pose/vitpose/infer.py
+# src/hydra_suite/core/individual/pose/vitpose/infer.py
 """Pure crop -> keypoints composition for ViTPose. Runtime-agnostic: the caller
 injects a forward function (torch module, ONNX session, TRT engine, or CoreML).
 
@@ -392,16 +392,16 @@ Expected: PASS (2 tests).
 - [ ] **Step 5: Format + commit**
 
 ```bash
-conda run -n hydra-mps black src/hydra_suite/core/identity/pose/vitpose/infer.py tests/test_vitpose_infer.py
-conda run -n hydra-mps isort src/hydra_suite/core/identity/pose/vitpose/infer.py tests/test_vitpose_infer.py
-git add src/hydra_suite/core/identity/pose/vitpose/infer.py tests/test_vitpose_infer.py
+conda run -n hydra-mps black src/hydra_suite/core/individual/pose/vitpose/infer.py tests/test_vitpose_infer.py
+conda run -n hydra-mps isort src/hydra_suite/core/individual/pose/vitpose/infer.py tests/test_vitpose_infer.py
+git add src/hydra_suite/core/individual/pose/vitpose/infer.py tests/test_vitpose_infer.py
 git commit -m "feat(vitpose): pure crop->keypoints inference driver"
 ```
 
 ## Task 3: `ViTPoseBackend` native path (Protocol impl)
 
 **Files:**
-- Create: `src/hydra_suite/core/identity/pose/backends/vitpose.py`
+- Create: `src/hydra_suite/core/individual/pose/backends/vitpose.py`
 - Test: `tests/test_vitpose_backend_native.py`
 
 **Interfaces:**
@@ -417,8 +417,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from hydra_suite.core.identity.pose.backends.vitpose import ViTPoseBackend
-from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
+from hydra_suite.core.individual.pose.backends.vitpose import ViTPoseBackend
+from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose
 
 
 def _ckpt(tmp_path: Path, k: int = 4) -> Path:
@@ -459,7 +459,7 @@ Expected: FAIL — module not found.
 - [ ] **Step 3: Write the implementation** (native path only; accelerated paths added in Phase 2)
 
 ```python
-# src/hydra_suite/core/identity/pose/backends/vitpose.py
+# src/hydra_suite/core/individual/pose/backends/vitpose.py
 """ViTPose pose backend. Thin driver over the Spec-1 leaf, mirroring yolo.py.
 
 Native path only in Phase 1; ONNX/TensorRT/CoreML runners are wired in Phase 2.
@@ -560,7 +560,7 @@ class ViTPoseBackend:
         self._model = None
 ```
 
-**Note for implementer:** verify the exact signature of `summarize_keypoints`/`empty_pose_result` in `core/identity/pose/utils.py` (grep first). If `summarize_keypoints` expects a different argument order or a `num_keypoints` kwarg, adapt the call — the contract is: given a `(K,3)` xy+conf array and a confidence threshold, return a `PoseResult`. `empty_pose_result` is imported for the (unused-in-Phase-1) degenerate path; drop the import if unused to keep output pristine.
+**Note for implementer:** verify the exact signature of `summarize_keypoints`/`empty_pose_result` in `core/individual/pose/utils.py` (grep first). If `summarize_keypoints` expects a different argument order or a `num_keypoints` kwarg, adapt the call — the contract is: given a `(K,3)` xy+conf array and a confidence threshold, return a `PoseResult`. `empty_pose_result` is imported for the (unused-in-Phase-1) degenerate path; drop the import if unused to keep output pristine.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -570,17 +570,17 @@ Expected: PASS (2 tests). Output pristine.
 - [ ] **Step 5: Format + commit**
 
 ```bash
-conda run -n hydra-mps black src/hydra_suite/core/identity/pose/backends/vitpose.py tests/test_vitpose_backend_native.py
-conda run -n hydra-mps isort src/hydra_suite/core/identity/pose/backends/vitpose.py tests/test_vitpose_backend_native.py
-git add src/hydra_suite/core/identity/pose/backends/vitpose.py tests/test_vitpose_backend_native.py
+conda run -n hydra-mps black src/hydra_suite/core/individual/pose/backends/vitpose.py tests/test_vitpose_backend_native.py
+conda run -n hydra-mps isort src/hydra_suite/core/individual/pose/backends/vitpose.py tests/test_vitpose_backend_native.py
+git add src/hydra_suite/core/individual/pose/backends/vitpose.py tests/test_vitpose_backend_native.py
 git commit -m "feat(vitpose): native ViTPoseBackend (Protocol impl)"
 ```
 
 ## Task 4: `PoseRuntimeConfig` fields + factory branch
 
 **Files:**
-- Modify: `src/hydra_suite/core/identity/pose/types.py:22-44` (add `vitpose_*` fields)
-- Modify: `src/hydra_suite/core/identity/pose/api.py` (add `vitpose` branch before `:159` raise)
+- Modify: `src/hydra_suite/core/individual/pose/types.py:22-44` (add `vitpose_*` fields)
+- Modify: `src/hydra_suite/core/individual/pose/api.py` (add `vitpose` branch before `:159` raise)
 - Test: `tests/test_vitpose_factory.py`
 
 **Interfaces:**
@@ -595,10 +595,10 @@ from pathlib import Path
 
 import torch
 
-from hydra_suite.core.identity.pose.api import create_pose_backend_from_config
-from hydra_suite.core.identity.pose.backends.vitpose import ViTPoseBackend
-from hydra_suite.core.identity.pose.types import PoseRuntimeConfig
-from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
+from hydra_suite.core.individual.pose.api import create_pose_backend_from_config
+from hydra_suite.core.individual.pose.backends.vitpose import ViTPoseBackend
+from hydra_suite.core.individual.pose.types import PoseRuntimeConfig
+from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose
 
 
 def test_factory_builds_vitpose(tmp_path):
@@ -662,8 +662,8 @@ Expected: PASS.
 - [ ] **Step 5: Format + commit**
 
 ```bash
-conda run -n hydra-mps black src/hydra_suite/core/identity/pose/types.py src/hydra_suite/core/identity/pose/api.py tests/test_vitpose_factory.py
-conda run -n hydra-mps isort src/hydra_suite/core/identity/pose/types.py src/hydra_suite/core/identity/pose/api.py tests/test_vitpose_factory.py
+conda run -n hydra-mps black src/hydra_suite/core/individual/pose/types.py src/hydra_suite/core/individual/pose/api.py tests/test_vitpose_factory.py
+conda run -n hydra-mps isort src/hydra_suite/core/individual/pose/types.py src/hydra_suite/core/individual/pose/api.py tests/test_vitpose_factory.py
 git add -A
 git commit -m "feat(vitpose): PoseRuntimeConfig fields + factory registry branch"
 ```
@@ -941,11 +941,11 @@ Delivers: `gpu_fast` tier runs ViTPose via a native TensorRT engine (CUDA) or Co
 ## Task 8: Extract the shared pose runtime from `sleap.py`
 
 **Files:**
-- Create: `src/hydra_suite/core/identity/pose/runtime/__init__.py`
-- Create: `src/hydra_suite/core/identity/pose/runtime/onnx_session.py`
-- Create: `src/hydra_suite/core/identity/pose/runtime/tensorrt_engine.py`
-- Create: `src/hydra_suite/core/identity/pose/runtime/accelerated.py`
-- Modify: `src/hydra_suite/core/identity/pose/backends/sleap.py` (delete the moved classes; import them from `..runtime`)
+- Create: `src/hydra_suite/core/individual/pose/runtime/__init__.py`
+- Create: `src/hydra_suite/core/individual/pose/runtime/onnx_session.py`
+- Create: `src/hydra_suite/core/individual/pose/runtime/tensorrt_engine.py`
+- Create: `src/hydra_suite/core/individual/pose/runtime/accelerated.py`
+- Modify: `src/hydra_suite/core/individual/pose/backends/sleap.py` (delete the moved classes; import them from `..runtime`)
 - Test: `tests/test_pose_runtime_extraction.py`
 
 **Interfaces (produced):**
@@ -970,7 +970,7 @@ def test_onnx_runner_runs_tiny_model(tmp_path):
     import onnx
     from onnx import helper, TensorProto
 
-    from hydra_suite.core.identity.pose.runtime.onnx_session import OnnxSessionRunner
+    from hydra_suite.core.individual.pose.runtime.onnx_session import OnnxSessionRunner
     from hydra_suite.runtime.resolver import ResolvedBackend
 
     # identity ONNX: input (1,3,4,4) -> output same
@@ -993,13 +993,13 @@ def test_sleap_still_imports_after_extraction():
     # SLEAP must keep working: its module imports the moved runners
     import importlib
 
-    importlib.import_module("hydra_suite.core.identity.pose.backends.sleap")
-    from hydra_suite.core.identity.pose.runtime.onnx_session import OnnxSessionRunner
-    from hydra_suite.core.identity.pose.runtime.tensorrt_engine import (
+    importlib.import_module("hydra_suite.core.individual.pose.backends.sleap")
+    from hydra_suite.core.individual.pose.runtime.onnx_session import OnnxSessionRunner
+    from hydra_suite.core.individual.pose.runtime.tensorrt_engine import (
         TensorRTEngineRunner,
         build_trt_engine_from_onnx,
     )
-    from hydra_suite.core.identity.pose.runtime.accelerated import (
+    from hydra_suite.core.individual.pose.runtime.accelerated import (
         build_accelerated_runner,
     )
     assert OnnxSessionRunner and TensorRTEngineRunner
@@ -1023,8 +1023,8 @@ Expected: extraction PASS; SLEAP tests unchanged from baseline (same pass/skip c
 - [ ] **Step 5: Format + commit**
 
 ```bash
-conda run -n hydra-mps black src/hydra_suite/core/identity/pose/runtime/*.py src/hydra_suite/core/identity/pose/backends/sleap.py tests/test_pose_runtime_extraction.py
-conda run -n hydra-mps isort src/hydra_suite/core/identity/pose/runtime/*.py src/hydra_suite/core/identity/pose/backends/sleap.py tests/test_pose_runtime_extraction.py
+conda run -n hydra-mps black src/hydra_suite/core/individual/pose/runtime/*.py src/hydra_suite/core/individual/pose/backends/sleap.py tests/test_pose_runtime_extraction.py
+conda run -n hydra-mps isort src/hydra_suite/core/individual/pose/runtime/*.py src/hydra_suite/core/individual/pose/backends/sleap.py tests/test_pose_runtime_extraction.py
 git add -A
 git commit -m "refactor(pose): extract shared runtime (onnx/tensorrt/ladder) from sleap.py"
 ```
@@ -1032,7 +1032,7 @@ git commit -m "refactor(pose): extract shared runtime (onnx/tensorrt/ladder) fro
 ## Task 9: `CoreMLRunner` (new)
 
 **Files:**
-- Create: `src/hydra_suite/core/identity/pose/runtime/coreml_runner.py`
+- Create: `src/hydra_suite/core/individual/pose/runtime/coreml_runner.py`
 - Test: `tests/test_coreml_runner.py`
 
 **Interfaces:**
@@ -1047,7 +1047,7 @@ import pytest
 
 
 def test_coreml_runner_signature_and_import():
-    from hydra_suite.core.identity.pose.runtime.coreml_runner import CoreMLRunner
+    from hydra_suite.core.individual.pose.runtime.coreml_runner import CoreMLRunner
 
     assert hasattr(CoreMLRunner, "run")
 
@@ -1060,9 +1060,9 @@ def test_coreml_runner_predicts(tmp_path):
     ct = pytest.importorskip("coremltools")
     import torch
 
-    from hydra_suite.core.identity.pose.runtime.coreml_runner import CoreMLRunner
-    from hydra_suite.core.identity.pose.vitpose.export import export_coreml
-    from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
+    from hydra_suite.core.individual.pose.runtime.coreml_runner import CoreMLRunner
+    from hydra_suite.core.individual.pose.vitpose.export import export_coreml
+    from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose
 
     model = build_vitpose("S", "classic", num_keypoints=3).eval()
     path = tmp_path / "m.mlpackage"
@@ -1081,7 +1081,7 @@ Expected: FAIL — module not found.
 - [ ] **Step 3: Write the implementation**
 
 ```python
-# src/hydra_suite/core/identity/pose/runtime/coreml_runner.py
+# src/hydra_suite/core/individual/pose/runtime/coreml_runner.py
 """Native CoreML .mlpackage runner for pose backends.
 
 The leaf export pins CoreML input to a static batch of 1 (pos_embed has no
@@ -1122,8 +1122,8 @@ Expected: PASS (2 tests; the predict test may skip if coremltools absent).
 - [ ] **Step 5: Format + commit**
 
 ```bash
-conda run -n hydra-mps black src/hydra_suite/core/identity/pose/runtime/coreml_runner.py tests/test_coreml_runner.py
-conda run -n hydra-mps isort src/hydra_suite/core/identity/pose/runtime/coreml_runner.py tests/test_coreml_runner.py
+conda run -n hydra-mps black src/hydra_suite/core/individual/pose/runtime/coreml_runner.py tests/test_coreml_runner.py
+conda run -n hydra-mps isort src/hydra_suite/core/individual/pose/runtime/coreml_runner.py tests/test_coreml_runner.py
 git add -A
 git commit -m "feat(pose): CoreMLRunner for native .mlpackage inference"
 ```
@@ -1131,7 +1131,7 @@ git commit -m "feat(pose): CoreMLRunner for native .mlpackage inference"
 ## Task 10: `auto_export_vitpose_model` caching wrapper
 
 **Files:**
-- Modify: `src/hydra_suite/core/identity/pose/backends/vitpose.py` (add module-level `auto_export_vitpose_model`)
+- Modify: `src/hydra_suite/core/individual/pose/backends/vitpose.py` (add module-level `auto_export_vitpose_model`)
 - Test: `tests/test_auto_export_vitpose.py`
 
 **Interfaces:**
@@ -1147,12 +1147,12 @@ from pathlib import Path
 import pytest
 import torch
 
-from hydra_suite.core.identity.pose.backends.vitpose import (
+from hydra_suite.core.individual.pose.backends.vitpose import (
     _vitpose_artifact_signature,
     auto_export_vitpose_model,
 )
-from hydra_suite.core.identity.pose.types import PoseRuntimeConfig
-from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
+from hydra_suite.core.individual.pose.types import PoseRuntimeConfig
+from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose
 
 
 def _ckpt(tmp_path):
@@ -1250,8 +1250,8 @@ Expected: PASS (2 tests; the export test skips without coremltools).
 - [ ] **Step 5: Format + commit**
 
 ```bash
-conda run -n hydra-mps black src/hydra_suite/core/identity/pose/backends/vitpose.py tests/test_auto_export_vitpose.py
-conda run -n hydra-mps isort src/hydra_suite/core/identity/pose/backends/vitpose.py tests/test_auto_export_vitpose.py
+conda run -n hydra-mps black src/hydra_suite/core/individual/pose/backends/vitpose.py tests/test_auto_export_vitpose.py
+conda run -n hydra-mps isort src/hydra_suite/core/individual/pose/backends/vitpose.py tests/test_auto_export_vitpose.py
 git add -A
 git commit -m "feat(vitpose): auto_export_vitpose_model caching wrapper"
 ```
@@ -1259,8 +1259,8 @@ git commit -m "feat(vitpose): auto_export_vitpose_model caching wrapper"
 ## Task 11: Wire accelerated runners into `ViTPoseBackend`
 
 **Files:**
-- Modify: `src/hydra_suite/core/identity/pose/backends/vitpose.py` (construct a runner in `__init__` for `tensorrt`/`coreml`; route `_forward` through it; add `predict_batch_cuda`)
-- Modify: `src/hydra_suite/core/identity/pose/api.py` (in the `vitpose` branch, call `auto_export_vitpose_model` for `tensorrt`/`coreml` flavors and pass the artifact path as `exported_model_path`, mirroring the yolo branch at `api.py:73-97`)
+- Modify: `src/hydra_suite/core/individual/pose/backends/vitpose.py` (construct a runner in `__init__` for `tensorrt`/`coreml`; route `_forward` through it; add `predict_batch_cuda`)
+- Modify: `src/hydra_suite/core/individual/pose/api.py` (in the `vitpose` branch, call `auto_export_vitpose_model` for `tensorrt`/`coreml` flavors and pass the artifact path as `exported_model_path`, mirroring the yolo branch at `api.py:73-97`)
 - Test: `tests/test_vitpose_backend_accelerated.py`
 
 **Interfaces:**
@@ -1277,12 +1277,12 @@ import numpy as np
 import pytest
 import torch
 
-from hydra_suite.core.identity.pose.backends.vitpose import (
+from hydra_suite.core.individual.pose.backends.vitpose import (
     auto_export_vitpose_model,
     ViTPoseBackend,
 )
-from hydra_suite.core.identity.pose.types import PoseRuntimeConfig
-from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
+from hydra_suite.core.individual.pose.types import PoseRuntimeConfig
+from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose
 
 
 def _ckpt(tmp_path, k=3):
@@ -1400,8 +1400,8 @@ Expected: PASS (2 tests; coreml test skips without coremltools).
 - [ ] **Step 5: Format + commit**
 
 ```bash
-conda run -n hydra-mps black src/hydra_suite/core/identity/pose/backends/vitpose.py src/hydra_suite/core/identity/pose/api.py tests/test_vitpose_backend_accelerated.py
-conda run -n hydra-mps isort src/hydra_suite/core/identity/pose/backends/vitpose.py src/hydra_suite/core/identity/pose/api.py tests/test_vitpose_backend_accelerated.py
+conda run -n hydra-mps black src/hydra_suite/core/individual/pose/backends/vitpose.py src/hydra_suite/core/individual/pose/api.py tests/test_vitpose_backend_accelerated.py
+conda run -n hydra-mps isort src/hydra_suite/core/individual/pose/backends/vitpose.py src/hydra_suite/core/individual/pose/api.py tests/test_vitpose_backend_accelerated.py
 git add -A
 git commit -m "feat(vitpose): wire TensorRT/CoreML runners + lazy export into backend"
 ```
@@ -1429,7 +1429,7 @@ git commit -m "feat(vitpose): wire TensorRT/CoreML runners + lazy export into ba
 import numpy as np
 import torch
 
-from hydra_suite.core.identity.pose.vitpose.decode import (
+from hydra_suite.core.individual.pose.vitpose.decode import (
     decode_udp_cv2,
     decode_udp_torch,
 )
@@ -1485,11 +1485,11 @@ from typing import Dict, List
 
 import numpy as np
 
-from hydra_suite.core.identity.pose.backends.vitpose import (
+from hydra_suite.core.individual.pose.backends.vitpose import (
     auto_export_vitpose_model,
     ViTPoseBackend,
 )
-from hydra_suite.core.identity.pose.types import PoseRuntimeConfig
+from hydra_suite.core.individual.pose.types import PoseRuntimeConfig
 
 
 def _native(checkpoint: str, crops: List[np.ndarray]) -> np.ndarray:
@@ -1577,9 +1577,9 @@ production factory.
 import numpy as np
 import torch
 
-from hydra_suite.core.identity.pose.api import create_pose_backend_from_config
-from hydra_suite.core.identity.pose.types import PoseRuntimeConfig
-from hydra_suite.core.identity.pose.vitpose.training.model_setup import (
+from hydra_suite.core.individual.pose.api import create_pose_backend_from_config
+from hydra_suite.core.individual.pose.types import PoseRuntimeConfig
+from hydra_suite.core.individual.pose.vitpose.training.model_setup import (
     build_finetune_model,
 )
 

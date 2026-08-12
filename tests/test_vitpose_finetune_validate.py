@@ -1,6 +1,6 @@
 import numpy as np
 
-from hydra_suite.core.identity.pose.vitpose.training.validate import pck_from_preds
+from hydra_suite.core.individual.pose.vitpose.training.validate import pck_from_preds
 
 
 def test_pck_perfect_and_thresholded():

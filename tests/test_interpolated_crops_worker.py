@@ -1,18 +1,26 @@
+"""Interpolated-crops pipeline tests.
+
+The implementation moved out of ``trackerkit/gui/workers/crops_worker.py`` into
+the Qt-free ``hydra_suite.core.post.interpolated_crops`` module; the worker is
+now a thin wrapper around ``run_interpolated_crops``. These tests therefore
+target the core module's functions directly.
+"""
+
 from __future__ import annotations
 
 import importlib
 
+import numpy as np
 import pandas as pd
 
+from hydra_suite.core.canonicalization.geometry import CanonicalGeometry, ClippingStats
+from hydra_suite.core.post import interpolated_crops as ic
 from hydra_suite.runtime.resolver import ResolvedBackend
-from hydra_suite.trackerkit.gui.workers.crops_worker import InterpolatedCropsWorker
 
 
 def test_interpolated_worker_skips_backend_init_when_no_eligible_gaps(
     monkeypatch,
 ) -> None:
-    worker = InterpolatedCropsWorker("tracks.csv", "source.mp4", "cache.npz", {})
-    emitted: list[dict[str, object]] = []
     finalized = {"called": False}
 
     class FakeCap:
@@ -23,12 +31,10 @@ def test_interpolated_worker_skips_backend_init_when_no_eligible_gaps(
         def finalize(self) -> None:
             finalized["called"] = True
 
-    worker.finished_signal.connect(lambda result: emitted.append(result))
-
     monkeypatch.setattr(
-        InterpolatedCropsWorker,
+        ic,
         "_validate_and_setup",
-        lambda self, profiler: (
+        lambda csv_path, video_path, cache_path, params, profiler, should_stop: (
             pd.DataFrame(
                 [
                     {
@@ -49,47 +55,48 @@ def test_interpolated_worker_skips_backend_init_when_no_eligible_gaps(
             True,
             1.0,
             1.0,
-            2.0,
-            0.1,
+            CanonicalGeometry.from_reference(20.0, 2.0, 1.3),
         ),
     )
     monkeypatch.setattr(
-        InterpolatedCropsWorker,
+        ic,
         "_detect_interpolation_gaps",
-        lambda self, df, detection_cache, position_scale, size_scale: ({}, 4, 0, 0),
+        lambda params, should_stop, df, detection_cache, position_scale, size_scale: (
+            {},
+            4,
+            0,
+            0,
+        ),
     )
     monkeypatch.setattr(
-        InterpolatedCropsWorker,
+        ic,
         "_init_interpolation_backends",
-        lambda self, output_dir: (_ for _ in ()).throw(
+        lambda *a, **k: (_ for _ in ()).throw(
             AssertionError("backend initialization should be skipped")
         ),
     )
-    monkeypatch.setattr(
-        InterpolatedCropsWorker,
-        "_cleanup_backends",
-        lambda self, *args, **kwargs: None,
-    )
+    monkeypatch.setattr(ic, "_cleanup_backends", lambda *args, **kwargs: None)
 
-    worker.execute()
+    result = ic.run_interpolated_crops("tracks.csv", "source.mp4", "cache.npz", {})
 
     assert finalized["called"] is True
-    assert len(emitted) == 1
-    assert emitted[0]["no_work_reason"] == "no_eligible_gaps"
-    assert emitted[0]["occluded_rows"] == 4
-    assert emitted[0]["eligible_frames"] == 0
-    assert emitted[0]["eligible_rows"] == 0
-    assert emitted[0]["pose_rows_produced"] == 0
-    assert emitted[0]["cnn_rows_produced"] == 0
+    assert result["no_work_reason"] == "no_eligible_gaps"
+    assert result["occluded_rows"] == 4
+    assert result["eligible_frames"] == 0
+    assert result["eligible_rows"] == 0
+    assert result["pose_rows_produced"] == 0
+    assert result["cnn_rows_produced"] == 0
 
 
 def test_interpolated_worker_uses_split_cnn_and_headtail_runtimes(
     monkeypatch,
     tmp_path,
 ) -> None:
-    cnn_module = importlib.import_module("hydra_suite.core.identity.classification.cnn")
+    cnn_module = importlib.import_module(
+        "hydra_suite.core.individual.classification.cnn"
+    )
     headtail_module = importlib.import_module(
-        "hydra_suite.core.identity.classification.headtail"
+        "hydra_suite.core.individual.classification.headtail"
     )
 
     cnn_model = tmp_path / "cnn_model.pth"
@@ -121,6 +128,7 @@ def test_interpolated_worker_uses_split_cnn_and_headtail_runtimes(
     class FakeHeadTailAnalyzer:
         def __init__(self, model_path: str, resolved=None, **kwargs) -> None:
             observed["headtail_resolved"] = resolved
+            observed["headtail_geometry"] = kwargs.get("geometry")
             self.is_available = True
 
         def close(self) -> None:
@@ -130,40 +138,36 @@ def test_interpolated_worker_uses_split_cnn_and_headtail_runtimes(
     monkeypatch.setattr(cnn_module, "CNNIdentityBackend", FakeCNNBackend)
     monkeypatch.setattr(headtail_module, "HeadTailAnalyzer", FakeHeadTailAnalyzer)
 
-    # Gen-2: the worker resolves the single RUNTIME_TIER through RuntimeResolver
-    # and threads a ResolvedBackend to both the CNN and head-tail stages. The
-    # "cpu" tier resolves to native torch/CPU on every host, independent of
-    # platform accelerators.
-    worker = InterpolatedCropsWorker(
-        "tracks.csv",
-        "source.mp4",
-        "cache.npz",
-        {
-            "CNN_CLASSIFIERS": [
-                {"label": "cnn_identity", "model_path": str(cnn_model), "batch_size": 4}
-            ],
-            "RUNTIME_TIER": "cpu",
-            "YOLO_HEADTAIL_MODEL_PATH": str(headtail_model),
-        },
-    )
+    # Gen-2: the pipeline resolves the single RUNTIME_TIER through
+    # RuntimeResolver and threads a ResolvedBackend to both the CNN and
+    # head-tail stages. The "cpu" tier resolves to native torch/CPU on every
+    # host, independent of platform accelerators.
+    params = {
+        "CNN_CLASSIFIERS": [
+            {"label": "cnn_identity", "model_path": str(cnn_model), "batch_size": 4}
+        ],
+        "RUNTIME_TIER": "cpu",
+        "YOLO_HEADTAIL_MODEL_PATH": str(headtail_model),
+    }
+    geometry = ic.canonical_geometry_from_params(params)
 
-    worker._init_cnn_backends()
-    worker._init_headtail_analyzer()
+    ic._init_cnn_backends(params)
+    ic._init_headtail_analyzer(params, geometry)
 
     assert observed["cnn_resolved"] == ResolvedBackend("torch", "cpu", False)
     assert observed["headtail_resolved"] == ResolvedBackend("torch", "cpu", False)
+    # The head-tail analyzer must share the ONE project-wide canvas, not build
+    # its own from a bare aspect ratio.
+    assert observed["headtail_geometry"] == geometry
 
 
 def test_init_pose_backend_yolo_delegates_to_load_pose_backend(
     monkeypatch, tmp_path
 ) -> None:
     """Golden rule: the YOLO pose branch routes through the shared
-    ``core/inference/api.load_pose_backend`` shim (patched here in the worker's
-    module) instead of duplicating the runtime-flavor ladder."""
-    crops_worker = importlib.import_module(
-        "hydra_suite.trackerkit.gui.workers.crops_worker"
-    )
-    pose_utils = importlib.import_module("hydra_suite.core.identity.pose.utils")
+    ``core/inference/api.load_pose_backend`` shim (patched here in the
+    pipeline's module) instead of duplicating the runtime-flavor ladder."""
+    pose_utils = importlib.import_module("hydra_suite.core.individual.pose.utils")
 
     monkeypatch.setattr(
         pose_utils, "load_skeleton_from_json", lambda _p: (["kpt0", "kpt1"], [])
@@ -187,12 +191,9 @@ def test_init_pose_backend_yolo_delegates_to_load_pose_backend(
         captured.update(kwargs)
         return fake_backend
 
-    monkeypatch.setattr(crops_worker, "load_pose_backend", _fake_load_pose_backend)
+    monkeypatch.setattr(ic, "load_pose_backend", _fake_load_pose_backend)
 
-    worker = InterpolatedCropsWorker(
-        "tracks.csv",
-        "source.mp4",
-        "cache.npz",
+    backend, kpt_source_names, kpt_labels = ic._init_pose_backend(
         {
             "ENABLE_POSE_EXTRACTOR": True,
             "POSE_MODEL_TYPE": "yolo",
@@ -201,9 +202,8 @@ def test_init_pose_backend_yolo_delegates_to_load_pose_backend(
             "POSE_BATCH_SIZE": 8,
             "RUNTIME_TIER": "cpu",
         },
+        str(tmp_path),
     )
-
-    backend, kpt_source_names, kpt_labels = worker._init_pose_backend(str(tmp_path))
 
     assert backend is fake_backend
     assert captured["backend_family"] == "yolo"
@@ -212,7 +212,7 @@ def test_init_pose_backend_yolo_delegates_to_load_pose_backend(
     # to native torch/CPU on every host, so the threaded string is host-stable.
     assert captured["compute_runtime"] == "cpu"
     # Regression guard: load_pose_backend (-> load_pose_model) already warms
-    # the backend it returns; a second GUI-side warmup() call is redundant
+    # the backend it returns; a second caller-side warmup() call is redundant
     # and, for the SLEAP service backend, breaks _service_started_here
     # ownership tracking, leaking the service subprocess past close().
     assert fake_backend.warmup_calls == 0
@@ -228,10 +228,7 @@ def test_init_pose_backend_sleap_delegates_to_load_pose_backend(
     ``load_pose_backend`` shim and threads SLEAP settings (env, max_instances)
     through -- the tier -> flavor decision lives in ``load_pose_model``, not
     here, so this asserts delegation + settings, not the resolved flavor."""
-    crops_worker = importlib.import_module(
-        "hydra_suite.trackerkit.gui.workers.crops_worker"
-    )
-    pose_utils = importlib.import_module("hydra_suite.core.identity.pose.utils")
+    pose_utils = importlib.import_module("hydra_suite.core.individual.pose.utils")
 
     monkeypatch.setattr(
         pose_utils, "load_skeleton_from_json", lambda _p: (["kpt0"], [(0, 1)])
@@ -255,12 +252,9 @@ def test_init_pose_backend_sleap_delegates_to_load_pose_backend(
         captured.update(kwargs)
         return fake_backend
 
-    monkeypatch.setattr(crops_worker, "load_pose_backend", _fake_load_pose_backend)
+    monkeypatch.setattr(ic, "load_pose_backend", _fake_load_pose_backend)
 
-    worker = InterpolatedCropsWorker(
-        "tracks.csv",
-        "source.mp4",
-        "cache.npz",
+    backend, kpt_source_names, kpt_labels = ic._init_pose_backend(
         {
             "ENABLE_POSE_EXTRACTOR": True,
             "POSE_MODEL_TYPE": "sleap",
@@ -271,9 +265,8 @@ def test_init_pose_backend_sleap_delegates_to_load_pose_backend(
             "POSE_SLEAP_MAX_INSTANCES": 2,
             "RUNTIME_TIER": "cpu",
         },
+        str(tmp_path),
     )
-
-    backend, kpt_source_names, kpt_labels = worker._init_pose_backend(str(tmp_path))
 
     assert backend is fake_backend
     # Regression guard: same double-warmup leak as the YOLO case above, but
@@ -297,15 +290,114 @@ def test_crops_worker_has_no_divergent_flavor_ladder() -> None:
     """Source guard: the deleted runtime-flavor ladder must not reappear."""
     from pathlib import Path as _Path
 
-    src = _Path(
-        importlib.import_module(
-            "hydra_suite.trackerkit.gui.workers.crops_worker"
-        ).__file__
-    ).read_text(encoding="utf-8")
-    for banned in (
-        "is_cuda_like",
-        "onnx_cuda",
-        "create_pose_backend_from_config",
-        "YoloNativeBackend",
+    for module_name in (
+        "hydra_suite.trackerkit.gui.workers.crops_worker",
+        "hydra_suite.core.post.interpolated_crops",
     ):
-        assert banned not in src, f"divergent pose ladder token still present: {banned}"
+        src = _Path(importlib.import_module(module_name).__file__).read_text(
+            encoding="utf-8"
+        )
+        for banned in (
+            "is_cuda_like",
+            "onnx_cuda",
+            "create_pose_backend_from_config",
+            "YoloNativeBackend",
+        ):
+            assert (
+                banned not in src
+            ), f"divergent pose ladder token still present in {module_name}: {banned}"
+
+
+def test_compute_frame_corners_and_affines_accumulates_clipping_stats() -> None:
+    """GAP 1: the interpolated-crops path shares the same run-scoped
+    ClippingStats accumulator/reporting pattern as InferenceRunner/Pipeline
+    (core/tracking/worker.py's end-of-run summary), instead of discarding the
+    ``clipped`` flag returned by ``canonical_affine``.
+    """
+    geometry = CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
+
+    clipping_stats = ClippingStats()
+    assert clipping_stats.clipped_count == 0
+    assert clipping_stats.total_count == 0
+
+    # A task whose OBB is far larger than the canonical canvas overflows it.
+    clipped_task = {"cx": 0.0, "cy": 0.0, "w": 500.0, "h": 250.0, "theta": 0.0}
+    # A task sized to the reference body fits comfortably within the canvas.
+    fitting_task = {"cx": 0.0, "cy": 0.0, "w": 20.0, "h": 10.0, "theta": 0.0}
+
+    ic._compute_frame_corners_and_affines(
+        [clipped_task, fitting_task], geometry, clipping_stats
+    )
+
+    assert clipping_stats.total_count == 2
+    assert clipping_stats.clipped_count == 1
+    assert clipping_stats.worst_overflow_ratio > 1.0
+    summary = clipping_stats.summary()
+    assert summary is not None
+    assert "1/2" in summary
+
+
+def test_pose_fit_failure_skips_detection(monkeypatch) -> None:
+    """F6: an ``apply_fit`` failure on a canonical crop must drop the
+    detection, not fall back to feeding the backend a raw canvas crop while
+    still composing/inverting a fit that was never applied.
+    """
+
+    class _FakeProfiler:
+        def tick(self, *_a, **_k) -> None:
+            return None
+
+        def tock(self, *_a, **_k) -> None:
+            return None
+
+    class _FakePoseBackend:
+        def __init__(self) -> None:
+            self.calls: list[list[np.ndarray]] = []
+
+        def predict_batch(self, crops):
+            self.calls.append(list(crops))
+            return [None] * len(crops)
+
+    monkeypatch.setattr(
+        ic,
+        "apply_fit",
+        lambda *a, **k: (_ for _ in ()).throw(ValueError("fit failed")),
+    )
+
+    geometry = CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
+    canvas_w, canvas_h = geometry.canvas_wh
+    raw_crop = np.full((canvas_h, canvas_w, 3), 255, dtype=np.uint8)
+
+    pose_backend = _FakePoseBackend()
+    interp_pose_rows: list[dict] = []
+    pending_crops = [raw_crop]
+    pending_entries = [
+        {
+            "task": {"frame_id": 7, "traj_id": 3},
+            "filename": "frame_7_traj_3.png",
+            "crop_info": {
+                "canonical": True,
+                "M_forward": np.eye(2, 3, dtype=np.float32),
+            },
+        }
+    ]
+
+    ic._flush_pose_batch(
+        pose_backend,
+        pending_crops,
+        pending_entries,
+        interp_pose_rows,
+        [],
+        [],
+        _FakeProfiler(),
+        geometry,
+    )
+
+    # The backend must never see the raw canvas crop for the failed fit.
+    assert len(pose_backend.calls) == 1
+    called_crops = pose_backend.calls[0]
+    assert len(called_crops) == 0
+    assert not any(np.array_equal(c, raw_crop) for c in called_crops)
+
+    # The detection is dropped entirely -- no pose row produced for it.
+    assert interp_pose_rows == []

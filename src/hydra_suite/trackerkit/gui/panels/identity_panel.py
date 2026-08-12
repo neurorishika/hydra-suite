@@ -101,6 +101,18 @@ class IdentityPanel(QWidget):
         )
         identity_content_layout.addWidget(self.lbl_identity_help)
 
+        # Honest status line: identity evidence is a single shared computation
+        # consumed by both realtime and post-hoc paths (Phase 6 Task 6).
+        self.lbl_identity_evidence_status = QLabel(
+            "Identity evidence is computed during inference and cached — "
+            "available to both realtime and post-hoc."
+        )
+        self.lbl_identity_evidence_status.setWordWrap(True)
+        self.lbl_identity_evidence_status.setStyleSheet(
+            "color: #9aa0a6; font-size: 11px; padding: 2px 0;"
+        )
+        identity_content_layout.addWidget(self.lbl_identity_evidence_status)
+
         # Legacy registry banner — shown when pre-v2 entries are detected.
         self.lbl_legacy_banner = QLabel()
         self.lbl_legacy_banner.setWordWrap(True)
@@ -243,7 +255,9 @@ class IdentityPanel(QWidget):
         self.btn_background_color = QPushButton()
         self.btn_background_color.setMaximumWidth(60)
         self.btn_background_color.setMinimumHeight(30)
-        self.btn_background_color.setToolTip("Click to choose background color")
+        self.btn_background_color.setToolTip(
+            "Colour used to mask overlapping animals inside crops (canvas padding is always black)"
+        )
         self.btn_background_color.clicked.connect(
             self._main_window._select_individual_background_color
         )
@@ -753,6 +767,7 @@ class IdentityPanel(QWidget):
         """Self-contained widget for one CNN classifier configuration row."""
 
         remove_requested = Signal(object)
+        fit_calibration_requested = Signal(object)
 
         def __init__(self, main_window, parent=None) -> None:
             super().__init__(parent)
@@ -801,14 +816,39 @@ class IdentityPanel(QWidget):
             self.chk_unique_identifier.setToolTip(
                 "When ON, this classifier's outputs feed the identity pipeline\n"
                 "(catalog, online decoder, assignment cost, posterior cache,\n"
-                "fragment solver) and drive IdentityAssignedLabel.\n"
+                "fragment solver) and drive identity assignment — IdentityRealtimeLabel\n"
+                "during tracking, IdentityFinalLabel after offline resolution.\n"
                 "When OFF, the classifier still runs and its predictions are\n"
                 "appended to the *_with_individual.csv as CNN_<label>_Class /\n"
-                "CNN_<label>_Prob columns, but it has no effect on identity\n"
-                "assignment or tracking.\n"
+                "CNN_<label>_Conf (plus per-class CNN_<label>_<class>_Prob) columns,\n"
+                "but it has no effect on identity assignment or tracking.\n"
                 "Enable this only for classifiers whose classes uniquely identify individuals."
             )
             form.addRow("Unique identifier", self.chk_unique_identifier)
+            self.chk_unique_identifier.toggled.connect(
+                lambda _checked: self._sync_calibration_status()
+            )
+
+            # Calibration status/affordance — surfaces whether this classifier's
+            # posterior has a fitted temperature-scaling calibration, and a
+            # (currently stub) hook to fit one (Phase 6 Task 6).
+            self.lbl_calibration_status = QLabel("Calibration: —")
+            self.btn_fit_calibration = QPushButton("Fit…")
+            self.btn_fit_calibration.setEnabled(False)
+            self.btn_fit_calibration.setToolTip(
+                "Calibration fitting is not available from this panel yet.\n"
+                "Fit calibration via ClassKit and re-import the model to pick it up here."
+            )
+            self.btn_fit_calibration.clicked.connect(
+                lambda: self.fit_calibration_requested.emit(self)
+            )
+            calibration_row = QWidget()
+            calibration_row_layout = QHBoxLayout(calibration_row)
+            calibration_row_layout.setContentsMargins(0, 0, 0, 0)
+            calibration_row_layout.setSpacing(6)
+            calibration_row_layout.addWidget(self.lbl_calibration_status, 1)
+            calibration_row_layout.addWidget(self.btn_fit_calibration, 0)
+            form.addRow("Calibration", calibration_row)
             self.spin_confidence = QDoubleSpinBox()
             self.spin_confidence.setRange(0.0, 1.0)
             self.spin_confidence.setSingleStep(0.05)
@@ -834,6 +874,7 @@ class IdentityPanel(QWidget):
                 lambda _index: self._sync_model_ui()
             )
             self._populate_model_combo()
+            self._sync_calibration_status()
 
         def _populate_model_combo(self):
             """Populate combo from the v2 classifier registry and discovered artifacts."""
@@ -1006,6 +1047,25 @@ class IdentityPanel(QWidget):
             self._update_verification_labels(
                 rel_path if self._has_selected_model(rel_path) else ""
             )
+            self._sync_calibration_status()
+
+        def _sync_calibration_status(self) -> None:
+            """Reflect whether the selected model has a fitted calibration."""
+            rel_path = self.combo_model.currentData()
+            if not self._has_selected_model(rel_path):
+                self.lbl_calibration_status.setText("Calibration: —")
+                return
+            meta = self._main_window._identity_panel._cnn_registry_entry(rel_path)
+            temperature = meta.get("calibration_temperature")
+            fitted = bool(temperature)
+            if not self.chk_unique_identifier.isChecked():
+                self.lbl_calibration_status.setText(
+                    "Calibration: n/a (not a unique identifier)"
+                )
+            elif fitted:
+                self.lbl_calibration_status.setText("Calibration: fitted")
+            else:
+                self.lbl_calibration_status.setText("Calibration: not fitted")
 
     def _add_cnn_classifier_row(self) -> "IdentityPanel.CNNClassifierRow":
         """Add a new CNN classifier row and return it."""

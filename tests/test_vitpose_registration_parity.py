@@ -12,7 +12,7 @@ guards both halves of that parity so a future edit can't accidentally:
 
 import inspect
 
-from hydra_suite.trackerkit.gui import model_utils
+from hydra_suite.core.inference import model_paths as model_utils
 from hydra_suite.trackerkit.gui.orchestrators import config as cfgmod
 
 

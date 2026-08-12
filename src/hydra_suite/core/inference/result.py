@@ -75,6 +75,35 @@ class CropBatch:
 
 
 @dataclass
+class NumpyCropBatch:
+    """CPU-only sibling of :class:`CropBatch` that never leaves numpy uint8.
+
+    The classifier (head-tail / CNN) CPU path consumes ``list[np.ndarray]`` HWC
+    uint8 BGR crops and nothing else, so materialising a ``(N, C, H, W)``
+    float32 ``[0, 1]`` torch tensor only to quantise it straight back to uint8
+    is pure work. That round trip is *exactly* value-preserving --
+    ``uint8 -> /255 (float32) -> *255 -> clip -> astype(uint8)`` is the identity
+    for all 256 byte values (see ``test_classifier_crop_batch_np_identity``) --
+    so skipping it is byte-identical, not merely equivalent.
+
+    Field names and row ordering match ``CropBatch`` so the assembly loops in
+    ``run_headtail_batch`` / ``run_cnn_batch`` are shared verbatim.
+    """
+
+    crops: "list[np.ndarray]"  # N x (H, W, C) uint8 BGR, canonical canvas
+    detection_ids: np.ndarray  # (N,) int64
+    frame_index: np.ndarray  # (N,) int64
+    obb_by_frame: dict  # frame_idx -> OBBResult
+    native_sizes: np.ndarray  # (N, 2) int64 — canvas h, w
+
+    def frames(self) -> list:
+        return sorted({int(f) for f in self.frame_index.tolist()})
+
+    def select_frame(self, frame_idx: int) -> np.ndarray:
+        return np.nonzero(self.frame_index == int(frame_idx))[0]
+
+
+@dataclass
 class HeadTailResult:
     heading_hints: np.ndarray  # (D,) radians; nan = no confident direction
     heading_confidences: np.ndarray  # (D,)

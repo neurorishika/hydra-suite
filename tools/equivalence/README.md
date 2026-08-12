@@ -91,7 +91,7 @@ python tools/equivalence/fixtures/make_manifest.py
 ## Quick start (full local videos)
 
 ```bash
-conda activate hydra-mps          # or hydra-suite-cuda on an NVIDIA box
+conda activate hydra-mps          # or hydra-cuda on an NVIDIA box
 FIXTURES=0 bash tools/equivalence/run_matrix.sh    # uses $DATA full videos
 ```
 

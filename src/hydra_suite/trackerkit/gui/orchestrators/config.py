@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import cv2
-import numpy as np
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
@@ -27,8 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from hydra_suite.core.inference.config import migrate_runtime_to_tier
-from hydra_suite.trackerkit.cli_config import legacy_detection_runtime_fields
-from hydra_suite.trackerkit.gui.model_utils import (
+from hydra_suite.core.inference.model_paths import (
     _normalize_usage_role,
     _sanitize_model_token,
     get_pose_models_directory,
@@ -39,12 +37,17 @@ from hydra_suite.trackerkit.gui.model_utils import (
     register_yolo_model,
     remove_model_from_repository,
 )
+from hydra_suite.trackerkit.cli_config import legacy_detection_runtime_fields
+from hydra_suite.trackerkit.engine_params import (
+    RuntimeContext,
+    build_engine_params,
+    build_roi_mask,
+)
 from hydra_suite.trackerkit.gui.panels.tracking_panel import (
     DENSITY_BINARIZE_THRESHOLD_CONST,
     DENSITY_DOWNSAMPLE_FACTOR_CONST,
     DENSITY_GAUSSIAN_SIGMA_SCALE_CONST,
     KALMAN_ANISOTROPY_RATIO_CONST,
-    MIN_DETECTIONS_TO_START_CONST,
     POSE_REJECTION_MIN_VISIBILITY_CONST,
     POSE_REJECTION_THRESHOLD_CONST,
     SOLVER_AUTOPICK_GREEDY_THRESHOLD,
@@ -383,7 +386,7 @@ class ConfigOrchestrator:
         )
         yolo_headtail_model = get_cfg("yolo_headtail_model_path", default="")
 
-        from hydra_suite.trackerkit.gui.main_window import resolve_model_path
+        from hydra_suite.core.inference.model_paths import resolve_model_path
 
         resolved_yolo_direct = resolve_model_path(yolo_direct_model)
         resolved_yolo_detect = resolve_model_path(yolo_detect_model)
@@ -484,6 +487,9 @@ class ConfigOrchestrator:
         )
         self._panels.detection.spin_reference_aspect_ratio.setValue(
             float(get_cfg("reference_aspect_ratio", default=2.0))
+        )
+        self._panels.detection.spin_canonical_margin.setValue(
+            float(get_cfg("canonical_margin", default=1.3))
         )
         self._panels.detection.chk_enable_aspect_ratio_filtering.setChecked(
             bool(get_cfg("enable_aspect_ratio_filtering", default=False))
@@ -865,6 +871,9 @@ class ConfigOrchestrator:
         self._panels.postprocess.chk_enable_pelt_splitting.setChecked(
             bool(get_cfg("enable_pelt_splitting", default=False))
         )
+        self._panels.postprocess.chk_enable_identity_smoothing.setChecked(
+            bool(get_cfg("enable_identity_smoothing", default=True))
+        )
         self._panels.postprocess.spin_heading_flip_max_burst.setValue(
             int(get_cfg("heading_flip_max_burst", default=5))
         )
@@ -894,6 +903,12 @@ class ConfigOrchestrator:
         )
         self._panels.postprocess.chk_identity_gates_trajectory_structure.setChecked(
             get_cfg("identity_gates_trajectory_structure", default=True)
+        )
+        self._panels.postprocess.spin_max_bridge_gap_frames.setValue(
+            int(get_cfg("max_bridge_gap_frames", default=30))
+        )
+        self._panels.postprocess.spin_fragment_spatial_veto_threshold.setValue(
+            float(get_cfg("fragment_spatial_veto_threshold", default=0.05))
         )
 
     def _load_config_visualization(self, get_cfg):
@@ -1136,6 +1151,12 @@ class ConfigOrchestrator:
         self._panels.identity.combo_apriltag_family.setCurrentIndex(max(0, idx))
         self._panels.identity.spin_apriltag_decimate.setValue(
             float(get_cfg("apriltag_decimate", default=1.0))
+        )
+        self._panels.identity.line_color_tag_model.setText(
+            str(get_cfg("color_tag_model_path", default=""))
+        )
+        self._panels.identity.spin_color_tag_conf.setValue(
+            float(get_cfg("color_tag_confidence", default=0.5))
         )
 
         # Warn users who had a non-default cnn_classifier_crop_padding in their config
@@ -1410,27 +1431,25 @@ class ConfigOrchestrator:
         )
         return path or None
 
-    def save_config(
-        self: object,
-        preset_mode: object = False,
-        preset_path: object = None,
+    def build_config_dict(
+        self,
+        preset_mode: bool = False,
         preset_name: object = None,
         preset_description: object = None,
-        prompt_if_exists: bool = True,
-    ) -> object:
-        """Save current configuration to JSON file.
+    ) -> dict:
+        """Assemble the config dict from current widget state.
+
+        Pure: touches no filesystem and shows no dialog.
 
         Args:
             preset_mode: If True, skip video paths, device settings, and ROI data (for organism presets)
-            preset_path: If provided, save directly to this path without prompting
             preset_name: Name for the preset (only used in preset_mode)
             preset_description: Description for the preset (only used in preset_mode)
-            prompt_if_exists: If False, overwrite default config path without interactive replace dialog.
 
         Returns:
-            bool: True if config was saved successfully, False if cancelled or failed
+            dict: the assembled config dict.
         """
-        from hydra_suite.trackerkit.gui.main_window import (
+        from hydra_suite.core.inference.model_paths import (
             get_yolo_model_metadata,
             make_model_path_relative,
             make_pose_model_path_relative,
@@ -1575,6 +1594,7 @@ class ConfigOrchestrator:
                 "yolo_headtail_detect_conf_threshold": self._panels.identity.spin_yolo_headtail_detect_conf.value(),
                 "headtail_batch_size": self._panels.identity.spin_headtail_batch.value(),
                 "reference_aspect_ratio": self._panels.detection.spin_reference_aspect_ratio.value(),
+                "canonical_margin": self._panels.detection.spin_canonical_margin.value(),
                 "enable_aspect_ratio_filtering": self._panels.detection.chk_enable_aspect_ratio_filtering.isChecked(),
                 "min_aspect_ratio_multiplier": self._panels.detection.spin_min_ar_multiplier.value(),
                 "max_aspect_ratio_multiplier": self._panels.detection.spin_max_ar_multiplier.value(),
@@ -1716,6 +1736,7 @@ class ConfigOrchestrator:
                 "pelt_model": self._panels.postprocess.cmb_pelt_model.currentText(),
                 "enable_fragment_scoring": self._panels.postprocess.chk_enable_fragment_scoring.isChecked(),
                 "enable_pelt_splitting": self._panels.postprocess.chk_enable_pelt_splitting.isChecked(),
+                "enable_identity_smoothing": self._panels.postprocess.chk_enable_identity_smoothing.isChecked(),
                 "heading_flip_max_burst": self._panels.postprocess.spin_heading_flip_max_burst.value(),
                 "cleanup_temp_files": self._panels.postprocess.chk_cleanup_temp_files.isChecked(),
                 # === TRAJECTORY MERGING (Conservative Strategy) ===
@@ -1728,6 +1749,8 @@ class ConfigOrchestrator:
                 "stitch_heading_gate_deg": self._panels.postprocess.spin_stitch_heading_gate_deg.value(),
                 "identity_disagree_min_run": self._panels.postprocess.spin_identity_disagree_min_run.value(),
                 "identity_gates_trajectory_structure": self._panels.postprocess.chk_identity_gates_trajectory_structure.isChecked(),
+                "max_bridge_gap_frames": self._panels.postprocess.spin_max_bridge_gap_frames.value(),
+                "fragment_spatial_veto_threshold": self._panels.postprocess.spin_fragment_spatial_veto_threshold.value(),
                 # === VIDEO VISUALIZATION ===
                 "video_show_labels": self._panels.postprocess.check_show_labels.isChecked(),
                 "video_show_orientation": self._panels.postprocess.check_show_orientation.isChecked(),
@@ -1826,6 +1849,8 @@ class ConfigOrchestrator:
             {
                 "apriltag_family": self._panels.identity.combo_apriltag_family.currentText(),
                 "apriltag_decimate": self._panels.identity.spin_apriltag_decimate.value(),
+                "color_tag_model_path": self._panels.identity.line_color_tag_model.text(),
+                "color_tag_confidence": self._panels.identity.spin_color_tag_conf.value(),
                 "enable_pose_extractor": self._panels.identity.chk_enable_pose_extractor.isChecked(),
                 "pose_model_type": self._panels.identity.combo_pose_model_type.currentText()
                 .strip()
@@ -1892,6 +1917,34 @@ class ConfigOrchestrator:
             }
         )
 
+        return cfg
+
+    def save_config(
+        self: object,
+        preset_mode: object = False,
+        preset_path: object = None,
+        preset_name: object = None,
+        preset_description: object = None,
+        prompt_if_exists: bool = True,
+    ) -> object:
+        """Save current configuration to JSON file.
+
+        Args:
+            preset_mode: If True, skip video paths, device settings, and ROI data (for organism presets)
+            preset_path: If provided, save directly to this path without prompting
+            preset_name: Name for the preset (only used in preset_mode)
+            preset_description: Description for the preset (only used in preset_mode)
+            prompt_if_exists: If False, overwrite default config path without interactive replace dialog.
+
+        Returns:
+            bool: True if config was saved successfully, False if cancelled or failed
+        """
+        cfg = self.build_config_dict(
+            preset_mode=preset_mode,
+            preset_name=preset_name,
+            preset_description=preset_description,
+        )
+
         # If preset mode with path provided, save directly
         if preset_mode and preset_path:
             os.makedirs(os.path.dirname(preset_path), exist_ok=True)
@@ -1920,380 +1973,95 @@ class ConfigOrchestrator:
     # PARAMETERS DICT
     # =========================================================================
 
-    def get_parameters_dict(self: object) -> object:
-        """get_parameters_dict method documentation."""
+    def get_parameters_dict(self):
+        """Build the flat engine-params dict for the tracking worker.
+
+        Thin wrapper over the shared, Qt-free ``build_engine_params``: the
+        persisted config (``build_config_dict``) plus a per-run
+        ``RuntimeContext`` produce every tracking + inert key identically to the
+        CLI, and a small GUI-only display overlay layers the cosmetic
+        visualization state on top. ``advanced_config`` is passed explicitly
+        (``self._mw.advanced_config``) so the builder overlays the live
+        advanced knobs onto the SAME base the GUI has always used, rather than
+        re-reading the on-disk advanced file.
+        """
         self._mw._commit_pending_setup_edits()
+        config = self.build_config_dict()
+        params = build_engine_params(
+            config,
+            runtime=self._gui_runtime_context(config),
+            advanced_config=self._mw.advanced_config,
+        )
+        params.update(self._gui_display_overlay())
+        return params
+
+    def _gui_video_dataset_dir(self, subfolder: str) -> str:
+        """``<video_dir>/<video_stem>_datasets/<subfolder>`` or ``""``.
+
+        Reproduces the exact video-derived output-dir construction the legacy
+        ``get_parameters_dict`` used for DATASET_OUTPUT_DIR /
+        FINAL_MEDIA_EXPORT_VIDEO_OUTPUT_DIR / INDIVIDUAL_DATASET_OUTPUT_DIR.
+        """
+        video_path = self._mw.current_video_path
+        if not video_path:
+            return ""
+        stem = os.path.splitext(os.path.basename(video_path))[0]
+        return os.path.join(os.path.dirname(video_path), f"{stem}_datasets", subfolder)
+
+    def _gui_runtime_context(self, config) -> RuntimeContext:
+        """Per-run values the pure builder cannot derive from config alone.
+
+        Sources every field exactly as the legacy ``get_parameters_dict`` did:
+        ROI mask from the live ``self._mw.roi_mask`` (a shared
+        ``build_roi_mask`` fallback rasterizes ``config["roi_shapes"]`` if no
+        live mask is cached -- the two rasterizations are byte-identical, see
+        ``tests/test_get_parameters_dict_characterization.py``); START/END frame
+        straight off the setup spin boxes (kept stable even while the controls
+        are disabled during a tracking/backward pass); the video-derived output
+        dirs; and the individual-properties cache path / dataset run id.
+        """
+        fps = float(config.get("fps", 30.0) or 30.0)
+        total_frames = int(getattr(self._mw, "video_total_frames", 0) or 0)
+        roi_mask = self._mw.roi_mask
+        if roi_mask is None and config.get("roi_shapes"):
+            roi_mask = build_roi_mask(config.get("roi_shapes"), None, None)
+        headtail_selected = bool(
+            str(
+                self._panels.identity._get_selected_yolo_headtail_model_path() or ""
+            ).strip()
+        )
+        return RuntimeContext(
+            fps=fps,
+            total_frames=total_frames,
+            frame_width=None,
+            frame_height=None,
+            roi_mask=roi_mask,
+            start_frame=self._panels.setup.spin_start_frame.value(),
+            end_frame=self._panels.setup.spin_end_frame.value(),
+            dataset_output_dir=self._gui_video_dataset_dir("active_learning"),
+            final_media_video_output_dir=self._gui_video_dataset_dir("oriented_videos"),
+            individual_dataset_output_dir=self._gui_video_dataset_dir(
+                "individual_crops"
+            ),
+            individual_dataset_name="" if headtail_selected else "unoriented",
+            individual_dataset_run_id=self._mw._individual_dataset_run_id,
+            individual_properties_cache_path=str(
+                self._mw.current_individual_properties_cache_path or ""
+            ).strip(),
+        )
+
+    def _gui_display_overlay(self) -> dict:
+        """GUI-only cosmetic/visualization keys layered over the shared params.
+
+        These have no engine-tracking meaning; the shared builder emits inert
+        defaults for them and this overlay replaces them with the live widget
+        state, matching the legacy ``get_parameters_dict`` byte-for-byte.
+        """
+        from hydra_suite.core.tracking.session_policy import build_trajectory_colors
 
         N = self._panels.setup.spin_max_targets.value()
-        np.random.seed(42)
-        colors = [tuple(c.tolist()) for c in np.random.randint(0, 255, (N, 3))]
-
-        det_method = (
-            "background_subtraction"
-            if self._panels.detection.combo_detection_method.currentIndex() == 0
-            else "yolo_obb"
-        )
-
-        yolo_mode = (
-            "sequential"
-            if self._panels.detection.combo_yolo_obb_mode.currentIndex() == 1
-            else "direct"
-        )
-        from hydra_suite.trackerkit.gui.main_window import (
-            resolve_model_path,
-            resolve_pose_model_path,
-        )
-
-        yolo_direct_path = resolve_model_path(
-            self._mw._get_selected_yolo_model_path() or ""
-        )
-        yolo_detect_path = resolve_model_path(
-            self._mw._get_selected_yolo_detect_model_path() or ""
-        )
-        yolo_crop_obb_path = resolve_model_path(
-            self._mw._get_selected_yolo_crop_obb_model_path() or ""
-        )
-        yolo_headtail_path = resolve_model_path(
-            self._panels.identity._get_selected_yolo_headtail_model_path() or ""
-        )
-        yolo_path = yolo_direct_path if yolo_mode == "direct" else yolo_crop_obb_path
-
-        yolo_cls = None
-        if self._panels.detection.line_yolo_classes.text().strip():
-            try:
-                yolo_cls = [
-                    int(x.strip())
-                    for x in self._panels.detection.line_yolo_classes.text().split(",")
-                ]
-            except ValueError:
-                pass
-
-        # Calculate actual pixel values from body-size multipliers
-        reference_body_size = self._panels.detection.spin_reference_body_size.value()
-        resize_factor = self._panels.setup.spin_resize.value()
-        scaled_body_size = reference_body_size * resize_factor
-
-        # Area is π * (diameter/2)^2
-        import math
-
-        reference_body_area = math.pi * (reference_body_size / 2.0) ** 2
-        scaled_body_area = reference_body_area * (resize_factor**2)
-
-        # Convert multipliers to actual pixels
-        min_object_size_pixels = int(
-            self._panels.detection.spin_min_object_size.value() * scaled_body_area
-        )
-        max_object_size_pixels = int(
-            self._panels.detection.spin_max_object_size.value() * scaled_body_area
-        )
-        max_distance_pixels = (
-            self._panels.tracking.spin_max_dist.value() * scaled_body_size
-        )
-        min_respawn_distance_pixels = (
-            self._panels.tracking.spin_min_respawn_distance.value() * scaled_body_size
-        )
-
-        # Convert time-based velocities to frame-based for tracking
-        fps = self._panels.setup.spin_fps.value()
-        velocity_threshold_pixels_per_frame = (
-            self._panels.tracking.spin_velocity.value() * scaled_body_size / fps
-        )
-        max_velocity_break_pixels_per_frame = (
-            self._panels.postprocess.spin_max_velocity_break.value()
-            * scaled_body_size
-            / fps
-        )
-
-        # Convert time-based durations (seconds) to frame counts
-        def _seconds_to_frames(seconds: float, min_frames: int = 1) -> int:
-            """Convert a duration in seconds to an integer frame count."""
-            return max(min_frames, round(seconds * fps))
-
-        lost_threshold_frames = _seconds_to_frames(
-            self._panels.tracking.spin_lost_thresh.value()
-        )
-        kalman_maturity_age = _seconds_to_frames(
-            self._panels.tracking.spin_kalman_maturity_age.value()
-        )
-        bg_prime_frames = _seconds_to_frames(
-            self._panels.detection.spin_bg_prime.value(), min_frames=0
-        )
-        # MIN_DETECTIONS_TO_START is a per-frame detection-count gate in the
-        # worker (`len(meas) >= MIN_DETECTIONS_TO_START`), not a frame count.
-        # The legacy seconds-based knob ran through _seconds_to_frames and
-        # produced values >1 at higher FPS, which prevented init when the
-        # animal count was lower than the FPS-derived threshold.
-        min_detections_to_start = MIN_DETECTIONS_TO_START_CONST
-        min_detection_counts = _seconds_to_frames(
-            self._panels.tracking.spin_min_detect.value()
-        )
-        min_trajectory_length = _seconds_to_frames(
-            self._panels.postprocess.spin_min_trajectory_length.value()
-        )
-        max_occlusion_gap = _seconds_to_frames(
-            self._panels.postprocess.spin_max_occlusion_gap.value(), min_frames=0
-        )
-        velocity_zscore_window = _seconds_to_frames(
-            self._panels.postprocess.spin_velocity_zscore_window.value(), min_frames=5
-        )
-        stitch_max_gap_frames = _seconds_to_frames(
-            self._panels.postprocess.spin_stitch_max_gap_seconds.value(), min_frames=0
-        )
-        advanced_config = self._mw.advanced_config.copy()
-        advanced_config["detection_batch_size"] = (
-            self._panels.detection.spin_detection_batch_size.value()
-        )
-        advanced_config["yolo_seq_individual_batch_size"] = (
-            self._panels.detection.spin_yolo_seq_individual_batch_size.value()
-        )
-        advanced_config["video_show_pose"] = (
-            self._panels.postprocess.check_video_show_pose.isChecked()
-        )
-        advanced_config["video_pose_point_radius"] = (
-            self._panels.postprocess.spin_video_pose_point_radius.value()
-        )
-        advanced_config["video_pose_point_thickness"] = (
-            self._panels.postprocess.spin_video_pose_point_thickness.value()
-        )
-        advanced_config["video_pose_line_thickness"] = (
-            self._panels.postprocess.spin_video_pose_line_thickness.value()
-        )
-        advanced_config["video_pose_color_mode"] = (
-            "track"
-            if self._panels.postprocess.combo_video_pose_color_mode.currentIndex() == 0
-            else "fixed"
-        )
-        advanced_config["video_pose_color"] = [
-            int(self._panels.postprocess._video_pose_color[0]),
-            int(self._panels.postprocess._video_pose_color[1]),
-            int(self._panels.postprocess._video_pose_color[2]),
-        ]
-        # Canonical crop / aspect ratio params (from UI widgets)
-        advanced_config["reference_aspect_ratio"] = (
-            self._panels.detection.spin_reference_aspect_ratio.value()
-        )
-        advanced_config["enable_aspect_ratio_filtering"] = (
-            self._panels.detection.chk_enable_aspect_ratio_filtering.isChecked()
-        )
-        advanced_config["min_aspect_ratio_multiplier"] = (
-            self._panels.detection.spin_min_ar_multiplier.value()
-        )
-        advanced_config["max_aspect_ratio_multiplier"] = (
-            self._panels.detection.spin_max_ar_multiplier.value()
-        )
-        individual_pipeline_enabled = self._mw._is_individual_pipeline_enabled()
-        final_canonical_image_export_enabled = (
-            self._mw._is_individual_image_save_enabled()
-        )
-        pose_extractor_enabled = self._mw._is_pose_inference_enabled()
-        identity_cfg = self._mw._identity_config()
-        identity_method = (
-            self._mw._selected_identity_method()
-        )  # kept for backward compat
-        resolved_obb = self._mw._resolved_obb_backend()
-        runtime_detection = legacy_detection_runtime_fields(resolved_obb)
-        trt_batch_size = resolve_tensorrt_max_batch_size(
-            detection_batch_size=self._panels.detection.spin_detection_batch_size.value(),
-            fixed_runtime=self._mw._runtime_requires_fixed_yolo_batch(resolved_obb),
-        )
-        trt_build_batch_size_raw = advanced_config.get(
-            "tensorrt_build_batch_size", None
-        )
-        if trt_build_batch_size_raw in (None, "", 0, "0"):
-            trt_build_batch_size = None
-        else:
-            try:
-                trt_build_batch_size = max(1, int(trt_build_batch_size_raw))
-            except (TypeError, ValueError):
-                trt_build_batch_size = None
-        p = {
-            "ADVANCED_CONFIG": advanced_config,  # Include advanced config for batch optimization
-            "DETECTION_METHOD": det_method,
-            "FPS": fps,  # Acquisition frame rate
-            # Keep selected frame range stable even when controls are disabled
-            # during tracking/backward pass.
-            "START_FRAME": self._panels.setup.spin_start_frame.value(),
-            "END_FRAME": self._panels.setup.spin_end_frame.value(),
-            "YOLO_MODEL_PATH": yolo_path,
-            "YOLO_OBB_MODE": yolo_mode,
-            "YOLO_OBB_DIRECT_TASK": ["obb", "detect", "segment"][
-                self._panels.detection.combo_yolo_direct_task.currentIndex()
-            ],
-            "YOLO_OBB_FIXED_ANGLE_DEG": self._panels.detection.spin_yolo_fixed_angle.value(),
-            # Segment-as-OBB rotated-rect kernel knobs (advanced config only;
-            # only read when YOLO_OBB_DIRECT_TASK == "segment"). No dedicated
-            # detection-panel UI -- power users tune via advanced_config.json.
-            "YOLO_OBB_SEG_NUM_ANGLES": advanced_config.get("obb_seg_num_angles", 24),
-            "YOLO_OBB_SEG_CROP_SIZE": advanced_config.get("obb_seg_crop_size", 64),
-            "YOLO_OBB_SEG_PAD_RATIO": advanced_config.get("obb_seg_pad_ratio", 0.15),
-            "YOLO_OBB_SEG_MASK_THRESHOLD": advanced_config.get(
-                "obb_seg_mask_threshold", 0.5
-            ),
-            "SLICE_ENABLED": self._panels.detection.chk_slice_enabled.isChecked(),
-            "SLICE_GEOMETRY_MODE": self._panels.detection.combo_slice_geometry.currentText(),
-            "SLICE_OVERLAP": advanced_config.get("slice_overlap", 0.2),
-            "SLICE_HEIGHT": advanced_config.get("slice_height", 0),
-            "SLICE_WIDTH": advanced_config.get("slice_width", 0),
-            "SLICE_OBJECT_TILE_FRACTION": advanced_config.get(
-                "slice_object_tile_fraction", 0.15
-            ),
-            "SLICE_TRAINED_BODY_PX": advanced_config.get("slice_trained_body_px", 0.0),
-            "SLICE_MERGE_POLICY": advanced_config.get(
-                "slice_merge_policy", "greedy_nmm"
-            ),
-            "SLICE_MERGE_METRIC": advanced_config.get("slice_merge_metric", "ios"),
-            "SLICE_MERGE_THRESHOLD": advanced_config.get("slice_merge_threshold", 0.5),
-            "SLICE_MERGE_BACKEND": advanced_config.get("slice_merge_backend", "cv2"),
-            "SLICE_PERFORM_STANDARD_PRED": advanced_config.get(
-                "slice_perform_standard_pred", False
-            ),
-            "YOLO_OBB_DIRECT_MODEL_PATH": yolo_direct_path,
-            "YOLO_DETECT_MODEL_PATH": yolo_detect_path,
-            "YOLO_CROP_OBB_MODEL_PATH": yolo_crop_obb_path,
-            "YOLO_HEADTAIL_MODEL_PATH": yolo_headtail_path,
-            "POSE_OVERRIDES_HEADTAIL": self._panels.identity.chk_pose_overrides_headtail.isChecked(),
-            "YOLO_SEQ_CROP_PAD_RATIO": self._panels.detection.spin_yolo_seq_crop_pad.value(),
-            "YOLO_SEQ_MIN_CROP_SIZE_PX": self._panels.detection.spin_yolo_seq_min_crop_px.value(),
-            "YOLO_SEQ_ENFORCE_SQUARE_CROP": self._panels.detection.chk_yolo_seq_square_crop.isChecked(),
-            "YOLO_SEQ_STAGE2_IMGSZ": self._panels.detection.spin_yolo_seq_stage2_imgsz.value(),
-            "YOLO_SEQ_INDIVIDUAL_BATCH_SIZE": self._panels.detection.spin_yolo_seq_individual_batch_size.value(),
-            "YOLO_SEQ_STAGE2_RUNTIME_BUILD_BATCH_SIZE": self._panels.detection.spin_yolo_seq_individual_batch_size.value(),
-            "YOLO_SEQ_STAGE2_POW2_PAD": self._panels.detection.chk_yolo_seq_stage2_pow2_pad.isChecked(),
-            "YOLO_SEQ_DETECT_CONF_THRESHOLD": self._panels.detection.spin_yolo_seq_detect_conf.value(),
-            "YOLO_HEADTAIL_CONF_THRESHOLD": self._panels.identity.spin_yolo_headtail_conf.value(),
-            "YOLO_HEADTAIL_DETECT_CONF_THRESHOLD": self._panels.identity.spin_yolo_headtail_detect_conf.value(),
-            "HEADTAIL_BATCH_SIZE": self._panels.identity.spin_headtail_batch.value(),
-            "YOLO_CONFIDENCE_THRESHOLD": self._panels.detection.spin_yolo_confidence.value(),
-            "YOLO_IOU_THRESHOLD": self._panels.detection.spin_yolo_iou.value(),
-            "USE_CUSTOM_OBB_IOU_FILTERING": True,
-            "YOLO_TARGET_CLASSES": yolo_cls,
-            # Live Detection Batching: feeds InferenceConfig.detection_batch_size
-            # via config.build_inference_config_from_params.
-            "YOLO_BATCH_SIZE": self._panels.detection.spin_detection_batch_size.value(),
-            "RUNTIME_TIER": self._mw._selected_runtime_tier(),
-            "YOLO_DEVICE": runtime_detection["yolo_device"],
-            "ENABLE_GPU_BACKGROUND": runtime_detection["enable_gpu_background"],
-            "ENABLE_TENSORRT": runtime_detection["enable_tensorrt"],
-            "ENABLE_ONNX_RUNTIME": runtime_detection["enable_onnx_runtime"],
-            "TENSORRT_MAX_BATCH_SIZE": trt_batch_size,
-            "TENSORRT_BUILD_WORKSPACE_GB": float(
-                advanced_config.get("tensorrt_build_workspace_gb", 4.0)
-            ),
-            "TENSORRT_BUILD_BATCH_SIZE": trt_build_batch_size,
-            "MAX_TARGETS": N,
-            "THRESHOLD_VALUE": self._panels.detection.spin_threshold.value(),
-            "MORPH_KERNEL_SIZE": self._panels.detection.spin_morph_size.value(),
-            "MIN_CONTOUR_AREA": self._panels.detection.spin_min_contour.value(),
-            "ENABLE_SIZE_FILTERING": self._panels.detection.chk_size_filtering.isChecked(),
-            "MIN_OBJECT_SIZE": min_object_size_pixels,
-            "MAX_OBJECT_SIZE": max_object_size_pixels,
-            "MAX_CONTOUR_MULTIPLIER": self._panels.detection.spin_max_contour_multiplier.value(),
-            "MAX_DISTANCE_THRESHOLD": max_distance_pixels,
-            "MAX_DISTANCE_MULTIPLIER": self._panels.tracking.spin_max_dist.value(),
-            "ENABLE_POSTPROCESSING": self._panels.postprocess.enable_postprocessing.isChecked(),
-            "MIN_TRAJECTORY_LENGTH": min_trajectory_length,
-            "MAX_VELOCITY_BREAK": max_velocity_break_pixels_per_frame,
-            "MAX_OCCLUSION_GAP": max_occlusion_gap,
-            "ENABLE_TRACKLET_RELINKING": self._panels.postprocess.chk_enable_tracklet_relinking.isChecked(),
-            "RELINK_POSE_MAX_DISTANCE": self._panels.postprocess.spin_relink_pose_max_distance.value(),
-            "POSE_EXPORT_MIN_VALID_FRACTION": self._panels.postprocess.spin_pose_export_min_valid_fraction.value(),
-            "POSE_EXPORT_MIN_VALID_KEYPOINTS": self._panels.postprocess.spin_pose_export_min_valid_keypoints.value(),
-            "RELINK_MIN_POSE_QUALITY": self._panels.postprocess.spin_relink_min_pose_quality.value(),
-            "POSE_POSTPROC_MAX_GAP": self._panels.postprocess.spin_pose_postproc_max_gap.value(),
-            "POSE_TEMPORAL_OUTLIER_ZSCORE": self._panels.postprocess.spin_pose_temporal_outlier_zscore.value(),
-            "MAX_VELOCITY_ZSCORE": self._panels.postprocess.spin_max_velocity_zscore.value(),
-            "VELOCITY_ZSCORE_WINDOW": velocity_zscore_window,
-            "CHANGEPOINT_PENALTY": self._panels.postprocess.spin_changepoint_penalty.value(),
-            "FRAGMENT_CNN_WEIGHT": self._panels.postprocess.spin_fragment_cnn_weight.value(),
-            "FRAGMENT_TAG_WEIGHT": self._panels.postprocess.spin_fragment_tag_weight.value(),
-            "ONLINE_PRIOR_WEIGHT": self._panels.postprocess.spin_online_prior_weight.value(),
-            "FRAGMENT_LENGTH_WEIGHT": self._panels.postprocess.spin_fragment_length_weight.value(),
-            "ASSIGNMENT_MARGIN_THRESHOLD": self._panels.postprocess.spin_assignment_margin_threshold.value(),
-            "MAX_BRIDGE_GAP_FRAMES": self._panels.postprocess.spin_max_bridge_gap_frames.value(),
-            "FRAGMENT_SPATIAL_VETO_THRESHOLD": self._panels.postprocess.spin_fragment_spatial_veto_threshold.value(),
-            "MIN_FRAGMENT_FRAMES": self._panels.postprocess.spin_min_fragment_frames.value(),
-            "PELT_MODEL": self._panels.postprocess.cmb_pelt_model.currentText(),
-            "ENABLE_FRAGMENT_SCORING": self._panels.postprocess.chk_enable_fragment_scoring.isChecked(),
-            "ENABLE_PELT_SPLITTING": self._panels.postprocess.chk_enable_pelt_splitting.isChecked(),
-            "VELOCITY_ZSCORE_MIN_VELOCITY": self._panels.postprocess.spin_velocity_zscore_min_vel.value()
-            * scaled_body_size
-            / fps,
-            "MIN_RESPAWN_DISTANCE": min_respawn_distance_pixels,
-            "MIN_DETECTION_COUNTS": min_detection_counts,
-            "MIN_DETECTIONS_TO_START": min_detections_to_start,
-            "TRAJECTORY_HISTORY_SECONDS": self._panels.setup.spin_traj_hist.value(),
-            "BACKGROUND_PRIME_FRAMES": bg_prime_frames,
-            "ENABLE_LIGHTING_STABILIZATION": self._panels.detection.chk_lighting_stab.isChecked(),
-            "ENABLE_ADAPTIVE_BACKGROUND": self._panels.detection.chk_adaptive_bg.isChecked(),
-            "BACKGROUND_LEARNING_RATE": self._panels.detection.spin_bg_learning.value(),
-            "LIGHTING_SMOOTH_FACTOR": self._panels.detection.spin_lighting_smooth.value(),
-            "LIGHTING_MEDIAN_WINDOW": self._panels.detection.spin_lighting_median.value(),
-            "KALMAN_NOISE_COVARIANCE": self._panels.tracking.spin_kalman_noise.value(),
-            "KALMAN_MEASUREMENT_NOISE_COVARIANCE": self._panels.tracking.spin_kalman_meas.value(),
-            "KALMAN_DAMPING": self._panels.tracking.spin_kalman_damping.value(),
-            "KALMAN_MATURITY_AGE": kalman_maturity_age,
-            "KALMAN_INITIAL_VELOCITY_RETENTION": self._panels.tracking.spin_kalman_initial_velocity_retention.value(),
-            "KALMAN_MAX_VELOCITY_MULTIPLIER": self._panels.tracking.spin_kalman_max_velocity.value(),
-            "KALMAN_LONGITUDINAL_NOISE_MULTIPLIER": self._panels.tracking.spin_kalman_longitudinal_noise.value(),
-            "KALMAN_LATERAL_NOISE_MULTIPLIER": self._panels.tracking._kalman_lateral_noise_multiplier,
-            "KALMAN_ANISOTROPY_RATIO": max(
-                1.0,
-                self._panels.tracking.spin_kalman_longitudinal_noise.value()
-                / max(self._panels.tracking._kalman_lateral_noise_multiplier, 1e-6),
-            ),
-            "RESIZE_FACTOR": self._panels.setup.spin_resize.value(),
-            "ENABLE_CONSERVATIVE_SPLIT": self._panels.detection.chk_conservative_split.isChecked(),
-            "CONSERVATIVE_KERNEL_SIZE": self._panels.detection.spin_conservative_kernel.value(),
-            "CONSERVATIVE_ERODE_ITER": self._panels.detection.spin_conservative_erode.value(),
-            "ENABLE_ADDITIONAL_DILATION": self._panels.detection.chk_additional_dilation.isChecked(),
-            "DILATION_ITERATIONS": self._panels.detection.spin_dilation_iterations.value(),
-            "DILATION_KERNEL_SIZE": self._panels.detection.spin_dilation_kernel_size.value(),
-            "BRIGHTNESS": self._panels.detection.slider_brightness.value(),
-            "CONTRAST": self._panels.detection.slider_contrast.value() / 100.0,
-            "GAMMA": self._panels.detection.slider_gamma.value() / 100.0,
-            "DARK_ON_LIGHT_BACKGROUND": self._panels.detection.chk_dark_on_light.isChecked(),
-            "VELOCITY_THRESHOLD": velocity_threshold_pixels_per_frame,
-            "INSTANT_FLIP_ORIENTATION": self._panels.tracking.chk_instant_flip.isChecked(),
-            "MAX_ORIENT_DELTA_STOPPED": self._panels.tracking.spin_max_orient.value(),
-            # Auto-derived flag: a directed heading source (head-tail or pose
-            # model) is active for this run.  When True, smooth_orientation
-            # passes the caller's resolved theta through (high-quality
-            # detections become the new anchor; low-quality detections fall
-            # back to OBB axis collapsed against the anchor) and global 180°
-            # ambiguities are resolved by interpolate_trajectories'
-            # _fix_heading_globally DP pass.  When False, smooth_orientation
-            # uses motion-aware undirected smoothing instead.
-            "DIRECTED_ORIENT_POSTHOC_CONSISTENCY": bool(
-                str(yolo_headtail_path or "").strip() or pose_extractor_enabled
-            ),
-            "LOST_THRESHOLD_FRAMES": lost_threshold_frames,
-            "W_POSITION": self._panels.tracking.spin_Wp.value(),
-            "W_ORIENTATION": self._panels.tracking.spin_Wo.value(),
-            "W_AREA": self._panels.tracking.spin_Wa.value(),
-            "W_ASPECT": self._panels.tracking.spin_Wasp.value(),
-            "W_POSE_DIRECTION": 0.5,
-            "W_POSE_LENGTH": 0.0,
-            "POSE_VALID_ORIENTATION_SCALE": 0.15,
-            "USE_MAHALANOBIS": self._panels.tracking.chk_use_mahal.isChecked(),
-            # Solver flags: saved override wins; otherwise auto-pick from N animals
-            # (greedy + spatial above SOLVER_AUTOPICK_GREEDY_THRESHOLD; Hungarian below).
-            "ENABLE_GREEDY_ASSIGNMENT": _resolve_solver_flags(
-                self._panels.tracking,
-                self._panels.setup.spin_max_targets.value(),
-            )[0],
-            "ENABLE_SPATIAL_OPTIMIZATION": _resolve_solver_flags(
-                self._panels.tracking,
-                self._panels.setup.spin_max_targets.value(),
-            )[1],
-            "ASSOCIATION_STAGE1_MOTION_GATE_MULTIPLIER": self._panels.tracking.spin_assoc_gate_multiplier.value(),
-            "ASSOCIATION_STAGE1_MAX_AREA_RATIO": self._panels.tracking.spin_assoc_max_area_ratio.value(),
-            "ASSOCIATION_STAGE1_MAX_ASPECT_DIFF": self._panels.tracking.spin_assoc_max_aspect_diff.value(),
-            "ENABLE_POSE_REJECTION": self._panels.tracking.chk_enable_pose_rejection.isChecked(),
-            "POSE_REJECTION_THRESHOLD": self._panels.tracking._pose_rejection_threshold,
-            "POSE_REJECTION_MIN_VISIBILITY": self._panels.tracking._pose_rejection_min_visibility,
-            "TRACK_FEATURE_EMA_ALPHA": self._panels.tracking.spin_track_feature_ema_alpha.value(),
-            "ASSOCIATION_HIGH_CONFIDENCE_THRESHOLD": self._panels.tracking.spin_assoc_high_conf_threshold.value(),
-            "TRAJECTORY_COLORS": colors,
+        return {
+            "TRAJECTORY_COLORS": build_trajectory_colors(N),
             "SHOW_FG": self._panels.detection.chk_show_fg.isChecked(),
             "SHOW_BG": self._panels.detection.chk_show_bg.isChecked(),
             "SHOW_CIRCLES": self._panels.setup.chk_show_circles.isChecked(),
@@ -2302,205 +2070,16 @@ class ConfigOrchestrator:
             "SHOW_TRAJECTORIES": self._panels.setup.chk_show_trajectories.isChecked(),
             "SHOW_LABELS": self._panels.setup.chk_show_labels.isChecked(),
             "SHOW_STATE": self._panels.setup.chk_show_state.isChecked(),
-            "SHOW_KALMAN_UNCERTAINTY": self._panels.setup.chk_show_kalman_uncertainty.isChecked(),
-            "VISUALIZATION_FREE_MODE": self._panels.setup.chk_visualization_free.isChecked(),
+            "SHOW_KALMAN_UNCERTAINTY": (
+                self._panels.setup.chk_show_kalman_uncertainty.isChecked()
+            ),
+            "VISUALIZATION_FREE_MODE": (
+                self._panels.setup.chk_visualization_free.isChecked()
+            ),
             "TRACKING_REALTIME_MODE": self._mw._is_realtime_tracking_mode_enabled(),
             "TRACKING_WORKFLOW_MODE": self._mw._session_orch._workflow_mode_key(),
             "zoom_factor": self._mw.slider_zoom.value() / 100.0,
-            "ROI_MASK": self._mw.roi_mask,
-            "REFERENCE_BODY_SIZE": reference_body_size,
-            # Conservative trajectory merging parameters (in resized coordinate space)
-            # These are used in resolve_trajectories() for bidirectional merging
-            # AGREEMENT_DISTANCE: max distance for frames to be considered "agreeing"
-            # MIN_OVERLAP_FRAMES: minimum agreeing frames to consider merge candidates
-            "AGREEMENT_DISTANCE": self._panels.postprocess.spin_merge_overlap_multiplier.value()
-            * scaled_body_size,
-            "MIN_OVERLAP_FRAMES": self._panels.postprocess.spin_min_overlap_frames.value(),
-            "STITCH_MAX_GAP_FRAMES": stitch_max_gap_frames,
-            "STITCH_DENSITY_TIGHTEN_FACTOR": self._panels.postprocess.spin_stitch_density_tighten_factor.value(),
-            "STITCH_SINGLE_OPTION_MARGIN": self._panels.postprocess.spin_stitch_single_option_margin.value(),
-            "STITCH_HEADING_GATE_DEG": self._panels.postprocess.spin_stitch_heading_gate_deg.value(),
-            "IDENTITY_DISAGREE_MIN_RUN": self._panels.postprocess.spin_identity_disagree_min_run.value(),
-            "IDENTITY_GATES_TRAJECTORY_STRUCTURE": self._panels.postprocess.chk_identity_gates_trajectory_structure.isChecked(),
-            # Dataset generation parameters
-            "ENABLE_DATASET_GENERATION": self._panels.dataset.chk_enable_dataset_gen.isChecked(),
-            "DATASET_NAME": "",
-            "DATASET_CLASS_NAME": self._panels.dataset.line_dataset_class_name.text(),
-            "DATASET_OUTPUT_DIR": (
-                os.path.join(
-                    os.path.dirname(self._mw.current_video_path),
-                    f"{os.path.splitext(os.path.basename(self._mw.current_video_path))[0]}_datasets",
-                    "active_learning",
-                )
-                if self._mw.current_video_path
-                else ""
-            ),
-            "DATASET_MAX_FRAMES": self._panels.dataset.spin_dataset_max_frames.value(),
-            "DATASET_CONF_THRESHOLD": 0.5,  # uncertainty conf floor; legacy default
-            "DATASET_MIN_SELECTION_SCORE": self._panels.dataset.spin_dataset_min_selection_score.value(),
-            "DATASET_AL_PRESET": self._panels.dataset.combo_dataset_preset.currentText(),
-            # Dataset-specific YOLO parameters from advanced config (for export, not tracking)
-            "DATASET_YOLO_CONFIDENCE_THRESHOLD": self._mw.advanced_config.get(
-                "dataset_yolo_confidence_threshold", 0.05
-            ),
-            "DATASET_YOLO_IOU_THRESHOLD": self._mw.advanced_config.get(
-                "dataset_yolo_iou_threshold", 0.5
-            ),
-            "DATASET_DIVERSITY_WINDOW": self._panels.dataset.spin_dataset_diversity_window.value(),
-            "DATASET_INCLUDE_CONTEXT": self._panels.dataset.chk_dataset_include_context.isChecked(),
-            "DATASET_PROBABILISTIC_SAMPLING": self._panels.dataset.chk_dataset_probabilistic.isChecked(),
-            "METRIC_LOW_CONFIDENCE": self._panels.dataset.chk_metric_low_confidence.isChecked(),
-            "METRIC_COUNT_MISMATCH": self._panels.dataset.chk_metric_count_mismatch.isChecked(),
-            "METRIC_FRAGMENTED_DETECTIONS": self._panels.dataset.chk_metric_fragmented_detections.isChecked(),
-            "METRIC_HIGH_ASSIGNMENT_COST": self._panels.dataset.chk_metric_high_assignment_cost.isChecked(),
-            "METRIC_TRACK_LOSS": self._panels.dataset.chk_metric_track_loss.isChecked(),
-            "METRIC_HIGH_UNCERTAINTY": self._panels.dataset.chk_metric_high_uncertainty.isChecked(),
-            # Individual analysis parameters
-            "ENABLE_IDENTITY_ANALYSIS": individual_pipeline_enabled,
-            "ENABLE_INDIVIDUAL_PIPELINE": individual_pipeline_enabled,
-            "IDENTITY_METHOD": identity_method,
-            "USE_APRILTAGS": identity_cfg.get("use_apriltags", False),
-            "CNN_CLASSIFIERS": identity_cfg.get("cnn_classifiers", []),
-            "COLOR_TAG_MODEL_PATH": self._panels.identity.line_color_tag_model.text(),
-            "COLOR_TAG_CONFIDENCE": self._panels.identity.spin_color_tag_conf.value(),
-            "CNN_CLASSIFIER_MODEL_PATH": "",
-            "CNN_CLASSIFIER_CONFIDENCE": 0.5,
-            "CNN_CLASSIFIER_LABEL": "",
-            "CNN_CLASSIFIER_BATCH_SIZE": int(
-                identity_cfg.get("cnn_classifiers", [{}])[0].get("batch_size", 64)
-                if identity_cfg.get("cnn_classifiers")
-                else 64
-            ),
-            "ENABLE_IDENTITY_IN_TRACKING": self._panels.tracking.chk_enable_identity_in_tracking.isChecked(),
-            "ENABLE_IDENTITY_ONLINE_DECODER": (
-                self._panels.tracking.chk_enable_identity_in_tracking.isChecked()
-                and self._panels.tracking.chk_enable_identity_online_decoder.isChecked()
-            ),
-            "IDENTITY_POSTPROCESS_MODE": (
-                self._panels.postprocess.cmb_identity_postprocess_mode.currentText()
-                if self._panels.postprocess.enable_postprocessing.isChecked()
-                else "None"
-            ),
-            "ENABLE_IDENTITY_FRAGMENT_SOLVER": (
-                self._panels.postprocess.enable_postprocessing.isChecked()
-                and self._panels.postprocess.cmb_identity_postprocess_mode.currentText()
-                == "Fragment Solver"
-            ),
-            "ASSOCIATION_IDENTITY_HINT_SCALE": self._panels.tracking.spin_identity_weight.value(),
-            "IDENTITY_COMMIT_THRESHOLD": self._panels.tracking.spin_identity_commit_threshold.value(),
-            "IDENTITY_DISPLAY_THRESHOLD": self._panels.tracking.spin_identity_display_threshold.value(),
-            "IDENTITY_TRANSITION_EPSILON": self._panels.tracking.spin_identity_transition_epsilon.value(),
-            "IDENTITY_UNKNOWN_PRIOR": self._panels.tracking.spin_identity_unknown_prior.value(),
-            "IDENTITY_REJOIN_THRESHOLD": self._panels.tracking.spin_identity_rejoin_threshold.value(),
-            "IDENTITY_SWAP_ENABLED": self._panels.tracking.chk_enable_identity_swap_correction.isChecked(),
-            "IDENTITY_SWAP_MIN_FRAMES": self._panels.tracking.spin_identity_swap_min_frames.value(),
-            # Advanced-config-only knobs (no UI; override via advanced_config.json)
-            "IDENTITY_SWAP_CONF_MARGIN": float(
-                self._mw.advanced_config.get("identity_swap_conf_margin", 0.2)
-            ),
-            "IDENTITY_REJOIN_VELOCITY_BUDGET": float(
-                self._mw.advanced_config.get("identity_rejoin_velocity_budget", 1.5)
-            ),
-            "IDENTITY_REJOIN_DIST_FLOOR": self._mw.advanced_config.get(
-                "identity_rejoin_dist_floor", None
-            ),
-            "CNN_CLASSIFIER_WINDOW": 10,
-            "APRILTAG_FAMILY": self._panels.identity.combo_apriltag_family.currentText(),
-            "APRILTAG_DECIMATE": self._panels.identity.spin_apriltag_decimate.value(),
-            "ENABLE_POSE_EXTRACTOR": pose_extractor_enabled,
-            "POSE_MODEL_TYPE": self._panels.identity.combo_pose_model_type.currentText()
-            .strip()
-            .lower(),
-            "POSE_MODEL_DIR": resolve_pose_model_path(
-                self._mw._pose_model_path_for_backend(
-                    self._panels.identity.combo_pose_model_type.currentText()
-                    .strip()
-                    .lower()
-                ),
-                backend=self._panels.identity.combo_pose_model_type.currentText()
-                .strip()
-                .lower(),
-            ),
-            "POSE_EXPORTED_MODEL_PATH": "",
-            "POSE_MIN_KPT_CONF_VALID": self._panels.identity.spin_pose_min_kpt_conf_valid.value(),
-            "POSE_SKELETON_FILE": self._panels.identity.line_pose_skeleton_file.text().strip(),
-            "POSE_IGNORE_KEYPOINTS": self._mw._parse_pose_ignore_keypoints(),
-            "POSE_DIRECTION_ANTERIOR_KEYPOINTS": self._mw._parse_pose_direction_anterior_keypoints(),
-            "POSE_DIRECTION_POSTERIOR_KEYPOINTS": self._mw._parse_pose_direction_posterior_keypoints(),
-            "POSE_YOLO_BATCH": self._panels.identity.spin_pose_batch.value(),
-            "POSE_BATCH_SIZE": self._panels.identity.spin_pose_batch.value(),
-            "POSE_SLEAP_ENV": self._mw._selected_pose_sleap_env(),
-            "POSE_SLEAP_BATCH": self._panels.identity.spin_pose_batch.value(),
-            "POSE_SLEAP_MAX_INSTANCES": 1,
-            "INDIVIDUAL_PROPERTIES_CACHE_PATH": str(
-                self._mw.current_individual_properties_cache_path or ""
-            ).strip(),
-            # Final media export parameters
-            "ENABLE_INDIVIDUAL_DATASET": False,
-            "ENABLE_INDIVIDUAL_IMAGE_SAVE": False,
-            "EXPORT_FINAL_CANONICAL_IMAGES": final_canonical_image_export_enabled,
-            "FINAL_MEDIA_EXPORT_VIDEOS_ENABLED": self._mw._should_export_final_media_videos(),
-            "FINAL_MEDIA_EXPORT_FIX_DIRECTION_FLIPS": bool(
-                self._panels.dataset.chk_fix_oriented_video_direction_flips.isChecked()
-            ),
-            "FINAL_MEDIA_EXPORT_HEADING_FLIP_MAX_BURST": self._panels.dataset.spin_oriented_video_heading_flip_burst.value(),
-            "FINAL_MEDIA_EXPORT_ENABLE_AFFINE_STABILIZATION": bool(
-                self._panels.dataset.chk_enable_oriented_video_affine_stabilization.isChecked()
-            ),
-            "FINAL_MEDIA_EXPORT_STABILIZATION_WINDOW": self._panels.dataset.spin_oriented_video_stabilization_window.value(),
-            "FINAL_MEDIA_EXPORT_VIDEO_OUTPUT_DIR": (
-                os.path.join(
-                    os.path.dirname(self._mw.current_video_path),
-                    f"{os.path.splitext(os.path.basename(self._mw.current_video_path))[0]}_datasets",
-                    "oriented_videos",
-                )
-                if self._mw.current_video_path
-                else ""
-            ),
-            "INDIVIDUAL_DATASET_NAME": (
-                ""
-                if str(
-                    self._panels.identity._get_selected_yolo_headtail_model_path() or ""
-                ).strip()
-                else "unoriented"
-            ),
-            "INDIVIDUAL_DATASET_OUTPUT_DIR": (
-                os.path.join(
-                    os.path.dirname(self._mw.current_video_path),
-                    f"{os.path.splitext(os.path.basename(self._mw.current_video_path))[0]}_datasets",
-                    "individual_crops",
-                )
-                if self._mw.current_video_path
-                else ""
-            ),
-            "INDIVIDUAL_OUTPUT_FORMAT": self._panels.dataset.combo_individual_format.currentText().lower(),
-            "INDIVIDUAL_SAVE_INTERVAL": self._panels.dataset.spin_individual_interval.value(),
-            "INDIVIDUAL_INTERPOLATE_OCCLUSIONS": self._panels.identity.chk_individual_interpolate.isChecked(),
-            "INDIVIDUAL_CROP_PADDING": self._panels.identity.spin_individual_padding.value(),
-            "INDIVIDUAL_BACKGROUND_COLOR": [
-                int(c) for c in self._panels.identity._background_color
-            ],  # Ensure JSON serializable
-            "SUPPRESS_FOREIGN_OBB_REGIONS": self._panels.identity.chk_suppress_foreign_obb.isChecked(),
-            "SUPPRESS_FOREIGN_OBB_DATASET": self._panels.dataset.chk_suppress_foreign_obb_individual_dataset.isChecked(),
-            "SUPPRESS_FOREIGN_OBB_ORIENTED_VIDEO": self._panels.dataset.chk_suppress_foreign_obb_oriented_videos.isChecked(),
-            "INDIVIDUAL_DATASET_RUN_ID": self._mw._individual_dataset_run_id,
-            "ENABLE_CONFIDENCE_DENSITY_MAP": self._panels.tracking.chk_enable_confidence_density_map.isChecked(),
-            "DENSITY_GAUSSIAN_SIGMA_SCALE": self._panels.tracking._density_gaussian_sigma_scale,
-            "DENSITY_TEMPORAL_SIGMA": self._panels.tracking.spin_density_temporal_sigma.value(),
-            "DENSITY_BINARIZE_THRESHOLD": self._panels.tracking._density_binarize_threshold,
-            "DENSITY_CONSERVATIVE_FACTOR": self._panels.tracking.spin_density_conservative_factor.value(),
-            "DENSITY_MIN_FRAME_DURATION": self._panels.tracking.spin_density_min_duration.value(),
-            "DENSITY_MIN_AREA_BODIES": self._panels.tracking.spin_density_min_area_bodies.value(),
-            "DENSITY_DOWNSAMPLE_FACTOR": self._panels.tracking._density_downsample_factor,
-            "EXPORT_CONFIDENCE_DENSITY_VIDEO": self._panels.tracking.chk_export_confidence_density_video.isChecked(),
-            "ENABLE_PROFILING": self._panels.setup.chk_enable_profiling.isChecked(),
         }
-
-        # Backward compat: map old color_tag keys to new cnn_classifier keys
-        if not p.get("CNN_CLASSIFIER_MODEL_PATH"):
-            p["CNN_CLASSIFIER_MODEL_PATH"] = p.get("COLOR_TAG_MODEL_PATH", "")
-
-        return p
 
     # =========================================================================
     # PRESET MANAGEMENT
@@ -4139,7 +3718,7 @@ class ConfigOrchestrator:
 
     def _handle_add_new_pose_model(self):
         """Browse for a pose model, import it if outside repo, refresh combo, and select it."""
-        from hydra_suite.trackerkit.gui.model_utils import (
+        from hydra_suite.core.inference.model_paths import (
             get_pose_models_directory,
             make_pose_model_path_relative,
         )
@@ -4160,7 +3739,7 @@ class ConfigOrchestrator:
                 self._set_model_selection_for_selector(combo, prev_data)
                 combo.blockSignals(False)
 
-        from hydra_suite.trackerkit.gui.model_utils import resolve_pose_model_path
+        from hydra_suite.core.inference.model_paths import resolve_pose_model_path
 
         backend = (
             self._mw._identity_panel.combo_pose_model_type.currentText().strip().lower()
@@ -4277,7 +3856,7 @@ class ConfigOrchestrator:
         import shutil as _shutil
         from pathlib import Path as _Path
 
-        from hydra_suite.trackerkit.gui.model_utils import (
+        from hydra_suite.core.inference.model_paths import (
             get_pose_models_directory,
             make_pose_model_path_relative,
         )

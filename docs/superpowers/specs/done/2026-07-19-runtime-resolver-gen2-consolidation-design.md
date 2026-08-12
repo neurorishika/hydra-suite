@@ -75,7 +75,7 @@ Two follow-up decisions locked for this spec:
    the old name would mislead).
 4. **Pose fields fully deleted.** `pose_runtime_flavor` / `pose_sleap_device`
    are removed as stored config; pose device is derived from `ResolvedBackend`
-   at the pose stage. The `core/identity/properties/cache.py` param-bag boundary
+   at the pose stage. The `core/individual/properties/cache.py` param-bag boundary
    (which reads `COMPUTE_RUNTIME` / `POSE_SLEAP_DEVICE` string params, not typed
    config) is resolved from `runtime_tier` at that boundary — audited in Phase 3.
 
@@ -159,7 +159,7 @@ testable on any machine.
   `trackerkit/gui/main_window.py`, `panels/detection_panel.py`,
   `panels/identity_panel.py`, `orchestrators/config.py`, `orchestrators/tracking.py`,
   `orchestrators/session.py`, `trackerkit/cli_config.py`).
-- **Audit `core/identity/properties/cache.py`:** it reads `COMPUTE_RUNTIME` /
+- **Audit `core/individual/properties/cache.py`:** it reads `COMPUTE_RUNTIME` /
   `POSE_SLEAP_DEVICE` from a string param-bag. Resolve `runtime_tier` →
   `ResolvedBackend` at that boundary and write the resolved device/backend into
   the cache payload, so cached property metadata stays meaningful without the
@@ -184,8 +184,8 @@ testable on any machine.
 - Delete capability tables, `_normalize_runtime`, `resolve_compute_runtime`,
   `runtime_label`, `CANONICAL_RUNTIMES`, and the remaining legacy helpers.
 - Rename `runtime/compute_runtime.py` → `runtime/onnx_providers.py`; update
-  imports (`core/identity/classification/backend.py`,
-  `core/identity/pose/backends/sleap.py`, `training/tiny_model.py`).
+  imports (`core/individual/classification/backend.py`,
+  `core/individual/pose/backends/sleap.py`, `training/tiny_model.py`).
 - Collapse `posekit/gui/runtimes.py` re-export facade to resolver-only symbols.
 
 ### Phase 7 — GUI display cleanup

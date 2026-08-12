@@ -98,7 +98,7 @@ def test_tiny_checkpoint_v2_consumable_by_backend(tmp_path):
     """A v2 tiny flat checkpoint round-trips through ClassifierBackend cleanly."""
     pytest.importorskip("cv2")
     pytest.importorskip("torch")
-    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+    from hydra_suite.core.individual.classification.backend import ClassifierBackend
     from hydra_suite.training.runner import _save_tiny_checkpoint
 
     model = _build_tiny_state(3)
@@ -128,7 +128,7 @@ def test_legacy_tiny_checkpoint_still_loads_via_backend(tmp_path):
     pytest.importorskip("torch")
     import torch
 
-    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+    from hydra_suite.core.individual.classification.backend import ClassifierBackend
 
     model = _build_legacy_tiny_state(3)
     out_path = tmp_path / "legacy_tiny.pth"
@@ -327,7 +327,7 @@ def test_torchvision_v2_roundtrips_through_backend(
     tmp_path, factor_names, class_names_per_factor, input_size
 ):
     """Every parameter combination produces a v2 artifact parseable by ClassifierBackend."""
-    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+    from hydra_suite.core.individual.classification.backend import ClassifierBackend
     from hydra_suite.training.torchvision_model import (
         build_torchvision_classifier,
         save_torchvision_checkpoint,

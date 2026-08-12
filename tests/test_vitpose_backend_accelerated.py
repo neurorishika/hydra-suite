@@ -2,12 +2,12 @@ import numpy as np
 import pytest
 import torch
 
-from hydra_suite.core.identity.pose.backends.vitpose import (
+from hydra_suite.core.individual.pose.backends.vitpose import (
     ViTPoseBackend,
     auto_export_vitpose_model,
 )
-from hydra_suite.core.identity.pose.types import PoseRuntimeConfig
-from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
+from hydra_suite.core.individual.pose.types import PoseRuntimeConfig
+from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose
 
 
 def _ckpt(tmp_path, k=3):
@@ -69,8 +69,8 @@ def test_forward_handles_list_returning_runner(tmp_path):
 
 def test_factory_coreml_flavor_not_collapsed(tmp_path):
     pytest.importorskip("coremltools")
-    from hydra_suite.core.identity.pose.api import create_pose_backend_from_config
-    from hydra_suite.core.identity.pose.types import PoseRuntimeConfig
+    from hydra_suite.core.individual.pose.api import create_pose_backend_from_config
+    from hydra_suite.core.individual.pose.types import PoseRuntimeConfig
 
     p = _ckpt(tmp_path, k=3)
     cfg = PoseRuntimeConfig(

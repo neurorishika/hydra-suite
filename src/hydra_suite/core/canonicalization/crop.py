@@ -17,13 +17,20 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, List, Optional, Tuple
-
-if TYPE_CHECKING:
-    import torch
+from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
+import torch
+
+from hydra_suite.core.canonicalization.geometry import (
+    CanonicalGeometry,
+    canonical_affine,
+)
+from hydra_suite.core.canonicalization.resample import (
+    canonical_warp,
+    canonical_warp_batch,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,166 +52,71 @@ class CanonicalCropResult:
 
 
 # ---------------------------------------------------------------------------
-# Public helpers
+# Layer 1 geometry resolution
 # ---------------------------------------------------------------------------
 
 
-def compute_crop_dimensions(
-    long_edge: int,
-    reference_aspect_ratio: float,
+def _resolve_canvas(
+    canvas_w: Optional[int],
+    canvas_h: Optional[int],
+    geometry: Optional[CanonicalGeometry],
 ) -> Tuple[int, int]:
-    """Derive (W, H) from long edge and species aspect ratio.
+    """Reconcile the legacy ``(canvas_w, canvas_h)`` ints with a ``geometry``.
 
-    Returns:
-        (width, height) where width >= height.
+    Either ``(canvas_w, canvas_h)`` or ``geometry`` must be supplied. If both
+    are supplied they must agree -- a caller that passes a geometry must not
+    also be able to silently smuggle in mismatched dimensions.
     """
-    long_edge = max(8, int(long_edge))
-    ar = max(1.0, float(reference_aspect_ratio))
-    short_edge = max(8, round(long_edge / ar))
-    return long_edge, short_edge
+    if geometry is not None:
+        gw, gh = geometry.canvas_w, geometry.canvas_h
+        if canvas_w is not None and int(canvas_w) != gw:
+            raise ValueError(
+                f"canvas_w={canvas_w} disagrees with geometry.canvas_w={gw}"
+            )
+        if canvas_h is not None and int(canvas_h) != gh:
+            raise ValueError(
+                f"canvas_h={canvas_h} disagrees with geometry.canvas_h={gh}"
+            )
+        return gw, gh
+    if canvas_w is None or canvas_h is None:
+        raise ValueError(
+            "extract_canonical_crop requires either geometry or both "
+            "canvas_w and canvas_h"
+        )
+    return int(canvas_w), int(canvas_h)
 
 
-def compute_native_crop_dimensions(
-    corners: np.ndarray,
-    reference_aspect_ratio: float,
-    padding_fraction: float,
-) -> Tuple[int, int]:
-    """Derive canvas (W, H) from an OBB's native pixel extent.
+def _geometry_from_canvas(canvas_w: int, canvas_h: int) -> CanonicalGeometry:
+    """Synthesise a :class:`CanonicalGeometry` from bare canvas dimensions.
 
-    The long edge of the canvas matches the OBB's major axis (times padding)
-    at native pixel scale — no downsampling.  The short edge is derived
-    from ``reference_aspect_ratio`` so all crops share a consistent AR.
-
-    Both dimensions are rounded to the nearest even integer (≥ 8).
-
-    Args:
-        corners: (4, 2) OBB corner array in frame coordinates.
-        reference_aspect_ratio: Species AR (long / short), e.g. 2.0.
-        padding_fraction: Fractional expansion (e.g. 0.1 = 10 %).
-
-    Returns:
-        (width, height) — width is the long (major-axis) dimension.
+    ``margin``/``aspect_ratio`` are irrelevant to the warp seam (only
+    ``canvas_w``/``canvas_h`` are consumed), so this exists purely to give
+    callers of the legacy ``(canvas_w, canvas_h)`` ints a single geometry
+    object to hand to :func:`~hydra_suite.core.canonicalization.resample.
+    canonical_warp`/``canonical_warp_batch``.
     """
-    c = np.asarray(corners, dtype=np.float32).reshape(4, 2)
-    e01 = float(np.linalg.norm(c[1] - c[0]))
-    e12 = float(np.linalg.norm(c[2] - c[1]))
-    major = max(e01, e12)
-
-    margin = 1.0 + max(0.0, float(padding_fraction))
-    ar = max(1.0, float(reference_aspect_ratio))
-
-    raw_w = major * margin
-
-    # Round W to even first, then derive H from the rounded W so that
-    # canvas_w / canvas_h stays close to the target AR.
-    canvas_w = max(8, int(math.ceil(raw_w / 2.0) * 2))
-    canvas_h = max(8, int(round(canvas_w / ar / 2.0) * 2))
-    return canvas_w, canvas_h
-
-
-def compute_native_scale_affine(
-    corners: np.ndarray,
-    reference_aspect_ratio: float,
-    padding_fraction: float,
-) -> Tuple[np.ndarray, int, int, float]:
-    """Build a native-scale alignment affine for one OBB.
-
-    Like :func:`compute_alignment_affine`, but the output canvas is sized
-    to preserve the OBB's native pixel extent (no down- or up-sampling).
-    The canvas aspect ratio is standardised to *reference_aspect_ratio*.
-
-    Args:
-        corners: (4, 2) OBB corner array in frame coordinates.
-        reference_aspect_ratio: Species AR (long / short).
-        padding_fraction: Fractional expansion (e.g. 0.1).
-
-    Returns:
-        (M_align, canvas_w, canvas_h, major_axis_theta)
-    """
-    canvas_w, canvas_h = compute_native_crop_dimensions(
-        corners, reference_aspect_ratio, padding_fraction
-    )
-    M_align, theta = compute_alignment_affine(
-        corners, canvas_w, canvas_h, padding_fraction
-    )
-    return M_align, canvas_w, canvas_h, theta
-
-
-def compute_alignment_affine(
-    corners: np.ndarray,
-    canvas_w: int,
-    canvas_h: int,
-    padding_fraction: float,
-) -> Tuple[np.ndarray, float]:
-    """Compute M_align from OBB corners.
-
-    Builds a 2×3 affine matrix that maps the padded OBB from frame space
-    into a rotation-normalised canvas of size ``(canvas_w, canvas_h)``
-    with the major axis horizontal and the centroid centred.
-
-    Args:
-        corners: (4, 2) OBB corner array in frame coordinates.
-        canvas_w: Output width in pixels.
-        canvas_h: Output height in pixels.
-        padding_fraction: Fractional expansion applied to the OBB.
-
-    Returns:
-        (M_align, major_axis_theta) — the 2×3 affine matrix and the
-        OBB major-axis angle in radians.
-    """
-    c = np.asarray(corners, dtype=np.float32).reshape(4, 2)
-    e01 = float(np.linalg.norm(c[1] - c[0]))
-    e12 = float(np.linalg.norm(c[2] - c[1]))
-
-    if e01 < 1e-3 or e12 < 1e-3:
-        raise ValueError("Degenerate OBB (zero-length edge)")
-
-    if e01 >= e12:
-        major_vec = c[1] - c[0]
-    else:
-        major_vec = c[2] - c[1]
-
-    cx = float(np.mean(c[:, 0]))
-    cy = float(np.mean(c[:, 1]))
-    angle = float(math.atan2(float(major_vec[1]), float(major_vec[0])))
-
-    major = max(e01, e12)
-    minor = min(e01, e12)
-
-    margin = 1.0 + padding_fraction
-    w_exp = float(major) * margin
-    h_exp = float(minor) * margin
-    cos_a = math.cos(angle)
-    sin_a = math.sin(angle)
-    hw = w_exp * 0.5
-    hh = h_exp * 0.5
-
-    # Source triangle: top-left, top-right, bottom-left of the expanded OBB
-    src_pts = np.array(
-        [
-            [cx - hw * cos_a + hh * sin_a, cy - hw * sin_a - hh * cos_a],
-            [cx + hw * cos_a + hh * sin_a, cy + hw * sin_a - hh * cos_a],
-            [cx - hw * cos_a - hh * sin_a, cy - hw * sin_a + hh * cos_a],
-        ],
-        dtype=np.float32,
-    )
-    dst_pts = np.array(
-        [[0, 0], [canvas_w, 0], [0, canvas_h]],
-        dtype=np.float32,
+    return CanonicalGeometry(
+        canvas_wh=(int(canvas_w), int(canvas_h)),
+        margin=1.0,
+        aspect_ratio=max(1.0, float(canvas_w) / max(1.0, float(canvas_h))),
     )
 
-    M_align = cv2.getAffineTransform(src_pts, dst_pts)
-    return M_align, angle
+
+# ---------------------------------------------------------------------------
+# Public helpers
+# ---------------------------------------------------------------------------
 
 
 def extract_canonical_crop(
     frame: np.ndarray,
     M_align: np.ndarray,
-    canvas_w: int,
-    canvas_h: int,
+    canvas_w: Optional[int] = None,
+    canvas_h: Optional[int] = None,
     bg_color: Tuple[int, int, int] = (0, 0, 0),
     foreign_corners: Optional[List[np.ndarray]] = None,
     own_corners: Optional[np.ndarray] = None,
+    *,
+    geometry: Optional[CanonicalGeometry] = None,
 ) -> np.ndarray:
     """Apply M_align to extract a rotation-normalised crop.
 
@@ -212,13 +124,30 @@ def extract_canonical_crop(
     (the current detection's own OBB, frame coordinates), when given,
     excludes any overlap with foreign OBBs so the current animal's own body
     is never masked out — see ``_apply_foreign_mask_canonical``.
+
+    Either ``(canvas_w, canvas_h)`` or ``geometry`` (Layer 1's
+    :class:`~hydra_suite.core.canonicalization.geometry.CanonicalGeometry`)
+    must be given. If both are given they must agree.
+
+    Delegates to the torch seam (:func:`canonical_warp`): converts the HWC
+    uint8 frame to a CHW float tensor once, warps via ``F.grid_sample``, then
+    converts back to HWC uint8. This replaces the former OpenCV affine-warp
+    kernel; the foreign-mask call sequence below (still ``cv2.fillPoly``-based)
+    is unchanged.
     """
-    crop = cv2.warpAffine(
-        frame,
-        M_align,
-        (canvas_w, canvas_h),
-        flags=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_REPLICATE,
+    canvas_w, canvas_h = _resolve_canvas(canvas_w, canvas_h, geometry)
+    effective_geometry = geometry or _geometry_from_canvas(canvas_w, canvas_h)
+
+    arr = np.asarray(frame)
+    frame_chw = torch.from_numpy(np.ascontiguousarray(arr)).permute(2, 0, 1).float()
+    crop_chw = canonical_warp(frame_chw, M_align, effective_geometry)
+    crop = (
+        crop_chw.round()
+        .clamp_(0, 255)
+        .to(torch.uint8)
+        .permute(1, 2, 0)
+        .contiguous()
+        .numpy()
     )
 
     if foreign_corners:
@@ -232,17 +161,19 @@ def extract_canonical_crop(
 def gpu_canonical_crop(
     frame_chw: "torch.Tensor",
     M_align: np.ndarray,
-    canvas_w: int,
-    canvas_h: int,
+    canvas_w: Optional[int] = None,
+    canvas_h: Optional[int] = None,
+    *,
+    geometry: Optional[CanonicalGeometry] = None,
 ) -> "torch.Tensor":
     """GPU-native affine warp replicating ``extract_canonical_crop``.
 
-    Replaces ``cv2.warpAffine`` for frames already resident on a CUDA (or MPS)
-    device.  ``M_align`` is the 2×3 forward affine produced by
-    :func:`compute_alignment_affine` mapping frame pixel coords to canvas pixel
-    coords.  The function inverts it on CPU (negligible), builds a normalised
-    ``F.affine_grid`` theta, and uses ``F.grid_sample`` with bilinear
-    interpolation and border replication — matching the cv2 default behaviour.
+    Thin wrapper over the shared torch seam
+    (:func:`~hydra_suite.core.canonicalization.resample.canonical_warp`) for
+    frames already resident on a CUDA (or MPS) device.  ``M_align`` is the
+    2x3 forward affine produced by
+    :func:`~hydra_suite.core.canonicalization.geometry.canonical_affine`
+    mapping frame pixel coords to canvas pixel coords.
 
     Parameters
     ----------
@@ -250,81 +181,42 @@ def gpu_canonical_crop(
         CUDA tensor ``(C, H, W)`` float32.  Channel order is preserved
         unchanged (caller is responsible for any BGR↔RGB flip).
     M_align:
-        ``(2, 3)`` float64/float32 numpy array from ``compute_alignment_affine``.
+        ``(2, 3)`` float64/float32 numpy array from ``canonical_affine``.
     canvas_w, canvas_h:
-        Output canvas dimensions in pixels.
+        Output canvas dimensions in pixels. Either these or ``geometry`` must
+        be given; if both are given they must agree.
+    geometry:
+        Layer 1 :class:`CanonicalGeometry`, alternative to ``canvas_w``/``canvas_h``.
 
     Returns
     -------
     torch.Tensor
         ``(C, canvas_h, canvas_w)`` float32 on the same device as
-        ``frame_chw``.
+        ``frame_chw``.  Carries no autograd graph (the seam runs under
+        ``torch.inference_mode()``).
     """
-    import cv2 as _cv2
-    import torch
-    import torch.nn.functional as F
-
-    C, H_in, W_in = frame_chw.shape
-
-    # Invert M_align (forward src→dst) to get dst→src mapping required by
-    # F.grid_sample (which samples source coords for each output pixel).
-    M_inv = _cv2.invertAffineTransform(np.asarray(M_align, dtype=np.float64))
-
-    # Build normalised theta (2×3) for F.affine_grid with align_corners=True.
-    # Derivation: norm_src = theta @ [norm_dst_x, norm_dst_y, 1]^T
-    # where norm = 2*pixel / (dim-1) - 1 (align_corners=True convention).
-    #
-    # theta[row, 0] = M_inv[row, 0] * (W_out-1) / (dim_in[row]-1)
-    # theta[row, 1] = M_inv[row, 1] * (H_out-1) / (dim_in[row]-1)
-    # theta[row, 2] = theta[row,0] + theta[row,1] + 2*M_inv[row,2]/(dim_in[row]-1) - 1
-    sw = float(canvas_w - 1)
-    sh = float(canvas_h - 1)
-    inv_win = 1.0 / max(float(W_in - 1), 1.0)
-    inv_hin = 1.0 / max(float(H_in - 1), 1.0)
-
-    t00 = M_inv[0, 0] * sw * inv_win
-    t01 = M_inv[0, 1] * sh * inv_win
-    t10 = M_inv[1, 0] * sw * inv_hin
-    t11 = M_inv[1, 1] * sh * inv_hin
-
-    theta = np.array(
-        [
-            [t00, t01, t00 + t01 + 2.0 * M_inv[0, 2] * inv_win - 1.0],
-            [t10, t11, t10 + t11 + 2.0 * M_inv[1, 2] * inv_hin - 1.0],
-        ],
-        dtype=np.float32,
-    )
-
-    theta_t = torch.as_tensor(
-        theta, dtype=torch.float32, device=frame_chw.device
-    ).unsqueeze(
-        0
-    )  # (1, 2, 3)
-
-    with torch.inference_mode():
-        grid = F.affine_grid(theta_t, (1, C, canvas_h, canvas_w), align_corners=True)
-        crop = F.grid_sample(
-            frame_chw.unsqueeze(0),
-            grid,
-            mode="bilinear",
-            padding_mode="border",
-            align_corners=True,
-        )
-        return crop.squeeze(0)  # (C, canvas_h, canvas_w)
+    canvas_w, canvas_h = _resolve_canvas(canvas_w, canvas_h, geometry)
+    effective_geometry = geometry or _geometry_from_canvas(canvas_w, canvas_h)
+    return canonical_warp(frame_chw, M_align, effective_geometry)
 
 
 def gpu_canonical_crop_batch(
     frame_chw: "torch.Tensor",
     M_aligns: list,
-    canvas_w: int,
-    canvas_h: int,
+    canvas_w: Optional[int] = None,
+    canvas_h: Optional[int] = None,
+    *,
+    geometry: Optional[CanonicalGeometry] = None,
 ) -> "torch.Tensor":
     """Batch version of :func:`gpu_canonical_crop` for N crops from *one* frame.
 
-    Replaces N serial ``F.affine_grid`` + ``F.grid_sample`` calls with a single
-    pair of batched calls.  This reduces GPU kernel launch overhead from O(N) to
-    O(1) when extracting many detections from the same frame, which is the
-    common case for dense multi-animal tracking (e.g. 50 animals × 8 frames).
+    Thin wrapper over
+    :func:`~hydra_suite.core.canonicalization.resample.canonical_warp_batch`,
+    which replaces N serial ``F.affine_grid`` + ``F.grid_sample`` calls with a
+    single pair of batched calls.  This reduces GPU kernel launch overhead
+    from O(N) to O(1) when extracting many detections from the same frame,
+    which is the common case for dense multi-animal tracking (e.g. 50
+    animals x 8 frames).
 
     Parameters
     ----------
@@ -332,83 +224,34 @@ def gpu_canonical_crop_batch(
         CUDA tensor ``(C, H, W)`` float32 — shared source for all N crops.
     M_aligns:
         List of N ``(2, 3)`` numpy float64/float32 arrays from
-        :func:`compute_alignment_affine`, one per detection.
+        :func:`~hydra_suite.core.canonicalization.geometry.canonical_affine`, one per detection.
     canvas_w, canvas_h:
-        Output canvas dimensions (same for every crop).
+        Output canvas dimensions (same for every crop). Either these or
+        ``geometry`` must be given; if both are given they must agree.
+    geometry:
+        Layer 1 :class:`CanonicalGeometry`, alternative to ``canvas_w``/``canvas_h``.
 
     Returns
     -------
     torch.Tensor
         ``(N, C, canvas_h, canvas_w)`` float32 on the same device as
-        ``frame_chw``.
+        ``frame_chw``.  Carries no autograd graph (the seam runs under
+        ``torch.inference_mode()``).
     """
-    import torch
-    import torch.nn.functional as F
-
-    N = len(M_aligns)
-    if N == 0:
-        C = frame_chw.shape[0]
-        return torch.zeros(
-            0,
-            C,
-            canvas_h,
-            canvas_w,
-            dtype=frame_chw.dtype,
-            device=frame_chw.device,
-        )
-    if N == 1:
-        return gpu_canonical_crop(frame_chw, M_aligns[0], canvas_w, canvas_h).unsqueeze(
-            0
-        )
-
-    C, H_in, W_in = frame_chw.shape
-    sw = float(canvas_w - 1)
-    sh = float(canvas_h - 1)
-    inv_win = 1.0 / max(float(W_in - 1), 1.0)
-    inv_hin = 1.0 / max(float(H_in - 1), 1.0)
-
-    # Build all theta matrices on CPU (negligible cost) then transfer once.
-    thetas_np = np.empty((N, 2, 3), dtype=np.float32)
-    for i, M_align in enumerate(M_aligns):
-        M_inv = cv2.invertAffineTransform(np.asarray(M_align, dtype=np.float64))
-        t00 = M_inv[0, 0] * sw * inv_win
-        t01 = M_inv[0, 1] * sh * inv_win
-        t10 = M_inv[1, 0] * sw * inv_hin
-        t11 = M_inv[1, 1] * sh * inv_hin
-        thetas_np[i, 0, 0] = t00
-        thetas_np[i, 0, 1] = t01
-        thetas_np[i, 0, 2] = t00 + t01 + 2.0 * M_inv[0, 2] * inv_win - 1.0
-        thetas_np[i, 1, 0] = t10
-        thetas_np[i, 1, 1] = t11
-        thetas_np[i, 1, 2] = t10 + t11 + 2.0 * M_inv[1, 2] * inv_hin - 1.0
-
-    thetas_t = torch.as_tensor(
-        thetas_np, dtype=torch.float32, device=frame_chw.device
-    )  # (N, 2, 3)
-
-    with torch.inference_mode():
-        # ONE affine_grid call + ONE grid_sample call for all N crops.
-        grid = F.affine_grid(
-            thetas_t, (N, C, canvas_h, canvas_w), align_corners=True
-        )  # (N, canvas_h, canvas_w, 2)
-        frame_expanded = frame_chw.unsqueeze(0).expand(N, -1, -1, -1)  # (N, C, H, W)
-        crops = F.grid_sample(
-            frame_expanded.contiguous(),
-            grid,
-            mode="bilinear",
-            padding_mode="border",
-            align_corners=True,
-        )  # (N, C, canvas_h, canvas_w)
-        return crops
+    canvas_w, canvas_h = _resolve_canvas(canvas_w, canvas_h, geometry)
+    effective_geometry = geometry or _geometry_from_canvas(canvas_w, canvas_h)
+    return canonical_warp_batch(frame_chw, list(M_aligns), effective_geometry)
 
 
 def apply_headtail_rotation(
     crop: np.ndarray,
     M_align: np.ndarray,
     direction: str,
-    canvas_w: int,
-    canvas_h: int,
+    canvas_w: Optional[int] = None,
+    canvas_h: Optional[int] = None,
     treat_updown_as_unknown: bool = True,
+    *,
+    geometry: Optional[CanonicalGeometry] = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, float]:
     """Rotate crop so head faces right based on head-tail classification.
 
@@ -421,10 +264,14 @@ def apply_headtail_rotation(
         canvas_h: Original canvas height.
         treat_updown_as_unknown: If True, treat ``'up'``/``'down'`` as
             ``'unknown'`` (no rotation applied).
+        geometry: Layer 1 :class:`CanonicalGeometry`, alternative to
+            ``canvas_w``/``canvas_h``. Either these or ``geometry`` must be
+            given; if both are given they must agree.
 
     Returns:
         (rotated_crop, M_canonical, M_inverse, orientation_offset_rad)
     """
+    canvas_w, canvas_h = _resolve_canvas(canvas_w, canvas_h, geometry)
     if treat_updown_as_unknown and direction in ("up", "down"):
         direction = "unknown"
 
@@ -487,12 +334,14 @@ def invert_keypoints(
 def extract_and_classify_batch(
     frames: List[np.ndarray],
     per_frame_corners: List[List[np.ndarray]],
-    canvas_w: int,
-    canvas_h: int,
-    padding_fraction: float = 0.1,
+    canvas_w: Optional[int] = None,
+    canvas_h: Optional[int] = None,
+    padding_fraction: Optional[float] = None,
     bg_color: Tuple[int, int, int] = (0, 0, 0),
     suppress_foreign: bool = True,
     per_frame_all_corners: Optional[List[List[np.ndarray]]] = None,
+    *,
+    geometry: Optional[CanonicalGeometry] = None,
 ) -> List[List[Optional[CanonicalCropResult]]]:
     """Full canonical pipeline for a batch of frames (without head-tail).
 
@@ -506,15 +355,37 @@ def extract_and_classify_batch(
         per_frame_corners: Per-frame list of OBB corner arrays.
         canvas_w: Canonical crop width.
         canvas_h: Canonical crop height.
-        padding_fraction: OBB expansion factor.
+        padding_fraction: OBB expansion factor. Ignored when ``geometry`` is
+            given — the geometry's own ``margin`` is used instead so the
+            transform stays rigid (Layer 1 contract).
         bg_color: Background fill colour.
         suppress_foreign: Whether to mask foreign OBB regions.
         per_frame_all_corners: Per-frame list of *all* OBB corners for
             foreign-OBB masking.  If None, ``per_frame_corners`` is used.
+        geometry: Layer 1 :class:`CanonicalGeometry`, alternative to
+            ``canvas_w``/``canvas_h``. Either these or ``geometry`` must be
+            given; if both are given they must agree.
 
     Returns:
         Nested list ``[frame][detection]`` of ``CanonicalCropResult | None``.
     """
+    canvas_w, canvas_h = _resolve_canvas(canvas_w, canvas_h, geometry)
+    # A geometry already carries the margin. Accepting a padding_fraction
+    # alongside it would let a caller believe they had set a padding that the
+    # geometry path silently ignores -- the same silent-mismatch class this
+    # module exists to remove, so it is an error rather than a preference.
+    if geometry is not None:
+        implied = geometry.margin - 1.0
+        if padding_fraction is not None and abs(padding_fraction - implied) > 1e-9:
+            raise ValueError(
+                f"padding_fraction={padding_fraction} disagrees with "
+                f"geometry.margin={geometry.margin} (implies {implied}). "
+                "Pass the geometry alone."
+            )
+        padding_fraction = implied
+    elif padding_fraction is None:
+        padding_fraction = 0.1
+
     results: List[List[Optional[CanonicalCropResult]]] = []
 
     for fi, frame in enumerate(frames):
@@ -524,10 +395,18 @@ def extract_and_classify_batch(
         )
         frame_results: List[Optional[CanonicalCropResult]] = []
 
+        # One code path: a caller that passed bare canvas dimensions gets a
+        # geometry synthesised from them, rather than a second affine builder.
+        effective_geometry = geometry or CanonicalGeometry(
+            canvas_wh=(int(canvas_w), int(canvas_h)),
+            margin=1.0 + float(padding_fraction),
+            aspect_ratio=max(1.0, float(canvas_w) / max(1.0, float(canvas_h))),
+        )
+
         for di, corners in enumerate(corners_list):
             try:
-                M_align, axis_theta = compute_alignment_affine(
-                    corners, canvas_w, canvas_h, padding_fraction
+                M_align, axis_theta, _clipped = canonical_affine(
+                    corners, effective_geometry
                 )
             except ValueError:
                 frame_results.append(None)

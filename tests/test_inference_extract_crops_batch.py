@@ -1,8 +1,11 @@
 import numpy as np
 
+from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
 from hydra_suite.core.inference.result import OBBResult
 from hydra_suite.core.inference.runtime import RuntimeContext
 from hydra_suite.core.inference.stages.crops import extract_canonical_crops_batch
+
+_GEOM = CanonicalGeometry(canvas_wh=(64, 32), margin=1.3, aspect_ratio=2.0)
 
 
 def _runtime_cpu():
@@ -40,7 +43,7 @@ def _obb(frame_idx, n):
 def test_extract_crops_concatenates_window_in_detection_id_order():
     frames = [np.zeros((64, 64, 3), np.uint8), np.zeros((64, 64, 3), np.uint8)]
     obbs = [_obb(0, 2), _obb(1, 1)]
-    batch = extract_canonical_crops_batch(frames, obbs, 2.0, 1.3, _runtime_cpu())
+    batch = extract_canonical_crops_batch(frames, obbs, _GEOM, _runtime_cpu())
     assert batch.crops.shape[0] == 3
     assert list(batch.detection_ids) == [0, 1, 10000]
     assert list(batch.frame_index) == [0, 0, 1]

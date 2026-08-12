@@ -2,6 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Agent Conventions
+
+- **Never use the `artifact-design` skill and never create Artifacts.** Present visual results as files in the repo/scratchpad (e.g. saved PNGs) or inline, not as hosted Artifact pages.
+- **Isolation:** always do implementation/execution work in a **git worktree branched from local HEAD** (`git worktree add .worktrees/<name> -b <branch> HEAD`), never a fresh-from-origin worktree — local `main` is usually ahead of `origin/main`. Prefer worktrees over in-place feature branches.
+- **Verification:** run tests/equivalence on `hydra-mps` on this box; run CUDA checks on `hydra-cuda` at `rutalab@mehek.taild08eb9.ts.net`.
+- **Before any heavy run** (equivalence harness, training, inference): kill dead/stale **sleap/hydra** processes first. **Never** interfere with a running process that is not sleap/hydra.
+
 ## Build & Environment Setup
 
 ### Quick Install (pip, CPU only)
@@ -41,7 +48,7 @@ make install-dev
 make docs-install
 ```
 
-Environment names: `hydra-suite`, `hydra-suite-mps`, `hydra-suite-cuda`.
+Environment names: `hydra`, `hydra-mps`, `hydra-cuda`.
 
 ## Running Tests
 
@@ -336,7 +343,7 @@ Runtime support logic is centralized in:
 - `src/hydra_suite/runtime/onnx_providers.py` — `execution_providers_for(resolved)`: the ONNX Runtime execution-provider list for a `ResolvedBackend` (TensorRT/CoreML/CPU), plus the TensorRT engine-cache options.
 - `src/hydra_suite/utils/gpu_utils.py` — host accelerator availability flags.
 
-Backends (`core/identity/classification/*`, `core/identity/pose/backends/sleap.py`) and every inference stage consume a `ResolvedBackend` directly — there is no `compute_runtime` string vocabulary anymore. `RuntimeContext.resolved` carries the backend on the live path; `resolved_backend_for(ctx)` derives one for hand-built contexts.
+Backends (`core/individual/classification/*`, `core/individual/pose/backends/sleap.py`) and every inference stage consume a `ResolvedBackend` directly — there is no `compute_runtime` string vocabulary anymore. `RuntimeContext.resolved` carries the backend on the live path; `resolved_backend_for(ctx)` derives one for hand-built contexts.
 
 Legacy config files (pre-tier, with per-stage `compute_runtime`/`pose_runtime_flavor` strings) are migrated once via `scripts/migrate_runtime_config.py`; loading a config with no `runtime_tier` raises a loud error pointing at that script.
 
@@ -345,7 +352,7 @@ When adding a new model/method: choose the stage's backend from `resolved.backen
 ### Extension Points
 
 - **New detector**: implement `detect_objects`-compatible output in `core/detectors/engine.py`
-- **New identity method**: extend `core/identity/analysis.py`; preserve the crop extraction metadata and output contract
+- **New identity method**: extend `core/individual/analysis.py`; preserve the crop extraction metadata and output contract
 - **New runtime pipeline**: follow the checklist in `docs/developer-guide/runtime-integration.md`
 
 ### Key Source Files for Auditing Behavior
@@ -354,9 +361,9 @@ When adding a new model/method: choose the stage's backend from `resolved.backen
 - `src/hydra_suite/core/filters/kalman.py`
 - `src/hydra_suite/core/assigners/hungarian.py`
 - `src/hydra_suite/core/post/processing.py`
-- `src/hydra_suite/core/identity/runtime_api.py`
-- `src/hydra_suite/core/identity/classification/backend.py` — shared classifier loader
-- `src/hydra_suite/core/identity/classification/errors.py` — classifier error hierarchy
+- `src/hydra_suite/core/individual/runtime_api.py`
+- `src/hydra_suite/core/individual/classification/backend.py` — shared classifier loader
+- `src/hydra_suite/core/individual/classification/errors.py` — classifier error hierarchy
 - `src/hydra_suite/runtime/resolver.py` — tier + platform + stage → `ResolvedBackend` (runtime single authority)
 - `src/hydra_suite/runtime/onnx_providers.py` — ONNX execution-provider list for a `ResolvedBackend`
 - `src/hydra_suite/paths.py` — central path resolution (all asset/data paths)

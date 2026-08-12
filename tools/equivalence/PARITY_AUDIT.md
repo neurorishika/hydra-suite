@@ -17,7 +17,7 @@ equivalent in the redesigned `core/inference/` pipeline. This is a **static** au
 ## Method
 
 Seven parallel domain audits compared the legacy implementation (inline in
-`core/tracking/worker.py`, `core/detectors/`, `core/identity/**`,
+`core/tracking/worker.py`, `core/detectors/`, `core/individual/**`,
 `core/tracking/pose_pipeline.py`) against the new staged pipeline
 (`core/inference/stages/*`, `runner.py`, `cache/*`, plus the rewired
 `core/tracking/{worker,frame_result_bridge,streaming_payload,optimizer}.py` and
@@ -132,7 +132,7 @@ absent-frame-reads-None (H9).
   (default 1.3) — `core/detectors/yolo_detector.py:286,304`.
 - `INDIVIDUAL_CROP_PADDING` is the **crop padding fraction** (default `0.1`), a different
   quantity. Head-tail derives `padding_fraction = max(0.0, canonical_margin - 1.0)`
-  (`core/identity/classification/headtail.py:154`). A real config carrying
+  (`core/individual/classification/headtail.py:154`). A real config carrying
   `INDIVIDUAL_CROP_PADDING=0.1` therefore yields `canonical_margin=0.1 →
   padding_fraction=0.0`.
 - **Impact:** every canonical crop feeding head-tail / CNN / pose collapses to **zero
@@ -146,7 +146,7 @@ absent-frame-reads-None (H9).
 - **Legacy:** posteriors are temperature-calibrated **at source** —
   `core/tracking/precompute.py:1244-1252` calls
   `predict_batch_posteriors(crops, calibration=self._calibration)`
-  (`core/identity/classification/cnn.py:482-543`). The calibrated posteriors then flow to
+  (`core/individual/classification/cnn.py:482-543`). The calibrated posteriors then flow to
   both the detection-posterior cache and the live store / online decoder.
 - **New:** the CNN stage emits **raw** softmax (`CNNFactorPrediction.raw_probabilities`,
   `core/inference/stages/cnn.py:71`, `result.py:49`).
@@ -198,7 +198,7 @@ absent-frame-reads-None (H9).
   except ImportError: detector = None
   ```
   This is the **upstream pupil-apriltags / python-apriltag** API.
-- **Legacy:** `core/identity/classification/apriltag.py` mandates the **SEB lab fork**:
+- **Legacy:** `core/individual/classification/apriltag.py` mandates the **SEB lab fork**:
   `at.apriltag(family=…, maxhamming=…, …)` (`:184`) and verifies `tag36ARTag` support via
   `_has_required_apriltag_family` (`:34-66`), raising a clear error otherwise
   (`APRILTAG_REQUIRED_FAMILY = "tag36ARTag"`, `:26`).
@@ -450,7 +450,7 @@ pose/headtail→skip) vs legacy AABB fallback (`precompute.py:530-545`); GAP 4 �
 
 ### Domain 4 — Pose (YOLO + SLEAP)
 
-> Shared `core/identity/pose/{api,types,utils,quality,artifacts}.py` and
+> Shared `core/individual/pose/{api,types,utils,quality,artifacts}.py` and
 > `backends/{yolo,sleap_utils}.py` are **byte-identical**. `backends/sleap.py` differs only
 > by additive changes (a `_to_uint8_image` fix + `predict_batch_cuda` + diagnostics).
 

@@ -69,12 +69,10 @@ def _cnn_det_pred_to_class_prediction(
 
     Mirrors legacy ``CNNClassifier.predict_batch`` (cnn.py:404-407): when the
     top-class confidence is below ``confidence_threshold`` the class name is
-    collapsed to ``None`` (the confidence is still recorded). The downstream
-    majority vote (``TrackCNNHistory.majority_class``) excludes ``None`` /
-    ``"unknown"``, so without this gate low-confidence guesses would be counted
-    that legacy discarded.
+    collapsed to ``None`` (the confidence is still recorded), so without this
+    gate low-confidence guesses would be counted that legacy discarded.
     """
-    from hydra_suite.core.identity.classification.cnn import ClassPrediction
+    from hydra_suite.core.individual.classification.cnn import ClassPrediction
 
     threshold = float(confidence_threshold)
     names = []
@@ -108,20 +106,18 @@ def populate_live_cnn_store(
     detection_ids: np.ndarray,
     frame_idx: int,
     phase_label: str,
-    evidence_emitter=None,
     confidence_threshold: float = 0.0,
 ) -> None:
     """Push CNN predictions from a FrameResult into a LiveCNNIdentityStore.
 
     Converts CNNDetectionPrediction → ClassPrediction so the live store's
-    ``load()`` method returns the same format as a legacy CNNIdentityCache.
-
-    When ``evidence_emitter`` is provided, the per-factor full probability
-    vectors are also forwarded so the emitter can build calibrated
-    ``IdentityEvidence`` objects (full catalog log_probs) and push them into
-    ``LiveCNNIdentityStore._evidences``. The online identity decoder needs
-    these to do Bayesian updates — without them it can only commit identity
-    on the strongest top-1 confidence, which under-commits dramatically.
+    ``load()`` method returns the same format as a legacy CNNIdentityCache
+    (top-1 predictions only). Identity Phase 3 Task 5: catalog-level
+    ``IdentityEvidence`` log_probs for the online identity decoder come from
+    the inference-time ``IdentityEvidenceStage`` sidecar
+    (``InferenceRunner.identity_evidence_cache`` /
+    ``identity_evidence_sidecar_path("batch")``), not from a tracking-time
+    emitter fed through this function.
 
     Args:
         store: The LiveCNNIdentityStore instance for this CNN phase.
@@ -130,12 +126,6 @@ def populate_live_cnn_store(
         frame_idx: Current video frame index.
         phase_label: CNN phase label string; used to select the matching phase
             from cnn_results.
-        evidence_emitter: Optional ``IdentityEvidenceEmitter`` for the same
-            phase. When provided, full posteriors are passed in and a list of
-            ``IdentityEvidence`` is built and pushed to the live store + the
-            emitter's sidecar cache. When None, only top-1 predictions are
-            populated (legacy behaviour) and the online decoder will be
-            severely under-informed.
         confidence_threshold: Per-factor top-class confidence threshold. A
             factor whose argmax confidence is below this value has its class
             name collapsed to ``None`` (legacy ``CNNClassifier.predict_batch``
@@ -162,47 +152,37 @@ def populate_live_cnn_store(
         for pred in phase_result.predictions
     ]
 
-    if evidence_emitter is None:
-        store.update_frame(frame_idx, class_preds)
-        return
+    store.update_frame(frame_idx, class_preds)
 
-    # Extract per-detection per-factor full probability vectors for the emitter.
-    # Order must match class_preds (i.e., phase_result.predictions order).
-    posteriors: list[list[np.ndarray] | None] = []
-    det_ids_list: list[int] = []
-    det_ids_arr = (
-        np.asarray(detection_ids, dtype=np.int64)
-        if detection_ids is not None and len(detection_ids) > 0
-        else None
-    )
-    for pred in phase_result.predictions:
-        per_factor_probs: list[np.ndarray] = []
-        for factor in pred.factors:
-            per_factor_probs.append(
-                np.asarray(factor.raw_probabilities, dtype=np.float32)
-            )
-        posteriors.append(per_factor_probs if per_factor_probs else None)
-        # det_index in CNNDetectionPrediction is the slot index within the
-        # filtered detection list; map back to the stable detection_id.
-        if det_ids_arr is not None and 0 <= int(pred.det_index) < len(det_ids_arr):
-            det_ids_list.append(int(det_ids_arr[int(pred.det_index)]))
-        else:
-            det_ids_list.append(int(pred.det_index))
 
-    evidences = evidence_emitter.build_frame_evidences(
-        frame_idx,
-        class_preds,
-        posteriors=posteriors,
-        detection_ids=det_ids_list,
-    )
-    store.update_frame(
-        frame_idx,
-        class_preds,
-        posteriors=posteriors,
-        evidences=evidences,
-    )
-    # Persist to sidecar cache for offline / replay consumers.
-    evidence_emitter.emit_evidences(frame_idx, evidences)
+def evidence_cache_for_cnn_phase_state(
+    effective_realtime_tracking_mode: bool,
+    batch_evidence_cache,
+):
+    """Which ``IdentityEvidenceCache`` a CNN phase's ``_cnn_phase_states`` entry
+    should carry for the online identity decoder to consume.
+
+    Identity Phase 3 regression fix: a phase state is built with a
+    ``LiveCNNIdentityStore`` (for its top-1 per-frame predictions, used in the
+    pre-assignment cost term) whenever ``InferenceRunner``-driven precompute
+    is active -- this happens for BOTH true realtime/streaming passes AND the
+    ordinary non-realtime batch/cached tracking pass (which pre-runs
+    ``InferenceRunner.run_batch_pass`` up front, then replays from cache).
+    Only the realtime path populates ``inference_runner.identity_evidence_cache``
+    (via ``run_realtime`` -> ``_write_identity_evidence_realtime``); the batch
+    path never calls ``run_realtime``, so that in-memory cache stays empty and
+    the on-disk "batch" sidecar (``batch_evidence_cache``, opened once up front
+    from ``identity_evidence_sidecar_path("batch")``) is the only place with
+    evidence for non-realtime passes.
+
+    Returns ``batch_evidence_cache`` for non-realtime passes (so the tracking
+    loop reads the disk sidecar) and ``None`` for realtime passes (so the
+    tracking loop's fallback reads ``inference_runner.identity_evidence_cache``
+    instead, which is the ONLY cache populated live during ``run_realtime``).
+    """
+    if effective_realtime_tracking_mode:
+        return None
+    return batch_evidence_cache
 
 
 def populate_live_pose_store(

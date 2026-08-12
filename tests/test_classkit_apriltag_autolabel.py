@@ -195,7 +195,7 @@ def _make_observation(tag_id: int, hamming: int = 0):
 
 
 def _make_config(unsharp_kernel_size=(5, 5), unsharp_sigma=1.0, unsharp_amount=1.5):
-    from hydra_suite.core.identity.classification.apriltag import AprilTagConfig
+    from hydra_suite.core.individual.classification.apriltag import AprilTagConfig
 
     return AprilTagConfig(
         unsharp_kernel_size=unsharp_kernel_size,

@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
+from hydra_suite.core.canonicalization.geometry import (
+    CanonicalGeometry,
+    canonical_geometry_from_params,
+)
+from hydra_suite.core.individual.classification.errors import CalibrationRequiredError
 from hydra_suite.runtime.resolver import RuntimeTier
+
+logger = logging.getLogger(__name__)
 
 
 class InferenceConfigError(ValueError):
@@ -314,8 +322,6 @@ class HeadTailConfig:
     confidence_threshold: float = 0.5
     candidate_confidence_threshold: float | None = None
     batch_size: int = 64
-    canonical_aspect_ratio: float = 2.0
-    canonical_margin: float = 1.3
 
 
 @dataclass
@@ -368,7 +374,6 @@ class PoseConfig:
     vitpose: PoseViTPoseConfig | None = None
     crop_padding: float = 0.1
     suppress_foreign_regions: bool = True
-    background_color: tuple[int, int, int] = (0, 0, 0)
     anterior_keypoints: list[str] = field(default_factory=list)
     posterior_keypoints: list[str] = field(default_factory=list)
     ignore_keypoints: list[str] = field(default_factory=list)
@@ -395,6 +400,21 @@ class AprilTagConfig:
     crop_padding: float = 0.1
 
 
+def _default_canonical_geometry() -> CanonicalGeometry:
+    """Fallback canonical geometry (project-wide default body_px/aspect/margin).
+
+    Used whenever a config is built without an explicit ``canonical`` (e.g.
+    hand-built ``InferenceConfig``s in tests, or `_dict_to_config` reading an
+    older on-disk JSON that predates this field).
+
+    Routes through ``canonical_geometry_from_params`` with an empty params
+    dict so the magic defaults (``REFERENCE_BODY_SIZE=20.0``,
+    ``reference_aspect_ratio=2.0``, ``canonical_margin=1.3``) live in exactly
+    one place: that helper's own defaults.
+    """
+    return canonical_geometry_from_params({})
+
+
 @dataclass
 class InferenceConfig:
     # Exactly one detection source must be set. OBB is the YOLO path; bgsub is
@@ -405,6 +425,10 @@ class InferenceConfig:
     cnn_phases: list[CNNConfig] = field(default_factory=list)
     pose: PoseConfig | None = None
     apriltag: AprilTagConfig = field(default_factory=AprilTagConfig)
+    # Single project-wide canonical crop geometry (Layer 1). Every crop-consuming
+    # stage (headtail, cnn, pose) shares this ONE geometry instead of each
+    # carrying its own aspect_ratio/margin pair.
+    canonical: CanonicalGeometry = field(default_factory=_default_canonical_geometry)
     detection_batch_size: int = 1
     pipeline_depth: int = 2
     runtime_tier: RuntimeTier = "gpu"
@@ -492,9 +516,10 @@ def _dict_to_config(d: dict[str, Any]) -> InferenceConfig:
         yolo_d = pose_d.pop("yolo", None)
         sleap_d = pose_d.pop("sleap", None)
         vitpose_d = pose_d.pop("vitpose", None)
-        bg = pose_d.get("background_color")
-        if isinstance(bg, list):
-            pose_d["background_color"] = tuple(bg)
+        # Dropped field (was always (0, 0, 0); never populated by
+        # from_parameters). Pop so stale serialized configs from before this
+        # change don't fail PoseConfig(**pose_d) with an unexpected kwarg.
+        pose_d.pop("background_color", None)
         pose = PoseConfig(
             **pose_d,
             yolo=PoseYOLOConfig(**yolo_d) if yolo_d else None,
@@ -507,6 +532,17 @@ def _dict_to_config(d: dict[str, Any]) -> InferenceConfig:
         at_d["unsharp_kernel"] = tuple(at_d["unsharp_kernel"])
     apriltag = AprilTagConfig(**at_d) if at_d else AprilTagConfig()
 
+    canonical_d = d.get("canonical")
+    canonical = (
+        CanonicalGeometry(
+            canvas_wh=tuple(canonical_d["canvas_wh"]),
+            margin=float(canonical_d["margin"]),
+            aspect_ratio=float(canonical_d["aspect_ratio"]),
+        )
+        if canonical_d
+        else _default_canonical_geometry()
+    )
+
     return InferenceConfig(
         obb=obb,
         bgsub=bgsub,
@@ -514,6 +550,7 @@ def _dict_to_config(d: dict[str, Any]) -> InferenceConfig:
         cnn_phases=cnn_phases,
         pose=pose,
         apriltag=apriltag,
+        canonical=canonical,
         detection_batch_size=d.get("detection_batch_size", 1),
         pipeline_depth=d.get("pipeline_depth", 2),
         runtime_tier=raw_tier,
@@ -586,6 +623,81 @@ def _slice_config_from_params(
     )
 
 
+def _resolve_cnn_temperature(cnn_cfg_dict: dict, model_path: str) -> float:
+    """Resolve the calibration temperature for a CNN classifier phase.
+
+    Params win when they specify ``calibration_temperature`` (or the legacy
+    ``temperature`` key) explicitly. Otherwise, fall back to the artifact's
+    own stored per-factor temperature (Task 5's ``ClassifierMetadata``);
+    the flat/scalar consume path here uses the first factor's value. Any
+    missing/unreadable/uncalibrated artifact defaults to ``1.0`` (today's
+    behavior — no regression).
+    """
+    explicit = cnn_cfg_dict.get(
+        "calibration_temperature", cnn_cfg_dict.get("temperature")
+    )
+    if explicit is not None:
+        return float(explicit)
+    try:
+        from hydra_suite.core.individual.classification.backend import _select_loader
+
+        metadata = _select_loader(model_path).parse_metadata(model_path)
+        temps = metadata.calibration_temperature
+        if temps:
+            return float(temps[0])
+    except Exception:
+        pass
+    return 1.0
+
+
+def _gate_calibration(params: dict) -> None:
+    """Mandatory-calibration gate for ``unique_identifier`` CNN models.
+
+    A no-op unless ``params["IDENTITY_CALIBRATION_REQUIRED"]`` is set. When it
+    is, every ``CNN_CLASSIFIERS`` entry marked ``unique_identifier`` is
+    checked via a metadata-only parse (no weight load -- ``current_signature``
+    is intentionally left ``None``, so ``calibration_status`` can only report
+    ``"calibrated"``/``"uncalibrated"``, never ``"stale"``; staleness is a
+    display concern handled elsewhere). An uncalibrated model raises
+    ``CalibrationRequiredError`` naming the recalibrate action, unless
+    ``params["IDENTITY_CALIBRATION_OVERRIDE"]`` is set, in which case the same
+    message is logged as a warning instead.
+    """
+    if not params.get("IDENTITY_CALIBRATION_REQUIRED"):
+        return
+    override = bool(params.get("IDENTITY_CALIBRATION_OVERRIDE"))
+    for cnn_cfg_dict in params.get("CNN_CLASSIFIERS", []):
+        if not bool(cnn_cfg_dict.get("unique_identifier", False)):
+            continue
+        model_path = str(cnn_cfg_dict.get("model_path", "")).strip()
+        if not model_path or not os.path.exists(model_path):
+            continue
+        try:
+            from hydra_suite.core.individual.classification.backend import (
+                _select_loader,
+                calibration_status,
+            )
+
+            meta = _select_loader(model_path).parse_metadata(model_path)
+            status = calibration_status(meta, None)
+        except Exception:
+            # A read failure means we cannot prove calibration -- treat it as
+            # uncalibrated rather than silently letting an unverifiable model
+            # through the gate.
+            status = "uncalibrated"
+        if status == "uncalibrated":
+            message = (
+                f"Identity model {model_path!r} is uncalibrated but calibration "
+                "is required (IDENTITY_CALIBRATION_REQUIRED). Please recalibrate "
+                "it via ClassKit -> Recalibrate model... before tracking, or set "
+                "IDENTITY_CALIBRATION_OVERRIDE to downgrade this to a warning."
+            )
+            if override:
+                logger.warning(message)
+            else:
+                raise CalibrationRequiredError(message)
+
+
 def build_inference_config_from_params(params: dict) -> InferenceConfig:
     """Build an InferenceConfig from a tracking-worker params dict.
 
@@ -644,6 +756,15 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
         max_ar = ref_ar * float(_adv.get("max_aspect_ratio_multiplier", 2.0))
     else:
         min_ar, max_ar = 0.0, float("inf")
+
+    # Single project-wide canonical crop geometry (Layer 1), shared by
+    # head-tail, CNN, and pose crops alike -- built ONCE here regardless of
+    # which of those stages end up configured below. CanonicalGeometry clamps
+    # aspect_ratio/margin to >= 1.0, so this is also the single place that
+    # guards against a degenerate (< 1.0) advanced-config value silently
+    # reaching any classifier. Delegates to ``canonical_geometry_from_params``
+    # so this is not a second copy of that derivation.
+    canonical = canonical_geometry_from_params(params)
 
     if obb_mode == "sequential":
         detect_path = str(params.get("YOLO_DETECT_MODEL_PATH", "") or "")
@@ -804,14 +925,6 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
                 )
             ),
             batch_size=int(params.get("HEADTAIL_BATCH_SIZE", 64)),
-            canonical_aspect_ratio=float(
-                params.get("ADVANCED_CONFIG", {}).get("reference_aspect_ratio", 2.0)
-            ),
-            canonical_margin=float(
-                params.get("ADVANCED_CONFIG", {}).get(
-                    "yolo_headtail_canonical_margin", 1.3
-                )
-            ),
         )
 
     # CNN phases
@@ -830,13 +943,13 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
                 scoring_mode=str(cnn_cfg_dict.get("scoring_mode", "atomic")),
                 match_bonus=float(cnn_cfg_dict.get("match_bonus", 0.1)),
                 mismatch_penalty=float(cnn_cfg_dict.get("mismatch_penalty", 0.3)),
-                calibration_temperature=float(
-                    cnn_cfg_dict.get(
-                        "calibration_temperature", cnn_cfg_dict.get("temperature", 1.0)
-                    )
+                calibration_temperature=_resolve_cnn_temperature(
+                    cnn_cfg_dict, cnn_model_path
                 ),
             )
         )
+
+    _gate_calibration(params)
 
     # Pose — supports both YOLO-pose and SLEAP backends.
     pose_cfg = None
@@ -930,6 +1043,7 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
         cnn_phases=cnn_phases,
         pose=pose_cfg,
         apriltag=apriltag_cfg,
+        canonical=canonical,
         detection_batch_size=batch_size,
         realtime=False,
         use_cache=True,

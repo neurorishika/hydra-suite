@@ -8,7 +8,7 @@ Primary modules:
 - `hydra_suite.core.filters.kalman`
 - `hydra_suite.core.assigners.hungarian`
 - `hydra_suite.core.post.processing`
-- `hydra_suite.core.identity.runtime_api`
+- `hydra_suite.core.individual.runtime_api`
 
 ## Design Goals
 
@@ -425,7 +425,7 @@ If you need to audit behavior, these files are the primary reference points:
 - `src/hydra_suite/core/filters/kalman.py`
 - `src/hydra_suite/core/assigners/hungarian.py`
 - `src/hydra_suite/core/post/processing.py`
-- `src/hydra_suite/core/identity/runtime_api.py`
+- `src/hydra_suite/core/individual/runtime_api.py`
 - `tests/test_tracking_pipeline_synthetic.py`
 - `tests/test_post_tracklet_relinking.py`
 

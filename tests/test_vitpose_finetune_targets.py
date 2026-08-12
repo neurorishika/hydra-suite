@@ -1,7 +1,7 @@
 import numpy as np
 
-from hydra_suite.core.identity.pose.vitpose.decode import decode_udp_cv2
-from hydra_suite.core.identity.pose.vitpose.training.targets import (
+from hydra_suite.core.individual.pose.vitpose.decode import decode_udp_cv2
+from hydra_suite.core.individual.pose.vitpose.training.targets import (
     generate_udp_gaussian,
 )
 

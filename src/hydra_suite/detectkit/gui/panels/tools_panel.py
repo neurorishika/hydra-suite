@@ -99,6 +99,8 @@ class ToolsPanel(QWidget):
 
     overlay_settings_changed = Signal()
     run_inference_requested = Signal()
+    escalate_sam2_requested = Signal()
+    mark_reviewed_requested = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -145,8 +147,43 @@ class ToolsPanel(QWidget):
 
         layout.addWidget(self._build_overview_group())
         layout.addWidget(self._build_overlay_group())
+        layout.addWidget(self._build_escalation_group())
         layout.addWidget(self._build_analysis_section())
         layout.addStretch(1)
+
+    def _build_escalation_group(self) -> QGroupBox:
+        box = QGroupBox("SAM2 Escalation")
+        v = QVBoxLayout(box)
+        v.setSpacing(6)
+
+        hint = QLabel(
+            "Promote OBB/box sources to polygon-level segment sources using SAM2, "
+            "then review the primed results before training."
+        )
+        hint.setWordWrap(True)
+        hint.setProperty("detectkitRole", "sectionHint")
+        v.addWidget(hint)
+
+        self._btn_escalate_sam2 = QPushButton("Escalate to segment (SAM2)")
+        self._btn_escalate_sam2.clicked.connect(self.escalate_sam2_requested)
+        # Disable if the SAM2 catalog cannot be imported (missing dependency/assets).
+        try:
+            from hydra_suite.core.inference.sam2.checkpoints import available_variants
+
+            available_variants()
+        except Exception:  # pragma: no cover - depends on optional SAM2 assets
+            self._btn_escalate_sam2.setEnabled(False)
+            self._btn_escalate_sam2.setToolTip(
+                "SAM2 catalog unavailable — install the SAM2 checkpoints to enable "
+                "escalation."
+            )
+        v.addWidget(self._btn_escalate_sam2)
+
+        self._btn_mark_reviewed = QPushButton("Mark reviewed…")
+        self._btn_mark_reviewed.clicked.connect(self.mark_reviewed_requested)
+        v.addWidget(self._btn_mark_reviewed)
+
+        return box
 
     def _build_overview_group(self) -> QGroupBox:
         box = QGroupBox("Dataset Overview")

@@ -7,11 +7,14 @@ import math
 import numpy as np
 import pytest
 
+from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
 from hydra_suite.runtime.resolver import ResolvedBackend
+
+_TEST_GEOMETRY = CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
 
 
 def test_normalize_label_accepts_canonical_tokens():
-    from hydra_suite.core.identity.classification.headtail import (
+    from hydra_suite.core.individual.classification.headtail import (
         HEADTAIL_CANONICAL_LABELS,
         normalize_headtail_label,
     )
@@ -33,7 +36,7 @@ def test_normalize_label_accepts_canonical_tokens():
 
 
 def test_normalize_label_rejects_unknown_token():
-    from hydra_suite.core.identity.classification.headtail import (
+    from hydra_suite.core.individual.classification.headtail import (
         normalize_headtail_label,
     )
 
@@ -42,7 +45,7 @@ def test_normalize_label_rejects_unknown_token():
 
 
 def test_validate_headtail_labels_accepts_subset():
-    from hydra_suite.core.identity.classification.headtail import (
+    from hydra_suite.core.individual.classification.headtail import (
         validate_headtail_labels,
     )
 
@@ -51,7 +54,7 @@ def test_validate_headtail_labels_accepts_subset():
 
 
 def test_validate_class_names_strict_accepts_four_label_subset():
-    from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
+    from hydra_suite.core.individual.classification.headtail import HeadTailAnalyzer
 
     normalized = HeadTailAnalyzer._validate_class_names(
         ["left", "right", "unknown", "up"],
@@ -62,8 +65,8 @@ def test_validate_class_names_strict_accepts_four_label_subset():
 
 
 def test_validate_headtail_labels_rejects_out_of_set():
-    from hydra_suite.core.identity.classification.errors import HeadTailFormatError
-    from hydra_suite.core.identity.classification.headtail import (
+    from hydra_suite.core.individual.classification.errors import HeadTailFormatError
+    from hydra_suite.core.individual.classification.headtail import (
         validate_headtail_labels,
     )
 
@@ -72,11 +75,12 @@ def test_validate_headtail_labels_rejects_out_of_set():
 
 
 def test_headtail_accepts_flat_tiny_five_class(tiny_flat_headtail):
-    from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
+    from hydra_suite.core.individual.classification.headtail import HeadTailAnalyzer
 
     analyzer = HeadTailAnalyzer(
         model_path=str(tiny_flat_headtail),
         resolved=ResolvedBackend("torch", "cpu", False),
+        geometry=_TEST_GEOMETRY,
     )
     assert analyzer.is_loaded()
     # Expect the normalized label set in order of the checkpoint.
@@ -84,11 +88,12 @@ def test_headtail_accepts_flat_tiny_five_class(tiny_flat_headtail):
 
 
 def test_headtail_accepts_flat_tiny_subset(tiny_flat_subset):
-    from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
+    from hydra_suite.core.individual.classification.headtail import HeadTailAnalyzer
 
     analyzer = HeadTailAnalyzer(
         model_path=str(tiny_flat_subset),
         resolved=ResolvedBackend("torch", "cpu", False),
+        geometry=_TEST_GEOMETRY,
     )
     assert analyzer.canonical_labels == ("left", "right")
 
@@ -96,45 +101,49 @@ def test_headtail_accepts_flat_tiny_subset(tiny_flat_subset):
 def test_headtail_accepts_legacy_flat_torchvision_subset(
     legacy_torchvision_flat_headtail,
 ):
-    from hydra_suite.core.identity.classification.errors import ClassifierFormatError
-    from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
+    from hydra_suite.core.individual.classification.errors import ClassifierFormatError
+    from hydra_suite.core.individual.classification.headtail import HeadTailAnalyzer
 
     with pytest.raises(ClassifierFormatError):
         HeadTailAnalyzer(
             model_path=str(legacy_torchvision_flat_headtail),
             resolved=ResolvedBackend("torch", "cpu", False),
+            geometry=_TEST_GEOMETRY,
         )
 
 
 def test_headtail_rejects_multi_head(tiny_multi_identity):
-    from hydra_suite.core.identity.classification.errors import HeadTailFormatError
-    from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
+    from hydra_suite.core.individual.classification.errors import HeadTailFormatError
+    from hydra_suite.core.individual.classification.headtail import HeadTailAnalyzer
 
     with pytest.raises(HeadTailFormatError):
         HeadTailAnalyzer(
             model_path=str(tiny_multi_identity),
             resolved=ResolvedBackend("torch", "cpu", False),
+            geometry=_TEST_GEOMETRY,
         )
 
 
 def test_headtail_rejects_non_headtail_labels(torchvision_flat_identity):
-    from hydra_suite.core.identity.classification.errors import HeadTailFormatError
-    from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
+    from hydra_suite.core.individual.classification.errors import HeadTailFormatError
+    from hydra_suite.core.individual.classification.headtail import HeadTailAnalyzer
 
     with pytest.raises(HeadTailFormatError):
         HeadTailAnalyzer(
             model_path=str(torchvision_flat_identity),
             resolved=ResolvedBackend("torch", "cpu", False),
+            geometry=_TEST_GEOMETRY,
         )
 
 
 def test_headtail_predict_labels_returns_normalized(tiny_flat_headtail):
     """predict_labels returns (canonical_label, confidence) tuples per crop."""
-    from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
+    from hydra_suite.core.individual.classification.headtail import HeadTailAnalyzer
 
     analyzer = HeadTailAnalyzer(
         model_path=str(tiny_flat_headtail),
         resolved=ResolvedBackend("torch", "cpu", False),
+        geometry=_TEST_GEOMETRY,
     )
     crops = [np.zeros((32, 32, 3), dtype=np.uint8) for _ in range(2)]
     out = analyzer.predict_labels(crops)
@@ -145,7 +154,9 @@ def test_headtail_predict_labels_returns_normalized(tiny_flat_headtail):
 
 
 def test_heading_for_direction_matches_canonical_crop_offsets():
-    from hydra_suite.core.identity.classification.headtail import heading_for_direction
+    from hydra_suite.core.individual.classification.headtail import (
+        heading_for_direction,
+    )
 
     axis = 0.25
     assert heading_for_direction(axis, "right") == pytest.approx(axis)
@@ -162,7 +173,7 @@ def test_heading_for_direction_matches_canonical_crop_offsets():
 
 
 def test_scatter_backend_v2_uses_canonical_direction_offsets():
-    from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
+    from hydra_suite.core.individual.classification.headtail import HeadTailAnalyzer
 
     analyzer = HeadTailAnalyzer.__new__(HeadTailAnalyzer)
     analyzer._canonical_labels = ("left", "right", "up", "down", "unknown")
@@ -189,19 +200,21 @@ def test_scatter_backend_v2_uses_canonical_direction_offsets():
 
 def test_headtail_load_failure_surfaces_as_exception(tmp_path):
     """Invalid checkpoints raise ClassifierError, not silent warnings."""
-    from hydra_suite.core.identity.classification.errors import ClassifierFormatError
-    from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
+    from hydra_suite.core.individual.classification.errors import ClassifierFormatError
+    from hydra_suite.core.individual.classification.headtail import HeadTailAnalyzer
 
     bad = tmp_path / "not_a_checkpoint.pth"
     bad.write_bytes(b"garbage")
     with pytest.raises(ClassifierFormatError):
         HeadTailAnalyzer(
-            model_path=str(bad), resolved=ResolvedBackend("torch", "cpu", False)
+            model_path=str(bad),
+            resolved=ResolvedBackend("torch", "cpu", False),
+            geometry=_TEST_GEOMETRY,
         )
 
 
 def test_headtail_predict_chunks_large_crop_batches():
-    from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
+    from hydra_suite.core.individual.classification.headtail import HeadTailAnalyzer
 
     calls: list[int] = []
 

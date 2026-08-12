@@ -2,8 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from hydra_suite.core.identity.pose.vitpose.config import HEATMAP_SIZE_WH
-from hydra_suite.core.identity.pose.vitpose.heads import (
+from hydra_suite.core.individual.pose.vitpose.config import HEATMAP_SIZE_WH
+from hydra_suite.core.individual.pose.vitpose.heads import (
     ClassicHead,
     SimpleHead,
     build_head,

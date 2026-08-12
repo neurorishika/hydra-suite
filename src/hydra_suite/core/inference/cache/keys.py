@@ -6,6 +6,8 @@ from dataclasses import replace
 
 import numpy as np
 
+from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
+
 from ..config import (
     AprilTagConfig,
     BgSubConfig,
@@ -16,6 +18,18 @@ from ..config import (
     SliceConfig,
 )
 from .base import CACHE_SCHEMA_VERSION, CacheKey
+
+
+def canonical_geometry_key(geometry: CanonicalGeometry) -> str:
+    """Content hash of a :class:`CanonicalGeometry` for folding into cache keys.
+
+    Any change to the project-wide canonical geometry (canvas size, margin, or
+    aspect ratio) changes what pixels every crop-consuming stage (head-tail,
+    CNN, pose) actually sees, so it must invalidate their caches.
+    """
+    return _sha(
+        f"{geometry.canvas_w}x{geometry.canvas_h}|{geometry.margin}|{geometry.aspect_ratio}"
+    )
 
 
 def video_signature(path: str | None) -> str:
@@ -136,7 +150,6 @@ _BGSUB_KEY_PARAMS = (
     "ENABLE_SIZE_FILTERING",
     "MIN_OBJECT_SIZE",
     "MAX_OBJECT_SIZE",
-    "ENABLE_ASPECT_RATIO_FILTERING",
     "BRIGHTNESS",
     "CONTRAST",
     "GAMMA",
@@ -204,8 +217,8 @@ def bgsub_detection_cache_key(config: BgSubConfig) -> CacheKey:
     )
 
 
-def headtail_cache_key(config: HeadTailConfig) -> CacheKey:
-    config_hash = _sha(f"{config.canonical_aspect_ratio}|{config.canonical_margin}")
+def headtail_cache_key(config: HeadTailConfig, geometry: CanonicalGeometry) -> CacheKey:
+    config_hash = canonical_geometry_key(geometry)
     return CacheKey(
         schema_version=CACHE_SCHEMA_VERSION,
         model_path=config.model_path,
@@ -214,16 +227,18 @@ def headtail_cache_key(config: HeadTailConfig) -> CacheKey:
     )
 
 
-def cnn_cache_key(config: CNNConfig) -> CacheKey:
+def cnn_cache_key(config: CNNConfig, geometry: CanonicalGeometry) -> CacheKey:
     return CacheKey(
         schema_version=CACHE_SCHEMA_VERSION,
         model_path=config.model_path,
         model_mtime=_mtime(config.model_path),
-        config_hash="",  # calibration_temperature, scoring_mode excluded
+        # calibration_temperature, scoring_mode excluded; canonical geometry
+        # IS included -- it changes what pixels the classifier actually sees.
+        config_hash=canonical_geometry_key(geometry),
     )
 
 
-def pose_cache_key(config: PoseConfig) -> CacheKey:
+def pose_cache_key(config: PoseConfig, geometry: CanonicalGeometry) -> CacheKey:
     if config.backend == "yolo":
         assert config.yolo is not None
         path = config.yolo.model_path
@@ -233,9 +248,12 @@ def pose_cache_key(config: PoseConfig) -> CacheKey:
     else:
         assert config.sleap is not None
         path = config.sleap.model_path
+    # background_color was dropped from PoseConfig: it was always (0, 0, 0)
+    # (never populated by from_parameters), so removing it does not change
+    # any hash produced by any existing config in practice.
     config_hash = _sha(
         f"{config.crop_padding}|{config.suppress_foreign_regions}"
-        f"|{config.background_color}"
+        f"|{canonical_geometry_key(geometry)}"
     )
     return CacheKey(
         schema_version=CACHE_SCHEMA_VERSION,

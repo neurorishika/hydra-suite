@@ -22,15 +22,15 @@ import torch
 from pycocotools.coco import COCO
 from pycocotools.cocoeval import COCOeval
 
-from hydra_suite.core.identity.pose.vitpose.decode import decode_udp_torch, flip_back
-from hydra_suite.core.identity.pose.vitpose.transforms import (
+from hydra_suite.core.individual.pose.vitpose.decode import decode_udp_torch, flip_back
+from hydra_suite.core.individual.pose.vitpose.transforms import (
     box2cs,
     normalize,
     top_down_affine,
     transform_preds,
 )
-from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
-from hydra_suite.core.identity.pose.vitpose.weights import load_checkpoint
+from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose
+from hydra_suite.core.individual.pose.vitpose.weights import load_checkpoint
 from tools.vitpose.oks_nms import oks_nms
 
 ASSET_DIR = Path(os.path.expanduser("~/.cache/vitpose-assets"))

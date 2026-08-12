@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import numpy as np
 
-from hydra_suite.core.identity.properties.detected_cache import DetectedPropertiesCache
+from hydra_suite.core.individual.properties.detected_cache import (
+    DetectedPropertiesCache,
+)
 
 
 def test_detected_properties_cache_roundtrip(tmp_path) -> None:

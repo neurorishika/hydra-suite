@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 
-from hydra_suite.core.identity.pose.vitpose.infer import (
+from hydra_suite.core.individual.pose.vitpose.infer import (
     decode_and_project,
     preprocess_crop,
 )

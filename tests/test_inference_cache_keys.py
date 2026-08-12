@@ -2,10 +2,12 @@ import numpy as np
 import pytest
 import torch
 
+from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
 from hydra_suite.core.inference.cache.base import CACHE_SCHEMA_VERSION, CacheKey
 from hydra_suite.core.inference.cache.keys import (
     apriltag_cache_key,
     bgsub_detection_cache_key,
+    canonical_geometry_key,
     cnn_cache_key,
     detection_cache_key,
     headtail_cache_key,
@@ -48,12 +50,10 @@ def _obb_direct(path="/m.pt", threshold=0.5) -> OBBConfig:
     )
 
 
-def _ht_config(path="/ht.pt", aspect=1.5, margin=0.1, threshold=0.4) -> HeadTailConfig:
+def _ht_config(path="/ht.pt", threshold=0.4) -> HeadTailConfig:
     return HeadTailConfig(
         model_path=path,
         confidence_threshold=threshold,
-        canonical_aspect_ratio=aspect,
-        canonical_margin=margin,
     )
 
 
@@ -393,23 +393,26 @@ def test_video_signature_empty_for_missing_or_none():
 
 # ---- headtail_cache_key ----
 
+_GEOM_A = CanonicalGeometry.from_reference(20.0, 1.5, 0.1 + 1.0)
+_GEOM_B = CanonicalGeometry.from_reference(20.0, 2.0, 0.1 + 1.0)
+
 
 def test_headtail_key_changes_with_model_path():
-    k1 = headtail_cache_key(_ht_config(path="/a.pt"))
-    k2 = headtail_cache_key(_ht_config(path="/b.pt"))
+    k1 = headtail_cache_key(_ht_config(path="/a.pt"), _GEOM_A)
+    k2 = headtail_cache_key(_ht_config(path="/b.pt"), _GEOM_A)
     assert k1 != k2
 
 
 def test_headtail_key_stable_with_threshold():
-    k1 = headtail_cache_key(_ht_config(threshold=0.3))
-    k2 = headtail_cache_key(_ht_config(threshold=0.9))
+    k1 = headtail_cache_key(_ht_config(threshold=0.3), _GEOM_A)
+    k2 = headtail_cache_key(_ht_config(threshold=0.9), _GEOM_A)
     assert k1.model_path == k2.model_path
     assert k1.config_hash == k2.config_hash
 
 
 def test_headtail_key_changes_with_canonical_params():
-    k1 = headtail_cache_key(_ht_config(aspect=1.5, margin=0.1))
-    k2 = headtail_cache_key(_ht_config(aspect=2.0, margin=0.1))
+    k1 = headtail_cache_key(_ht_config(), _GEOM_A)
+    k2 = headtail_cache_key(_ht_config(), _GEOM_B)
     assert k1.config_hash != k2.config_hash
 
 
@@ -417,25 +420,46 @@ def test_headtail_key_changes_with_canonical_params():
 
 
 def test_cnn_key_stable_with_calibration_temperature():
-    k1 = cnn_cache_key(_cnn_config(temperature=1.0))
-    k2 = cnn_cache_key(_cnn_config(temperature=2.5))
+    k1 = cnn_cache_key(_cnn_config(temperature=1.0), _GEOM_A)
+    k2 = cnn_cache_key(_cnn_config(temperature=2.5), _GEOM_A)
     assert k1.model_path == k2.model_path
     assert k1.config_hash == k2.config_hash
 
 
 def test_cnn_key_changes_with_model_path():
-    k1 = cnn_cache_key(_cnn_config(path="/a.pt"))
-    k2 = cnn_cache_key(_cnn_config(path="/b.pt"))
+    k1 = cnn_cache_key(_cnn_config(path="/a.pt"), _GEOM_A)
+    k2 = cnn_cache_key(_cnn_config(path="/b.pt"), _GEOM_A)
     assert k1 != k2
+
+
+def test_cnn_key_changes_with_canonical_geometry():
+    k1 = cnn_cache_key(_cnn_config(), _GEOM_A)
+    k2 = cnn_cache_key(_cnn_config(), _GEOM_B)
+    assert k1.config_hash != k2.config_hash
 
 
 # ---- pose_cache_key ----
 
 
 def test_pose_key_changes_with_crop_padding():
-    k1 = pose_cache_key(_pose_config(padding=0.1))
-    k2 = pose_cache_key(_pose_config(padding=0.3))
+    k1 = pose_cache_key(_pose_config(padding=0.1), _GEOM_A)
+    k2 = pose_cache_key(_pose_config(padding=0.3), _GEOM_A)
     assert k1.config_hash != k2.config_hash
+
+
+def test_pose_key_changes_with_canonical_geometry():
+    k1 = pose_cache_key(_pose_config(), _GEOM_A)
+    k2 = pose_cache_key(_pose_config(), _GEOM_B)
+    assert k1.config_hash != k2.config_hash
+
+
+# ---- canonical_geometry_key ----
+
+
+def test_canonical_geometry_key_stable_for_equal_geometry():
+    a = CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
+    b = CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
+    assert canonical_geometry_key(a) == canonical_geometry_key(b)
 
 
 # ---- apriltag_cache_key ----

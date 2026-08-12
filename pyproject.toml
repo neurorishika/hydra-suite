@@ -43,6 +43,7 @@ dependencies = [
     "annoy",
     "platformdirs>=3.0",
     "ruptures>=1.1",
+    "sam2>=1.1",
 ]
 
 [project.optional-dependencies]

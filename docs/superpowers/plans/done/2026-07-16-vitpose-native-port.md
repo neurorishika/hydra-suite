@@ -68,7 +68,7 @@ For `get_warp_matrix` (Task 6) and `post_dark_udp` (Task 7), **fetch the upstrea
 ## File Structure
 
 ```
-src/hydra_suite/core/identity/pose/vitpose/
+src/hydra_suite/core/individual/pose/vitpose/
 ├── __init__.py      # public API; cv2-before-torch import order
 ├── config.py        # variant table + frozen constants          (~90 lines)
 ├── model.py         # ViT backbone, Block, Attention, MoEMlp    (~230 lines)
@@ -346,8 +346,8 @@ git commit -m "feat(vitpose): SHA256-pinned asset fetcher for weights and COCO d
 ### Task 2: Variant config and frozen constants
 
 **Files:**
-- Create: `src/hydra_suite/core/identity/pose/vitpose/__init__.py`
-- Create: `src/hydra_suite/core/identity/pose/vitpose/config.py`
+- Create: `src/hydra_suite/core/individual/pose/vitpose/__init__.py`
+- Create: `src/hydra_suite/core/individual/pose/vitpose/config.py`
 - Test: `tests/test_vitpose_config.py`
 
 **Interfaces:**
@@ -362,7 +362,7 @@ git commit -m "feat(vitpose): SHA256-pinned asset fetcher for weights and COCO d
 
 ```python
 # tests/test_vitpose_config.py
-from hydra_suite.core.identity.pose.vitpose.config import (
+from hydra_suite.core.individual.pose.vitpose.config import (
     VARIANTS, IMAGE_SIZE_WH, HEATMAP_SIZE_WH, PIXEL_STD, UDP_BLUR_KERNEL,
     TARGET_SIGMA, NUM_EXPERTS, EXPERT_DATASETS,
 )
@@ -419,12 +419,12 @@ Run:
 ```bash
 PYTHONPATH=src /Users/neurorishika/miniforge3/envs/hydra-mps/bin/python -m pytest tests/test_vitpose_config.py -q
 ```
-Expected: FAIL — `ModuleNotFoundError: No module named 'hydra_suite.core.identity.pose.vitpose'`
+Expected: FAIL — `ModuleNotFoundError: No module named 'hydra_suite.core.individual.pose.vitpose'`
 
 - [ ] **Step 3: Write minimal implementation**
 
 ```python
-# src/hydra_suite/core/identity/pose/vitpose/__init__.py
+# src/hydra_suite/core/individual/pose/vitpose/__init__.py
 """Native-PyTorch ViTPose. Standalone leaf: imports nothing from hydra_suite.
 
 Module attribute names deliberately mirror the upstream checkpoint's state_dict
@@ -440,7 +440,7 @@ instead (see Global Constraints). A docstring may record the history; the
 imports must not come back.
 
 ```python
-# src/hydra_suite/core/identity/pose/vitpose/config.py
+# src/hydra_suite/core/individual/pose/vitpose/config.py
 """Variant table and constants that must not drift.
 
 Values transcribed from upstream ViTPose configs
@@ -505,14 +505,14 @@ Expected: PASS (6 passed)
 
 Run:
 ```bash
-grep -rn "from hydra_suite\|import hydra_suite" src/hydra_suite/core/identity/pose/vitpose/
+grep -rn "from hydra_suite\|import hydra_suite" src/hydra_suite/core/individual/pose/vitpose/
 ```
 Expected: no output. Any hit is a Global Constraints violation — fix before committing.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/hydra_suite/core/identity/pose/vitpose/ tests/test_vitpose_config.py
+git add src/hydra_suite/core/individual/pose/vitpose/ tests/test_vitpose_config.py
 git commit -m "feat(vitpose): variant table and frozen constants"
 ```
 
@@ -523,7 +523,7 @@ git commit -m "feat(vitpose): variant table and frozen constants"
 The two silent traps live here. The tests below exist specifically to catch them.
 
 **Files:**
-- Create: `src/hydra_suite/core/identity/pose/vitpose/model.py`
+- Create: `src/hydra_suite/core/individual/pose/vitpose/model.py`
 - Test: `tests/test_vitpose_model.py`
 
 **Interfaces:**
@@ -540,8 +540,8 @@ The two silent traps live here. The tests below exist specifically to catch them
 ```python
 # tests/test_vitpose_model.py
 import torch
-from hydra_suite.core.identity.pose.vitpose.model import ViT, PatchEmbed
-from hydra_suite.core.identity.pose.vitpose.config import VARIANTS
+from hydra_suite.core.individual.pose.vitpose.model import ViT, PatchEmbed
+from hydra_suite.core.individual.pose.vitpose.config import VARIANTS
 
 
 def _vit_b() -> ViT:
@@ -622,7 +622,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named '...vitpose.model'`
 Attribute names are load-bearing: they must equal the checkpoint's key names.
 
 ```python
-# src/hydra_suite/core/identity/pose/vitpose/model.py
+# src/hydra_suite/core/individual/pose/vitpose/model.py
 """ViT backbone for ViTPose.
 
 Plain, non-hierarchical ViT: absolute learned pos-embed only, no relative
@@ -765,7 +765,7 @@ Expected: PASS (6 passed)
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/hydra_suite/core/identity/pose/vitpose/model.py tests/test_vitpose_model.py
+git add src/hydra_suite/core/individual/pose/vitpose/model.py tests/test_vitpose_model.py
 git commit -m "feat(vitpose): ViT backbone with upstream patch padding and pos-embed"
 ```
 
@@ -774,7 +774,7 @@ git commit -m "feat(vitpose): ViT backbone with upstream patch padding and pos-e
 ### Task 4: Heads (classic deconv + simple decoder)
 
 **Files:**
-- Create: `src/hydra_suite/core/identity/pose/vitpose/heads.py`
+- Create: `src/hydra_suite/core/individual/pose/vitpose/heads.py`
 - Test: `tests/test_vitpose_heads.py`
 
 **Interfaces:**
@@ -791,8 +791,8 @@ git commit -m "feat(vitpose): ViT backbone with upstream patch padding and pos-e
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from hydra_suite.core.identity.pose.vitpose.config import HEATMAP_SIZE_WH
-from hydra_suite.core.identity.pose.vitpose.heads import (
+from hydra_suite.core.individual.pose.vitpose.config import HEATMAP_SIZE_WH
+from hydra_suite.core.individual.pose.vitpose.heads import (
     ClassicHead, SimpleHead, build_head,
 )
 
@@ -918,7 +918,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named '...vitpose.heads'`
 - [ ] **Step 3: Write minimal implementation**
 
 ```python
-# src/hydra_suite/core/identity/pose/vitpose/heads.py
+# src/hydra_suite/core/individual/pose/vitpose/heads.py
 """ViTPose heatmap heads.
 
 Both are upstream's TopdownHeatmapSimpleHead; the config chooses between them.
@@ -994,7 +994,7 @@ Expected: PASS (8 passed)
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/hydra_suite/core/identity/pose/vitpose/heads.py tests/test_vitpose_heads.py
+git add src/hydra_suite/core/individual/pose/vitpose/heads.py tests/test_vitpose_heads.py
 git commit -m "feat(vitpose): classic deconv and simple decoder heads"
 ```
 
@@ -1007,9 +1007,9 @@ and 2 for free, because a wrong `padding` or a missing `pos_embed` slot changes
 either a shape or a key.
 
 **Files:**
-- Create: `src/hydra_suite/core/identity/pose/vitpose/vitpose.py`
-- Create: `src/hydra_suite/core/identity/pose/vitpose/weights.py`
-- Modify: `src/hydra_suite/core/identity/pose/vitpose/__init__.py`
+- Create: `src/hydra_suite/core/individual/pose/vitpose/vitpose.py`
+- Create: `src/hydra_suite/core/individual/pose/vitpose/weights.py`
+- Modify: `src/hydra_suite/core/individual/pose/vitpose/__init__.py`
 - Test: `tests/test_vitpose_weights.py`
 
 **Interfaces:**
@@ -1030,8 +1030,8 @@ from pathlib import Path
 import pytest
 import torch
 
-from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
-from hydra_suite.core.identity.pose.vitpose.weights import load_checkpoint
+from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose
+from hydra_suite.core.individual.pose.vitpose.weights import load_checkpoint
 
 ASSET_DIR = Path(os.path.expanduser("~/.cache/vitpose-assets"))
 
@@ -1069,7 +1069,7 @@ def test_checkpoint_load_is_weights_only():
     permit arbitrary code execution via unpickling."""
     import inspect
 
-    from hydra_suite.core.identity.pose.vitpose import weights
+    from hydra_suite.core.individual.pose.vitpose import weights
 
     src = inspect.getsource(weights)
     assert "weights_only=True" in src
@@ -1097,7 +1097,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named '...vitpose.vitpose'`
 - [ ] **Step 3: Write minimal implementation**
 
 ```python
-# src/hydra_suite/core/identity/pose/vitpose/vitpose.py
+# src/hydra_suite/core/individual/pose/vitpose/vitpose.py
 """Top-level ViTPose: backbone + keypoint head.
 
 Attribute names `backbone` and `keypoint_head` are deliberate: they equal the
@@ -1135,7 +1135,7 @@ def build_vitpose(
 ```
 
 ```python
-# src/hydra_suite/core/identity/pose/vitpose/weights.py
+# src/hydra_suite/core/individual/pose/vitpose/weights.py
 """Checkpoint loading with strict-key assertions."""
 
 from __future__ import annotations
@@ -1191,7 +1191,7 @@ caught by `test_patch_embed_uses_padding_two_not_zero` (Task 3) and by Gate C.
 - [ ] **Step 5: Export the public API**
 
 ```python
-# append to src/hydra_suite/core/identity/pose/vitpose/__init__.py
+# append to src/hydra_suite/core/individual/pose/vitpose/__init__.py
 from .config import VARIANTS, ViTPoseVariant  # noqa: E402
 from .vitpose import ViTPose, build_vitpose  # noqa: E402
 from .weights import CheckpointKeyError, load_checkpoint  # noqa: E402
@@ -1209,7 +1209,7 @@ __all__ = [
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/hydra_suite/core/identity/pose/vitpose/ tests/test_vitpose_weights.py
+git add src/hydra_suite/core/individual/pose/vitpose/ tests/test_vitpose_weights.py
 git commit -m "feat(vitpose): GATE A - strict checkpoint load for classic and simple"
 ```
 
@@ -1218,7 +1218,7 @@ git commit -m "feat(vitpose): GATE A - strict checkpoint load for classic and si
 ### Task 6: Transforms (bbox -> center/scale, UDP affine warp)
 
 **Files:**
-- Create: `src/hydra_suite/core/identity/pose/vitpose/transforms.py`
+- Create: `src/hydra_suite/core/individual/pose/vitpose/transforms.py`
 - Test: `tests/test_vitpose_transforms.py`
 
 **Interfaces:**
@@ -1251,10 +1251,10 @@ Transcribe `get_warp_matrix` and the **`use_udp=True` branch** of
 import numpy as np
 import pytest
 
-from hydra_suite.core.identity.pose.vitpose.transforms import (
+from hydra_suite.core.individual.pose.vitpose.transforms import (
     box2cs, get_warp_matrix, top_down_affine, normalize, transform_preds,
 )
-from hydra_suite.core.identity.pose.vitpose.config import (
+from hydra_suite.core.individual.pose.vitpose.config import (
     PIXEL_STD, PADDING_FACTOR, IMAGENET_MEAN, IMAGENET_STD,
 )
 
@@ -1340,7 +1340,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named '...vitpose.transforms'
 - [ ] **Step 4: Implement, transcribing get_warp_matrix from Step 1**
 
 ```python
-# src/hydra_suite/core/identity/pose/vitpose/transforms.py
+# src/hydra_suite/core/individual/pose/vitpose/transforms.py
 """Top-down pre/post-processing, UDP variant.
 
 UDP (Unbiased Data Processing, Huang et al. CVPR 2020) defines unit length as
@@ -1442,7 +1442,7 @@ Expected: PASS (8 passed)
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/hydra_suite/core/identity/pose/vitpose/transforms.py tests/test_vitpose_transforms.py
+git add src/hydra_suite/core/individual/pose/vitpose/transforms.py tests/test_vitpose_transforms.py
 git commit -m "feat(vitpose): UDP top-down transforms"
 ```
 
@@ -1451,7 +1451,7 @@ git commit -m "feat(vitpose): UDP top-down transforms"
 ### Task 7: decode_udp_cv2 (the oracle)
 
 **Files:**
-- Create: `src/hydra_suite/core/identity/pose/vitpose/decode.py`
+- Create: `src/hydra_suite/core/individual/pose/vitpose/decode.py`
 - Test: `tests/test_vitpose_decode.py`
 
 **Interfaces:**
@@ -1477,10 +1477,10 @@ grep -n "def _get_max_preds" -A 25 /tmp/vitpose-ref/inference.py
 import numpy as np
 import pytest
 
-from hydra_suite.core.identity.pose.vitpose.decode import (
+from hydra_suite.core.individual.pose.vitpose.decode import (
     get_max_preds, decode_udp_cv2, flip_back,
 )
-from hydra_suite.core.identity.pose.vitpose.config import UDP_BLUR_KERNEL
+from hydra_suite.core.individual.pose.vitpose.config import UDP_BLUR_KERNEL
 
 
 def _gaussian_heatmap(h=64, w=48, cx=20.0, cy=30.0, sigma=2.0):
@@ -1532,7 +1532,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named '...vitpose.decode'`
 - [ ] **Step 4: Implement the oracle by transcribing from Step 1**
 
 ```python
-# src/hydra_suite/core/identity/pose/vitpose/decode.py
+# src/hydra_suite/core/individual/pose/vitpose/decode.py
 """Heatmap decoding, UDP/DARK.
 
 Two implementations:
@@ -1601,7 +1601,7 @@ Expected: PASS (4 passed)
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/hydra_suite/core/identity/pose/vitpose/decode.py tests/test_vitpose_decode.py
+git add src/hydra_suite/core/individual/pose/vitpose/decode.py tests/test_vitpose_decode.py
 git commit -m "feat(vitpose): UDP/DARK cv2 decode (numerical oracle)"
 ```
 
@@ -1615,7 +1615,7 @@ Spec 2 requires no roundtrips, so the decode must run on-device. This task
 proves the on-device version is numerically the same thing.
 
 **Files:**
-- Modify: `src/hydra_suite/core/identity/pose/vitpose/decode.py`
+- Modify: `src/hydra_suite/core/individual/pose/vitpose/decode.py`
 - Modify: `tests/test_vitpose_decode.py`
 
 **Interfaces:**
@@ -1628,7 +1628,7 @@ proves the on-device version is numerically the same thing.
 ```python
 # append to tests/test_vitpose_decode.py
 import torch
-from hydra_suite.core.identity.pose.vitpose.decode import decode_udp_torch
+from hydra_suite.core.individual.pose.vitpose.decode import decode_udp_torch
 
 
 def _random_peaky_heatmaps(n=2, k=17, h=64, w=48, seed=0):
@@ -1698,7 +1698,7 @@ Expected: FAIL — `ImportError: cannot import name 'decode_udp_torch'`
 - [ ] **Step 3: Implement the on-device decode**
 
 ```python
-# append to src/hydra_suite/core/identity/pose/vitpose/decode.py
+# append to src/hydra_suite/core/individual/pose/vitpose/decode.py
 import torch
 import torch.nn.functional as F
 
@@ -1828,7 +1828,7 @@ Debug in this order:
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/hydra_suite/core/identity/pose/vitpose/decode.py tests/test_vitpose_decode.py
+git add src/hydra_suite/core/individual/pose/vitpose/decode.py tests/test_vitpose_decode.py
 git commit -m "feat(vitpose): GATE B - device-resident UDP decode with cv2 parity"
 ```
 
@@ -1837,8 +1837,8 @@ git commit -m "feat(vitpose): GATE B - device-resident UDP decode with cv2 parit
 ### Task 9: ViTPose+ MoE and GATE A(3)
 
 **Files:**
-- Modify: `src/hydra_suite/core/identity/pose/vitpose/model.py`
-- Modify: `src/hydra_suite/core/identity/pose/vitpose/vitpose.py`
+- Modify: `src/hydra_suite/core/individual/pose/vitpose/model.py`
+- Modify: `src/hydra_suite/core/individual/pose/vitpose/vitpose.py`
 - Modify: `tests/test_vitpose_model.py`, `tests/test_vitpose_weights.py`
 
 **Interfaces:**
@@ -1853,7 +1853,7 @@ git commit -m "feat(vitpose): GATE B - device-resident UDP decode with cv2 parit
 
 ```python
 # append to tests/test_vitpose_model.py
-from hydra_suite.core.identity.pose.vitpose.model import MoEMlp
+from hydra_suite.core.individual.pose.vitpose.model import MoEMlp
 
 
 def test_moe_shapes_for_base():
@@ -1886,7 +1886,7 @@ def test_moe_routing_is_by_dataset_index_not_learned():
 
 ```python
 # append to tests/test_vitpose_weights.py
-from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose_moe
+from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose_moe
 
 requires_plus = pytest.mark.skipif(
     not (ASSET_DIR / "vitpose+_base.pth").exists(),
@@ -1932,7 +1932,7 @@ Expected: FAIL — `ImportError: cannot import name 'MoEMlp'`
 - [ ] **Step 3: Implement MoE**
 
 ```python
-# append to src/hydra_suite/core/identity/pose/vitpose/model.py
+# append to src/hydra_suite/core/individual/pose/vitpose/model.py
 class MoEMlp(nn.Module):
     """ViTPose+ FFN. ONLY the FFN differs from classic; attention, patch embed,
     pos embed and norms are byte-identical.
@@ -1976,7 +1976,7 @@ Then thread `dataset_index` through `Block.forward` and `ViT.forward` when
 `part_features` is set, and add to `vitpose.py`:
 
 ```python
-# append to src/hydra_suite/core/identity/pose/vitpose/vitpose.py
+# append to src/hydra_suite/core/individual/pose/vitpose/vitpose.py
 ASSOCIATE_HEAD_CHANNELS = (14, 16, 17, 17, 133)  # AiC, MPII, AP-10K, APT-36K, WholeBody
 
 
@@ -2041,7 +2041,7 @@ PY
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/hydra_suite/core/identity/pose/vitpose/ tests/test_vitpose_model.py tests/test_vitpose_weights.py
+git add src/hydra_suite/core/individual/pose/vitpose/ tests/test_vitpose_model.py tests/test_vitpose_weights.py
 git commit -m "feat(vitpose): GATE A(3) - ViTPose+ MoE backbone and per-dataset heads"
 ```
 
@@ -2213,12 +2213,12 @@ import torch
 from pycocotools.coco import COCO
 from pycocotools.cocoeval import COCOeval
 
-from hydra_suite.core.identity.pose.vitpose.decode import decode_udp_torch, flip_back
-from hydra_suite.core.identity.pose.vitpose.transforms import (
+from hydra_suite.core.individual.pose.vitpose.decode import decode_udp_torch, flip_back
+from hydra_suite.core.individual.pose.vitpose.transforms import (
     box2cs, normalize, top_down_affine, transform_preds,
 )
-from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
-from hydra_suite.core.identity.pose.vitpose.weights import load_checkpoint
+from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose
+from hydra_suite.core.individual.pose.vitpose.weights import load_checkpoint
 
 ASSET_DIR = Path(os.path.expanduser("~/.cache/vitpose-assets"))
 COCO_FLIP_PAIRS = [
@@ -2349,7 +2349,7 @@ false VIOLATION every time — a check that always cries wolf is worse than none
 ```bash
 PYTHONPATH=src /Users/neurorishika/miniforge3/envs/hydra-mps/bin/python - <<'PY'
 import ast, pathlib, sys
-root = pathlib.Path("src/hydra_suite/core/identity/pose/vitpose")
+root = pathlib.Path("src/hydra_suite/core/individual/pose/vitpose")
 bad = []
 for f in root.rglob("*.py"):
     for node in ast.walk(ast.parse(f.read_text())):
@@ -2370,7 +2370,7 @@ Expected: `VIOLATIONS: none — leaf constraint holds`
 
 Run:
 ```bash
-git diff --stat main...HEAD -- src/hydra_suite/core/identity/pose/api.py src/hydra_suite/core/identity/pose/types.py src/hydra_suite/core/inference/
+git diff --stat main...HEAD -- src/hydra_suite/core/individual/pose/api.py src/hydra_suite/core/individual/pose/types.py src/hydra_suite/core/inference/
 ```
 Expected: **empty**. Any change here is Spec 3 scope leaking in.
 
@@ -2431,7 +2431,7 @@ for the YOLO backend: it converts a live model to an artifact and knows nothing 
 caching, config, or where models live (that is `auto_export_vitpose_model` at Spec 3).
 
 **Files:**
-- Create: `src/hydra_suite/core/identity/pose/vitpose/export.py`
+- Create: `src/hydra_suite/core/individual/pose/vitpose/export.py`
 - Test: `tests/test_vitpose_export.py`
 
 **Interfaces:**
@@ -2451,9 +2451,9 @@ import numpy as np
 import pytest
 import torch
 
-from hydra_suite.core.identity.pose.vitpose.export import export_onnx, ExportError
-from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
-from hydra_suite.core.identity.pose.vitpose.weights import load_checkpoint
+from hydra_suite.core.individual.pose.vitpose.export import export_onnx, ExportError
+from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose
+from hydra_suite.core.individual.pose.vitpose.weights import load_checkpoint
 
 ASSET_DIR = Path(os.path.expanduser("~/.cache/vitpose-assets"))
 requires_weights = pytest.mark.skipif(
@@ -2518,7 +2518,7 @@ def test_moe_export_bakes_one_expert(tmp_path):
     """
     import onnx
 
-    from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose_moe
+    from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose_moe
 
     m = build_vitpose_moe("B").eval()
     load_checkpoint(m, ASSET_DIR / "vitpose+_base.pth", strict=True)
@@ -2541,7 +2541,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named '...vitpose.export'`
 - [ ] **Step 3: Write minimal implementation**
 
 ```python
-# src/hydra_suite/core/identity/pose/vitpose/export.py
+# src/hydra_suite/core/individual/pose/vitpose/export.py
 """ViTPose export recipe: a live torch model -> a deployable artifact.
 
 This is the RECIPE, not the runtime. It is the piece ultralytics' model.export()
@@ -2647,7 +2647,7 @@ If `test_gate_d_onnx_matches_torch` misses 1e-4, **do not loosen the bound and d
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/hydra_suite/core/identity/pose/vitpose/export.py tests/test_vitpose_export.py
+git add src/hydra_suite/core/individual/pose/vitpose/export.py tests/test_vitpose_export.py
 git commit -m "feat(vitpose): GATE D(onnx) - ONNX export recipe with torch parity"
 ```
 
@@ -2659,7 +2659,7 @@ git commit -m "feat(vitpose): GATE D(onnx) - ONNX export recipe with torch parit
 deployment target.
 
 **Files:**
-- Modify: `src/hydra_suite/core/identity/pose/vitpose/export.py`
+- Modify: `src/hydra_suite/core/individual/pose/vitpose/export.py`
 - Modify: `tests/test_vitpose_export.py`
 
 **Interfaces:**
@@ -2692,7 +2692,7 @@ def test_tensorrt_defaults_to_fp32(tmp_path):
     A future edit flipping this default must break a test, not slip through."""
     import inspect
 
-    from hydra_suite.core.identity.pose.vitpose import export
+    from hydra_suite.core.individual.pose.vitpose import export
 
     sig = inspect.signature(export.build_tensorrt_engine)
     assert sig.parameters["fp16"].default is False
@@ -2703,7 +2703,7 @@ def test_tensorrt_defaults_to_fp32(tmp_path):
 def test_gate_d_tensorrt_matches_torch(tmp_path):
     """GATE D(tensorrt). TRT rearranges kernels, so it gets more slack than ONNX -- but
     FP32 keeps it close. Bound is max-abs per element."""
-    from hydra_suite.core.identity.pose.vitpose.export import (
+    from hydra_suite.core.individual.pose.vitpose.export import (
         build_tensorrt_engine, export_onnx,
     )
     from tools.vitpose.trt_runner import run_engine  # test-only helper, see Step 3
@@ -2787,7 +2787,7 @@ engine path, not the engine.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/hydra_suite/core/identity/pose/vitpose/export.py tools/vitpose/trt_runner.py tests/test_vitpose_export.py
+git add src/hydra_suite/core/individual/pose/vitpose/export.py tools/vitpose/trt_runner.py tests/test_vitpose_export.py
 git commit -m "feat(vitpose): GATE D(tensorrt) - FP32 engine build with torch parity"
 ```
 
@@ -2807,7 +2807,7 @@ coremltools cannot trace torch 2.11, report BLOCKED with the error and stop — 
 downgrade torch, and do not spend hours fighting it.
 
 **Files:**
-- Modify: `src/hydra_suite/core/identity/pose/vitpose/export.py`
+- Modify: `src/hydra_suite/core/individual/pose/vitpose/export.py`
 - Modify: `tests/test_vitpose_export.py`
 
 **Interfaces:**
@@ -2826,7 +2826,7 @@ requires_coreml = pytest.mark.skipif(
 @requires_weights
 def test_gate_d_coreml_matches_torch(tmp_path):
     """GATE D(coreml). Same slack as TRT: CoreML rearranges kernels."""
-    from hydra_suite.core.identity.pose.vitpose.export import export_coreml
+    from hydra_suite.core.individual.pose.vitpose.export import export_coreml
 
     m = build_vitpose("B", "classic").eval()
     load_checkpoint(m, ASSET_DIR / "vitpose-b.pth", strict=True)

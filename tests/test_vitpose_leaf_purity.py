@@ -1,4 +1,4 @@
-"""Leaf-purity AST checks for hydra_suite.core.identity.pose.vitpose.
+"""Leaf-purity AST checks for hydra_suite.core.individual.pose.vitpose.
 
 `vitpose/` (including the `training/` subpackage) must never import from
 `hydra_suite` — it is a standalone leaf. `vitpose/__init__.py` must also not
@@ -9,7 +9,7 @@ load the training loop.
 import ast
 from pathlib import Path
 
-VITPOSE = Path("src/hydra_suite/core/identity/pose/vitpose")
+VITPOSE = Path("src/hydra_suite/core/individual/pose/vitpose")
 
 
 def test_training_subpackage_is_leaf_pure():

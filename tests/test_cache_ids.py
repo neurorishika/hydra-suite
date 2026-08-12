@@ -5,7 +5,7 @@ from __future__ import annotations
 from tests.helpers.module_loader import load_src_module
 
 mod = load_src_module(
-    "hydra_suite/core/identity/properties/cache.py",
+    "hydra_suite/core/individual/properties/cache.py",
     "properties_cache_under_test",
 )
 

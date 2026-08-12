@@ -14,8 +14,9 @@ from pathlib import Path
 from typing import Callable
 
 import torch
-from PIL import Image
 from torch.utils.data import Dataset
+
+from .canonical_transform import cv2_bgr_loader
 
 _IMG_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
 
@@ -75,15 +76,15 @@ class MultiFactorImageFolder(Dataset):
 
     def __getitem__(self, index: int):
         path, label_tuple = self._samples[index]
-        with Image.open(path) as img:
-            image = img.convert("RGB")
+        image = cv2_bgr_loader(path)  # uint8 BGR HWC -- the Layer 2 contract
         if self._transform is not None:
             tensor = self._transform(image)
         else:
             import numpy as np
 
+            rgb = image[:, :, ::-1]
             tensor = torch.from_numpy(
-                np.asarray(image, dtype="float32") / 255.0
+                np.ascontiguousarray(rgb, dtype="float32") / 255.0
             ).permute(2, 0, 1)
         return tensor, torch.LongTensor(label_tuple)
 

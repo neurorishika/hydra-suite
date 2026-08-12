@@ -1,8 +1,8 @@
 import pytest
 
-from hydra_suite.core.identity.pose.api import create_pose_backend_from_config
-from hydra_suite.core.identity.pose.backends import vitpose as vitpose_backend_module
-from hydra_suite.core.identity.pose.types import PoseRuntimeConfig
+from hydra_suite.core.individual.pose.api import create_pose_backend_from_config
+from hydra_suite.core.individual.pose.backends import vitpose as vitpose_backend_module
+from hydra_suite.core.individual.pose.types import PoseRuntimeConfig
 from hydra_suite.core.inference.config import PoseViTPoseConfig
 
 

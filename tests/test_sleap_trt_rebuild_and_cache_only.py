@@ -59,7 +59,7 @@ class TestInitTensorrtRunner:
         """Create a SleapExportedBackend instance without calling __init__
         so we can test _init_tensorrt_runner in isolation.
         """
-        from hydra_suite.core.identity.pose.backends.sleap import SleapExportedBackend
+        from hydra_suite.core.individual.pose.backends.sleap import SleapExportedBackend
 
         obj = object.__new__(SleapExportedBackend)
         obj.runtime_flavor = "tensorrt"
@@ -82,7 +82,7 @@ class TestInitTensorrtRunner:
         mock_engine = MagicMock(name="DirectTensorRTEngine")
 
         with patch(
-            "hydra_suite.core.identity.pose.backends.sleap._DirectTensorRTEngine",
+            "hydra_suite.core.individual.pose.backends.sleap._DirectTensorRTEngine",
             return_value=mock_engine,
         ) as MockEngine:
             result = backend._init_tensorrt_runner(trt_file)
@@ -108,11 +108,11 @@ class TestInitTensorrtRunner:
 
         with (
             patch(
-                "hydra_suite.core.identity.pose.backends.sleap._DirectTensorRTEngine",
+                "hydra_suite.core.individual.pose.backends.sleap._DirectTensorRTEngine",
                 side_effect=engine_side_effect,
             ),
             patch(
-                "hydra_suite.core.identity.pose.backends.sleap._build_trt_engine_from_onnx",
+                "hydra_suite.core.individual.pose.backends.sleap._build_trt_engine_from_onnx",
                 return_value=True,
             ) as mock_build,
         ):
@@ -131,15 +131,15 @@ class TestInitTensorrtRunner:
 
         with (
             patch(
-                "hydra_suite.core.identity.pose.backends.sleap._DirectTensorRTEngine",
+                "hydra_suite.core.individual.pose.backends.sleap._DirectTensorRTEngine",
                 side_effect=RuntimeError("stale"),
             ),
             patch(
-                "hydra_suite.core.identity.pose.backends.sleap._build_trt_engine_from_onnx",
+                "hydra_suite.core.individual.pose.backends.sleap._build_trt_engine_from_onnx",
                 return_value=False,
             ),
             patch(
-                "hydra_suite.core.identity.pose.backends.sleap._DirectOnnxSession",
+                "hydra_suite.core.individual.pose.backends.sleap._DirectOnnxSession",
                 return_value=mock_ort_session,
             ) as MockOrt,
         ):
@@ -160,11 +160,11 @@ class TestInitTensorrtRunner:
 
         with (
             patch(
-                "hydra_suite.core.identity.pose.backends.sleap._build_trt_engine_from_onnx",
+                "hydra_suite.core.individual.pose.backends.sleap._build_trt_engine_from_onnx",
                 return_value=True,
             ) as mock_build,
             patch(
-                "hydra_suite.core.identity.pose.backends.sleap._DirectTensorRTEngine",
+                "hydra_suite.core.individual.pose.backends.sleap._DirectTensorRTEngine",
                 return_value=mock_engine,
             ) as MockEngine,
         ):
@@ -184,11 +184,11 @@ class TestInitTensorrtRunner:
 
         with (
             patch(
-                "hydra_suite.core.identity.pose.backends.sleap._build_trt_engine_from_onnx",
+                "hydra_suite.core.individual.pose.backends.sleap._build_trt_engine_from_onnx",
                 return_value=False,
             ),
             patch(
-                "hydra_suite.core.identity.pose.backends.sleap._DirectOnnxSession",
+                "hydra_suite.core.individual.pose.backends.sleap._DirectOnnxSession",
                 return_value=mock_ort_session,
             ) as MockOrt,
         ):
@@ -208,11 +208,11 @@ class TestInitTensorrtRunner:
 
         with (
             patch(
-                "hydra_suite.core.identity.pose.backends.sleap._DirectTensorRTEngine",
+                "hydra_suite.core.individual.pose.backends.sleap._DirectTensorRTEngine",
                 side_effect=RuntimeError("stale"),
             ),
             patch(
-                "hydra_suite.core.identity.pose.backends.sleap._DirectOnnxSession",
+                "hydra_suite.core.individual.pose.backends.sleap._DirectOnnxSession",
                 return_value=mock_ort_session,
             ) as MockOrt,
         ):
@@ -232,7 +232,7 @@ class TestBuildTrtEngineFromOnnx:
 
     def test_returns_false_when_tensorrt_import_fails(self, tmp_path):
         """When TensorRT is not installed, return False without raising."""
-        from hydra_suite.core.identity.pose.backends.sleap import (
+        from hydra_suite.core.individual.pose.backends.sleap import (
             _build_trt_engine_from_onnx,
         )
 
@@ -248,7 +248,7 @@ class TestBuildTrtEngineFromOnnx:
 
     def test_returns_false_on_builder_exception(self, tmp_path):
         """If TRT builder raises an exception, return False without propagating."""
-        from hydra_suite.core.identity.pose.backends.sleap import (
+        from hydra_suite.core.individual.pose.backends.sleap import (
             _build_trt_engine_from_onnx,
         )
 
@@ -268,7 +268,7 @@ class TestBuildTrtEngineFromOnnx:
 
     def test_returns_true_and_writes_engine_on_success(self, tmp_path):
         """Successful build returns True and writes serialized plan bytes."""
-        from hydra_suite.core.identity.pose.backends.sleap import (
+        from hydra_suite.core.individual.pose.backends.sleap import (
             _build_trt_engine_from_onnx,
         )
 
@@ -307,7 +307,7 @@ class TestBuildTrtEngineFromOnnx:
 
     def test_returns_false_when_build_serialized_network_returns_none(self, tmp_path):
         """build_serialized_network returning None → return False."""
-        from hydra_suite.core.identity.pose.backends.sleap import (
+        from hydra_suite.core.individual.pose.backends.sleap import (
             _build_trt_engine_from_onnx,
         )
 
@@ -375,7 +375,7 @@ class TestBuildTrtEngineFromOnnx:
         this is the actual bug fix: SLEAP's exporter emits symbolic H/W even
         though every crop is always resized to one fixed size before inference.
         """
-        from hydra_suite.core.identity.pose.backends.sleap import (
+        from hydra_suite.core.individual.pose.backends.sleap import (
             _build_trt_engine_from_onnx,
         )
 
@@ -398,7 +398,7 @@ class TestBuildTrtEngineFromOnnx:
 
     def test_dynamic_hw_without_fixed_hw_bails(self, tmp_path):
         """No fixed_hw hint -> bail to ORT-EP rather than build a wrong engine."""
-        from hydra_suite.core.identity.pose.backends.sleap import (
+        from hydra_suite.core.individual.pose.backends.sleap import (
             _build_trt_engine_from_onnx,
         )
 

@@ -13,7 +13,7 @@ behavior through the exact params the trackerkit orchestrator emits.
 
 from pathlib import Path
 
-from hydra_suite.trackerkit.gui import model_utils
+from hydra_suite.core.inference import model_paths as model_utils
 
 
 def test_pose_models_directory_vitpose():

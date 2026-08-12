@@ -18,7 +18,7 @@
 - `hydra_suite.core.filters.kalman`
 - `hydra_suite.core.assigners.hungarian`
 - `hydra_suite.core.post.processing`
-- `hydra_suite.core.identity.analysis`
+- `hydra_suite.core.individual.analysis`
 
 ## Data
 

@@ -61,7 +61,7 @@ Foreign crop mask : core/canonicalization/crop.py:559 (_apply_foreign_mask_canon
                     :220 (canonical_crop_with_foreign_mask)
 Foreign keypoints : utils/geometry.py:172 (filter_keypoints_by_foreign_obbs)
 GPU crop batch    : core/canonicalization/crop.py:309 (gpu_canonical_crop_batch)
-Pose CUDA         : core/identity/pose/backends/sleap.py:844 (predict_batch_cuda)
+Pose CUDA         : core/individual/pose/backends/sleap.py:844 (predict_batch_cuda)
 Double-buffer ref : core/tracking/pose/pose_pipeline.py:261-674
 ```
 

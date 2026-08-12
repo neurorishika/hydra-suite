@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import dataclasses
+import logging
 import random
 import re
 import shutil
@@ -17,6 +18,8 @@ from .contracts import CustomCNNParams, TrainingRole, TrainingRunSpec
 LogCallback = Callable[[str], None]
 ProgressCallback = Callable[[int, int], None]
 CancelCheck = Callable[[], bool]
+
+logger = logging.getLogger(__name__)
 
 
 def _safe_log(cb: LogCallback | None, message: str) -> None:
@@ -108,12 +111,69 @@ def _resolve_ultralytics_data_arg(spec: TrainingRunSpec, task: str) -> str:
     return str(spec.derived_dataset_dir)
 
 
+def _prefit_yolo_classify_dataset(
+    dataset_dir: Path, imgsz: int, dest_dir: Path
+) -> Path:
+    """Pre-fit a YOLO-classify ImageFolder dataset onto a square canvas.
+
+    Mirrors ``dataset_dir``'s ``<split>/<class>/`` layout into ``dest_dir``
+    with every image passed through the Layer 2 isotropic centred letterbox
+    (``CanonicalFitTransform``) at ``(imgsz, imgsz)``. Ultralytics' own
+    ``Resize(shortest_edge)`` + ``CenterCrop(size)`` then sees a square image
+    with shortest edge == longest edge, so the centre crop is a no-op -- the
+    same guarantee ``_forward_yolo`` (core/individual/classification/backend.py)
+    gives at inference time. YOLO-classify remains a known-lossy family
+    (operator decision, 2026-08-05): this closes the gap as far as the
+    vendor's own pipeline allows, it does not eliminate it. Idempotent --
+    skipped when ``dest_dir`` already exists.
+    """
+    import cv2
+
+    from .canonical_transform import CanonicalFitTransform, cv2_bgr_loader
+
+    if dest_dir.exists():
+        return dest_dir
+    transform = CanonicalFitTransform((int(imgsz), int(imgsz)))
+    for split_dir in sorted(p for p in dataset_dir.iterdir() if p.is_dir()):
+        for cls_dir in sorted(p for p in split_dir.iterdir() if p.is_dir()):
+            out_cls_dir = dest_dir / split_dir.name / cls_dir.name
+            out_cls_dir.mkdir(parents=True, exist_ok=True)
+            for img_path in sorted(cls_dir.iterdir()):
+                if not img_path.is_file():
+                    continue
+                try:
+                    img = cv2_bgr_loader(img_path)
+                except Exception:
+                    continue
+                cv2.imwrite(str(out_cls_dir / img_path.name), transform(img))
+    return dest_dir
+
+
 def build_ultralytics_command(spec: TrainingRunSpec, run_dir: str | Path) -> list[str]:
     """Build deterministic Ultralytics train command for a role."""
 
     task = _ultralytics_task_for_role(spec.role)
     run_dir = Path(run_dir).expanduser().resolve()
     data_arg = _resolve_ultralytics_data_arg(spec, task)
+
+    classify_scale_override: float | None = None
+    if task == "classify":
+        prefit_dir = run_dir / "prefit_dataset"
+        _prefit_yolo_classify_dataset(
+            Path(spec.derived_dataset_dir).expanduser(),
+            int(spec.hyperparams.imgsz),
+            prefit_dir,
+        )
+        data_arg = str(prefit_dir)
+        # Ultralytics computes RandomResizedCrop's internal scale range as
+        # (1.0 - args.scale, 1.0) (ultralytics.data.dataset.ClassificationDataset).
+        # scale=0.0 -> internal (1.0, 1.0): RandomResizedCrop always samples the
+        # full source area, so on an already-square pre-fitted image it
+        # degenerates to a no-op crop. Measured round-trip: max abs pixel diff
+        # 0/255 with scale=0.0 vs ~250/255 with the naively-plausible scale=1.0
+        # (which instead widens the crop range to (0.0, 1.0) -- maximally
+        # lossy). See task-9-report.md for the measurement.
+        classify_scale_override = 0.0
 
     args = [
         task,
@@ -140,6 +200,11 @@ def build_ultralytics_command(spec: TrainingRunSpec, run_dir: str | Path) -> lis
             args.append(f"{k}={v}")
     if spec.resume_from:
         args.append("resume=True")
+    if classify_scale_override is not None:
+        # RandomResizedCrop(scale=...) degenerates to a centre crop of the
+        # whole already-square pre-fitted image. Appended last so it wins
+        # over any `scale=` the augmentation profile set above.
+        args.append(f"scale={classify_scale_override}")
 
     yolo_exe = shutil.which("yolo")
     if yolo_exe:
@@ -296,6 +361,10 @@ def _build_tiny_dataset_class(input_w, input_h):
     import torch
     from torch.utils.data import Dataset
 
+    from hydra_suite.training.canonical_transform import CanonicalFitTransform
+
+    fit_transform = CanonicalFitTransform((input_h, input_w))
+
     class TinyDataset(Dataset):
         """Image dataset that loads crops, applies optional augmentation, and normalizes for TinyClassifier training."""
 
@@ -304,6 +373,16 @@ def _build_tiny_dataset_class(input_w, input_h):
             self.augment = augment
             self.profile = profile
             self._rng = np.random.default_rng(seed)
+            self._canon_aug = None
+            if (
+                augment
+                and profile
+                and getattr(profile, "enabled", False)
+                and getattr(profile, "canonical_aug", False)
+            ):
+                from hydra_suite.training.canonical_aug import CanonicalAug
+
+                self._canon_aug = CanonicalAug(seed=seed)
 
         def __len__(self):
             return len(self.items)
@@ -317,10 +396,13 @@ def _build_tiny_dataset_class(input_w, input_h):
             img = _apply_tiny_augmentation(
                 img, self.augment, self.profile, rng=getattr(self, "_rng", None)
             )
+            # CanonicalAug (Moderate robustness profile) runs on the canonical
+            # crop before the Layer-2 letterbox below -- training-only, opt-in
+            # via augmentation_profile.canonical_aug.
+            if self._canon_aug is not None:
+                img = self._canon_aug(img)
             if img.shape[1] != input_w or img.shape[0] != input_h:
-                img = cv2.resize(
-                    img, (input_w, input_h), interpolation=cv2.INTER_LINEAR
-                )
+                img = fit_transform(img)
             x = torch.from_numpy(img.copy()).permute(2, 0, 1).float() / 255.0
             y = torch.tensor(label, dtype=torch.long)
             return x, y
@@ -563,6 +645,46 @@ def _run_tiny_validation(model, val_loader, device, ignore_index=None):
     return correct / max(1, total)
 
 
+def _calibrate_and_pack(
+    model, val_loader, device, *, num_factors: int = 1, split_logits=None
+) -> dict:
+    """Fit calibration on the (best) model + val loader; return save kwargs (or {} if no val).
+
+    Calibration is best-effort: an empty/degenerate val loader or any other
+    fit failure must never sink an otherwise fully-trained run, so any
+    exception here degrades to "uncalibrated but saved" ({}) rather than
+    propagating.
+    """
+    if val_loader is None:
+        return {}
+    from hydra_suite.training.calibration_fit import fit_calibration_from_val
+
+    try:
+        res = fit_calibration_from_val(
+            model,
+            val_loader,
+            device,
+            split_logits=split_logits,
+            num_factors=num_factors,
+        )
+    except Exception as exc:  # calibration is best-effort; never lose the trained model
+        logger.warning(
+            "Calibration fit failed (%s); saving model without calibration.", exc
+        )
+        return {}
+    logger.info(
+        "Calibration fit: T=%s  ECE %s -> %s",
+        [round(t, 3) for t in res.temperatures],
+        [round(e, 4) for e in res.ece_before],
+        [round(e, 4) for e in res.ece_after],
+    )
+    return {
+        "calibration_temperature": res.temperatures,
+        "calibration_signature": res.signature,
+        "calibration_ece": res.ece_after,
+    }
+
+
 def _save_tiny_checkpoint(
     *,
     model,
@@ -575,6 +697,9 @@ def _save_tiny_checkpoint(
     dropout: float,
     best_val_acc,
     history,
+    calibration_temperature: list | None = None,
+    calibration_signature: str | None = None,
+    calibration_ece: list | None = None,
 ) -> None:
     """Save a TinyClassifier checkpoint in the v2 classifier-artifact format.
 
@@ -605,6 +730,15 @@ def _save_tiny_checkpoint(
         "best_val_acc": (float(best_val_acc) if best_val_acc is not None else None),
         "history": history if history is not None else [],
         "model_state_dict": model.state_dict(),
+        "calibration_temperature": (
+            list(calibration_temperature)
+            if calibration_temperature is not None
+            else None
+        ),
+        "calibration_signature": calibration_signature,
+        "calibration_ece": (
+            list(calibration_ece) if calibration_ece is not None else None
+        ),
     }
     ckpt_dict.update(tiny_model_checkpoint_metadata(model))
     _torch.save(ckpt_dict, str(save_path))
@@ -858,6 +992,8 @@ def _train_tiny_classify(
     if best_state is not None:
         model.load_state_dict(best_state, strict=True)
 
+    cal = _calibrate_and_pack(model, val_loader, device, num_factors=1)
+
     _safe_log(log_cb, "Saving checkpoint...")
 
     # Path derivation
@@ -885,6 +1021,7 @@ def _train_tiny_classify(
         dropout=float(spec.tiny_params.dropout),
         best_val_acc=best_val_acc,
         history=history,
+        **cal,
     )
 
     # Metrics JSON
@@ -1061,7 +1198,7 @@ def _run_torchvision_training_loop(
 
     import torch
 
-    sz = params.input_size
+    in_h, in_w = params.input_size  # (H, W)
     best_val_acc = None
     best_epoch = 0
     patience_count = 0
@@ -1167,7 +1304,7 @@ def _run_torchvision_training_loop(
                     backbone=backbone,
                     class_names=class_names,
                     factor_names=[],
-                    input_size=(sz, sz),
+                    input_size=(in_h, in_w),
                     best_val_acc=best_val_acc,
                     history=history,
                     trainable_layers=params.trainable_layers,
@@ -1192,7 +1329,7 @@ def _run_torchvision_training_loop(
             backbone=backbone,
             class_names=class_names,
             factor_names=[],
-            input_size=(sz, sz),
+            input_size=(in_h, in_w),
             best_val_acc=None,
             history=history,
             trainable_layers=params.trainable_layers,
@@ -1288,13 +1425,29 @@ def _train_custom_classify(
     weights_dir.mkdir(parents=True, exist_ok=True)
 
     dataset_dir = Path(spec.derived_dataset_dir)
-    sz = params.input_size
+    resize_hw = tuple(params.input_size)  # (H, W)
+
+    from hydra_suite.training.canonical_transform import (
+        CanonicalFitTransform,
+        bgr_to_rgb_pil,
+        cv2_bgr_loader,
+    )
 
     profile = spec.augmentation_profile
     mean, std = get_classifier_normalization_stats(
         monochrome=bool(getattr(profile, "monochrome", False))
     )
-    train_transforms = [transforms.Resize((sz, sz))]
+    train_transforms = []
+    if getattr(profile, "enabled", False) and getattr(profile, "canonical_aug", False):
+        from hydra_suite.training.canonical_aug import CanonicalAug
+
+        train_transforms.append(
+            transforms.Lambda(CanonicalAug(seed=getattr(spec, "seed", 42)))
+        )
+    train_transforms += [
+        CanonicalFitTransform(resize_hw),
+        transforms.Lambda(bgr_to_rgb_pil),
+    ]
     if profile.fliplr > 0:
         train_transforms.append(transforms.RandomHorizontalFlip(p=profile.fliplr))
     if profile.flipud > 0:
@@ -1334,7 +1487,8 @@ def _train_custom_classify(
     train_tf = transforms.Compose(train_transforms)
     val_tf = transforms.Compose(
         [
-            transforms.Resize((sz, sz)),
+            CanonicalFitTransform(resize_hw),
+            transforms.Lambda(bgr_to_rgb_pil),
             *(
                 [transforms.Grayscale(num_output_channels=3)]
                 if getattr(profile, "monochrome", False)
@@ -1352,13 +1506,17 @@ def _train_custom_classify(
     shared_class_to_idx = _build_class_to_idx(dataset_dir)
     class_names = sorted(shared_class_to_idx.keys())
 
-    train_ds = datasets.ImageFolder(str(dataset_dir / "train"), transform=train_tf)
+    train_ds = datasets.ImageFolder(
+        str(dataset_dir / "train"), transform=train_tf, loader=cv2_bgr_loader
+    )
     val_dir = dataset_dir / "val"
     has_validation = val_dir.exists() and any(
         path.is_file() for path in val_dir.rglob("*")
     )
     val_ds = (
-        datasets.ImageFolder(str(val_dir), transform=val_tf) if has_validation else None
+        datasets.ImageFolder(str(val_dir), transform=val_tf, loader=cv2_bgr_loader)
+        if has_validation
+        else None
     )
 
     for ds in [train_ds] + ([val_ds] if val_ds else []):
@@ -1556,6 +1714,28 @@ def _train_custom_classify(
             "task": "custom_classify",
         }
 
+    cal: dict = {}
+    if val_loader is not None:
+        _best_ckpt = torch.load(best_ckpt_path, map_location=device, weights_only=False)
+        model.load_state_dict(_best_ckpt["model_state_dict"], strict=True)
+        cal = _calibrate_and_pack(model, val_loader, device, num_factors=1)
+    if cal:
+        save_torchvision_checkpoint(
+            model=model,
+            backbone=params.backbone,
+            class_names=class_names,
+            factor_names=[],
+            input_size=resize_hw,
+            best_val_acc=best_val_acc,
+            history=history,
+            trainable_layers=params.trainable_layers,
+            backbone_lr_scale=params.backbone_lr_scale,
+            monochrome=bool(checkpoint_extra_meta.get("monochrome", False)),
+            extra_meta=checkpoint_extra_meta,
+            path=best_ckpt_path,
+            **cal,
+        )
+
     _total_elapsed = _time.monotonic() - _t0
     _safe_log(
         log_cb,
@@ -1628,11 +1808,26 @@ def _train_multihead_shared_classify(
     weights_dir.mkdir(parents=True, exist_ok=True)
     best_ckpt_path = weights_dir / "best.pth"
 
-    sz = int(params.input_size)
+    resize_hw = tuple(params.input_size)  # (H, W)
     profile = spec.augmentation_profile
     mean, std = get_classifier_normalization_stats(monochrome=bool(profile.monochrome))
 
-    train_tf_steps = [transforms.Resize((sz, sz))]
+    from hydra_suite.training.canonical_transform import (
+        CanonicalFitTransform,
+        bgr_to_rgb_pil,
+    )
+
+    train_tf_steps = []
+    if getattr(profile, "enabled", False) and getattr(profile, "canonical_aug", False):
+        from hydra_suite.training.canonical_aug import CanonicalAug
+
+        train_tf_steps.append(
+            transforms.Lambda(CanonicalAug(seed=getattr(spec, "seed", 42)))
+        )
+    train_tf_steps += [
+        CanonicalFitTransform(resize_hw),
+        transforms.Lambda(bgr_to_rgb_pil),
+    ]
     if profile.fliplr > 0:
         train_tf_steps.append(transforms.RandomHorizontalFlip(p=profile.fliplr))
     if profile.flipud > 0:
@@ -1661,7 +1856,7 @@ def _train_multihead_shared_classify(
     train_tf_steps += [transforms.ToTensor(), transforms.Normalize(mean, std)]
     train_tf = transforms.Compose(train_tf_steps)
     val_tf = transforms.Compose(
-        [transforms.Resize((sz, sz))]
+        [CanonicalFitTransform(resize_hw), transforms.Lambda(bgr_to_rgb_pil)]
         + ([transforms.Grayscale(num_output_channels=3)] if profile.monochrome else [])
         + [transforms.ToTensor(), transforms.Normalize(mean, std)]
     )
@@ -1720,7 +1915,7 @@ def _train_multihead_shared_classify(
         trainable_layers=int(params.trainable_layers),
         head_hidden_dim=int(params.head_hidden_dim),
         head_dropout=float(params.head_dropout),
-        input_size=sz,
+        input_size=resize_hw,
     )
     model.to(device)
 
@@ -1829,7 +2024,7 @@ def _train_multihead_shared_classify(
                     class_names=[],
                     factor_names=list(factor_names),
                     class_names_per_factor=[list(c) for c in cnpf],
-                    input_size=(sz, sz),
+                    input_size=resize_hw,
                     best_val_acc=best_val_acc,
                     history=history,
                     trainable_layers=int(params.trainable_layers),
@@ -1852,7 +2047,7 @@ def _train_multihead_shared_classify(
             class_names=[],
             factor_names=list(factor_names),
             class_names_per_factor=[list(c) for c in cnpf],
-            input_size=(sz, sz),
+            input_size=resize_hw,
             best_val_acc=None,
             history=history,
             trainable_layers=int(params.trainable_layers),
@@ -1862,6 +2057,35 @@ def _train_multihead_shared_classify(
             path=best_ckpt_path,
         )
         _safe_log(log_cb, "Final checkpoint saved (no validation).")
+
+    cal: dict = {}
+    if has_val and best_ckpt_path.exists():
+        _best_ckpt = torch.load(best_ckpt_path, map_location=device, weights_only=False)
+        model.load_state_dict(_best_ckpt["model_state_dict"], strict=True)
+        cal = _calibrate_and_pack(
+            model,
+            val_loader,
+            device,
+            num_factors=len(factor_names),
+            split_logits=_split_logits_per_factor,
+        )
+    if cal:
+        save_torchvision_checkpoint(
+            model=model,
+            backbone=params.backbone,
+            class_names=[],
+            factor_names=list(factor_names),
+            class_names_per_factor=[list(c) for c in cnpf],
+            input_size=resize_hw,
+            best_val_acc=best_val_acc,
+            history=history,
+            trainable_layers=int(params.trainable_layers),
+            backbone_lr_scale=float(params.backbone_lr_scale),
+            monochrome=bool(profile.monochrome),
+            extra_meta=checkpoint_extra_meta,
+            path=best_ckpt_path,
+            **cal,
+        )
 
     elapsed = _time.monotonic() - _t0
     _safe_log(

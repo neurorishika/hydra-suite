@@ -10,9 +10,9 @@ production factory.
 import numpy as np
 import torch
 
-from hydra_suite.core.identity.pose.api import create_pose_backend_from_config
-from hydra_suite.core.identity.pose.types import PoseRuntimeConfig
-from hydra_suite.core.identity.pose.vitpose.training.model_setup import (
+from hydra_suite.core.individual.pose.api import create_pose_backend_from_config
+from hydra_suite.core.individual.pose.types import PoseRuntimeConfig
+from hydra_suite.core.individual.pose.vitpose.training.model_setup import (
     build_finetune_model,
 )
 

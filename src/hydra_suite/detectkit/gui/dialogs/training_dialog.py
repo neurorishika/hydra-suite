@@ -756,7 +756,21 @@ QTabBar::tab:selected {
             "Run order stays deterministic: OBB direct -> Sequence detect -> Sequence crop OBB."
         )
         v.addWidget(note)
+
+        # Secondary entry: escalate a role-blocking source to segment via SAM2.
+        self._escalate_blocker_name: str | None = None
+        self.btn_escalate_blocker = QPushButton("Escalate to segment (SAM2)")
+        self.btn_escalate_blocker.setVisible(False)
+        self.btn_escalate_blocker.clicked.connect(self._on_escalate_blocker_clicked)
+        v.addWidget(self.btn_escalate_blocker)
         return gb
+
+    def _on_escalate_blocker_clicked(self) -> None:
+        """Open the SAM2 escalate dialog on the main window, pre-selecting the blocker."""
+        who = self._escalate_blocker_name
+        handler = getattr(self.parent(), "_on_escalate_to_segment_sam2", None)
+        if who and callable(handler):
+            handler(preselect=who)
 
     # --- 2. Config ---
 
@@ -1493,6 +1507,13 @@ QTabBar::tab:selected {
             TrainingRole.SEQ_CROP_SEGMENT: self.chk_role_seq_crop_segment,
         }
         blocked = blocked_roles_for_level(level, list(role_checks))
+        # Offer a SAM2 escalation shortcut for the blocking source, if any.
+        who = blocker.name if blocker is not None else None
+        has_block = bool(blocked) and who is not None
+        self._escalate_blocker_name = who if has_block else None
+        if has_block:
+            self.btn_escalate_blocker.setText(f"Escalate '{who}' to segment (SAM2)")
+        self.btn_escalate_blocker.setVisible(has_block)
         for role, chk in role_checks.items():
             required = blocked.get(role)
             if required is not None:

@@ -210,7 +210,7 @@ class TestDirectedOrientationAnchor:
         must not second-guess that with motion."""
         from collections import deque
 
-        from hydra_suite.core.identity.geometry import collapse_obb_axis_theta
+        from hydra_suite.core.individual.geometry import collapse_obb_axis_theta
         from hydra_suite.core.tracking.features.orientation import smooth_orientation
 
         anchor = math.pi
@@ -234,7 +234,7 @@ class TestDirectedOrientationAnchor:
         prediction arrives."""
         from collections import deque
 
-        from hydra_suite.core.identity.geometry import collapse_obb_axis_theta
+        from hydra_suite.core.individual.geometry import collapse_obb_axis_theta
         from hydra_suite.core.tracking.features.orientation import smooth_orientation
 
         params = self._params()

@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 import torch
 
+from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
 from hydra_suite.core.inference.config import HeadTailConfig
 from hydra_suite.core.inference.result import OBBResult
 from hydra_suite.core.inference.runtime import RuntimeContext
@@ -14,6 +15,8 @@ from hydra_suite.core.inference.stages.headtail import (
     run_headtail,
 )
 from hydra_suite.runtime.resolver import ResolvedBackend
+
+_TEST_GEOMETRY = CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
 
 
 def _cpu_rt():
@@ -77,7 +80,7 @@ def test_label_to_heading_unrecognized_token_returns_none():
 def _patch_backend(monkeypatch, *, is_multihead, labels, factor_names=("direction",)):
     """Patch ClassifierBackend used by load_headtail_model with a fake whose
     metadata reports the given multi-head flag and labels."""
-    import hydra_suite.core.identity.classification.backend as backend_mod
+    import hydra_suite.core.individual.classification.backend as backend_mod
 
     meta = MagicMock()
     meta.is_multihead = is_multihead
@@ -97,7 +100,7 @@ def _patch_backend(monkeypatch, *, is_multihead, labels, factor_names=("directio
 
 def test_load_headtail_rejects_multihead(monkeypatch):
     # H7: a multi-head artifact must raise rather than silently use factor 0.
-    from hydra_suite.core.identity.classification.errors import HeadTailFormatError
+    from hydra_suite.core.individual.classification.errors import HeadTailFormatError
     from hydra_suite.core.inference.stages.headtail import load_headtail_model
 
     fake_backend = _patch_backend(
@@ -128,7 +131,7 @@ def test_load_headtail_normalizes_labels(monkeypatch):
 
 def test_load_headtail_rejects_noncanonical_labels(monkeypatch):
     # H7: labels outside the canonical head-tail set fail loudly at load.
-    from hydra_suite.core.identity.classification.errors import HeadTailFormatError
+    from hydra_suite.core.individual.classification.errors import HeadTailFormatError
     from hydra_suite.core.inference.stages.headtail import load_headtail_model
 
     _patch_backend(
@@ -152,7 +155,9 @@ def test_run_headtail_empty_crops_returns_nan_hints():
     # Backend yields no predictions -> hints stay NaN, still sized to n.
     mock_backend.predict_batch.return_value = []
     frame = np.zeros((128, 128, 3), dtype=np.uint8)
-    result = run_headtail(frame, _obb(n=2), model, config, _cpu_rt())
+    result = run_headtail(
+        frame, _obb(n=2), model, config, _cpu_rt(), geometry=_TEST_GEOMETRY
+    )
     assert len(result.heading_hints) == 2
     assert all(math.isnan(h) for h in result.heading_hints)
     assert all(m == 0 for m in result.directed_mask)
@@ -172,8 +177,12 @@ def test_run_headtail_confident_prediction():
         input_size=(64, 64),
         class_names=["right", "left", "up", "down", "unknown"],
     )
-    crops = torch.zeros((2, 3, 64, 64))
-    result = run_headtail(crops, _obb(n=2), model, config, _cpu_rt())
+    # A single (C, H, W) frame -- corners are all-zero/degenerate (_obb), so
+    # extract_classifier_crops never actually samples real content from it.
+    frame = torch.zeros((3, 100, 100))
+    result = run_headtail(
+        frame, _obb(n=2), model, config, _cpu_rt(), geometry=_TEST_GEOMETRY
+    )
     assert result.directed_mask[0] == 1
     assert result.directed_mask[1] == 1
     assert result.heading_hints[0] == pytest.approx(0.0)
@@ -194,7 +203,9 @@ def test_run_headtail_below_threshold_not_directed():
         class_names=["right", "left", "up", "down", "unknown"],
     )
     crops = torch.zeros((1, 3, 64, 64))
-    result = run_headtail(crops, _obb(n=1), model, config, _cpu_rt())
+    result = run_headtail(
+        crops, _obb(n=1), model, config, _cpu_rt(), geometry=_TEST_GEOMETRY
+    )
     assert result.directed_mask[0] == 0
 
 
@@ -210,7 +221,9 @@ def test_run_headtail_unknown_label_not_directed():
         class_names=["right", "left", "up", "down", "unknown"],
     )
     crops = torch.zeros((1, 3, 64, 64))
-    result = run_headtail(crops, _obb(n=1), model, config, _cpu_rt())
+    result = run_headtail(
+        crops, _obb(n=1), model, config, _cpu_rt(), geometry=_TEST_GEOMETRY
+    )
     assert result.directed_mask[0] == 0
     assert math.isnan(result.heading_hints[0])
 
@@ -240,8 +253,10 @@ def test_run_headtail_below_candidate_confidence_skips_classification():
     obb = _obb(n=2)
     obb.confidences[0] = 0.10  # below candidate_confidence_threshold -> skipped
     obb.confidences[1] = 0.90  # above -> classified normally
-    crops = torch.zeros((2, 3, 64, 64))
-    result = run_headtail(crops, obb, model, config, _cpu_rt())
+    # A single (C, H, W) frame -- corners are all-zero/degenerate (_obb), so
+    # extract_classifier_crops never actually samples real content from it.
+    frame = torch.zeros((3, 100, 100))
+    result = run_headtail(frame, obb, model, config, _cpu_rt(), geometry=_TEST_GEOMETRY)
     assert result.directed_mask[0] == 0
     assert math.isnan(result.heading_hints[0])
     assert result.directed_mask[1] == 1
@@ -264,6 +279,6 @@ def test_run_headtail_candidate_confidence_none_classifies_everything():
     obb = _obb(n=1)
     obb.confidences[0] = 0.01  # would fail any reasonable candidate gate
     crops = torch.zeros((1, 3, 64, 64))
-    result = run_headtail(crops, obb, model, config, _cpu_rt())
+    result = run_headtail(crops, obb, model, config, _cpu_rt(), geometry=_TEST_GEOMETRY)
     assert result.directed_mask[0] == 1
     assert result.heading_hints[0] == pytest.approx(0.0)

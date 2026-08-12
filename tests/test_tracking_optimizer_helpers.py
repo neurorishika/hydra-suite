@@ -164,18 +164,18 @@ def _load_optimizer_module():
 
     # Identity sub-package stubs (optimizer imports from canonical locations).
     # These are pure-Python modules; load the real implementations.
-    core_identity = types.ModuleType("hydra_suite.core.identity")
+    core_identity = types.ModuleType("hydra_suite.core.individual")
     core_identity.__path__ = []
 
     identity_geometry = load_src_module(
-        "hydra_suite/core/identity/geometry.py",
+        "hydra_suite/core/individual/geometry.py",
         "identity_geometry_for_optimizer_test",
     )
 
-    pose_pkg = types.ModuleType("hydra_suite.core.identity.pose")
+    pose_pkg = types.ModuleType("hydra_suite.core.individual.pose")
     pose_pkg.__path__ = []
     pose_features = load_src_module(
-        "hydra_suite/core/identity/pose/features.py",
+        "hydra_suite/core/individual/pose/features.py",
         "pose_features_for_optimizer_test",
     )
 
@@ -192,10 +192,10 @@ def _load_optimizer_module():
         "hydra_suite.core.detectors": core_detectors,
         "hydra_suite.core.filters.kalman": kalman,
         "hydra_suite.data.detection_cache": detection_cache,
-        "hydra_suite.core.identity": core_identity,
-        "hydra_suite.core.identity.geometry": identity_geometry,
-        "hydra_suite.core.identity.pose": pose_pkg,
-        "hydra_suite.core.identity.pose.features": pose_features,
+        "hydra_suite.core.individual": core_identity,
+        "hydra_suite.core.individual.geometry": identity_geometry,
+        "hydra_suite.core.individual.pose": pose_pkg,
+        "hydra_suite.core.individual.pose.features": pose_features,
     }
 
     return load_src_module(

@@ -5,7 +5,10 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
 from hydra_suite.runtime.resolver import ResolvedBackend
+
+_TEST_GEOMETRY = CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
 
 
 @pytest.mark.slow
@@ -15,15 +18,16 @@ def test_tracking_smoke_headtail_and_cnn_identity(
     tiny_flat_subset,
 ):
     """Sanity check — head-tail + CNN identity both load + run against a tiny synthetic video."""
-    from hydra_suite.core.identity.classification.cnn import (
+    from hydra_suite.core.individual.classification.cnn import (
         CNNIdentityBackend,
         CNNIdentityConfig,
     )
-    from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
+    from hydra_suite.core.individual.classification.headtail import HeadTailAnalyzer
 
     headtail = HeadTailAnalyzer(
         model_path=str(tiny_flat_headtail),
         resolved=ResolvedBackend("torch", "cpu", False),
+        geometry=_TEST_GEOMETRY,
     )
     cnn_cfg = CNNIdentityConfig(
         model_path=str(tiny_flat_subset),

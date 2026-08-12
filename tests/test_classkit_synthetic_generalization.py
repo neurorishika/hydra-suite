@@ -417,7 +417,7 @@ def _make_custom_resnet_spec(dataset_dir: Path):
             backbone="resnet18",
             fine_tune_method="layerwise_lr_decay",
             layerwise_lr_decay=0.85,
-            input_size=64,
+            input_size=(64, 64),
             epochs=6,
             batch=4,
             lr=1e-3,

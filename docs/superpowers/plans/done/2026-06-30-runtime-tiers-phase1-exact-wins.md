@@ -115,7 +115,7 @@ git commit -m "perf(crop): run GPU canonical crop extraction under inference_mod
 ### Task 2: Classifier native-CUDA exact wins (channels_last + inference_mode + pinned H2D)
 
 **Files:**
-- Modify: `src/hydra_suite/core/identity/classification/backend.py` (`_ensure_loaded` native-load branch ~line 587, `_forward_torch` ~line 849, `_forward_torch_cuda` ~line 1020)
+- Modify: `src/hydra_suite/core/individual/classification/backend.py` (`_ensure_loaded` native-load branch ~line 587, `_forward_torch` ~line 849, `_forward_torch_cuda` ~line 1020)
 - Test: `tests/test_classifier_channels_last.py`
 
 **Interfaces:**
@@ -131,7 +131,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from hydra_suite.core.identity.classification import backend as backend_mod
+from hydra_suite.core.individual.classification import backend as backend_mod
 
 
 class _TinyNet(torch.nn.Module):
@@ -264,7 +264,7 @@ Expected: PASS
 - [ ] **Step 8: Commit**
 
 ```bash
-git add src/hydra_suite/core/identity/classification/backend.py tests/test_classifier_channels_last.py
+git add src/hydra_suite/core/individual/classification/backend.py tests/test_classifier_channels_last.py
 git commit -m "perf(classifier): channels_last + inference_mode + pinned H2D on CUDA native path"
 ```
 

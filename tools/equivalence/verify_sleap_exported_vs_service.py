@@ -32,8 +32,8 @@ from hydra_suite.core.canonicalization.crop import (
     compute_alignment_affine,
     compute_native_crop_dimensions,
 )
-from hydra_suite.core.identity.pose.api import create_pose_backend_from_config
-from hydra_suite.core.identity.pose.types import PoseRuntimeConfig
+from hydra_suite.core.individual.pose.api import create_pose_backend_from_config
+from hydra_suite.core.individual.pose.types import PoseRuntimeConfig
 
 AR, MARGIN = 2.0, 1.3
 PAD = max(0.0, MARGIN - 1.0)

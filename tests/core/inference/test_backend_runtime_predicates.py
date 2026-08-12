@@ -1,6 +1,8 @@
 import pytest
 
-from hydra_suite.core.identity.classification.backend import _torch_device_for_resolved
+from hydra_suite.core.individual.classification.backend import (
+    _torch_device_for_resolved,
+)
 from hydra_suite.runtime.resolver import ResolvedBackend
 
 FIVE = [

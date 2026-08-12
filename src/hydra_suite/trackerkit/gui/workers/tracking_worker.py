@@ -86,10 +86,6 @@ class TrackingWorker(QThread):
     def detected_properties_cache_path(self):
         return self._core.detected_properties_cache_path
 
-    @property
-    def detected_cnn_cache_paths(self):
-        return self._core.detected_cnn_cache_paths
-
     def run(self) -> None:
         """QThread entry point. PySide6 silently swallows exceptions that escape
         a QThread.run() override, which would leave finished_signal unemitted and

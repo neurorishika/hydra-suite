@@ -601,6 +601,8 @@ class DetectKitMainWindow(QMainWindow):
         self._inference_progress_dialog: Optional[QProgressDialog] = None
         self._portable_worker = None
         self._portable_progress_dialog = None
+        self._escalation_worker = None
+        self._escalation_progress_dialog: Optional[QProgressDialog] = None
 
         # Build workspace panels first (toolbar actions need them)
         self._dataset_panel = DatasetPanel()
@@ -632,6 +634,10 @@ class DetectKitMainWindow(QMainWindow):
         self._dataset_panel.history_requested.connect(self._open_history_dialog)
         self._tools_panel.overlay_settings_changed.connect(self._on_overlay_changed)
         self._tools_panel.run_inference_requested.connect(self._run_inference_overlay)
+        self._tools_panel.escalate_sam2_requested.connect(
+            self._on_escalate_to_segment_sam2
+        )
+        self._tools_panel.mark_reviewed_requested.connect(self._on_mark_reviewed)
 
     # ------------------------------------------------------------------
     # Toolbar
@@ -1637,6 +1643,189 @@ class DetectKitMainWindow(QMainWindow):
         self._inference_progress_dialog = progress
         progress.show()
         worker.start()
+
+    # ------------------------------------------------------------------
+    # SAM2 escalation
+    # ------------------------------------------------------------------
+
+    def _on_escalate_to_segment_sam2(self, preselect: "str | None" = None) -> None:
+        """Open the SAM2 escalate dialog and run a Sam2EscalationWorker."""
+        if self._project is None:
+            QMessageBox.information(
+                self,
+                "Escalate to segment (SAM2)",
+                "Open a project before escalating sources.",
+            )
+            return
+        if self._escalation_worker is not None:
+            QMessageBox.information(
+                self,
+                "Escalate to segment (SAM2)",
+                "An escalation run is already in progress.",
+            )
+            return
+
+        try:
+            from hydra_suite.detectkit.jobs.sam2_escalation import (
+                EscalationRequest,
+                Sam2EscalationWorker,
+            )
+
+            from .dialogs.escalate_sam2_dialog import EscalateSam2Dialog
+        except Exception as exc:  # pragma: no cover - optional SAM2 assets
+            QMessageBox.warning(
+                self,
+                "Escalate to segment (SAM2)",
+                f"SAM2 escalation is unavailable: {exc}",
+            )
+            return
+
+        dlg = EscalateSam2Dialog(self._project.sources, parent=self)
+        if preselect:
+            dlg.preselect_source(preselect)
+        if not dlg.exec():
+            return
+
+        source_names = dlg.selected_sources()
+        if not source_names:
+            QMessageBox.information(
+                self,
+                "Escalate to segment (SAM2)",
+                "Select at least one source to escalate.",
+            )
+            return
+
+        existing_names = {s.name for s in self._project.sources}
+        would_overwrite = [n for n in source_names if f"{n}_seg" in existing_names]
+        overwrite = False
+        if would_overwrite:
+            reply = QMessageBox.question(
+                self,
+                "Escalate to segment (SAM2)",
+                (
+                    "The following source(s) already have a derived segment "
+                    "source, which will be overwritten:\n\n"
+                    f"{', '.join(f'{n}_seg' for n in would_overwrite)}\n\n"
+                    "Any prior review of those derived sources will be lost. "
+                    "Continue and overwrite?"
+                ),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                source_names = [n for n in source_names if n not in would_overwrite]
+                if not source_names:
+                    return
+            else:
+                overwrite = True
+
+        request = EscalationRequest(
+            project=self._project,
+            source_names=source_names,
+            variant=dlg.selected_variant(),
+            overwrite=overwrite,
+        )
+
+        progress = QProgressDialog(
+            f"Escalating {len(source_names)} source(s) to segment…",
+            None,
+            0,
+            100,
+            self,
+        )
+        progress.setWindowTitle("Escalate to segment (SAM2)")
+        progress.setMinimumDuration(0)
+        progress.setWindowModality(Qt.ApplicationModal)
+        progress.setAttribute(Qt.WA_DeleteOnClose, True)
+        progress.setValue(0)
+
+        worker = Sam2EscalationWorker(request)
+        worker.progress.connect(progress.setValue)
+        worker.status.connect(progress.setLabelText)
+        worker.status.connect(lambda msg: self.statusBar().showMessage(msg, 3000))
+        worker.error.connect(
+            lambda msg: QMessageBox.warning(self, "Escalate to segment (SAM2)", msg)
+        )
+
+        def _handle_result(result: object) -> None:
+            derived = list(getattr(result, "derived", []) or [])
+            primed = int(getattr(result, "primed", 0))
+            fell_back = int(getattr(result, "fell_back", 0))
+            skipped = list(getattr(result, "skipped", []) or [])
+            # The worker appended new sources onto the live project; persist + refresh.
+            self._save_current_project()
+            self._dataset_panel.refresh_sources(self._project)
+            self._tools_panel.refresh_overview()
+            skipped_note = (
+                (
+                    "\n\nSkipped (already escalated, not overwritten): "
+                    + ", ".join(f"{name} ({reason})" for name, reason in skipped)
+                )
+                if skipped
+                else ""
+            )
+            QMessageBox.information(
+                self,
+                "Escalate to segment (SAM2)",
+                (
+                    f"Created {len(derived)} segment source(s): "
+                    f"{', '.join(derived) if derived else '(none)'}.\n\n"
+                    f"{primed} instance(s) primed, {fell_back} fell back to the "
+                    f"original box (review these first)."
+                    f"{skipped_note}"
+                ),
+            )
+
+        def _finish() -> None:
+            progress.close()
+            self._escalation_worker = None
+            self._escalation_progress_dialog = None
+
+        worker.result_ready.connect(_handle_result)
+        worker.finished.connect(_finish)
+        self._escalation_worker = worker
+        self._escalation_progress_dialog = progress
+        progress.show()
+        worker.start()
+
+    def _on_mark_reviewed(self) -> None:
+        """Mark a selected unreviewed derived source as reviewed and persist."""
+        if self._project is None:
+            QMessageBox.information(self, "Mark reviewed", "Open a project first.")
+            return
+
+        unreviewed = [
+            s for s in self._project.sources if not getattr(s, "reviewed", True)
+        ]
+        if not unreviewed:
+            QMessageBox.information(
+                self,
+                "Mark reviewed",
+                "There are no unreviewed sources to mark.",
+            )
+            return
+
+        names = [s.name for s in unreviewed]
+        choice, ok = QInputDialog.getItem(
+            self,
+            "Mark reviewed",
+            "Select a source to mark reviewed:",
+            names,
+            0,
+            False,
+        )
+        if not ok or not choice:
+            return
+
+        for src in unreviewed:
+            if src.name == choice:
+                src.reviewed = True
+                break
+
+        self._save_current_project()
+        self._dataset_panel.refresh_sources(self._project)
+        self._tools_panel.refresh_overview()
+        self.statusBar().showMessage(f"Marked '{choice}' as reviewed.", 4000)
 
     def _refresh_prediction_overlay(self, *, force: bool = False) -> None:
         if self._project is None or not self._current_image_path:

@@ -20,12 +20,12 @@ def describe_headtail_candidate(model_path: str) -> dict[str, Any]:
     ``normalized_labels``, ``raw_labels``, ``reason`` (populated only when
     ``valid`` is False).
     """
-    from hydra_suite.core.identity.classification.backend import ClassifierBackend
-    from hydra_suite.core.identity.classification.errors import (
+    from hydra_suite.core.individual.classification.backend import ClassifierBackend
+    from hydra_suite.core.individual.classification.errors import (
         ClassifierError,
         HeadTailFormatError,
     )
-    from hydra_suite.core.identity.classification.headtail import (
+    from hydra_suite.core.individual.classification.headtail import (
         validate_headtail_labels,
     )
     from hydra_suite.runtime.resolver import ResolvedBackend

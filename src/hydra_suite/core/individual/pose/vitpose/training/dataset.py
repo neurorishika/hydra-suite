@@ -1,0 +1,143 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import cv2
+import numpy as np
+import torch
+from torch.utils.data import Dataset
+
+from ..geometry import DEFAULT_GEOMETRY, PoseGeometry
+from ..transforms import affine_matrix, box2cs, normalize, top_down_affine
+from .targets import generate_udp_gaussian
+
+# Kept for backward compatibility: some callers/tests reach for the
+# process-wide default stride directly. Per-instance geometry now lives on
+# CocoKeypointsDataset._feat_stride (see __init__). This constant's value is
+# bit-identical to its pre-branch value ([4.06383, 4.047619] for
+# DEFAULT_GEOMETRY's 192x256 / 48x64), since DEFAULT_GEOMETRY reproduces the
+# historical 192x256 constants exactly.
+FEAT_STRIDE = (np.array(DEFAULT_GEOMETRY.image_size_wh, np.float32) - 1.0) / (
+    np.array(DEFAULT_GEOMETRY.heatmap_size_wh, np.float32) - 1.0
+)
+
+# augmentation ranges (no flip, per spec)
+_SCALE_JITTER = 0.30
+_ROT_RANGE = 40.0
+_ROT_PROB = 0.6
+
+
+def load_coco_index(dataset_dir: Path) -> tuple[list[int], dict]:
+    coco = json.loads(
+        (Path(dataset_dir) / "annotations.json").read_text(encoding="utf-8")
+    )
+    images = {img["id"]: img for img in coco["images"]}
+    anns = [a for a in coco["annotations"] if a.get("num_keypoints", 0) > 0]
+    index = {a["id"]: (a, images[a["image_id"]]) for a in anns}
+    return list(index.keys()), index
+
+
+def _warp_joints(joints_xy: np.ndarray, matrix: np.ndarray) -> np.ndarray:
+    return joints_xy @ matrix[:, :2].T + matrix[:, 2]
+
+
+class CocoKeypointsDataset(Dataset):
+    def __init__(
+        self,
+        dataset_dir: Path,
+        ids: list[int],
+        sigma: float,
+        augment: bool,
+        geom: PoseGeometry = DEFAULT_GEOMETRY,
+    ) -> None:
+        self.dir = Path(dataset_dir)
+        self.ids, self.index = load_coco_index(dataset_dir)
+        self.ids = [i for i in ids if i in self.index]
+        self.sigma = float(sigma)
+        self.augment = bool(augment)
+        self.geom = geom
+        self._feat_stride = (np.array(geom.image_size_wh, np.float32) - 1.0) / (
+            np.array(geom.heatmap_size_wh, np.float32) - 1.0
+        )
+
+    def __len__(self) -> int:
+        return len(self.ids)
+
+    def __getitem__(self, i: int) -> dict:
+        ann, img_meta = self.index[self.ids[i]]
+        img = cv2.imread(
+            str(self.dir / "images" / img_meta["file_name"]), cv2.IMREAD_COLOR
+        )
+        kp = np.array(ann["keypoints"], np.float32).reshape(-1, 3)
+        # PoseKit images are one-animal canonical crops (single annotation per
+        # image; see posekit/gui/main_window.py save_current, which writes one
+        # class + keypoint set per frame). The tight per-annotation COCO bbox
+        # (compute_bbox_from_kpts, ~3% pad around keypoints) is therefore NOT
+        # the crop the model should be centered on at inference time — that's
+        # the crop's full extent (infer.py::preprocess_crop uses (0, 0, w, h)).
+        # Use the same full-extent box here so box2cs (aspect fix + PADDING_FACTOR)
+        # lands on an identical fraction-of-input at train and inference time.
+        # ann["bbox"] is left untouched below for PCK normalization (validate.py),
+        # which legitimately wants the tight animal extent, not the crop extent.
+        img_h, img_w = img.shape[:2]
+        full_box_xywh = np.array([0.0, 0.0, float(img_w), float(img_h)], np.float32)
+        center, scale = box2cs(full_box_xywh, geom=self.geom)
+
+        rot = 0.0
+        if self.augment:
+            scale = scale * float(
+                np.clip(
+                    np.random.randn() * 0.25 + 1.0, 1 - _SCALE_JITTER, 1 + _SCALE_JITTER
+                )
+            )
+            if np.random.rand() < _ROT_PROB:
+                rot = float(
+                    np.clip(
+                        np.random.randn() * (_ROT_RANGE / 2), -_ROT_RANGE, _ROT_RANGE
+                    )
+                )
+
+        warped = top_down_affine(img, center, scale, rot, geom=self.geom)
+        if self.augment:
+            warped = _photometric(warped)
+        image = torch.from_numpy(normalize(warped))
+
+        matrix = affine_matrix(center, scale, rot, geom=self.geom)
+        joints_in = _warp_joints(kp[:, :2], matrix)  # input-crop space
+        joints_hm = joints_in / self._feat_stride  # heatmap space
+        vis = kp[:, 2]
+        # Zero out visibility (for target/weight generation only) for joints
+        # that warp outside the heatmap bounds under augmentation, so
+        # JointsMSELoss does not train those channels toward "no keypoint
+        # anywhere" on samples where the joint was actually present.
+        w_hm, h_hm = self.geom.heatmap_size_wh
+        in_bounds = (
+            (joints_hm[:, 0] >= 0)
+            & (joints_hm[:, 0] <= w_hm - 1)
+            & (joints_hm[:, 1] >= 0)
+            & (joints_hm[:, 1] <= h_hm - 1)
+        )
+        vis_eff = vis * in_bounds.astype(vis.dtype)
+        target, weight = generate_udp_gaussian(
+            joints_hm, vis_eff, self.geom.heatmap_size_wh, self.sigma
+        )
+
+        return {
+            "image": image,
+            "target": torch.from_numpy(target),
+            "target_weight": torch.from_numpy(weight),
+            "center": torch.from_numpy(center),
+            "scale": torch.from_numpy(scale),
+            "gt_joints": torch.from_numpy(kp),
+            "bbox": torch.tensor(ann["bbox"], dtype=torch.float32),
+            "image_id": int(ann["image_id"]),
+        }
+
+
+def _photometric(img_bgr: np.ndarray) -> np.ndarray:
+    out = img_bgr.astype(np.float32)
+    out *= np.random.uniform(0.7, 1.3)  # brightness
+    mean = out.mean(axis=(0, 1), keepdims=True)
+    out = (out - mean) * np.random.uniform(0.7, 1.3) + mean  # contrast
+    return np.clip(out, 0, 255).astype(np.uint8)

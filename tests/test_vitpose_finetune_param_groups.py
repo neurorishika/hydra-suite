@@ -1,6 +1,6 @@
 import math
 
-from hydra_suite.core.identity.pose.vitpose.training.model_setup import (
+from hydra_suite.core.individual.pose.vitpose.training.model_setup import (
     _layer_id_for,
     build_finetune_model,
     build_param_groups,

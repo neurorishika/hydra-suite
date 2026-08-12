@@ -101,7 +101,7 @@ class CustomCNNParams:
     backbone_lr_scale: float = 0.1  # LR multiplier for unfrozen backbone layers
     layerwise_lr_decay: float = 0.75
     gradual_unfreeze_interval: int = 5
-    input_size: int = 224  # Resize target (square) for torchvision backbones
+    input_size: tuple[int, int] = (224, 224)  # (H, W) resize target for backbones
     epochs: int = 50
     batch: int = 32
     lr: float = 1e-3
@@ -140,6 +140,9 @@ class AugmentationProfile:
         0.0  # 0=off; ~0.5 recommended. P(apply) decode-color re-sim.
     )
     resample_sim: float = 0.0  # 0=off; ~0.3 recommended. P(apply) alternate resampler.
+    canonical_aug: bool = False  # off by default; opt-in Moderate CanonicalAug
+    # (resample-kernel swap + sub-pixel warp jitter + mild blur/JPEG degrade)
+    # applied to the canonical crop before the Layer-2 letterbox. Training-only.
     monochrome: bool = False
     args: dict[str, Any] = field(default_factory=dict)
     # Label-switching expansion rules.

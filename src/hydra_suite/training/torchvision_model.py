@@ -356,6 +356,9 @@ def save_torchvision_checkpoint(
     monochrome: bool,
     class_names_per_factor: list[list[str]] | None = None,
     extra_meta: dict[str, Any] | None = None,
+    calibration_temperature: list[float] | None = None,
+    calibration_signature: str | None = None,
+    calibration_ece: list[float] | None = None,
     path: str | Path,
 ) -> Path:
     """Save a torchvision model checkpoint in the v2 classifier-artifact format.
@@ -399,6 +402,15 @@ def save_torchvision_checkpoint(
         "history": history,
         "trainable_layers": trainable_layers,
         "backbone_lr_scale": backbone_lr_scale,
+        "calibration_temperature": (
+            list(calibration_temperature)
+            if calibration_temperature is not None
+            else None
+        ),
+        "calibration_signature": calibration_signature,
+        "calibration_ece": (
+            list(calibration_ece) if calibration_ece is not None else None
+        ),
     }
     if backbone == "tinyclassifier":
         from hydra_suite.training.tiny_model import tiny_model_checkpoint_metadata

@@ -61,8 +61,8 @@ def test_forward_fn_injection_actually_drives_the_pipeline():
        the flip test, or fell back to zeros/identity, the AP would diverge
        from the baseline.
     """
-    from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
-    from hydra_suite.core.identity.pose.vitpose.weights import load_checkpoint
+    from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose
+    from hydra_suite.core.individual.pose.vitpose.weights import load_checkpoint
     from tools.vitpose.eval_coco import evaluate
 
     device = _device()

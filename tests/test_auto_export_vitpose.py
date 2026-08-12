@@ -3,12 +3,12 @@ from pathlib import Path
 import pytest
 import torch
 
-from hydra_suite.core.identity.pose.backends.vitpose import (
+from hydra_suite.core.individual.pose.backends.vitpose import (
     _vitpose_artifact_signature,
     auto_export_vitpose_model,
 )
-from hydra_suite.core.identity.pose.types import PoseRuntimeConfig
-from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
+from hydra_suite.core.individual.pose.types import PoseRuntimeConfig
+from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose
 
 
 def _ckpt(tmp_path):
@@ -23,7 +23,7 @@ def _ckpt(tmp_path):
 def test_signature_includes_recipe_tag(tmp_path):
     p = _ckpt(tmp_path)
     sig = _vitpose_artifact_signature(str(p), "coreml")
-    assert "vitpose-v1" in sig
+    assert "vitpose-v2" in sig
     assert "coreml" in sig
 
 

@@ -49,7 +49,7 @@ def _seeded_frame(imgsz: int, seed: int = 4321) -> np.ndarray:
 
 
 def classifier_logits(model_path: str, runtime: str, batch: int) -> dict:
-    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+    from hydra_suite.core.individual.classification.backend import ClassifierBackend
 
     probe = ClassifierBackend(model_path, compute_runtime="cpu")
     probe._ensure_loaded()

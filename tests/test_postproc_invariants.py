@@ -290,8 +290,8 @@ def test_find_merge_candidates_python_detection_id_identity_branch_does_not_cras
                 "Theta": 0.0,
                 "State": "active",
                 "DetectionID": 100001,
-                "IdentityCommitted": 1,
-                "IdentityAssignedLabel": "animal_a",
+                "IdentityFinalSource": "offline",
+                "IdentityFinalLabel": "animal_a",
             },
             {
                 "TrajectoryID": 0,
@@ -301,8 +301,8 @@ def test_find_merge_candidates_python_detection_id_identity_branch_does_not_cras
                 "Theta": 0.0,
                 "State": "active",
                 "DetectionID": 110001,
-                "IdentityCommitted": 1,
-                "IdentityAssignedLabel": "animal_a",
+                "IdentityFinalSource": "offline",
+                "IdentityFinalLabel": "animal_a",
             },
         ]
     )
@@ -316,8 +316,8 @@ def test_find_merge_candidates_python_detection_id_identity_branch_does_not_cras
                 "Theta": 0.0,
                 "State": "active",
                 "DetectionID": 100001,
-                "IdentityCommitted": 1,
-                "IdentityAssignedLabel": "animal_a",
+                "IdentityFinalSource": "offline",
+                "IdentityFinalLabel": "animal_a",
             },
             {
                 "TrajectoryID": 0,
@@ -327,8 +327,8 @@ def test_find_merge_candidates_python_detection_id_identity_branch_does_not_cras
                 "Theta": 0.0,
                 "State": "active",
                 "DetectionID": 110001,
-                "IdentityCommitted": 1,
-                "IdentityAssignedLabel": "animal_a",
+                "IdentityFinalSource": "offline",
+                "IdentityFinalLabel": "animal_a",
             },
         ]
     )

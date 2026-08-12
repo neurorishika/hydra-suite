@@ -13,7 +13,7 @@ from typing import Any
 
 import numpy as np
 
-from hydra_suite.trackerkit.gui.model_utils import resolve_model_path
+from hydra_suite.core.inference.model_paths import resolve_model_path
 from hydra_suite.utils.video_artifacts import (
     build_detection_cache_path,
     candidate_artifact_base_dirs,

@@ -15,14 +15,14 @@
 - **Acceptance vs current CUDA (not legacy):** determinism (`new_a == new_b` byte-identical); positions within determinism floor; identity-label agreement ≥ 99% vs the current CUDA pipeline on `ant_cnn_identity`.
 - **Base suite is NOT green** (~24 pre-existing failures). Use a **delta gate** ("no new failures"), not "all green".
 - **Worktree testing:** run tests with `PYTHONPATH=src` from `.worktree/gpu-classifier` (editable install points elsewhere). `make format` is broken — run `black`/`isort` directly.
-- **Reference files:** design spec `docs/superpowers/specs/2026-07-22-gpu-native-classifier-crop-design.md`. Existing GPU crop machinery: `src/hydra_suite/core/canonicalization/crop.py:gpu_canonical_crop_batch`, `src/hydra_suite/core/inference/stages/crops.py:_extract_canonical_gpu`. Classifier backend: `src/hydra_suite/core/identity/classification/backend.py`.
+- **Reference files:** design spec `docs/superpowers/specs/2026-07-22-gpu-native-classifier-crop-design.md`. Existing GPU crop machinery: `src/hydra_suite/core/canonicalization/crop.py:gpu_canonical_crop_batch`, `src/hydra_suite/core/inference/stages/crops.py:_extract_canonical_gpu`. Classifier backend: `src/hydra_suite/core/individual/classification/backend.py`.
 
 ---
 
 ## File Structure
 
 - `src/hydra_suite/core/inference/stages/crops.py` — add `extract_classifier_crops_gpu` (single-frame) + `extract_classifier_crops_batch_gpu` (window). Mirrors the CPU `extract_classifier_crops[_batch]` but stays on device.
-- `src/hydra_suite/core/identity/classification/backend.py` — add `_forward_multi_cuda`; route factor bundles in `predict_batch_cuda`; add `supports_cuda_forward()` capability probe.
+- `src/hydra_suite/core/individual/classification/backend.py` — add `_forward_multi_cuda`; route factor bundles in `predict_batch_cuda`; add `supports_cuda_forward()` capability probe.
 - `src/hydra_suite/core/inference/stages/cnn.py` — GPU routing in `run_cnn_batch` + strict check in `load_cnn_model`.
 - `src/hydra_suite/core/inference/stages/headtail.py` — GPU routing in `run_headtail_batch` + strict check in `load_headtail_model`.
 - `tests/test_gpu_classifier_crop.py` — new unit tests (crop shape/device, CPU/GPU numeric closeness on CPU-simulated grid_sample, factor-forward shape, strict check).
@@ -177,7 +177,7 @@ git commit -m "feat(inference): GPU-native classifier crop extractor (grid_sampl
 ## Task 2: GPU factor-bundle forward (`_forward_multi_cuda`)
 
 **Files:**
-- Modify: `src/hydra_suite/core/identity/classification/backend.py` (add `_forward_multi_cuda`, `supports_cuda_forward`)
+- Modify: `src/hydra_suite/core/individual/classification/backend.py` (add `_forward_multi_cuda`, `supports_cuda_forward`)
 - Test: `tests/test_gpu_classifier_crop.py` (append)
 
 **Interfaces:**
@@ -193,7 +193,7 @@ def test_forward_multi_cuda_shape_matches_numpy(monkeypatch):
     # A fake 2-factor bundle: each factor returns fixed probs from both
     # predict_batch and predict_batch_cuda; the concatenated log-probs must match.
     import numpy as np
-    from hydra_suite.core.identity.classification import backend as bk
+    from hydra_suite.core.individual.classification import backend as bk
 
     class _FakeFactor:
         _active_execution_backend = "native"
@@ -253,7 +253,7 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/hydra_suite/core/identity/classification/backend.py tests/test_gpu_classifier_crop.py
+git add src/hydra_suite/core/individual/classification/backend.py tests/test_gpu_classifier_crop.py
 git commit -m "feat(identity): GPU factor-bundle forward + supports_cuda_forward probe"
 ```
 
@@ -262,7 +262,7 @@ git commit -m "feat(identity): GPU factor-bundle forward + supports_cuda_forward
 ## Task 3: Route factor bundles through the GPU forward in `predict_batch_cuda`
 
 **Files:**
-- Modify: `src/hydra_suite/core/identity/classification/backend.py` (`predict_batch_cuda`, the fallback branch at ~1151)
+- Modify: `src/hydra_suite/core/individual/classification/backend.py` (`predict_batch_cuda`, the fallback branch at ~1151)
 
 **Interfaces:**
 - Consumes: `_forward_multi_cuda`, `supports_cuda_forward`, `_preprocess_cuda`, existing `_cardinalities()`/`_softmax` post-processing.
@@ -273,7 +273,7 @@ git commit -m "feat(identity): GPU factor-bundle forward + supports_cuda_forward
 ```python
 def test_predict_batch_cuda_uses_gpu_forward_for_capable_bundle(monkeypatch):
     import numpy as np
-    from hydra_suite.core.identity.classification import backend as bk
+    from hydra_suite.core.individual.classification import backend as bk
 
     b = bk.ClassifierBackend.__new__(bk.ClassifierBackend)
     called = {"numpy_fallback": False, "multi_cuda": False}
@@ -344,7 +344,7 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/hydra_suite/core/identity/classification/backend.py tests/test_gpu_classifier_crop.py
+git add src/hydra_suite/core/individual/classification/backend.py tests/test_gpu_classifier_crop.py
 git commit -m "feat(identity): predict_batch_cuda runs CUDA-capable factor bundles on-GPU"
 ```
 
@@ -365,7 +365,7 @@ git commit -m "feat(identity): predict_batch_cuda runs CUDA-capable factor bundl
 ```python
 def test_load_cnn_strict_raises_without_cuda_forward(monkeypatch, tmp_path):
     from hydra_suite.core.inference.stages import cnn as cnn_stage
-    from hydra_suite.core.identity.classification import backend as bk
+    from hydra_suite.core.individual.classification import backend as bk
 
     class _NoCudaBackend:
         metadata = type("M", (), {"input_size": (128, 128),

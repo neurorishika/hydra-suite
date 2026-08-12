@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 import torch
 
-from hydra_suite.core.identity.pose.vitpose.training.dataset import (
+from hydra_suite.core.individual.pose.vitpose.training.dataset import (
     FEAT_STRIDE,
     CocoKeypointsDataset,
     load_coco_index,
@@ -59,8 +59,8 @@ def test_getitem_shapes(tmp_path):
 def test_target_peak_matches_decoded_gt(tmp_path):
     # With no augmentation, decoding the GT heatmap and mapping back through
     # transform_preds must recover the annotated keypoints (sub-pixel).
-    from hydra_suite.core.identity.pose.vitpose.decode import decode_udp_cv2
-    from hydra_suite.core.identity.pose.vitpose.transforms import transform_preds
+    from hydra_suite.core.individual.pose.vitpose.decode import decode_udp_cv2
+    from hydra_suite.core.individual.pose.vitpose.transforms import transform_preds
 
     ds_dir = _make_ds(tmp_path)
     ids, _ = load_coco_index(ds_dir)
@@ -73,13 +73,16 @@ def test_target_peak_matches_decoded_gt(tmp_path):
 
 
 def _make_ds_with_oob_joint(tmp_path):
-    # Two labelled joints: one inside the bbox (stays in heatmap bounds),
-    # one far outside the bbox so it warps outside the heatmap even without
-    # augmentation (deterministic).
+    # Two labelled joints: one inside the crop (stays in heatmap bounds), one
+    # far outside the IMAGE (not just the tight annotation bbox) so it warps
+    # outside the heatmap even without augmentation (deterministic). box2cs
+    # is keyed off the full image extent (train/inference parity), so an
+    # out-of-bounds joint must lie outside the image itself, not just outside
+    # the tight per-annotation bbox.
     (tmp_path / "images").mkdir()
     img = np.full((1000, 1000, 3), 127, np.uint8)
     cv2.imwrite(str(tmp_path / "images" / "f0.png"), img)
-    kpts = [30.0, 40.0, 2, 900.0, 900.0, 2]  # joint0 in-bounds, joint1 far away
+    kpts = [30.0, 40.0, 2, 2000.0, 2000.0, 2]  # joint0 in-bounds, joint1 far away
     coco = {
         "images": [{"id": 1, "file_name": "f0.png", "width": 1000, "height": 1000}],
         "annotations": [
@@ -119,7 +122,7 @@ def test_out_of_bounds_joint_gets_zero_target_weight(tmp_path):
     # regardless of the out-of-bounds target-weight zeroing above.
     gt = s["gt_joints"].numpy()
     assert np.allclose(gt[0], [30.0, 40.0, 2.0])
-    assert np.allclose(gt[1], [900.0, 900.0, 2.0])
+    assert np.allclose(gt[1], [2000.0, 2000.0, 2.0])
 
 
 def test_feat_stride_value():

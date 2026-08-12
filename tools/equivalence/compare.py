@@ -188,6 +188,21 @@ def main() -> int:
             elif "mismatch" in v and v["mismatch"]:
                 print(f"  {c:24s} mismatched rows={v['mismatch']}")
 
+    # A comparison of nothing against nothing satisfies every criterion below
+    # vacuously: no positions means pos_p99 is 0, no angles means theta_mean is
+    # 0, and nothing to match means unmatched is 0. That produced a confident
+    # EQUIVALENT for clips whose tracking run had crashed (CUDA OOM) and left a
+    # header-only CSV behind -- the single most dangerous failure this harness
+    # can have, because it reports success for work that never ran.
+    if len(a) == 0 or len(b) == 0 or p["matched"] == 0:
+        print(
+            f"\nVERDICT: NO DATA ❌"
+            f"  (legacy rows={len(a)}, new rows={len(b)}, matched={p['matched']};"
+            f" a run produced no trajectories -- check the tracking log for a"
+            f" crash, a missing model, or an inactive conda env)"
+        )
+        return 2
+
     unmatched = p["unmatched_legacy"] + p["unmatched_new"]
     ok = (
         p["pos_p99"] <= args.pos_atol

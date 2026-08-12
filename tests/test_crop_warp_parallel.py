@@ -1,17 +1,22 @@
-"""The parallel pose crop-warp must be byte-identical to the serial loop.
+"""Layer 2's parallel crop-fit must be byte-identical to the serial loop.
 
-``_warp_crops_for_obb`` runs independent cv2.warpAffine calls across a shared
-thread pool when the detection count is large enough. cv2 releases the GIL and
-each warp writes its own buffer, and ``pool.map`` preserves order, so the output
-must match the serial path exactly. This locks that invariant in.
+``apply_fit_batch`` (and, trivially, ``extract_classifier_crops`` which now
+warps every detection from a frame in a single batched torch call rather than
+per-crop) runs independent resamples across a shared thread pool when the
+detection count is large enough. Each call writes its own buffer, and
+``pool.map`` preserves order, so the output must match the serial path
+exactly. This locks that invariant in.
 """
 
 import os
 
 import numpy as np
 
+from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
 from hydra_suite.core.inference.result import OBBResult
 from hydra_suite.core.inference.stages import crops as crops_mod
+
+_GEOMETRY = CanonicalGeometry.from_reference(20.0, 2.0, 1.1)
 
 
 def _make_obb(n: int, frame_idx: int = 0) -> OBBResult:
@@ -42,35 +47,42 @@ def _make_obb(n: int, frame_idx: int = 0) -> OBBResult:
     )
 
 
-def _warp(arr, obb, threads):
+def _classifier_crops(arr, obb, threads):
     os.environ["HYDRA_CROP_WARP_THREADS"] = str(threads)
     try:
-        return crops_mod._warp_crops_for_obb(
-            arr, obb, aspect_ratio=2.0, padding_fraction=0.1
-        )
+        return crops_mod.extract_classifier_crops(arr, obb, _GEOMETRY)
     finally:
         os.environ.pop("HYDRA_CROP_WARP_THREADS", None)
 
 
-def test_parallel_warp_is_byte_identical_to_serial():
-    arr = np.random.default_rng(7).integers(0, 256, (260, 640, 3), dtype=np.uint8)
-    obb = _make_obb(12)  # >= _WARP_MIN_PARALLEL, so the pool engages
-    serial = _warp(arr, obb, threads=1)
-    parallel = _warp(arr, obb, threads=4)
+def test_parallel_classifier_warp_is_byte_identical_to_serial():
+    arr = np.random.default_rng(11).integers(0, 256, (260, 640, 3), dtype=np.uint8)
+    obb = _make_obb(12)
+    serial = _classifier_crops(arr, obb, threads=1)
+    parallel = _classifier_crops(arr, obb, threads=4)
     assert len(serial) == len(parallel) == 12
     for i, (a, b) in enumerate(zip(serial, parallel)):
-        assert a.shape == b.shape, f"crop {i} shape mismatch"
-        assert np.array_equal(a, b), f"crop {i} differs serial vs parallel"
+        assert a.dtype == b.dtype == np.uint8
+        assert np.array_equal(a, b), f"classifier crop {i} differs serial vs parallel"
 
 
-def test_small_batch_stays_serial_and_matches():
-    # n below the threshold must not use the pool, and still be correct.
-    arr = np.random.default_rng(3).integers(0, 256, (200, 300, 3), dtype=np.uint8)
-    obb = _make_obb(2)
-    serial = _warp(arr, obb, threads=1)
-    parallel = _warp(arr, obb, threads=8)  # still serial: n=2 < _WARP_MIN_PARALLEL
-    for a, b in zip(serial, parallel):
-        assert np.array_equal(a, b)
+def test_apply_fit_batch_is_byte_identical_to_serial_apply_fit():
+    from hydra_suite.core.canonicalization.fit import apply_fit, fit_to_model_input
+
+    rng = np.random.default_rng(13)
+    crops = [rng.integers(0, 256, (32, 64, 3), dtype=np.uint8) for _ in range(12)]
+    fit = fit_to_model_input((64, 32), (224, 224))
+    reference = [apply_fit(c, fit) for c in crops]
+
+    for threads in (1, 4):
+        os.environ["HYDRA_CROP_WARP_THREADS"] = str(threads)
+        try:
+            got = crops_mod.apply_fit_batch(crops, fit)
+        finally:
+            os.environ.pop("HYDRA_CROP_WARP_THREADS", None)
+        assert len(got) == len(reference)
+        for i, (a, b) in enumerate(zip(reference, got)):
+            assert np.array_equal(a, b), f"fit {i} differs at threads={threads}"
 
 
 def test_threads_env_of_one_disables_pool():

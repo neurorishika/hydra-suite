@@ -14,7 +14,7 @@ def test_classifier_gpu_fast_falls_back_to_native_when_onnx_load_fails(
     monkeypatch, caplog
 ):
     """Classifier falls back to native when ONNX/TRT peer load raises."""
-    from hydra_suite.core.identity.classification import backend as bmod
+    from hydra_suite.core.individual.classification import backend as bmod
     from hydra_suite.runtime.resolver import ResolvedBackend
 
     be = bmod.ClassifierBackend.__new__(bmod.ClassifierBackend)
@@ -38,7 +38,7 @@ def test_classifier_gpu_fast_falls_back_to_native_when_onnx_load_fails(
 
     # Fake metadata so _uses_factor_backends() and _uses_imagenet_normalization()
     # return sensible defaults.
-    from hydra_suite.core.identity.classification.backend import ClassifierMetadata
+    from hydra_suite.core.individual.classification.backend import ClassifierMetadata
 
     be._metadata = ClassifierMetadata(
         arch="tinyclassifier",

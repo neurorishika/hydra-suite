@@ -44,6 +44,8 @@
   "yolo_seq_stage2_pow2_pad": false,
   "yolo_seq_detect_conf_threshold": 0.25,
   "yolo_headtail_conf_threshold": 0.5,
+  "canonical_margin": 1.3,
+  "reference_body_size": 20.0,
   "yolo_confidence_threshold": 0.23,
   "yolo_iou_threshold": 0.28,
   "use_custom_obb_iou_filtering": true,

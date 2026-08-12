@@ -121,7 +121,7 @@ def _build_core_dependency_stubs() -> dict[str, types.ModuleType]:
     core_background = _make_namespace_package("hydra_suite.core.background")
     core_detectors = _make_namespace_package("hydra_suite.core.detectors")
     core_assigners = _make_namespace_package("hydra_suite.core.assigners")
-    core_identity = _make_namespace_package("hydra_suite.core.identity")
+    core_identity = _make_namespace_package("hydra_suite.core.individual")
 
     kalman = types.ModuleType("hydra_suite.core.filters.kalman")
     kalman.KalmanFilterManager = object
@@ -132,9 +132,9 @@ def _build_core_dependency_stubs() -> dict[str, types.ModuleType]:
     assigner = types.ModuleType("hydra_suite.core.assigners.hungarian")
     assigner.TrackAssigner = object
 
-    identity_dataset = types.ModuleType("hydra_suite.core.identity.dataset")
+    identity_dataset = types.ModuleType("hydra_suite.core.individual.dataset")
     identity_dataset_generator = types.ModuleType(
-        "hydra_suite.core.identity.dataset.generator"
+        "hydra_suite.core.individual.dataset.generator"
     )
     identity_dataset_generator.IndividualDatasetGenerator = object
 
@@ -152,36 +152,35 @@ def _build_core_dependency_stubs() -> dict[str, types.ModuleType]:
         "hydra_suite.core.background": core_background,
         "hydra_suite.core.detectors": core_detectors,
         "hydra_suite.core.assigners": core_assigners,
-        "hydra_suite.core.identity": core_identity,
+        "hydra_suite.core.individual": core_identity,
         "hydra_suite.core.filters.kalman": kalman,
         "hydra_suite.core.background.model": background_model,
         "hydra_suite.core.assigners.hungarian": assigner,
-        "hydra_suite.core.identity.dataset": identity_dataset,
-        "hydra_suite.core.identity.dataset.generator": identity_dataset_generator,
+        "hydra_suite.core.individual.dataset": identity_dataset,
+        "hydra_suite.core.individual.dataset.generator": identity_dataset_generator,
         "hydra_suite.core.tracking.features.tag_features": tag_features,
     }
 
 
 def _build_identity_and_tracking_stubs() -> dict[str, types.ModuleType]:
-    classification = types.ModuleType("hydra_suite.core.identity.classification")
+    classification = types.ModuleType("hydra_suite.core.individual.classification")
     classification_apriltag = types.ModuleType(
-        "hydra_suite.core.identity.classification.apriltag"
+        "hydra_suite.core.individual.classification.apriltag"
     )
     classification_apriltag.AprilTagDetector = object
     classification_apriltag.AprilTagConfig = object
     classification_cnn = types.ModuleType(
-        "hydra_suite.core.identity.classification.cnn"
+        "hydra_suite.core.individual.classification.cnn"
     )
     classification_cnn.ClassPrediction = object
     classification_cnn.CNNIdentityBackend = object
-    classification_cnn.CNNIdentityCache = object
     classification_cnn.CNNIdentityConfig = object
     classification_headtail = types.ModuleType(
-        "hydra_suite.core.identity.classification.headtail"
+        "hydra_suite.core.individual.classification.headtail"
     )
     classification_headtail.HeadTailAnalyzer = object
 
-    identity_geometry = types.ModuleType("hydra_suite.core.identity.geometry")
+    identity_geometry = types.ModuleType("hydra_suite.core.individual.geometry")
     identity_geometry.build_detection_direction_overrides = lambda *_args, **_kwargs: (
         np.full(0, np.nan, dtype=np.float32),
         np.zeros(0, dtype=np.uint8),
@@ -190,8 +189,8 @@ def _build_identity_and_tracking_stubs() -> dict[str, types.ModuleType]:
     identity_geometry.resolve_tracking_theta = lambda *_args, **_kwargs: 0.0
     identity_geometry.normalize_theta = lambda x: float(x) % (2 * 3.141592653589793)
 
-    pose_pkg = types.ModuleType("hydra_suite.core.identity.pose")
-    pose_features_new = types.ModuleType("hydra_suite.core.identity.pose.features")
+    pose_pkg = types.ModuleType("hydra_suite.core.individual.pose")
+    pose_features_new = types.ModuleType("hydra_suite.core.individual.pose.features")
     pose_features_new.build_pose_detection_keypoint_map = lambda *_args, **_kwargs: {}
     pose_features_new.compute_pose_geometry_from_keypoints = (
         lambda *_args, **_kwargs: None
@@ -199,11 +198,11 @@ def _build_identity_and_tracking_stubs() -> dict[str, types.ModuleType]:
     pose_features_new.is_pose_heading_reliable = lambda *_args, **_kwargs: False
     pose_features_new.normalize_pose_keypoints = lambda *_args, **_kwargs: None
     pose_features_new.resolve_pose_group_indices = lambda *_args, **_kwargs: []
-    pose_api = types.ModuleType("hydra_suite.core.identity.pose.api")
+    pose_api = types.ModuleType("hydra_suite.core.individual.pose.api")
     pose_api.create_pose_backend_from_config = lambda *_args, **_kwargs: None
 
-    properties_pkg = types.ModuleType("hydra_suite.core.identity.properties")
-    properties_cache = types.ModuleType("hydra_suite.core.identity.properties.cache")
+    properties_pkg = types.ModuleType("hydra_suite.core.individual.properties")
+    properties_cache = types.ModuleType("hydra_suite.core.individual.properties.cache")
     properties_cache.IndividualPropertiesCache = object
     properties_cache.compute_detection_hash = lambda *_args, **_kwargs: ""
     properties_cache.compute_extractor_hash = lambda *_args, **_kwargs: ""
@@ -223,16 +222,16 @@ def _build_identity_and_tracking_stubs() -> dict[str, types.ModuleType]:
     profiler.TrackingProfiler = object
 
     return {
-        "hydra_suite.core.identity.classification": classification,
-        "hydra_suite.core.identity.classification.apriltag": classification_apriltag,
-        "hydra_suite.core.identity.classification.cnn": classification_cnn,
-        "hydra_suite.core.identity.classification.headtail": classification_headtail,
-        "hydra_suite.core.identity.geometry": identity_geometry,
-        "hydra_suite.core.identity.pose": pose_pkg,
-        "hydra_suite.core.identity.pose.features": pose_features_new,
-        "hydra_suite.core.identity.pose.api": pose_api,
-        "hydra_suite.core.identity.properties": properties_pkg,
-        "hydra_suite.core.identity.properties.cache": properties_cache,
+        "hydra_suite.core.individual.classification": classification,
+        "hydra_suite.core.individual.classification.apriltag": classification_apriltag,
+        "hydra_suite.core.individual.classification.cnn": classification_cnn,
+        "hydra_suite.core.individual.classification.headtail": classification_headtail,
+        "hydra_suite.core.individual.geometry": identity_geometry,
+        "hydra_suite.core.individual.pose": pose_pkg,
+        "hydra_suite.core.individual.pose.features": pose_features_new,
+        "hydra_suite.core.individual.pose.api": pose_api,
+        "hydra_suite.core.individual.properties": properties_pkg,
+        "hydra_suite.core.individual.properties.cache": properties_cache,
         "hydra_suite.core.tracking.confidence.density": density,
         "hydra_suite.core.tracking.features.live_features": live_features,
         "hydra_suite.core.tracking.pose.pose_pipeline": pose_pipeline,
@@ -260,7 +259,7 @@ def _load_worker_module():
 
 def test_resolve_pose_group_indices_accepts_names_and_indices() -> None:
     pf = load_src_module(
-        "hydra_suite/core/identity/pose/features.py",
+        "hydra_suite/core/individual/pose/features.py",
         "pose_features_for_indices_test",
     )
 
@@ -487,7 +486,7 @@ def test_realtime_yolo_micro_batch_size_requires_direct_realtime_opt_in() -> Non
 
 def test_backward_orientation_flip_applies_only_to_motion_based_theta() -> None:
     pf = load_src_module(
-        "hydra_suite/core/identity/geometry.py",
+        "hydra_suite/core/individual/geometry.py",
         "geometry_for_orient_flip_test",
     )
 
@@ -510,7 +509,7 @@ def test_backward_orientation_flip_applies_only_to_motion_based_theta() -> None:
 
 def test_select_directed_heading_prefers_pose_by_default() -> None:
     pf = load_src_module(
-        "hydra_suite/core/identity/geometry.py",
+        "hydra_suite/core/individual/geometry.py",
         "geometry_for_heading_select_test",
     )
 
@@ -528,7 +527,7 @@ def test_select_directed_heading_prefers_pose_by_default() -> None:
 
 def test_select_directed_heading_can_prefer_headtail() -> None:
     pf = load_src_module(
-        "hydra_suite/core/identity/geometry.py",
+        "hydra_suite/core/individual/geometry.py",
         "geometry_for_headtail_test",
     )
 

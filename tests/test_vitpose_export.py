@@ -5,9 +5,10 @@ import numpy as np
 import pytest
 import torch
 
-from hydra_suite.core.identity.pose.vitpose.export import ExportError, export_onnx
-from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
-from hydra_suite.core.identity.pose.vitpose.weights import load_checkpoint
+from hydra_suite.core.individual.pose.vitpose.export import ExportError, export_onnx
+from hydra_suite.core.individual.pose.vitpose.geometry import PoseGeometry
+from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose
+from hydra_suite.core.individual.pose.vitpose.weights import load_checkpoint
 
 ASSET_DIR = Path(os.path.expanduser("~/.cache/vitpose-assets"))
 requires_weights = pytest.mark.skipif(
@@ -44,7 +45,7 @@ def test_legacy_exporter_rejection_raises_export_error(tmp_path, monkeypatch):
     exercises the wrapper directly: monkeypatch torch.onnx.export to raise the failure
     modes we catch and assert the translation happens with a useful message.
     """
-    import hydra_suite.core.identity.pose.vitpose.export as export_mod
+    import hydra_suite.core.individual.pose.vitpose.export as export_mod
 
     m = build_vitpose("B", "classic").eval()
 
@@ -61,6 +62,32 @@ def test_legacy_exporter_rejection_raises_export_error(tmp_path, monkeypatch):
     monkeypatch.setattr(export_mod.torch.onnx, "export", _raise_import_error)
     with pytest.raises(ExportError, match="legacy exporter"):
         export_onnx(m, tmp_path / "y.onnx")
+
+
+def test_export_onnx_default_geometry_input_is_256x192(tmp_path):
+    """No geom kwarg -> DEFAULT_GEOMETRY (256x192), matching the historical constant."""
+    import onnx
+
+    m = build_vitpose("S", "classic", num_keypoints=9).eval()
+    onnx_path = export_onnx(m, tmp_path / "default.onnx")
+    graph_input = onnx.load(str(onnx_path)).graph.input[0]
+    dims = [d.dim_value for d in graph_input.type.tensor_type.shape.dim]
+    # [batch, channels, H, W]; batch is a dynamic dim (dim_value == 0 there).
+    assert dims[2:] == [256, 192]
+
+
+def test_export_onnx_honours_a_non_default_geometry(tmp_path):
+    """A square geom kwarg must reshape the exported graph's spatial dims, not
+    silently keep exporting at the default 256x192."""
+    import onnx
+
+    m = build_vitpose(
+        "S", "classic", num_keypoints=9, geom=PoseGeometry((256, 256))
+    ).eval()
+    onnx_path = export_onnx(m, tmp_path / "square.onnx", geom=PoseGeometry((256, 256)))
+    graph_input = onnx.load(str(onnx_path)).graph.input[0]
+    dims = [d.dim_value for d in graph_input.type.tensor_type.shape.dim]
+    assert dims[2:] == [256, 256]
 
 
 @requires_weights
@@ -114,7 +141,7 @@ def test_moe_export_bakes_one_expert(tmp_path):
     """
     import onnx
 
-    from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose_moe
+    from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose_moe
 
     m = build_vitpose_moe("B").eval()
     load_checkpoint(m, ASSET_DIR / "vitpose+_base.pth", strict=True)
@@ -139,7 +166,7 @@ def test_tensorrt_defaults_to_fp32(tmp_path):
     A future edit flipping this default must break a test, not slip through."""
     import inspect
 
-    from hydra_suite.core.identity.pose.vitpose import export
+    from hydra_suite.core.individual.pose.vitpose import export
 
     sig = inspect.signature(export.build_tensorrt_engine)
     assert sig.parameters["fp16"].default is False
@@ -150,7 +177,7 @@ def test_tensorrt_defaults_to_fp32(tmp_path):
 def test_gate_d_tensorrt_matches_torch(tmp_path):
     """GATE D(tensorrt). TRT rearranges kernels, so it gets more slack than ONNX -- but
     FP32 keeps it close. Bound is max-abs per element."""
-    from hydra_suite.core.identity.pose.vitpose.export import (
+    from hydra_suite.core.individual.pose.vitpose.export import (
         build_tensorrt_engine,
         export_onnx,
     )
@@ -181,7 +208,7 @@ def test_export_coreml_refuses_a_training_mode_model(tmp_path):
     """Same guard as export_onnx, reused rather than duplicated: exporting a
     train()-mode model would silently bake training-mode BatchNorm into the
     mlpackage."""
-    from hydra_suite.core.identity.pose.vitpose.export import export_coreml
+    from hydra_suite.core.individual.pose.vitpose.export import export_coreml
 
     m = build_vitpose("B", "classic").train()
     with pytest.raises(ExportError, match="eval"):
@@ -192,7 +219,7 @@ def test_export_coreml_refuses_a_training_mode_model(tmp_path):
 @requires_weights
 def test_gate_d_coreml_matches_torch(tmp_path):
     """GATE D(coreml). Same slack as TRT: CoreML rearranges kernels."""
-    from hydra_suite.core.identity.pose.vitpose.export import export_coreml
+    from hydra_suite.core.individual.pose.vitpose.export import export_coreml
 
     m = build_vitpose("B", "classic").eval()
     load_checkpoint(m, ASSET_DIR / "vitpose-b.pth", strict=True)

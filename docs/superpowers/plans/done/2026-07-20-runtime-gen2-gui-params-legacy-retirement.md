@@ -28,7 +28,7 @@ Producers: `trackerkit/gui/orchestrators/config.py:2143-2153`, `orchestrators/tr
 Consumers, all now SOFT (none drive backend selection — that is `runtime_tier`→`resolved`):
 - `core/inference/config.py:build_inference_config_from_params` — feeds only the **inert** per-stage config fields + the tier fallback (`migrate_runtime_to_tier({compute_runtime})`).
 - `core/tracking/worker.py` — classify **cache-key** (`compute_classify_cache_id`, lines ~1546, ~4320) and **telemetry** (`profiler.set_config(compute_runtime=…)` ~949, `runtime_family=…` ~2471).
-- `core/identity/properties/cache.py:174` — param-bag `COMPUTE_RUNTIME`/`POSE_SLEAP_DEVICE`.
+- `core/individual/properties/cache.py:174` — param-bag `COMPUTE_RUNTIME`/`POSE_SLEAP_DEVICE`.
 
 ## Open decision (resolve at FT1 execution): classify cache-key
 
@@ -51,7 +51,7 @@ Pick one before implementing FT1 and state it in the commit.
 
 ## FT2 — Resolve tier at `properties/cache.py`; drop pose-flavor fields
 
-**Files:** `core/identity/properties/cache.py:173-196,256-271`; pose-flavor threading in `orchestrators/{session,tracking,config}.py`, `panels/{detection_panel,identity_panel}.py`, `trackerkit/gui/main_window.py`, `posekit/gui/main_window.py`, `cli_config.py`. Test: new `tests/test_cache_runtime_payload.py`.
+**Files:** `core/individual/properties/cache.py:173-196,256-271`; pose-flavor threading in `orchestrators/{session,tracking,config}.py`, `panels/{detection_panel,identity_panel}.py`, `trackerkit/gui/main_window.py`, `posekit/gui/main_window.py`, `cli_config.py`. Test: new `tests/test_cache_runtime_payload.py`.
 
 - [ ] Add `_runtime_payload_for_params(params)`: read `RUNTIME_TIER`, resolve via `RuntimeResolver(tier, detect_platform()).resolve("sleap_pose")`, return `{"device": resolved.device, "backend": resolved.backend}`. Replace the `COMPUTE_RUNTIME`/`POSE_SLEAP_DEVICE` reads.
 - [ ] Remove `pose_runtime_flavor`/`pose_sleap_device` from stored config; update the GUI threading sites.

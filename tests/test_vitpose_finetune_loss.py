@@ -1,6 +1,6 @@
 import torch
 
-from hydra_suite.core.identity.pose.vitpose.training.loss import JointsMSELoss
+from hydra_suite.core.individual.pose.vitpose.training.loss import JointsMSELoss
 
 
 def test_zero_loss_when_equal():

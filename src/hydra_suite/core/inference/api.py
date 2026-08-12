@@ -6,7 +6,7 @@ that cannot directly depend on the internal stages module.
 Correction 21: apply_detection_filter shim for optimizer.py and optimizer_workers.py
 Correction 22: predict_pose_for_image helper and create_pose_backend_from_config
   shim for posekit/gui/workers.py.
-  create_pose_backend_from_config re-exports from core/identity/pose/api.py
+  create_pose_backend_from_config re-exports from core/individual/pose/api.py
   while it exists; once that module is deleted the implementation will move
   here. (Task 8: build_runtime_config was deleted from pose/api.py — it had
   zero real callers left — so its shim here was removed too.)
@@ -19,9 +19,9 @@ from .result import OBBResult
 from .stages.filtering import filter_detections
 
 # Correction 22: stable re-export so posekit/gui/workers.py does not need to
-# import from the soon-to-be-deleted core/identity/pose/api module.
+# import from the soon-to-be-deleted core/individual/pose/api module.
 try:
-    from hydra_suite.core.identity.pose.api import (  # noqa: F401
+    from hydra_suite.core.individual.pose.api import (  # noqa: F401
         create_pose_backend_from_config,
     )
 except ImportError:
@@ -160,6 +160,8 @@ def predict_pose_for_image(
     """
     import numpy as np
 
+    from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
+
     from .config import InferenceConfig, OBBConfig, OBBDirectConfig
     from .result import OBBResult
     from .runtime import RuntimeContext
@@ -200,11 +202,18 @@ def predict_pose_for_image(
         detection_ids=OBBResult.make_detection_ids(0, 1),
     )
 
-    ar = 2.0
-    mg = 1.3
+    # A single one-shot image has no project-wide reference body size, so the
+    # canvas is simply the whole image (margin=1.0): the synthetic OBB already
+    # spans (0, 0)-(w, h), so this crop preserves it exactly rather than
+    # forcing it through an unrelated aspect ratio.
+    geometry = CanonicalGeometry(
+        canvas_wh=(max(1, int(w)), max(1, int(h))),
+        margin=1.0,
+        aspect_ratio=float(w) / float(h or 1),
+    )
     model = load_pose_model(pose_config, runtime)
     try:
-        crops = extract_canonical_crops(image, synthetic_obb, ar, mg, runtime)
-        return run_pose(crops, synthetic_obb, model, pose_config, runtime, ar, mg)
+        crops = extract_canonical_crops(image, synthetic_obb, geometry, runtime)
+        return run_pose(crops, synthetic_obb, model, pose_config, runtime, geometry)
     finally:
         del model

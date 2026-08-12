@@ -8,6 +8,9 @@ from typing import Any
 import numpy as np
 import torch
 
+from hydra_suite.core.canonicalization.fit import apply_fit, fit_to_model_input
+from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
+
 from ..config import HeadTailConfig
 from ..result import HeadTailResult, OBBResult
 from ..runtime import RuntimeContext, resolved_backend_for
@@ -45,9 +48,9 @@ def load_headtail_model(
       ``validate_headtail_labels``, so non-canonical-but-known labels still map
       to a heading offset instead of silently becoming undirected.
     """
-    from hydra_suite.core.identity.classification.backend import ClassifierBackend
-    from hydra_suite.core.identity.classification.errors import HeadTailFormatError
-    from hydra_suite.core.identity.classification.headtail import (
+    from hydra_suite.core.individual.classification.backend import ClassifierBackend
+    from hydra_suite.core.individual.classification.errors import HeadTailFormatError
+    from hydra_suite.core.individual.classification.headtail import (
         validate_headtail_labels,
     )
 
@@ -81,7 +84,8 @@ def load_headtail_model(
             "crops through predict_batch_cuda (no silent CPU fallback). Use a "
             "native-torch / ONNX classifier, or run on the cpu tier."
         )
-    input_size = (meta.input_size[0], meta.input_size[1])
+    in_h, in_w = meta.input_size  # ClassifierMetadata documents (H, W)
+    input_size = (in_h, in_w)
     return HeadTailModel(
         backend=backend,
         input_size=input_size,
@@ -95,14 +99,14 @@ def run_headtail(
     model: HeadTailModel,
     config: HeadTailConfig,
     runtime: RuntimeContext,
-    aspect_ratio: float = 2.0,
-    margin: float = 1.3,
+    geometry: CanonicalGeometry,
 ) -> HeadTailResult:
     """Classify head-tail orientation per detection. No I/O, no mode branching.
 
-    Crops are warped directly from the frame to the classifier input size
-    (extract_classifier_crops), bit-identical to the legacy head-tail path, so
-    direction decisions match legacy at the classifier boundary.
+    Crops are warped onto the shared canonical canvas (extract_classifier_crops,
+    Layer 1), then fit to the classifier's exact input size via Layer 2
+    (``fit_to_model_input`` / ``apply_fit``) so direction decisions match the
+    classifier boundary every other crop-consuming stage now shares.
 
     Per Correction 15: canonical_affines is None — affines belong to the crops
     stage, not headtail. Downstream consumers must check for None and recompute
@@ -120,9 +124,10 @@ def run_headtail(
 
     from .crops import extract_classifier_crops
 
-    np_crops = extract_classifier_crops(
-        frame, obb_result, model.input_size, aspect_ratio, margin
-    )
+    canon_crops = extract_classifier_crops(frame, obb_result, geometry)
+    in_h, in_w = model.input_size  # ClassifierMetadata documents (H, W)
+    fit = fit_to_model_input(geometry.canvas_wh, (in_w, in_h))
+    np_crops = [apply_fit(c, fit) for c in canon_crops]
 
     all_probs = model.backend.predict_batch(np_crops)
 
@@ -204,7 +209,7 @@ def _label_to_heading_offset(label: str) -> float | None:
     resolve to an offset (H7 parity). Returns ``None`` for ``unknown`` or any
     unrecognized token, leaving the detection undirected.
     """
-    from hydra_suite.core.identity.classification.headtail import (
+    from hydra_suite.core.individual.classification.headtail import (
         normalize_headtail_label,
     )
 
@@ -218,7 +223,7 @@ def _label_to_heading_offset(label: str) -> float | None:
 def _signed_major_axis_from_corners(corners: np.ndarray) -> np.ndarray | None:
     """Return per-detection major-axis angle from OBB corners, in [-pi, pi].
 
-    Mirrors ``compute_alignment_affine`` in core.canonicalization.crop: picks
+    Mirrors ``canonical_affine`` in core.canonicalization.geometry: picks
     the longer of the first two edges (c[1]-c[0] vs c[2]-c[1]) and returns
     ``atan2(major_vec_y, major_vec_x)``. NaN for degenerate boxes.
     """
@@ -243,55 +248,64 @@ def run_headtail_batch(
     model: HeadTailModel,
     config: HeadTailConfig,
     runtime: RuntimeContext,
-    aspect_ratio: float = 2.0,
-    margin: float = 1.3,
+    geometry: CanonicalGeometry,
 ) -> "dict[int, HeadTailResult]":
     """Run head-tail classification over a window; return one HeadTailResult per frame.
 
-    Builds classifier crops internally via extract_classifier_crops_batch (single
-    warpAffine to model.input_size, BGR uint8 — bit-identical to the per-frame
-    run_headtail path). Runs the backend ONCE over all crops (cross-frame perf win),
-    then splits per frame via batch.select_frame. Assembly delegates to
+    Builds classifier crops internally via extract_classifier_crops_batch_np (the
+    shared canonical canvas, BGR uint8 -- bit-identical to the per-frame
+    run_headtail path), then fits each to the model input via Layer 2 exactly
+    like run_headtail. Runs the backend ONCE over all crops (cross-frame perf
+    win), then splits per frame via batch.select_frame. Assembly delegates to
     _assemble_headtail_result (DRY with run_headtail).
+
+    Both branches derive their fit from the SAME ``fit_to_model_input(geometry
+    .canvas_wh, (in_w, in_h))`` call, computed once here. The GPU (NVDEC
+    on-device) branch applies that fit on-device via the shared torch seam's
+    ``letterbox_fit`` (``F.interpolate`` + zero-canvas paste) instead of the
+    CPU's ``cv2``-based ``apply_fit`` -- an anisotropic stretch here would
+    silently feed the model a DIFFERENT geometry than the CPU path (a model
+    trained on letterboxed crops fed non-letterboxed ones on CUDA), so both
+    paths must letterbox identically; only the resample kernel differs
+    (grid_sample/interpolate != cv2, so the acceptance gate is identity
+    agreement, not byte-identity).
     """
     from .crops import frames_on_cuda
+
+    in_h, in_w = model.input_size  # ClassifierMetadata documents (H, W)
+    fit = fit_to_model_input(geometry.canvas_wh, (in_w, in_h))
 
     if frames_on_cuda(runtime, frames):
         # Pure-GPU path (NVDEC): warp + forward on-device, no frame D->H copy.
         # floor-quantize to [0,255] 8-bit to match the cv2/uint8 reference regime
         # (grid_sample != cv2 -> identity-agreement gate, not byte-identity).
-        from .crops import extract_classifier_crops_batch_gpu
+        from hydra_suite.core.canonicalization.resample import letterbox_fit
 
-        batch = extract_classifier_crops_batch_gpu(
-            frames, obb_results, model.input_size, aspect_ratio, margin, runtime.device
-        )
+        from .crops import extract_canonical_crops_batch
+
+        batch = extract_canonical_crops_batch(frames, obb_results, geometry, runtime)
         n_total = batch.crops.shape[0]
         if n_total:
             # NVDEC frames (the only CUDA frame source) are RGB -> input_is_bgr=False
             # so the model sees RGB, matching the CPU path's BGR->RGB flip.
+            fitted = letterbox_fit(batch.crops, fit.model_wh)
             cuda_crops = [
-                (batch.crops[i] * 255.0).floor().clamp(0, 255) for i in range(n_total)
+                (fitted[i] * 255.0).floor().clamp(0, 255) for i in range(n_total)
             ]
             all_probs = model.backend.predict_batch_cuda(cuda_crops, input_is_bgr=False)
         else:
             all_probs = []
     else:
-        from .crops import extract_classifier_crops_batch
+        from .crops import apply_fit_batch, extract_classifier_crops_batch_np
 
-        batch = extract_classifier_crops_batch(
-            frames, obb_results, model.input_size, aspect_ratio, margin
-        )
-        # batch.crops is NCHW float [0,1]; convert back to HWC uint8 for
-        # predict_batch. Single batched host transfer + vectorized uint8
-        # quantization -- byte-identical to the former per-crop `.cpu().numpy()`
-        # loop (same values), one D->H copy instead of N.
-        n_total = batch.crops.shape[0]
-        if n_total:
-            hwc_all = np.ascontiguousarray(
-                batch.crops.permute(0, 2, 3, 1).cpu().numpy()
-            )
-            stacked = (hwc_all * 255.0).clip(0, 255).astype(np.uint8)
-            np_crops: list[np.ndarray] = list(stacked)
+        # ``batch.crops`` is already the list of HWC uint8 BGR canonical crops
+        # predict_batch wants, so there is no float32 tensor round trip here:
+        # the old ``stack -> /255 -> permute -> cpu -> *255 -> clip -> astype``
+        # detour was exactly value-preserving and therefore pure overhead
+        # (four full-batch float32 passes per window).
+        batch = extract_classifier_crops_batch_np(frames, obb_results, geometry)
+        if batch.crops:
+            np_crops: list[np.ndarray] = apply_fit_batch(batch.crops, fit)
             all_probs = model.backend.predict_batch(np_crops)
         else:
             all_probs = []

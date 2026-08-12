@@ -8,6 +8,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
+from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
+
 from .contracts import TrainingRole
 
 
@@ -150,6 +152,9 @@ def write_classifier_multihead_manifest(
     input_size: tuple[int, int],
     monochrome: bool,
     recommended_confidence_threshold: float | None = None,
+    calibration_temperature: list[float] | None = None,
+    calibration_signature: str | None = None,
+    calibration_ece: list[float] | None = None,
     kind: str = _TRACKERKIT_MULTIHEAD_KIND,
 ) -> Path:
     """Write a TrackerKit-readable multi-head classifier manifest.
@@ -175,6 +180,12 @@ def write_classifier_multihead_manifest(
         payload["recommended_confidence_threshold"] = float(
             min(1.0, max(0.0, recommended_confidence_threshold))
         )
+    if calibration_temperature is not None:
+        payload["calibration_temperature"] = list(calibration_temperature)
+    if calibration_signature is not None:
+        payload["calibration_signature"] = str(calibration_signature)
+    if calibration_ece is not None:
+        payload["calibration_ece"] = list(calibration_ece)
     manifest_abs.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return manifest_abs
 
@@ -224,6 +235,15 @@ def _normalize_classifier_meta(meta: dict[str, Any]) -> dict[str, Any]:
             )
         except (TypeError, ValueError):
             pass
+    calibration_temperature = meta.get("calibration_temperature")
+    if calibration_temperature is not None:
+        normalized["calibration_temperature"] = list(calibration_temperature)
+    calibration_signature = meta.get("calibration_signature")
+    if calibration_signature is not None:
+        normalized["calibration_signature"] = str(calibration_signature)
+    calibration_ece = meta.get("calibration_ece")
+    if calibration_ece is not None:
+        normalized["calibration_ece"] = list(calibration_ece)
     if len(class_names_per_factor) == 1:
         normalized["class_names"] = list(class_names_per_factor[0])
     return normalized
@@ -245,7 +265,7 @@ def classifier_metadata_for_artifact(
     path = Path(artifact_path).expanduser().resolve()
     suffix = path.suffix.lower()
     if path.name.lower().endswith(".multihead.json") or suffix == ".pth":
-        from hydra_suite.core.identity.classification.backend import ClassifierBackend
+        from hydra_suite.core.individual.classification.backend import ClassifierBackend
         from hydra_suite.runtime.resolver import ResolvedBackend
 
         backend = ClassifierBackend(str(path), ResolvedBackend("torch", "cpu", False))
@@ -261,6 +281,9 @@ def classifier_metadata_for_artifact(
                 "input_size": list(meta.input_size),
                 "monochrome": meta.monochrome,
                 "recommended_confidence_threshold": meta.recommended_confidence_threshold,
+                "calibration_temperature": meta.calibration_temperature,
+                "calibration_signature": meta.calibration_signature,
+                "calibration_ece": meta.calibration_ece,
             }
         )
 
@@ -442,8 +465,8 @@ def import_classifier_artifact(
     scoring_mode: str = "atomic",
 ) -> str:
     """Register a classifier artifact, copying it into TrackerKit storage when needed."""
-    from hydra_suite.core.identity.classification.errors import ClassifierFormatError
-    from hydra_suite.core.identity.classification.headtail import (
+    from hydra_suite.core.individual.classification.errors import ClassifierFormatError
+    from hydra_suite.core.individual.classification.headtail import (
         validate_headtail_labels,
     )
 
@@ -716,6 +739,7 @@ def publish_trained_model(
     training_params: dict[str, Any] | None = None,
     classifier_v2_meta: dict[str, Any] | None = None,
     slice_geometry: dict[str, Any] | None = None,
+    canonical_geometry: CanonicalGeometry | None = None,
 ) -> tuple[str, str]:
     """Copy trained artifact into repository and register metadata.
 
@@ -799,6 +823,20 @@ def publish_trained_model(
         )
         slice_geom_sidecar_name = slice_sidecar.name
 
+    canonical_meta_sidecar_name: str | None = None
+    if canonical_geometry is not None and dst.suffix.lower() == ".pt":
+        # Append to the full name (foo.pt -> foo.pt.canonical_meta.json), matching
+        # the .slice_meta.json / .runtime_meta.json convention above -- NOT the
+        # .v2meta.json suffix-replace convention. Every model gets this stamp
+        # regardless of role: it records which CanonicalGeometry convention the
+        # checkpoint was trained under, so a mismatched load can be flagged
+        # instead of silently degrading.
+        canonical_sidecar = dst.with_suffix(dst.suffix + ".canonical_meta.json")
+        canonical_sidecar.write_text(
+            json.dumps(canonical_geometry.to_dict(), indent=2), encoding="utf-8"
+        )
+        canonical_meta_sidecar_name = canonical_sidecar.name
+
     key = _registry_key_for_model(dst)
     metadata = {
         "size": safe_size,
@@ -824,6 +862,10 @@ def publish_trained_model(
         metadata["slice_geometry"] = dict(slice_geometry)
         if slice_geom_sidecar_name:
             metadata["slice_meta_sidecar"] = slice_geom_sidecar_name
+    if canonical_geometry is not None:
+        metadata["canonical_geometry"] = canonical_geometry.to_dict()
+        if canonical_meta_sidecar_name:
+            metadata["canonical_meta_sidecar"] = canonical_meta_sidecar_name
 
     # v2 sidecar for YOLO-style artifacts whose weight file cannot embed our schema.
     if dst.suffix.lower() == ".pt" and dst_sidecar.exists():

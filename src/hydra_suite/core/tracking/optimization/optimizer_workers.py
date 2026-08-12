@@ -19,23 +19,23 @@ import numpy as np
 
 from hydra_suite.core.assigners.hungarian import TrackAssigner
 from hydra_suite.core.filters.kalman import KalmanFilterManager
-from hydra_suite.core.identity.geometry import (
+from hydra_suite.core.individual.geometry import (
     build_detection_direction_overrides as _pf_build_direction_overrides,
 )
-from hydra_suite.core.identity.geometry import normalize_theta as _pf_normalize_theta
-from hydra_suite.core.identity.geometry import (
+from hydra_suite.core.individual.geometry import normalize_theta as _pf_normalize_theta
+from hydra_suite.core.individual.geometry import (
     resolve_detection_tracking_theta as _pf_resolve_detection_tracking_theta,
 )
-from hydra_suite.core.identity.pose.features import (
+from hydra_suite.core.individual.pose.features import (
     build_pose_detection_keypoint_map as _pf_build_keypoint_map,
 )
-from hydra_suite.core.identity.pose.features import (
+from hydra_suite.core.individual.pose.features import (
     compute_detection_pose_features as _pf_compute_det_features,
 )
-from hydra_suite.core.identity.pose.features import (
+from hydra_suite.core.individual.pose.features import (
     is_pose_heading_reliable as _pf_heading_reliable,
 )
-from hydra_suite.core.identity.pose.features import (
+from hydra_suite.core.individual.pose.features import (
     load_pose_context_from_params as _pf_load_pose_context,
 )
 from hydra_suite.core.inference.api import (

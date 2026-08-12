@@ -2,7 +2,7 @@
 
 ## Main Extension Surface
 
-`hydra_suite.core.identity.analysis`
+`hydra_suite.core.individual.analysis`
 
 ## Recommended Pattern
 
