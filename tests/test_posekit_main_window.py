@@ -9,6 +9,8 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtWidgets import QMessageBox  # noqa: E402
+
 from hydra_suite.posekit.gui.main_window import MainWindow  # noqa: E402
 from hydra_suite.posekit.gui.models import FrameAnn  # noqa: E402
 
@@ -19,6 +21,9 @@ class _DummyCombo:
 
     def setCurrentIndex(self, _index: int) -> None:
         return None
+
+    def currentIndex(self) -> int:
+        return 0
 
     def count(self) -> int:
         return 1
@@ -158,3 +163,556 @@ def test_switch_project_window_allows_empty_projects(
     assert shown == [True]
     assert closed == [True]
     assert hasattr(app, "_posekit_windows")
+
+
+def test_on_frame_mode_toggled_updates_config():
+    from hydra_suite.posekit.config.schemas import PoseKitConfig
+
+    window = SimpleNamespace(config=PoseKitConfig())
+    window._update_random_count_label = (
+        lambda frame_mode: MainWindow._update_random_count_label(window, frame_mode)
+    )
+    window.lbl_random_count = SimpleNamespace(
+        setText=lambda _text: None, setToolTip=lambda _tip: None
+    )
+
+    MainWindow._on_frame_mode_toggled(window, True)
+    assert window.config.frame_mode is True
+
+    MainWindow._on_frame_mode_toggled(window, False)
+    assert window.config.frame_mode is False
+
+
+def test_on_frame_mode_toggled_relabels_random_count_spinbox():
+    from hydra_suite.posekit.config.schemas import PoseKitConfig
+
+    texts = []
+    tooltips = []
+
+    window = SimpleNamespace(
+        config=PoseKitConfig(),
+        lbl_random_count=SimpleNamespace(
+            setText=lambda text: texts.append(text),
+            setToolTip=lambda tip: tooltips.append(tip),
+        ),
+    )
+    window._update_random_count_label = (
+        lambda frame_mode: MainWindow._update_random_count_label(window, frame_mode)
+    )
+
+    MainWindow._on_frame_mode_toggled(window, True)
+    assert texts[-1] == "Frames"
+    assert "frames" in tooltips[-1].lower()
+
+    MainWindow._on_frame_mode_toggled(window, False)
+    assert texts[-1] == "Count"
+    assert "crops" in tooltips[-1].lower()
+
+
+def test_frame_expansion_groups_by_source_and_frame():
+    from hydra_suite.posekit.config.schemas import PoseKitConfig
+
+    window = SimpleNamespace(
+        config=PoseKitConfig(frame_mode=True),
+        image_paths=[
+            Path("did10000.jpg"),
+            Path("did10001.jpg"),
+            Path("did20000.jpg"),
+        ],
+        _source_id_for_index=lambda idx: "src_a",
+    )
+
+    expanded, frame_count = MainWindow._frame_expansion(window, {0})
+
+    assert expanded == {0, 1}
+    assert frame_count == 1
+
+
+def test_add_indices_to_labeling_frame_mode_expands_and_confirms(monkeypatch):
+    from hydra_suite.posekit.config.schemas import PoseKitConfig
+
+    calls = []
+
+    def fake_question(*args, **kwargs):
+        calls.append("asked")
+        return QMessageBox.Yes
+
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(fake_question))
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: None))
+
+    window = SimpleNamespace(
+        config=PoseKitConfig(frame_mode=True),
+        image_paths=[
+            Path("did10000.jpg"),
+            Path("did10001.jpg"),
+            Path("did20000.jpg"),
+        ],
+        _source_id_for_index=lambda idx: "src_a",
+        labeling_frames=set(),
+        current_index=0,
+        _populate_frames=lambda: None,
+        _select_frame_in_list=lambda *a, **k: None,
+        _frame_expansion=lambda indices: MainWindow._frame_expansion(window, indices),
+    )
+
+    result = MainWindow._add_indices_to_labeling(window, [0], "Test")
+
+    assert result is True
+    assert window.labeling_frames == {0, 1}
+    assert calls == ["asked"]
+
+
+def test_add_indices_to_labeling_confirmation_counts_total_not_just_new(monkeypatch):
+    """Total instance count in the confirmation must reflect all instances on
+    the touched frame, even those already present in labeling_frames — not
+    just the newly-added ones (regression for total_count vs len(to_add))."""
+    from hydra_suite.posekit.config.schemas import PoseKitConfig
+
+    messages = []
+
+    def fake_question(_self, _title, message, *args, **kwargs):
+        messages.append(message)
+        return QMessageBox.Yes
+
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(fake_question))
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: None))
+
+    window = SimpleNamespace(
+        config=PoseKitConfig(frame_mode=True),
+        image_paths=[
+            Path("did10000.jpg"),
+            Path("did10001.jpg"),
+        ],
+        _source_id_for_index=lambda idx: "src_a",
+        # Index 0 is already in the labeling set; only index 1 is new, but
+        # both belong to the same frame, so the total should be 2.
+        labeling_frames={0},
+        current_index=0,
+        _populate_frames=lambda: None,
+        _select_frame_in_list=lambda *a, **k: None,
+        _frame_expansion=lambda indices: MainWindow._frame_expansion(window, indices),
+    )
+
+    result = MainWindow._add_indices_to_labeling(window, [1], "Test")
+
+    assert result is True
+    assert window.labeling_frames == {0, 1}
+    assert len(messages) == 1
+    assert "comprising 2 total instance(s)" in messages[0]
+
+
+def test_add_indices_to_labeling_frame_mode_cancel_adds_nothing(monkeypatch):
+    from hydra_suite.posekit.config.schemas import PoseKitConfig
+
+    monkeypatch.setattr(
+        QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.No)
+    )
+
+    window = SimpleNamespace(
+        config=PoseKitConfig(frame_mode=True),
+        image_paths=[Path("did10000.jpg"), Path("did10001.jpg")],
+        _source_id_for_index=lambda idx: "src_a",
+        labeling_frames=set(),
+        current_index=0,
+        _populate_frames=lambda: (_ for _ in ()).throw(
+            AssertionError("must not refresh UI on cancel")
+        ),
+        _select_frame_in_list=lambda *a, **k: None,
+        _frame_expansion=lambda indices: MainWindow._frame_expansion(window, indices),
+    )
+
+    result = MainWindow._add_indices_to_labeling(window, [0], "Test")
+
+    assert result is False
+    assert window.labeling_frames == set()
+
+
+def test_add_indices_to_labeling_frame_mode_disclosed_skips_confirmation(monkeypatch):
+    from hydra_suite.posekit.config.schemas import PoseKitConfig
+
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        staticmethod(
+            lambda *a, **k: (_ for _ in ()).throw(
+                AssertionError("must not confirm when disclosed=True")
+            )
+        ),
+    )
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: None))
+
+    window = SimpleNamespace(
+        config=PoseKitConfig(frame_mode=True),
+        image_paths=[Path("did10000.jpg"), Path("did10001.jpg")],
+        _source_id_for_index=lambda idx: "src_a",
+        labeling_frames=set(),
+        current_index=0,
+        _populate_frames=lambda: None,
+        _select_frame_in_list=lambda *a, **k: None,
+        _frame_expansion=lambda indices: MainWindow._frame_expansion(window, indices),
+    )
+
+    result = MainWindow._add_indices_to_labeling(window, [0], "Test", disclosed=True)
+
+    assert result is True
+    assert window.labeling_frames == {0, 1}
+
+
+def test_add_indices_to_labeling_individual_mode_unchanged(monkeypatch):
+    from hydra_suite.posekit.config.schemas import PoseKitConfig
+
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        staticmethod(
+            lambda *a, **k: (_ for _ in ()).throw(
+                AssertionError("must not confirm outside frame mode")
+            )
+        ),
+    )
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: None))
+
+    window = SimpleNamespace(
+        config=PoseKitConfig(frame_mode=False),
+        image_paths=[Path("did10000.jpg"), Path("did10001.jpg")],
+        _source_id_for_index=lambda idx: "src_a",
+        labeling_frames=set(),
+        current_index=0,
+        _populate_frames=lambda: None,
+        _select_frame_in_list=lambda *a, **k: None,
+    )
+
+    result = MainWindow._add_indices_to_labeling(window, [0], "Test")
+
+    assert result is True
+    assert window.labeling_frames == {0}
+
+
+def _make_save_current_window(monkeypatch, frame_mode, current_index=0):
+    from hydra_suite.posekit.config.schemas import PoseKitConfig
+
+    save_calls = []
+    monkeypatch.setattr(
+        "hydra_suite.posekit.gui.main_window.save_yolo_pose_label",
+        lambda **kwargs: save_calls.append(kwargs),
+    )
+    monkeypatch.setattr(
+        "hydra_suite.posekit.gui.main_window.compute_bbox_from_kpts",
+        lambda *a, **k: (0, 0, 1, 1),
+    )
+
+    window = SimpleNamespace(
+        config=PoseKitConfig(frame_mode=frame_mode),
+        image_paths=[Path("did10000.jpg"), Path("did10001.jpg")],
+        _source_id_for_index=lambda idx: "src_a",
+        labeling_frames=set(),
+        current_index=current_index,
+        _ann=FrameAnn(cls=0, bbox_xyxy=None, kpts=[]),
+        _cache_current_frame=lambda: None,
+        _label_path_for=lambda p: Path(f"/labels/{p.stem}.txt"),
+        class_combo=_DummyCombo(),
+        _kpts_to_save_space=lambda kpts, path: (kpts, 10, 10),
+        project=SimpleNamespace(bbox_pad_frac=0.1),
+        _autosave_timer=SimpleNamespace(isActive=lambda: False, stop=lambda: None),
+        _populate_frames=lambda: None,
+        _select_frame_in_list=lambda *a, **k: None,
+        statusBar=lambda: SimpleNamespace(showMessage=lambda *a, **k: None),
+        _set_saved_status=lambda: None,
+        save_project=lambda: None,
+        _load_ann_from_disk=lambda idx: FrameAnn(cls=0, bbox_xyxy=None, kpts=[]),
+        _rebuild_canvas=lambda: None,
+    )
+    window._frame_expansion = lambda indices: MainWindow._frame_expansion(
+        window, indices
+    )
+    return window, save_calls
+
+
+def test_save_current_frame_mode_confirms_and_adds_companions(monkeypatch):
+    monkeypatch.setattr(
+        QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.Yes)
+    )
+    window, save_calls = _make_save_current_window(monkeypatch, frame_mode=True)
+
+    MainWindow.save_current(window)
+
+    assert len(save_calls) == 1
+    assert window.labeling_frames == {1}  # companion added explicitly
+
+
+def test_save_current_frame_mode_cancel_discards_edits(monkeypatch):
+    monkeypatch.setattr(
+        QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.No)
+    )
+    window, save_calls = _make_save_current_window(monkeypatch, frame_mode=True)
+    reload_calls = []
+    window._load_ann_from_disk = lambda idx: (
+        reload_calls.append(idx) or FrameAnn(cls=0, bbox_xyxy=None, kpts=[])
+    )
+
+    MainWindow.save_current(window)
+
+    assert save_calls == []
+    assert window.labeling_frames == set()
+    assert reload_calls == [0]
+
+
+def test_save_current_individual_mode_unchanged(monkeypatch):
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        staticmethod(
+            lambda *a, **k: (_ for _ in ()).throw(
+                AssertionError("must not confirm outside frame mode")
+            )
+        ),
+    )
+    window, save_calls = _make_save_current_window(monkeypatch, frame_mode=False)
+
+    MainWindow.save_current(window)
+
+    assert len(save_calls) == 1
+    # Individual mode never explicitly adds anything; only _populate_frames'
+    # own auto-promotion (not exercised by this fake) would do so.
+    assert window.labeling_frames == set()
+
+
+def test_save_current_already_in_labeling_set_skips_confirmation(monkeypatch):
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        staticmethod(
+            lambda *a, **k: (_ for _ in ()).throw(
+                AssertionError("must not confirm when frame already in labeling set")
+            )
+        ),
+    )
+    window, save_calls = _make_save_current_window(monkeypatch, frame_mode=True)
+    window.labeling_frames = {0}
+
+    MainWindow.save_current(window)
+
+    assert len(save_calls) == 1
+
+
+def test_move_unlabeled_to_labeling_only_moves_selected(monkeypatch):
+    from hydra_suite.posekit.config.schemas import PoseKitConfig
+
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: None))
+
+    def add_indices_stub(indices, title):
+        window.labeling_frames.update(indices)
+
+    window = SimpleNamespace(
+        config=PoseKitConfig(frame_mode=False),
+        image_paths=[Path("a.png"), Path("b.png"), Path("c.png")],
+        labeling_frames=set(),
+        current_index=0,
+        _matches_current_source=lambda idx: True,
+        _is_labeled=lambda p: False,
+        _collect_selected_indices=lambda: [1],
+        _populate_frames=lambda: None,
+        _select_frame_in_list=lambda *a, **k: None,
+        _add_indices_to_labeling=add_indices_stub,
+    )
+
+    MainWindow._move_unlabeled_to_labeling(window)
+
+    assert window.labeling_frames == {1}
+
+
+def test_move_unlabeled_to_labeling_frame_mode_expands_selection(monkeypatch):
+    from hydra_suite.posekit.config.schemas import PoseKitConfig
+    from hydra_suite.posekit.core.frame_grouping import group_indices_by_frame
+
+    monkeypatch.setattr(
+        QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.Yes)
+    )
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: None))
+
+    def add_indices_stub(indices, title):
+        # Simulate frame expansion for frame mode
+        groups = group_indices_by_frame(
+            [p.name for p in window.image_paths],
+            [window._source_id_for_index(i) for i in range(len(window.image_paths))],
+        )
+        idx_to_key = {i: key for key, idxs in groups.items() for i in idxs}
+        keys = {idx_to_key[i] for i in indices if i in idx_to_key}
+        expanded = set()
+        for key in keys:
+            expanded.update(groups[key])
+        window.labeling_frames.update(expanded)
+
+    window = SimpleNamespace(
+        config=PoseKitConfig(frame_mode=True),
+        image_paths=[Path("did10000.jpg"), Path("did10001.jpg")],
+        _source_id_for_index=lambda idx: "src_a",
+        labeling_frames=set(),
+        current_index=0,
+        _matches_current_source=lambda idx: True,
+        _is_labeled=lambda p: False,
+        _collect_selected_indices=lambda: [0],
+        _populate_frames=lambda: None,
+        _select_frame_in_list=lambda *a, **k: None,
+        _add_indices_to_labeling=add_indices_stub,
+    )
+
+    MainWindow._move_unlabeled_to_labeling(window)
+
+    assert window.labeling_frames == {0, 1}
+
+
+def test_move_unlabeled_to_labeling_no_selection_shows_info(monkeypatch):
+    from hydra_suite.posekit.config.schemas import PoseKitConfig
+
+    info_calls = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        staticmethod(lambda *a, **k: info_calls.append(a)),
+    )
+
+    window = SimpleNamespace(
+        config=PoseKitConfig(frame_mode=False),
+        image_paths=[Path("a.png")],
+        labeling_frames=set(),
+        _matches_current_source=lambda idx: True,
+        _is_labeled=lambda p: False,
+        _collect_selected_indices=lambda: [],
+        _populate_frames=lambda: None,
+    )
+
+    MainWindow._move_unlabeled_to_labeling(window)
+
+    assert len(info_calls) == 1
+    assert window.labeling_frames == set()
+
+
+def test_move_unlabeled_to_all_individual_mode_unchanged():
+    from hydra_suite.posekit.config.schemas import PoseKitConfig
+
+    window = SimpleNamespace(
+        config=PoseKitConfig(frame_mode=False),
+        image_paths=[Path("a.png"), Path("b.png")],
+        labeling_frames={0, 1},
+        current_index=0,
+        _matches_current_source=lambda idx: True,
+        _is_labeled=lambda p: False,
+        _populate_frames=lambda: None,
+        _select_frame_in_list=lambda *a, **k: None,
+    )
+
+    MainWindow._move_unlabeled_to_all(window)
+
+    assert window.labeling_frames == set()
+
+
+def test_move_unlabeled_to_all_frame_mode_skips_partially_labeled_frame(monkeypatch):
+    from hydra_suite.posekit.config.schemas import PoseKitConfig
+
+    info_calls = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        staticmethod(lambda *a, **k: info_calls.append(a)),
+    )
+
+    is_labeled_map = {
+        Path("did10000.jpg"): False,
+        Path("did10001.jpg"): True,  # one instance on frame 1 is labeled
+        Path("did20000.jpg"): False,
+    }
+    window = SimpleNamespace(
+        config=PoseKitConfig(frame_mode=True),
+        image_paths=[Path("did10000.jpg"), Path("did10001.jpg"), Path("did20000.jpg")],
+        _source_id_for_index=lambda idx: "src_a",
+        labeling_frames={0, 1, 2},
+        current_index=0,
+        _matches_current_source=lambda idx: True,
+        _is_labeled=lambda p: is_labeled_map[p],
+        _populate_frames=lambda: None,
+        _select_frame_in_list=lambda *a, **k: None,
+    )
+
+    MainWindow._move_unlabeled_to_all(window)
+
+    # Frame (src_a, 1) has a labeled instance -> kept entirely (idx 0 and 1 stay).
+    # Frame (src_a, 2) has no labeled instance -> reverted (idx 2 removed).
+    assert window.labeling_frames == {0, 1}
+    assert len(info_calls) == 1
+
+
+def test_add_random_to_labeling_individual_mode_uses_add_indices_helper(monkeypatch):
+    from hydra_suite.posekit.config.schemas import PoseKitConfig
+
+    monkeypatch.setattr("random.sample", lambda population, k: population[:k])
+    added = []
+
+    window = SimpleNamespace(
+        config=PoseKitConfig(frame_mode=False),
+        image_paths=[Path("a.png"), Path("b.png"), Path("c.png")],
+        labeling_frames=set(),
+        spin_random_count=SimpleNamespace(value=lambda: 2),
+        _matches_current_source=lambda idx: True,
+        _is_labeled=lambda p: False,
+        _add_indices_to_labeling=lambda indices, title: (
+            added.append((list(indices), title)),
+            True,
+        )[1],
+    )
+
+    MainWindow._add_random_to_labeling(window)
+
+    assert added == [([0, 1], "Random Selection")]
+
+
+def test_add_random_to_labeling_frame_mode_samples_frame_ids(monkeypatch):
+    from hydra_suite.posekit.config.schemas import PoseKitConfig
+
+    monkeypatch.setattr("random.sample", lambda population, k: population[:k])
+    added = []
+
+    window = SimpleNamespace(
+        config=PoseKitConfig(frame_mode=True),
+        image_paths=[Path("did10000.jpg"), Path("did10001.jpg"), Path("did20000.jpg")],
+        _source_id_for_index=lambda idx: "src_a",
+        labeling_frames=set(),
+        spin_random_count=SimpleNamespace(value=lambda: 1),
+        _matches_current_source=lambda idx: True,
+        _is_labeled=lambda p: False,
+        _add_indices_to_labeling=lambda indices, title: (
+            added.append((sorted(indices), title)),
+            True,
+        )[1],
+    )
+
+    MainWindow._add_random_to_labeling(window)
+
+    # Frame keys are sorted by dict insertion order from group_indices_by_frame;
+    # with only one requested and frame (src_a, 1) inserted first (indices 0/1
+    # appear before index 2 in image_paths), it is the one sampled.
+    assert added == [([0, 1], "Random Selection")]
+
+
+def test_add_random_to_labeling_no_candidates_shows_info(monkeypatch):
+    from hydra_suite.posekit.config.schemas import PoseKitConfig
+
+    info_calls = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        staticmethod(lambda *a, **k: info_calls.append(a)),
+    )
+
+    window = SimpleNamespace(
+        config=PoseKitConfig(frame_mode=False),
+        image_paths=[Path("a.png")],
+        labeling_frames={0},
+        spin_random_count=SimpleNamespace(value=lambda: 5),
+        _matches_current_source=lambda idx: True,
+        _is_labeled=lambda p: False,
+    )
+
+    MainWindow._add_random_to_labeling(window)
+
+    assert len(info_calls) == 1

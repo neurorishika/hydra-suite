@@ -20,6 +20,7 @@ class PoseKitConfig:
     sleap_env_path: str = ""
     autosave_delay_ms: int = 3000
     runtime_tier: str = "gpu"  # 'cpu' | 'gpu' | 'gpu_fast'
+    frame_mode: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize all user preferences to a JSON-compatible dictionary for persistence."""
@@ -30,6 +31,7 @@ class PoseKitConfig:
             "sleap_env_path": self.sleap_env_path,
             "autosave_delay_ms": self.autosave_delay_ms,
             "runtime_tier": self.runtime_tier,
+            "frame_mode": self.frame_mode,
         }
 
     @classmethod
@@ -49,4 +51,5 @@ class PoseKitConfig:
             sleap_env_path=data.get("sleap_env_path", ""),
             autosave_delay_ms=data.get("autosave_delay_ms", 3000),
             runtime_tier=runtime_tier,
+            frame_mode=data.get("frame_mode", False),
         )
