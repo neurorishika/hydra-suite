@@ -29,6 +29,9 @@ class TrackerConfig:
     # --- Runtime ---
     runtime_tier: str = "gpu"
 
+    # --- Debug ---
+    debug_mode: bool = False
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a JSON-compatible dict."""
         return {
@@ -38,6 +41,7 @@ class TrackerConfig:
             "roi_current_mode": self.roi_current_mode,
             "roi_current_zone_type": self.roi_current_zone_type,
             "runtime_tier": self.runtime_tier,
+            "debug_mode": self.debug_mode,
         }
 
     @classmethod
@@ -58,4 +62,5 @@ class TrackerConfig:
             roi_current_mode=data.get("roi_current_mode", "circle"),
             roi_current_zone_type=data.get("roi_current_zone_type", "include"),
             runtime_tier=str(raw_tier),
+            debug_mode=bool(data.get("debug_mode", False)),
         )

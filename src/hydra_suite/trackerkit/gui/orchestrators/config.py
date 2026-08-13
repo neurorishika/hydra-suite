@@ -245,9 +245,6 @@ class ConfigOrchestrator:
 
     def _load_config_system_performance(self, get_cfg):
         self._panels.setup.spin_resize.setValue(get_cfg("resize_factor", default=1.0))
-        self._panels.setup.check_save_confidence.setChecked(
-            get_cfg("save_confidence_metrics", default=True)
-        )
         self._panels.setup.chk_use_cached_detections.setChecked(
             get_cfg("use_cached_detections", default=True)
         )
@@ -809,9 +806,6 @@ class ConfigOrchestrator:
         self._panels.tracking.spin_density_min_area_bodies.setValue(
             float(get_cfg("density_min_area_bodies", default=0.25))
         )
-        self._panels.tracking.chk_export_confidence_density_video.setChecked(
-            get_cfg("export_confidence_density_video", default=False)
-        )
         self._mw._on_confidence_density_map_toggled(
             self._panels.tracking.chk_enable_confidence_density_map.checkState()
         )
@@ -876,9 +870,6 @@ class ConfigOrchestrator:
         )
         self._panels.postprocess.spin_heading_flip_max_burst.setValue(
             int(get_cfg("heading_flip_max_burst", default=5))
-        )
-        self._panels.postprocess.chk_cleanup_temp_files.setChecked(
-            get_cfg("cleanup_temp_files", default=True)
         )
         self._panels.postprocess.spin_merge_overlap_multiplier.setValue(
             get_cfg("merge_agreement_distance_multiplier", default=0.5)
@@ -1001,27 +992,10 @@ class ConfigOrchestrator:
         self._panels.setup.chk_show_state.setChecked(
             get_cfg("show_state_text", "show_state", default=True)
         )
-        self._panels.setup.chk_show_kalman_uncertainty.setChecked(
-            get_cfg("show_kalman_uncertainty", default=False)
-        )
-        self._panels.detection.chk_show_fg.setChecked(
-            get_cfg("show_foreground_mask", "show_fg", default=True)
-        )
-        self._panels.detection.chk_show_bg.setChecked(
-            get_cfg("show_background_model", "show_bg", default=True)
-        )
-        self._panels.detection.chk_show_yolo_obb.setChecked(
-            get_cfg("show_yolo_obb", default=False)
-        )
         self._panels.setup.spin_traj_hist.setValue(
             get_cfg("trajectory_history_seconds", "traj_history", default=5)
         )
-        self._panels.setup.chk_debug_logging.setChecked(
-            get_cfg("debug_logging", default=False)
-        )
-        self._panels.setup.chk_enable_profiling.setChecked(
-            get_cfg("enable_profiling", default=False)
-        )
+        self._mw.btn_debug_mode.setChecked(get_cfg("debug_mode", default=False))
         self._mw.slider_zoom.setValue(int(get_cfg("zoom_factor", default=1.0) * 100))
 
     def _load_config_dataset(self, get_cfg):
@@ -1522,7 +1496,6 @@ class ConfigOrchestrator:
             {
                 # === SYSTEM PERFORMANCE ===
                 "resize_factor": self._panels.setup.spin_resize.value(),
-                "save_confidence_metrics": self._panels.setup.check_save_confidence.isChecked(),
                 "use_cached_detections": self._panels.setup.chk_use_cached_detections.isChecked(),
                 "visualization_free_mode": self._panels.setup.chk_visualization_free.isChecked(),
                 "prompt_open_refinekit_on_tracking_complete": self._panels.postprocess.chk_prompt_open_refinekit.isChecked(),
@@ -1720,7 +1693,6 @@ class ConfigOrchestrator:
                 "density_min_frame_duration": self._panels.tracking.spin_density_min_duration.value(),
                 "density_min_area_bodies": self._panels.tracking.spin_density_min_area_bodies.value(),
                 "density_downsample_factor": self._panels.tracking._density_downsample_factor,
-                "export_confidence_density_video": self._panels.tracking.chk_export_confidence_density_video.isChecked(),
                 "max_velocity_zscore": self._panels.postprocess.spin_max_velocity_zscore.value(),
                 "velocity_zscore_window_seconds": self._panels.postprocess.spin_velocity_zscore_window.value(),
                 "velocity_zscore_min_velocity": self._panels.postprocess.spin_velocity_zscore_min_vel.value(),
@@ -1738,7 +1710,6 @@ class ConfigOrchestrator:
                 "enable_pelt_splitting": self._panels.postprocess.chk_enable_pelt_splitting.isChecked(),
                 "enable_identity_smoothing": self._panels.postprocess.chk_enable_identity_smoothing.isChecked(),
                 "heading_flip_max_burst": self._panels.postprocess.spin_heading_flip_max_burst.value(),
-                "cleanup_temp_files": self._panels.postprocess.chk_cleanup_temp_files.isChecked(),
                 # === TRAJECTORY MERGING (Conservative Strategy) ===
                 # Agreement distance and min overlap frames for conservative merging
                 "merge_agreement_distance_multiplier": self._panels.postprocess.spin_merge_overlap_multiplier.value(),
@@ -1780,13 +1751,8 @@ class ConfigOrchestrator:
                 "show_trajectory_trails": self._panels.setup.chk_show_trajectories.isChecked(),
                 "show_id_labels": self._panels.setup.chk_show_labels.isChecked(),
                 "show_state_text": self._panels.setup.chk_show_state.isChecked(),
-                "show_kalman_uncertainty": self._panels.setup.chk_show_kalman_uncertainty.isChecked(),
-                "show_foreground_mask": self._panels.detection.chk_show_fg.isChecked(),
-                "show_background_model": self._panels.detection.chk_show_bg.isChecked(),
-                "show_yolo_obb": self._panels.detection.chk_show_yolo_obb.isChecked(),
                 "trajectory_history_seconds": self._panels.setup.spin_traj_hist.value(),
-                "debug_logging": self._panels.setup.chk_debug_logging.isChecked(),
-                "enable_profiling": self._panels.setup.chk_enable_profiling.isChecked(),
+                "debug_mode": self._mw.btn_debug_mode.isChecked(),
                 "zoom_factor": self._mw.slider_zoom.value() / 100.0,
             }
         )
@@ -2062,17 +2028,15 @@ class ConfigOrchestrator:
         N = self._panels.setup.spin_max_targets.value()
         return {
             "TRAJECTORY_COLORS": build_trajectory_colors(N),
-            "SHOW_FG": self._panels.detection.chk_show_fg.isChecked(),
-            "SHOW_BG": self._panels.detection.chk_show_bg.isChecked(),
+            "SHOW_FG": bool(self._mw.config.debug_mode),
+            "SHOW_BG": bool(self._mw.config.debug_mode),
             "SHOW_CIRCLES": self._panels.setup.chk_show_circles.isChecked(),
             "SHOW_ORIENTATION": self._panels.setup.chk_show_orientation.isChecked(),
-            "SHOW_YOLO_OBB": self._panels.detection.chk_show_yolo_obb.isChecked(),
+            "SHOW_YOLO_OBB": bool(self._mw.config.debug_mode),
             "SHOW_TRAJECTORIES": self._panels.setup.chk_show_trajectories.isChecked(),
             "SHOW_LABELS": self._panels.setup.chk_show_labels.isChecked(),
             "SHOW_STATE": self._panels.setup.chk_show_state.isChecked(),
-            "SHOW_KALMAN_UNCERTAINTY": (
-                self._panels.setup.chk_show_kalman_uncertainty.isChecked()
-            ),
+            "SHOW_KALMAN_UNCERTAINTY": bool(self._mw.config.debug_mode),
             "VISUALIZATION_FREE_MODE": (
                 self._panels.setup.chk_visualization_free.isChecked()
             ),

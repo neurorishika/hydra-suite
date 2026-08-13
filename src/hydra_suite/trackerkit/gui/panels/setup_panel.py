@@ -652,14 +652,6 @@ class SetupPanel(QWidget):
         # Pose runtime is fully derived from Compute tier (spec §2/§5.2) — no
         # UI control for it at all, not even read-only. See RuntimeResolver.
 
-        self.check_save_confidence = QCheckBox("Save metrics")
-        self.check_save_confidence.setChecked(True)
-        self.check_save_confidence.setToolTip(
-            "Save detection, assignment, and position uncertainty metrics to CSV.\n"
-            "Useful for post-hoc quality control but adds ~10-20% processing time.\n"
-            "Disable for maximum tracking speed."
-        )
-
         # Use Cached Detections
         self.chk_use_cached_detections = QCheckBox("Reuse cache")
         self.chk_use_cached_detections.setChecked(True)
@@ -695,7 +687,6 @@ class SetupPanel(QWidget):
         )
 
         for perf_checkbox in (
-            self.check_save_confidence,
             self.chk_use_cached_detections,
             self.chk_realtime_mode,
             self.chk_visualization_free,
@@ -708,14 +699,12 @@ class SetupPanel(QWidget):
         perf_toggle_grid.setHorizontalSpacing(12)
         perf_toggle_grid.setVerticalSpacing(6)
         perf_toggle_grid.setContentsMargins(0, 0, 0, 0)
-        perf_toggle_grid.addWidget(self.check_save_confidence, 0, 0)
-        perf_toggle_grid.addWidget(self.chk_use_cached_detections, 0, 1)
-        perf_toggle_grid.addWidget(self.chk_realtime_mode, 0, 2)
-        perf_toggle_grid.addWidget(self.chk_visualization_free, 0, 3)
+        perf_toggle_grid.addWidget(self.chk_use_cached_detections, 0, 0)
+        perf_toggle_grid.addWidget(self.chk_realtime_mode, 0, 1)
+        perf_toggle_grid.addWidget(self.chk_visualization_free, 0, 2)
         perf_toggle_grid.setColumnStretch(0, 1)
         perf_toggle_grid.setColumnStretch(1, 1)
         perf_toggle_grid.setColumnStretch(2, 1)
-        perf_toggle_grid.setColumnStretch(3, 1)
         self._reflow_performance_controls()
         vl_sys.addLayout(self.performance_control_grid)
         vl_sys.addLayout(perf_toggle_grid)
@@ -776,14 +765,6 @@ class SetupPanel(QWidget):
             "Display tracking state (ACTIVE, PREDICTED, etc.)."
         )
 
-        self.chk_show_kalman_uncertainty = QCheckBox("Show prediction uncertainty")
-        self.chk_show_kalman_uncertainty.setChecked(False)
-        self.chk_show_kalman_uncertainty.setToolTip(
-            "Draw ellipses showing Kalman filter position uncertainty.\n"
-            "Larger ellipse = more uncertainty in predicted position.\n"
-            "Useful for debugging tracking quality and filter convergence."
-        )
-
         _disp_r1 = QHBoxLayout()
         _disp_r1.addWidget(self.chk_show_circles)
         _disp_r1.addWidget(self.chk_show_orientation)
@@ -792,7 +773,6 @@ class SetupPanel(QWidget):
         _disp_r2.addWidget(self.chk_show_labels)
         _disp_r3 = QHBoxLayout()
         _disp_r3.addWidget(self.chk_show_state)
-        _disp_r3.addWidget(self.chk_show_kalman_uncertainty)
         vl_display.addLayout(_disp_r1)
         vl_display.addLayout(_disp_r2)
         vl_display.addLayout(_disp_r3)
@@ -817,39 +797,9 @@ class SetupPanel(QWidget):
 
         form.addWidget(self.g_display)
 
-        # ============================================================
-        # Advanced / Debug (moved from Visuals tab)
-        # ============================================================
-        g_debug = QGroupBox("Debug")
-        self._main_window._set_compact_section_widget(g_debug)
-        v_dbg = QVBoxLayout(g_debug)
-        v_dbg.setSpacing(6)
-        v_dbg.addWidget(
-            self._main_window._create_help_label(
-                "Enable verbose logging to see detailed tracking decisions. Useful for troubleshooting "
-                "but generates large log files. Disable for production runs."
-            )
-        )
-        self.chk_debug_logging = QCheckBox("Enable detailed debug logging")
-        self.chk_debug_logging.stateChanged.connect(
-            self._main_window.toggle_debug_logging
-        )
-        self.chk_enable_profiling = QCheckBox("Enable performance profiling")
-        self.chk_enable_profiling.setToolTip(
-            "Collect detailed timing for every tracking pipeline step "
-            "(init, detection, precompute, tracking loop, post-processing). "
-            "Exports a JSON profile next to outputs. Disabled by default for zero overhead."
-        )
-        debug_toggle_grid = QGridLayout()
-        debug_toggle_grid.setContentsMargins(0, 0, 0, 0)
-        debug_toggle_grid.setHorizontalSpacing(12)
-        debug_toggle_grid.setVerticalSpacing(6)
-        debug_toggle_grid.addWidget(self.chk_debug_logging, 0, 0)
-        debug_toggle_grid.addWidget(self.chk_enable_profiling, 0, 1)
-        debug_toggle_grid.setColumnStretch(0, 1)
-        debug_toggle_grid.setColumnStretch(1, 1)
-        v_dbg.addLayout(debug_toggle_grid)
-        form.addWidget(g_debug)
+        # Advanced / Debug group (moved from Visuals tab) removed: the
+        # per-checkbox debug-logging/profiling toggles are superseded by the
+        # single global Debug Mode button (see main_window.btn_debug_mode).
 
         scroll.setWidget(content)
         layout.addWidget(scroll)

@@ -558,17 +558,6 @@ class PostProcessPanel(QWidget):
         )
         f_interpolation_merge.addRow(self.stitch_params_row_widget)
 
-        # Cleanup option
-        self.chk_cleanup_temp_files = QCheckBox("Auto-cleanup temporary files")
-        self.chk_cleanup_temp_files.setChecked(True)
-        self.chk_cleanup_temp_files.setToolTip(
-            "Automatically delete temporary files after successful tracking:\n"
-            "\u2022 Intermediate CSV files (*_forward.csv, *_backward.csv)\n"
-            "\u2022 Pose inference cache (posekit/ directory)\n"
-            "Keeps only final merged/processed output files."
-        )
-        f_cleaning_filters.addRow("", self.chk_cleanup_temp_files)
-
         # --- Identity Post-Processing ---
         self.g_identity_postprocess = QGroupBox("Identity Post-Processing")
         self._main_window._set_compact_section_widget(self.g_identity_postprocess)
