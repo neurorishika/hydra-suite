@@ -401,8 +401,20 @@ class SessionOrchestrator:
     # =========================================================================
 
     def _cleanup_temporary_files(self):
-        """Remove temporary files if cleanup is enabled."""
-        if not self._mw._postprocess_panel.chk_cleanup_temp_files.isChecked():
+        """Remove temporary files if cleanup is enabled.
+
+        User mode (debug off) always cleans up, regardless of the checkbox --
+        User-mode runs are only supposed to leave the clean tracks.csv +
+        annotated video behind. Debug mode still honors the checkbox.
+        (Defensive ``getattr``: ``TrackerConfig.debug_mode`` is added in
+        Task 8; until then this falls back to debug-on, i.e. checkbox-only
+        behavior, so nothing changes ahead of that task.)
+        """
+        _debug = bool(getattr(self._mw.config, "debug_mode", True))
+        _checkbox_wants_cleanup = (
+            self._mw._postprocess_panel.chk_cleanup_temp_files.isChecked()
+        )
+        if _debug and not _checkbox_wants_cleanup:
             logger.info("Temporary file cleanup disabled, keeping intermediate files.")
             return
 

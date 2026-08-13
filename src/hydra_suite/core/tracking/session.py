@@ -95,6 +95,20 @@ def enforce_nonempty_forward(raw_csv_path, detection_cache_path) -> None:
         )
 
 
+def _user_mode_intermediate_paths(base: str, ext: str) -> list[str]:
+    """Intermediate CSVs to delete after a User-mode run (never the clean tracks.csv)."""
+    return [
+        f"{base}_final{ext}",
+        f"{base}_forward{ext}",
+        f"{base}_backward{ext}",
+        f"{base}_forward_processed{ext}",
+        f"{base}_final_with_individual{ext}",
+        f"{base}_tracking_forward{ext}",
+        f"{base}_tracking_backward{ext}",
+        f"{base}_tracking_final{ext}",
+    ]
+
+
 def _save_trajectories_to_csv(trajectories, output_path: str) -> bool:
     """Persist post-processed trajectories (delegates to the shared base-final writer)."""
     return write_base_final_csv(trajectories, output_path)
@@ -542,6 +556,22 @@ class TrackingSessionCore:
             result.summary_lines = build_session_summary_lines(
                 self.config, summary_result
             )
+
+            # User mode: intermediates are no longer needed once dataset
+            # generation, media export, and the annotated video (all of which
+            # read the base-final CSV) have finished -- clean them up so only
+            # the clean tracks.csv + annotated video remain. NO-OP in debug
+            # mode (and thus a no-op for the equivalence gate).
+            if not bool(self.params.get("DEBUG_MODE", True)):
+                for _p in _user_mode_intermediate_paths(base, ext):
+                    try:
+                        if os.path.exists(_p):
+                            os.remove(_p)
+                    except OSError:
+                        logger.warning(
+                            "Failed to remove intermediate %s", _p, exc_info=True
+                        )
+
             cb.stage_changed("done")
             return result
         except TrackingSessionError as e:
