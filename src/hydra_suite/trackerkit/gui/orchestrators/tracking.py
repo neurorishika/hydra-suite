@@ -26,7 +26,10 @@ from hydra_suite.trackerkit.tracking_cache import (
     plan_tracking_cache,
     resolve_detection_cache_runtime,
 )
-from hydra_suite.utils.video_artifacts import candidate_artifact_base_dirs
+from hydra_suite.utils.video_artifacts import (
+    build_inference_cache_dir,
+    candidate_artifact_base_dirs,
+)
 
 if TYPE_CHECKING:
     from hydra_suite.trackerkit.config.schemas import TrackerConfig
@@ -432,10 +435,11 @@ class TrackingOrchestrator:
         file-glob in ``_iter_cache_artifact_paths`` never matches them, so they
         must be discovered and removed explicitly.
         """
-        stem = Path(video_path).stem.strip() or "video"
         found: dict[str, Path] = {}
         for base_dir in artifact_base_dirs:
-            cache_dir = Path(base_dir).expanduser() / f".inference_cache_{stem}"
+            cache_dir = build_inference_cache_dir(
+                video_path, artifact_base_dir=base_dir
+            )
             if cache_dir.is_dir():
                 try:
                     key = str(cache_dir.resolve())
