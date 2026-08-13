@@ -948,9 +948,7 @@ class TrackingEngineCore:
         # detection live (constructed below); backward replays a cache.
         inference_runner = None  # InferenceRunner for yolo_obb mode
         bgsub_runner = None  # InferenceRunner for background-subtraction mode
-        detection_cache = None  # Legacy cache — only used for background subtraction
         use_cached_detections = False
-        cached_frame_indices = set()
 
         # Identity Phase 3, Task 4: resolve the catalog + per-phase calibration
         # ONCE, ahead of the yolo_obb InferenceRunner construction below, so
@@ -3850,22 +3848,6 @@ class TrackingEngineCore:
 
         profiler.phase_end("tracking_loop")
 
-        # Ensure cache has entries for all frames in the requested range (forward pass)
-        if detection_cache and not self.backward_mode and not use_cached_detections:
-            for frame_idx in range(start_frame, end_frame + 1):
-                if frame_idx not in cached_frame_indices:
-                    detection_cache.add_frame(
-                        frame_idx,
-                        [],
-                        [],
-                        [],
-                        [],
-                        None,
-                        [],
-                        [],
-                        [],
-                    )
-
         # === 3. CLEANUP (Identical to Original) ===
         profiler.phase_start("cleanup")
         stop_requested = bool(self._stop_requested)
@@ -3938,18 +3920,6 @@ class TrackingEngineCore:
                     )
             finally:
                 detected_props_cache.close()
-        # Save or close detection cache
-        if detection_cache:
-            if stop_requested:
-                detection_cache.close()
-            elif not self.backward_mode and not use_cached_detections:
-                # Forward pass Phase 1 (detection phase): save cache to disk
-                # Note: In batched detection, cache is already saved after Phase 1
-                detection_cache.save()
-                logger.info("Detection cache saved successfully")
-            else:
-                # Backward pass or Phase 2: just close cache (read-only mode)
-                detection_cache.close()
 
         # Flush the InferenceRunner. On a realtime forward pass this writes the
         # per-frame detection/headtail/cnn/pose caches to disk so the backward pass
