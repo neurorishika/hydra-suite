@@ -32,9 +32,9 @@ from hydra_suite.core.individual.properties.export import (
     pose_wide_columns_for_labels,
 )
 from hydra_suite.core.inference.api import load_pose_backend
+from hydra_suite.core.inference.cache import open_detection_cache_reader
 from hydra_suite.core.post.merge import write_csv_artifact as _write_csv_artifact
 from hydra_suite.core.post.merge import write_roi_npz as _write_roi_npz
-from hydra_suite.data.detection_cache import DetectionCache
 from hydra_suite.utils.geometry import wrap_angle_degs
 
 logger = logging.getLogger(__name__)
@@ -80,15 +80,15 @@ def _get_detection_size(detection_cache, frame_id, detection_id):
     if detection_cache is None or detection_id is None or pd.isna(detection_id):
         return None, None
     try:
-        _, _, shapes, _, obb_corners, detection_ids, *_ = detection_cache.get_frame(
-            int(frame_id)
-        )
+        obb = detection_cache.read_frame(int(frame_id))
     except Exception:
+        return None, None
+    if obb is None:
         return None, None
 
     idx = None
     try:
-        for i, did in enumerate(detection_ids):
+        for i, did in enumerate(obb.detection_ids):
             if int(did) == int(detection_id):
                 idx = i
                 break
@@ -98,11 +98,11 @@ def _get_detection_size(detection_cache, frame_id, detection_id):
     if idx is None:
         return None, None
 
-    w, h = _size_from_obb_corners(obb_corners, idx)
+    w, h = _size_from_obb_corners(list(obb.corners), idx)
     if w is not None:
         return w, h
 
-    return _size_from_shapes(shapes, idx)
+    return _size_from_shapes(list(obb.shapes), idx)
 
 
 def _init_pose_backend(params, output_dir):
@@ -1472,7 +1472,7 @@ def _validate_and_setup(
 
     detection_cache = None
     if detection_cache_path and os.path.exists(detection_cache_path):
-        detection_cache = DetectionCache(detection_cache_path, mode="r")
+        detection_cache = open_detection_cache_reader(detection_cache_path)
 
     save_interpolated_outputs = bool(params.get("ENABLE_INDIVIDUAL_IMAGE_SAVE", False))
     generate_oriented_videos = bool(
