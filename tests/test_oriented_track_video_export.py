@@ -13,7 +13,9 @@ from hydra_suite.core.individual.dataset.oriented_video import (
     resolve_individual_dataset_dir,
     resolve_oriented_track_video_dir,
 )
-from hydra_suite.data.detection_cache import DetectionCache
+from hydra_suite.core.inference.cache.base import CacheKey
+from hydra_suite.core.inference.cache.store import DetectionCacheHandle
+from hydra_suite.core.inference.result import OBBResult
 
 
 def _write_video(path: Path, colors: list[tuple[int, int, int]]) -> None:
@@ -42,6 +44,78 @@ def _square(cx: float, cy: float, half: float) -> np.ndarray:
         ],
         dtype=np.float32,
     )
+
+
+def _write_detection_cache(path: Path, frames: list[dict]) -> None:
+    """Write a modern ``detection.npz`` (``DetectionCacheHandle`` format).
+
+    Each entry in ``frames`` is a dict with ``frame_idx`` plus optional
+    ``meas`` (list of ``[cx, cy, theta]``), ``shapes`` (list of
+    ``(ellipse_area, aspect_ratio)``), ``confidences``, ``obb_corners``, and
+    ``detection_ids``. Missing keys default to zero detections for that
+    frame (still recorded as a written frame).
+    """
+    key = CacheKey(
+        schema_version=0, model_path="test", model_mtime=0.0, config_hash="h"
+    )
+    handle = DetectionCacheHandle(path=path, key=key)
+    for frame in frames:
+        frame_idx = int(frame["frame_idx"])
+        meas = frame.get("meas", [])
+        shapes = frame.get("shapes", [])
+        confidences = frame.get("confidences", [])
+        obb_corners = frame.get("obb_corners", [])
+        detection_ids = frame.get("detection_ids", [])
+        n = len(meas)
+        centroids = (
+            np.array([[m[0], m[1]] for m in meas], dtype=np.float32)
+            if n
+            else np.zeros((0, 2), dtype=np.float32)
+        )
+        angles = (
+            np.array([m[2] for m in meas], dtype=np.float32)
+            if n
+            else np.zeros(0, dtype=np.float32)
+        )
+        sizes = (
+            np.array([s[0] for s in shapes], dtype=np.float32)
+            if n
+            else np.zeros(0, dtype=np.float32)
+        )
+        shapes_arr = (
+            np.array(shapes, dtype=np.float32)
+            if n
+            else np.zeros((0, 2), dtype=np.float32)
+        )
+        confidences_arr = (
+            np.array(confidences, dtype=np.float32)
+            if n
+            else np.zeros(0, dtype=np.float32)
+        )
+        corners_arr = (
+            np.array(obb_corners, dtype=np.float32)
+            if n
+            else np.zeros((0, 4, 2), dtype=np.float32)
+        )
+        detection_ids_arr = (
+            np.array(detection_ids, dtype=np.int64)
+            if n
+            else np.zeros(0, dtype=np.int64)
+        )
+        handle.write_frame(
+            frame_idx,
+            result=OBBResult(
+                frame_idx=frame_idx,
+                centroids=centroids,
+                angles=angles,
+                sizes=sizes,
+                shapes=shapes_arr,
+                confidences=confidences_arr,
+                corners=corners_arr,
+                detection_ids=detection_ids_arr,
+            ),
+        )
+    handle.close()
 
 
 def test_resolve_individual_dataset_dir_uses_run_id(tmp_path: Path):
@@ -80,36 +154,36 @@ def test_oriented_track_video_export_streams_from_source_video_and_caches(
         [(0, 0, 255), (0, 255, 0), (255, 0, 0), (0, 255, 255)],
     )
 
-    with DetectionCache(cache_path, mode="w", start_frame=0, end_frame=3) as cache:
-        cache.add_frame(
-            0,
-            meas=[np.array([20.0, 24.0, 0.0], dtype=np.float32)],
-            sizes=[64.0],
-            shapes=[(64.0, 1.0)],
-            confidences=[0.9],
-            obb_corners=[_square(20.0, 24.0, 6.0)],
-            detection_ids=[101],
-        )
-        cache.add_frame(
-            1,
-            meas=[np.array([24.0, 24.0, 0.0], dtype=np.float32)],
-            sizes=[64.0],
-            shapes=[(64.0, 1.0)],
-            confidences=[0.9],
-            obb_corners=[_square(24.0, 24.0, 6.0)],
-            detection_ids=[102],
-        )
-        cache.add_frame(2, [], [], [], [])
-        cache.add_frame(
-            3,
-            meas=[np.array([42.0, 24.0, 0.0], dtype=np.float32)],
-            sizes=[64.0],
-            shapes=[(64.0, 1.0)],
-            confidences=[0.9],
-            obb_corners=[_square(42.0, 24.0, 6.0)],
-            detection_ids=[201],
-        )
-        cache.save()
+    _write_detection_cache(
+        cache_path,
+        [
+            {
+                "frame_idx": 0,
+                "meas": [[20.0, 24.0, 0.0]],
+                "shapes": [(64.0, 1.0)],
+                "confidences": [0.9],
+                "obb_corners": [_square(20.0, 24.0, 6.0)],
+                "detection_ids": [101],
+            },
+            {
+                "frame_idx": 1,
+                "meas": [[24.0, 24.0, 0.0]],
+                "shapes": [(64.0, 1.0)],
+                "confidences": [0.9],
+                "obb_corners": [_square(24.0, 24.0, 6.0)],
+                "detection_ids": [102],
+            },
+            {"frame_idx": 2},
+            {
+                "frame_idx": 3,
+                "meas": [[42.0, 24.0, 0.0]],
+                "shapes": [(64.0, 1.0)],
+                "confidences": [0.9],
+                "obb_corners": [_square(42.0, 24.0, 6.0)],
+                "detection_ids": [201],
+            },
+        ],
+    )
 
     np.savez_compressed(
         str(interp_npz_path),
@@ -211,36 +285,36 @@ def test_final_canonical_media_export_writes_images_and_videos(tmp_path: Path):
         [(0, 0, 255), (0, 255, 0), (255, 0, 0), (0, 255, 255)],
     )
 
-    with DetectionCache(cache_path, mode="w", start_frame=0, end_frame=3) as cache:
-        cache.add_frame(
-            0,
-            meas=[np.array([20.0, 24.0, 0.0], dtype=np.float32)],
-            sizes=[64.0],
-            shapes=[(64.0, 1.0)],
-            confidences=[0.9],
-            obb_corners=[_square(20.0, 24.0, 6.0)],
-            detection_ids=[101],
-        )
-        cache.add_frame(
-            1,
-            meas=[np.array([24.0, 24.0, 0.0], dtype=np.float32)],
-            sizes=[64.0],
-            shapes=[(64.0, 1.0)],
-            confidences=[0.9],
-            obb_corners=[_square(24.0, 24.0, 6.0)],
-            detection_ids=[102],
-        )
-        cache.add_frame(2, [], [], [], [])
-        cache.add_frame(
-            3,
-            meas=[np.array([42.0, 24.0, 0.0], dtype=np.float32)],
-            sizes=[64.0],
-            shapes=[(64.0, 1.0)],
-            confidences=[0.9],
-            obb_corners=[_square(42.0, 24.0, 6.0)],
-            detection_ids=[201],
-        )
-        cache.save()
+    _write_detection_cache(
+        cache_path,
+        [
+            {
+                "frame_idx": 0,
+                "meas": [[20.0, 24.0, 0.0]],
+                "shapes": [(64.0, 1.0)],
+                "confidences": [0.9],
+                "obb_corners": [_square(20.0, 24.0, 6.0)],
+                "detection_ids": [101],
+            },
+            {
+                "frame_idx": 1,
+                "meas": [[24.0, 24.0, 0.0]],
+                "shapes": [(64.0, 1.0)],
+                "confidences": [0.9],
+                "obb_corners": [_square(24.0, 24.0, 6.0)],
+                "detection_ids": [102],
+            },
+            {"frame_idx": 2},
+            {
+                "frame_idx": 3,
+                "meas": [[42.0, 24.0, 0.0]],
+                "shapes": [(64.0, 1.0)],
+                "confidences": [0.9],
+                "obb_corners": [_square(42.0, 24.0, 6.0)],
+                "detection_ids": [201],
+            },
+        ],
+    )
 
     np.savez_compressed(
         str(interp_npz_path),
@@ -319,9 +393,18 @@ def test_final_canonical_media_export_writes_images_and_videos(tmp_path: Path):
     assert (image_output_dir / "did201.png").exists()
 
 
-def test_oriented_track_video_prefers_directed_heading_and_preserves_branch(
+def test_oriented_track_video_preserves_branch_across_interpolated_rows(
     tmp_path: Path,
 ):
+    """Actual-row heading now comes from the final CSV's ``Theta`` column
+    (upstream head-tail correction already bakes the resolved/directed
+    heading into it) -- the modern per-frame detection cache
+    (``DetectionCacheHandle``/``OBBResult``) has no slot for cache-level
+    heading hints or a directed mask; those live in the separate head-tail
+    cache, which this dataset exporter does not read. This test now checks
+    that an interpolated row's stored heading (on the opposite pi-branch)
+    still collapses onto the resolved reference branch from the real
+    detection, rather than exercising a cache-supplied heading override."""
     dataset_dir = tmp_path / "individual_crops" / "run_20260311"
     cache_path = tmp_path / "detections.npz"
     interp_npz_path = tmp_path / "interpolated_rois.npz"
@@ -330,20 +413,20 @@ def test_oriented_track_video_prefers_directed_heading_and_preserves_branch(
 
     _write_video(video_path, [(0, 0, 255), (0, 255, 0)])
 
-    with DetectionCache(cache_path, mode="w", start_frame=0, end_frame=1) as cache:
-        cache.add_frame(
-            0,
-            meas=[np.array([20.0, 24.0, math.pi], dtype=np.float32)],
-            sizes=[64.0],
-            shapes=[(64.0, 1.0)],
-            confidences=[0.9],
-            obb_corners=[_square(20.0, 24.0, 6.0)],
-            detection_ids=[101],
-            heading_hints=[0.0],
-            directed_mask=[1],
-        )
-        cache.add_frame(1, [], [], [], [])
-        cache.save()
+    _write_detection_cache(
+        cache_path,
+        [
+            {
+                "frame_idx": 0,
+                "meas": [[20.0, 24.0, 0.0]],
+                "shapes": [(64.0, 1.0)],
+                "confidences": [0.9],
+                "obb_corners": [_square(20.0, 24.0, 6.0)],
+                "detection_ids": [101],
+            },
+            {"frame_idx": 1},
+        ],
+    )
 
     np.savez_compressed(
         str(interp_npz_path),
@@ -368,7 +451,7 @@ def test_oriented_track_video_prefers_directed_heading_and_preserves_branch(
                 "TrajectoryID": 1,
                 "FrameID": 0,
                 "DetectionID": 101,
-                "Theta": math.pi,
+                "Theta": 0.0,
                 "State": "active",
             },
             {
@@ -401,7 +484,7 @@ def test_oriented_track_video_prefers_directed_heading_and_preserves_branch(
     assert missing_rows == 0
     task0 = frame_bundles[0].tasks[0]
     task1 = frame_bundles[1].tasks[0]
-    expected_affine, expected_w, expected_h = exporter._compute_affine(
+    expected_affine, expected_w, expected_h = exporter._canonical_affine_for_task(
         20.0,
         24.0,
         12.0,
@@ -409,7 +492,7 @@ def test_oriented_track_video_prefers_directed_heading_and_preserves_branch(
         0.0,
     )
     interp_expected_affine, interp_expected_w, interp_expected_h = (
-        exporter._compute_affine(
+        exporter._canonical_affine_for_task(
             28.0,
             24.0,
             12.0,
@@ -434,35 +517,35 @@ def test_oriented_track_video_can_fix_short_heading_flip_bursts(tmp_path: Path):
 
     _write_video(video_path, [(0, 0, 255), (0, 255, 0), (255, 0, 0)])
 
-    with DetectionCache(cache_path, mode="w", start_frame=0, end_frame=2) as cache:
-        cache.add_frame(
-            0,
-            meas=[np.array([20.0, 24.0, 0.0], dtype=np.float32)],
-            sizes=[64.0],
-            shapes=[(64.0, 1.0)],
-            confidences=[0.9],
-            obb_corners=[_square(20.0, 24.0, 6.0)],
-            detection_ids=[101],
-        )
-        cache.add_frame(
-            1,
-            meas=[np.array([24.0, 24.0, math.pi], dtype=np.float32)],
-            sizes=[64.0],
-            shapes=[(64.0, 1.0)],
-            confidences=[0.9],
-            obb_corners=[_square(24.0, 24.0, 6.0)],
-            detection_ids=[102],
-        )
-        cache.add_frame(
-            2,
-            meas=[np.array([28.0, 24.0, 0.0], dtype=np.float32)],
-            sizes=[64.0],
-            shapes=[(64.0, 1.0)],
-            confidences=[0.9],
-            obb_corners=[_square(28.0, 24.0, 6.0)],
-            detection_ids=[103],
-        )
-        cache.save()
+    _write_detection_cache(
+        cache_path,
+        [
+            {
+                "frame_idx": 0,
+                "meas": [[20.0, 24.0, 0.0]],
+                "shapes": [(64.0, 1.0)],
+                "confidences": [0.9],
+                "obb_corners": [_square(20.0, 24.0, 6.0)],
+                "detection_ids": [101],
+            },
+            {
+                "frame_idx": 1,
+                "meas": [[24.0, 24.0, math.pi]],
+                "shapes": [(64.0, 1.0)],
+                "confidences": [0.9],
+                "obb_corners": [_square(24.0, 24.0, 6.0)],
+                "detection_ids": [102],
+            },
+            {
+                "frame_idx": 2,
+                "meas": [[28.0, 24.0, 0.0]],
+                "shapes": [(64.0, 1.0)],
+                "confidences": [0.9],
+                "obb_corners": [_square(28.0, 24.0, 6.0)],
+                "detection_ids": [103],
+            },
+        ],
+    )
 
     pd.DataFrame(
         [
@@ -509,7 +592,7 @@ def test_oriented_track_video_can_fix_short_heading_flip_bursts(tmp_path: Path):
 
     assert missing_rows == 0
     corrected_task = frame_bundles[1].tasks[0]
-    expected_affine, expected_w, expected_h = exporter._compute_affine(
+    expected_affine, expected_w, expected_h = exporter._canonical_affine_for_task(
         24.0,
         24.0,
         12.0,
@@ -530,35 +613,35 @@ def test_oriented_track_video_affine_stabilization_smooths_jitter(tmp_path: Path
 
     _write_video(video_path, [(0, 0, 255), (0, 255, 0), (255, 0, 0)])
 
-    with DetectionCache(cache_path, mode="w", start_frame=0, end_frame=2) as cache:
-        cache.add_frame(
-            0,
-            meas=[np.array([20.0, 24.0, 0.0], dtype=np.float32)],
-            sizes=[64.0],
-            shapes=[(64.0, 1.0)],
-            confidences=[0.9],
-            obb_corners=[_square(20.0, 24.0, 6.0)],
-            detection_ids=[101],
-        )
-        cache.add_frame(
-            1,
-            meas=[np.array([28.0, 24.0, 0.0], dtype=np.float32)],
-            sizes=[256.0],
-            shapes=[(256.0, 1.0)],
-            confidences=[0.9],
-            obb_corners=[_square(28.0, 24.0, 12.0)],
-            detection_ids=[102],
-        )
-        cache.add_frame(
-            2,
-            meas=[np.array([20.0, 24.0, 0.0], dtype=np.float32)],
-            sizes=[64.0],
-            shapes=[(64.0, 1.0)],
-            confidences=[0.9],
-            obb_corners=[_square(20.0, 24.0, 6.0)],
-            detection_ids=[103],
-        )
-        cache.save()
+    _write_detection_cache(
+        cache_path,
+        [
+            {
+                "frame_idx": 0,
+                "meas": [[20.0, 24.0, 0.0]],
+                "shapes": [(64.0, 1.0)],
+                "confidences": [0.9],
+                "obb_corners": [_square(20.0, 24.0, 6.0)],
+                "detection_ids": [101],
+            },
+            {
+                "frame_idx": 1,
+                "meas": [[28.0, 24.0, 0.0]],
+                "shapes": [(256.0, 1.0)],
+                "confidences": [0.9],
+                "obb_corners": [_square(28.0, 24.0, 12.0)],
+                "detection_ids": [102],
+            },
+            {
+                "frame_idx": 2,
+                "meas": [[20.0, 24.0, 0.0]],
+                "shapes": [(64.0, 1.0)],
+                "confidences": [0.9],
+                "obb_corners": [_square(20.0, 24.0, 6.0)],
+                "detection_ids": [103],
+            },
+        ],
+    )
 
     pd.DataFrame(
         [
@@ -605,7 +688,7 @@ def test_oriented_track_video_affine_stabilization_smooths_jitter(tmp_path: Path
 
     assert missing_rows == 0
     stabilized_task = frame_bundles[1].tasks[0]
-    expected_affine, expected_w, expected_h = exporter._compute_affine(
+    expected_affine, expected_w, expected_h = exporter._canonical_affine_for_task(
         20.0,
         24.0,
         12.0,
@@ -630,20 +713,22 @@ def test_final_media_export_reports_missing_geometry_breakdown(tmp_path: Path):
         [(0, 0, 255), (0, 255, 0), (255, 0, 0), (0, 255, 255)],
     )
 
-    with DetectionCache(cache_path, mode="w", start_frame=0, end_frame=3) as cache:
-        cache.add_frame(
-            0,
-            meas=[np.array([20.0, 24.0, 0.0], dtype=np.float32)],
-            sizes=[64.0],
-            shapes=[(64.0, 1.0)],
-            confidences=[0.9],
-            obb_corners=[_square(20.0, 24.0, 6.0)],
-            detection_ids=[101],
-        )
-        cache.add_frame(1, [], [], [], [])
-        cache.add_frame(2, [], [], [], [])
-        cache.add_frame(3, [], [], [], [])
-        cache.save()
+    _write_detection_cache(
+        cache_path,
+        [
+            {
+                "frame_idx": 0,
+                "meas": [[20.0, 24.0, 0.0]],
+                "shapes": [(64.0, 1.0)],
+                "confidences": [0.9],
+                "obb_corners": [_square(20.0, 24.0, 6.0)],
+                "detection_ids": [101],
+            },
+            {"frame_idx": 1},
+            {"frame_idx": 2},
+            {"frame_idx": 3},
+        ],
+    )
 
     np.savez_compressed(
         str(interp_npz_path),
