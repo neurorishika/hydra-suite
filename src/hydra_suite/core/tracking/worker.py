@@ -4074,8 +4074,9 @@ class TrackingEngineCore:
 
     def _resolve_cache_dir(self) -> Path:
         """Return the per-video cache directory for InferenceRunner caches."""
-        video_path = Path(self.video_path)
-        return video_path.parent / f".inference_cache_{video_path.stem}"
+        from hydra_suite.utils.video_artifacts import build_inference_cache_dir
+
+        return build_inference_cache_dir(self.video_path)
 
     @staticmethod
     def _resolve_cnn_phase_factor_labels(cnn_cfg_dict: dict) -> list[list[str]]:

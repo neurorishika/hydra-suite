@@ -22,9 +22,7 @@ def test_detection_cache_path_uses_video_cache_subdirectory(tmp_path: Path) -> N
         artifact_base_dir=artifact_root,
     )
 
-    assert cache_path == (
-        artifact_root / "clip_caches" / "clip_detection_cache_model123.npz"
-    )
+    assert cache_path == (artifact_root / ".inference_cache_clip" / "detection.npz")
 
 
 def test_tracking_log_path_uses_video_log_subdirectory(tmp_path: Path) -> None:
@@ -57,11 +55,15 @@ def test_iter_detection_cache_candidates_scans_new_and_legacy_locations(
     )
     legacy_path.write_bytes(b"legacy")
 
-    new_path = mod.build_detection_cache_path(
-        str(video_path),
-        "newer",
-        artifact_base_dir=artifact_root,
-        create_dir=True,
+    # iter_detection_cache_candidates still scans the `<stem>_caches/` subdirectory
+    # layout directly (its own rewrite onto `.inference_cache_<stem>/` is a later,
+    # separate task); build that path explicitly rather than via
+    # build_detection_cache_path, which now points at the modern cache dir.
+    new_cache_dir = mod.build_video_cache_dir(
+        str(video_path), artifact_base_dir=artifact_root, create=True
+    )
+    new_path = (
+        new_cache_dir / f"{mod._video_stem(video_path)}_detection_cache_newer.npz"
     )
     new_path.write_bytes(b"newer")
     os.utime(

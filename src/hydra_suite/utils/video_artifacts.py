@@ -92,6 +92,23 @@ def build_video_cache_dir(
     return cache_dir
 
 
+def build_inference_cache_dir(
+    video_path: str | os.PathLike[str],
+    artifact_base_dir: str | os.PathLike[str] | None = None,
+    create: bool = False,
+) -> Path:
+    """Return the modern InferenceRunner cache dir, ``.inference_cache_<stem>/``."""
+    base_dir = (
+        _normalize_base_dir(artifact_base_dir) or Path(video_path).expanduser().parent
+    )
+    stem = _video_stem(video_path)
+    expected = f".inference_cache_{stem}"
+    cache_dir = base_dir if base_dir.name == expected else base_dir / expected
+    if create:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
+
+
 def build_video_log_dir(
     video_path: str | os.PathLike[str],
     artifact_base_dir: str | os.PathLike[str] | None = None,
@@ -117,16 +134,17 @@ def build_detection_cache_path(
     artifact_base_dir: str | os.PathLike[str] | None = None,
     create_dir: bool = False,
 ) -> Path:
-    """Return the canonical ``.npz`` path for a detection cache inside the video's cache dir.
+    """Return the modern detection cache file, ``.inference_cache_<stem>/detection.npz``.
 
-    The filename is ``<stem>_detection_cache_<model_id>.npz`` under ``<stem>_caches/``.
+    ``model_id`` is accepted for signature stability but no longer encoded in the
+    filename — the modern cache key inside the directory carries model identity.
     """
-    cache_dir = build_video_cache_dir(
+    cache_dir = build_inference_cache_dir(
         video_path,
         artifact_base_dir=artifact_base_dir,
         create=create_dir,
     )
-    return cache_dir / f"{_video_stem(video_path)}_detection_cache_{model_id}.npz"
+    return cache_dir / "detection.npz"
 
 
 def build_legacy_detection_cache_path(
@@ -152,8 +170,8 @@ def find_existing_detection_cache_path(
 ) -> Path | None:
     """Locate an existing detection cache ``.npz`` for the given video and model.
 
-    Checks current-layout paths first across all candidate directories, then falls back
-    to legacy flat paths.  Returns ``None`` if no cache is found anywhere.
+    Checks the modern ``.inference_cache_<stem>/detection.npz`` layout across all
+    candidate directories. Returns ``None`` if no cache is found anywhere.
     """
     base_dirs = artifact_base_dirs or candidate_artifact_base_dirs(video_path)
 
@@ -165,15 +183,6 @@ def find_existing_detection_cache_path(
         )
         if current.exists():
             return current
-
-    for base_dir in base_dirs:
-        legacy = build_legacy_detection_cache_path(
-            video_path,
-            model_id,
-            artifact_base_dir=base_dir,
-        )
-        if legacy.exists():
-            return legacy
     return None
 
 
