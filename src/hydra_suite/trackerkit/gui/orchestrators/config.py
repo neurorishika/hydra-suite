@@ -114,6 +114,41 @@ def resolve_tensorrt_max_batch_size(
     return max(1, int(detection_batch_size or 1))
 
 
+def detection_cache_dir_covers_range(
+    path: str,
+    video_path: str,
+    params: dict,
+    start_frame: int,
+    end_frame: int,
+) -> bool:
+    """Return True iff *path* is a modern detection-cache directory whose
+    detection cache is valid (key-compatible) and covers ``start_frame..end_frame``.
+
+    Only the modern ``InferenceRunner`` cache-directory layout (built by
+    ``DetectionCacheBuildWorker``) is recognized -- there is no legacy
+    single-file fallback. A non-directory or non-existent ``path`` returns
+    False rather than raising.
+    """
+    if not path or not os.path.isdir(path):
+        return False
+    try:
+        from pathlib import Path as _Path
+
+        from hydra_suite.core.inference.config import build_inference_config_from_params
+        from hydra_suite.core.inference.runner import _open_caches, video_signature
+
+        _cfg = build_inference_config_from_params(params)
+        handle = _open_caches(
+            _cfg,
+            _Path(path),
+            video_signature(video_path),
+            params.get("ROI_MASK", None),
+        ).detection
+        return handle is not None and handle.covers_frame_range(start_frame, end_frame)
+    except Exception:
+        return False
+
+
 class ConfigOrchestrator:
     """Manages configuration load/save, presets, ROI, and video file setup."""
 
@@ -2885,7 +2920,6 @@ class ConfigOrchestrator:
         """
         import re
 
-        from hydra_suite.data.detection_cache import DetectionCache
         from hydra_suite.utils.video_artifacts import (
             build_optimizer_detection_cache_path,
             candidate_artifact_base_dirs,
@@ -2917,43 +2951,9 @@ class ConfigOrchestrator:
 
         def _is_valid(path: str) -> bool:
             """Return True if *path* is a compatible cache covering the frame range."""
-            if not path or not os.path.exists(path):
-                return False
-            if os.path.isdir(path):
-                # InferenceRunner cache dir (built by DetectionCacheBuildWorker):
-                # key-constructed handle, not a legacy single-file DetectionCache.
-                try:
-                    from pathlib import Path as _Path
-
-                    from hydra_suite.core.inference.config import (
-                        build_inference_config_from_params,
-                    )
-                    from hydra_suite.core.inference.runner import (
-                        _open_caches,
-                        video_signature,
-                    )
-
-                    _cfg = build_inference_config_from_params(params)
-                    handle = _open_caches(
-                        _cfg,
-                        _Path(path),
-                        video_signature(video_path),
-                        params.get("ROI_MASK", None),
-                    ).detection
-                    return handle is not None and handle.covers_frame_range(
-                        start_frame, end_frame
-                    )
-                except Exception:
-                    return False
-            try:
-                dc = DetectionCache(path, mode="r")
-                ok = dc.is_compatible() and dc.covers_frame_range(
-                    start_frame, end_frame
-                )
-                dc.close()
-                return ok
-            except Exception:
-                return False
+            return detection_cache_dir_covers_range(
+                path, video_path, params, start_frame, end_frame
+            )
 
         # 1. Production cache from current session — only if method-compatible
         if _cache_matches_method(self._mw.current_detection_cache_path) and _is_valid(
