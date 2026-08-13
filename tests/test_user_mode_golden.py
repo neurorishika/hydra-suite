@@ -6,18 +6,16 @@ fixture clips (see ``tools/equivalence/fixtures/``), via
 ``tools/equivalence/runner.py`` on the worktree's own ``src`` (PYTHONPATH),
 never hand-written.
 
-Note on schema: all three source fixture configs have
-``enable_identity_analysis=True`` (the identity-postprocessing / rich-export
-path always resolves an ``IdentityFinalLabel`` column when that pipeline is
-enabled, regardless of ``identity_method``), so even the "pure tracking"
-``fly_obb`` fixture carries the ``identity``/``identity_confidence``/
-``identity_source`` columns -- populated with placeholder values
-(``identity="unknown"``, ``identity_confidence=0.0``, empty source) since its
-``identity_method`` is ``none_disabled``. ``ant_cnn_identity`` additionally
-resolves real per-track identities (``identity_method=cnn_classifier``) AND
-carries pose keypoint triples, since its fixture config also supplies a
-skeleton/pose backend. ``ant_pose_headtail`` carries real pose keypoint
-triples via SLEAP head-tail pose.
+Note on schema: the identity block (``identity``/``identity_confidence``/
+``identity_source``) is now *gated* on whether an identity method actually
+ran (``identity_ran``), not merely on whether identity post-processing was
+enabled. ``fly_obb`` and ``ant_pose_headtail`` have ``identity_method``
+``none_disabled`` -- no identity method ran -- so their clean User-mode CSVs
+omit the identity block entirely. ``ant_cnn_identity`` resolves real
+per-track identities (``identity_method=cnn_classifier``), so its CSV
+carries the identity block. ``ant_pose_headtail`` and ``ant_cnn_identity``
+both carry pose keypoint triples (SLEAP head-tail pose / a skeleton+pose
+backend respectively); ``fly_obb`` is pure OBB tracking with no pose.
 """
 
 import pandas as pd
@@ -64,9 +62,12 @@ POSE_TRIPLE_COLUMNS = [
 ]
 
 CASES = {
-    "fly_obb": CORE_COLUMNS + IDENTITY_COLUMNS,
+    # fly_obb: identity_method=none_disabled -> no identity ran -> no identity block, no pose.
+    "fly_obb": CORE_COLUMNS,
+    # ant_cnn_identity: identity_method=cnn_classifier -> identity ran -> identity block present, plus pose.
     "ant_cnn_identity": CORE_COLUMNS + IDENTITY_COLUMNS + POSE_TRIPLE_COLUMNS,
-    "ant_pose_headtail": CORE_COLUMNS + IDENTITY_COLUMNS + POSE_TRIPLE_COLUMNS,
+    # ant_pose_headtail: identity_method=none_disabled -> no identity ran -> no identity block, but pose present.
+    "ant_pose_headtail": CORE_COLUMNS + POSE_TRIPLE_COLUMNS,
 }
 
 
@@ -87,11 +88,27 @@ def test_fly_obb_core_columns_present():
     assert set(CORE_COLUMNS).issubset(golden.columns)
 
 
+def test_fly_obb_has_no_identity_block():
+    # No identity method ran for this fixture -> identity block is absent, not
+    # populated with "unknown" placeholders.
+    golden = pd.read_csv("tests/goldens/user_mode/fly_obb_tracks.csv")
+    assert not set(IDENTITY_COLUMNS) & set(golden.columns)
+
+
+def test_ant_pose_headtail_has_no_identity_block():
+    # No identity method ran for this fixture either -- pose keypoints are
+    # present, but the identity block must still be absent.
+    golden = pd.read_csv("tests/goldens/user_mode/ant_pose_headtail_tracks.csv")
+    assert not set(IDENTITY_COLUMNS) & set(golden.columns)
+
+
 def test_ant_cnn_identity_has_real_identity_values():
     golden = pd.read_csv("tests/goldens/user_mode/ant_cnn_identity_tracks.csv")
     assert set(IDENTITY_COLUMNS).issubset(golden.columns)
-    # Real CNN identities resolved (not the "unknown" placeholder every row).
+    # Real CNN identities resolved: non-empty and not the "unknown" placeholder.
+    assert golden["identity"].notna().all()
     assert (golden["identity"] != "unknown").any()
+    assert (golden["identity"].astype(str).str.strip() != "").all()
 
 
 def test_pose_fixture_has_keypoint_triples():

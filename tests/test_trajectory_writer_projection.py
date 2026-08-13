@@ -74,3 +74,32 @@ def test_pose_triples_appear_only_when_pose_present():
 def test_no_fps_yields_nan_time():
     out = project_user_tracks(_base_df(), fps=None)
     assert out["time_s"].isna().all()
+
+
+def test_identity_columns_absent_when_identity_did_not_run():
+    """Even with C.FINAL_LABEL present, identity_ran=False suppresses the block.
+
+    Rich-export's identity postprocessing unconditionally resolves
+    C.FINAL_LABEL to a placeholder ("unknown") whenever the identity
+    pipeline is enabled, regardless of whether a real method executed --
+    column presence alone is not a reliable "identity actually ran" signal.
+    """
+    df = _base_df()
+    df[C.FINAL_LABEL] = ["unknown", "unknown"]
+    df[C.FINAL_CONFIDENCE] = [0.0, 0.0]
+    df[C.FINAL_SOURCE] = ["", ""]
+    out = project_user_tracks(df, fps=10.0, identity_ran=False)
+    assert "identity" not in out.columns
+    assert "identity_confidence" not in out.columns
+    assert "identity_source" not in out.columns
+
+
+def test_identity_columns_present_when_identity_ran_true():
+    df = _base_df()
+    df[C.FINAL_LABEL] = ["antA", "antB"]
+    df[C.FINAL_CONFIDENCE] = [0.7, 0.6]
+    df[C.FINAL_SOURCE] = ["realtime", "offline"]
+    out = project_user_tracks(df, fps=10.0, identity_ran=True)
+    assert out["identity"].tolist() == ["antA", "antB"]
+    assert out["identity_confidence"].tolist() == [0.7, 0.6]
+    assert out["identity_source"].tolist() == ["realtime", "offline"]

@@ -263,6 +263,17 @@ class TrackingSessionCore:
             )
             return None
 
+    def _identity_ran(self) -> bool:
+        """Whether an identity/tag method actually ran (not just enabled-with-none)."""
+        _method = (
+            str(self.config.get("identity_method", "none_disabled")).strip().lower()
+        )
+        return bool(self.config.get("enable_identity_analysis")) and _method not in (
+            "none_disabled",
+            "none",
+            "",
+        )
+
     def _export_rich(self, final_csv):
         return export_rich_csv(
             final_csv,
@@ -273,6 +284,7 @@ class TrackingSessionCore:
             identity_evidence_cache_path=self._identity_evidence_cache_path(),
             debug_mode=bool(self.params.get("DEBUG_MODE", True)),
             fps=self.params.get("FPS"),
+            identity_ran=self._identity_ran(),
         )
 
     def _relink_export_rich(self, final_csv):
@@ -285,6 +297,7 @@ class TrackingSessionCore:
             identity_evidence_cache_path=self._identity_evidence_cache_path(),
             debug_mode=bool(self.params.get("DEBUG_MODE", True)),
             fps=self.params.get("FPS"),
+            identity_ran=self._identity_ran(),
         )
 
     def _run_interp_crops(self, final_csv) -> None:

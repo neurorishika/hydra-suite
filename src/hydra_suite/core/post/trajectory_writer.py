@@ -20,8 +20,20 @@ def _is_empty_label(series: pd.Series) -> pd.Series:
     return s.isna() | (s.str.strip().str.len() == 0)
 
 
-def project_user_tracks(df: pd.DataFrame, *, fps: float | None) -> pd.DataFrame:
-    """Project the full trajectory DataFrame to the clean User-mode schema."""
+def project_user_tracks(
+    df: pd.DataFrame, *, fps: float | None, identity_ran: bool = True
+) -> pd.DataFrame:
+    """Project the full trajectory DataFrame to the clean User-mode schema.
+
+    ``identity_ran`` gates the identity block (``identity``/
+    ``identity_confidence``/``identity_source``): even when a resolved-final
+    label column is present in ``df``, it is only emitted when an
+    identity/tag method actually ran. Rich-export's identity postprocessing
+    unconditionally resolves ``C.FINAL_LABEL`` to a placeholder (``"unknown"``)
+    whenever the identity-postprocessing pipeline is enabled, regardless of
+    whether a real method (CNN classifier, AprilTags, ...) executed, so
+    column presence alone is not a reliable signal.
+    """
     out = pd.DataFrame(index=df.index)
     out["id"] = df["TrajectoryID"]
     out["frame"] = pd.to_numeric(df["FrameID"], errors="coerce").round().astype("Int64")
@@ -36,8 +48,9 @@ def project_user_tracks(df: pd.DataFrame, *, fps: float | None) -> pd.DataFrame:
     out["state"] = df["State"]
     out["detection_confidence"] = df.get("DetectionConfidence")
 
-    # Identity — only when the resolved-final label column is present.
-    if C.FINAL_LABEL in df.columns:
+    # Identity — only when an identity/tag method actually ran AND the
+    # resolved-final label column is present.
+    if identity_ran and C.FINAL_LABEL in df.columns:
         label = df[C.FINAL_LABEL].astype("string")
         if C.FINAL_SMOOTHED_LABEL in df.columns:
             label = label.mask(
@@ -80,13 +93,19 @@ def write_final_trajectories(
     *,
     debug_mode: bool,
     fps: float | None,
+    identity_ran: bool = True,
 ) -> str | None:
-    """Terminal trajectory writer. Debug → `_with_individual.csv`; User → `<stem>_tracks.csv`."""
+    """Terminal trajectory writer. Debug → `_with_individual.csv`; User → `<stem>_tracks.csv`.
+
+    ``identity_ran`` is forwarded to `project_user_tracks` for the User
+    branch only; the Debug branch's rich export always includes every
+    resolved column regardless of whether identity actually ran.
+    """
     if debug_mode:
         from hydra_suite.core.post.rich_export import write_rich_export_csv
 
         return write_rich_export_csv(rich_df, final_csv_path)
-    clean = project_user_tracks(rich_df, fps=fps)
+    clean = project_user_tracks(rich_df, fps=fps, identity_ran=identity_ran)
     out_path = user_tracks_path(final_csv_path)
     clean.to_csv(out_path, index=False)
     return out_path

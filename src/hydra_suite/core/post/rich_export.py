@@ -324,6 +324,7 @@ def export_rich_csv(
     identity_evidence_cache_path=None,
     debug_mode=True,
     fps=None,
+    identity_ran=True,
 ):
     """Write the rich individual-analysis CSV next to the final CSV."""
     with_pose_df = build_rich_export_dataframe(
@@ -340,7 +341,11 @@ def export_rich_csv(
     from hydra_suite.core.post.trajectory_writer import write_final_trajectories
 
     return write_final_trajectories(
-        with_pose_df, final_csv_path, debug_mode=debug_mode, fps=fps
+        with_pose_df,
+        final_csv_path,
+        debug_mode=debug_mode,
+        fps=fps,
+        identity_ran=identity_ran,
     )
 
 
@@ -354,6 +359,7 @@ def relink_and_export_rich_csv(
     identity_evidence_cache_path=None,
     debug_mode=True,
     fps=None,
+    identity_ran=True,
 ):
     """Rewrite final CSV IDs after pose-aware relinking and regenerate the rich export CSV."""
     if not final_csv_path or not os.path.exists(final_csv_path):
@@ -382,6 +388,7 @@ def relink_and_export_rich_csv(
             ignore_keypoints=ignore_keypoints,
             debug_mode=debug_mode,
             fps=fps,
+            identity_ran=identity_ran,
         )
 
     relink_input_df = (
@@ -419,7 +426,11 @@ def relink_and_export_rich_csv(
         from hydra_suite.core.post.trajectory_writer import write_final_trajectories
 
         rich_path = write_final_trajectories(
-            relinked_with_pose, final_csv_path, debug_mode=debug_mode, fps=fps
+            relinked_with_pose,
+            final_csv_path,
+            debug_mode=debug_mode,
+            fps=fps,
+            identity_ran=identity_ran,
         )
         if not rich_path:
             return None
