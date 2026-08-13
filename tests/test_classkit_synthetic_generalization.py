@@ -229,10 +229,11 @@ def _evaluate_artifact_accuracy(artifact_path: Path, dataset_dir: Path) -> float
 
 def _build_pil_tiny_dataset_class(input_w: int, input_h: int):
     class TinyDataset(Dataset):
-        def __init__(self, items, augment: bool = False, profile=None):
+        def __init__(self, items, augment: bool = False, profile=None, seed: int = 42):
             self.items = list(items)
             self.augment = bool(augment)
             self.profile = profile
+            self.seed = seed
 
         def __len__(self):
             return len(self.items)
@@ -260,7 +261,27 @@ def _patch_tiny_dataset_loader(monkeypatch: pytest.MonkeyPatch) -> None:
 def _ensure_stub_cv2_module(monkeypatch: pytest.MonkeyPatch) -> None:
     if "cv2" in sys.modules:
         return
-    monkeypatch.setitem(sys.modules, "cv2", ModuleType("cv2"))
+    # Prefer the real cv2 when it is importable — core.background.model evaluates
+    # `cap: cv2.VideoCapture` annotations at import time, so a bare stub (missing
+    # VideoCapture) breaks the import. Only fall back to a stub with the attrs the
+    # import needs when real cv2 is genuinely unavailable.
+    try:
+        import cv2  # noqa: F401
+
+        return
+    except Exception:
+        pass
+    stub = ModuleType("cv2")
+    stub.VideoCapture = type("VideoCapture", (), {})
+    for _prop in (
+        "CAP_PROP_FRAME_COUNT",
+        "CAP_PROP_FPS",
+        "CAP_PROP_FRAME_WIDTH",
+        "CAP_PROP_FRAME_HEIGHT",
+        "CAP_PROP_POS_FRAMES",
+    ):
+        setattr(stub, _prop, 0)
+    monkeypatch.setitem(sys.modules, "cv2", stub)
 
 
 @pytest.mark.parametrize(
@@ -302,7 +323,7 @@ def test_classkit_trainer_generalizes_on_easy_synthetic_dataset(
     # Avoid network downloads when exercising the torchvision training path.
     monkeypatch.setattr(
         "hydra_suite.training.torchvision_model._load_pretrained",
-        lambda backbone: getattr(tvm, backbone)(weights=None),
+        lambda backbone, **_kwargs: getattr(tvm, backbone)(weights=None),
     )
     _patch_tiny_dataset_loader(monkeypatch)
 

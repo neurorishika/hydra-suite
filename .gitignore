@@ -138,6 +138,10 @@ dmypy.json
 
 # Data files
 *.csv
+# Exception: committed postproc regression baselines (small golden CSVs the
+# test_postproc_invariants suite reads; without this they are ignored and the
+# test fails on a fresh checkout with empty inputs).
+!tests/fixtures/postproc/**/*.csv
 *.avi
 *.mp4
 *.mov
@@ -150,6 +154,9 @@ dmypy.json
 *_reversed.avi
 *_cleaned.csv
 *_backward.csv
+# Re-include committed postproc regression baselines (must come after the
+# *_backward.csv rule above, which otherwise re-ignores input_backward.csv).
+!tests/fixtures/postproc/**/*.csv
 
 # Configuration files (may contain sensitive paths)
 tracking_config.json

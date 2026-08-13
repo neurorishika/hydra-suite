@@ -20,15 +20,6 @@ def qapp():
     return app
 
 
-def test_model_history_dialog_sets_high_contrast_alternating_rows(qapp, tmp_path):
-    from hydra_suite.classkit.gui.dialogs.model_history import ModelHistoryDialog
-
-    dialog = ModelHistoryDialog([], project_path=tmp_path)
-
-    assert dialog.table.alternatingRowColors() is True
-    assert "alternate-background-color: #2d2d30" in dialog.table.styleSheet()
-
-
 def test_model_history_export_upgrades_legacy_flat_checkpoint_to_v2(
     qapp, tmp_path, legacy_torchvision_flat_headtail, monkeypatch
 ):

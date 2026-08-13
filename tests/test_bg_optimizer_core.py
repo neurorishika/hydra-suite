@@ -5,12 +5,6 @@ import numpy as np
 import hydra_suite.core.background.optimizer as opt
 
 
-def test_run_bg_optimization_is_importable_and_qt_free():
-    # The function exists and the module imports without Qt.
-    assert hasattr(opt, "run_bg_optimization")
-    assert hasattr(opt, "BgOptimizationRun")
-
-
 def test_run_bg_optimization_honors_stop_check(monkeypatch, tmp_path):
     # The video can't be opened (nonexistent path), so the function must
     # return an empty run gracefully instead of raising -- regardless of
@@ -66,10 +60,6 @@ def test_run_bg_optimization_stop_check_short_circuits_frame_read(monkeypatch):
     )
     assert isinstance(run, opt.BgOptimizationRun)
     assert run.results == []
-
-
-def test_generate_bg_previews_is_importable_and_qt_free():
-    assert hasattr(opt, "generate_bg_previews")
 
 
 def test_generate_bg_previews_emits_via_frame_cb(monkeypatch):

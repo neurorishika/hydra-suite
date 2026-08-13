@@ -133,6 +133,7 @@ def test_color_tag_preset_2factor():
         "flat_custom",
         "multihead_yolo",
         "multihead_custom",
+        "multihead_custom_shared",
     ]
 
 
@@ -145,6 +146,7 @@ def test_color_tag_preset_3factor():
         "flat_custom",
         "multihead_yolo",
         "multihead_custom",
+        "multihead_custom_shared",
     ]
 
 

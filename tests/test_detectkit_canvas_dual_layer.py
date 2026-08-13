@@ -23,20 +23,6 @@ def qapp():
     yield app
 
 
-def test_canvas_has_set_gt_detections(qapp):
-    from hydra_suite.detectkit.gui.canvas import OBBCanvas
-
-    canvas = OBBCanvas()
-    assert hasattr(canvas, "set_gt_detections")
-
-
-def test_canvas_has_set_pred_detections(qapp):
-    from hydra_suite.detectkit.gui.canvas import OBBCanvas
-
-    canvas = OBBCanvas()
-    assert hasattr(canvas, "set_pred_detections")
-
-
 def test_canvas_gt_items_populated(qapp):
     from hydra_suite.detectkit.gui.canvas import OBBCanvas
 

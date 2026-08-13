@@ -77,12 +77,3 @@ def test_apply_fit_no_pad_fast_path_handles_single_channel():
     got = apply_fit(img, fit)
     assert got.shape == (16, 16, 1)
     np.testing.assert_array_equal(got, _reference_apply_fit(img, fit))
-
-
-def test_classifier_preprocess_same_size_resize_is_identity():
-    """The premise of the _preprocess fast path: scale-1 INTER_LINEAR is exact."""
-    rng = np.random.default_rng(3)
-    for shape in [(224, 224, 3), (128, 64, 3), (37, 91, 3)]:
-        img = rng.integers(0, 256, shape, dtype=np.uint8)
-        same = cv2.resize(img, (shape[1], shape[0]), interpolation=cv2.INTER_LINEAR)
-        assert np.array_equal(img, same), shape

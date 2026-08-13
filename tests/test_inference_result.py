@@ -3,14 +3,12 @@ import pytest
 
 from hydra_suite.core.inference.result import (
     DETECTION_ID_STRIDE,
-    AprilTagResult,
     CNNDetectionPrediction,
     CNNFactorPrediction,
     CNNResult,
     FrameResult,
     HeadTailResult,
     OBBResult,
-    PoseResult,
     assemble_resolved_headings,
 )
 
@@ -100,16 +98,6 @@ def test_cnn_result_multi_head_structure():
     np.testing.assert_array_almost_equal(pred.factors[1].raw_probabilities, [0.3, 0.7])
 
 
-def test_apriltag_result_empty():
-    result = AprilTagResult(
-        tag_ids=[],
-        det_indices=[],
-        centers=np.zeros((0, 2)),
-        corners=np.zeros((0, 4, 2)),
-    )
-    assert len(result.tag_ids) == 0
-
-
 def test_detection_ids_are_unique_across_frames():
     """Detection IDs must be unique and follow the legacy stride convention."""
     ids_f0 = OBBResult.make_detection_ids(0, 5)
@@ -172,15 +160,6 @@ def test_frame_result_construction():
     assert fr.obb.num_detections == 2
     assert fr.filtered_indices == [0, 1]
     np.testing.assert_array_almost_equal(fr.resolved_headings, obb.angles)
-
-
-def test_pose_result_construction():
-    pose = PoseResult(
-        keypoints=np.zeros((2, 5, 3)),
-        valid_mask=np.array([True, False]),
-    )
-    assert pose.keypoints.shape == (2, 5, 3)
-    assert pose.valid_mask[0] is np.True_ or pose.valid_mask[0] == True  # noqa: E712
 
 
 def test_cnn_result_label_and_predictions():

@@ -71,7 +71,7 @@ def _patched_modules(stubs: dict):
 
 def _load_runtime_api_module(stubs: dict):
     module_name = "runtime_api_sleap_export_test"
-    module_path = SRC_ROOT / "hydra_suite" / "core" / "identity" / "pose" / "api.py"
+    module_path = SRC_ROOT / "hydra_suite" / "core" / "individual" / "pose" / "api.py"
     spec = importlib.util.spec_from_file_location(module_name, module_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Unable to load module spec: {module_path}")
@@ -91,7 +91,7 @@ def _load_sleap_backend_module(stubs: dict):
         SRC_ROOT
         / "hydra_suite"
         / "core"
-        / "identity"
+        / "individual"
         / "pose"
         / "backends"
         / "sleap.py"
@@ -649,7 +649,7 @@ def test_coerce_prediction_batch_normalizes_out_of_range_confidences() -> None:
     }
     pose_utils = importlib.util.spec_from_file_location(
         "pose_utils_under_test",
-        SRC_ROOT / "hydra_suite" / "core" / "identity" / "pose" / "utils.py",
+        SRC_ROOT / "hydra_suite" / "core" / "individual" / "pose" / "utils.py",
     )
     utils_module = importlib.util.module_from_spec(pose_utils)
     with _patched_modules(stubs):

@@ -3,16 +3,6 @@
 from __future__ import annotations
 
 
-def test_project_has_active_model_path_field():
-    from hydra_suite.detectkit.gui.models import DetectKitProject
-
-    proj = DetectKitProject()
-    assert hasattr(
-        proj, "active_model_path"
-    ), "DetectKitProject must have active_model_path"
-    assert proj.active_model_path == "", "Default must be empty string"
-
-
 def test_project_active_model_path_persists(tmp_path):
     from hydra_suite.detectkit.gui.models import DetectKitProject
 

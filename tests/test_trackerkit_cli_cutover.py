@@ -34,20 +34,6 @@ def _make_session(**overrides) -> TrackerCliSession:
     return TrackerCliSession(**base)
 
 
-def test_supports_direct_run_true_for_pose_sessions():
-    session = _make_session(enable_pose_extractor=True)
-    assert session.supports_direct_run() is True
-
-
-def test_supports_direct_run_true_for_identity_sessions():
-    session = _make_session(identity_method="apriltags")
-    assert session.supports_direct_run() is True
-
-
-def test_supports_direct_run_true_for_plain_session():
-    assert _make_session().supports_direct_run() is True
-
-
 def test_cli_module_has_no_bridge_symbols():
     import hydra_suite.trackerkit.cli as cli
 

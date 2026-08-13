@@ -56,13 +56,3 @@ def test_pred_runtime_flavor_uses_vitpose_stage(monkeypatch):
     flavor = mw.MainWindow._pred_runtime_flavor(self_ns)
     assert captured["stage"] == "vitpose_pose"
     assert flavor == "cpu"
-
-
-def test_combo_and_widget_present_in_source():
-    import hydra_suite.posekit.gui.main_window as mw
-
-    with open(mw.__file__, "r", encoding="utf-8") as fh:
-        text = fh.read()
-    assert '"ViTPose"' in text  # combo item
-    assert "vitpose_pred_widget" in text  # dedicated settings widget
-    assert "pred_vitpose_edit" in text  # checkpoint line edit

@@ -82,8 +82,11 @@ def test_gui_parameter_builder_also_writes_the_key():
     Asserted structurally rather than by constructing a MainWindow: this repo
     has known modal-dialog hangs that prevent GUI tests from completing.
     """
-    orchestrator = _repo_src() / "trackerkit" / "gui" / "orchestrators" / "config.py"
-    assert "SAVE_CONFIDENCE_METRICS" in _assigned_string_keys(orchestrator)
+    # The shared param-builder refactor moved the SAVE_CONFIDENCE_METRICS
+    # assignment out of the GUI orchestrator into the shared engine-params
+    # builder (trackerkit/engine_params.py), which the GUI path feeds through.
+    builder = _repo_src() / "trackerkit" / "engine_params.py"
+    assert "SAVE_CONFIDENCE_METRICS" in _assigned_string_keys(builder)
 
 
 def test_uppercase_key_is_read_by_the_worker():

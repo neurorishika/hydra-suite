@@ -92,6 +92,7 @@ av = [
 dev = [
     "pytest>=7.0",
     "pytest-cov",
+    "pytest-timeout>=2.1",
     "black>=23.0",
     "isort>=5.12",
     "flake8>=6.0",

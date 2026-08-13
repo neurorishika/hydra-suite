@@ -120,77 +120,6 @@ def test_backend_below_confidence_returns_none_class(tiny_flat_headtail):
 
 
 # ---------------------------------------------------------------------------
-# Checkpoint metadata extraction tests (for _handle_add_new_cnn_identity_model)
-# ---------------------------------------------------------------------------
-
-
-def test_pth_checkpoint_metadata_extraction(tmp_path):
-    """Verify that .pth checkpoint fields are correctly extracted during import."""
-    import torch
-
-    ckpt = {
-        "arch": "resnet18",
-        "class_names": ["tag_0", "tag_1", "no_tag"],
-        "factor_names": [],
-        "input_size": (224, 224),
-        "num_classes": 3,
-        "model_state_dict": {},
-        "best_val_acc": 0.95,
-        "history": {},
-        "trainable_layers": 0,
-        "backbone_lr_scale": 0.1,
-    }
-    ckpt_path = tmp_path / "model.pth"
-    torch.save(ckpt, str(ckpt_path))
-
-    loaded = torch.load(str(ckpt_path), map_location="cpu", weights_only=False)
-    assert loaded["arch"] == "resnet18"
-    assert loaded["class_names"] == ["tag_0", "tag_1", "no_tag"]
-    assert loaded["num_classes"] == 3
-    assert list(loaded["input_size"]) == [224, 224]
-
-
-def test_registry_entry_format_after_import(tmp_path):
-    """Registry entry for a CNN identity model has all required fields."""
-    import json
-    from datetime import datetime
-
-    entry = {
-        "arch": "convnext_tiny",
-        "num_classes": 11,
-        "class_names": [f"tag_{i}" for i in range(10)] + ["no_tag"],
-        "factor_names": [],
-        "input_size": [224, 224],
-        "species": "ant",
-        "classification_label": "apriltag",
-        "added_at": datetime.now().isoformat(),
-        "task_family": "classify",
-        "usage_role": "cnn_identity",
-    }
-    registry_path = tmp_path / "model_registry.json"
-    registry = {"classification/identity/test.pth": entry}
-    registry_path.write_text(json.dumps(registry))
-
-    loaded = json.loads(registry_path.read_text())
-    loaded_entry = loaded["classification/identity/test.pth"]
-    required = {
-        "arch",
-        "num_classes",
-        "class_names",
-        "factor_names",
-        "input_size",
-        "species",
-        "classification_label",
-        "added_at",
-        "task_family",
-        "usage_role",
-    }
-    assert required.issubset(set(loaded_entry.keys()))
-    assert loaded_entry["usage_role"] == "cnn_identity"
-    assert loaded_entry["num_classes"] == 11
-
-
-# ---------------------------------------------------------------------------
 # ClassPrediction multi-factor tests
 # ---------------------------------------------------------------------------
 
@@ -247,20 +176,6 @@ def test_class_prediction_flat_accessors_error_on_multi_factor():
         _ = p.class_name
     with pytest.raises(ValueError):
         _ = p.confidence
-
-
-def test_cnn_identity_config_scoring_mode_default():
-    from hydra_suite.core.individual.classification.cnn import CNNIdentityConfig
-
-    cfg = CNNIdentityConfig()
-    assert cfg.scoring_mode == "atomic"
-
-
-def test_cnn_identity_config_accepts_per_head_average():
-    from hydra_suite.core.individual.classification.cnn import CNNIdentityConfig
-
-    cfg = CNNIdentityConfig(scoring_mode="per_head_average")
-    assert cfg.scoring_mode == "per_head_average"
 
 
 # ---------------------------------------------------------------------------

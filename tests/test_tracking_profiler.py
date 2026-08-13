@@ -22,8 +22,8 @@ def test_log_periodic_includes_interval_phase_breakdown(caplog) -> None:
     with caplog.at_level(logging.INFO, logger="hydra_suite.core.tracking.profiler"):
         profiler.log_periodic(interval=2)
 
-    assert "=== PROFILING SUMMARY (last 2 frames) ===" in caplog.text
-    assert "PHASE TIMING" in caplog.text
+    assert "--- PROFILING [last 2 frames] ---" in caplog.text
+    assert "PHASE BREAKDOWN" in caplog.text
     assert "frame_resize" in caplog.text
     assert "roi_prepare" in caplog.text
     assert "pose_transport" in caplog.text

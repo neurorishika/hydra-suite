@@ -40,11 +40,6 @@ def test_apriltag_preset_name():
     assert scheme.name == "apriltag_tag36h11"
 
 
-def test_apriltag_preset_flat_training_modes_only():
-    scheme = apriltag_preset("tag36h11", max_tag_id=9)
-    assert scheme.training_modes == ["flat_yolo", "flat_custom"]
-
-
 def test_apriltag_preset_max_tag_id_zero():
     scheme = apriltag_preset("tag36h11", max_tag_id=0)
     assert scheme.factors[0].labels == ["tag_0", "no_tag"]

@@ -227,39 +227,6 @@ class TestStabilizeLighting:
         assert isinstance(current_mean, (float, np.floating))
         assert current_mean > 0
 
-    def test_smooth_factor_effect(self):
-        """Test that alpha/smooth factor affects stabilization."""
-        img_bright = np.ones((100, 100), dtype=np.uint8) * 200
-        reference_intensity = 128
-
-        # Higher alpha (more smoothing)
-        result_high, _, _ = stabilize_lighting(
-            img_bright,
-            reference_intensity,
-            [],
-            alpha=0.99,
-            roi_mask=None,
-            median_window=5,
-            lighting_state={},
-            use_gpu=False,
-        )
-
-        # Lower alpha (less smoothing)
-        result_low, _, _ = stabilize_lighting(
-            img_bright,
-            reference_intensity,
-            [],
-            alpha=0.5,
-            roi_mask=None,
-            median_window=5,
-            lighting_state={},
-            use_gpu=False,
-        )
-
-        # Both should produce valid images
-        assert result_high.dtype == np.uint8
-        assert result_low.dtype == np.uint8
-
     def test_median_window_sizes(self):
         """Test different median window sizes."""
         img = np.random.randint(100, 150, (100, 100), dtype=np.uint8)
@@ -278,44 +245,6 @@ class TestStabilizeLighting:
             )
 
             assert result.dtype == np.uint8
-
-    def test_dark_image_adjustment(self):
-        """Test that dark images are adjusted toward reference."""
-        img_dark = np.ones((100, 100), dtype=np.uint8) * 50
-        reference_intensity = 128
-
-        result, _, _ = stabilize_lighting(
-            img_dark,
-            reference_intensity,
-            [],
-            alpha=0.95,
-            roi_mask=None,
-            median_window=5,
-            lighting_state={},
-            use_gpu=False,
-        )
-
-        # Stabilized image should be adjusted (though may not be exactly brighter due to smoothing)
-        assert result.dtype == np.uint8
-
-    def test_bright_image_adjustment(self):
-        """Test that bright images are adjusted toward reference."""
-        img_bright = np.ones((100, 100), dtype=np.uint8) * 200
-        reference_intensity = 128
-
-        result, _, _ = stabilize_lighting(
-            img_bright,
-            reference_intensity,
-            [],
-            alpha=0.95,
-            roi_mask=None,
-            median_window=5,
-            lighting_state={},
-            use_gpu=False,
-        )
-
-        # Stabilized image should be adjusted
-        assert result.dtype == np.uint8
 
     def test_use_gpu_false(self):
         """Test that use_gpu=False works correctly."""

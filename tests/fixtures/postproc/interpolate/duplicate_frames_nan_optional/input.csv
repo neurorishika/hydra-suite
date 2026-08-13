@@ -1,0 +1,7 @@
+TrajectoryID,FrameID,X,Y,Theta,State,DetectionConfidence,AssignmentConfidence,PositionUncertainty
+2,5,100.0,100.0,0.1,active,0.8,,2.0
+2,5,102.0,102.0,0.15,active,0.7,0.7,1.9
+2,7,,,,occluded,,,
+2,8,108.0,108.0,0.4,active,0.85,0.81,1.4
+3,20,50.0,51.0,2.2,active,0.95,0.9,1.0
+3,22,54.0,55.0,2.4,active,0.92,0.88,1.1

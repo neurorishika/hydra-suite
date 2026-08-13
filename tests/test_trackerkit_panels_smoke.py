@@ -2,16 +2,13 @@
 
 import os
 import sys
-from unittest.mock import MagicMock
 
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 
-from PySide6.QtWidgets import QApplication, QWidget  # noqa: E402
-
-from hydra_suite.trackerkit.config.schemas import TrackerConfig  # noqa: E402
+from PySide6.QtWidgets import QApplication  # noqa: E402
 
 # All panels — used for signal-presence checks.
 _PANEL_MAP = {
@@ -23,10 +20,8 @@ _PANEL_MAP = {
     "TrackingPanel": "hydra_suite.trackerkit.gui.panels.tracking_panel",
 }
 
+
 # All panels are now fully extracted — no stubs remain.
-_STUB_PANEL_MAP: dict[str, str] = {}
-
-
 @pytest.fixture(scope="module")
 def qapp():
     return QApplication.instance() or QApplication([])
@@ -39,19 +34,6 @@ def main_window(qapp):
     w = MainWindow()
     yield w
     w.close()
-
-
-@pytest.mark.parametrize("class_name,module_path", list(_STUB_PANEL_MAP.items()))
-def test_panel_instantiates(qapp, class_name, module_path):
-    """Stub panels must instantiate without raising an exception (mock main_window is safe)."""
-    import importlib
-
-    mock_mw = MagicMock()
-    config = TrackerConfig()
-    mod = importlib.import_module(module_path)
-    cls = getattr(mod, class_name)
-    panel = cls(main_window=mock_mw, config=config)
-    assert isinstance(panel, QWidget)
 
 
 @pytest.mark.parametrize("class_name,module_path", list(_PANEL_MAP.items()))

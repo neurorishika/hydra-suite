@@ -6,7 +6,7 @@ from hydra_suite.trackerkit.gui.widgets.loss_plot_widget import (
 
 
 def test_parse_epoch_line():
-    line = "      1/100      0.987      1.234      0.567        40       640"
+    line = "      1/100      0.987      1.234      0.567        40       640   100%"
     result = parse_ultralytics_log_line(line)
     assert result is not None
     assert result["epoch"] == 1

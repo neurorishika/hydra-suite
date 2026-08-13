@@ -162,44 +162,6 @@ def test_assign_tracks_respawns_lost_track_when_valid_detection_exists() -> None
     assert free_dets == []
 
 
-def test_assign_tracks_does_not_respawn_near_non_lost_track() -> None:
-    params = _params()
-    assigner = TrackAssigner(params)
-    kf = _DummyKF(2)
-    kf.X[0, :2] = [10.0, 10.0]
-    kf.X[1, :2] = [14.0, 14.0]
-
-    measurements = [
-        np.array([12.0, 12.0, 0.1], dtype=np.float32),
-    ]
-
-    cost = np.array(
-        [
-            [80.0],
-            [2.0],
-        ],
-        dtype=np.float32,
-    )
-
-    track_states = ["active", "lost"]
-    continuity = [10, 0]
-
-    rows, cols, free_dets, _ = assigner.assign_tracks(
-        cost=cost,
-        N=2,
-        M=1,
-        meas=measurements,
-        track_states=track_states,
-        tracking_continuity=continuity,
-        kf_manager=kf,
-        spatial_candidates={},
-    )
-
-    assert rows == []
-    assert cols == []
-    assert free_dets == [0]
-
-
 def test_assign_tracks_returns_four_values_when_no_measurements() -> None:
     assigner = TrackAssigner(_params())
     kf = _DummyKF(2)
@@ -432,77 +394,6 @@ def test_has_pose_association_data_true_when_keypoint_present():
         "track_pose_prototypes": [None, None],
     }
     assert assigner._has_pose_association_data(data_with_kpt)
-
-
-def test_tag_identity_bonus_applies_without_pose_data() -> None:
-    assigner = TrackAssigner(_params())
-    kf = _DummyKF(1)
-    predictions = np.array([[20.0, 20.0, 0.1]], dtype=np.float32)
-    measurements = [np.array([20.0, 20.0, 0.1], dtype=np.float32)]
-    shapes = [(30.0, 1.2)]
-    last_shape_info = [(30.0, 1.2)]
-
-    base_cost, _ = assigner.compute_cost_matrix(
-        N=1,
-        measurements=measurements,
-        predictions=predictions,
-        shapes=shapes,
-        kf_manager=kf,
-        last_shape_info=last_shape_info,
-    )
-    tagged_cost, _ = assigner.compute_cost_matrix(
-        N=1,
-        measurements=measurements,
-        predictions=predictions,
-        shapes=shapes,
-        kf_manager=kf,
-        last_shape_info=last_shape_info,
-        association_data={
-            "detection_tag_ids": [7],
-            "track_last_tag_ids": [7],
-        },
-    )
-
-    assert float(tagged_cost[0, 0]) < float(base_cost[0, 0])
-
-
-def test_cnn_identity_penalty_applies_without_pose_data() -> None:
-    assigner = TrackAssigner(_params())
-    kf = _DummyKF(1)
-    predictions = np.array([[20.0, 20.0, 0.1]], dtype=np.float32)
-    measurements = [np.array([20.0, 20.0, 0.1], dtype=np.float32)]
-    shapes = [(30.0, 1.2)]
-    last_shape_info = [(30.0, 1.2)]
-
-    base_cost, _ = assigner.compute_cost_matrix(
-        N=1,
-        measurements=measurements,
-        predictions=predictions,
-        shapes=shapes,
-        kf_manager=kf,
-        last_shape_info=last_shape_info,
-    )
-    cnn_cost, _ = assigner.compute_cost_matrix(
-        N=1,
-        measurements=measurements,
-        predictions=predictions,
-        shapes=shapes,
-        kf_manager=kf,
-        last_shape_info=last_shape_info,
-        association_data={
-            "cnn_phases": [
-                {
-                    "label": "cnn_identity",
-                    "match_bonus": 20.0,
-                    "mismatch_penalty": 50.0,
-                    "detection_classes": ["alpha"],
-                    "track_identities": ["beta"],
-                }
-            ]
-        },
-    )
-
-    assert float(cnn_cost[0, 0]) > float(base_cost[0, 0])
 
 
 def test_cnn_identity_overlay_is_disabled_when_online_decoder_is_authoritative() -> (

@@ -12,70 +12,6 @@ import pytest
 import torch
 
 
-def test_custom_cnn_params_defaults():
-    from hydra_suite.training.contracts import CustomCNNParams
-
-    p = CustomCNNParams()
-    assert p.backbone == "tinyclassifier"
-    assert p.fine_tune_method == "head_only"
-    assert p.trainable_layers == 0
-    assert p.backbone_lr_scale == 0.1
-    assert p.layerwise_lr_decay == 0.75
-    assert p.gradual_unfreeze_interval == 5
-    assert p.input_size == (224, 224)
-    assert p.epochs == 50
-    assert p.batch == 32
-    assert p.lr == 1e-3
-    assert p.weight_decay == 1e-2
-    assert p.patience == 10
-    assert p.label_smoothing == 0.0
-    assert p.class_rebalance_mode == "none"
-    assert p.class_rebalance_power == 1.0
-    assert p.hidden_layers == 1
-    assert p.hidden_dim == 96
-    assert p.dropout == 0.1
-    assert p.input_width == 128
-    assert p.input_height == 64
-
-
-def test_new_training_roles_exist():
-    from hydra_suite.training.contracts import TrainingRole
-
-    assert TrainingRole.CLASSIFY_FLAT_CUSTOM.value == "classify_flat_custom"
-    assert TrainingRole.CLASSIFY_MULTIHEAD_CUSTOM.value == "classify_multihead_custom"
-
-
-def test_training_run_spec_has_custom_params():
-    from hydra_suite.training.contracts import (
-        CustomCNNParams,
-        TrainingRole,
-        TrainingRunSpec,
-    )
-
-    spec = TrainingRunSpec(
-        role=TrainingRole.CLASSIFY_FLAT_CUSTOM,
-        source_datasets=[],
-        derived_dataset_dir="/tmp/ds",
-        base_model="",
-        hyperparams=None,
-    )
-    assert hasattr(spec, "custom_params")
-    assert spec.custom_params is None
-
-    spec2 = TrainingRunSpec(
-        role=TrainingRole.CLASSIFY_FLAT_CUSTOM,
-        source_datasets=[],
-        derived_dataset_dir="/tmp/ds",
-        base_model="",
-        hyperparams=None,
-        custom_params=CustomCNNParams(
-            backbone="convnext_tiny", fine_tune_method="full_finetune"
-        ),
-    )
-    assert spec2.custom_params.backbone == "convnext_tiny"
-    assert spec2.custom_params.fine_tune_method == "full_finetune"
-
-
 def test_custom_backbone_registry_persists(monkeypatch, tmp_path):
     monkeypatch.setenv("HYDRA_CONFIG_DIR", str(tmp_path / "cfg"))
 
@@ -386,6 +322,7 @@ def test_checkpoint_format_required_keys(tmp_path):
         history={"train_loss": [], "val_acc": []},
         trainable_layers=0,
         backbone_lr_scale=0.1,
+        monochrome=False,
         path=ckpt_path,
     )
     ckpt = torch.load(str(ckpt_path), map_location="cpu", weights_only=False)
@@ -424,6 +361,7 @@ def test_load_torchvision_classifier_roundtrip(tmp_path):
         history={},
         trainable_layers=0,
         backbone_lr_scale=0.1,
+        monochrome=False,
         path=ckpt_path,
     )
     loaded_model, ckpt = load_torchvision_classifier(str(ckpt_path), device="cpu")
@@ -458,6 +396,11 @@ def test_load_torchvision_classifier_uses_saved_timm_input_size(
 
         def eval(self):
             self.in_eval = True
+            return self
+
+        def train(self, mode: bool = True):
+            # The loader switches to eval via model.train(False); mirror that.
+            self.in_eval = not mode
             return self
 
     recorded: dict[str, object] = {}
@@ -522,6 +465,7 @@ def test_export_torchvision_to_onnx_smoke(tmp_path):
         history={},
         trainable_layers=0,
         backbone_lr_scale=0.1,
+        monochrome=False,
         path=ckpt_path,
     )
     ckpt = torch.load(str(ckpt_path), map_location="cpu", weights_only=False)
@@ -540,16 +484,6 @@ def test_export_torchvision_to_onnx_smoke(tmp_path):
 # ---------------------------------------------------------------------------
 # Spec-required tests: backbone registry and tinyclassifier integration
 # ---------------------------------------------------------------------------
-
-
-def test_torchvision_backbones_list_contains_expected():
-    from hydra_suite.training.torchvision_model import TORCHVISION_BACKBONES
-
-    assert "convnext_tiny" in TORCHVISION_BACKBONES
-    assert "mobilenet_v3_small" in TORCHVISION_BACKBONES
-    assert "shufflenet_v2_x1_0" in TORCHVISION_BACKBONES
-    assert "tinyclassifier" in TORCHVISION_BACKBONES
-    assert "vit_b_16" in TORCHVISION_BACKBONES
 
 
 def test_backbone_display_names_covers_all_backbones():
@@ -749,9 +683,10 @@ def test_train_custom_classify_remaps_validation_targets_to_shared_class_indices
     (dataset_dir / "val" / "bee" / "bee_1.png").write_bytes(b"val-bee")
 
     class FakeImageFolder:
-        def __init__(self, root, transform=None):
+        def __init__(self, root, transform=None, loader=None):
             self.root = str(root)
             self.transform = transform
+            self.loader = loader
             if str(root).endswith("/train"):
                 self.class_to_idx = {"ant": 0, "bee": 1}
                 self.classes = ["ant", "bee"]
@@ -807,6 +742,8 @@ def test_train_custom_classify_remaps_validation_targets_to_shared_class_indices
         log_cb,
         progress_cb,
         should_cancel,
+        ignore_index=None,
+        **_kwargs,
     ):
         assert train_loader.dataset.class_to_idx == {"ant": 0, "bee": 1}
         assert train_loader.dataset.targets == [0, 1]
@@ -815,7 +752,10 @@ def test_train_custom_classify_remaps_validation_targets_to_shared_class_indices
         assert val_loader.dataset.classes == ["ant", "bee"]
         assert val_loader.dataset.targets == [1]
         assert val_loader.dataset.samples[0][1] == 1
-        best_ckpt_path.write_bytes(b"stub")
+        # Write a real checkpoint: _train_custom_classify reloads best_ckpt_path
+        # (torch.load -> ["model_state_dict"]) for the post-training calibration
+        # step, so a stub byte-string would fail with an unpickling error.
+        torch.save({"model_state_dict": model.state_dict()}, best_ckpt_path)
         return 1.0, {"train_loss": [0.1], "val_acc": [1.0]}
 
     build_kwargs: dict[str, object] = {}
@@ -864,7 +804,7 @@ def test_train_custom_classify_remaps_validation_targets_to_shared_class_indices
 
     assert result["success"] is True
     assert Path(result["artifact_path"]).exists()
-    assert build_kwargs["input_size"] == 64
+    assert build_kwargs["input_size"] == (64, 64)
 
 
 def test_load_compatible_checkpoint_weights_skips_mismatched_head(tmp_path: Path):

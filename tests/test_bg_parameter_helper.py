@@ -176,8 +176,13 @@ def test_bg_parameter_helper_slider_scrub_does_not_render_until_release(
 
     dialog._on_frame_slider_moved(2)
 
+    # Core invariant on every platform: scrubbing must not render until release.
     assert render_spy.call_count == 0
-    assert dialog._frame_label.text() == "3/3"
+    # The live label only updates on the non-tracking (Linux) path; when tracking
+    # is enabled (non-Linux) _on_frame_slider_moved early-returns and the label
+    # is instead updated on the release (valueChanged) signal.
+    if not dialog._frame_slider.hasTracking():
+        assert dialog._frame_label.text() == "3/3"
     assert dialog._frame_slider.hasTracking() is (not sys.platform.startswith("linux"))
 
     dialog.close()
