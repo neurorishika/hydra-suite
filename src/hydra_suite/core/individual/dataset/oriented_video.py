@@ -593,14 +593,6 @@ class OrientedTrackVideoExporter:
         if actual_rows_by_frame:
             if self.detection_cache_path.exists():
                 detection_cache = open_detection_cache_reader(self.detection_cache_path)
-                if not detection_cache.is_valid():
-                    logger.warning(
-                        "Incompatible detection cache for oriented track videos: "
-                        "%s -- actual-row cache geometry will be skipped.",
-                        self.detection_cache_path,
-                    )
-                    detection_cache.close()
-                    detection_cache = None
             else:
                 logger.warning(
                     "Missing detection cache for oriented track videos: %s -- "

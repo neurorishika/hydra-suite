@@ -71,9 +71,6 @@ def _build_runtime_stubs(video_artifacts) -> dict[str, types.ModuleType]:
     geometry.wrap_angle_degs = lambda x: x
     geometry.estimate_detection_crop_quality = lambda shape, ref: 0.0
 
-    detection_cache = types.ModuleType("hydra_suite.data.detection_cache")
-    detection_cache.DetectionCache = object
-
     tag_observation_cache = types.ModuleType("hydra_suite.data.tag_observation_cache")
     tag_observation_cache.TagObservationCache = object
 
@@ -108,7 +105,6 @@ def _build_runtime_stubs(video_artifacts) -> dict[str, types.ModuleType]:
         "hydra_suite.utils.image_processing": image_processing,
         "hydra_suite.utils.geometry": geometry,
         "hydra_suite.utils.video_artifacts": video_artifacts,
-        "hydra_suite.data.detection_cache": detection_cache,
         "hydra_suite.data.tag_observation_cache": tag_observation_cache,
         "hydra_suite.utils.batch_optimizer": batch_optimizer,
         "hydra_suite.utils.batch_policy": batch_policy,
@@ -295,7 +291,7 @@ def test_individual_data_precompute_gate_requires_pose_extractor() -> None:
     )
 
 
-def test_individual_properties_cache_path_defaults_to_video_cache_dir(
+def test_individual_properties_cache_path_defaults_to_inference_cache_dir(
     tmp_path,
 ) -> None:
     mod = _load_worker_module()
@@ -304,7 +300,7 @@ def test_individual_properties_cache_path_defaults_to_video_cache_dir(
 
     cache_path = worker._build_individual_properties_cache_path("props", 4, 9)
 
-    assert cache_path.parent == tmp_path / "clip_caches"
+    assert cache_path.parent == tmp_path / ".inference_cache_clip"
     assert cache_path.name == "clip_pose_cache_props_4_9.npz"
 
 

@@ -157,9 +157,6 @@ def _load_optimizer_module():
     kalman = types.ModuleType("hydra_suite.core.filters.kalman")
     kalman.KalmanFilterManager = _StubKalmanFilterManager
 
-    detection_cache = types.ModuleType("hydra_suite.data.detection_cache")
-    detection_cache.DetectionCache = object
-
     # Identity sub-package stubs (optimizer imports from canonical locations).
     # These are pure-Python modules; load the real implementations.
     core_identity = types.ModuleType("hydra_suite.core.individual")
@@ -189,7 +186,6 @@ def _load_optimizer_module():
         "hydra_suite.core.assigners.hungarian": assigner,
         "hydra_suite.core.detectors": core_detectors,
         "hydra_suite.core.filters.kalman": kalman,
-        "hydra_suite.data.detection_cache": detection_cache,
         "hydra_suite.core.individual": core_identity,
         "hydra_suite.core.individual.geometry": identity_geometry,
         "hydra_suite.core.individual.pose": pose_pkg,

@@ -209,14 +209,14 @@ def build_individual_properties_cache_path(
 
     The filename is ``<stem>_pose_cache_<properties_id>_<start>_<end>.npz``.
     When ``detection_cache_path`` is supplied the cache is placed alongside it;
-    otherwise it goes into the standard ``<stem>_caches/`` directory.
+    otherwise it goes into the modern ``.inference_cache_<stem>/`` directory.
     """
     if detection_cache_path:
         base_dir = Path(detection_cache_path).expanduser().parent
         if create_dir:
             base_dir.mkdir(parents=True, exist_ok=True)
     else:
-        base_dir = build_video_cache_dir(
+        base_dir = build_inference_cache_dir(
             video_path,
             artifact_base_dir=artifact_base_dir,
             create=create_dir,
@@ -242,7 +242,7 @@ def build_detected_properties_cache_path(
         if create_dir:
             base_dir.mkdir(parents=True, exist_ok=True)
     else:
-        base_dir = build_video_cache_dir(
+        base_dir = build_inference_cache_dir(
             video_path,
             artifact_base_dir=artifact_base_dir,
             create=create_dir,

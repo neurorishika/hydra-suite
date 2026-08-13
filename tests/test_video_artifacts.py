@@ -74,6 +74,46 @@ def test_iter_detection_cache_candidates_scans_modern_opt_dir_only(
     assert candidates == [opt_dir]
 
 
+def test_individual_properties_cache_path_without_detection_cache_uses_modern_dir(
+    tmp_path: Path,
+) -> None:
+    video_path = tmp_path / "clip.mp4"
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+
+    cache_path = mod.build_individual_properties_cache_path(
+        str(video_path),
+        "props1",
+        0,
+        10,
+        detection_cache_path=None,
+        artifact_base_dir=artifact_root,
+    )
+
+    assert cache_path.parent == artifact_root / ".inference_cache_clip"
+    assert "clip_caches" not in cache_path.parts
+
+
+def test_detected_properties_cache_path_without_detection_cache_uses_modern_dir(
+    tmp_path: Path,
+) -> None:
+    video_path = tmp_path / "clip.mp4"
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+
+    cache_path = mod.build_detected_properties_cache_path(
+        str(video_path),
+        "props1",
+        0,
+        10,
+        detection_cache_path=None,
+        artifact_base_dir=artifact_root,
+    )
+
+    assert cache_path.parent == artifact_root / ".inference_cache_clip"
+    assert "clip_caches" not in cache_path.parts
+
+
 def test_find_existing_detection_cache_path_prefers_new_layout(tmp_path: Path) -> None:
     video_path = tmp_path / "clip.mp4"
     artifact_root = tmp_path / "artifacts"
