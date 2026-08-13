@@ -61,6 +61,7 @@ from hydra_suite.utils.geometry import estimate_detection_crop_quality
 from hydra_suite.utils.video_artifacts import (
     build_detected_properties_cache_path,
     build_individual_properties_cache_path,
+    build_video_log_dir,
 )
 from hydra_suite.utils.video_encoder import VideoEncoder
 
@@ -3963,28 +3964,35 @@ class TrackingEngineCore:
         # --- Profiling: final summary and JSON export ---
         profiler.phase_end("cleanup")
         profiler.log_final_summary()
-        # Export JSON next to the video output or detection cache, whichever is available.
+        # Export JSON next to the video output if configured, otherwise under
+        # the video's `<stem>_logs/` directory (never the detection-cache dir).
         # Use a direction suffix so forward and backward profiles are kept separate.
         _dir_tag = "backward" if self.backward_mode else "forward"
-        profile_export_path = None
-        if self.video_output_path:
-            _pbase = Path(self.video_output_path).with_suffix("")
-            profile_export_path = Path(f"{_pbase}_{_dir_tag}.profile.json")
-        elif self.detection_cache_path:
-            profile_export_path = (
-                Path(self.detection_cache_path).parent
-                / f"tracking_profile_{_dir_tag}.json"
-            )
-        elif self.video_path:
-            profile_export_path = (
-                Path(self.video_path).parent / f"tracking_profile_{_dir_tag}.json"
-            )
+        profile_export_path = self._resolve_profile_path(_dir_tag)
         if profile_export_path is not None and not stop_requested:
             profiler.export_summary(profile_export_path)
 
         logger.info("Tracking worker finished. Emitting raw trajectory data.")
 
         self._emit_finished(not self._stop_requested, fps_list, self.trajectories_full)
+
+    def _resolve_profile_path(self, dir_tag):
+        """Return where to write the tracking-profile JSON, or ``None``.
+
+        If ``video_output_path`` is configured, the profile is written next
+        to the output video (unchanged legacy behavior). Otherwise it is
+        written under the source video's ``<stem>_logs/`` directory — never
+        under a detection-cache directory.
+        """
+        if self.video_output_path:
+            _pbase = Path(self.video_output_path).with_suffix("")
+            return Path(f"{_pbase}_{dir_tag}.profile.json")
+        if self.video_path:
+            return (
+                build_video_log_dir(self.video_path, create=True)
+                / f"tracking_profile_{dir_tag}.json"
+            )
+        return None
 
     def _smooth_orientation(
         self,
