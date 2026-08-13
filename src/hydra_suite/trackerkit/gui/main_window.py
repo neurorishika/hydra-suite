@@ -852,7 +852,18 @@ class MainWindow(QMainWindow):
         self.btn_start.clicked.connect(lambda ch: self.toggle_tracking(ch))
         self.btn_start.setMinimumHeight(34)
 
+        self.btn_debug_mode = QPushButton("Debug Mode")
+        self.btn_debug_mode.setCheckable(True)
+        self.btn_debug_mode.setChecked(self.config.debug_mode)
+        self.btn_debug_mode.setToolTip(
+            "Debug Mode: retain all intermediate files, diagnostic columns, "
+            "profiling, and overlays. Off = clean single trajectory CSV."
+        )
+        self.btn_debug_mode.setMinimumHeight(34)
+        self.btn_debug_mode.clicked.connect(self._on_debug_mode_toggled)
+
         btn_layout.addWidget(self.btn_preview)
+        btn_layout.addWidget(self.btn_debug_mode)
         btn_layout.addWidget(self.btn_start)
 
         action_layout.addLayout(prog_layout)
@@ -2522,6 +2533,11 @@ class MainWindow(QMainWindow):
         else:
             logger.setLevel(logging.INFO)
             logger.info("Debug logging disabled")
+
+    def _on_debug_mode_toggled(self, checked: bool) -> None:
+        """Toggle global Debug Mode: retained intermediates, diagnostics, overlays."""
+        self.config.debug_mode = bool(checked)
+        self.toggle_debug_logging(checked)  # debug_logging derives from debug_mode
 
     def _on_visualization_mode_changed(self, state):
         """Handle visualization-free mode toggle."""

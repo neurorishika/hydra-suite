@@ -401,9 +401,17 @@ class SessionOrchestrator:
     # =========================================================================
 
     def _cleanup_temporary_files(self):
-        """Remove temporary files if cleanup is enabled."""
-        if not self._mw._postprocess_panel.chk_cleanup_temp_files.isChecked():
-            logger.info("Temporary file cleanup disabled, keeping intermediate files.")
+        """Remove temporary files if cleanup is enabled.
+
+        User mode (debug off) always cleans up -- User-mode runs are only
+        supposed to leave the clean tracks.csv + annotated video behind.
+        Debug mode retains all intermediate files.
+        (Defensive ``getattr``: kept in case this runs before ``self._mw.config``
+        is fully populated; defaults to debug-on, i.e. retain files.)
+        """
+        _debug = bool(getattr(self._mw.config, "debug_mode", True))
+        if _debug:
+            logger.info("Debug Mode enabled, keeping intermediate files.")
             return
 
         if not self._mw.temporary_files:
@@ -2319,10 +2327,6 @@ class SessionOrchestrator:
         self._panels.setup.chk_show_trajectories.setEnabled(True)
         self._panels.setup.chk_show_labels.setEnabled(True)
         self._panels.setup.chk_show_state.setEnabled(True)
-        self._panels.setup.chk_show_kalman_uncertainty.setEnabled(True)
-        self._panels.detection.chk_show_fg.setEnabled(True)
-        self._panels.detection.chk_show_bg.setEnabled(True)
-        self._panels.detection.chk_show_yolo_obb.setEnabled(True)
 
         if is_tracking_active and is_viz_free and not is_preview_active:
             self._mw._stored_preview_text = (

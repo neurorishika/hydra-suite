@@ -157,6 +157,8 @@ dmypy.json
 # Re-include committed postproc regression baselines (must come after the
 # *_backward.csv rule above, which otherwise re-ignores input_backward.csv).
 !tests/fixtures/postproc/**/*.csv
+# Re-include committed User-mode clean-CSV goldens (test_user_mode_golden.py).
+!tests/goldens/user_mode/**/*.csv
 
 # Configuration files (may contain sensitive paths)
 tracking_config.json

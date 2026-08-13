@@ -884,51 +884,9 @@ class DetectionPanel(QWidget):
 
         vbox.addWidget(self.stack_detection)
 
-        # ============================================================
-        # Detection Overlays (moved from Visuals tab)
-        # ============================================================
-        # Background Subtraction specific overlays
-        self.g_overlays_bg = QGroupBox("Background Diagnostics")
-        self._main_window._set_compact_section_widget(self.g_overlays_bg)
-        v_ov_bg = QVBoxLayout(self.g_overlays_bg)
-        v_ov_bg.addWidget(
-            self._main_window._create_help_label(
-                "Debug background subtraction by viewing the foreground mask (detected movement) "
-                "and background model (learned static image)."
-            )
-        )
-
-        self.chk_show_fg = QCheckBox("Show Foreground Mask")
-        self.chk_show_fg.setChecked(True)
-        self.chk_show_bg = QCheckBox("Show Background Model")
-        self.chk_show_bg.setChecked(True)
-        _bg_ov_row = QHBoxLayout()
-        _bg_ov_row.addWidget(self.chk_show_fg)
-        _bg_ov_row.addWidget(self.chk_show_bg)
-        v_ov_bg.addLayout(_bg_ov_row)
-
-        vbox.addWidget(self.g_overlays_bg)
-
-        # YOLO specific overlays
-        self.g_overlays_yolo = QGroupBox("YOLO Diagnostics")
-        self._main_window._set_compact_section_widget(self.g_overlays_yolo)
-        v_ov_yolo = QVBoxLayout(self.g_overlays_yolo)
-        v_ov_yolo.addWidget(
-            self._main_window._create_help_label(
-                "Show oriented bounding boxes from YOLO detection. Useful for debugging detection quality "
-                "and verifying model performance."
-            )
-        )
-
-        self.chk_show_yolo_obb = QCheckBox("Show YOLO OBB Detection Boxes")
-        self.chk_show_yolo_obb.setChecked(False)
-        v_ov_yolo.addWidget(self.chk_show_yolo_obb)
-
-        vbox.addWidget(self.g_overlays_yolo)
-
-        # Initially show/hide based on detection method (will be set properly by combo)
-        self.g_overlays_bg.setVisible(True)
-        self.g_overlays_yolo.setVisible(False)
+        # Detection overlay diagnostics (foreground/background mask, YOLO OBB
+        # boxes) moved from per-checkbox toggles into the single global Debug
+        # Mode; see main_window.btn_debug_mode / _gui_display_overlay.
 
         # ============================================================
         # Reference Scale (size + aspect ratio)
@@ -1292,8 +1250,6 @@ class DetectionPanel(QWidget):
         self.stack_detection.setCurrentIndex(index)
         is_background_subtraction = index == 0
         self.g_img.setVisible(is_background_subtraction)
-        self.g_overlays_bg.setVisible(is_background_subtraction)
-        self.g_overlays_yolo.setVisible(not is_background_subtraction)
         self._update_preview_display()
         self.on_detection_method_changed(index)
         self._main_window._on_runtime_context_changed()

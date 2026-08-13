@@ -687,7 +687,7 @@ def test_start_tracking_on_video_restores_csv_and_worker_imports(
     from hydra_suite.trackerkit.headless_tracking import build_tracking_csv_header
 
     assert captured["csv_header"] == build_tracking_csv_header(
-        False, identity_method=main_window._selected_identity_method()
+        identity_method=main_window._selected_identity_method()
     )
     assert C.REALTIME_LABEL in captured["csv_header"]
     assert "IdentityAssignedLabel" not in captured["csv_header"]

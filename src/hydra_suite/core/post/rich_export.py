@@ -322,6 +322,9 @@ def export_rich_csv(
     min_valid_conf,
     ignore_keypoints,
     identity_evidence_cache_path=None,
+    debug_mode=True,
+    fps=None,
+    identity_ran=True,
 ):
     """Write the rich individual-analysis CSV next to the final CSV."""
     with_pose_df = build_rich_export_dataframe(
@@ -335,7 +338,15 @@ def export_rich_csv(
     if with_pose_df is None or with_pose_df.empty:
         return None
 
-    return write_rich_export_csv(with_pose_df, final_csv_path)
+    from hydra_suite.core.post.trajectory_writer import write_final_trajectories
+
+    return write_final_trajectories(
+        with_pose_df,
+        final_csv_path,
+        debug_mode=debug_mode,
+        fps=fps,
+        identity_ran=identity_ran,
+    )
 
 
 def relink_and_export_rich_csv(
@@ -346,6 +357,9 @@ def relink_and_export_rich_csv(
     min_valid_conf,
     ignore_keypoints,
     identity_evidence_cache_path=None,
+    debug_mode=True,
+    fps=None,
+    identity_ran=True,
 ):
     """Rewrite final CSV IDs after pose-aware relinking and regenerate the rich export CSV."""
     if not final_csv_path or not os.path.exists(final_csv_path):
@@ -372,6 +386,9 @@ def relink_and_export_rich_csv(
             params=params,
             min_valid_conf=min_valid_conf,
             ignore_keypoints=ignore_keypoints,
+            debug_mode=debug_mode,
+            fps=fps,
+            identity_ran=identity_ran,
         )
 
     relink_input_df = (
@@ -393,17 +410,48 @@ def relink_and_export_rich_csv(
     ).reset_index(drop=True)
 
     try:
+        # Intentionally NOT routed through write_base_final_csv: the equivalence
+        # gate compares this exact `_tracking_final.csv` byte-for-byte against
+        # legacy when relinking runs, and the shared writer's Int64 rounding of
+        # X/Y/FrameID can print differently than this bare float write for
+        # NaN-containing columns (e.g. "123.0" vs "123"). Keep this a plain
+        # to_csv to preserve byte-identity; folding relink formatting into the
+        # shared writer is deferred to a separate, gate-validated change.
         relinked_base.to_csv(final_csv_path, index=False)
     except Exception:
         logger.exception("Failed to rewrite relinked final CSV: %s", final_csv_path)
         return None
 
     if with_pose_df is not None and not with_pose_df.empty:
-        rich_path = write_rich_export_csv(relinked_with_pose, final_csv_path)
+        from hydra_suite.core.post.trajectory_writer import write_final_trajectories
+
+        rich_path = write_final_trajectories(
+            relinked_with_pose,
+            final_csv_path,
+            debug_mode=debug_mode,
+            fps=fps,
+            identity_ran=identity_ran,
+        )
         if not rich_path:
             return None
     else:
         remove_legacy_rich_exports(final_csv_path)
+        if not debug_mode:
+            # No pose-augmented frame to relink from, but the clean
+            # `<stem>_tracks.csv` was already written (pre-relink IDs) by the
+            # earlier export_rich_csv() call. relinked_base above *is* the
+            # just-rewritten final CSV content -- refresh tracks.csv from it
+            # so User mode doesn't ship stale IDs that disagree with the
+            # rewritten final CSV.
+            from hydra_suite.core.post.trajectory_writer import write_final_trajectories
+
+            write_final_trajectories(
+                relinked_base,
+                final_csv_path,
+                debug_mode=False,
+                fps=fps,
+                identity_ran=identity_ran,
+            )
 
     logger.info(
         "Relinked final CSV rewritten: %s (%d trajectories)",

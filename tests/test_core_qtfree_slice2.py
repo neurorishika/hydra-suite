@@ -45,27 +45,24 @@ def test_header_uses_realtime_family_and_no_legacy():
     from hydra_suite.core.individual.identity import columns as C
     from hydra_suite.trackerkit.headless_tracking import build_tracking_csv_header
 
-    for save_confidence in (True, False):
-        hdr = build_tracking_csv_header(
-            save_confidence, identity_method="cnn_classifier"
-        )
-        assert C.REALTIME_LABEL in hdr and C.EVIDENCE_SOURCES in hdr
-        assert "IdentityAssignedLabel" not in hdr
-        assert "IdentityAssignedID" not in hdr
-        assert "IdentityAssignedConfidence" not in hdr
-        assert "IdentityConflictFlag" not in hdr
-        assert "IdentitySlotLockLabel" not in hdr
-        # Positional block appears contiguously in the writer's order.
-        i = hdr.index(C.REALTIME_ID)
-        block = C.identity_realtime_columns()
-        assert hdr[i : i + len(block)] == block
+    hdr = build_tracking_csv_header(identity_method="cnn_classifier")
+    assert C.REALTIME_LABEL in hdr and C.EVIDENCE_SOURCES in hdr
+    assert "IdentityAssignedLabel" not in hdr
+    assert "IdentityAssignedID" not in hdr
+    assert "IdentityAssignedConfidence" not in hdr
+    assert "IdentityConflictFlag" not in hdr
+    assert "IdentitySlotLockLabel" not in hdr
+    # Positional block appears contiguously in the writer's order.
+    i = hdr.index(C.REALTIME_ID)
+    block = C.identity_realtime_columns()
+    assert hdr[i : i + len(block)] == block
 
 
 def test_header_apriltag_block_appended_after_realtime_family():
     from hydra_suite.core.individual.identity import columns as C
     from hydra_suite.trackerkit.headless_tracking import build_tracking_csv_header
 
-    hdr = build_tracking_csv_header(False, identity_method="apriltags")
+    hdr = build_tracking_csv_header(identity_method="apriltags")
     block = C.identity_realtime_columns()
     i = hdr.index(C.REALTIME_ID)
     assert hdr[i : i + len(block)] == block

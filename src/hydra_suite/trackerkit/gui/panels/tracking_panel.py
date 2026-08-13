@@ -957,17 +957,6 @@ class TrackingPanel(QWidget):
             )
         )
 
-        self.chk_export_confidence_density_video = QCheckBox(
-            "Export density diagnostic video"
-        )
-        self.chk_export_confidence_density_video.setChecked(False)
-        self.chk_export_confidence_density_video.setToolTip(
-            "Write a reduced-resolution density visualization video alongside\n"
-            "the source video. Adds a full extra video write pass — leave off\n"
-            "unless you need the diagnostic."
-        )
-        f_density.addRow(self.chk_export_confidence_density_video)
-
         vl_density.addLayout(f_density)
         self.g_density.setContentLayout(vl_density)
         vbox.addWidget(self.g_density)

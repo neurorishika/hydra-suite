@@ -869,15 +869,16 @@ def test_confidence_density_toggle_roundtrip_updates_visibility(
     qapp: QApplication,
     tmp_path: Path,
 ) -> None:
+    """``EXPORT_CONFIDENCE_DENSITY_VIDEO`` derives from the global Debug Mode
+    toggle (Task 8), not a standalone checkbox; ``g_density`` visibility is
+    still governed solely by ``chk_enable_confidence_density_map``.
+    """
     window = _make_main_window(monkeypatch)
 
     assert not window._tracking_panel.g_density.isHidden()
-    assert (
-        window._tracking_panel.chk_export_confidence_density_video.isChecked() is False
-    )
+    assert window.btn_debug_mode.isChecked() is False
 
     window._tracking_panel.chk_enable_confidence_density_map.setChecked(False)
-    window._tracking_panel.chk_export_confidence_density_video.setChecked(False)
 
     assert window._tracking_panel.g_density.isHidden()
     assert window.get_parameters_dict()["ENABLE_CONFIDENCE_DENSITY_MAP"] is False
@@ -887,7 +888,7 @@ def test_confidence_density_toggle_roundtrip_updates_visibility(
     assert window.save_config(preset_mode=True, preset_path=str(config_path))
     saved_cfg = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved_cfg["enable_confidence_density_map"] is False
-    assert saved_cfg["export_confidence_density_video"] is False
+    assert saved_cfg["debug_mode"] is False
     window.close()
 
     reloaded_window = _make_main_window(monkeypatch)
@@ -897,20 +898,54 @@ def test_confidence_density_toggle_roundtrip_updates_visibility(
         reloaded_window._tracking_panel.chk_enable_confidence_density_map.isChecked()
         is False
     )
-    assert (
-        reloaded_window._tracking_panel.chk_export_confidence_density_video.isChecked()
-        is False
-    )
+    assert reloaded_window.btn_debug_mode.isChecked() is False
     assert reloaded_window._tracking_panel.g_density.isHidden()
 
     reloaded_window._tracking_panel.chk_enable_confidence_density_map.setChecked(True)
-    reloaded_window._tracking_panel.chk_export_confidence_density_video.setChecked(True)
+    reloaded_window.btn_debug_mode.setChecked(True)
+    reloaded_window._on_debug_mode_toggled(True)
 
     assert not reloaded_window._tracking_panel.g_density.isHidden()
     assert (
         reloaded_window.get_parameters_dict()["EXPORT_CONFIDENCE_DENSITY_VIDEO"] is True
     )
     reloaded_window.close()
+
+    # Regression guard: loading a config/preset with debug_mode: true must sync
+    # ``window.config.debug_mode`` itself, not just ``btn_debug_mode``'s checked
+    # state. QPushButton.setChecked() does NOT emit ``clicked``, so
+    # ``_on_debug_mode_toggled`` (the only other writer of ``config.debug_mode``)
+    # never fires from a config load -- if the load path only calls
+    # ``setChecked(...)`` without also assigning ``config.debug_mode``, the field
+    # goes stale and every debug-derived overlay key silently reverts to the
+    # window's pre-load value.
+    debug_on_window = _make_main_window(monkeypatch)
+    debug_on_window.btn_debug_mode.setChecked(True)
+    debug_on_window._on_debug_mode_toggled(True)
+    debug_on_config_path = tmp_path / "debug_mode_on.json"
+    assert debug_on_window.save_config(
+        preset_mode=True, preset_path=str(debug_on_config_path)
+    )
+    saved_debug_on_cfg = json.loads(debug_on_config_path.read_text(encoding="utf-8"))
+    assert saved_debug_on_cfg["debug_mode"] is True
+    debug_on_window.close()
+
+    fresh_window = _make_main_window(monkeypatch)
+    assert fresh_window.config.debug_mode is False  # sanity: starts debug-off
+    fresh_window._load_config_from_file(str(debug_on_config_path), preset_mode=True)
+
+    # Do NOT manually re-invoke _on_debug_mode_toggled here -- that would mask
+    # the bug. Exercise only the real load path.
+    assert fresh_window.btn_debug_mode.isChecked() is True
+    assert fresh_window.config.debug_mode is True
+    params = fresh_window.get_parameters_dict()
+    assert params["DEBUG_MODE"] is True
+    assert params["EXPORT_CONFIDENCE_DENSITY_VIDEO"] is True
+    assert params["SHOW_FG"] is True
+    assert params["SHOW_BG"] is True
+    assert params["SHOW_YOLO_OBB"] is True
+    assert params["SHOW_KALMAN_UNCERTAINTY"] is True
+    fresh_window.close()
 
 
 def test_final_media_video_paths_are_split_from_individual_crop_paths(

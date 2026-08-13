@@ -27,6 +27,10 @@ from hydra_suite.core.post.rich_export import (
     export_rich_csv,
     relink_and_export_rich_csv,
 )
+from hydra_suite.core.post.trajectory_writer import (
+    user_tracks_path,
+    write_base_final_csv,
+)
 from hydra_suite.core.tracking.errors import TrackingSessionError
 from hydra_suite.core.tracking.session_policy import (
     should_export_final_canonical_images,
@@ -94,37 +98,23 @@ def enforce_nonempty_forward(raw_csv_path, detection_cache_path) -> None:
         )
 
 
-def _save_trajectories_to_csv(trajectories, output_path: str) -> bool:
-    """Persist post-processed trajectories in the same shape as the GUI path.
-
-    Copied verbatim from ``trackerkit/headless_tracking.py::save_trajectories_to_csv``
-    so ``core/`` needs no app-layer import.
-    """
-    if trajectories is None:
-        return False
-    if not isinstance(trajectories, pd.DataFrame):
-        raise TypeError("Expected post-processed trajectories as a pandas DataFrame.")
-    if trajectories.empty:
-        return False
-
-    df_to_save = trajectories.copy()
-    for column in ["X", "Y", "FrameID"]:
-        if column in df_to_save.columns:
-            df_to_save[column] = pd.to_numeric(df_to_save[column], errors="coerce")
-            df_to_save[column] = df_to_save[column].round().astype("Int64")
-
-    df_to_save = df_to_save.drop(
-        columns=[
-            column for column in ["TrackID", "Index"] if column in df_to_save.columns
-        ],
-        errors="ignore",
-    )
-    base_columns = ["TrajectoryID", "X", "Y", "Theta", "FrameID"]
-    ordered_columns = base_columns + [
-        column for column in df_to_save.columns if column not in base_columns
+def _user_mode_intermediate_paths(base: str, ext: str) -> list[str]:
+    """Intermediate CSVs to delete after a User-mode run (never the clean tracks.csv)."""
+    return [
+        f"{base}_final{ext}",
+        f"{base}_forward{ext}",
+        f"{base}_backward{ext}",
+        f"{base}_forward_processed{ext}",
+        f"{base}_final_with_individual{ext}",
+        f"{base}_tracking_forward{ext}",
+        f"{base}_tracking_backward{ext}",
+        f"{base}_tracking_final{ext}",
     ]
-    df_to_save[ordered_columns].to_csv(output_path, index=False)
-    return True
+
+
+def _save_trajectories_to_csv(trajectories, output_path: str) -> bool:
+    """Persist post-processed trajectories (delegates to the shared base-final writer)."""
+    return write_base_final_csv(trajectories, output_path)
 
 
 def _noop1(_a) -> None:
@@ -276,6 +266,17 @@ class TrackingSessionCore:
             )
             return None
 
+    def _identity_ran(self) -> bool:
+        """Whether an identity/tag method actually ran (not just enabled-with-none)."""
+        _method = (
+            str(self.config.get("identity_method", "none_disabled")).strip().lower()
+        )
+        return bool(self.config.get("enable_identity_analysis")) and _method not in (
+            "none_disabled",
+            "none",
+            "",
+        )
+
     def _export_rich(self, final_csv):
         return export_rich_csv(
             final_csv,
@@ -284,6 +285,9 @@ class TrackingSessionCore:
             min_valid_conf=float(self.params.get("POSE_MIN_KPT_CONF_VALID", 0.2)),
             ignore_keypoints=self.config.get("pose_ignore_keypoints"),
             identity_evidence_cache_path=self._identity_evidence_cache_path(),
+            debug_mode=bool(self.params.get("DEBUG_MODE", True)),
+            fps=self.params.get("FPS"),
+            identity_ran=self._identity_ran(),
         )
 
     def _relink_export_rich(self, final_csv):
@@ -294,6 +298,9 @@ class TrackingSessionCore:
             min_valid_conf=float(self.params.get("POSE_MIN_KPT_CONF_VALID", 0.2)),
             ignore_keypoints=self.config.get("pose_ignore_keypoints"),
             identity_evidence_cache_path=self._identity_evidence_cache_path(),
+            debug_mode=bool(self.params.get("DEBUG_MODE", True)),
+            fps=self.params.get("FPS"),
+            identity_ran=self._identity_ran(),
         )
 
     def _run_interp_crops(self, final_csv) -> None:
@@ -565,6 +572,32 @@ class TrackingSessionCore:
             result.summary_lines = build_session_summary_lines(
                 self.config, summary_result
             )
+
+            # User mode: intermediates are no longer needed once dataset
+            # generation, media export, and the annotated video (all of which
+            # read the base-final CSV) have finished -- clean them up so only
+            # the clean tracks.csv + annotated video remain. NO-OP in debug
+            # mode (and thus a no-op for the equivalence gate).
+            if not bool(self.params.get("DEBUG_MODE", True)):
+                _expected_tracks_csv = user_tracks_path(final_csv)
+                if os.path.exists(_expected_tracks_csv):
+                    for _p in _user_mode_intermediate_paths(base, ext):
+                        try:
+                            if os.path.exists(_p):
+                                os.remove(_p)
+                        except OSError:
+                            logger.warning(
+                                "Failed to remove intermediate %s",
+                                _p,
+                                exc_info=True,
+                            )
+                else:
+                    logger.warning(
+                        "User-mode cleanup skipped: expected clean output %s "
+                        "was not found. Keeping intermediates as a fallback.",
+                        _expected_tracks_csv,
+                    )
+
             cb.stage_changed("done")
             return result
         except TrackingSessionError as e:

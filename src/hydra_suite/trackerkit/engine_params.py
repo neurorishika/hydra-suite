@@ -713,8 +713,17 @@ def build_engine_params(
         cfg_get=lambda _c, _k, _d=None: _cfg_get(_c, _k, default=_d),
     )
 
+    # Debug/Release derivation (Task 2 of the debug-mode plan): an absent
+    # ``debug_mode`` key means Debug/legacy behavior. When present, it drives
+    # ENABLE_PROFILING/EXPORT_CONFIDENCE_DENSITY_VIDEO; when absent, those keep
+    # their independently stored values (backward compat with pre-debug-mode
+    # configs, incl. the equivalence-gate fixtures).
+    _debug_present = "debug_mode" in cfg
+    _debug_mode = bool(_cfg_get(cfg, "debug_mode", default=True))
+
     params: dict[str, Any] = {
         "ADVANCED_CONFIG": advanced,
+        "DEBUG_MODE": _debug_mode,
         "DETECTION_METHOD": str(
             _cfg_get(cfg, "detection_method", default="background_subtraction")
         ),
@@ -882,9 +891,9 @@ def build_engine_params(
         "MAX_DISTANCE_THRESHOLD": max_distance_multiplier * scaled_body_size,
         "MAX_DISTANCE_MULTIPLIER": max_distance_multiplier,
         "ENABLE_POSTPROCESSING": enable_postprocessing_flag,
-        # Gates the three confidence columns the worker appends per row. Must
-        # match the header built from `save_confidence_metrics`, or the CSV rows
-        # carry more values than the header declares columns.
+        # Retained for CLI/GUI config back-compat only. The worker no longer
+        # reads this param: the three confidence columns are always emitted
+        # per row, and the header is always built to match.
         "SAVE_CONFIDENCE_METRICS": bool(
             _cfg_get(cfg, "save_confidence_metrics", default=True)
         ),
@@ -1187,8 +1196,10 @@ def build_engine_params(
                 default=DENSITY_DOWNSAMPLE_FACTOR_CONST,
             )
         ),
-        "EXPORT_CONFIDENCE_DENSITY_VIDEO": bool(
-            _cfg_get(cfg, "export_confidence_density_video", default=False)
+        "EXPORT_CONFIDENCE_DENSITY_VIDEO": (
+            _debug_mode
+            if _debug_present
+            else bool(_cfg_get(cfg, "export_confidence_density_video", default=False))
         ),
         # --- Dataset generation (bridge: config.py:2367-2399). Active-learning
         # export knobs; inert for tracking. DATASET_NAME/CONF_THRESHOLD are
@@ -1293,7 +1304,11 @@ def build_engine_params(
             _cfg_get(cfg, "suppress_foreign_obb_oriented_videos", default=False)
         ),
         # Profiling toggle (bridge: config.py:2544).
-        "ENABLE_PROFILING": bool(_cfg_get(cfg, "enable_profiling", default=False)),
+        "ENABLE_PROFILING": (
+            _debug_mode
+            if _debug_present
+            else bool(_cfg_get(cfg, "enable_profiling", default=False))
+        ),
     }
 
     # Runtime-overlay output-dir / cache keys. These depend on the live

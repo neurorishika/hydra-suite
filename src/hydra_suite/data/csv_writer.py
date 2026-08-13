@@ -18,14 +18,28 @@ class CSVWriterThread(threading.Thread):
     I/O operations from blocking the main tracking loop. It uses a queue-based
     system to buffer data and ensures data integrity during high-frequency writes.
 
-    The CSV format includes:
+    The CSV format includes (always emitted):
     - TrackID: Track slot identifier (0-based index, reused across track losses)
     - TrajectoryID: Persistent trajectory identifier (increments when tracks are reassigned)
     - Index: Sequential count of detections for this track slot
-    - X, Y: Pixel coordinates of object center
+    - X: Pixel x-coordinate of object center
+    - Y: Pixel y-coordinate of object center
     - Theta: Orientation angle in radians
     - FrameID: Video frame number (1-based)
     - State: Tracking state ('active', 'occluded', 'lost')
+    - DetectionConfidence: Confidence score from the detector (always emitted)
+    - AssignmentConfidence: Confidence of the Hungarian assignment (always emitted)
+    - PositionUncertainty: Kalman filter position covariance (always emitted)
+    - DetectionID: Unique identifier for the detection
+
+    Followed by a block of realtime identity columns (IdentityRealtime*/IdentityEvidence*)
+    when identity analysis runs.
+
+    For the 'apriltags' identity method, four additional columns are appended:
+    - DetectedTagID: AprilTag ID
+    - DetectedTagLabel: AprilTag label
+    - DetectedTagConf: Detection confidence
+    - DetectedTagHamming: Hamming distance
     """
 
     def __init__(self, path: str, header=None):
