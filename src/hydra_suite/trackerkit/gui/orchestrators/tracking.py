@@ -1407,9 +1407,8 @@ class TrackingOrchestrator:
         self._mw.csv_writer_thread = None
         if not self._panels.setup.csv_line.text():
             return
-        save_confidence = self._panels.setup.check_save_confidence.isChecked()
         hdr = build_tracking_csv_header(
-            save_confidence, identity_method=self._mw._selected_identity_method()
+            identity_method=self._mw._selected_identity_method()
         )
         csv_path = self._panels.setup.csv_line.text()
         base, ext = os.path.splitext(csv_path)

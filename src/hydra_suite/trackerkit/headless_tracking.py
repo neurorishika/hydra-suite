@@ -30,37 +30,22 @@ from hydra_suite.trackerkit.tracking_cache import plan_tracking_cache
 logger = logging.getLogger(__name__)
 
 
-def build_tracking_csv_header(
-    save_confidence_metrics: bool, identity_method: str = "none_disabled"
-) -> list[str]:
-    """Build the raw tracking CSV header used by the GUI path."""
-    if save_confidence_metrics:
-        base_cols = [
-            "TrackID",
-            "TrajectoryID",
-            "Index",
-            "X",
-            "Y",
-            "Theta",
-            "FrameID",
-            "State",
-            "DetectionConfidence",
-            "AssignmentConfidence",
-            "PositionUncertainty",
-            "DetectionID",
-        ]
-    else:
-        base_cols = [
-            "TrackID",
-            "TrajectoryID",
-            "Index",
-            "X",
-            "Y",
-            "Theta",
-            "FrameID",
-            "State",
-            "DetectionID",
-        ]
+def build_tracking_csv_header(identity_method: str = "none_disabled") -> list[str]:
+    """Build the raw tracking CSV header. Confidence columns are always emitted."""
+    base_cols = [
+        "TrackID",
+        "TrajectoryID",
+        "Index",
+        "X",
+        "Y",
+        "Theta",
+        "FrameID",
+        "State",
+        "DetectionConfidence",
+        "AssignmentConfidence",
+        "PositionUncertainty",
+        "DetectionID",
+    ]
     header = list(base_cols) + C.identity_realtime_columns()
     if str(identity_method).strip().lower() == "apriltags":
         header.extend(
@@ -113,10 +98,7 @@ def _run_engine_pass(
     direction = "backward" if backward_mode else "forward"
     csv_writer = CSVWriterThread(
         raw_csv_path,
-        header=build_tracking_csv_header(
-            session.save_confidence_metrics,
-            identity_method=session.identity_method,
-        ),
+        header=build_tracking_csv_header(identity_method=session.identity_method),
     )
     csv_writer.start()
 

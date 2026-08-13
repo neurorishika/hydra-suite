@@ -2902,9 +2902,8 @@ class TrackingEngineCore:
                                 f"VEL_GATE={_vel_gate:.1f}"
                             )
 
-                # Conditionally compute confidence metrics (for performance)
-                save_confidence = params.get("SAVE_CONFIDENCE_METRICS", True)
-                if save_confidence:
+                # Confidence metrics are always computed (the opt-out toggle was retired).
+                if True:
                     # Compute assignment confidence for matched pairs
                     matched_pairs = list(zip(rows, cols))
                     assignment_confidences = assigner.compute_assignment_confidence(
@@ -2915,9 +2914,6 @@ class TrackingEngineCore:
                     position_uncertainties = (
                         self.kf_manager.get_position_uncertainties()
                     )
-                else:
-                    assignment_confidences = {}
-                    position_uncertainties = []
 
                 # --- State Management ---
                 profiler.tick("state_update")
@@ -3301,20 +3297,19 @@ class TrackingEngineCore:
                             track_states[r],
                         ]
 
-                        # Add confidence values if enabled
-                        if save_confidence:
-                            det_conf = (
-                                detection_confidences[c]
-                                if c < len(detection_confidences)
-                                else 0.0
-                            )
-                            assign_conf = assignment_confidences.get(r, 0.0)
-                            pos_uncertainty = (
-                                position_uncertainties[r]
-                                if r < len(position_uncertainties)
-                                else 0.0
-                            )
-                            row_data.extend([det_conf, assign_conf, pos_uncertainty])
+                        # Confidence values are always computed and emitted.
+                        det_conf = (
+                            detection_confidences[c]
+                            if c < len(detection_confidences)
+                            else 0.0
+                        )
+                        assign_conf = assignment_confidences.get(r, 0.0)
+                        pos_uncertainty = (
+                            position_uncertainties[r]
+                            if r < len(position_uncertainties)
+                            else 0.0
+                        )
+                        row_data.extend([det_conf, assign_conf, pos_uncertainty])
 
                         # Add DetectionID (can be NaN for unmatched)
                         det_id = (
@@ -3355,16 +3350,15 @@ class TrackingEngineCore:
                             track_states[r],
                         ]
 
-                        # Add confidence values if enabled (unmatched = 0)
-                        if save_confidence:
-                            det_conf = 0.0
-                            assign_conf = 0.0
-                            pos_uncertainty = (
-                                position_uncertainties[r]
-                                if r < len(position_uncertainties)
-                                else 0.0
-                            )
-                            row_data.extend([det_conf, assign_conf, pos_uncertainty])
+                        # Confidence values are always computed and emitted (unmatched = 0).
+                        det_conf = 0.0
+                        assign_conf = 0.0
+                        pos_uncertainty = (
+                            position_uncertainties[r]
+                            if r < len(position_uncertainties)
+                            else 0.0
+                        )
+                        row_data.extend([det_conf, assign_conf, pos_uncertainty])
 
                         # Add DetectionID (NaN for unmatched tracks)
                         row_data.append(float("nan"))
@@ -3504,12 +3498,7 @@ class TrackingEngineCore:
                         track_states[r] = "occluded"
 
                 if self.csv_writer_thread:
-                    _save_conf_zero = params.get("SAVE_CONFIDENCE_METRICS", True)
-                    _pos_unc_zero = (
-                        self.kf_manager.get_position_uncertainties()
-                        if _save_conf_zero
-                        else []
-                    )
+                    _pos_unc_zero = self.kf_manager.get_position_uncertainties()
                     for r in range(N):
                         row_data = [
                             r,
@@ -3521,11 +3510,10 @@ class TrackingEngineCore:
                             actual_frame_index,
                             track_states[r],
                         ]
-                        if _save_conf_zero:
-                            pos_uncertainty = (
-                                _pos_unc_zero[r] if r < len(_pos_unc_zero) else 0.0
-                            )
-                            row_data.extend([0.0, 0.0, pos_uncertainty])
+                        pos_uncertainty = (
+                            _pos_unc_zero[r] if r < len(_pos_unc_zero) else 0.0
+                        )
+                        row_data.extend([0.0, 0.0, pos_uncertainty])
                         row_data.append(float("nan"))  # DetectionID
                         row_data.extend(_online_identity_row_values(r))
                         # Add detection-level AprilTag columns (NaN — no detection)

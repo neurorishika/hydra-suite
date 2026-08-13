@@ -1,14 +1,14 @@
-"""The confidence-metrics toggle must reach the worker that writes CSV rows.
+"""Historical wiring guard for the (now-retired) confidence-metrics toggle.
 
-The operator's choice drives the CSV *header* (``headless_tracking.py``,
-``gui/orchestrators/tracking.py``) via the lowercase ``save_confidence_metrics``
-field.  The worker decides whether to append the three confidence *values* to
-each row from ``params["SAVE_CONFIDENCE_METRICS"]``
-(``core/tracking/worker.py``).
-
-Nothing wrote that uppercase key, so the row gate was permanently ``True``:
-turning the toggle off produced an 18-column header above 21-value rows, which
-shifts every downstream column read.
+A 2026-08-11 user decision retired ``save_confidence_metrics`` entirely: the
+tracking worker (``core/tracking/worker.py``) now *always* computes and
+appends the three confidence columns to every CSV row, unconditionally. The
+``SAVE_CONFIDENCE_METRICS`` param key is no longer read anywhere in the
+worker (see ``docs/superpowers/sdd/2026-08-11-trackerkit-debug-mode``,
+Task 1). The CLI/GUI param plumbing (``cli_config.py``, ``engine_params.py``)
+still carries the lowercase field/uppercase key for now -- that surface is
+retired later in the Debug Mode work (Task 8 removes the GUI checkbox) -- but
+nothing downstream gates on it any more.
 """
 
 from __future__ import annotations
@@ -89,7 +89,14 @@ def test_gui_parameter_builder_also_writes_the_key():
     assert "SAVE_CONFIDENCE_METRICS" in _assigned_string_keys(builder)
 
 
-def test_uppercase_key_is_read_by_the_worker():
-    """Guard the fix against a rename on either side."""
+def test_worker_no_longer_gates_on_the_toggle():
+    """Task 1 of the Debug Mode work retires the row-level gate entirely.
+
+    The worker must always compute and emit the three confidence columns;
+    ``SAVE_CONFIDENCE_METRICS``/``save_confidence`` must not appear anywhere
+    in worker.py any more (see task-1 brief verification requirement).
+    """
     worker = _repo_src() / "core" / "tracking" / "worker.py"
-    assert "SAVE_CONFIDENCE_METRICS" in worker.read_text(encoding="utf-8")
+    text = worker.read_text(encoding="utf-8")
+    assert "SAVE_CONFIDENCE_METRICS" not in text
+    assert "save_confidence" not in text
