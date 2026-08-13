@@ -27,7 +27,10 @@ from hydra_suite.core.post.rich_export import (
     export_rich_csv,
     relink_and_export_rich_csv,
 )
-from hydra_suite.core.post.trajectory_writer import write_base_final_csv
+from hydra_suite.core.post.trajectory_writer import (
+    user_tracks_path,
+    write_base_final_csv,
+)
 from hydra_suite.core.tracking.errors import TrackingSessionError
 from hydra_suite.core.tracking.session_policy import (
     should_export_final_canonical_images,
@@ -576,14 +579,24 @@ class TrackingSessionCore:
             # the clean tracks.csv + annotated video remain. NO-OP in debug
             # mode (and thus a no-op for the equivalence gate).
             if not bool(self.params.get("DEBUG_MODE", True)):
-                for _p in _user_mode_intermediate_paths(base, ext):
-                    try:
-                        if os.path.exists(_p):
-                            os.remove(_p)
-                    except OSError:
-                        logger.warning(
-                            "Failed to remove intermediate %s", _p, exc_info=True
-                        )
+                _expected_tracks_csv = user_tracks_path(final_csv)
+                if os.path.exists(_expected_tracks_csv):
+                    for _p in _user_mode_intermediate_paths(base, ext):
+                        try:
+                            if os.path.exists(_p):
+                                os.remove(_p)
+                        except OSError:
+                            logger.warning(
+                                "Failed to remove intermediate %s",
+                                _p,
+                                exc_info=True,
+                            )
+                else:
+                    logger.warning(
+                        "User-mode cleanup skipped: expected clean output %s "
+                        "was not found. Keeping intermediates as a fallback.",
+                        _expected_tracks_csv,
+                    )
 
             cb.stage_changed("done")
             return result

@@ -436,6 +436,22 @@ def relink_and_export_rich_csv(
             return None
     else:
         remove_legacy_rich_exports(final_csv_path)
+        if not debug_mode:
+            # No pose-augmented frame to relink from, but the clean
+            # `<stem>_tracks.csv` was already written (pre-relink IDs) by the
+            # earlier export_rich_csv() call. relinked_base above *is* the
+            # just-rewritten final CSV content -- refresh tracks.csv from it
+            # so User mode doesn't ship stale IDs that disagree with the
+            # rewritten final CSV.
+            from hydra_suite.core.post.trajectory_writer import write_final_trajectories
+
+            write_final_trajectories(
+                relinked_base,
+                final_csv_path,
+                debug_mode=False,
+                fps=fps,
+                identity_ran=identity_ran,
+            )
 
     logger.info(
         "Relinked final CSV rewritten: %s (%d trajectories)",

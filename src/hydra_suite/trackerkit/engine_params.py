@@ -891,9 +891,9 @@ def build_engine_params(
         "MAX_DISTANCE_THRESHOLD": max_distance_multiplier * scaled_body_size,
         "MAX_DISTANCE_MULTIPLIER": max_distance_multiplier,
         "ENABLE_POSTPROCESSING": enable_postprocessing_flag,
-        # Gates the three confidence columns the worker appends per row. Must
-        # match the header built from `save_confidence_metrics`, or the CSV rows
-        # carry more values than the header declares columns.
+        # Retained for CLI/GUI config back-compat only. The worker no longer
+        # reads this param: the three confidence columns are always emitted
+        # per row, and the header is always built to match.
         "SAVE_CONFIDENCE_METRICS": bool(
             _cfg_get(cfg, "save_confidence_metrics", default=True)
         ),
