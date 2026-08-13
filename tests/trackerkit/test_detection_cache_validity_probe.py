@@ -63,6 +63,23 @@ def test_modern_cache_dir_covering_range_is_valid(tmp_path):
     )
 
 
+def test_modern_cache_file_path_covering_range_is_valid(tmp_path):
+    """``current_detection_cache_path`` (and optimizer-reuse candidates) may be
+    the ``detection.npz`` FILE itself, not just its containing directory --
+    the probe must normalize to the containing dir before opening caches."""
+    params: dict = {}
+    cache_dir = tmp_path / ".inference_cache_clip"
+    _write_modern_detection_cache_dir(cache_dir, params, frames=range(0, 5))
+    cache_file = cache_dir / "detection.npz"
+
+    assert (
+        detection_cache_dir_covers_range(
+            str(cache_file), "", params, start_frame=0, end_frame=4
+        )
+        is True
+    )
+
+
 def test_modern_cache_dir_missing_frames_is_not_valid(tmp_path):
     params: dict = {}
     cache_dir = tmp_path / ".inference_cache_clip"

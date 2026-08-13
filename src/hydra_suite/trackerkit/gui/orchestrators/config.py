@@ -121,26 +121,33 @@ def detection_cache_dir_covers_range(
     start_frame: int,
     end_frame: int,
 ) -> bool:
-    """Return True iff *path* is a modern detection-cache directory whose
-    detection cache is valid (key-compatible) and covers ``start_frame..end_frame``.
+    """Return True iff *path* names a modern detection cache (directory or
+    the ``detection.npz`` file inside one) that is key-compatible with
+    *params* and covers ``start_frame..end_frame``.
 
     Only the modern ``InferenceRunner`` cache-directory layout (built by
     ``DetectionCacheBuildWorker``) is recognized -- there is no legacy
-    single-file fallback. A non-directory or non-existent ``path`` returns
-    False rather than raising.
+    single-file fallback. Method/model compatibility is enforced entirely by
+    the stored ``cache_key`` (see ``DetectionCacheHandle.is_valid``) -- a
+    cache built for a different detection method or model simply fails the
+    key check and is treated as not covering the range. A non-existent path,
+    or one whose containing directory doesn't exist, returns False rather
+    than raising.
     """
-    if not path or not os.path.isdir(path):
+    if not path:
+        return False
+    p = Path(path)
+    cache_dir = p if p.is_dir() else p.parent
+    if not cache_dir.is_dir():
         return False
     try:
-        from pathlib import Path as _Path
-
         from hydra_suite.core.inference.config import build_inference_config_from_params
         from hydra_suite.core.inference.runner import _open_caches, video_signature
 
         _cfg = build_inference_config_from_params(params)
         handle = _open_caches(
             _cfg,
-            _Path(path),
+            cache_dir,
             video_signature(video_path),
             params.get("ROI_MASK", None),
         ).detection
@@ -2911,10 +2918,11 @@ class ConfigOrchestrator:
 
         Search order:
           1. current_detection_cache_path (set by the last tracking run in this session)
-             — only if it was produced by the *same* detection method.
-          2. Any compatible detection cache in the video's dedicated cache directory
-             whose filename matches the current detection method, with legacy flat
-             files still considered as a fallback.
+             — compatibility with the current detection method/model is enforced by
+             the cache's stored ``cache_key`` (see ``detection_cache_dir_covers_range``),
+             not by filename.
+          2. Any compatible detection cache in the video's dedicated cache directory,
+             same key-based compatibility check.
           3. A freshly-computed optimizer-specific path in the dedicated cache directory
              (name encodes the detection method so different methods never collide).
         """
@@ -2928,26 +2936,6 @@ class ConfigOrchestrator:
         )
 
         detection_method = params.get("DETECTION_METHOD", "background_subtraction")
-        method_tag = "yolo" if detection_method == "yolo_obb" else "bgsub"
-
-        def _cache_matches_method(path_str: str) -> bool:
-            """Return True when *path_str*'s filename was produced by *method_tag*."""
-            if not path_str:
-                return False
-            basename = os.path.basename(path_str)
-            # Production tracking caches: ..._detection_cache_{method_tag}_...
-            if "_detection_cache_" in basename:
-                after = basename.split("_detection_cache_", 1)[1]
-                return after.startswith(f"{method_tag}_") or after.startswith(
-                    f"{method_tag}."
-                )
-            # Optimizer caches (new naming): ..._opt_cache.npz with method_tag
-            if "_opt_cache" in basename:
-                before_opt = basename.split("_opt_cache")[0]
-                # Accept if the method tag appears as a delimited segment
-                segments = before_opt.split("_")
-                return method_tag in segments
-            return False
 
         def _is_valid(path: str) -> bool:
             """Return True if *path* is a compatible cache covering the frame range."""
@@ -2955,10 +2943,8 @@ class ConfigOrchestrator:
                 path, video_path, params, start_frame, end_frame
             )
 
-        # 1. Production cache from current session — only if method-compatible
-        if _cache_matches_method(self._mw.current_detection_cache_path) and _is_valid(
-            self._mw.current_detection_cache_path
-        ):
+        # 1. Production cache from current session — key-checked by _is_valid.
+        if _is_valid(self._mw.current_detection_cache_path):
             return self._mw.current_detection_cache_path, True
 
         csv_dir = (
@@ -2971,13 +2957,13 @@ class ConfigOrchestrator:
             preferred_base_dirs=[csv_dir],
         )
 
-        # 2. Scan known cache directories — accept only method-compatible caches.
+        # 2. Scan known cache directories — key-checked by _is_valid.
         for candidate in iter_detection_cache_candidates(
             video_path,
             artifact_base_dirs=artifact_base_dirs,
         ):
             candidate_str = str(candidate)
-            if _cache_matches_method(candidate_str) and _is_valid(candidate_str):
+            if _is_valid(candidate_str):
                 return candidate_str, True
 
         # 3. Fallback: compute a write-target path for a new detection-only build.
