@@ -147,22 +147,6 @@ def build_detection_cache_path(
     return cache_dir / "detection.npz"
 
 
-def build_legacy_detection_cache_path(
-    video_path: str | os.PathLike[str],
-    model_id: str,
-    artifact_base_dir: str | os.PathLike[str] | None = None,
-) -> Path:
-    """Return the legacy flat ``.npz`` path for a detection cache placed directly in the base dir.
-
-    Used only to locate caches written by older versions of the tracker that did not
-    use the ``<stem>_caches/`` subdirectory layout.
-    """
-    base_dir = (
-        _normalize_base_dir(artifact_base_dir) or Path(video_path).expanduser().parent
-    )
-    return base_dir / f"{_video_stem(video_path)}_detection_cache_{model_id}.npz"
-
-
 def find_existing_detection_cache_path(
     video_path: str | os.PathLike[str],
     model_id: str,
@@ -265,115 +249,6 @@ def build_detected_properties_cache_path(
     )
 
 
-def build_apriltag_cache_path(
-    video_path: str | os.PathLike[str],
-    apriltag_id: str,
-    start_frame: int,
-    end_frame: int,
-    artifact_base_dir: str | os.PathLike[str] | None = None,
-    create_dir: bool = False,
-) -> Path:
-    """Return the ``.npz`` path for an AprilTag detection cache.
-
-    The filename is ``<stem>_apriltag_cache_<apriltag_id>_<start>_<end>.npz``
-    inside ``<stem>_caches/``.
-    """
-    cache_dir = build_video_cache_dir(
-        video_path,
-        artifact_base_dir=artifact_base_dir,
-        create=create_dir,
-    )
-    stem = _video_stem(video_path)
-    return cache_dir / (
-        f"{stem}_apriltag_cache_{apriltag_id}_"
-        f"{int(start_frame)}_{int(end_frame)}.npz"
-    )
-
-
-def find_existing_apriltag_cache_path(
-    video_path: str | os.PathLike[str],
-    apriltag_id: str,
-    start_frame: int,
-    end_frame: int,
-    artifact_base_dirs: Iterable[str | os.PathLike[str] | None] | None = None,
-) -> Path | None:
-    """Locate an existing AprilTag cache ``.npz`` for the given video, tag ID, and frame range.
-
-    Searches across all candidate base directories and returns the first match,
-    or ``None`` if no cache is found.
-    """
-    base_dirs = artifact_base_dirs or candidate_artifact_base_dirs(video_path)
-    for base_dir in base_dirs:
-        current = build_apriltag_cache_path(
-            video_path,
-            apriltag_id,
-            start_frame,
-            end_frame,
-            artifact_base_dir=base_dir,
-        )
-        if current.exists():
-            return current
-    return None
-
-
-def build_classify_cache_path(
-    video_path: str | os.PathLike[str],
-    classify_id: str,
-    label: str,
-    start_frame: int,
-    end_frame: int,
-    artifact_base_dir: str | os.PathLike[str] | None = None,
-    create_dir: bool = False,
-) -> Path:
-    """Return the ``.npz`` path for a classification embedding cache.
-
-    The filename is ``<stem>_classify_cache_<safe_label>_<classify_id>_<start>_<end>.npz``
-    inside ``<stem>_caches/``.  Non-alphanumeric characters in ``label`` are replaced with
-    underscores to produce a safe filename component.
-    """
-    import re as _re
-
-    cache_dir = build_video_cache_dir(
-        video_path,
-        artifact_base_dir=artifact_base_dir,
-        create=create_dir,
-    )
-    stem = _video_stem(video_path)
-    safe_label = _re.sub(r"[^\w-]", "_", label)
-    return cache_dir / (
-        f"{stem}_classify_cache_{safe_label}_{classify_id}_"
-        f"{int(start_frame)}_{int(end_frame)}.npz"
-    )
-
-
-def find_existing_classify_cache_path(
-    video_path: str | os.PathLike[str],
-    classify_id: str,
-    label: str,
-    start_frame: int,
-    end_frame: int,
-    artifact_base_dirs: Iterable[str | os.PathLike[str] | None] | None = None,
-) -> Path | None:
-    """Locate an existing classification cache ``.npz`` for the given video, classifier, label, and frame range.
-
-    Searches across all candidate base directories and returns the first match,
-    or ``None`` if no cache is found.
-    """
-    base_dirs = artifact_base_dirs or candidate_artifact_base_dirs(video_path)
-    for base_dir in base_dirs:
-        current = build_classify_cache_path(
-            video_path,
-            classify_id,
-            label,
-            start_frame,
-            end_frame,
-            artifact_base_dir=base_dir,
-        )
-        if current.exists():
-            return current
-    return None
-
-
 def build_autotune_state_path(
     detection_cache_path: str | os.PathLike[str],
 ) -> Path:
@@ -442,9 +317,7 @@ def iter_detection_cache_candidates(
 
 
 __all__ = [
-    "build_apriltag_cache_path",
     "build_autotune_state_path",
-    "build_classify_cache_path",
     "build_detected_properties_cache_path",
     "build_detection_cache_path",
     "build_individual_properties_cache_path",
@@ -454,8 +327,6 @@ __all__ = [
     "build_video_log_dir",
     "candidate_artifact_base_dirs",
     "choose_writable_artifact_base_dir",
-    "find_existing_apriltag_cache_path",
-    "find_existing_classify_cache_path",
     "find_existing_detection_cache_path",
     "iter_detection_cache_candidates",
 ]
