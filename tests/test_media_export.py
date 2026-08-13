@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 
 from hydra_suite.core.post import media_export
+from hydra_suite.core.post.trajectory_writer import write_base_final_csv
 
 
 def test_scale_trajectories_noop_when_factor_is_one():
@@ -23,7 +24,7 @@ def test_scale_trajectories_scales_xy_only():
     assert out["FrameID"].iloc[0] == 3
 
 
-def test_save_trajectories_to_csv_writes_ordered_columns(tmp_path):
+def test_write_base_final_csv_writes_ordered_columns(tmp_path):
     df = pd.DataFrame(
         {
             "TrajectoryID": [0, 0],
@@ -36,15 +37,15 @@ def test_save_trajectories_to_csv_writes_ordered_columns(tmp_path):
         }
     )
     out = tmp_path / "traj.csv"
-    assert media_export.save_trajectories_to_csv(df, str(out)) is True
+    assert write_base_final_csv(df, str(out)) is True
     written = pd.read_csv(out)
     assert list(written.columns)[:5] == ["TrajectoryID", "X", "Y", "Theta", "FrameID"]
     assert "TrackID" not in written.columns  # unwanted dropped
     assert written["X"].iloc[0] == 10  # rounded to Int64
 
 
-def test_save_trajectories_to_csv_none_returns_false(tmp_path):
-    assert media_export.save_trajectories_to_csv(None, str(tmp_path / "x.csv")) is False
+def test_write_base_final_csv_none_returns_false(tmp_path):
+    assert write_base_final_csv(None, str(tmp_path / "x.csv")) is False
 
 
 def test_normalize_identity_key_treats_unknown_as_empty():

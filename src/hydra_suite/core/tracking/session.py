@@ -27,6 +27,7 @@ from hydra_suite.core.post.rich_export import (
     export_rich_csv,
     relink_and_export_rich_csv,
 )
+from hydra_suite.core.post.trajectory_writer import write_base_final_csv
 from hydra_suite.core.tracking.errors import TrackingSessionError
 from hydra_suite.core.tracking.session_policy import (
     should_export_final_canonical_images,
@@ -95,36 +96,8 @@ def enforce_nonempty_forward(raw_csv_path, detection_cache_path) -> None:
 
 
 def _save_trajectories_to_csv(trajectories, output_path: str) -> bool:
-    """Persist post-processed trajectories in the same shape as the GUI path.
-
-    Copied verbatim from ``trackerkit/headless_tracking.py::save_trajectories_to_csv``
-    so ``core/`` needs no app-layer import.
-    """
-    if trajectories is None:
-        return False
-    if not isinstance(trajectories, pd.DataFrame):
-        raise TypeError("Expected post-processed trajectories as a pandas DataFrame.")
-    if trajectories.empty:
-        return False
-
-    df_to_save = trajectories.copy()
-    for column in ["X", "Y", "FrameID"]:
-        if column in df_to_save.columns:
-            df_to_save[column] = pd.to_numeric(df_to_save[column], errors="coerce")
-            df_to_save[column] = df_to_save[column].round().astype("Int64")
-
-    df_to_save = df_to_save.drop(
-        columns=[
-            column for column in ["TrackID", "Index"] if column in df_to_save.columns
-        ],
-        errors="ignore",
-    )
-    base_columns = ["TrajectoryID", "X", "Y", "Theta", "FrameID"]
-    ordered_columns = base_columns + [
-        column for column in df_to_save.columns if column not in base_columns
-    ]
-    df_to_save[ordered_columns].to_csv(output_path, index=False)
-    return True
+    """Persist post-processed trajectories (delegates to the shared base-final writer)."""
+    return write_base_final_csv(trajectories, output_path)
 
 
 def _noop1(_a) -> None:

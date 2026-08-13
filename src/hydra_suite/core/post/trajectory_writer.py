@@ -59,3 +59,30 @@ def project_user_tracks(df: pd.DataFrame, *, fps: float | None) -> pd.DataFrame:
         out[f"{name}_conf"] = df.get(f"{_POSE_PREFIX}{name}_Conf")
 
     return out
+
+
+def write_base_final_csv(df: pd.DataFrame, output_path: str) -> bool:
+    """Write the debug base-final CSV: round X/Y/FrameID, drop TrackID/Index, reorder."""
+    if df is None:
+        return False
+    if not isinstance(df, pd.DataFrame):
+        raise TypeError("Expected post-processed trajectories as a pandas DataFrame.")
+    if df.empty:
+        return False
+
+    df_to_save = df.copy()
+    for column in ["X", "Y", "FrameID"]:
+        if column in df_to_save.columns:
+            df_to_save[column] = pd.to_numeric(df_to_save[column], errors="coerce")
+            df_to_save[column] = df_to_save[column].round().astype("Int64")
+
+    df_to_save = df_to_save.drop(
+        columns=[c for c in ["TrackID", "Index"] if c in df_to_save.columns],
+        errors="ignore",
+    )
+    base_columns = ["TrajectoryID", "X", "Y", "Theta", "FrameID"]
+    ordered_columns = base_columns + [
+        c for c in df_to_save.columns if c not in base_columns
+    ]
+    df_to_save[ordered_columns].to_csv(output_path, index=False)
+    return True
