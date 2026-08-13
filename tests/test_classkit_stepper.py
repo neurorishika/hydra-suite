@@ -30,7 +30,7 @@ def test_stepper_advances_on_pick():
 
     state.pick("x")
     assert state.is_complete
-    assert state.composite_label == "a|x"
+    assert state.composite_label == "a_x"
 
 
 def test_stepper_back():
@@ -115,7 +115,7 @@ def test_stepper_allows_unknown_for_one_factor_only():
     state.pick("unknown")
     state.pick("left")
 
-    assert state.composite_label == "unknown|left"
+    assert state.composite_label == "unknown_left"
 
 
 def test_stepper_zero_shortcut_routes_to_current_factor_unknown():

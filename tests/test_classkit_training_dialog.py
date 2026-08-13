@@ -490,6 +490,7 @@ def test_training_dialog_exposes_multihead_modes_for_multifactor_scheme(qapp) ->
         "flat_yolo",
         "multihead_yolo",
         "multihead_custom",
+        "multihead_custom_shared",
     ]
     assert structures == ["flat", "multihead"]
 
@@ -515,6 +516,7 @@ def test_training_dialog_falls_back_to_multihead_modes_for_legacy_scheme(qapp) -
         "flat_yolo",
         "multihead_yolo",
         "multihead_custom",
+        "multihead_custom_shared",
     ]
 
 

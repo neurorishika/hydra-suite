@@ -1,0 +1,6 @@
+TrajectoryID,FrameID,X,Y,Theta,State,DetectionConfidence
+0,0,0.0,0.0,0.0,active,0.9
+0,2,2.0,2.0,0.2,active,0.8
+0,3,3.0,3.2,0.3,active,0.75
+0,6,6.0,6.1,0.6,active,0.72
+1,10,12.0,12.0,1.0,active,0.99

@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 from hydra_suite.core.post import media_export
+from hydra_suite.runtime.resolver import ResolvedBackend
 from hydra_suite.trackerkit.gui.orchestrators import config as config_module
 from hydra_suite.trackerkit.gui.orchestrators import tracking as tracking_module
 from hydra_suite.trackerkit.gui.orchestrators.config import ConfigOrchestrator
@@ -522,10 +523,13 @@ def test_setup_video_file_adds_recent_video_to_main_window_store(monkeypatch) ->
         current_detection_cache_path="stale-detections.npz",
         current_individual_properties_cache_path="stale-properties.npz",
         roi_selection_active=False,
+        clear_roi=lambda: None,
         btn_test_detection=FakeButton(),
         video_total_frames=240,
         _recents_store=SimpleNamespace(add=recent_paths.append),
-        _init_video_player=lambda path: captured.setdefault("video_path", path),
+        _init_video_player=lambda path, _probe=None: captured.setdefault(
+            "video_path", path
+        ),
         setWindowTitle=lambda title: captured.setdefault("window_title", title),
         _apply_ui_state=lambda state: captured.setdefault("ui_state", state),
         _show_workspace=lambda: captured.setdefault("workspace_shown", True),
@@ -654,25 +658,19 @@ def test_start_tracking_on_video_restores_csv_and_worker_imports(
         "hydra_suite.trackerkit.gui.workers.tracking_worker.TrackingWorker",
         FakeTrackingWorker,
     )
-    monkeypatch.setattr(
-        tracking_module,
-        "candidate_artifact_base_dirs",
-        lambda _video_path, preferred_base_dirs=None: [tmp_path],
+    # Detection-cache paths now flow through plan_tracking_cache() -> a
+    # TrackingCachePlan (the old build_detection_cache_path free function is
+    # gone). Patch the planner to a known plan and assert the worker receives
+    # its detection_cache_path verbatim.
+    fake_plan = SimpleNamespace(
+        inference_model_id="model-1",
+        engine_model_id=None,
+        detection_cache_path=str(tmp_path / "cache.npz"),
     )
     monkeypatch.setattr(
         tracking_module,
-        "choose_writable_artifact_base_dir",
-        lambda _video_path, preferred_base_dirs=None: tmp_path,
-    )
-    monkeypatch.setattr(
-        tracking_module,
-        "find_existing_detection_cache_path",
-        lambda *_args, **_kwargs: None,
-    )
-    monkeypatch.setattr(
-        tracking_module,
-        "build_detection_cache_path",
-        lambda *_args, **_kwargs: tmp_path / "cache.npz",
+        "plan_tracking_cache",
+        lambda *_args, **_kwargs: fake_plan,
     )
 
     orchestrator.start_tracking_on_video(str(video_path), backward_mode=False)
@@ -729,9 +727,7 @@ def test_start_preview_on_video_uses_tracking_worker_when_cache_is_valid(
             return False
 
     video_path = tmp_path / "video.mp4"
-    cache_path = tmp_path / "preview_cache.npz"
     video_path.write_bytes(b"video")
-    cache_path.write_bytes(b"cache")
 
     panels = SimpleNamespace(
         setup=SimpleNamespace(file_line=SimpleNamespace(text=lambda: str(video_path)))
@@ -746,12 +742,11 @@ def test_start_preview_on_video_uses_tracking_worker_when_cache_is_valid(
         csv_writer_thread="stale-writer",
         progress_bar=FakeProgress(),
         progress_label=FakeProgress(),
-        get_parameters_dict=lambda: {"COMPUTE_RUNTIME": "cpu"},
-        _preview_safe_runtime=lambda runtime: runtime,
-        _find_or_plan_optimizer_cache_path=lambda *_args, **_kwargs: (
-            str(cache_path),
-            True,
-        ),
+        get_parameters_dict=lambda: {"RUNTIME_TIER": "cpu"},
+        _resolve_source_video_fps=lambda: 30.0,
+        # torch backend => preview keeps the resolved detection backend as-is
+        # (no accelerator downgrade branch).
+        _resolved_obb_backend=lambda: SimpleNamespace(backend="torch"),
         _prepare_tracking_display=lambda: captured.setdefault("prepared", True),
         _apply_ui_state=lambda state: captured.setdefault("ui_state", state),
         _stop_playback=lambda: captured.setdefault("playback_stopped", True),
@@ -776,7 +771,10 @@ def test_start_preview_on_video_uses_tracking_worker_when_cache_is_valid(
 
     assert captured["worker_started"] is True
     assert captured["worker_args"][0] == str(video_path)
-    assert captured["worker_kwargs"]["detection_cache_path"] == str(cache_path)
+    # Preview does not plumb a cache path; the worker reuses a valid, range-
+    # covering forward cache internally when one exists (worker.py). The
+    # orchestrator's contract is simply to request cache reuse.
+    assert captured["worker_kwargs"]["detection_cache_path"] is None
     assert captured["worker_kwargs"]["preview_mode"] is True
     assert captured["worker_kwargs"]["use_cached_detections"] is True
     assert captured["params"]["VISUALIZATION_FREE_MODE"] is False
@@ -825,9 +823,7 @@ def test_start_preview_on_video_downgrades_auxiliary_runtimes(
             return False
 
     video_path = tmp_path / "video.mp4"
-    cache_path = tmp_path / "preview_cache.npz"
     video_path.write_bytes(b"video")
-    cache_path.write_bytes(b"cache")
 
     panels = SimpleNamespace(
         setup=SimpleNamespace(file_line=SimpleNamespace(text=lambda: str(video_path)))
@@ -842,21 +838,13 @@ def test_start_preview_on_video_downgrades_auxiliary_runtimes(
         csv_writer_thread=None,
         progress_bar=FakeProgress(),
         progress_label=FakeProgress(),
-        get_parameters_dict=lambda: {
-            "COMPUTE_RUNTIME": "tensorrt",
-            "HEADTAIL_COMPUTE_RUNTIME": "onnx_coreml",
-            "CNN_COMPUTE_RUNTIME": "onnx_cuda",
-            "POSE_MODEL_TYPE": "yolo",
-        },
-        _preview_safe_runtime=lambda runtime: {
-            "onnx_cpu": "cpu",
-            "onnx_coreml": "mps",
-            "onnx_cuda": "cuda",
-            "tensorrt": "cuda",
-        }.get(runtime, runtime),
-        _find_or_plan_optimizer_cache_path=lambda *_args, **_kwargs: (
-            str(cache_path),
-            True,
+        get_parameters_dict=lambda: {"POSE_MODEL_TYPE": "yolo"},
+        _resolve_source_video_fps=lambda: 30.0,
+        # A resolved OBB backend that would build an accelerator engine
+        # (TensorRT). Preview must NOT build engines, so it downgrades to the
+        # native torch device and writes the safe legacy detection fields.
+        _resolved_obb_backend=lambda: ResolvedBackend(
+            backend="tensorrt", device="cuda", used_fallback=False
         ),
         _prepare_tracking_display=lambda: None,
         _apply_ui_state=lambda _state: None,
@@ -880,10 +868,13 @@ def test_start_preview_on_video_downgrades_auxiliary_runtimes(
 
     orchestrator.start_preview_on_video(str(video_path))
 
-    assert captured["params"]["COMPUTE_RUNTIME"] == "cuda"
-    assert captured["params"]["HEADTAIL_COMPUTE_RUNTIME"] == "mps"
-    assert captured["params"]["CNN_COMPUTE_RUNTIME"] == "cuda"
-    assert captured["params"]["POSE_RUNTIME_FLAVOR"] == "cuda"
+    # The accelerator OBB backend is downgraded to native torch for preview:
+    # device preserved (cuda -> cuda:0), no TensorRT engine build, GPU
+    # background enabled because the device is not CPU.
+    assert captured["params"]["YOLO_DEVICE"] == "cuda:0"
+    assert captured["params"]["ENABLE_TENSORRT"] is False
+    assert captured["params"]["ENABLE_ONNX_RUNTIME"] is False
+    assert captured["params"]["ENABLE_GPU_BACKGROUND"] is True
 
 
 def test_clear_detection_caches_deletes_all_current_video_cache_files(
@@ -960,7 +951,8 @@ def test_clear_detection_caches_deletes_all_current_video_cache_files(
     assert info_calls == [
         (
             "Caches Cleared",
-            "Deleted 6 cache file(s) for the current video.",
+            "Deleted 6 cache file(s) and 0 inference cache folder(s) "
+            "for the current video.",
         )
     ]
 

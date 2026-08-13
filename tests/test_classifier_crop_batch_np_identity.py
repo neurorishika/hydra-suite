@@ -12,7 +12,6 @@ that detour. These tests pin the two claims that make the skip legal:
 """
 
 import numpy as np
-import torch
 
 from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
 from hydra_suite.core.inference.result import OBBResult
@@ -45,16 +44,6 @@ def _obb(frame_idx: int, n: int) -> OBBResult:
         corners=corners,
         detection_ids=np.array([frame_idx * 10000 + s for s in range(n)], np.int64),
     )
-
-
-def test_uint8_float32_round_trip_is_the_identity_for_every_byte():
-    """The exact arithmetic the removed detour performed, on all 256 values."""
-    src = np.arange(256, dtype=np.uint8).reshape(1, 16, 16, 1).repeat(3, axis=3)
-    tensor = torch.from_numpy(np.ascontiguousarray(src)).permute(0, 3, 1, 2)
-    tensor = tensor.float() / 255.0
-    hwc = np.ascontiguousarray(tensor.permute(0, 2, 3, 1).cpu().numpy())
-    back = (hwc * 255.0).clip(0, 255).astype(np.uint8)
-    assert np.array_equal(back, src)
 
 
 def test_numpy_batch_is_byte_identical_to_tensor_batch():

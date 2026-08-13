@@ -452,6 +452,15 @@ def _copy_classifier_artifact_to_repository(
         ),
         monochrome=bool(bundle_meta.get("monochrome", False)),
         kind=str(data.get("kind") or _TRACKERKIT_MULTIHEAD_KIND),
+        # Preserve calibration/abstention metadata when copying an external
+        # bundle into the repository — otherwise the recommended confidence
+        # threshold and temperature/ECE calibration are silently dropped.
+        recommended_confidence_threshold=bundle_meta.get(
+            "recommended_confidence_threshold"
+        ),
+        calibration_temperature=bundle_meta.get("calibration_temperature"),
+        calibration_signature=bundle_meta.get("calibration_signature"),
+        calibration_ece=bundle_meta.get("calibration_ece"),
     )
 
 

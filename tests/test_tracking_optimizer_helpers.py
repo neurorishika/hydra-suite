@@ -94,19 +94,17 @@ class _StubTrackAssigner:
 
 class _FakeCache:
     def read_frame(self, frame_idx):
-        return (
-            [np.array([10.0, 20.0, 0.0], dtype=np.float32)],
-            [50.0],
-            [(50.0, 1.0)],
-            [0.95],
-            [np.array([[0, 0], [4, 0], [4, 2], [0, 2]], dtype=np.float32)],
-            [101],
-            [1.25],
-            [0.88],
-            [1],
-            None,
-            None,
-            None,
+        from hydra_suite.core.inference.result import OBBResult
+
+        return OBBResult(
+            frame_idx=0,
+            centroids=np.array([[10.0, 20.0]], dtype=np.float32),
+            angles=np.array([0.0], dtype=np.float32),
+            sizes=np.array([50.0], dtype=np.float32),
+            shapes=np.array([[50.0, 1.0]], dtype=np.float32),
+            confidences=np.array([0.95], dtype=np.float32),
+            corners=np.array([[[0, 0], [4, 0], [4, 2], [0, 2]]], dtype=np.float32),
+            detection_ids=np.array([101], dtype=np.int64),
         )
 
 
@@ -220,15 +218,37 @@ def test_optimizer_replay_uses_directed_heading_for_assignment_and_kf() -> None:
     optimizer._pose_frame_cache = {}
     optimizer._stop_requested = False
 
-    params = {
-        "MAX_TARGETS": 1,
-        "REFERENCE_BODY_SIZE": 20.0,
-        "RESIZE_FACTOR": 1.0,
-        "LOST_THRESHOLD_FRAMES": 5,
-        "POSE_OVERRIDES_HEADTAIL": True,
-    }
+    # Detection caches are now bare OBBResults (no per-detection heading hints);
+    # the directed heading comes from the pose pipeline. Inject a strong,
+    # reliable pose heading of 1.25 so the directed-heading override fires.
+    def _strong_pose_features(*_args, **_kwargs):
+        return (
+            [
+                np.asarray(
+                    [[0.0, 0.0, 0.99], [1.0, 0.0, 0.99], [2.0, 0.0, 0.99]],
+                    dtype=np.float32,
+                )
+            ],
+            [0.99],
+            [np.float32(1.25)],
+        )
 
-    score, _, _ = optimizer._run_tracking_loop(params)
+    original_compute = mod._compute_pose_features_for_frame
+    mod._compute_pose_features_for_frame = _strong_pose_features
+    try:
+        params = {
+            "MAX_TARGETS": 1,
+            "REFERENCE_BODY_SIZE": 20.0,
+            "RESIZE_FACTOR": 1.0,
+            "LOST_THRESHOLD_FRAMES": 5,
+            "POSE_OVERRIDES_HEADTAIL": True,
+            "POSE_DIRECTION_MIN_VALID_KEYPOINTS": 1,
+            "POSE_DIRECTION_MIN_VISIBILITY": 0.0,
+        }
+
+        score, _, _ = optimizer._run_tracking_loop(params)
+    finally:
+        mod._compute_pose_features_for_frame = original_compute
 
     assert np.isfinite(score)
     np.testing.assert_allclose(
@@ -245,22 +265,10 @@ def test_optimizer_replay_uses_directed_heading_for_assignment_and_kf() -> None:
 def test_optimizer_replay_skips_directed_pose_heading_when_pose_is_weak() -> None:
     mod = _load_optimizer_module()
 
+    # Inherits _FakeCache.read_frame (bare OBBResult); the "weak pose" signal
+    # comes from the _compute_pose_features_for_frame override below.
     class _WeakPoseOnlyCache(_FakeCache):
-        def read_frame(self, frame_idx):
-            return (
-                [np.array([10.0, 20.0, 0.0], dtype=np.float32)],
-                [50.0],
-                [(50.0, 1.0)],
-                [0.95],
-                [np.array([[0, 0], [4, 0], [4, 2], [0, 2]], dtype=np.float32)],
-                [101],
-                [0.0],
-                [0.0],
-                [0],
-                None,
-                None,
-                None,
-            )
+        pass
 
     optimizer = mod.TrackingOptimizerCore(
         video_path="dummy.mp4",

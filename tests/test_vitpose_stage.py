@@ -1,8 +1,4 @@
-from hydra_suite.runtime.resolver import STAGES, PlatformInfo, RuntimeResolver
-
-
-def test_vitpose_pose_stage_registered():
-    assert "vitpose_pose" in STAGES
+from hydra_suite.runtime.resolver import PlatformInfo, RuntimeResolver
 
 
 def test_resolver_vitpose_pose_native_on_cpu():

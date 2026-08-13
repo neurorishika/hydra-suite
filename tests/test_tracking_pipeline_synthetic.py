@@ -35,19 +35,20 @@ def _compute_cost_matrix_numba_py(
     Wo,
     Wa,
     Wasp,
-    cull_threshold,
+    per_track_gates,
     meas_ori_directed,
 ):
     cost = np.zeros((N, M), dtype=np.float32)
     for i in range(N):
         inv_S_pos = S_inv_batch[i, :2, :2]
+        gate_i = per_track_gates[i]
         for j in range(M):
             diff = meas_pos[j] - pred_pos[i]
             if use_maha:
                 pos_dist = float(np.sqrt(diff @ inv_S_pos @ diff))
             else:
                 pos_dist = float(np.linalg.norm(diff))
-            if pos_dist > cull_threshold:
+            if pos_dist > gate_i:
                 cost[i, j] = 1e6
                 continue
             odiff = abs(pred_ori[i] - meas_ori[j])
@@ -124,8 +125,10 @@ def test_synthetic_tracking_pipeline_regression() -> None:
 
     track_states = ["active"] * n_tracks
     continuity = [5] * n_tracks
+    # Local row->trajectory-id map. Trajectory-id lifecycle was moved out of
+    # TrackAssigner.assign_tracks (no more trajectory_ids/next_trajectory_id
+    # params; it returns (rows, cols, free_dets, identity_rejoin_pairs)).
     trajectory_ids = [0, 1]
-    next_id = 2
     traj_rows = {0: [], 1: []}
 
     for frame_id, measurements in enumerate(frames):
@@ -142,7 +145,7 @@ def test_synthetic_tracking_pipeline_regression() -> None:
             last_shape_info=last_shape_info,
         )
 
-        rows, cols, _, next_id, _ = assigner.assign_tracks(
+        rows, cols, _, _ = assigner.assign_tracks(
             cost=cost,
             N=n_tracks,
             M=len(measurements),
@@ -150,8 +153,6 @@ def test_synthetic_tracking_pipeline_regression() -> None:
             track_states=track_states,
             tracking_continuity=continuity,
             kf_manager=kf,
-            trajectory_ids=trajectory_ids,
-            next_trajectory_id=next_id,
             spatial_candidates=spatial_candidates,
         )
 

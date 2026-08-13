@@ -39,6 +39,7 @@ def test_classifier_metadata_fields():
         factor_names=["flat"],
         class_names_per_factor=[["a", "b"]],
         monochrome=False,
+        recommended_confidence_threshold=None,
         source_path="/tmp/model.pth",
     )
     assert meta.arch == "tinyclassifier"
@@ -507,6 +508,14 @@ def test_backend_yolo_multihead_bundle_preserves_export_runtime(
 def test_backend_falls_back_to_native_torch_when_onnx_accelerator_missing(
     tiny_flat_headtail, monkeypatch
 ):
+    import torch
+
+    if not torch.cuda.is_available():
+        pytest.skip(
+            "native-torch fallback here resolves to the cuda device; "
+            "predict_batch moves tensors to CUDA, which needs a CUDA build/box"
+        )
+
     import hydra_suite.core.individual.classification.backend as backend_module
     from hydra_suite.core.individual.classification.backend import ClassifierBackend
 

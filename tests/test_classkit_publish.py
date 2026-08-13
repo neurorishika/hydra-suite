@@ -6,13 +6,6 @@ from hydra_suite.training.contracts import TrainingRole
 from hydra_suite.training.model_publish import _repo_dir_for_role
 
 
-def test_new_roles_exist():
-    assert TrainingRole.CLASSIFY_FLAT_YOLO.value == "classify_flat_yolo"
-    assert TrainingRole.CLASSIFY_FLAT_TINY.value == "classify_flat_tiny"
-    assert TrainingRole.CLASSIFY_MULTIHEAD_YOLO.value == "classify_multihead_yolo"
-    assert TrainingRole.CLASSIFY_MULTIHEAD_TINY.value == "classify_multihead_tiny"
-
-
 def test_repo_dir_flat_yolo(tmp_path):
     with patch(
         "hydra_suite.training.model_publish.get_models_root", return_value=tmp_path

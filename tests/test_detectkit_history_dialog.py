@@ -49,13 +49,6 @@ _FAKE_RUNS = [
 ]
 
 
-def test_history_dialog_imports(qapp):
-    from hydra_suite.detectkit.gui.dialogs.history_dialog import (  # noqa: F401
-        HistoryDialog,
-        _load_runs,
-    )
-
-
 def test_history_dialog_is_base_dialog(qapp, tmp_path, monkeypatch):
     import hydra_suite.detectkit.gui.dialogs.history_dialog as hd
 

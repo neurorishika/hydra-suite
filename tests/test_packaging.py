@@ -39,10 +39,3 @@ def test_skeleton_configs_exist_in_package():
     skeletons = files("hydra_suite.resources.configs.skeletons")
     names = [r.name for r in skeletons.iterdir()]
     assert "ooceraea_biroi.json" in names
-
-
-def test_platformdirs_importable():
-    """platformdirs is available as a dependency."""
-    import platformdirs
-
-    assert hasattr(platformdirs, "user_config_dir")

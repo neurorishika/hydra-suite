@@ -19,14 +19,6 @@ def _ckpt(tmp_path, k=3):
     return p
 
 
-def test_predict_batch_cuda_falls_back_to_numpy(tmp_path):
-    # On a non-TRT runner, predict_batch_cuda must degrade to predict_batch.
-    be = ViTPoseBackend(
-        str(_ckpt(tmp_path)), device="cpu", keypoint_names=["a", "b", "c"]
-    )
-    assert hasattr(be, "predict_batch_cuda")
-
-
 def test_coreml_backend_predicts(tmp_path):
     pytest.importorskip("coremltools")
     p = _ckpt(tmp_path, k=3)

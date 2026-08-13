@@ -1,17 +1,3 @@
-def test_fragment_solver_imports():
-    from hydra_suite.core.individual.identity.offline import (
-        detect_identity_changepoints,
-        run_fragment_solver,
-        solve_global_assignment,
-        split_trajectories_at_changepoints,
-    )
-
-    assert callable(run_fragment_solver)
-    assert callable(detect_identity_changepoints)
-    assert callable(split_trajectories_at_changepoints)
-    assert callable(solve_global_assignment)
-
-
 import pandas as pd
 
 from hydra_suite.core.individual.identity.catalog import IdentityCatalog

@@ -37,15 +37,29 @@ def test_identity_evidence_emitter_uses_factor_posteriors(tmp_path) -> None:
 
     cache = IdentityEvidenceCache(cache_path, mode="r")
     try:
-        assert cache.catalog_labels == ("unknown", "mouse1", "mouse2", "red", "blue")
+        # The emitter now builds a COMPOSITE (cartesian-product) catalog across
+        # factors instead of a flat per-factor list:
+        # identity {mouse1, mouse2} x coat {red, blue}.
+        assert cache.catalog_labels == (
+            "unknown",
+            "mouse1_red",
+            "mouse1_blue",
+            "mouse2_red",
+            "mouse2_blue",
+        )
         frame = cache.load_frame(42)
         assert len(frame) == 1
         evidence = frame[0]
         probs = np.exp(evidence.log_probs)
         probs /= probs.sum()
         assert evidence.detection_id == 420000
-        assert probs[1] > probs[2]
-        assert probs[3] > probs[4]
+        # Predicted mouse1+red -> mouse1_red is the top combo, and the marginal
+        # orderings survive in the product (red>blue within each identity;
+        # mouse1>mouse2 across coats).
+        assert int(np.argmax(probs)) == 1  # mouse1_red
+        assert probs[1] > probs[2]  # mouse1_red > mouse1_blue
+        assert probs[3] > probs[4]  # mouse2_red > mouse2_blue
+        assert probs[1] > probs[3]  # mouse1_red > mouse2_red
         assert evidence.observed_mask is not None
         assert bool(evidence.observed_mask[1]) is True
         assert bool(evidence.observed_mask[3]) is True

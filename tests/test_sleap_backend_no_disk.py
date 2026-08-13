@@ -84,7 +84,7 @@ def _load_sleap_backend_module(stubs: dict):
         SRC_ROOT
         / "hydra_suite"
         / "core"
-        / "identity"
+        / "individual"
         / "pose"
         / "backends"
         / "sleap.py"
@@ -214,7 +214,7 @@ def test_backend_source_has_no_imwrite_in_predict_path() -> None:
         SRC_ROOT
         / "hydra_suite"
         / "core"
-        / "identity"
+        / "individual"
         / "pose"
         / "backends"
         / "sleap.py"

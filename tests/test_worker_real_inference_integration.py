@@ -7,8 +7,6 @@ rather than now-deleted stub methods.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
-
 import numpy as np
 import pytest
 
@@ -142,45 +140,15 @@ def test_frame_result_to_meas_shapes_and_values():
 
 
 # ---------------------------------------------------------------------------
-# Site E: per-frame detection via load_frame (cached path)
+# Site E note: the per-frame run_realtime dispatch is exercised end-to-end by
+# test_tracking_worker_realtime_live_features.py
+# (test_tracking_worker_realtime_yolo_obb_handles_zero_detection_frame), which
+# drives the real run_tracking() loop with a faked InferenceRunner.run_realtime.
+# The former test_site_e_* tests here only asserted that a MagicMock recorded
+# its own calls (they exercised no worker code) and were removed. The cached
+# load_frame / batch-pass dispatch decision is covered by the real-drive tests
+# in the "Site A dispatch" section below.
 # ---------------------------------------------------------------------------
-
-
-def test_site_e_load_frame_called_per_iteration(tmp_path):
-    """In cached mode, inference_runner.load_frame() is called once per frame."""
-
-    # We exercise just the detection dispatch sub-path without running the full
-    # tracking loop. Create a worker-like object and call _resolve_obb_for_frame()
-    # (or directly test the loop iteration logic via a mock run).
-
-    # Verify the call pattern by checking that load_frame receives frame indices.
-    mock_runner = MagicMock()
-    mock_runner.caches_all_valid.return_value = True
-    mock_runner.load_frame.side_effect = lambda fi: _make_frame_result(fi)
-
-    # Verify the mapping: frame_result_to_meas is called with obb data from load_frame
-    fr = mock_runner.load_frame(5)
-    assert fr.frame_idx == 5
-    assert fr.obb.num_detections == 2
-    mock_runner.load_frame.assert_called_once_with(5)
-
-
-# ---------------------------------------------------------------------------
-# Site E: per-frame detection via run_realtime (live path)
-# ---------------------------------------------------------------------------
-
-
-def test_site_e_run_realtime_returns_frame_result():
-    """run_realtime produces a FrameResult with correct fields."""
-    mock_runner = MagicMock()
-    mock_runner.run_realtime.return_value = _make_frame_result(frame_idx=7)
-
-    frame = np.zeros((480, 640, 3), dtype=np.uint8)
-    result = mock_runner.run_realtime(frame)
-
-    assert result.frame_idx == 7
-    assert result.obb.num_detections == 2
-    mock_runner.run_realtime.assert_called_once_with(frame)
 
 
 # ---------------------------------------------------------------------------
@@ -273,77 +241,234 @@ def test_site_f_populate_live_tag_store_from_frame_result():
 
 
 # ---------------------------------------------------------------------------
-# Backward-mode guard: refuses to run without valid caches
+# Site A dispatch: caches_all_valid() decides run_batch_pass vs cached replay.
+#
+# These drive the REAL run_tracking() dispatch in worker.py — a faked
+# InferenceRunner at the module boundary, a real synthetic video, and a
+# sentinel raised from the probed method to escape before the heavy
+# Kalman/assignment/CSV machinery. That keeps each test focused on the branch
+# decision under test while still executing the real control flow (unlike the
+# former versions, which reimplemented the if/else inline and asserted against
+# their own copy).
 # ---------------------------------------------------------------------------
 
 
-def test_backward_mode_refuses_without_valid_caches(tmp_path):
-    """TrackingWorker._run() raises or returns early when backward caches are invalid.
+class _StopAfterDispatch(RuntimeError):
+    """Sentinel raised from a probed runner method to end run_tracking() early."""
 
-    We patch InferenceRunner to report invalid caches and verify run_batch_pass
-    is never called (backward pass must NOT re-run inference).
+
+class _FakeProfiler:
+    def __init__(self, enabled: bool = False):
+        self.enabled = enabled
+
+    def __getattr__(self, _name):  # any phase_*/tick/tock/etc. is a no-op
+        return lambda *a, **k: None
+
+
+class _FakeVideoCapture:
+    """Minimal cv2.VideoCapture stand-in yielding a couple of 8x8 frames."""
+
+    def __init__(self, *_args, **_kwargs):
+        self._frames = [np.zeros((8, 8, 3), dtype=np.uint8) for _ in range(2)]
+        self._idx = 0
+        self._opened = True
+
+    def isOpened(self):
+        return self._opened
+
+    def read(self):
+        if self._idx >= len(self._frames):
+            return False, None
+        frame = self._frames[self._idx]
+        self._idx += 1
+        return True, frame.copy()
+
+    def get(self, prop_id):
+        import hydra_suite.core.tracking.worker as _wm
+
+        if prop_id == _wm.cv2.CAP_PROP_FRAME_COUNT:
+            return len(self._frames)
+        if prop_id == _wm.cv2.CAP_PROP_FPS:
+            return 30.0
+        if prop_id == _wm.cv2.CAP_PROP_FRAME_WIDTH:
+            return self._frames[0].shape[1]
+        if prop_id == _wm.cv2.CAP_PROP_FRAME_HEIGHT:
+            return self._frames[0].shape[0]
+        if prop_id == _wm.cv2.CAP_PROP_POS_FRAMES:
+            return self._idx
+        return 0
+
+    def set(self, prop_id, value):
+        import hydra_suite.core.tracking.worker as _wm
+
+        if prop_id == _wm.cv2.CAP_PROP_POS_FRAMES:
+            self._idx = int(value)
+        return True
+
+    def release(self):
+        self._opened = False
+
+
+def _dispatch_params(**overrides):
+    p = {
+        "MAX_TARGETS": 1,
+        "START_FRAME": 0,
+        "END_FRAME": 1,
+        "RESIZE_FACTOR": 1.0,
+        "DETECTION_METHOD": "yolo_obb",
+        "TRACKING_WORKFLOW_MODE": "non_realtime",
+        "MIN_DETECTIONS_TO_START": 1,
+        "MIN_DETECTION_COUNTS": 2,
+        "LOST_THRESHOLD_FRAMES": 1,
+        "REFERENCE_BODY_SIZE": 20.0,
+        "MAX_DISTANCE_THRESHOLD": 1000.0,
+        "ENABLE_POSE_EXTRACTOR": False,
+        "USE_APRILTAGS": False,
+        "CNN_CLASSIFIERS": [],
+        "ENABLE_CONFIDENCE_DENSITY_MAP": False,
+        "ENABLE_FRAME_PREFETCH": False,
+        "VISUALIZATION_FREE_MODE": True,
+        "ADVANCED_CONFIG": {},
+        "COMPUTE_RUNTIME": "cpu",
+    }
+    p.update(overrides)
+    return p
+
+
+def _run_with_faked_runner(monkeypatch, tmp_path, runner_cls, **ctor_kwargs):
+    """Drive real run_tracking() with a faked InferenceRunner; return finished-success.
+
+    Returns (success, raised) where `raised` is the _StopAfterDispatch sentinel if
+    the probed method fired one (used to prove the branch was taken), else None.
     """
-    from hydra_suite.core.tracking.worker import TrackingEngineCore
+    import hydra_suite.core.tracking.worker as worker_mod
 
-    mock_runner = MagicMock()
-    mock_runner.caches_all_valid.return_value = False
+    monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
+    monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _FakeVideoCapture)
+    monkeypatch.setattr(worker_mod, "InferenceRunner", runner_cls)
 
-    with patch(
-        "hydra_suite.core.tracking.worker.InferenceRunner", return_value=mock_runner
-    ):
-        worker_obj = TrackingEngineCore.__new__(TrackingEngineCore)
-        worker_obj._identity_builders = []
+    captured = {}
 
-        # Minimal attributes needed to reach the guard
-        worker_obj.backward_mode = True
-        worker_obj.preview_mode = False
-        worker_obj.detection_cache_path = None
-        worker_obj.video_path = str(tmp_path / "video.mp4")
-        worker_obj.video_output_path = None
-        worker_obj.video_writer = None
-        worker_obj.frame_count = 0
-        worker_obj._stop_requested = False
-        worker_obj.frame_prefetcher = None
-        worker_obj._density_regions = []
-        worker_obj._evidence_emitters = []
-        worker_obj.kf_manager = None
+    def _on_finished(success, _fps, _traj):
+        captured["success"] = success
 
-        # Verify batch pass is never called when backward caches are missing
-        mock_runner.run_batch_pass.assert_not_called()
+    worker = worker_mod.TrackingEngineCore(
+        str(tmp_path / "video.mp4"), on_finished=_on_finished, **ctor_kwargs
+    )
+    worker.set_parameters(_dispatch_params())
+
+    raised = None
+    try:
+        worker.run_tracking()
+    except _StopAfterDispatch as exc:
+        raised = exc
+    return captured.get("success"), raised
 
 
-# ---------------------------------------------------------------------------
-# InferenceRunner.caches_all_valid controls batch pass execution
-# ---------------------------------------------------------------------------
+def test_backward_mode_refuses_without_valid_caches(monkeypatch, tmp_path):
+    """Real run_tracking(): backward mode with invalid caches must abort (finished=False)
+    and must NOT run a fresh inference batch pass."""
+    calls = {"batch": 0, "caches_checked": 0}
+
+    class _InvalidCacheRunner:
+        def __init__(self, *_a, **_k):
+            pass
+
+        def caches_all_valid(self):
+            calls["caches_checked"] += 1
+            return False
+
+        def detection_cache_covers_range(self, *_a, **_k):
+            return False
+
+        def run_batch_pass(self, *_a, **_k):
+            calls["batch"] += 1  # must never happen in backward mode
+
+        def close(self):
+            pass
+
+    success, _ = _run_with_faked_runner(
+        monkeypatch,
+        tmp_path,
+        _InvalidCacheRunner,
+        backward_mode=True,
+        detection_cache_path=str(tmp_path / "forward_cache"),
+    )
+
+    assert calls["caches_checked"] >= 1, "backward guard must query caches_all_valid()"
+    assert success is False, "invalid backward caches must abort the run"
+    assert (
+        calls["batch"] == 0
+    ), "backward mode must never re-run inference (run_batch_pass)"
 
 
-def test_caches_valid_skips_batch_pass():
-    """When caches_all_valid() returns True, run_batch_pass must NOT be called."""
-    mock_runner = MagicMock()
-    mock_runner.caches_all_valid.return_value = True
-    mock_runner.load_frame.return_value = _make_frame_result(0)
+def test_forward_invalid_caches_triggers_batch_pass(monkeypatch, tmp_path):
+    """Real run_tracking(): forward, non-realtime, caches invalid → run_batch_pass IS called.
 
-    # The Site A block in worker.py:
-    #   if inference_runner is not None and not use_cached_detections and not realtime:
-    #       inference_runner.run_batch_pass(...)
-    # When caches_all_valid() → True, use_cached_detections is set True,
-    # so run_batch_pass is skipped.
-    use_cached_detections = mock_runner.caches_all_valid()  # True
-    if use_cached_detections:
-        pass  # skip batch pass
-    else:
-        mock_runner.run_batch_pass()
+    run_batch_pass records the call and then raises the sentinel to short-circuit the
+    rest of the pipeline; worker.py catches it in its own batch-pass try/except (real
+    code), so we assert on the recorded call, not on propagation.
+    """
+    calls = {"batch": 0}
 
-    mock_runner.run_batch_pass.assert_not_called()
+    class _NeedsBatchRunner:
+        def __init__(self, *_a, **_k):
+            pass
+
+        def caches_all_valid(self):
+            return False
+
+        def detection_cache_covers_range(self, *_a, **_k):
+            return False
+
+        def run_batch_pass(self, *_a, **_k):
+            calls["batch"] += 1
+            raise _StopAfterDispatch("run_batch_pass reached")
+
+        def close(self):
+            pass
+
+    _run_with_faked_runner(
+        monkeypatch, tmp_path, _NeedsBatchRunner, use_cached_detections=False
+    )
+
+    assert (
+        calls["batch"] == 1
+    ), "forward run with invalid caches must call run_batch_pass"
 
 
-def test_caches_invalid_triggers_batch_pass():
-    """When caches_all_valid() returns False, run_batch_pass must be called."""
-    mock_runner = MagicMock()
-    mock_runner.caches_all_valid.return_value = False
+def test_forward_valid_caches_skips_batch_pass(monkeypatch, tmp_path):
+    """Real run_tracking(): forward, cache reuse enabled, caches valid & covering →
+    run_batch_pass is SKIPPED and the cached replay path (load_frame) is used instead.
+    """
 
-    use_cached_detections = mock_runner.caches_all_valid()  # False
-    if not use_cached_detections:
-        mock_runner.run_batch_pass()
+    class _CachedRunner:
+        def __init__(self, *_a, **_k):
+            pass
 
-    mock_runner.run_batch_pass.assert_called_once()
+        def caches_all_valid(self):
+            return True
+
+        def detection_cache_covers_range(self, *_a, **_k):
+            return True
+
+        def detection_cache_missing_frames(self, *_a, **_k):
+            return []
+
+        def run_batch_pass(self, *_a, **_k):
+            raise AssertionError("run_batch_pass must NOT run when caches are valid")
+
+        def load_frame(self, frame_idx, *_a, **_k):
+            # Cached replay reached — escape before the heavy tracking loop.
+            raise _StopAfterDispatch(f"load_frame({frame_idx}) reached")
+
+        def close(self):
+            pass
+
+    success, raised = _run_with_faked_runner(
+        monkeypatch, tmp_path, _CachedRunner, use_cached_detections=True
+    )
+
+    assert (
+        raised is not None
+    ), "cached forward run must reach the load_frame replay path"

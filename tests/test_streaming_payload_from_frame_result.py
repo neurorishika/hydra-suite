@@ -50,13 +50,6 @@ def _make_frame_result(n: int = 3, with_headtail: bool = True) -> FrameResult:
     )
 
 
-def test_from_frame_result_basic():
-    """from_frame_result should produce a StreamingAnalysisPayload."""
-    fr = _make_frame_result()
-    payload = StreamingAnalysisPayload.from_frame_result(fr)
-    assert isinstance(payload, StreamingAnalysisPayload)
-
-
 def test_from_frame_result_frame_idx():
     """Payload frame_idx should match OBB frame_idx."""
     fr = _make_frame_result()
@@ -107,10 +100,3 @@ def test_from_frame_result_runtime_family_propagated():
     fr = _make_frame_result()
     payload = StreamingAnalysisPayload.from_frame_result(fr, runtime_family="mps")
     assert payload.runtime_family == "mps"
-
-
-def test_frame_result_streaming_payload_field_exists():
-    """FrameResult.streaming_payload field should exist and default to None."""
-    fr = _make_frame_result()
-    assert hasattr(fr, "streaming_payload")
-    assert fr.streaming_payload is None

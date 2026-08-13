@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import types
+
 import cv2
 import numpy as np
 import pytest
@@ -255,7 +257,7 @@ def test_tracking_worker_realtime_yolo_obb_handles_zero_detection_frame(
 
     class _FakeInferenceRunner:
         def __init__(self, *_args, **_kwargs):
-            pass
+            self.clipping_stats = types.SimpleNamespace(summary=lambda: "")
 
         def run_realtime(self, frame, frame_idx=0, roi_mask=None, roi_mask_cuda=None):
             empty_obb = OBBResult(

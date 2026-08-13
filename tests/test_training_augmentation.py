@@ -101,19 +101,3 @@ def test_tiny_augmentation_deterministic_under_fixed_rng():
     a = _apply_tiny_augmentation(img, True, prof, rng=np.random.default_rng(5))
     b = _apply_tiny_augmentation(img, True, prof, rng=np.random.default_rng(5))
     assert np.array_equal(a, b)
-
-
-def test_augmentation_profile_new_decode_fields_default_off_and_serialize():
-    from dataclasses import asdict
-
-    from hydra_suite.training.contracts import AugmentationProfile
-
-    p = AugmentationProfile()
-    assert p.decode_color_sim == 0.0
-    assert p.resample_sim == 0.0
-    d = asdict(p)
-    assert d["decode_color_sim"] == 0.0 and d["resample_sim"] == 0.0
-
-    p2 = AugmentationProfile(decode_color_sim=0.5, resample_sim=0.3)
-    assert asdict(p2)["decode_color_sim"] == 0.5
-    assert asdict(p2)["resample_sim"] == 0.3

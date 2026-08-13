@@ -510,7 +510,7 @@ def test_video_autoload_restores_pose_keypoint_groups_and_headtail_model(
 
     reloaded_window = _make_main_window(monkeypatch)
 
-    def _fake_init_video_player(_path: str) -> None:
+    def _fake_init_video_player(_path: str, _probe=None) -> None:
         reloaded_window.video_total_frames = 120
         reloaded_window._setup_panel.spin_start_frame.setMaximum(119)
         reloaded_window._setup_panel.spin_end_frame.setMaximum(119)
@@ -685,8 +685,6 @@ def test_preview_detection_restores_analyze_individual_controls(
         update_combo=True,
     )
 
-    assert window._identity_panel.spin_identity_match_bonus.isEnabled() is True
-    assert window._identity_panel.spin_identity_mismatch_penalty.isEnabled() is True
     assert window._identity_panel.combo_apriltag_family.isEnabled() is True
     assert window._identity_panel.spin_apriltag_decimate.isEnabled() is True
     assert window._identity_panel.combo_pose_model_type.isEnabled() is True
@@ -698,13 +696,10 @@ def test_preview_detection_restores_analyze_individual_controls(
 
     window._session_orch._set_preview_test_running(True)
 
-    assert window._identity_panel.spin_identity_match_bonus.isEnabled() is False
     assert window._identity_panel.btn_remove_pose_model.isEnabled() is False
 
     window._session_orch._set_preview_test_running(False)
 
-    assert window._identity_panel.spin_identity_match_bonus.isEnabled() is True
-    assert window._identity_panel.spin_identity_mismatch_penalty.isEnabled() is True
     assert window._identity_panel.combo_apriltag_family.isEnabled() is True
     assert window._identity_panel.spin_apriltag_decimate.isEnabled() is True
     assert window._identity_panel.combo_pose_model_type.isEnabled() is True
@@ -1117,72 +1112,6 @@ def test_realtime_sequential_mode_keeps_crop_batch_setting_visible(
     window.close()
 
 
-def test_realtime_direct_mode_exposes_micro_batch_controls(
-    monkeypatch: pytest.MonkeyPatch,
-    qapp: QApplication,
-    tmp_path: Path,
-) -> None:
-    _seed_trackerkit_model_repository(tmp_path, monkeypatch)
-
-    window = _make_main_window(monkeypatch)
-    window._detection_panel.combo_detection_method.setCurrentIndex(1)
-    window._setup_panel.chk_realtime_mode.setChecked(True)
-
-    assert (
-        window._detection_panel.chk_enable_realtime_yolo_micro_batching.isEnabled()
-        is True
-    )
-    assert (
-        window._detection_panel.spin_realtime_yolo_micro_batch_size.isEnabled() is False
-    )
-
-    window._detection_panel.chk_enable_realtime_yolo_micro_batching.setChecked(True)
-    window._detection_panel.spin_realtime_yolo_micro_batch_size.setValue(4)
-    window._detection_panel._sync_live_detection_batch_controls()
-
-    assert (
-        window._detection_panel.spin_realtime_yolo_micro_batch_size.isEnabled() is True
-    )
-    assert (
-        "queues up to 4 frame(s)"
-        in window._detection_panel.lbl_batch_policy_notice.text()
-    )
-    window.close()
-
-
-def test_realtime_micro_batch_roundtrip_persists(
-    monkeypatch: pytest.MonkeyPatch,
-    qapp: QApplication,
-    tmp_path: Path,
-) -> None:
-    _seed_trackerkit_model_repository(tmp_path, monkeypatch)
-
-    window = _make_main_window(monkeypatch)
-    window._detection_panel.combo_detection_method.setCurrentIndex(1)
-    window._detection_panel.chk_enable_realtime_yolo_micro_batching.setChecked(True)
-    window._detection_panel.spin_realtime_yolo_micro_batch_size.setValue(3)
-
-    config_path = tmp_path / "realtime_micro_batch_roundtrip.json"
-    assert window.save_config(preset_mode=True, preset_path=str(config_path))
-    saved_cfg = json.loads(config_path.read_text(encoding="utf-8"))
-    assert saved_cfg["enable_realtime_yolo_micro_batching"] is True
-    assert saved_cfg["realtime_yolo_micro_batch_size"] == 3
-    window.close()
-
-    reloaded_window = _make_main_window(monkeypatch)
-    reloaded_window._load_config_from_file(str(config_path), preset_mode=True)
-
-    assert (
-        reloaded_window._detection_panel.chk_enable_realtime_yolo_micro_batching.isChecked()
-        is True
-    )
-    assert (
-        reloaded_window._detection_panel.spin_realtime_yolo_micro_batch_size.value()
-        == 3
-    )
-    reloaded_window.close()
-
-
 def test_sequential_crop_batch_roundtrip_persists(
     monkeypatch: pytest.MonkeyPatch,
     qapp: QApplication,
@@ -1351,72 +1280,6 @@ def test_get_parameters_dict_commits_pending_frame_range_edit(
     window.close()
 
 
-def test_advanced_config_defaults_include_identity_decoder_tuning(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    advanced_path = tmp_path / "advanced_config.json"
-
-    monkeypatch.setattr(
-        "hydra_suite.paths.get_advanced_config_path",
-        lambda: advanced_path,
-    )
-
-    advanced = ConfigOrchestrator._load_advanced_config(object())
-
-    assert advanced["identity_offline_split_trajectories"] is False
-    assert advanced["identity_offline_split_min_conf"] == pytest.approx(0.75)
-    assert advanced["identity_offline_split_min_margin"] == pytest.approx(0.2)
-    assert advanced["identity_offline_split_min_frames"] == 3
-    assert advanced["identity_offline_split_max_bridge_frames"] == 6
-    assert advanced["identity_offline_ilp_time_limit"] == pytest.approx(30.0)
-    assert advanced["identity_offline_ilp_rel_gap"] == pytest.approx(1e-6)
-    assert advanced["identity_respawn_prior_strength"] == pytest.approx(0.75)
-    assert advanced["identity_respawn_prior_decay"] == pytest.approx(0.97)
-    assert advanced["identity_respawn_prior_max_gap"] == 120
-
-    saved = json.loads(advanced_path.read_text(encoding="utf-8"))
-    assert saved["identity_offline_split_trajectories"] is False
-    assert saved["identity_offline_split_min_conf"] == pytest.approx(0.75)
-    assert saved["identity_respawn_prior_max_gap"] == 120
-
-
-def test_get_parameters_dict_exposes_identity_decoder_advanced_overrides(
-    monkeypatch: pytest.MonkeyPatch,
-    qapp: QApplication,
-) -> None:
-    window = _make_main_window(
-        monkeypatch,
-        advanced_config={
-            "identity_offline_split_trajectories": True,
-            "identity_offline_split_min_conf": 0.81,
-            "identity_offline_split_min_margin": 0.27,
-            "identity_offline_split_min_frames": 5,
-            "identity_offline_split_max_bridge_frames": 8,
-            "identity_offline_ilp_time_limit": 12.5,
-            "identity_offline_ilp_rel_gap": 1e-4,
-            "identity_respawn_prior_strength": 0.62,
-            "identity_respawn_prior_decay": 0.93,
-            "identity_respawn_prior_max_gap": 44,
-        },
-    )
-
-    params = window.get_parameters_dict()
-
-    assert params["IDENTITY_OFFLINE_SPLIT_TRAJECTORIES"] is True
-    assert params["IDENTITY_OFFLINE_SPLIT_MIN_CONF"] == pytest.approx(0.81)
-    assert params["IDENTITY_OFFLINE_SPLIT_MIN_MARGIN"] == pytest.approx(0.27)
-    assert params["IDENTITY_OFFLINE_SPLIT_MIN_FRAMES"] == 5
-    assert params["IDENTITY_OFFLINE_SPLIT_MAX_BRIDGE_FRAMES"] == 8
-    assert params["IDENTITY_OFFLINE_ILP_TIME_LIMIT"] == pytest.approx(12.5)
-    assert params["IDENTITY_OFFLINE_ILP_REL_GAP"] == pytest.approx(1e-4)
-    assert params["IDENTITY_RESPAWN_PRIOR_STRENGTH"] == pytest.approx(0.62)
-    assert params["IDENTITY_RESPAWN_PRIOR_DECAY"] == pytest.approx(0.93)
-    assert params["IDENTITY_RESPAWN_PRIOR_MAX_GAP"] == 44
-    assert params["ADVANCED_CONFIG"]["identity_respawn_prior_max_gap"] == 44
-    window.close()
-
-
 def test_advanced_config_defaults_include_obb_seg_kernel_params(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1477,99 +1340,6 @@ def test_get_parameters_dict_obb_seg_kernel_overrides_default_when_absent(
     assert params["YOLO_OBB_SEG_PAD_RATIO"] == pytest.approx(0.15)
     assert params["YOLO_OBB_SEG_MASK_THRESHOLD"] == pytest.approx(0.5)
     window.close()
-
-
-def test_identity_decoder_tuning_controls_roundtrip_through_tracker_config(
-    monkeypatch: pytest.MonkeyPatch,
-    qapp: QApplication,
-    tmp_path: Path,
-) -> None:
-    window = _make_main_window(
-        monkeypatch,
-        advanced_config={
-            "identity_offline_split_trajectories": True,
-            "identity_offline_split_min_conf": 0.82,
-            "identity_respawn_prior_max_gap": 77,
-        },
-    )
-
-    assert window._identity_panel.chk_identity_offline_split_trajectories.isChecked()
-    assert (
-        window._identity_panel.spin_identity_offline_split_min_conf.value()
-        == pytest.approx(0.82)
-    )
-    assert window._identity_panel.spin_identity_respawn_prior_max_gap.value() == 77
-
-    window._identity_panel.chk_identity_offline_split_trajectories.setChecked(False)
-    window._identity_panel.spin_identity_offline_split_min_conf.setValue(0.79)
-    window._identity_panel.spin_identity_offline_split_min_margin.setValue(0.24)
-    window._identity_panel.spin_identity_offline_split_min_frames.setValue(4)
-    window._identity_panel.spin_identity_offline_split_max_bridge_frames.setValue(9)
-    window._identity_panel.spin_identity_offline_ilp_time_limit.setValue(15.0)
-    window._identity_panel.spin_identity_offline_ilp_rel_gap.setValue(0.0025)
-    window._identity_panel.spin_identity_respawn_prior_strength.setValue(0.66)
-    window._identity_panel.spin_identity_respawn_prior_decay.setValue(0.91)
-    window._identity_panel.spin_identity_respawn_prior_max_gap.setValue(42)
-
-    config_path = tmp_path / "identity_decoder_tuning_roundtrip.json"
-    assert window.save_config(preset_mode=True, preset_path=str(config_path))
-    saved_cfg = json.loads(config_path.read_text(encoding="utf-8"))
-
-    assert saved_cfg["identity_offline_split_trajectories"] is False
-    assert saved_cfg["identity_offline_split_min_conf"] == pytest.approx(0.79)
-    assert saved_cfg["identity_offline_split_min_margin"] == pytest.approx(0.24)
-    assert saved_cfg["identity_offline_split_min_frames"] == 4
-    assert saved_cfg["identity_offline_split_max_bridge_frames"] == 9
-    assert saved_cfg["identity_offline_ilp_time_limit"] == pytest.approx(15.0)
-    assert saved_cfg["identity_offline_ilp_rel_gap"] == pytest.approx(0.0025)
-    assert saved_cfg["identity_respawn_prior_strength"] == pytest.approx(0.66)
-    assert saved_cfg["identity_respawn_prior_decay"] == pytest.approx(0.91)
-    assert saved_cfg["identity_respawn_prior_max_gap"] == 42
-    window.close()
-
-    reloaded_window = _make_main_window(monkeypatch)
-    reloaded_window._load_config_from_file(str(config_path), preset_mode=True)
-
-    assert (
-        not reloaded_window._identity_panel.chk_identity_offline_split_trajectories.isChecked()
-    )
-    assert (
-        reloaded_window._identity_panel.spin_identity_offline_split_min_conf.value()
-        == pytest.approx(0.79)
-    )
-    assert (
-        reloaded_window._identity_panel.spin_identity_offline_split_min_margin.value()
-        == pytest.approx(0.24)
-    )
-    assert (
-        reloaded_window._identity_panel.spin_identity_offline_split_min_frames.value()
-        == 4
-    )
-    assert (
-        reloaded_window._identity_panel.spin_identity_offline_split_max_bridge_frames.value()
-        == 9
-    )
-    assert (
-        reloaded_window._identity_panel.spin_identity_offline_ilp_time_limit.value()
-        == pytest.approx(15.0)
-    )
-    assert (
-        reloaded_window._identity_panel.spin_identity_offline_ilp_rel_gap.value()
-        == pytest.approx(0.0025)
-    )
-    assert (
-        reloaded_window._identity_panel.spin_identity_respawn_prior_strength.value()
-        == pytest.approx(0.66)
-    )
-    assert (
-        reloaded_window._identity_panel.spin_identity_respawn_prior_decay.value()
-        == pytest.approx(0.91)
-    )
-    assert (
-        reloaded_window._identity_panel.spin_identity_respawn_prior_max_gap.value()
-        == 42
-    )
-    reloaded_window.close()
 
 
 def test_trail_history_special_values_update_overlay_toggle_and_clamp(

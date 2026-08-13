@@ -285,12 +285,16 @@ def test_augment_trajectories_with_detected_properties_cache_merges_by_detection
     for col in DETECTED_HEADING_COLUMNS:
         assert col in out.columns
 
-    assert out.iloc[0]["ThetaRaw"] == pytest.approx(0.1)
-    assert out.iloc[0]["ThetaResolved"] == pytest.approx(0.2)
-    assert out.iloc[0]["HeadingSource"] == "headtail"
-    assert out.iloc[0]["HeadingDirected"] == 1
-    assert out.iloc[0]["HeadTailConfidence"] == pytest.approx(0.92)
-    assert np.isnan(out.iloc[1]["ThetaRaw"])
+    # Heading schema was renamed (ThetaRaw dropped as redundant with the
+    # tracking CSV's Theta): ThetaResolved->HeadingResolved,
+    # HeadingSource->HeadingMethod, HeadingDirected->HeadingIsDirected,
+    # HeadTailConfidence->HeadTailClassifierConf, headtail_heading->HeadTailAngleRad.
+    assert out.iloc[0]["HeadingResolved"] == pytest.approx(0.2)
+    assert out.iloc[0]["HeadingMethod"] == "headtail"
+    assert bool(out.iloc[0]["HeadingIsDirected"]) is True
+    assert out.iloc[0]["HeadTailAngleRad"] == pytest.approx(0.2)
+    assert out.iloc[0]["HeadTailClassifierConf"] == pytest.approx(0.92)
+    assert np.isnan(out.iloc[1]["HeadingResolved"])
 
 
 def test_augment_trajectories_with_detected_cnn_cache_merges_by_detection(tmp_path):

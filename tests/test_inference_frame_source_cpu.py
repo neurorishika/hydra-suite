@@ -54,13 +54,6 @@ def _import():
 # ---------------------------------------------------------------------------
 
 
-def test_import():
-    """FrameSource and CpuFrameReader can be imported from sources module."""
-    FrameSource, CpuFrameReader = _import()
-    assert FrameSource is not None
-    assert CpuFrameReader is not None
-
-
 def test_cpu_frame_reader_yields_all_frames(tiny_video):
     """CpuFrameReader yields (index, ndarray) for all frames in ascending order."""
     _, CpuFrameReader = _import()

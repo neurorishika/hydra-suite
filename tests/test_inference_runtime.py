@@ -88,7 +88,9 @@ def test_cuda_config_produces_cuda_mode():
         ctx = RuntimeContext.from_config(_cuda_config())
     assert ctx.cuda_mode is True
     assert ctx.device == "cuda:0"
-    assert ctx.use_nvdec is True
+    # NVDEC is confined to the gpu_fast tier (see _should_use_nvdec); the plain
+    # gpu tier CPU-decodes even when NVDEC hardware is available.
+    assert ctx.use_nvdec is False
 
 
 def test_cuda_without_nvdec():

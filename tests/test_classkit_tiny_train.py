@@ -212,10 +212,10 @@ def test_compute_class_weights_skips_ignored_classes() -> None:
     from hydra_suite.training.runner import _compute_class_weights
 
     weights = _compute_class_weights(
-        [0, 0, 1, 2],
+        [("a", 0), ("b", 0), ("c", 1), ("d", 2)],
         num_classes=3,
-        mode="loss",
-        power=1.0,
+        rebalance_mode="weighted_loss",
+        rebalance_power=1.0,
         ignored_class_indices={2},
     )
 

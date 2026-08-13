@@ -103,6 +103,15 @@ def test_classkit_new_project_dialog_lists_saved_custom_presets(
     dialog.preset_combo.setCurrentIndex(preset_index)
     project_info = dialog.get_project_info()
 
-    assert project_info["classes"] == ["red", "blue", "left", "right"]
+    # Multi-factor schemes auto-append "unknown" to each factor (LabelingScheme
+    # __post_init__), so the flattened class list carries a per-factor "unknown".
+    assert project_info["classes"] == [
+        "red",
+        "blue",
+        "unknown",
+        "left",
+        "right",
+        "unknown",
+    ]
     assert project_info["scheme"] is not None
     assert project_info["scheme"].name == "colony_tags"

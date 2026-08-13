@@ -266,17 +266,6 @@ class TestCSVWriterThread:
         finally:
             Path(temp_path).unlink(missing_ok=True)
 
-    def test_file_path_property(self):
-        """Test that csv_path property is correctly set."""
-        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".csv") as f:
-            temp_path = f.name
-
-        try:
-            writer = CSVWriterThread(temp_path)
-            assert writer.csv_path == temp_path
-        finally:
-            Path(temp_path).unlink(missing_ok=True)
-
     def test_queue_property(self):
         """Test that queue is accessible and functional."""
         with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".csv") as f:

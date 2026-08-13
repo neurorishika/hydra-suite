@@ -22,7 +22,7 @@ CORE_ROOT = pathlib.Path(__file__).resolve().parents[1] / "src" / "hydra_suite" 
 # its own effort (see the core/ Qt-in-core + integrations-boundary cleanup). Allow-listed so
 # this guard still fails on any NEW core->app/integrations import.
 KNOWN_VIOLATIONS = {
-    ("identity/pose/backends/sleap.py", "hydra_suite.integrations.sleap.service"),
+    ("individual/pose/backends/sleap.py", "hydra_suite.integrations.sleap.service"),
 }
 
 

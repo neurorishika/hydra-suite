@@ -1,5 +1,6 @@
 {
   "ADVANCED_CONFIG": {
+    "canonical_margin": 1.3,
     "detection_batch_size": 1,
     "enable_aspect_ratio_filtering": true,
     "max_aspect_ratio_multiplier": 2.5,

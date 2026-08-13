@@ -27,10 +27,6 @@ def _make_proj(tmp_path):
     return DetectKitProject(project_dir=tmp_path, class_names=["ant"])
 
 
-def test_source_manager_dialog_imports(qapp):
-    pass  # noqa: F401
-
-
 def test_source_manager_is_base_dialog(qapp, tmp_path):
     from hydra_suite.detectkit.gui.dialogs.source_manager import SourceManagerDialog
     from hydra_suite.widgets.dialogs import BaseDialog

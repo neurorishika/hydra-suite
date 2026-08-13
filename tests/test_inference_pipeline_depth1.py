@@ -6,7 +6,7 @@ frame index and must be testable without real models. ``Pipeline.for_test`` +
 the production ``run()`` drives, with a fake per-window stage callable.
 """
 
-from hydra_suite.core.inference.pipeline import BatchWindow, Pipeline
+from hydra_suite.core.inference.pipeline import Pipeline
 
 
 def test_windows_are_frame_indexed_not_arrival_indexed():
@@ -57,9 +57,3 @@ def test_window_size_one_yields_singleton_windows():
     pipe = Pipeline.for_test(window_size=1, depth=1, stage=fake_stage)
     pipe.run_frames(range(3))
     assert seen == [[0], [1], [2]]
-
-
-def test_batch_window_holds_frames_and_indices():
-    window = BatchWindow(frames=[object(), object()], frame_indices=[3, 4])
-    assert window.frame_indices == [3, 4]
-    assert len(window.frames) == 2

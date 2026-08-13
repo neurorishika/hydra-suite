@@ -58,27 +58,6 @@ def test_tools_panel_fixed_width(qapp):
     assert panel.minimumWidth() == 280
 
 
-def test_tools_panel_signals(qapp):
-    from hydra_suite.detectkit.gui.panels.tools_panel import ToolsPanel
-
-    panel = ToolsPanel()
-    assert hasattr(panel, "overlay_settings_changed")
-    assert hasattr(panel, "run_inference_requested")
-    assert hasattr(panel, "prev_requested")
-    assert hasattr(panel, "next_requested")
-    assert hasattr(panel, "train_requested")
-    assert hasattr(panel, "evaluate_requested")
-    assert hasattr(panel, "history_requested")
-
-
-def test_tools_panel_has_overlay_action_buttons(qapp):
-    from hydra_suite.detectkit.gui.panels.tools_panel import ToolsPanel
-
-    panel = ToolsPanel()
-    assert hasattr(panel, "_btn_run_inference")
-    assert hasattr(panel, "_btn_overlay_evaluate")
-
-
 def test_tools_panel_set_project(qapp, tmp_path):
     from hydra_suite.detectkit.gui.panels.tools_panel import ToolsPanel
 
@@ -94,13 +73,6 @@ def test_tools_panel_refresh_overview(qapp, tmp_path):
     proj = _make_proj(tmp_path)
     panel.set_project(proj)
     panel.refresh_overview()  # Must not raise
-
-
-def test_tools_panel_set_image_counter(qapp):
-    from hydra_suite.detectkit.gui.panels.tools_panel import ToolsPanel
-
-    panel = ToolsPanel()
-    panel.set_image_counter(3, 10)  # Must not raise
 
 
 def test_tools_panel_refresh_model_selector(qapp):
@@ -181,10 +153,3 @@ def test_tools_panel_has_overview_progress(qapp):
 
     panel = ToolsPanel()
     assert hasattr(panel, "_overview_progress")
-
-
-def test_tools_panel_update_model_metrics(qapp):
-    from hydra_suite.detectkit.gui.panels.tools_panel import ToolsPanel
-
-    panel = ToolsPanel()
-    panel.update_model_metrics({"mAP50": 0.85, "mAP50-95": 0.62})  # Must not raise

@@ -26,10 +26,6 @@ def _make_proj(tmp_path):
     return DetectKitProject(project_dir=tmp_path, class_names=["ant"])
 
 
-def test_evaluation_dialog_imports(qapp):
-    pass  # noqa: F401
-
-
 def test_evaluation_dialog_is_base_dialog(qapp, tmp_path):
     from hydra_suite.detectkit.gui.dialogs.evaluation_dialog import EvaluationDialog
     from hydra_suite.widgets.dialogs import BaseDialog
@@ -44,20 +40,6 @@ def test_evaluation_dialog_has_close_button(qapp, tmp_path):
     dlg = EvaluationDialog(_make_proj(tmp_path))
     close_btn = dlg._buttons.button(QDialogButtonBox.StandardButton.Close)
     assert close_btn is not None
-
-
-def test_evaluation_dialog_has_analyze_button(qapp, tmp_path):
-    from hydra_suite.detectkit.gui.dialogs.evaluation_dialog import EvaluationDialog
-
-    dlg = EvaluationDialog(_make_proj(tmp_path))
-    assert hasattr(dlg, "btn_analyze")
-
-
-def test_evaluation_dialog_has_analysis_view(qapp, tmp_path):
-    from hydra_suite.detectkit.gui.dialogs.evaluation_dialog import EvaluationDialog
-
-    dlg = EvaluationDialog(_make_proj(tmp_path))
-    assert hasattr(dlg, "_analysis_view")
 
 
 def test_evaluation_dialog_no_sources_message(qapp, tmp_path):
