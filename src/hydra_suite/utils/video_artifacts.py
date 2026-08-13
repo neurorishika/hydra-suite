@@ -177,18 +177,23 @@ def build_optimizer_detection_cache_path(
     artifact_base_dir: str | os.PathLike[str] | None = None,
     create_dir: bool = False,
 ) -> Path:
-    """Return the ``.npz`` path for a parameter-optimizer detection cache.
+    """Return the modern parameter-optimizer detection cache dir.
 
-    The filename encodes the model name and resize percentage:
-    ``<stem>_<model_name>_r<resize_percent>_opt_cache.npz`` inside ``<stem>_caches/``.
+    ``.inference_cache_<stem>/opt`` — an ``InferenceRunner`` cache *directory*
+    (holds its own ``detection.npz`` plus a cache key), not a legacy
+    single-file cache. ``model_name`` and ``resize_percent`` are accepted for
+    signature stability but no longer encoded in the path — the modern cache
+    key inside the directory carries model identity.
     """
-    cache_dir = build_video_cache_dir(
+    inference_cache_dir = build_inference_cache_dir(
         video_path,
         artifact_base_dir=artifact_base_dir,
         create=create_dir,
     )
-    stem = _video_stem(video_path)
-    return cache_dir / f"{stem}_{model_name}_r{int(resize_percent)}_opt_cache.npz"
+    opt_dir = inference_cache_dir / "opt"
+    if create_dir:
+        opt_dir.mkdir(parents=True, exist_ok=True)
+    return opt_dir
 
 
 def build_individual_properties_cache_path(
@@ -283,13 +288,13 @@ def iter_detection_cache_candidates(
     artifact_base_dirs: Iterable[str | os.PathLike[str] | None] | None = None,
     include_legacy: bool = True,
 ) -> list[Path]:
-    """Return all ``.npz`` cache files matching ``<stem>*_cache*.npz`` for a video, sorted newest-first.
+    """Return candidate parameter-optimizer cache directories, sorted newest-first.
 
-    Searches both the current ``<stem>_caches/`` subdirectory layout and,
-    when ``include_legacy`` is True, the flat base directories used by older versions.
+    Scans the modern ``.inference_cache_<stem>/opt`` directory across all
+    candidate base dirs. The legacy ``<stem>_caches/`` layout is no longer
+    scanned. ``include_legacy`` is accepted for call-site signature stability
+    but has no effect.
     """
-    stem = _video_stem(video_path)
-    pattern = f"{stem}*_cache*.npz"
     found: dict[str, Path] = {}
     base_dirs = artifact_base_dirs or candidate_artifact_base_dirs(video_path)
 
@@ -298,16 +303,12 @@ def iter_detection_cache_candidates(
         if normalized_base_dir is None:
             continue
 
-        cache_dir = build_video_cache_dir(
-            video_path, artifact_base_dir=normalized_base_dir
+        opt_dir = (
+            build_inference_cache_dir(video_path, artifact_base_dir=normalized_base_dir)
+            / "opt"
         )
-        if cache_dir.exists():
-            for path in cache_dir.glob(pattern):
-                found[str(path.resolve())] = path
-
-        if include_legacy and normalized_base_dir.exists():
-            for path in normalized_base_dir.glob(pattern):
-                found[str(path.resolve())] = path
+        if opt_dir.exists() and opt_dir.is_dir():
+            found[str(opt_dir.resolve())] = opt_dir
 
     return sorted(
         found.values(),
