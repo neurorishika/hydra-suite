@@ -257,6 +257,8 @@ class TrackingSessionCore:
             min_valid_conf=float(self.params.get("POSE_MIN_KPT_CONF_VALID", 0.2)),
             ignore_keypoints=self.config.get("pose_ignore_keypoints"),
             identity_evidence_cache_path=self._identity_evidence_cache_path(),
+            debug_mode=bool(self.params.get("DEBUG_MODE", True)),
+            fps=self.params.get("FPS"),
         )
 
     def _relink_export_rich(self, final_csv):
@@ -267,6 +269,8 @@ class TrackingSessionCore:
             min_valid_conf=float(self.params.get("POSE_MIN_KPT_CONF_VALID", 0.2)),
             ignore_keypoints=self.config.get("pose_ignore_keypoints"),
             identity_evidence_cache_path=self._identity_evidence_cache_path(),
+            debug_mode=bool(self.params.get("DEBUG_MODE", True)),
+            fps=self.params.get("FPS"),
         )
 
     def _run_interp_crops(self, final_csv) -> None:

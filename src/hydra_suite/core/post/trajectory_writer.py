@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import pandas as pd
 
@@ -9,6 +11,7 @@ from hydra_suite.core.individual.identity import columns as C
 
 _POSE_PREFIX = "PoseKpt_"
 _POSE_X_SUFFIX = "_X"
+_FINAL_SUFFIXES = ("_final", "_forward_processed")
 
 
 def _is_empty_label(series: pd.Series) -> pd.Series:
@@ -59,6 +62,34 @@ def project_user_tracks(df: pd.DataFrame, *, fps: float | None) -> pd.DataFrame:
         out[f"{name}_conf"] = df.get(f"{_POSE_PREFIX}{name}_Conf")
 
     return out
+
+
+def user_tracks_path(final_csv_path: str) -> str:
+    """Derive the clean `<stem>_tracks.csv` path from a debug final-CSV path."""
+    base, ext = os.path.splitext(final_csv_path)
+    for suffix in _FINAL_SUFFIXES:
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+            break
+    return f"{base}_tracks{ext}"
+
+
+def write_final_trajectories(
+    rich_df: pd.DataFrame,
+    final_csv_path: str,
+    *,
+    debug_mode: bool,
+    fps: float | None,
+) -> str | None:
+    """Terminal trajectory writer. Debug → `_with_individual.csv`; User → `<stem>_tracks.csv`."""
+    if debug_mode:
+        from hydra_suite.core.post.rich_export import write_rich_export_csv
+
+        return write_rich_export_csv(rich_df, final_csv_path)
+    clean = project_user_tracks(rich_df, fps=fps)
+    out_path = user_tracks_path(final_csv_path)
+    clean.to_csv(out_path, index=False)
+    return out_path
 
 
 def write_base_final_csv(df: pd.DataFrame, output_path: str) -> bool:
