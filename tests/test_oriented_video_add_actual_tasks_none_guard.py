@@ -1,5 +1,5 @@
 """Guard: _add_actual_tasks must not crash when the detection cache has no
-entry for a frame (get_frame -> None). Previously it fell through to the
+entry for a frame (read_frame -> None). Previously it fell through to the
 legacy 12-tuple unpack and raised TypeError: cannot unpack non-iterable
 NoneType."""
 
@@ -12,7 +12,7 @@ from hydra_suite.core.individual.dataset.oriented_video import (
 
 
 class _NoneCache:
-    def get_frame(self, frame_id):
+    def read_frame(self, frame_id):
         return None
 
 

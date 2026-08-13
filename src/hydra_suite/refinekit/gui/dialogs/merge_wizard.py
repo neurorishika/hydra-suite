@@ -29,7 +29,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from hydra_suite.data.detection_cache import DetectionCache
+from hydra_suite.core.inference.cache.reader import open_detection_cache_reader
+from hydra_suite.core.inference.cache.store import DetectionCacheHandle
 from hydra_suite.refinekit.core.correction_writer import CorrectionWriter
 from hydra_suite.refinekit.core.event_types import EventType, SuspicionEvent
 from hydra_suite.refinekit.core.merge_candidates import (
@@ -52,6 +53,7 @@ from hydra_suite.refinekit.gui.overlay_utils import (
 )
 from hydra_suite.refinekit.gui.overlay_utils import review_overlay_style_from_shape
 from hydra_suite.refinekit.gui.widgets.synced_video_grid import SyncedVideoGrid
+from hydra_suite.utils.video_artifacts import build_inference_cache_dir
 
 # Type alias for hypotheses that can be either merge or swap
 Hypothesis = MergeCandidate | SwapCandidate
@@ -442,29 +444,12 @@ def _tail_mask(frames: np.ndarray, frame_idx: int) -> np.ndarray:
 
 
 def _discover_detection_cache(video_path: str) -> Optional[Path]:
-    """Find the detection cache ``.npz`` for *video_path*.
+    """Find the modern detection cache ``.npz`` for *video_path*.
 
-    Searches ``{stem}_caches/{stem}_detection_cache_*.npz`` first, then the
-    legacy flat layout ``{dir}/{stem}_detection_cache_*.npz``.
     Returns ``None`` if no cache is found.
     """
-    vp = Path(video_path).expanduser()
-    stem = vp.stem
-    parent = vp.parent
-
-    # Current layout: {parent}/{stem}_caches/{stem}_detection_cache_*.npz
-    cache_dir = parent / f"{stem}_caches"
-    if cache_dir.is_dir():
-        hits = sorted(cache_dir.glob(f"{stem}_detection_cache_*.npz"))
-        if hits:
-            return hits[-1]  # newest / last alphabetically
-
-    # Legacy flat layout
-    hits = sorted(parent.glob(f"{stem}_detection_cache_*.npz"))
-    if hits:
-        return hits[-1]
-
-    return None
+    cache_path = build_inference_cache_dir(video_path) / "detection.npz"
+    return cache_path if cache_path.exists() else None
 
 
 def _load_resize_factor(video_path: str) -> float:
@@ -485,7 +470,7 @@ def _load_resize_factor(video_path: str) -> float:
 
 
 class _FrameDetections:
-    """Read-only wrapper around a :class:`DetectionCache` opened for reading.
+    """Read-only wrapper around a :class:`DetectionCacheHandle` opened for reading.
 
     Pre-computes per-detection semi-axes from the cached ``shapes`` array so
     that drawing is cheap at render time.  Coordinates are scaled from the
@@ -493,7 +478,7 @@ class _FrameDetections:
     the refinekit CSV.
     """
 
-    def __init__(self, cache: DetectionCache, inv_resize: float) -> None:
+    def __init__(self, cache: DetectionCacheHandle, inv_resize: float) -> None:
         self._cache = cache
         self._inv_resize = inv_resize  # 1.0 / resize_factor
 
@@ -505,36 +490,21 @@ class _FrameDetections:
         * *obb_corners* — list of ``(4, 2)`` float32 arrays (empty when BG-sub).
         """
         try:
-            (
-                meas,
-                _sizes,
-                shapes,
-                _conf,
-                obb,
-                _ids,
-                _hints,
-                _heading_confidences,
-                _dmask,
-                _affines,
-                _canvas_dims,
-                _m_inverse,
-            ) = self._cache.get_frame(frame_idx)
+            res = self._cache.read_frame(frame_idx)
         except Exception:
             return None
-        if not meas:
+        if res is None or res.num_detections == 0:
             return None
 
         s = self._inv_resize
-        meas_arr = np.array(meas, dtype=np.float32)
+        meas_arr = np.empty((res.num_detections, 3), dtype=np.float32)
+        meas_arr[:, 0:2] = res.centroids
+        meas_arr[:, 2] = res.angles
         meas_arr[:, 0] *= s
         meas_arr[:, 1] *= s
 
         # Recover semi-axes from (ellipse_area, aspect_ratio)
-        shapes_arr = (
-            np.array(shapes, dtype=np.float32)
-            if shapes
-            else np.empty((0, 2), dtype=np.float32)
-        )
+        shapes_arr = np.asarray(res.shapes, dtype=np.float32)
         semi_axes = np.empty((len(meas_arr), 2), dtype=np.float32)
         for i in range(len(meas_arr)):
             if i < len(shapes_arr) and shapes_arr.ndim == 2:
@@ -548,8 +518,8 @@ class _FrameDetections:
                 semi_axes[i] = [8.0, 4.0]  # minimal fallback
 
         obb_scaled: list = []
-        if obb:
-            for corners in obb:
+        if res.corners is not None and len(res.corners) > 0:
+            for corners in res.corners:
                 obb_scaled.append((np.asarray(corners, dtype=np.float32) * s))
 
         return meas_arr, semi_axes, obb_scaled
@@ -1192,13 +1162,10 @@ class MergeWizardDialog(QDialog):
         cache_path = _discover_detection_cache(video_path)
         if cache_path is not None:
             try:
-                cache = DetectionCache(str(cache_path), mode="r")
-                if cache.is_compatible():
-                    inv_resize = 1.0 / _load_resize_factor(video_path)
-                    self._frame_dets = _FrameDetections(cache, inv_resize)
-                    logger.info("Detection cache loaded: %s", cache_path)
-                else:
-                    logger.warning("Detection cache incompatible: %s", cache_path)
+                cache = open_detection_cache_reader(cache_path)
+                inv_resize = 1.0 / _load_resize_factor(video_path)
+                self._frame_dets = _FrameDetections(cache, inv_resize)
+                logger.info("Detection cache loaded: %s", cache_path)
             except Exception:
                 logger.warning(
                     "Failed to load detection cache: %s", cache_path, exc_info=True

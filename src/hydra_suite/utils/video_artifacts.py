@@ -92,6 +92,23 @@ def build_video_cache_dir(
     return cache_dir
 
 
+def build_inference_cache_dir(
+    video_path: str | os.PathLike[str],
+    artifact_base_dir: str | os.PathLike[str] | None = None,
+    create: bool = False,
+) -> Path:
+    """Return the modern InferenceRunner cache dir, ``.inference_cache_<stem>/``."""
+    base_dir = (
+        _normalize_base_dir(artifact_base_dir) or Path(video_path).expanduser().parent
+    )
+    stem = _video_stem(video_path)
+    expected = f".inference_cache_{stem}"
+    cache_dir = base_dir if base_dir.name == expected else base_dir / expected
+    if create:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
+
+
 def build_video_log_dir(
     video_path: str | os.PathLike[str],
     artifact_base_dir: str | os.PathLike[str] | None = None,
@@ -117,32 +134,17 @@ def build_detection_cache_path(
     artifact_base_dir: str | os.PathLike[str] | None = None,
     create_dir: bool = False,
 ) -> Path:
-    """Return the canonical ``.npz`` path for a detection cache inside the video's cache dir.
+    """Return the modern detection cache file, ``.inference_cache_<stem>/detection.npz``.
 
-    The filename is ``<stem>_detection_cache_<model_id>.npz`` under ``<stem>_caches/``.
+    ``model_id`` is accepted for signature stability but no longer encoded in the
+    filename — the modern cache key inside the directory carries model identity.
     """
-    cache_dir = build_video_cache_dir(
+    cache_dir = build_inference_cache_dir(
         video_path,
         artifact_base_dir=artifact_base_dir,
         create=create_dir,
     )
-    return cache_dir / f"{_video_stem(video_path)}_detection_cache_{model_id}.npz"
-
-
-def build_legacy_detection_cache_path(
-    video_path: str | os.PathLike[str],
-    model_id: str,
-    artifact_base_dir: str | os.PathLike[str] | None = None,
-) -> Path:
-    """Return the legacy flat ``.npz`` path for a detection cache placed directly in the base dir.
-
-    Used only to locate caches written by older versions of the tracker that did not
-    use the ``<stem>_caches/`` subdirectory layout.
-    """
-    base_dir = (
-        _normalize_base_dir(artifact_base_dir) or Path(video_path).expanduser().parent
-    )
-    return base_dir / f"{_video_stem(video_path)}_detection_cache_{model_id}.npz"
+    return cache_dir / "detection.npz"
 
 
 def find_existing_detection_cache_path(
@@ -152,8 +154,8 @@ def find_existing_detection_cache_path(
 ) -> Path | None:
     """Locate an existing detection cache ``.npz`` for the given video and model.
 
-    Checks current-layout paths first across all candidate directories, then falls back
-    to legacy flat paths.  Returns ``None`` if no cache is found anywhere.
+    Checks the modern ``.inference_cache_<stem>/detection.npz`` layout across all
+    candidate directories. Returns ``None`` if no cache is found anywhere.
     """
     base_dirs = artifact_base_dirs or candidate_artifact_base_dirs(video_path)
 
@@ -165,15 +167,6 @@ def find_existing_detection_cache_path(
         )
         if current.exists():
             return current
-
-    for base_dir in base_dirs:
-        legacy = build_legacy_detection_cache_path(
-            video_path,
-            model_id,
-            artifact_base_dir=base_dir,
-        )
-        if legacy.exists():
-            return legacy
     return None
 
 
@@ -184,18 +177,23 @@ def build_optimizer_detection_cache_path(
     artifact_base_dir: str | os.PathLike[str] | None = None,
     create_dir: bool = False,
 ) -> Path:
-    """Return the ``.npz`` path for a parameter-optimizer detection cache.
+    """Return the modern parameter-optimizer detection cache dir.
 
-    The filename encodes the model name and resize percentage:
-    ``<stem>_<model_name>_r<resize_percent>_opt_cache.npz`` inside ``<stem>_caches/``.
+    ``.inference_cache_<stem>/opt`` — an ``InferenceRunner`` cache *directory*
+    (holds its own ``detection.npz`` plus a cache key), not a legacy
+    single-file cache. ``model_name`` and ``resize_percent`` are accepted for
+    signature stability but no longer encoded in the path — the modern cache
+    key inside the directory carries model identity.
     """
-    cache_dir = build_video_cache_dir(
+    inference_cache_dir = build_inference_cache_dir(
         video_path,
         artifact_base_dir=artifact_base_dir,
         create=create_dir,
     )
-    stem = _video_stem(video_path)
-    return cache_dir / f"{stem}_{model_name}_r{int(resize_percent)}_opt_cache.npz"
+    opt_dir = inference_cache_dir / "opt"
+    if create_dir:
+        opt_dir.mkdir(parents=True, exist_ok=True)
+    return opt_dir
 
 
 def build_individual_properties_cache_path(
@@ -211,14 +209,14 @@ def build_individual_properties_cache_path(
 
     The filename is ``<stem>_pose_cache_<properties_id>_<start>_<end>.npz``.
     When ``detection_cache_path`` is supplied the cache is placed alongside it;
-    otherwise it goes into the standard ``<stem>_caches/`` directory.
+    otherwise it goes into the modern ``.inference_cache_<stem>/`` directory.
     """
     if detection_cache_path:
         base_dir = Path(detection_cache_path).expanduser().parent
         if create_dir:
             base_dir.mkdir(parents=True, exist_ok=True)
     else:
-        base_dir = build_video_cache_dir(
+        base_dir = build_inference_cache_dir(
             video_path,
             artifact_base_dir=artifact_base_dir,
             create=create_dir,
@@ -244,7 +242,7 @@ def build_detected_properties_cache_path(
         if create_dir:
             base_dir.mkdir(parents=True, exist_ok=True)
     else:
-        base_dir = build_video_cache_dir(
+        base_dir = build_inference_cache_dir(
             video_path,
             artifact_base_dir=artifact_base_dir,
             create=create_dir,
@@ -254,115 +252,6 @@ def build_detected_properties_cache_path(
         f"{stem}_detected_props_cache_{properties_id}_"
         f"{int(start_frame)}_{int(end_frame)}.npz"
     )
-
-
-def build_apriltag_cache_path(
-    video_path: str | os.PathLike[str],
-    apriltag_id: str,
-    start_frame: int,
-    end_frame: int,
-    artifact_base_dir: str | os.PathLike[str] | None = None,
-    create_dir: bool = False,
-) -> Path:
-    """Return the ``.npz`` path for an AprilTag detection cache.
-
-    The filename is ``<stem>_apriltag_cache_<apriltag_id>_<start>_<end>.npz``
-    inside ``<stem>_caches/``.
-    """
-    cache_dir = build_video_cache_dir(
-        video_path,
-        artifact_base_dir=artifact_base_dir,
-        create=create_dir,
-    )
-    stem = _video_stem(video_path)
-    return cache_dir / (
-        f"{stem}_apriltag_cache_{apriltag_id}_"
-        f"{int(start_frame)}_{int(end_frame)}.npz"
-    )
-
-
-def find_existing_apriltag_cache_path(
-    video_path: str | os.PathLike[str],
-    apriltag_id: str,
-    start_frame: int,
-    end_frame: int,
-    artifact_base_dirs: Iterable[str | os.PathLike[str] | None] | None = None,
-) -> Path | None:
-    """Locate an existing AprilTag cache ``.npz`` for the given video, tag ID, and frame range.
-
-    Searches across all candidate base directories and returns the first match,
-    or ``None`` if no cache is found.
-    """
-    base_dirs = artifact_base_dirs or candidate_artifact_base_dirs(video_path)
-    for base_dir in base_dirs:
-        current = build_apriltag_cache_path(
-            video_path,
-            apriltag_id,
-            start_frame,
-            end_frame,
-            artifact_base_dir=base_dir,
-        )
-        if current.exists():
-            return current
-    return None
-
-
-def build_classify_cache_path(
-    video_path: str | os.PathLike[str],
-    classify_id: str,
-    label: str,
-    start_frame: int,
-    end_frame: int,
-    artifact_base_dir: str | os.PathLike[str] | None = None,
-    create_dir: bool = False,
-) -> Path:
-    """Return the ``.npz`` path for a classification embedding cache.
-
-    The filename is ``<stem>_classify_cache_<safe_label>_<classify_id>_<start>_<end>.npz``
-    inside ``<stem>_caches/``.  Non-alphanumeric characters in ``label`` are replaced with
-    underscores to produce a safe filename component.
-    """
-    import re as _re
-
-    cache_dir = build_video_cache_dir(
-        video_path,
-        artifact_base_dir=artifact_base_dir,
-        create=create_dir,
-    )
-    stem = _video_stem(video_path)
-    safe_label = _re.sub(r"[^\w-]", "_", label)
-    return cache_dir / (
-        f"{stem}_classify_cache_{safe_label}_{classify_id}_"
-        f"{int(start_frame)}_{int(end_frame)}.npz"
-    )
-
-
-def find_existing_classify_cache_path(
-    video_path: str | os.PathLike[str],
-    classify_id: str,
-    label: str,
-    start_frame: int,
-    end_frame: int,
-    artifact_base_dirs: Iterable[str | os.PathLike[str] | None] | None = None,
-) -> Path | None:
-    """Locate an existing classification cache ``.npz`` for the given video, classifier, label, and frame range.
-
-    Searches across all candidate base directories and returns the first match,
-    or ``None`` if no cache is found.
-    """
-    base_dirs = artifact_base_dirs or candidate_artifact_base_dirs(video_path)
-    for base_dir in base_dirs:
-        current = build_classify_cache_path(
-            video_path,
-            classify_id,
-            label,
-            start_frame,
-            end_frame,
-            artifact_base_dir=base_dir,
-        )
-        if current.exists():
-            return current
-    return None
 
 
 def build_autotune_state_path(
@@ -399,13 +288,13 @@ def iter_detection_cache_candidates(
     artifact_base_dirs: Iterable[str | os.PathLike[str] | None] | None = None,
     include_legacy: bool = True,
 ) -> list[Path]:
-    """Return all ``.npz`` cache files matching ``<stem>*_cache*.npz`` for a video, sorted newest-first.
+    """Return candidate parameter-optimizer cache directories, sorted newest-first.
 
-    Searches both the current ``<stem>_caches/`` subdirectory layout and,
-    when ``include_legacy`` is True, the flat base directories used by older versions.
+    Scans the modern ``.inference_cache_<stem>/opt`` directory across all
+    candidate base dirs. The legacy ``<stem>_caches/`` layout is no longer
+    scanned. ``include_legacy`` is accepted for call-site signature stability
+    but has no effect.
     """
-    stem = _video_stem(video_path)
-    pattern = f"{stem}*_cache*.npz"
     found: dict[str, Path] = {}
     base_dirs = artifact_base_dirs or candidate_artifact_base_dirs(video_path)
 
@@ -414,16 +303,12 @@ def iter_detection_cache_candidates(
         if normalized_base_dir is None:
             continue
 
-        cache_dir = build_video_cache_dir(
-            video_path, artifact_base_dir=normalized_base_dir
+        opt_dir = (
+            build_inference_cache_dir(video_path, artifact_base_dir=normalized_base_dir)
+            / "opt"
         )
-        if cache_dir.exists():
-            for path in cache_dir.glob(pattern):
-                found[str(path.resolve())] = path
-
-        if include_legacy and normalized_base_dir.exists():
-            for path in normalized_base_dir.glob(pattern):
-                found[str(path.resolve())] = path
+        if opt_dir.exists() and opt_dir.is_dir():
+            found[str(opt_dir.resolve())] = opt_dir
 
     return sorted(
         found.values(),
@@ -433,9 +318,7 @@ def iter_detection_cache_candidates(
 
 
 __all__ = [
-    "build_apriltag_cache_path",
     "build_autotune_state_path",
-    "build_classify_cache_path",
     "build_detected_properties_cache_path",
     "build_detection_cache_path",
     "build_individual_properties_cache_path",
@@ -445,8 +328,6 @@ __all__ = [
     "build_video_log_dir",
     "candidate_artifact_base_dirs",
     "choose_writable_artifact_base_dir",
-    "find_existing_apriltag_cache_path",
-    "find_existing_classify_cache_path",
     "find_existing_detection_cache_path",
     "iter_detection_cache_candidates",
 ]

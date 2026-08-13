@@ -57,6 +57,7 @@ def _npz_save(path: Path, key: CacheKey, **arrays) -> None:
 class DetectionCacheHandle(CacheHandle):
     path: Path
     key: CacheKey
+    require_key: bool = True
     _buffer: list[OBBResult] = field(default_factory=list, repr=False)
     _data: dict | None = field(default=None, repr=False)
     _valid: bool | None = field(default=None, repr=False)
@@ -64,7 +65,13 @@ class DetectionCacheHandle(CacheHandle):
 
     def is_valid(self) -> bool:
         if self._valid is None:
-            self._valid = _check_key(self.path, self.key)
+            if self.require_key:
+                self._valid = _check_key(self.path, self.key)
+            else:
+                # Read-only mode: existence + written-frame bookkeeping alone
+                # is sufficient; the caller does not care which run produced
+                # the cache, only that the geometry on disk is usable.
+                self._valid = self.path.exists()
         return self._valid
 
     def write_frame(self, frame_idx: int, *, result: OBBResult, **_) -> None:

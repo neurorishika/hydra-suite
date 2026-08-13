@@ -6,10 +6,11 @@ from __future__ import annotations
 import logging
 import os
 
+import numpy as np
 import pandas as pd
 
+from hydra_suite.core.inference.cache import open_detection_cache_reader
 from hydra_suite.data.dataset_generation import FrameQualityScorer, export_dataset
-from hydra_suite.data.detection_cache import DetectionCache
 
 logger = logging.getLogger(__name__)
 
@@ -53,9 +54,8 @@ def generate_active_learning_dataset(
         scorer = FrameQualityScorer(params)
         if detection_cache_path and os.path.exists(detection_cache_path):
             try:
-                detection_cache = DetectionCache(detection_cache_path, mode="r")
-                if not detection_cache.is_compatible():
-                    detection_cache.close()
+                detection_cache = open_detection_cache_reader(detection_cache_path)
+                if not detection_cache.is_valid():
                     detection_cache = None
             except Exception:
                 detection_cache = None
@@ -76,9 +76,15 @@ def generate_active_learning_dataset(
             used_detection_cache = False
             if detection_cache is not None:
                 try:
-                    raw_meas, _, raw_shapes, raw_confidences, raw_obb_corners, _, *_ = (
-                        detection_cache.get_frame(int(frame_id))
-                    )
+                    obb = detection_cache.read_frame(int(frame_id))
+                    if obb is None:
+                        raise KeyError(f"frame {frame_id} not cached")
+                    raw_meas = np.concatenate(
+                        [obb.centroids, obb.angles[:, None]], axis=1
+                    ).tolist()
+                    raw_shapes = obb.shapes.tolist()
+                    raw_confidences = obb.confidences.tolist()
+                    raw_obb_corners = obb.corners.tolist()
                     used_detection_cache = True
                 except Exception:
                     raw_meas, raw_shapes, raw_confidences, raw_obb_corners = (
@@ -156,9 +162,8 @@ def generate_active_learning_dataset(
     except Exception as e:
         logger.exception("Error during dataset generation")
         return {"success": False, "error": str(e)}
-    finally:
-        if detection_cache is not None:
-            try:
-                detection_cache.close()
-            except Exception:
-                pass
+    # No `finally: detection_cache.close()` -- unlike the legacy DetectionCache
+    # (whose read-mode close() is a harmless mmap release), DetectionCacheHandle
+    # is write-oriented: close() flushes `_buffer` and, for a reader that never
+    # buffered a write, that means clobbering the on-disk cache with an empty
+    # frame set. This handle is opened read-only above and must never be closed.

@@ -10,11 +10,9 @@ from .dataset_merge import (
     update_dataset_class_name,
     validate_labels,
 )
-from .detection_cache import DetectionCache
 
 __all__ = [
     "CSVWriterThread",
-    "DetectionCache",
     "FrameQualityScorer",
     "detect_dataset_layout",
     "export_dataset",

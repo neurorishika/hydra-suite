@@ -61,6 +61,7 @@ from hydra_suite.utils.geometry import estimate_detection_crop_quality
 from hydra_suite.utils.video_artifacts import (
     build_detected_properties_cache_path,
     build_individual_properties_cache_path,
+    build_video_log_dir,
 )
 from hydra_suite.utils.video_encoder import VideoEncoder
 
@@ -948,9 +949,7 @@ class TrackingEngineCore:
         # detection live (constructed below); backward replays a cache.
         inference_runner = None  # InferenceRunner for yolo_obb mode
         bgsub_runner = None  # InferenceRunner for background-subtraction mode
-        detection_cache = None  # Legacy cache — only used for background subtraction
         use_cached_detections = False
-        cached_frame_indices = set()
 
         # Identity Phase 3, Task 4: resolve the catalog + per-phase calibration
         # ONCE, ahead of the yolo_obb InferenceRunner construction below, so
@@ -3850,22 +3849,6 @@ class TrackingEngineCore:
 
         profiler.phase_end("tracking_loop")
 
-        # Ensure cache has entries for all frames in the requested range (forward pass)
-        if detection_cache and not self.backward_mode and not use_cached_detections:
-            for frame_idx in range(start_frame, end_frame + 1):
-                if frame_idx not in cached_frame_indices:
-                    detection_cache.add_frame(
-                        frame_idx,
-                        [],
-                        [],
-                        [],
-                        [],
-                        None,
-                        [],
-                        [],
-                        [],
-                    )
-
         # === 3. CLEANUP (Identical to Original) ===
         profiler.phase_start("cleanup")
         stop_requested = bool(self._stop_requested)
@@ -3938,18 +3921,6 @@ class TrackingEngineCore:
                     )
             finally:
                 detected_props_cache.close()
-        # Save or close detection cache
-        if detection_cache:
-            if stop_requested:
-                detection_cache.close()
-            elif not self.backward_mode and not use_cached_detections:
-                # Forward pass Phase 1 (detection phase): save cache to disk
-                # Note: In batched detection, cache is already saved after Phase 1
-                detection_cache.save()
-                logger.info("Detection cache saved successfully")
-            else:
-                # Backward pass or Phase 2: just close cache (read-only mode)
-                detection_cache.close()
 
         # Flush the InferenceRunner. On a realtime forward pass this writes the
         # per-frame detection/headtail/cnn/pose caches to disk so the backward pass
@@ -3993,28 +3964,35 @@ class TrackingEngineCore:
         # --- Profiling: final summary and JSON export ---
         profiler.phase_end("cleanup")
         profiler.log_final_summary()
-        # Export JSON next to the video output or detection cache, whichever is available.
+        # Export JSON next to the video output if configured, otherwise under
+        # the video's `<stem>_logs/` directory (never the detection-cache dir).
         # Use a direction suffix so forward and backward profiles are kept separate.
         _dir_tag = "backward" if self.backward_mode else "forward"
-        profile_export_path = None
-        if self.video_output_path:
-            _pbase = Path(self.video_output_path).with_suffix("")
-            profile_export_path = Path(f"{_pbase}_{_dir_tag}.profile.json")
-        elif self.detection_cache_path:
-            profile_export_path = (
-                Path(self.detection_cache_path).parent
-                / f"tracking_profile_{_dir_tag}.json"
-            )
-        elif self.video_path:
-            profile_export_path = (
-                Path(self.video_path).parent / f"tracking_profile_{_dir_tag}.json"
-            )
+        profile_export_path = self._resolve_profile_path(_dir_tag)
         if profile_export_path is not None and not stop_requested:
             profiler.export_summary(profile_export_path)
 
         logger.info("Tracking worker finished. Emitting raw trajectory data.")
 
         self._emit_finished(not self._stop_requested, fps_list, self.trajectories_full)
+
+    def _resolve_profile_path(self, dir_tag):
+        """Return where to write the tracking-profile JSON, or ``None``.
+
+        If ``video_output_path`` is configured, the profile is written next
+        to the output video (unchanged legacy behavior). Otherwise it is
+        written under the source video's ``<stem>_logs/`` directory — never
+        under a detection-cache directory.
+        """
+        if self.video_output_path:
+            _pbase = Path(self.video_output_path).with_suffix("")
+            return Path(f"{_pbase}_{dir_tag}.profile.json")
+        if self.video_path:
+            return (
+                build_video_log_dir(self.video_path, create=True)
+                / f"tracking_profile_{dir_tag}.json"
+            )
+        return None
 
     def _smooth_orientation(
         self,
@@ -4074,8 +4052,9 @@ class TrackingEngineCore:
 
     def _resolve_cache_dir(self) -> Path:
         """Return the per-video cache directory for InferenceRunner caches."""
-        video_path = Path(self.video_path)
-        return video_path.parent / f".inference_cache_{video_path.stem}"
+        from hydra_suite.utils.video_artifacts import build_inference_cache_dir
+
+        return build_inference_cache_dir(self.video_path)
 
     @staticmethod
     def _resolve_cnn_phase_factor_labels(cnn_cfg_dict: dict) -> list[list[str]]:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from tests.helpers.module_loader import load_src_module
@@ -22,9 +21,7 @@ def test_detection_cache_path_uses_video_cache_subdirectory(tmp_path: Path) -> N
         artifact_base_dir=artifact_root,
     )
 
-    assert cache_path == (
-        artifact_root / "clip_caches" / "clip_detection_cache_model123.npz"
-    )
+    assert cache_path == (artifact_root / ".inference_cache_clip" / "detection.npz")
 
 
 def test_tracking_log_path_uses_video_log_subdirectory(tmp_path: Path) -> None:
@@ -43,38 +40,78 @@ def test_tracking_log_path_uses_video_log_subdirectory(tmp_path: Path) -> None:
     )
 
 
-def test_iter_detection_cache_candidates_scans_new_and_legacy_locations(
+def test_iter_detection_cache_candidates_scans_modern_opt_dir_only(
     tmp_path: Path,
 ) -> None:
     video_path = tmp_path / "clip.mp4"
     artifact_root = tmp_path / "artifacts"
     artifact_root.mkdir()
 
-    legacy_path = mod.build_legacy_detection_cache_path(
-        str(video_path),
-        "legacy",
-        artifact_base_dir=artifact_root,
+    # Legacy `<stem>_caches/` layout must no longer be scanned.
+    legacy_cache_dir = mod.build_video_cache_dir(
+        str(video_path), artifact_base_dir=artifact_root, create=True
+    )
+    legacy_path = (
+        legacy_cache_dir / f"{mod._video_stem(video_path)}_detection_cache_legacy.npz"
     )
     legacy_path.write_bytes(b"legacy")
 
-    new_path = mod.build_detection_cache_path(
+    # Modern `.inference_cache_<stem>/opt` directory must be scanned.
+    opt_dir = mod.build_optimizer_detection_cache_path(
         str(video_path),
-        "newer",
+        "modelA",
+        100,
         artifact_base_dir=artifact_root,
         create_dir=True,
     )
-    new_path.write_bytes(b"newer")
-    os.utime(
-        new_path, (legacy_path.stat().st_atime + 1, legacy_path.stat().st_mtime + 1)
-    )
+    (opt_dir / "detection.npz").write_bytes(b"newer")
 
     candidates = mod.iter_detection_cache_candidates(
         str(video_path),
         artifact_base_dirs=[artifact_root],
     )
 
-    assert candidates[0] == new_path
-    assert legacy_path in candidates
+    assert candidates == [opt_dir]
+
+
+def test_individual_properties_cache_path_without_detection_cache_uses_modern_dir(
+    tmp_path: Path,
+) -> None:
+    video_path = tmp_path / "clip.mp4"
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+
+    cache_path = mod.build_individual_properties_cache_path(
+        str(video_path),
+        "props1",
+        0,
+        10,
+        detection_cache_path=None,
+        artifact_base_dir=artifact_root,
+    )
+
+    assert cache_path.parent == artifact_root / ".inference_cache_clip"
+    assert "clip_caches" not in cache_path.parts
+
+
+def test_detected_properties_cache_path_without_detection_cache_uses_modern_dir(
+    tmp_path: Path,
+) -> None:
+    video_path = tmp_path / "clip.mp4"
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+
+    cache_path = mod.build_detected_properties_cache_path(
+        str(video_path),
+        "props1",
+        0,
+        10,
+        detection_cache_path=None,
+        artifact_base_dir=artifact_root,
+    )
+
+    assert cache_path.parent == artifact_root / ".inference_cache_clip"
+    assert "clip_caches" not in cache_path.parts
 
 
 def test_find_existing_detection_cache_path_prefers_new_layout(tmp_path: Path) -> None:
@@ -82,10 +119,8 @@ def test_find_existing_detection_cache_path_prefers_new_layout(tmp_path: Path) -
     artifact_root = tmp_path / "artifacts"
     artifact_root.mkdir()
 
-    legacy_path = mod.build_legacy_detection_cache_path(
-        str(video_path),
-        "model123",
-        artifact_base_dir=artifact_root,
+    legacy_path = (
+        artifact_root / f"{mod._video_stem(video_path)}_detection_cache_model123.npz"
     )
     legacy_path.write_bytes(b"legacy")
 
@@ -104,140 +139,3 @@ def test_find_existing_detection_cache_path_prefers_new_layout(tmp_path: Path) -
     )
 
     assert resolved == new_path
-
-
-# ---- AprilTag cache path ----
-
-
-def test_apriltag_cache_path_uses_video_cache_subdirectory(tmp_path: Path) -> None:
-    video_path = tmp_path / "clip.mp4"
-    artifact_root = tmp_path / "artifacts"
-    artifact_root.mkdir()
-
-    cache_path = mod.build_apriltag_cache_path(
-        str(video_path),
-        "at_hash123",
-        0,
-        100,
-        artifact_base_dir=artifact_root,
-    )
-
-    assert cache_path == (
-        artifact_root / "clip_caches" / "clip_apriltag_cache_at_hash123_0_100.npz"
-    )
-
-
-def test_find_existing_apriltag_cache_path(tmp_path: Path) -> None:
-    video_path = tmp_path / "clip.mp4"
-    artifact_root = tmp_path / "artifacts"
-    artifact_root.mkdir()
-
-    cache_path = mod.build_apriltag_cache_path(
-        str(video_path),
-        "hash_abc",
-        10,
-        200,
-        artifact_base_dir=artifact_root,
-        create_dir=True,
-    )
-    cache_path.write_bytes(b"data")
-
-    found = mod.find_existing_apriltag_cache_path(
-        str(video_path),
-        "hash_abc",
-        10,
-        200,
-        artifact_base_dirs=[artifact_root],
-    )
-    assert found == cache_path
-
-    not_found = mod.find_existing_apriltag_cache_path(
-        str(video_path),
-        "hash_xyz",
-        10,
-        200,
-        artifact_base_dirs=[artifact_root],
-    )
-    assert not_found is None
-
-
-# ---- Classify cache path ----
-
-
-def test_classify_cache_path_uses_video_cache_subdirectory(tmp_path: Path) -> None:
-    video_path = tmp_path / "clip.mp4"
-    artifact_root = tmp_path / "artifacts"
-    artifact_root.mkdir()
-
-    cache_path = mod.build_classify_cache_path(
-        str(video_path),
-        "cl_hash456",
-        "individual_id",
-        0,
-        100,
-        artifact_base_dir=artifact_root,
-    )
-
-    assert cache_path == (
-        artifact_root
-        / "clip_caches"
-        / "clip_classify_cache_individual_id_cl_hash456_0_100.npz"
-    )
-
-
-def test_classify_cache_path_does_not_nest_when_base_is_existing_cache_dir(
-    tmp_path: Path,
-) -> None:
-    video_path = tmp_path / "clip.mp4"
-    cache_dir = tmp_path / "clip_caches"
-    cache_dir.mkdir()
-
-    cache_path = mod.build_classify_cache_path(
-        str(video_path),
-        "cl_hash456",
-        "individual_id",
-        0,
-        100,
-        artifact_base_dir=cache_dir,
-    )
-
-    assert cache_path == (
-        cache_dir / "clip_classify_cache_individual_id_cl_hash456_0_100.npz"
-    )
-
-
-def test_find_existing_classify_cache_path(tmp_path: Path) -> None:
-    video_path = tmp_path / "clip.mp4"
-    artifact_root = tmp_path / "artifacts"
-    artifact_root.mkdir()
-
-    cache_path = mod.build_classify_cache_path(
-        str(video_path),
-        "hash_def",
-        "age",
-        5,
-        50,
-        artifact_base_dir=artifact_root,
-        create_dir=True,
-    )
-    cache_path.write_bytes(b"data")
-
-    found = mod.find_existing_classify_cache_path(
-        str(video_path),
-        "hash_def",
-        "age",
-        5,
-        50,
-        artifact_base_dirs=[artifact_root],
-    )
-    assert found == cache_path
-
-    not_found = mod.find_existing_classify_cache_path(
-        str(video_path),
-        "hash_other",
-        "age",
-        5,
-        50,
-        artifact_base_dirs=[artifact_root],
-    )
-    assert not_found is None

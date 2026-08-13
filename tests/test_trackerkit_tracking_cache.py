@@ -78,7 +78,7 @@ def test_plan_tracking_cache_populates_model_ids(tmp_path):
 
     assert plan.inference_model_id.startswith("bgsub_")
     assert plan.engine_model_id is None
-    assert plan.detection_cache_path.endswith(f"{plan.inference_model_id}.npz")
+    assert plan.detection_cache_path.endswith("detection.npz")
 
 
 def test_get_tracking_cache_model_ids_varies_with_yolo_obb_direct_task():

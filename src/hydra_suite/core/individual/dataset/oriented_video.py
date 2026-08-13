@@ -20,42 +20,8 @@ from hydra_suite.core.canonicalization.geometry import (
     ClippingStats,
     canonical_affine,
 )
-
-# Correction 20 / Task 17d: rewire to new DetectionCache.
-# The new DetectionCacheHandle has a different API (read_frame returns OBBResult).
-# We provide a thin compatibility wrapper so the existing _add_actual_tasks code
-# needs only one targeted update (the get_frame tuple-unpack → OBBResult access).
-try:
-    from hydra_suite.core.inference.cache.base import CacheKey as _CacheKey
-    from hydra_suite.core.inference.cache.store import (
-        DetectionCacheHandle as _NewDetCache,
-    )
-
-    class DetectionCache:  # type: ignore[no-redef]
-        """Compatibility shim: wraps DetectionCacheHandle to expose legacy-compat API."""
-
-        def __init__(self, path, mode="r"):  # noqa: ARG002
-            # CacheKey with empty values — is_valid() checks path existence only.
-            _key = _CacheKey(
-                schema_version=0,
-                model_path="",
-                model_mtime=0.0,
-                config_hash="",
-            )
-            self._handle = _NewDetCache(path=path, key=_key)
-
-        def is_compatible(self) -> bool:
-            return self._handle.path.exists()
-
-        def get_frame(self, frame_id: int):
-            """Return frame data as OBBResult for use by _add_actual_tasks."""
-            return self._handle.read_frame(frame_id)
-
-        def close(self) -> None:
-            self._handle.close()
-
-except ImportError:
-    from ....data.detection_cache import DetectionCache  # type: ignore[no-redef]
+from hydra_suite.core.inference.cache import open_detection_cache_reader
+from hydra_suite.core.inference.cache.store import DetectionCacheHandle
 
 from ....utils.video_encoder import VideoEncoder
 from ...post.processing import _fix_heading_flips
@@ -625,15 +591,21 @@ class OrientedTrackVideoExporter:
 
         detection_cache = None
         if actual_rows_by_frame:
-            if not self.detection_cache_path.exists():
-                raise FileNotFoundError(
-                    f"Missing detection cache for oriented track videos: {self.detection_cache_path}"
+            if self.detection_cache_path.exists():
+                detection_cache = open_detection_cache_reader(self.detection_cache_path)
+            else:
+                logger.warning(
+                    "Missing detection cache for oriented track videos: %s -- "
+                    "actual-row cache geometry will be skipped.",
+                    self.detection_cache_path,
                 )
-            detection_cache = DetectionCache(self.detection_cache_path, mode="r")
-            if not detection_cache.is_compatible():
-                detection_cache.close()
-                raise ValueError(
-                    f"Incompatible detection cache for oriented track videos: {self.detection_cache_path}"
+            if detection_cache is None:
+                # No usable cache: every actual row falls through as missing
+                # geometry (same bookkeeping _add_actual_tasks already applies
+                # per-frame when a specific frame has no cached detection),
+                # rather than raising and aborting the whole export.
+                missing_breakdown["missing_detected_rows"] += sum(
+                    len(rows) for rows in actual_rows_by_frame.values()
                 )
 
         actual_index = 0
@@ -823,7 +795,7 @@ class OrientedTrackVideoExporter:
 
     def _add_actual_tasks(
         self,
-        detection_cache: DetectionCache,
+        detection_cache: DetectionCacheHandle,
         frame_id: int,
         rows: list[Any],
         bundle: FrameBundle,
@@ -836,7 +808,7 @@ class OrientedTrackVideoExporter:
         }
         # Support both new OBBResult API and legacy 12-tuple.
         # Correction 20: new cache returns OBBResult; legacy returns a 12-tuple.
-        frame_data = detection_cache.get_frame(frame_id)
+        frame_data = detection_cache.read_frame(frame_id)
         from hydra_suite.core.inference.result import OBBResult as _OBBResult
 
         if frame_data is None:
