@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from hydra_suite.core.inference.result import OBBResult
 from hydra_suite.refinekit.gui.dialogs.merge_wizard import (
     MAIN_TRACK_BGR,
     _FrameDetections,
@@ -16,20 +17,19 @@ from hydra_suite.refinekit.gui.dialogs.merge_wizard import (
 
 def test_merge_wizard_frame_detections_reads_current_cache_tuple_shape() -> None:
     class _FakeCache:
-        def get_frame(self, _frame_idx: int):
-            return (
-                [[10.0, 20.0, 0.25]],
-                [],
-                [[100.0, 2.0]],
-                [],
-                [np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0]])],
-                [],
-                [],
-                [],
-                [],
-                [],
-                None,
-                None,
+        def read_frame(self, _frame_idx: int):
+            return OBBResult(
+                frame_idx=_frame_idx,
+                centroids=np.array([[10.0, 20.0]], dtype=np.float32),
+                angles=np.array([0.25], dtype=np.float32),
+                sizes=np.array([100.0], dtype=np.float32),
+                shapes=np.array([[100.0, 2.0]], dtype=np.float32),
+                confidences=np.array([0.9], dtype=np.float32),
+                corners=np.array(
+                    [[[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0]]],
+                    dtype=np.float32,
+                ),
+                detection_ids=np.array([0], dtype=np.int64),
             )
 
     dets = _FrameDetections(_FakeCache(), inv_resize=2.0)

@@ -10,7 +10,9 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from hydra_suite.data.detection_cache import DetectionCache
+from hydra_suite.core.inference.cache.reader import open_detection_cache_reader
+from hydra_suite.core.inference.cache.store import DetectionCacheHandle
+from hydra_suite.utils.video_artifacts import build_inference_cache_dir
 
 TAB20_RGB = [
     (31, 119, 180),
@@ -102,19 +104,9 @@ def context_gray_bgr(
 
 
 def discover_detection_cache(video_path: str) -> Optional[Path]:
-    """Find the detection cache file saved next to a tracked video."""
-    vp = Path(video_path).expanduser()
-    stem = vp.stem
-    parent = vp.parent
-
-    cache_dir = parent / f"{stem}_caches"
-    if cache_dir.is_dir():
-        hits = sorted(cache_dir.glob(f"{stem}_detection_cache_*.npz"))
-        if hits:
-            return hits[-1]
-
-    hits = sorted(parent.glob(f"{stem}_detection_cache_*.npz"))
-    return hits[-1] if hits else None
+    """Find the modern detection cache file saved next to a tracked video."""
+    cache_path = build_inference_cache_dir(video_path) / "detection.npz"
+    return cache_path if cache_path.exists() else None
 
 
 def load_resize_factor(video_path: str) -> float:
@@ -134,41 +126,26 @@ def load_resize_factor(video_path: str) -> float:
 class FrameDetections:
     """Read-only detection cache wrapper that exposes OBB/ellipse geometry."""
 
-    def __init__(self, cache: DetectionCache, inv_resize: float) -> None:
+    def __init__(self, cache: DetectionCacheHandle, inv_resize: float) -> None:
         self._cache = cache
         self._inv_resize = inv_resize
 
     def get(self, frame_idx: int):
         try:
-            (
-                meas,
-                _sizes,
-                shapes,
-                _conf,
-                obb,
-                _ids,
-                _hints,
-                _heading_confidences,
-                _dmask,
-                _affines,
-                _canvas_dims,
-                _m_inverse,
-            ) = self._cache.get_frame(frame_idx)
+            res = self._cache.read_frame(frame_idx)
         except Exception:
             return None
-        if not meas:
+        if res is None or res.num_detections == 0:
             return None
 
         scale = self._inv_resize
-        meas_arr = np.array(meas, dtype=np.float32)
+        meas_arr = np.empty((res.num_detections, 3), dtype=np.float32)
+        meas_arr[:, 0:2] = res.centroids
+        meas_arr[:, 2] = res.angles
         meas_arr[:, 0] *= scale
         meas_arr[:, 1] *= scale
 
-        shapes_arr = (
-            np.array(shapes, dtype=np.float32)
-            if shapes
-            else np.empty((0, 2), dtype=np.float32)
-        )
+        shapes_arr = np.asarray(res.shapes, dtype=np.float32)
         semi_axes = np.empty((len(meas_arr), 2), dtype=np.float32)
         for idx in range(len(meas_arr)):
             if idx < len(shapes_arr) and shapes_arr.ndim == 2:
@@ -181,8 +158,8 @@ class FrameDetections:
                 semi_axes[idx] = [8.0, 4.0]
 
         obb_scaled = []
-        if obb:
-            for corners in obb:
+        if res.corners is not None and len(res.corners) > 0:
+            for corners in res.corners:
                 obb_scaled.append(np.asarray(corners, dtype=np.float32) * scale)
 
         return meas_arr, semi_axes, obb_scaled
@@ -194,9 +171,7 @@ def load_frame_detections(video_path: str) -> Optional[FrameDetections]:
     if cache_path is None:
         return None
     try:
-        cache = DetectionCache(cache_path, mode="r")
-        if not cache.is_compatible():
-            return None
+        cache = open_detection_cache_reader(cache_path)
         inv_resize = 1.0 / load_resize_factor(video_path)
         return FrameDetections(cache, inv_resize)
     except Exception:
