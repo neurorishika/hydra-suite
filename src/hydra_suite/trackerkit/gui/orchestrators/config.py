@@ -995,7 +995,9 @@ class ConfigOrchestrator:
         self._panels.setup.spin_traj_hist.setValue(
             get_cfg("trajectory_history_seconds", "traj_history", default=5)
         )
-        self._mw.btn_debug_mode.setChecked(get_cfg("debug_mode", default=False))
+        _debug_mode = bool(get_cfg("debug_mode", default=False))
+        self._mw.btn_debug_mode.setChecked(_debug_mode)
+        self._mw.config.debug_mode = _debug_mode
         self._mw.slider_zoom.setValue(int(get_cfg("zoom_factor", default=1.0) * 100))
 
     def _load_config_dataset(self, get_cfg):
