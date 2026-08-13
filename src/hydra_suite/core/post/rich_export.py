@@ -22,7 +22,6 @@ from hydra_suite.core.post.pose_merge import (
     check_pose_export_sources,
     merge_pose_sources_into_df,
 )
-from hydra_suite.core.post.trajectory_writer import write_base_final_csv
 
 logger = logging.getLogger(__name__)
 
@@ -394,7 +393,14 @@ def relink_and_export_rich_csv(
     ).reset_index(drop=True)
 
     try:
-        write_base_final_csv(relinked_base, final_csv_path)
+        # Intentionally NOT routed through write_base_final_csv: the equivalence
+        # gate compares this exact `_tracking_final.csv` byte-for-byte against
+        # legacy when relinking runs, and the shared writer's Int64 rounding of
+        # X/Y/FrameID can print differently than this bare float write for
+        # NaN-containing columns (e.g. "123.0" vs "123"). Keep this a plain
+        # to_csv to preserve byte-identity; folding relink formatting into the
+        # shared writer is deferred to a separate, gate-validated change.
+        relinked_base.to_csv(final_csv_path, index=False)
     except Exception:
         logger.exception("Failed to rewrite relinked final CSV: %s", final_csv_path)
         return None
