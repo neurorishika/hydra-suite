@@ -1060,18 +1060,26 @@ def build_obb_only_config(
     iou_threshold: float = 0.7,
     max_targets: int = 8,
     mode: str = "direct",
+    model_task: str = "obb",
+    emit_native_geometry: bool = False,
 ) -> InferenceConfig:
     """Detection-only InferenceConfig for one-shot / dataset OBB detection.
 
-    Thin wrapper over build_inference_config_from_params with every non-OBB
-    stage left disabled. Used by callers that have a model path + runtime but
-    no full tracking params dict. ``runtime_tier`` is the live runtime knob
-    (Runtime Gen-2); when omitted, the tier is migrated from ``compute_runtime``.
+    ``model_task`` selects the checkpoint's head ("obb", "detect", "segment");
+    it MUST match the checkpoint, which ``stages/obb.py`` verifies loudly.
+    ``emit_native_geometry`` is the export-only opt-in that populates
+    ``OBBResult.polygons`` with native contours (segment task only).
     """
+    task = str(model_task).strip().lower()
+    if task not in {"obb", "detect", "segment"}:
+        raise ValueError(
+            f"model_task must be one of 'obb', 'detect', 'segment'; got {model_task!r}"
+        )
     params: dict = {
         "DETECTION_METHOD": "yolo_obb",
         "YOLO_OBB_MODE": mode,
         "YOLO_OBB_DIRECT_MODEL_PATH": model_path,
+        "YOLO_OBB_DIRECT_TASK": task,
         "COMPUTE_RUNTIME": compute_runtime,
         "YOLO_CONFIDENCE_THRESHOLD": confidence_threshold,
         "YOLO_IOU_THRESHOLD": iou_threshold,
@@ -1079,4 +1087,7 @@ def build_obb_only_config(
     }
     if runtime_tier:
         params["RUNTIME_TIER"] = runtime_tier
-    return build_inference_config_from_params(params)
+    cfg = build_inference_config_from_params(params)
+    if emit_native_geometry:
+        cfg.obb.emit_native_geometry = True
+    return cfg
