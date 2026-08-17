@@ -17,34 +17,31 @@ from hydra_suite.utils.geometry import (  # noqa: F401
 
 @dataclass
 class ALSignals:
-    """Per-frame signal record consumed by the acquisition selector."""
+    """Per-frame signal record consumed by the acquisition selector.
+
+    `uncertainty_score` is NOT derived from `mean_confidence` automatically --
+    there is deliberately no `__post_init__` magic here. `mean_confidence`
+    alone cannot be turned into an absolute severity without knowing the
+    caller's confidence floor, and that floor varies per caller
+    (`al_worker.py`'s `base_conf` defaults to 0.25; `dataset_generation.py`'s
+    `conf_threshold` defaults to 0.5). A hardcoded fallback floor would
+    silently disagree with a live caller-configured floor. Every constructor
+    of `ALSignals` MUST compute `uncertainty_score` itself via
+    `score_uncertainty(confidences, conf_floor=<its own floor>)` and pass it
+    explicitly; the 0.0 default here is a genuine "no uncertainty signal"
+    value, not a stand-in for "compute it later".
+    """
 
     frame_id: int
     n_detections: int = 0
     mean_confidence: float = float("nan")
-    uncertainty_score: float | None = None
+    uncertainty_score: float = 0.0
     nms_instability: float = 0.0
     count_deviation: float = 0.0
     crowd_score: float = 0.0
     fragmentation_score: float = 0.0
     edge_score: float = 0.0
     extras: dict[str, float] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        """Derive `uncertainty_score` from `mean_confidence` when not supplied.
-
-        Callers that already know their detector's confidence floor (e.g.
-        `al_worker.py`, `dataset_generation.py`) compute the absolute severity
-        themselves via `score_uncertainty(confidences, conf_floor=...)` and
-        pass it in explicitly -- that value (including an explicit 0.0) is
-        always respected. Callers that only have the mean (hand-built
-        `ALSignals` in tests, or any future lightweight caller) get a
-        best-effort severity derived here with the standard floor (0.5), since
-        `mean_confidence` alone cannot be turned into a severity without
-        knowing what floor to compare it against.
-        """
-        if self.uncertainty_score is None:
-            self.uncertainty_score = score_uncertainty([self.mean_confidence])
 
 
 def score_uncertainty(

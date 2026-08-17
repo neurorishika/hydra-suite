@@ -1,3 +1,18 @@
+import dataclasses
+
+import pytest
+
+from hydra_suite.data.al.acquisition import (
+    AcquisitionWeights,
+    _composite_score,
+    explain,
+    select,
+)
+from hydra_suite.data.al.signals import (
+    ALSignals,
+    score_count_deviation,
+    score_uncertainty,
+)
 from hydra_suite.utils.geometry import obb_corners_from_dims
 
 
@@ -51,16 +66,6 @@ def test_al_signals_carries_fragmentation_field():
     assert ALSignals(frame_id=0).fragmentation_score == 0.0
 
 
-import pytest
-
-from hydra_suite.data.al.acquisition import AcquisitionWeights, explain, select
-from hydra_suite.data.al.signals import (
-    ALSignals,
-    score_count_deviation,
-    score_uncertainty,
-)
-
-
 def test_uncertainty_is_zero_above_the_floor():
     assert score_uncertainty([0.9, 0.8], conf_floor=0.5) == 0.0
 
@@ -95,8 +100,21 @@ def test_composite_score_is_zero_for_a_clean_frame():
 
 def test_min_score_gate_is_comparable_across_runs():
     weights = AcquisitionWeights(uncertainty=1.0)
-    mild = ALSignals(frame_id=0, mean_confidence=0.45)
-    severe = ALSignals(frame_id=9999, mean_confidence=0.05)
+    # ALSignals no longer derives uncertainty_score from mean_confidence (that
+    # hardcoded-floor derivation was removed -- it silently disagreed with
+    # real per-caller floors like al_worker.py's base_conf=0.25). Every
+    # constructor, including this fixture, must compute it itself via
+    # score_uncertainty(confidences, conf_floor=...), same as production code.
+    mild = ALSignals(
+        frame_id=0,
+        mean_confidence=0.45,
+        uncertainty_score=score_uncertainty([0.45], conf_floor=0.5),
+    )
+    severe = ALSignals(
+        frame_id=9999,
+        mean_confidence=0.05,
+        uncertainty_score=score_uncertainty([0.05], conf_floor=0.5),
+    )
 
     # Severe alone, and severe alongside mild, must both clear a 0.5 gate --
     # under min-max normalization the lone frame would have normalized to 0.
@@ -110,8 +128,18 @@ def test_min_score_gate_is_comparable_across_runs():
 def test_explain_reports_per_channel_maxima():
     weights = AcquisitionWeights(uncertainty=0.5, count=0.5)
     signals = [
-        ALSignals(frame_id=0, mean_confidence=0.4, count_deviation=0.25),
-        ALSignals(frame_id=1, mean_confidence=0.2, count_deviation=0.10),
+        ALSignals(
+            frame_id=0,
+            mean_confidence=0.4,
+            uncertainty_score=score_uncertainty([0.4], conf_floor=0.5),
+            count_deviation=0.25,
+        ),
+        ALSignals(
+            frame_id=1,
+            mean_confidence=0.2,
+            uncertainty_score=score_uncertainty([0.2], conf_floor=0.5),
+            count_deviation=0.10,
+        ),
     ]
     report = explain(signals, weights)
     assert report["uncertainty"] == pytest.approx(0.6)
@@ -129,10 +157,6 @@ def test_explain_reports_per_channel_maxima():
 # only that channel, and asserts the composite score is nonzero.
 # ---------------------------------------------------------------------------
 
-import dataclasses
-
-from hydra_suite.data.al.acquisition import _composite_score
-
 _CHANNEL_SIGNAL_BUILDERS = {
     "uncertainty": lambda: ALSignals(frame_id=0, uncertainty_score=0.5),
     "nms_instability": lambda: ALSignals(frame_id=0, nms_instability=0.5),
@@ -145,6 +169,15 @@ _CHANNEL_SIGNAL_BUILDERS = {
     "position_uncertainty": lambda: ALSignals(
         frame_id=0, extras={"position_uncertainty": 0.5}
     ),
+}
+
+# The builder map above is hand-maintained, so it does not self-extend: a new
+# AcquisitionWeights field added but never wired into a builder here (or into
+# _composite_score) would slip through silently -- the same failure mode this
+# guard exists to catch, one generation later. Assert the two field sets stay
+# in lockstep.
+assert set(_CHANNEL_SIGNAL_BUILDERS) == {
+    f.name for f in dataclasses.fields(AcquisitionWeights)
 }
 
 
