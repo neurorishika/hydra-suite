@@ -181,9 +181,18 @@ class BackgroundMeasurer:
         return fg_mask
 
     def detect_objects(
-        self, fg_mask: np.ndarray, frame_count: int
-    ) -> tuple[list, list, list, list]:
+        self,
+        fg_mask: np.ndarray,
+        frame_count: int,
+        *,
+        return_contours: bool = False,
+    ) -> tuple:
         """Detect and measure objects from the final foreground mask.
+
+        Returns (meas, sizes, shapes, confidences), or that tuple plus a
+        parallel list of (P, 2) float32 pixel-space contours when
+        `return_contours=True`. The contour list is filtered and reordered in
+        lockstep with `meas`, so row i always describes detection i.
 
         Returns:
             meas: list of np.array([cx, cy, angle_radians], float32)
@@ -191,6 +200,8 @@ class BackgroundMeasurer:
             shapes: list of (ellipse_area, aspect_ratio) tuples
             confidences: list of np.nan -- confidence is not feasible for
                 background subtraction (quality is too context-specific).
+            contours (only when return_contours=True): list of (P, 2) float32
+                pixel-space contour points, one per surviving detection.
         """
         p = self.params
         cnts, _ = cv2.findContours(fg_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -202,9 +213,10 @@ class BackgroundMeasurer:
             logger.debug(
                 f"Frame {frame_count}: Too many contours ({len(cnts)}), skipping."
             )
-            return [], [], [], []
+            return ([], [], [], [], []) if return_contours else ([], [], [], [])
 
         meas, sizes, shapes, confidences = [], [], [], []
+        contours: list = []
         for c in cnts:
             area = cv2.contourArea(c)
             if area < p["MIN_CONTOUR_AREA"] or len(c) < 5:
@@ -227,28 +239,19 @@ class BackgroundMeasurer:
             sizes.append(ellipse_area)
             shapes.append((ellipse_area, ax1 / ax2 if ax2 > 0 else 0))
             confidences.append(confidence)
+            contours.append(np.asarray(c, dtype=np.float32).reshape(-1, 2))
 
         if meas and p.get("ENABLE_SIZE_FILTERING", False):
             min_size = p.get("MIN_OBJECT_SIZE", 0)
             max_size = p.get("MAX_OBJECT_SIZE", float("inf"))
 
             original_count = len(meas)
-            filtered = [
-                (m, s, sh, conf)
-                for m, s, sh, conf in zip(meas, sizes, shapes, confidences)
-                if min_size <= s <= max_size
-            ]
-
-            if filtered:
-                meas, sizes, shapes, confidences = zip(*filtered)
-                meas, sizes, shapes, confidences = (
-                    list(meas),
-                    list(sizes),
-                    list(shapes),
-                    list(confidences),
-                )
-            else:
-                meas, sizes, shapes, confidences = [], [], [], []
+            keep = [i for i, s in enumerate(sizes) if min_size <= s <= max_size]
+            meas = [meas[i] for i in keep]
+            sizes = [sizes[i] for i in keep]
+            shapes = [shapes[i] for i in keep]
+            confidences = [confidences[i] for i in keep]
+            contours = [contours[i] for i in keep]
 
             if len(meas) != original_count:
                 logger.debug(
@@ -261,5 +264,8 @@ class BackgroundMeasurer:
             sizes = [sizes[i] for i in idxs]
             shapes = [shapes[i] for i in idxs]
             confidences = [confidences[i] for i in idxs]
+            contours = [contours[i] for i in idxs]
 
+        if return_contours:
+            return meas, sizes, shapes, confidences, contours
         return meas, sizes, shapes, confidences

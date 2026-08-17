@@ -182,7 +182,16 @@ def run_bgsub(
     model.last_fg_mask = fg_mask
     model.last_bg_u8 = background
 
-    meas, sizes, shapes, confidences = model.measurer.detect_objects(fg_mask, frame_idx)
+    emit_polygons = bool(getattr(config, "emit_native_geometry", False))
+    if emit_polygons:
+        meas, sizes, shapes, confidences, contours = model.measurer.detect_objects(
+            fg_mask, frame_idx, return_contours=True
+        )
+    else:
+        meas, sizes, shapes, confidences = model.measurer.detect_objects(
+            fg_mask, frame_idx
+        )
+        contours = None
     if not meas:
         return _empty_result(frame_idx)
 
@@ -206,7 +215,7 @@ def run_bgsub(
 
     detection_ids = OBBResult.make_detection_ids(frame_idx, len(meas))
 
-    return OBBResult(
+    result = OBBResult(
         frame_idx=frame_idx,
         centroids=centroids,
         angles=angles,
@@ -219,6 +228,14 @@ def run_bgsub(
         # "object" class (0).
         class_ids=np.zeros(len(meas), dtype=np.int64),
     )
+    if contours is not None:
+        # Fall back to the fitted-ellipse corners for any degenerate contour,
+        # mirroring the segment extractor's behaviour at stages/obb.py:1046.
+        result.polygons = [
+            contours[i] if contours[i].shape[0] >= 3 else corners[i].copy()
+            for i in range(len(meas))
+        ]
+    return result
 
 
 def _major_from_shape(shape: np.ndarray) -> float:

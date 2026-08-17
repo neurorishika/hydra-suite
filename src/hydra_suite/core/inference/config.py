@@ -271,6 +271,11 @@ class BgSubConfig:
     enable_size_filtering: bool = False
     min_object_size: float = 0.0
     max_object_size: float = float("inf")
+    # Export-only: when True, run_bgsub additionally populates
+    # OBBResult.polygons with native per-detection contours (frame pixel
+    # space). Default False keeps the hot tracking path byte-identical (no
+    # contours computed, no OBBResult field change).
+    emit_native_geometry: bool = False
     # The raw param dict, retained for BackgroundModel/BackgroundMeasurer,
     # which still read params by legacy UPPER_SNAKE key.
     params: dict = field(default_factory=dict)
