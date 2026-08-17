@@ -207,6 +207,8 @@ def build_ultralytics_command(spec: TrainingRunSpec, run_dir: str | Path) -> lis
             Path(spec.derived_dataset_dir).expanduser(),
             int(spec.hyperparams.imgsz),
             prefit_dir,
+            profile=spec.augmentation_profile,
+            seed=int(spec.seed),
         )
         data_arg = str(prefit_dir)
         # Ultralytics computes RandomResizedCrop's internal scale range as
