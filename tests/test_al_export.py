@@ -1,4 +1,5 @@
 import json
+from collections.abc import Mapping
 
 import numpy as np
 import pytest
@@ -36,6 +37,33 @@ def _provenance():
         "model_task": "segment",
         "preset": "tracker_default",
     }
+
+
+class _SingleReadImages(Mapping):
+    """Images mapping that raises if any key is read more than once.
+
+    Proves the whole-export-in-memory fix: `export_al_dataset` must consult
+    `images` exactly once per frame (via the authoritative root only) no
+    matter how many derived levels are requested, not once per level.
+    """
+
+    def __init__(self, frame_ids):
+        self._frames = {
+            fid: np.zeros((100, 200, 3), dtype=np.uint8) for fid in frame_ids
+        }
+        self.read_counts: dict[int, int] = {}
+
+    def __getitem__(self, frame_id):
+        self.read_counts[frame_id] = self.read_counts.get(frame_id, 0) + 1
+        if self.read_counts[frame_id] > 1:
+            raise AssertionError(f"frame {frame_id} read more than once")
+        return self._frames[frame_id]
+
+    def __iter__(self):
+        return iter(self._frames)
+
+    def __len__(self):
+        return len(self._frames)
 
 
 def test_writes_one_root_per_requested_level(tmp_path):
@@ -160,3 +188,29 @@ def test_partial_write_is_not_left_behind_on_failure(tmp_path, monkeypatch):
             provenance=_provenance(),
         )
     assert not (tmp_path / "al_round").exists()
+
+
+def test_images_mapping_is_read_at_most_once_per_frame_across_all_levels(tmp_path):
+    """Regression test for the whole-export-in-memory fix.
+
+    `images` must be a lazy Mapping consulted exactly once per frame (by the
+    authoritative root only); derived roots must hardlink + read a cached
+    shape rather than re-indexing `images`. A mapping that raises on a second
+    read of the same key proves no per-level re-read happens even when three
+    levels are requested.
+    """
+    images = _SingleReadImages([0, 1])
+    manifest = export_al_dataset(
+        round_dir=tmp_path / "al_round",
+        frames=[_frame(0), _frame(1)],
+        images=images,
+        native_level=GeometryLevel.POLYGON,
+        levels=[GeometryLevel.POLYGON, GeometryLevel.OBB, GeometryLevel.AABB],
+        class_names=["ant"],
+        provenance=_provenance(),
+    )
+    assert {r["level"] for r in manifest["roots"]} == {"polygon", "obb", "aabb"}
+    assert images.read_counts == {0: 1, 1: 1}
+    for name in ("polygon", "obb", "aabb"):
+        assert (tmp_path / "al_round" / name / "images" / "f000000.jpg").is_file()
+        assert (tmp_path / "al_round" / name / "images" / "f000001.jpg").is_file()

@@ -20,11 +20,12 @@ from __future__ import annotations
 import json
 import logging
 import shutil
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Sequence
 
 import cv2
+import numpy as np
 
 from hydra_suite.utils.geometry_levels import GeometryLevel
 
@@ -60,7 +61,8 @@ def _link_or_copy(src: Path, dst: Path) -> None:
 def _write_root(
     root: Path,
     frames: Sequence[ExportedFrame],
-    images: dict,
+    images: Mapping[int, np.ndarray],
+    shape_cache: dict[int, tuple[int, int]],
     level: GeometryLevel,
     class_names: Sequence[str],
     provenance: dict,
@@ -75,12 +77,18 @@ def _write_root(
     for frame in frames:
         img_dst = images_dir / frame.image_name
         if authoritative_root is None:
-            cv2.imwrite(str(img_dst), images[frame.frame_id])
+            # Only the authoritative root touches `images`, and only once per
+            # frame -- its (height, width) is cached here so derived roots
+            # below never index `images` again (it may be a lazy, single-read
+            # mapping backed by a video decode).
+            image = images[frame.frame_id]
+            cv2.imwrite(str(img_dst), image)
+            shape_cache[frame.frame_id] = image.shape[:2]
         else:
             _link_or_copy(authoritative_root / "images" / frame.image_name, img_dst)
 
         records = derive_down(frame.records, level)
-        height, width = images[frame.frame_id].shape[:2]
+        height, width = shape_cache[frame.frame_id]
         write_label_file(
             labels_dir / (Path(frame.image_name).stem + ".txt"),
             records,
@@ -109,13 +117,20 @@ def export_al_dataset(
     *,
     round_dir: str | Path,
     frames: Sequence[ExportedFrame],
-    images: dict,
+    images: Mapping[int, np.ndarray],
     native_level: GeometryLevel,
     levels: Sequence[GeometryLevel],
     class_names: Sequence[str],
     provenance: dict,
 ) -> dict:
     """Write one AL round as up to three sibling source roots.
+
+    `images` is a Mapping[frame_id, ndarray] consulted exactly once per frame
+    -- only by the authoritative root, which is written first. A plain dict
+    works, but callers exporting many frames should pass a lazy mapping (one
+    that decodes on `__getitem__`) so the whole export never has to be
+    resident in memory at once; derived roots hardlink images and read a
+    cached (height, width) instead of touching `images` again.
 
     Returns a manifest dict describing every root written plus round-level
     totals. Raises ValueError if any requested level exceeds `native_level`.
@@ -138,6 +153,7 @@ def export_al_dataset(
     # root tries to hardlink its images.
     ordered = sorted(set(levels), reverse=True)
     roots: list[dict] = []
+    shape_cache: dict[int, tuple[int, int]] = {}
     try:
         authoritative_root: Path | None = None
         for lvl in ordered:
@@ -146,6 +162,7 @@ def export_al_dataset(
                 root,
                 frames,
                 images,
+                shape_cache,
                 lvl,
                 class_names,
                 provenance,

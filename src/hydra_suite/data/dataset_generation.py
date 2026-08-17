@@ -5,6 +5,7 @@ Identifies challenging frames and exports them for annotation.
 
 import logging
 from collections import defaultdict
+from collections.abc import Mapping
 from itertools import combinations
 from pathlib import Path
 
@@ -598,8 +599,77 @@ def _open_video(video_path):
     return cap
 
 
+def _frame_is_readable(cap, frame_id) -> bool:
+    """Cheap readability probe: seeks + reads, but never retains the frame."""
+    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_id)
+    ret, frame = cap.read()
+    return bool(ret and frame is not None and frame.size > 0)
+
+
+class _LazyFrameImages(Mapping):
+    """Original (full-resolution) frames, decoded from `cap` on `__getitem__`.
+
+    Only the frame currently being accessed is ever resident in memory.
+    `export_al_dataset`'s authoritative root reads each key exactly once
+    (derived roots hardlink instead), so this keeps the export's image
+    footprint at O(1) frames instead of O(frame count) -- at default panel
+    settings (100 frames x3 for context, on 4K video) the eager dict this
+    replaces was ~15 GB resident.
+    """
+
+    def __init__(self, cap, params, frame_ids):
+        self._cap = cap
+        self._params = params
+        self._frame_ids = list(frame_ids)
+
+    def __getitem__(self, frame_id):
+        read = _read_and_resize_frame(self._cap, frame_id, self._params, None)
+        if read is None:
+            raise KeyError(frame_id)
+        original, _for_detection, _shape = read
+        return original
+
+    def __iter__(self):
+        return iter(self._frame_ids)
+
+    def __len__(self):
+        return len(self._frame_ids)
+
+
+class _LazyDetectionFrames(Mapping):
+    """Detection-resized frames, decoded from `cap` on `__getitem__`.
+
+    `_detect_records_for_frames` reads one batch at a time and discards it
+    once detection on that batch completes, so nothing beyond the batch
+    currently in flight is resident.
+    """
+
+    def __init__(self, cap, params, frame_ids):
+        self._cap = cap
+        self._params = params
+        self._frame_ids = list(frame_ids)
+
+    def __getitem__(self, frame_id):
+        read = _read_and_resize_frame(self._cap, frame_id, self._params, None)
+        if read is None:
+            raise KeyError(frame_id)
+        _original, for_detection, _shape = read
+        return for_detection
+
+    def __iter__(self):
+        return iter(self._frame_ids)
+
+    def __len__(self):
+        return len(self._frame_ids)
+
+
 def _detect_records_for_frames(runner, frames, params, native_level):
-    """Run detection over `frames` and return {frame_id: [LabelRecord]}."""
+    """Run detection over `frames` and return {frame_id: [LabelRecord]}.
+
+    `frames` is a Mapping[frame_id, image] consulted in batches -- only the
+    current batch's images are held in memory at once, whether `frames` is a
+    plain dict (tests) or a lazy, decode-on-access mapping (production).
+    """
     if runner is None:
         return {}
     batch_size = _get_detector_batch_size(runner)
@@ -607,13 +677,24 @@ def _detect_records_for_frames(runner, frames, params, native_level):
     frame_ids = sorted(frames)
     for start in range(0, len(frame_ids), batch_size):
         chunk = frame_ids[start : start + batch_size]
-        images = [frames[fid] for fid in chunk]
-        try:
-            results = runner.detect_batch(images, frame_indices=list(chunk))
-        except Exception as e:
-            logger.warning("Detection failed for batch starting at %s: %s", chunk[0], e)
+        images = []
+        valid_chunk = []
+        for fid in chunk:
+            try:
+                images.append(frames[fid])
+            except KeyError:
+                continue
+            valid_chunk.append(fid)
+        if not images:
             continue
-        for fid, obb in zip(chunk, results):
+        try:
+            results = runner.detect_batch(images, frame_indices=list(valid_chunk))
+        except Exception as e:
+            logger.warning(
+                "Detection failed for batch starting at %s: %s", valid_chunk[0], e
+            )
+            continue
+        for fid, obb in zip(valid_chunk, results):
             out[fid] = records_from_obb_result(obb, native_level)
     return out
 
@@ -670,15 +751,17 @@ def export_dataset(
         selected = {int(f) for f in frame_ids}
         frames_to_export = _expand_frame_ids(frame_ids, include_context, total_frames)
 
-        images: dict[int, np.ndarray] = {}
-        detection_frames: dict[int, np.ndarray] = {}
-        for fid in frames_to_export:
-            read = _read_and_resize_frame(cap, fid, params, None)
-            if read is None:
-                continue
-            original, for_detection, _shape = read
-            images[fid] = original
-            detection_frames[fid] = for_detection
+        # Readability is probed and immediately discarded -- no frame data is
+        # retained here. The two lazy mappings below re-decode each valid
+        # frame on demand, so at most one batch of detection frames (or one
+        # authoritative-root image) is ever resident at once, rather than
+        # every export frame at full resolution simultaneously.
+        valid_frame_ids = [
+            fid for fid in frames_to_export if _frame_is_readable(cap, fid)
+        ]
+
+        images = _LazyFrameImages(cap, params, valid_frame_ids)
+        detection_frames = _LazyDetectionFrames(cap, params, valid_frame_ids)
 
         records_by_frame = _detect_records_for_frames(
             runner, detection_frames, params, native_level
@@ -689,7 +772,7 @@ def export_dataset(
         rows_by_frame = {int(fid): sub for fid, sub in df.groupby("FrameID")}
 
         exported: list[ExportedFrame] = []
-        for fid in sorted(images):
+        for fid in valid_frame_ids:
             records, drops = _select_records_for_frame(
                 rows_by_frame.get(fid),
                 records_by_frame.get(fid, []),
@@ -705,44 +788,47 @@ def export_dataset(
                     drops=drops,
                 )
             )
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        name = f"{dataset_name}_{timestamp}" if str(dataset_name).strip() else timestamp
+        round_dir = Path(output_dir).resolve() / name
+
+        provenance = {
+            "source_video": str(video_path),
+            "source_csv": str(csv_path),
+            "detection_method": params.get("DETECTION_METHOD"),
+            "model_path": params.get("YOLO_OBB_DIRECT_MODEL_PATH"),
+            "model_task": params.get("YOLO_OBB_DIRECT_TASK"),
+            "export_confidence_threshold": params.get(
+                "DATASET_YOLO_CONFIDENCE_THRESHOLD", 0.05
+            ),
+            "export_iou_threshold": params.get("DATASET_YOLO_IOU_THRESHOLD", 0.5),
+            "acquisition_preset": params.get("DATASET_AL_PRESET"),
+            "image_width": frame_width,
+            "image_height": frame_height,
+            "note": (
+                "Labels come from a dedicated export detection pass at lower "
+                "confidence than tracking, so they may differ from the tracked "
+                "detections. Review before training."
+            ),
+        }
+
+        # `images` is only actually read here, while `cap` is still open --
+        # export_al_dataset's authoritative root decodes each frame lazily.
+        manifest = export_al_dataset(
+            round_dir=round_dir,
+            frames=exported,
+            images=images,
+            native_level=native_level,
+            levels=levels,
+            class_names=resolved_class_names,
+            provenance=provenance,
+        )
     finally:
         cap.release()
         if runner is not None:
             runner.close()
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    name = f"{dataset_name}_{timestamp}" if str(dataset_name).strip() else timestamp
-    round_dir = Path(output_dir).resolve() / name
-
-    provenance = {
-        "source_video": str(video_path),
-        "source_csv": str(csv_path),
-        "detection_method": params.get("DETECTION_METHOD"),
-        "model_path": params.get("YOLO_OBB_DIRECT_MODEL_PATH"),
-        "model_task": params.get("YOLO_OBB_DIRECT_TASK"),
-        "export_confidence_threshold": params.get(
-            "DATASET_YOLO_CONFIDENCE_THRESHOLD", 0.05
-        ),
-        "export_iou_threshold": params.get("DATASET_YOLO_IOU_THRESHOLD", 0.5),
-        "acquisition_preset": params.get("DATASET_AL_PRESET"),
-        "image_width": frame_width,
-        "image_height": frame_height,
-        "note": (
-            "Labels come from a dedicated export detection pass at lower "
-            "confidence than tracking, so they may differ from the tracked "
-            "detections. Review before training."
-        ),
-    }
-
-    manifest = export_al_dataset(
-        round_dir=round_dir,
-        frames=exported,
-        images=images,
-        native_level=native_level,
-        levels=levels,
-        class_names=resolved_class_names,
-        provenance=provenance,
-    )
     logger.info("Dataset exported to %s (%d frames)", round_dir, len(exported))
     return manifest
 
