@@ -150,3 +150,24 @@ def test_xal_mode_for_level():
     assert xal_mode_for_level(GeometryLevel.AABB) == "detect"
     assert xal_mode_for_level(GeometryLevel.OBB) == "obb"
     assert xal_mode_for_level(GeometryLevel.POLYGON) == "segment"
+
+
+def test_geometry_level_importable_from_utils_and_training():
+    from hydra_suite.training.geometry_levels import GeometryLevel as TrainingLevel
+    from hydra_suite.utils.geometry_levels import GeometryLevel as UtilsLevel
+
+    # Same object, not a copy -- otherwise IntEnum identity checks break
+    # across the two import paths.
+    assert TrainingLevel is UtilsLevel
+    assert UtilsLevel.POLYGON > UtilsLevel.OBB > UtilsLevel.AABB
+    assert UtilsLevel.from_str("polygon") is UtilsLevel.POLYGON
+    assert UtilsLevel.POLYGON.label == "polygon"
+
+
+def test_classify_label_line_importable_from_utils():
+    from hydra_suite.utils.geometry_levels import classify_label_line
+
+    assert classify_label_line(5) == "aabb"
+    assert classify_label_line(9) == "four_point"
+    assert classify_label_line(11) == "polygon"
+    assert classify_label_line(6) == "invalid"
