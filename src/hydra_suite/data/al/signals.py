@@ -9,6 +9,7 @@ from typing import Callable, Sequence
 
 import numpy as np
 
+from hydra_suite.utils.geometry import clamp01 as _clamp01
 from hydra_suite.utils.geometry import (  # noqa: F401
     polygon_overlap_ratio as _polygon_overlap_ratio,
 )
@@ -25,6 +26,7 @@ class ALSignals:
     nms_instability: float = 0.0
     count_deviation: float = 0.0
     crowd_score: float = 0.0
+    fragmentation_score: float = 0.0
     edge_score: float = 0.0
     extras: dict[str, float] = field(default_factory=dict)
 
@@ -85,6 +87,61 @@ def score_crowd(
         edge = max(edge, edge_norm)
 
     return float(crowd), float(edge)
+
+
+def score_fragmentation(
+    obb_corners: Sequence[np.ndarray],
+    reference_major_axis: float | None = None,
+) -> float:
+    """Return [0, 1] evidence that one object was split into several detections.
+
+    A suspicious pair is close together, overlapping, and *both* smaller than
+    the frame's typical detection -- the signature of a single animal broken
+    into fragments. This is distinct from `score_crowd`, which measures genuine
+    overlap between full-size neighbours.
+
+    Ported from the legacy FrameQualityScorer so the signal keeps its meaning;
+    the 0.45 suspicion gate and the pair weights are unchanged.
+    """
+    boxes = [
+        np.asarray(c, dtype=np.float32).reshape(-1, 2)
+        for c in obb_corners
+        if c is not None
+    ]
+    boxes = [b for b in boxes if b.shape[0] >= 3]
+    if len(boxes) < 2:
+        return 0.0
+
+    centers = [b.mean(axis=0) for b in boxes]
+    major_axes = [
+        float(
+            max(
+                np.linalg.norm(b[1] - b[0]),
+                np.linalg.norm(b[2] - b[1]),
+            )
+        )
+        for b in boxes
+    ]
+    typical = float(reference_major_axis or np.median(major_axes))
+    typical = max(typical, 1.0)
+
+    suspicious = 0
+    best = 0.0
+    for i, j in combinations(range(len(boxes)), 2):
+        distance = float(np.linalg.norm(centers[i] - centers[j]))
+        proximity = _clamp01(1.0 - distance / max(typical * 0.65, 1.0))
+        overlap = _polygon_overlap_ratio(boxes[i], boxes[j])
+        pair_major = (major_axes[i] + major_axes[j]) / 2.0
+        smallness = _clamp01(1.0 - pair_major / typical)
+
+        pair_score = _clamp01(0.5 * proximity + 0.3 * overlap + 0.2 * smallness)
+        if pair_score >= 0.45:
+            suspicious += 1
+        best = max(best, pair_score)
+
+    if best < 0.45:
+        return 0.0
+    return _clamp01(best + min(0.1 * max(suspicious - 1, 0), 0.2))
 
 
 Detection = tuple  # (cx, cy, w, h, theta, conf)

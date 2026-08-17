@@ -20,6 +20,7 @@ class AcquisitionWeights:
     count: float = 0.20
     crowd: float = 0.15
     edge: float = 0.05
+    fragmentation: float = 0.0
     # Tracker-only extras (zero on detector-only paths)
     assignment: float = 0.0
     track_loss: float = 0.0
@@ -62,6 +63,7 @@ PRESETS: dict[str, AcquisitionWeights] = {
         count=0.20,
         crowd=0.15,
         edge=0.05,
+        fragmentation=0.30,
         assignment=0.15,
         track_loss=0.10,
         position_uncertainty=0.05,
@@ -87,6 +89,7 @@ def _channel_array(signals: Sequence[ALSignals], attr: str) -> np.ndarray:
             "nms_instability": "nms_instability",
             "crowd": "crowd_score",
             "edge": "edge_score",
+            "fragmentation": "fragmentation_score",
         }
         attr_name = attr_map.get(attr, attr)
         vals = [getattr(s, attr_name) for s in signals]
@@ -115,6 +118,7 @@ def _composite_score(
         "count": w.count,
         "crowd": w.crowd,
         "edge": w.edge,
+        "fragmentation": w.fragmentation,
         "assignment": w.assignment,
         "track_loss": w.track_loss,
         "position_uncertainty": w.position_uncertainty,
