@@ -60,6 +60,45 @@ def _theta_from_m_align(
     return theta
 
 
+def _theta_for_subregion(
+    m_align: np.ndarray,
+    x0: int,
+    y0: int,
+    canvas_wh: tuple,
+    pad_wh: tuple,
+) -> np.ndarray:
+    """``_theta_from_m_align`` for a sub-region input.
+
+    Input pixel ``(u, v)`` of the (padded) sub-region corresponds to frame
+    pixel ``(u + x0, v + y0)``, so the canvas->frame map ``m_inv`` has its
+    translation shifted by ``-(x0, y0)`` and is normalised by the padded
+    sub-region size ``pad_wh`` instead of the full frame. Equals
+    ``_theta_from_m_align`` when ``x0 == y0 == 0`` and ``pad_wh == (w_in, h_in)``.
+    """
+    canvas_w, canvas_h = int(canvas_wh[0]), int(canvas_wh[1])
+    pad_w, pad_h = int(pad_wh[0]), int(pad_wh[1])
+    m_inv = cv2.invertAffineTransform(np.asarray(m_align, dtype=np.float64))
+    tx = m_inv[0, 2] - float(x0)
+    ty = m_inv[1, 2] - float(y0)
+
+    sw = float(canvas_w - 1)
+    sh = float(canvas_h - 1)
+    inv_win = 1.0 / max(float(pad_w - 1), 1.0)
+    inv_hin = 1.0 / max(float(pad_h - 1), 1.0)
+
+    t00 = m_inv[0, 0] * sw * inv_win
+    t01 = m_inv[0, 1] * sh * inv_win
+    t10 = m_inv[1, 0] * sw * inv_hin
+    t11 = m_inv[1, 1] * sh * inv_hin
+    return np.array(
+        [
+            [t00, t01, t00 + t01 + 2.0 * tx * inv_win - 1.0],
+            [t10, t11, t10 + t11 + 2.0 * ty * inv_hin - 1.0],
+        ],
+        dtype=np.float32,
+    )
+
+
 def _canvas_footprint_aabb(
     m_align: np.ndarray,
     geometry: CanonicalGeometry,

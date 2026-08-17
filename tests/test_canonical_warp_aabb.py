@@ -144,3 +144,12 @@ def test_footprint_aabb_out_of_frame_is_degenerate_or_clamped():
     x0, y0, x1, y1 = R._canvas_footprint_aabb(m, geo, (H, W))
     assert x0 >= 0 and y0 >= 0 and x1 <= W and y1 <= H
     assert (x1 - x0) <= 0 or (y1 - y0) <= 0  # nothing in-frame
+
+
+def test_theta_subregion_reduces_to_full_frame():
+    W, H = 640, 512
+    geo = _make_geometry()
+    m = _make_m_aligns("rotated", W, H, geo.canvas_w, geo.canvas_h)[0]
+    full = R._theta_from_m_align(m, geo.canvas_w, geo.canvas_h, W, H)
+    sub = R._theta_for_subregion(m, 0, 0, (geo.canvas_w, geo.canvas_h), (W, H))
+    assert np.allclose(full, sub, atol=0, rtol=0)
