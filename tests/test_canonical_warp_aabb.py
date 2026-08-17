@@ -125,3 +125,22 @@ def test_empty_returns_zeros():
     frame = torch.rand(3, 64, 64)
     out = R.canonical_warp_batch(frame, [], geo)
     assert out.shape == (0, 3, geo.canvas_h, geo.canvas_w)
+
+
+def test_footprint_aabb_centered_is_small_and_inside():
+    W, H = 640, 512
+    geo = _make_geometry()
+    m = _make_m_aligns("centered", W, H, geo.canvas_w, geo.canvas_h)[0]
+    x0, y0, x1, y1 = R._canvas_footprint_aabb(m, geo, (H, W))
+    assert 0 <= x0 < x1 <= W and 0 <= y0 < y1 <= H
+    # footprint of a ~210x86 canvas is far smaller than the full frame
+    assert (x1 - x0) < 260 and (y1 - y0) < 260
+
+
+def test_footprint_aabb_out_of_frame_is_degenerate_or_clamped():
+    W, H = 640, 512
+    geo = _make_geometry()
+    m = _make_m_aligns("out_of_frame", W, H, geo.canvas_w, geo.canvas_h)[0]
+    x0, y0, x1, y1 = R._canvas_footprint_aabb(m, geo, (H, W))
+    assert x0 >= 0 and y0 >= 0 and x1 <= W and y1 <= H
+    assert (x1 - x0) <= 0 or (y1 - y0) <= 0  # nothing in-frame

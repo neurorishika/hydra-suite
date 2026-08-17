@@ -60,6 +60,34 @@ def _theta_from_m_align(
     return theta
 
 
+def _canvas_footprint_aabb(
+    m_align: np.ndarray,
+    geometry: CanonicalGeometry,
+    frame_hw: tuple,
+) -> tuple:
+    """Clamped, +1px-padded frame-space AABB of the canonical canvas footprint.
+
+    Maps the four canvas corners back through ``m_inv`` (canvas -> frame) and
+    bounds them. The +1px pad guarantees bilinear neighbours of any in-frame
+    sampled coordinate are inside the crop; clamping to the frame makes
+    out-of-frame samples fall outside the sub-region (grid_sample zeros),
+    exactly matching the full-frame ``padding_mode="zeros"`` behaviour.
+    """
+    h_in, w_in = int(frame_hw[0]), int(frame_hw[1])
+    cw, ch = geometry.canvas_w, geometry.canvas_h
+    m_inv = cv2.invertAffineTransform(np.asarray(m_align, dtype=np.float64))
+    xs = np.array([0.0, cw - 1.0, 0.0, cw - 1.0])
+    ys = np.array([0.0, 0.0, ch - 1.0, ch - 1.0])
+    fx = m_inv[0, 0] * xs + m_inv[0, 1] * ys + m_inv[0, 2]
+    fy = m_inv[1, 0] * xs + m_inv[1, 1] * ys + m_inv[1, 2]
+    pad = 1
+    x0 = max(0, int(np.floor(fx.min())) - pad)
+    y0 = max(0, int(np.floor(fy.min())) - pad)
+    x1 = min(w_in, int(np.ceil(fx.max())) + pad)
+    y1 = min(h_in, int(np.ceil(fy.max())) + pad)
+    return x0, y0, x1, y1
+
+
 def canonical_warp(
     frame_chw: torch.Tensor,
     m_align: np.ndarray,
