@@ -99,9 +99,29 @@ untouched.
   `x0=y0=0, pad_wh=(w_in,h_in)` special case).
 - `canonical_warp` (N=1) and `canonical_warp_batch` (N>1) — reworked internals.
 
-## Correctness / Byte-Identical Argument
+## Acceptance bar (amended 2026-08-17 after implementation)
 
-Identical output because:
+Implementation proved the AABB path **cannot be bitwise `torch.equal`** to the
+full-frame path: `affine_grid` normalizes the sampling grid to the input
+tensor's extent, so the sub-region (normalize by `pad-1`) and the full frame
+(normalize by `w_in-1`) are two float32 quantizations of the *same* real-valued
+map, differing by **max |Δ| ≈ 6e-5** on [0,1] pixels (diffuse, not a geometry
+bug — footprint/theta helpers and the exact-reduction test all pass).
+
+**Ruling (human-approved):** the acceptance bar is the project's established
+standard — the equivalence harness at its determinism floor (positions p99 ≈ 0,
+θ at floor), NOT bitwise crop equality. This matches precedent: the prior
+`cv2.warpAffine → grid_sample` canonicalization migration was likewise not
+bitwise-identical to legacy yet accepted at the floor. Rationale: the
+classifier/head-tail crops are quantized to uint8 downstream
+(`(crops*255).round()`), where a 6e-5 delta rounds away; only the pose (float)
+path carries it, far below SLEAP precision. The unit oracle is relaxed to
+`max|Δ| < 1e-3` (>15× the observed noise, <¼ the uint8 step 3.9e-3); **Task 6's
+MPS+CUDA equivalence harness is the true acceptance gate.**
+
+## Correctness Argument (real-number / noise-floor)
+
+Output matches within the noise floor because:
 - **Same source pixels.** Grid values are the same canvas→frame mapping; the
   only change is which tensor those coords index (a sub-view vs the full frame),
   with the affine translation compensated for the sub-origin.
