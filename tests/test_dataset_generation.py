@@ -680,6 +680,7 @@ def test_frame_quality_scorer_honors_dataset_al_preset_param():
         count=expected.count,
         crowd=expected.crowd,
         edge=expected.edge,
+        fragmentation=expected.fragmentation,
         assignment=expected.assignment,
         track_loss=expected.track_loss,
         position_uncertainty=expected.position_uncertainty,
@@ -694,16 +695,16 @@ def test_frame_quality_scorer_unknown_preset_falls_back_to_tracker_default():
     params = {"MAX_TARGETS": 4, "DATASET_AL_PRESET": "no_such_preset"}
     scorer = FrameQualityScorer(params)
     expected = PRESETS["tracker_default"]
-    # `._weights` is stored pre-normalized; fragmentation isn't wired into the
-    # scorer's weight construction (out of scope here) and METRIC_HIGH_
-    # UNCERTAINTY (-> position_uncertainty) defaults off, so both drop out.
+    # `._weights` is stored pre-normalized. fragmentation IS wired through now
+    # (METRIC_FRAGMENTED_DETECTIONS defaults True); METRIC_HIGH_UNCERTAINTY
+    # (-> position_uncertainty) defaults off, so only that one drops out.
     expected_norm = AcquisitionWeights(
         uncertainty=expected.uncertainty,
         nms_instability=0.0,
         count=expected.count,
         crowd=expected.crowd,
         edge=expected.edge,
-        fragmentation=0.0,
+        fragmentation=expected.fragmentation,
         assignment=expected.assignment,
         track_loss=expected.track_loss,
         position_uncertainty=0.0,
@@ -881,3 +882,129 @@ def test_bgsub_zeroes_uncertainty_weight_and_renormalizes():
         )
     )
     assert total == pytest.approx(1.0)
+
+
+def test_fragmentation_carries_nonzero_weight_under_tracker_default():
+    """Regression guard: fragmentation must actually reach `_weights`, not
+    just live in the AcquisitionWeights preset object unused."""
+    from hydra_suite.data.dataset_generation import FrameQualityScorer
+
+    scorer = FrameQualityScorer({"MAX_TARGETS": 4}, frame_shape=(1080, 1920))
+    assert scorer._weights.fragmentation > 0.0
+
+
+def test_fragmented_detections_flag_gates_fragmentation_not_crowd():
+    """METRIC_FRAGMENTED_DETECTIONS must control the fragmentation channel
+    (one animal split in two), not crowd (animals genuinely touching)."""
+    from hydra_suite.data.dataset_generation import FrameQualityScorer
+
+    scorer = FrameQualityScorer(
+        {"MAX_TARGETS": 4, "METRIC_FRAGMENTED_DETECTIONS": False},
+        frame_shape=(1080, 1920),
+    )
+    assert scorer._weights.fragmentation == 0.0
+    assert scorer._weights.crowd > 0.0
+
+
+def test_crowding_flag_gates_crowd_not_fragmentation():
+    """The converse of the above: METRIC_CROWDING controls crowd only."""
+    from hydra_suite.data.dataset_generation import FrameQualityScorer
+
+    scorer = FrameQualityScorer(
+        {"MAX_TARGETS": 4, "METRIC_CROWDING": False},
+        frame_shape=(1080, 1920),
+    )
+    assert scorer._weights.crowd == 0.0
+    assert scorer._weights.fragmentation > 0.0
+
+
+@pytest.mark.parametrize(
+    "extra_params",
+    [
+        {},
+        {"METRIC_FRAGMENTED_DETECTIONS": False},
+        {"METRIC_CROWDING": False},
+        {"DETECTION_METHOD": "background_subtraction"},
+        {"METRIC_FRAGMENTED_DETECTIONS": False, "METRIC_CROWDING": False},
+    ],
+)
+def test_weights_always_sum_to_one_across_gate_configurations(extra_params):
+    from hydra_suite.data.dataset_generation import FrameQualityScorer
+
+    params = {"MAX_TARGETS": 4, **extra_params}
+    scorer = FrameQualityScorer(params, frame_shape=(1080, 1920))
+    total = sum(
+        getattr(scorer._weights, f)
+        for f in (
+            "uncertainty",
+            "nms_instability",
+            "count",
+            "crowd",
+            "fragmentation",
+            "edge",
+            "assignment",
+            "track_loss",
+            "position_uncertainty",
+        )
+    )
+    assert total == pytest.approx(1.0)
+
+
+def test_fragmented_detections_frame_outranks_clean_frame():
+    """End-to-end: a frame containing a fragmented-looking pair must rank
+    above a clean, well-separated frame -- proving fragmentation is actually
+    wired with nonzero weight through the live scorer + selector, not merely
+    present on the AcquisitionWeights object. Boxes are chosen close but
+    non-overlapping so crowd_score is exactly 0 and only fragmentation fires,
+    isolating the channel this regression is about.
+    """
+    from hydra_suite.data.dataset_generation import FrameQualityScorer
+    from hydra_suite.utils.geometry import obb_corners_from_dims
+
+    scorer = FrameQualityScorer(
+        {"MAX_TARGETS": 2, "REFERENCE_BODY_SIZE": 50.0},
+        frame_shape=(1080, 1920),
+    )
+
+    # Frame 0: clean, well-separated, full-confidence, matches MAX_TARGETS.
+    # Both boxes stay far from the frame border so edge_score is also 0 --
+    # otherwise a near-border placement could make frame 1 "win" via the
+    # edge channel instead of fragmentation, defeating the isolation.
+    clean_boxes = [
+        obb_corners_from_dims(300, 300, 40.0, 16.0, 0.0),
+        obb_corners_from_dims(900, 300, 40.0, 16.0, 0.0),
+    ]
+    scorer.score_frame(
+        0,
+        detection_data={
+            "confidences": [0.95, 0.95],
+            "count": 2,
+            "obb_corners": [b.tolist() for b in clean_boxes],
+        },
+        tracking_data={},
+    )
+
+    # Frame 1: two small, close-but-non-overlapping boxes -- the classic
+    # single-animal-split-in-two fragmentation signature. Also far from the
+    # border, so edge_score is 0 here too.
+    frag_boxes = [
+        obb_corners_from_dims(500, 300, 20.0, 8.0, 0.0),
+        obb_corners_from_dims(530, 300, 20.0, 8.0, 0.0),
+    ]
+    scorer.score_frame(
+        1,
+        detection_data={
+            "confidences": [0.95, 0.95],
+            "count": 2,
+            "obb_corners": [b.tolist() for b in frag_boxes],
+        },
+        tracking_data={},
+    )
+
+    assert scorer.frame_signals[1].crowd_score == 0.0
+    assert scorer.frame_signals[1].edge_score == 0.0
+    assert scorer.frame_signals[1].fragmentation_score > 0.0
+    assert scorer.frame_signals[0].fragmentation_score == 0.0
+
+    worst = scorer.get_worst_frames(1, diversity_window=0, probabilistic=False)
+    assert worst == [1]

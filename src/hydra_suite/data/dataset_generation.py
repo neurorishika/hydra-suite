@@ -85,6 +85,7 @@ class FrameQualityScorer:
         self.use_fragmented_detections = bool(
             params.get("METRIC_FRAGMENTED_DETECTIONS", True)
         )
+        self.use_crowd = bool(params.get("METRIC_CROWDING", True))
 
         # Background subtraction sets every detection confidence to NaN
         # (core/background/measure.py), so score_uncertainty always returns
@@ -101,7 +102,8 @@ class FrameQualityScorer:
             "assignment": self.use_assignment_cost,
             "track_loss": self.use_track_loss,
             "position_uncertainty": self.use_uncertainty,
-            "crowd": self.use_fragmented_detections,
+            "crowd": self.use_crowd,
+            "fragmentation": self.use_fragmented_detections,
         }
 
         preset_name = params.get("DATASET_AL_PRESET", "tracker_default")
@@ -112,6 +114,9 @@ class FrameQualityScorer:
             count=base.count if self._enabled["count"] else 0.0,
             crowd=base.crowd if self._enabled["crowd"] else 0.0,
             edge=base.edge,
+            fragmentation=(
+                base.fragmentation if self._enabled["fragmentation"] else 0.0
+            ),
             assignment=base.assignment if self._enabled["assignment"] else 0.0,
             track_loss=base.track_loss if self._enabled["track_loss"] else 0.0,
             position_uncertainty=(
