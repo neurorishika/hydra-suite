@@ -10,7 +10,7 @@ def test_generate_dataset_reports_error_on_empty_selection(tmp_path, monkeypatch
     )
 
     class _Scorer:
-        def __init__(self, params):
+        def __init__(self, params, frame_shape=None):
             pass
 
         def score_frame(self, frame_id, detection_data=None, tracking_data=None):
@@ -46,7 +46,7 @@ def test_generate_dataset_success(tmp_path, monkeypatch):
     )
 
     class _Scorer:
-        def __init__(self, params):
+        def __init__(self, params, frame_shape=None):
             pass
 
         def score_frame(self, frame_id, detection_data=None, tracking_data=None):
@@ -87,7 +87,7 @@ def test_generate_dataset_cancelled_after_export(tmp_path, monkeypatch):
     )
 
     class _Scorer:
-        def __init__(self, params):
+        def __init__(self, params, frame_shape=None):
             pass
 
         def score_frame(self, frame_id, detection_data=None, tracking_data=None):

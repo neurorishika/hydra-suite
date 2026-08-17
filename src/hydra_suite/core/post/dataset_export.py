@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 import os
 
+import cv2
 import numpy as np
 import pandas as pd
 
@@ -53,7 +54,15 @@ def generate_active_learning_dataset(
         df = pd.read_csv(csv_path)
 
         _emit(progress, 15, "Initializing quality scorer...")
-        scorer = FrameQualityScorer(params)
+        cap = cv2.VideoCapture(str(video_path))
+        try:
+            frame_shape = (
+                int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+                int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+            )
+        finally:
+            cap.release()
+        scorer = FrameQualityScorer(params, frame_shape=frame_shape)
         if detection_cache_path and os.path.exists(detection_cache_path):
             try:
                 detection_cache = open_detection_cache_reader(detection_cache_path)
@@ -134,9 +143,17 @@ def generate_active_learning_dataset(
             max_frames, diversity_window, probabilistic=probabilistic
         )
         if not selected_frames:
+            observed = scorer.explain_scores()
+            detail = ", ".join(f"{k}={v:.2f}" for k, v in sorted(observed.items()))
             return {
                 "success": False,
-                "error": "No frames met the quality criteria for export.",
+                "error": (
+                    "No frames scored above the minimum selection score. "
+                    f"Highest severity observed per signal: {detail or 'none'}. "
+                    "Lower 'Min selection score' to export the best available "
+                    "frames, or accept that tracking found nothing difficult."
+                ),
+                "channel_maxima": observed,
             }
 
         _emit(progress, 60, f"Exporting {len(selected_frames)} frames...")

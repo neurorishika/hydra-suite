@@ -659,7 +659,7 @@ def test_frame_quality_scorer_uses_tracker_default_preset_after_refactor():
 
 def test_frame_quality_scorer_honors_dataset_al_preset_param():
     """Custom DATASET_AL_PRESET param swaps the weight preset."""
-    from hydra_suite.data.al.acquisition import PRESETS
+    from hydra_suite.data.al.acquisition import PRESETS, AcquisitionWeights
     from hydra_suite.data.dataset_generation import FrameQualityScorer
 
     params = {
@@ -670,19 +670,45 @@ def test_frame_quality_scorer_honors_dataset_al_preset_param():
     }
     scorer = FrameQualityScorer(params)
     expected = PRESETS["uncertainty_heavy"]
-    # uncertainty channel should match the preset's uncertainty weight
-    # (only enabled-channel weights flow through; uncertainty is enabled by default).
-    assert scorer._weights.uncertainty == expected.uncertainty
+    # uncertainty channel should match the preset's uncertainty weight,
+    # renormalized: only enabled-channel weights flow through (uncertainty is
+    # enabled by default; nms_instability is always zeroed here), and
+    # `._weights` stores the already-normalized weights.
+    expected_norm = AcquisitionWeights(
+        uncertainty=expected.uncertainty,
+        nms_instability=0.0,
+        count=expected.count,
+        crowd=expected.crowd,
+        edge=expected.edge,
+        assignment=expected.assignment,
+        track_loss=expected.track_loss,
+        position_uncertainty=expected.position_uncertainty,
+    ).normalized()
+    assert scorer._weights.uncertainty == pytest.approx(expected_norm.uncertainty)
 
 
 def test_frame_quality_scorer_unknown_preset_falls_back_to_tracker_default():
-    from hydra_suite.data.al.acquisition import PRESETS
+    from hydra_suite.data.al.acquisition import PRESETS, AcquisitionWeights
     from hydra_suite.data.dataset_generation import FrameQualityScorer
 
     params = {"MAX_TARGETS": 4, "DATASET_AL_PRESET": "no_such_preset"}
     scorer = FrameQualityScorer(params)
     expected = PRESETS["tracker_default"]
-    assert scorer._weights.uncertainty == expected.uncertainty
+    # `._weights` is stored pre-normalized; fragmentation isn't wired into the
+    # scorer's weight construction (out of scope here) and METRIC_HIGH_
+    # UNCERTAINTY (-> position_uncertainty) defaults off, so both drop out.
+    expected_norm = AcquisitionWeights(
+        uncertainty=expected.uncertainty,
+        nms_instability=0.0,
+        count=expected.count,
+        crowd=expected.crowd,
+        edge=expected.edge,
+        fragmentation=0.0,
+        assignment=expected.assignment,
+        track_loss=expected.track_loss,
+        position_uncertainty=0.0,
+    ).normalized()
+    assert scorer._weights.uncertainty == pytest.approx(expected_norm.uncertainty)
 
 
 @pytest.mark.parametrize(
@@ -793,3 +819,65 @@ def test_init_detection_runner_bgsub_sets_emit_native_geometry(monkeypatch):
     assert cfg.obb is None
     assert cfg.bgsub is not None
     assert cfg.bgsub.emit_native_geometry is True
+
+
+def test_edge_score_uses_real_frame_shape():
+    """Regression: frame_shape=(1, 1) made edge_score ~1900 instead of [0, 1]."""
+    from hydra_suite.data.dataset_generation import FrameQualityScorer
+
+    scorer = FrameQualityScorer({"MAX_TARGETS": 2}, frame_shape=(1080, 1920))
+    scorer.score_frame(
+        0,
+        detection_data={
+            "confidences": [0.9, 0.9],
+            "count": 2,
+            "obb_corners": [
+                [[100, 100], [140, 100], [140, 120], [100, 120]],
+                [[900, 500], [940, 500], [940, 520], [900, 520]],
+            ],
+        },
+        tracking_data={},
+    )
+    assert 0.0 <= scorer.frame_signals[0].edge_score <= 1.0
+
+
+def test_edge_score_is_high_for_a_detection_at_the_border():
+    from hydra_suite.data.dataset_generation import FrameQualityScorer
+
+    scorer = FrameQualityScorer({"MAX_TARGETS": 1}, frame_shape=(1080, 1920))
+    scorer.score_frame(
+        0,
+        detection_data={
+            "confidences": [0.9],
+            "count": 1,
+            "obb_corners": [[[0, 0], [40, 0], [40, 20], [0, 20]]],
+        },
+        tracking_data={},
+    )
+    assert scorer.frame_signals[0].edge_score > 0.9
+
+
+def test_bgsub_zeroes_uncertainty_weight_and_renormalizes():
+    """All-NaN confidences must not silently dilute the other channels."""
+    from hydra_suite.data.dataset_generation import FrameQualityScorer
+
+    scorer = FrameQualityScorer(
+        {"MAX_TARGETS": 4, "DETECTION_METHOD": "background_subtraction"},
+        frame_shape=(1080, 1920),
+    )
+    assert scorer._weights.uncertainty == 0.0
+    total = sum(
+        getattr(scorer._weights, f)
+        for f in (
+            "uncertainty",
+            "nms_instability",
+            "count",
+            "crowd",
+            "fragmentation",
+            "edge",
+            "assignment",
+            "track_loss",
+            "position_uncertainty",
+        )
+    )
+    assert total == pytest.approx(1.0)

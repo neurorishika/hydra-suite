@@ -61,7 +61,7 @@ class FrameQualityScorer:
     underlying ranking now lives in `hydra_suite.data.al.acquisition`.
     """
 
-    def __init__(self, params):
+    def __init__(self, params, frame_shape: tuple[int, int] | None = None):
         from hydra_suite.data.al.acquisition import PRESETS, AcquisitionWeights
 
         self.params = params
@@ -71,6 +71,10 @@ class FrameQualityScorer:
         self.reference_body_size = max(
             float(params.get("REFERENCE_BODY_SIZE", 20.0)), 1.0
         )
+        # (H, W) of the coordinate space `obb_corners` live in. Required for a
+        # meaningful edge score: passing (1, 1) with pixel-space corners made
+        # score_crowd return values in the hundreds.
+        self.frame_shape = tuple(frame_shape) if frame_shape else None
 
         # Public legacy boolean flags (kept for backward compat).
         self.use_confidence = bool(params.get("METRIC_LOW_CONFIDENCE", True))
@@ -82,8 +86,17 @@ class FrameQualityScorer:
             params.get("METRIC_FRAGMENTED_DETECTIONS", True)
         )
 
+        # Background subtraction sets every detection confidence to NaN
+        # (core/background/measure.py), so score_uncertainty always returns
+        # 0.0 on that path. Its weight must be zeroed explicitly and the
+        # remaining weights renormalized -- otherwise the dead uncertainty
+        # weight still counts in the denominator and dilutes every other
+        # channel by its share for no reason.
+        method = str(params.get("DETECTION_METHOD", "")).strip().lower()
+        self._confidence_available = method != "background_subtraction"
+
         self._enabled = {
-            "uncertainty": self.use_confidence,
+            "uncertainty": self.use_confidence and self._confidence_available,
             "count": self.use_count_mismatch,
             "assignment": self.use_assignment_cost,
             "track_loss": self.use_track_loss,
@@ -106,7 +119,7 @@ class FrameQualityScorer:
                 if self._enabled["position_uncertainty"]
                 else 0.0
             ),
-        )
+        ).normalized()
 
         # Backward-compat scalar map for legacy callers.
         self.frame_scores = defaultdict(lambda: {"score": 0.0, "metrics": {}})
@@ -116,6 +129,7 @@ class FrameQualityScorer:
             ALSignals,
             score_count_deviation,
             score_crowd,
+            score_fragmentation,
             score_uncertainty,
         )
 
@@ -133,10 +147,18 @@ class FrameQualityScorer:
         count_dev = score_count_deviation(n_dets, self.max_targets)
 
         obb_corners = self._extract_obb_corners(detection_data)
-        if obb_corners:
-            crowd, edge = score_crowd(obb_corners, frame_shape=(1, 1))
+        if obb_corners and self.frame_shape is not None:
+            crowd, edge = score_crowd(obb_corners, frame_shape=self.frame_shape)
+        elif obb_corners:
+            # No frame shape available: crowd is shape-independent, edge is not
+            # -- computing it against a fake (1, 1) shape is the bug this fixes.
+            crowd, _ = score_crowd(obb_corners, frame_shape=(1, 1))
+            edge = 0.0
         else:
             crowd, edge = 0.0, 0.0
+        fragmentation = score_fragmentation(
+            obb_corners, reference_major_axis=self.reference_body_size * 2.2
+        )
 
         extras: dict[str, float] = {}
         ac = tracking_data.get("assignment_confidences") or []
@@ -161,6 +183,7 @@ class FrameQualityScorer:
             uncertainty_score=uncertainty,
             count_deviation=count_dev,
             crowd_score=crowd,
+            fragmentation_score=fragmentation,
             edge_score=edge,
             extras=extras,
         )
@@ -182,6 +205,12 @@ class FrameQualityScorer:
 
         self.frame_scores[int(frame_id)] = {"score": legacy_score, "metrics": metrics}
         return legacy_score
+
+    def explain_scores(self) -> dict:
+        """Per-channel maxima, for reporting why a selection came back empty."""
+        from hydra_suite.data.al.acquisition import explain
+
+        return explain(list(self.frame_signals.values()), self._weights)
 
     # ------------------------------------------------------------------
     # Legacy per-metric scorers (restored for backward compat)
