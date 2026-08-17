@@ -68,14 +68,16 @@ def test_detect_extractor_default_no_polygons():
 
 
 def test_write_geometry_label_polygon(tmp_path):
-    from hydra_suite.detectkit.jobs.al_worker import _write_geometry_label
+    from hydra_suite.data.al.labels import write_label_file
+    from hydra_suite.detectkit.jobs.al_worker import _records_from_detections
+    from hydra_suite.utils.geometry_levels import GeometryLevel
 
     path = tmp_path / "a.txt"
     poly = np.array(
         [[10, 20], [30, 20], [30, 60], [20, 70], [10, 60]], np.float32
     )  # 5 pts
-    records = [(20.0, 40.0, 20.0, 40.0, 0.0, 0.9, poly)]
-    _write_geometry_label(path, records, frame_size=(100, 100))
+    records = _records_from_detections([(20.0, 40.0, 20.0, 40.0, 0.0, 0.9, poly)])
+    write_label_file(path, records, frame_size=(100, 100), level=GeometryLevel.POLYGON)
     fields = path.read_text().strip().split()
     assert fields[0] == "0" and len(fields) == 11  # class + 5 points
     assert (
@@ -85,10 +87,12 @@ def test_write_geometry_label_polygon(tmp_path):
 
 
 def test_write_geometry_label_none_matches_obb(tmp_path):
-    from hydra_suite.detectkit.jobs.al_worker import _write_geometry_label
+    from hydra_suite.data.al.labels import write_label_file
+    from hydra_suite.detectkit.jobs.al_worker import _records_from_detections
+    from hydra_suite.utils.geometry_levels import GeometryLevel
 
     path = tmp_path / "a.txt"
-    records = [(50.0, 50.0, 20.0, 10.0, 0.0, 0.9, None)]
-    _write_geometry_label(path, records, frame_size=(100, 100))
+    records = _records_from_detections([(50.0, 50.0, 20.0, 10.0, 0.0, 0.9, None)])
+    write_label_file(path, records, frame_size=(100, 100), level=GeometryLevel.OBB)
     fields = path.read_text().strip().split()
     assert fields[0] == "0" and len(fields) == 9  # class + 8 coords (OBB corners)

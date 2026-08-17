@@ -14,12 +14,14 @@ from PySide6.QtCore import Signal
 
 from hydra_suite.data.al.acquisition import PRESETS, AcquisitionWeights, select
 from hydra_suite.data.al.candidate_pool import CandidatePoolConfig, build_candidate_pool
+from hydra_suite.data.al.escalation import LabelRecord, derive_down
 from hydra_suite.data.al.frame_source import (
     DetectKitProjectSource,
     FrameSource,
     ImageFolderFrameSource,
     VideoFrameSource,
 )
+from hydra_suite.data.al.labels import write_label_file
 from hydra_suite.data.al.signals import (
     ALSignals,
     score_count_deviation,
@@ -29,6 +31,7 @@ from hydra_suite.data.al.signals import (
 )
 from hydra_suite.detectkit.gui.models import DetectKitProject, OBBSource
 from hydra_suite.utils.geometry import obb_corners_from_dims as _detection_corners
+from hydra_suite.utils.geometry_levels import GeometryLevel
 from hydra_suite.widgets.workers import BaseWorker
 
 logger = logging.getLogger(__name__)
@@ -113,36 +116,27 @@ def _frame_signals(
     return signal, detections
 
 
-def _write_geometry_label(
-    path: Path, records: list, frame_size: tuple[int, int]
-) -> None:
-    """Write YOLO labels: a native polygon when present, else OBB corners.
-
-    Each record is a 6-tuple ``(cx, cy, w, h, theta, conf)`` or a 7-tuple with
-    a trailing native polygon (an ``(P, 2)`` pixel-space array, or ``None``).
-    When the polygon is absent, output is byte-identical to the legacy
-    OBB-corner writer.
-    """
-    h, w = frame_size
-    with path.open("w") as fp:
-        for rec in records:
-            cx, cy, ww, hh, theta, _conf = rec[:6]
-            polygon = rec[6] if len(rec) > 6 else None
-            if polygon is not None:
-                pts = np.asarray(polygon, dtype=np.float32).reshape(-1, 2).copy()
-            else:
-                pts = _detection_corners(cx, cy, ww, hh, theta)
-            pts[:, 0] = np.clip(pts[:, 0] / w, 0.0, 1.0)
-            pts[:, 1] = np.clip(pts[:, 1] / h, 0.0, 1.0)
-            line = "0 " + " ".join(f"{v:.6f}" for v in pts.reshape(-1)) + "\n"
-            fp.write(line)
-
-
-def _write_yolo_obb_label(
-    path: Path, detections: list, frame_size: tuple[int, int]
-) -> None:
-    """Back-compat alias for :func:`_write_geometry_label`."""
-    _write_geometry_label(path, detections, frame_size)
+def _records_from_detections(detections: list) -> list[LabelRecord]:
+    """Convert detector tuples into LabelRecords, polygon-first."""
+    records: list[LabelRecord] = []
+    for rec in detections:
+        cx, cy, ww, hh, theta, conf = rec[:6]
+        polygon = rec[6] if len(rec) > 6 else None
+        if polygon is not None:
+            pts = np.asarray(polygon, dtype=np.float32).reshape(-1, 2)
+            level = GeometryLevel.POLYGON
+        else:
+            pts = _detection_corners(cx, cy, ww, hh, theta)
+            level = GeometryLevel.OBB
+        records.append(
+            LabelRecord(
+                class_id=0,
+                confidence=float(conf),
+                points=pts,
+                level=level,
+            )
+        )
+    return records
 
 
 def run_active_learning(
@@ -222,10 +216,13 @@ def run_active_learning(
         dets = detections_by_id[fid]
         img_path = images_dir / f"f_{fid:06d}.jpg"
         cv2.imwrite(str(img_path), img)
-        _write_geometry_label(
+        records = _records_from_detections(dets)
+        level = GeometryLevel.from_str(req.export_level)
+        write_label_file(
             labels_dir / f"f_{fid:06d}.txt",
-            dets,
+            derive_down(records, level),
             frame_size=img.shape[:2],
+            level=level,
         )
         written_ids.append(fid)
 

@@ -8,11 +8,14 @@ from pathlib import Path
 from typing import Callable
 
 import cv2
+import numpy as np
 from PySide6.QtCore import Signal
 
 from hydra_suite.core.inference.sam2.masks import mask_to_contour
+from hydra_suite.data.al.escalation import LabelRecord
+from hydra_suite.data.al.labels import write_label_file
 from hydra_suite.detectkit.gui.models import OBBSource
-from hydra_suite.detectkit.jobs.al_worker import _write_geometry_label
+from hydra_suite.utils.geometry_levels import GeometryLevel
 from hydra_suite.widgets.workers import BaseWorker
 
 from .sam2_prompts import build_prompts, read_boxes_from_label
@@ -134,7 +137,7 @@ def run_escalation(
             h, w = img.shape[:2]
             label_path = labels_dir / f"{img_path.stem}.txt"
             boxes = read_boxes_from_label(label_path, w, h)
-            records = []
+            records: list[LabelRecord] = []
             if boxes:
                 prompts = build_prompts(boxes)
                 executor.set_image(img)
@@ -149,9 +152,19 @@ def run_escalation(
                     else:  # fallback: original OBB corners as the polygon
                         result.fell_back += 1
                         poly = box.polygon_px
-                    records.append((0.0, 0.0, 0.0, 0.0, 0.0, 1.0, poly))
-            _write_geometry_label(
-                out_root / "labels" / f"{img_path.stem}.txt", records, (h, w)
+                    records.append(
+                        LabelRecord(
+                            class_id=0,
+                            confidence=1.0,
+                            points=np.asarray(poly, dtype=np.float32).reshape(-1, 2),
+                            level=GeometryLevel.POLYGON,
+                        )
+                    )
+            write_label_file(
+                out_root / "labels" / f"{img_path.stem}.txt",
+                records,
+                frame_size=(h, w),
+                level=GeometryLevel.POLYGON,
             )
             shutil.copy2(img_path, out_root / "images" / img_path.name)
             if progress:
