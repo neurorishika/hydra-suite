@@ -143,6 +143,9 @@ class AugmentationProfile:
     canonical_aug: bool = False  # off by default; opt-in Moderate CanonicalAug
     # (resample-kernel swap + sub-pixel warp jitter + mild blur/JPEG degrade)
     # applied to the canonical crop before the Layer-2 letterbox. Training-only.
+    canonical_aug_copies: int = 3  # extra augmented copies per image in the
+    # YOLO-classify offline prefit when canonical_aug is on (0 => clean only).
+    # The clean copy is always written; total = 1 + canonical_aug_copies.
     monochrome: bool = False
     args: dict[str, Any] = field(default_factory=dict)
     # Label-switching expansion rules.

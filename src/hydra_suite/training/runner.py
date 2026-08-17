@@ -13,7 +13,12 @@ import sys
 from pathlib import Path
 from typing import Any, Callable
 
-from .contracts import CustomCNNParams, TrainingRole, TrainingRunSpec
+from .contracts import (
+    AugmentationProfile,
+    CustomCNNParams,
+    TrainingRole,
+    TrainingRunSpec,
+)
 
 LogCallback = Callable[[str], None]
 ProgressCallback = Callable[[int, int], None]
@@ -112,7 +117,12 @@ def _resolve_ultralytics_data_arg(spec: TrainingRunSpec, task: str) -> str:
 
 
 def _prefit_yolo_classify_dataset(
-    dataset_dir: Path, imgsz: int, dest_dir: Path
+    dataset_dir: Path,
+    imgsz: int,
+    dest_dir: Path,
+    *,
+    profile: "AugmentationProfile | None" = None,
+    seed: int = 42,
 ) -> Path:
     """Pre-fit a YOLO-classify ImageFolder dataset onto a square canvas.
 
@@ -126,6 +136,14 @@ def _prefit_yolo_classify_dataset(
     (operator decision, 2026-08-05): this closes the gap as far as the
     vendor's own pipeline allows, it does not eliminate it. Idempotent --
     skipped when ``dest_dir`` already exists.
+
+    When ``profile.canonical_aug`` is on, additionally writes
+    ``profile.canonical_aug_copies`` augmented variants per image
+    (``CanonicalAug`` applied to the canonical crop *before* the Layer-2
+    letterbox) so the CLI-trained model sees the Moderate robustness signal
+    the Python-hooked trainers get per-epoch. Off by default -> clean only,
+    byte-identical to the prior behaviour. Idempotent (skipped when
+    ``dest_dir`` exists).
     """
     import cv2
 
@@ -133,6 +151,26 @@ def _prefit_yolo_classify_dataset(
 
     if dest_dir.exists():
         return dest_dir
+
+    copies = 0
+    canon_aug = None
+    if (
+        profile is not None
+        and getattr(profile, "enabled", False)
+        and getattr(profile, "canonical_aug", False)
+    ):
+        copies = max(0, int(getattr(profile, "canonical_aug_copies", 0)))
+        if copies > 0:
+            from .canonical_aug import CanonicalAug
+
+            canon_aug = CanonicalAug(seed=seed)
+            logger.info(
+                "YOLO-classify prefit: canonical_aug on, writing 1 clean + %d "
+                "augmented copies/image (seed=%d)",
+                copies,
+                seed,
+            )
+
     transform = CanonicalFitTransform((int(imgsz), int(imgsz)))
     for split_dir in sorted(p for p in dataset_dir.iterdir() if p.is_dir()):
         for cls_dir in sorted(p for p in split_dir.iterdir() if p.is_dir()):
@@ -146,6 +184,12 @@ def _prefit_yolo_classify_dataset(
                 except Exception:
                     continue
                 cv2.imwrite(str(out_cls_dir / img_path.name), transform(img))
+                for k in range(1, copies + 1):
+                    aug_img = canon_aug(img)
+                    cv2.imwrite(
+                        str(out_cls_dir / f"{img_path.stem}.aug{k}{img_path.suffix}"),
+                        transform(aug_img),
+                    )
     return dest_dir
 
 
@@ -163,6 +207,8 @@ def build_ultralytics_command(spec: TrainingRunSpec, run_dir: str | Path) -> lis
             Path(spec.derived_dataset_dir).expanduser(),
             int(spec.hyperparams.imgsz),
             prefit_dir,
+            profile=spec.augmentation_profile,
+            seed=int(spec.seed),
         )
         data_arg = str(prefit_dir)
         # Ultralytics computes RandomResizedCrop's internal scale range as
