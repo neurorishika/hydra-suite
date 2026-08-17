@@ -17,11 +17,22 @@ def _mask_with_two_blobs():
     # Filled ellipses (not axis-aligned rectangles): a perfectly rectangular
     # filled region collapses to a 4-point contour under CHAIN_APPROX_SIMPLE,
     # which the >=5-point contour-length filter in detect_objects then skips
-    # entirely. Ellipses keep the same wide-vs-tall blob semantics (center,
-    # rough extent) while producing contours long enough to survive.
+    # entirely. Ellipses produce contours long enough to survive that filter.
+    #
+    # Sizes and positions are deliberately chosen so scan order and size
+    # order DIVERGE. Empirically verified against this OpenCV build:
+    # cv2.findContours(..., RETR_EXTERNAL) on this mask returns the bottom
+    # blob first and the top blob second, i.e. scan order is
+    # [small (bottom), large (top)], while size order (descending, what
+    # MAX_TARGETS capping must use) is [large (top), small (bottom)]. A
+    # MAX_TARGETS=1 cap that naively truncates in scan order
+    # (`contours[:N]`) instead of applying the size-sorted index list
+    # (`idxs = np.argsort(sizes)[::-1][:N]`) therefore keeps the WRONG
+    # contour, which the alignment assertion in
+    # test_contours_stay_aligned_after_max_targets_cap catches.
     mask = np.zeros((200, 200), dtype=np.uint8)
-    cv2.ellipse(mask, (60, 40), (30, 20), 0, 0, 360, 255, -1)  # wide blob
-    cv2.ellipse(mask, (145, 145), (15, 25), 0, 0, 360, 255, -1)  # tall blob
+    cv2.ellipse(mask, (60, 40), (30, 25), 0, 0, 360, 255, -1)  # large blob (top)
+    cv2.ellipse(mask, (145, 145), (15, 20), 0, 0, 360, 255, -1)  # small blob (bottom)
     return mask
 
 
@@ -66,6 +77,13 @@ def test_contours_stay_aligned_after_max_targets_cap():
     )
     assert len(meas) == 1
     assert len(contours) == 1
+    # The surviving contour must describe the surviving measurement, not just
+    # be positionally present. The fixture's scan order and size order
+    # diverge (see _mask_with_two_blobs), so this fails for a cap that
+    # truncates in scan order (`contours[:N]`) instead of following the
+    # size-sorted index list.
+    assert abs(float(contours[0][:, 0].mean()) - float(meas[0][0])) < 20.0
+    assert abs(float(contours[0][:, 1].mean()) - float(meas[0][1])) < 20.0
 
 
 def test_run_bgsub_leaves_polygons_none_by_default():
