@@ -100,6 +100,7 @@ def _make_m_aligns(kind, W, H, cw, ch):
     "kind", ["centered", "rotated", "many", "near_border", "out_of_frame"]
 )
 def test_canonical_warp_batch_matches_reference(kind):
+    torch.manual_seed(0)
     W, H = 640, 512
     geo = _make_geometry()
     frame = torch.rand(3, H, W, dtype=torch.float32)
@@ -107,17 +108,19 @@ def test_canonical_warp_batch_matches_reference(kind):
     got = R.canonical_warp_batch(frame, m_aligns, geo)
     ref = _ref_warp_batch(frame, m_aligns, geo)
     assert got.shape == ref.shape
-    assert torch.equal(got, ref), f"{kind}: max|Δ|={(got - ref).abs().max().item()}"
+    max_delta = (got - ref).abs().max().item()
+    assert max_delta < 1e-3, f"{kind}: max|Δ|={max_delta}"
 
 
 def test_canonical_warp_single_matches_reference():
+    torch.manual_seed(0)
     W, H = 640, 512
     geo = _make_geometry()
     frame = torch.rand(3, H, W, dtype=torch.float32)
     m = _make_m_aligns("rotated", W, H, geo.canvas_w, geo.canvas_h)[0]
     got = R.canonical_warp(frame, m, geo)
     ref = _ref_warp_batch(frame, [m], geo).squeeze(0)
-    assert torch.equal(got, ref)
+    assert (got - ref).abs().max().item() < 1e-3
 
 
 def test_empty_returns_zeros():

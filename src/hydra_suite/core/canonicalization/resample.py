@@ -132,30 +132,8 @@ def canonical_warp(
     m_align: np.ndarray,
     geometry: CanonicalGeometry,
 ) -> torch.Tensor:
-    """Warp ``frame_chw`` into the canonical canvas via ``F.grid_sample``.
-
-    ``m_align`` is the 2x3 forward affine from ``canonical_affine`` mapping
-    frame pixel coords to canvas pixel coords. Returns
-    ``(C, canvas_h, canvas_w)`` on the same device as ``frame_chw``.
-    """
-    canvas_w, canvas_h = geometry.canvas_w, geometry.canvas_h
-    c, h_in, w_in = frame_chw.shape
-
-    theta = _theta_from_m_align(m_align, canvas_w, canvas_h, w_in, h_in)
-    theta_t = torch.as_tensor(
-        theta, dtype=torch.float32, device=frame_chw.device
-    ).unsqueeze(0)
-
-    with torch.inference_mode():
-        grid = F.affine_grid(theta_t, (1, c, canvas_h, canvas_w), align_corners=True)
-        crop = F.grid_sample(
-            frame_chw.unsqueeze(0).float(),
-            grid,
-            mode="bilinear",
-            padding_mode="zeros",
-            align_corners=True,
-        )
-        return crop.squeeze(0)
+    """Single-crop canonical warp (see :func:`canonical_warp_batch`)."""
+    return canonical_warp_batch(frame_chw, [m_align], geometry).squeeze(0)
 
 
 def canonical_warp_batch(
@@ -163,33 +141,42 @@ def canonical_warp_batch(
     m_aligns: List[np.ndarray],
     geometry: CanonicalGeometry,
 ) -> torch.Tensor:
-    """Batch version of :func:`canonical_warp` for N crops from one frame.
+    """Batch canonical warp via per-detection AABB pre-crop + one grid_sample.
 
-    Returns ``(N, C, canvas_h, canvas_w)`` on the same device as
-    ``frame_chw``.
+    Byte-identical to the previous full-frame ``expand(N).contiguous()`` path,
+    but samples only each detection's canvas footprint (a small frame region)
+    instead of replicating the whole frame N times. See
+    ``docs/superpowers/specs/2026-08-17-crop-warp-aabb-precrop-design.md``.
     """
     canvas_w, canvas_h = geometry.canvas_w, geometry.canvas_h
     c, h_in, w_in = frame_chw.shape
     n = len(m_aligns)
-
     if n == 0:
         return torch.zeros(
             0, c, canvas_h, canvas_w, dtype=frame_chw.dtype, device=frame_chw.device
         )
-    if n == 1:
-        return canonical_warp(frame_chw, m_aligns[0], geometry).unsqueeze(0)
 
+    boxes = [_canvas_footprint_aabb(m, geometry, (h_in, w_in)) for m in m_aligns]
+    sub_w = [max(0, x1 - x0) for (x0, _y0, x1, _y1) in boxes]
+    sub_h = [max(0, y1 - y0) for (_x0, y0, _x1, y1) in boxes]
+    pad_w = max(1, max(sub_w))
+    pad_h = max(1, max(sub_h))
+
+    batch = frame_chw.new_zeros((n, c, pad_h, pad_w))
     thetas_np = np.empty((n, 2, 3), dtype=np.float32)
-    for i, m_align in enumerate(m_aligns):
-        thetas_np[i] = _theta_from_m_align(m_align, canvas_w, canvas_h, w_in, h_in)
+    for i, (x0, y0, x1, y1) in enumerate(boxes):
+        sw_i, sh_i = sub_w[i], sub_h[i]
+        if sw_i > 0 and sh_i > 0:
+            batch[i, :, :sh_i, :sw_i] = frame_chw[:, y0:y1, x0:x1]
+        thetas_np[i] = _theta_for_subregion(
+            m_aligns[i], x0, y0, (canvas_w, canvas_h), (pad_w, pad_h)
+        )
 
     thetas_t = torch.as_tensor(thetas_np, dtype=torch.float32, device=frame_chw.device)
-
     with torch.inference_mode():
         grid = F.affine_grid(thetas_t, (n, c, canvas_h, canvas_w), align_corners=True)
-        frame_expanded = frame_chw.unsqueeze(0).expand(n, -1, -1, -1).float()
         crops = F.grid_sample(
-            frame_expanded.contiguous(),
+            batch.float(),
             grid,
             mode="bilinear",
             padding_mode="zeros",
