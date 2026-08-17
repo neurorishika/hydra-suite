@@ -56,9 +56,8 @@ def test_generate_dataset_success(tmp_path, monkeypatch):
             return [0, 2]
 
     monkeypatch.setattr(dataset_export, "FrameQualityScorer", _Scorer)
-    monkeypatch.setattr(
-        dataset_export, "export_dataset", lambda **k: str(tmp_path / "dataset_dir")
-    )
+    fake_manifest = {"round_dir": str(tmp_path / "dataset_dir"), "roots": []}
+    monkeypatch.setattr(dataset_export, "export_dataset", lambda **k: fake_manifest)
 
     result = dataset_export.generate_active_learning_dataset(
         video_path=str(tmp_path / "in.mp4"),
@@ -77,6 +76,7 @@ def test_generate_dataset_success(tmp_path, monkeypatch):
         "success": True,
         "num_frames": 2,
         "dir": str(tmp_path / "dataset_dir"),
+        "manifest": fake_manifest,
     }
 
 
@@ -99,10 +99,11 @@ def test_generate_dataset_cancelled_after_export(tmp_path, monkeypatch):
     monkeypatch.setattr(dataset_export, "FrameQualityScorer", _Scorer)
 
     exported = {"done": False}
+    fake_manifest = {"round_dir": str(tmp_path / "dataset_dir"), "roots": []}
 
     def _fake_export_dataset(**k):
         exported["done"] = True
-        return str(tmp_path / "dataset_dir")
+        return fake_manifest
 
     monkeypatch.setattr(dataset_export, "export_dataset", _fake_export_dataset)
 
@@ -129,3 +130,4 @@ def test_generate_dataset_cancelled_after_export(tmp_path, monkeypatch):
     assert result["cancelled"] is True
     assert result["dir"] == str(tmp_path / "dataset_dir")
     assert result["num_frames"] == 2
+    assert result["manifest"] == fake_manifest

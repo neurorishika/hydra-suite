@@ -39,6 +39,8 @@ def generate_active_learning_dataset(
     probabilistic,
     progress=None,
     should_stop=None,
+    export_levels=None,
+    class_names=None,
 ) -> dict:
     """Score frames and export an active-learning dataset. Pure/Qt-free."""
     detection_cache = None
@@ -140,7 +142,7 @@ def generate_active_learning_dataset(
         _emit(progress, 60, f"Exporting {len(selected_frames)} frames...")
         if _stopped(should_stop):
             return {"success": False, "cancelled": True}
-        dataset_dir = export_dataset(
+        manifest = export_dataset(
             video_path=video_path,
             csv_path=csv_path,
             frame_ids=selected_frames,
@@ -149,16 +151,25 @@ def generate_active_learning_dataset(
             class_name=class_name,
             params=params,
             include_context=include_context,
+            export_levels=export_levels,
+            class_names=class_names,
         )
+        dataset_dir = manifest["round_dir"]
         if _stopped(should_stop):
             return {
                 "success": False,
                 "cancelled": True,
                 "num_frames": len(selected_frames),
                 "dir": dataset_dir,
+                "manifest": manifest,
             }
         _emit(progress, 100, "Dataset generation complete!")
-        return {"success": True, "num_frames": len(selected_frames), "dir": dataset_dir}
+        return {
+            "success": True,
+            "num_frames": len(selected_frames),
+            "dir": dataset_dir,
+            "manifest": manifest,
+        }
     except Exception as e:
         logger.exception("Error during dataset generation")
         return {"success": False, "error": str(e)}

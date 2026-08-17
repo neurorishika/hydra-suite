@@ -1,15 +1,66 @@
 """Tests for dataset generation and active-learning export metadata."""
 
-import json
 from pathlib import Path
 
-import cv2
 import numpy as np
-import pandas as pd
 import pytest
 
-from hydra_suite.data.dataset_generation import FrameQualityScorer, export_dataset
+from hydra_suite.data.dataset_generation import FrameQualityScorer
 from hydra_suite.utils.geometry_levels import GeometryLevel
+
+
+class _FakeCap:
+    """Minimal cv2.VideoCapture stand-in returning one constant frame."""
+
+    def __init__(self, frame, total):
+        self._frame = frame
+        self._total = total
+
+    def isOpened(self):
+        return True
+
+    def get(self, prop):
+        import cv2
+
+        return {
+            cv2.CAP_PROP_FRAME_COUNT: self._total,
+            cv2.CAP_PROP_FRAME_WIDTH: self._frame.shape[1],
+            cv2.CAP_PROP_FRAME_HEIGHT: self._frame.shape[0],
+        }.get(prop, 0)
+
+    def set(self, prop, value):
+        return True
+
+    def read(self):
+        return True, self._frame.copy()
+
+    def release(self):
+        return None
+
+
+def _seg_obb_result():
+    import numpy as np
+
+    from hydra_suite.core.inference.result import OBBResult
+
+    corners = np.array(
+        [[[90.0, 40.0], [110.0, 40.0], [110.0, 60.0], [90.0, 60.0]]], dtype=np.float32
+    )
+    result = OBBResult(
+        frame_idx=0,
+        centroids=np.array([[100.0, 50.0]], dtype=np.float32),
+        angles=np.array([0.0], dtype=np.float32),
+        sizes=np.array([400.0], dtype=np.float32),
+        shapes=np.array([[400.0, 1.0]], dtype=np.float32),
+        confidences=np.array([0.8], dtype=np.float32),
+        corners=corners,
+        detection_ids=OBBResult.make_detection_ids(0, 1),
+        class_ids=np.array([0], dtype=np.int64),
+    )
+    result.polygons = [
+        np.array([[90.0, 40.0], [110.0, 42.0], [108.0, 60.0]], dtype=np.float32)
+    ]
+    return result
 
 
 class TestFrameQualityScorer:
@@ -260,139 +311,105 @@ class TestFrameQualityScorer:
         assert score == 0.0
 
 
-def test_export_dataset_writes_active_learning_metadata(tmp_path: Path):
-    video_path = tmp_path / "video.mp4"
+def test_export_dataset_writes_three_roots_for_segmentation(tmp_path, monkeypatch):
+    """A segmentation source yields polygon + obb + aabb roots."""
+    import numpy as np
+    import pandas as pd
+
+    import hydra_suite.data.dataset_generation as dg
+
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"")
     csv_path = tmp_path / "tracks.csv"
-    out_root = tmp_path / "out"
-
-    writer = cv2.VideoWriter(
-        str(video_path),
-        cv2.VideoWriter_fourcc(*"mp4v"),
-        5.0,
-        (64, 48),
-    )
-    assert writer.isOpened()
-    frame = np.full((48, 64, 3), 127, dtype=np.uint8)
-    writer.write(frame)
-    writer.release()
-
     pd.DataFrame(
-        [
-            {
-                "FrameID": 0,
-                "X": 32.0,
-                "Y": 24.0,
-                "Theta": 0.5,
-                "TrackID": 7,
-                "State": "tracked",
-            }
-        ]
+        {
+            "FrameID": [0, 0],
+            "TrackID": [1, 2],
+            "X": [100.0, 150.0],
+            "Y": [50.0, 60.0],
+            "Theta": [0.0, 0.5],
+            "State": ["tracked", "tracked"],
+        }
     ).to_csv(csv_path, index=False)
 
-    dataset_dir = export_dataset(
-        video_path=video_path,
-        csv_path=csv_path,
-        frame_ids=[0],
-        output_dir=out_root,
-        dataset_name="al_test",
-        class_name="ant",
-        params={
-            "DETECTION_METHOD": "background_subtraction",
-            "REFERENCE_BODY_SIZE": 10.0,
+    frame = np.zeros((200, 400, 3), dtype=np.uint8)
+    monkeypatch.setattr(dg, "_open_video", lambda p: _FakeCap(frame, total=3))
+    monkeypatch.setattr(dg, "_init_detection_runner", lambda params: None)
+    monkeypatch.setattr(
+        dg,
+        "_detect_records_for_frames",
+        lambda runner, frames, params, level: {
+            0: dg.records_from_obb_result(_seg_obb_result(), level)
         },
+    )
+
+    manifest = dg.export_dataset(
+        video_path=str(video),
+        csv_path=str(csv_path),
+        frame_ids=[0],
+        output_dir=str(tmp_path / "out"),
+        dataset_name="round",
+        class_name="ant",
+        params={"DETECTION_METHOD": "yolo_obb", "YOLO_OBB_DIRECT_TASK": "segment"},
         include_context=False,
     )
 
-    metadata_path = Path(dataset_dir) / "metadata.json"
-    raw = json.loads(metadata_path.read_text(encoding="utf-8"))
-    assert int(raw["schema_version"]) == 1
-    ann = raw["frames"][0]["annotations"][0]
-    assert ann["track_id"] == 7
-    assert ann["dimension_source"] == "reference_size"
-    assert "canonicalization_support" not in raw
-    assert "canonicalization" not in ann
-    assert "obb_corners_px" not in ann
+    assert manifest["native_level"] == "polygon"
+    assert {r["level"] for r in manifest["roots"]} == {"polygon", "obb", "aabb"}
+    round_dir = Path(manifest["round_dir"])
+    assert (round_dir / "polygon" / "labels").is_dir()
+    assert (round_dir / "aabb" / "labels").is_dir()
 
 
-def test_measurements_to_detections_scales_back_raw_obb_corners() -> None:
+def test_export_dataset_writes_two_roots_for_obb_model(tmp_path, monkeypatch):
+    """An OBB model must never produce a polygon root."""
+    import numpy as np
+    import pandas as pd
+
     import hydra_suite.data.dataset_generation as dg
 
-    detections = dg._measurements_to_detections(
-        [np.array([25.0, 25.0, 0.0], dtype=np.float32)],
-        [(100.0, 1.0)],
-        0.5,
-        obb_corners=[
-            np.array(
-                [[20.0, 20.0], [30.0, 20.0], [30.0, 30.0], [20.0, 30.0]],
-                dtype=np.float32,
-            )
-        ],
-    )
-
-    match = detections[(50.0, 50.0)]
-    assert match["corners"] is not None
-    assert np.allclose(
-        match["corners"],
-        np.array(
-            [[40.0, 40.0], [60.0, 40.0], [60.0, 60.0], [40.0, 60.0]],
-            dtype=np.float32,
-        ),
-    )
-
-
-def test_write_frame_annotations_prefers_matched_detector_corners(tmp_path: Path):
-    import hydra_suite.data.dataset_generation as dg
-
-    images_dir = tmp_path / "images"
-    labels_dir = tmp_path / "labels"
-    images_dir.mkdir()
-    labels_dir.mkdir()
-
-    frame = np.zeros((100, 100, 3), dtype=np.uint8)
-    df = pd.DataFrame(
-        [
-            {
-                "FrameID": 0,
-                "X": 50.0,
-                "Y": 50.0,
-                "Theta": 0.0,
-                "TrackID": 3,
-                "State": "tracked",
-            }
-        ]
-    )
-    matched_corners = np.array(
-        [[45.0, 25.0], [75.0, 45.0], [55.0, 75.0], [25.0, 55.0]],
-        dtype=np.float32,
-    )
-    yolo_detections = {
-        (50.0, 50.0): {
-            "width": 40.0,
-            "height": 20.0,
-            "theta": 1.0,
-            "corners": matched_corners,
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"")
+    csv_path = tmp_path / "tracks.csv"
+    pd.DataFrame(
+        {
+            "FrameID": [0, 0],
+            "TrackID": [1, 2],
+            "X": [100.0, 150.0],
+            "Y": [50.0, 60.0],
+            "Theta": [0.0, 0.5],
+            "State": ["tracked", "tracked"],
         }
-    }
+    ).to_csv(csv_path, index=False)
 
-    _image_filename, label_filename, annotations = dg._write_frame_annotations(
-        0,
-        frame,
-        df,
-        yolo_detections,
-        {"REFERENCE_BODY_SIZE": 10.0},
-        images_dir,
-        labels_dir,
-        100,
-        100,
-        1.0,
+    frame = np.zeros((200, 400, 3), dtype=np.uint8)
+    monkeypatch.setattr(dg, "_open_video", lambda p: _FakeCap(frame, total=3))
+    monkeypatch.setattr(dg, "_init_detection_runner", lambda params: None)
+    monkeypatch.setattr(
+        dg,
+        "_detect_records_for_frames",
+        lambda runner, frames, params, level: {
+            0: dg.records_from_obb_result(_seg_obb_result(), level)
+        },
     )
 
-    text = (labels_dir / label_filename).read_text(encoding="utf-8")
-    assert (
-        text
-        == "0 0.450000 0.250000 0.750000 0.450000 0.550000 0.750000 0.250000 0.550000\n"
+    manifest = dg.export_dataset(
+        video_path=str(video),
+        csv_path=str(csv_path),
+        frame_ids=[0],
+        output_dir=str(tmp_path / "out"),
+        dataset_name="round",
+        class_name="ant",
+        params={"DETECTION_METHOD": "yolo_obb", "YOLO_OBB_DIRECT_TASK": "obb"},
+        include_context=False,
     )
-    assert annotations[0]["dimension_source"] == "yolo_match"
+
+    assert manifest["native_level"] == "obb"
+    assert {r["level"] for r in manifest["roots"]} == {"obb", "aabb"}
+    round_dir = Path(manifest["round_dir"])
+    assert (round_dir / "obb" / "labels").is_dir()
+    assert (round_dir / "aabb" / "labels").is_dir()
+    assert not (round_dir / "polygon").exists()
 
 
 def test_score_frame_zero_count():
