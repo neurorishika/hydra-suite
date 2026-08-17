@@ -17,8 +17,35 @@ from hydra_suite.utils.geometry import (
     obb_corners_from_dims as _detection_corners_from_dims,
 )
 from hydra_suite.utils.geometry import polygon_overlap_ratio as _polygon_overlap_ratio
+from hydra_suite.utils.geometry_levels import GeometryLevel
 
 logger = logging.getLogger(__name__)
+
+_TASK_LEVELS = {
+    "segment": GeometryLevel.POLYGON,
+    "obb": GeometryLevel.OBB,
+    "detect": GeometryLevel.AABB,
+}
+
+
+def resolve_native_level(params) -> GeometryLevel:
+    """The geometry level the configured detection source can actually produce.
+
+    Never claims a level the model did not compute: a rotated quad is OBB, not
+    a polygon. bg-sub produces true foreground contours, so it reaches POLYGON.
+    """
+    method = str(params.get("DETECTION_METHOD", "background_subtraction")).lower()
+    if method == "background_subtraction":
+        return GeometryLevel.POLYGON
+    if method != "yolo_obb":
+        return GeometryLevel.OBB
+
+    mode = str(params.get("YOLO_OBB_MODE", "direct")).strip().lower()
+    if mode == "sequential":
+        task = str(params.get("YOLO_OBB_STAGE2_TASK", "obb")).strip().lower()
+    else:
+        task = str(params.get("YOLO_OBB_DIRECT_TASK", "obb")).strip().lower()
+    return _TASK_LEVELS.get(task, GeometryLevel.OBB)
 
 
 class FrameQualityScorer:
@@ -411,41 +438,89 @@ def _make_dataset_dir(output_dir, dataset_name):
 
 
 def _init_detection_runner(params):
-    """Build a detection-only InferenceRunner for dataset dimension extraction.
+    """Build a detection-only InferenceRunner for dataset label extraction.
 
-    Returns None for non-yolo_obb methods (dimension extraction then falls back
-    to reference-size approximation, as before).
+    Unlike the legacy version this supports every detection source, not just
+    `yolo_obb`: returning None for bg-sub meant every exported label was a
+    fabricated reference-size box.
     """
-    detection_method = params.get("DETECTION_METHOD", "background_subtraction")
-    if detection_method != "yolo_obb":
-        return None
+    method = str(params.get("DETECTION_METHOD", "background_subtraction")).lower()
+    native_level = resolve_native_level(params)
     try:
-        from ..core.inference.config import build_obb_only_config
         from ..core.inference.runner import InferenceRunner
 
-        model_path = str(
-            params.get(
-                "YOLO_OBB_DIRECT_MODEL_PATH",
-                params.get("YOLO_MODEL_PATH", "yolo26s-obb.pt"),
+        if method == "background_subtraction":
+            # build_inference_config_from_params never builds a BgSubConfig
+            # (it only ever wires up `obb=`), so a bgsub-backed InferenceConfig
+            # has to be constructed explicitly here, mirroring the live
+            # tracking path in core/tracking/worker.py (bgsub branch).
+            from ..core.inference.config import (
+                BgSubConfig,
+                InferenceConfig,
+                migrate_runtime_to_tier,
             )
-            or "yolo26s-obb.pt"
-        )
-        cfg = build_obb_only_config(
-            model_path,
-            runtime_tier=str(params.get("RUNTIME_TIER", "") or "") or None,
-            confidence_threshold=float(
-                params.get("DATASET_YOLO_CONFIDENCE_THRESHOLD", 0.05)
-            ),
-            iou_threshold=float(params.get("DATASET_YOLO_IOU_THRESHOLD", 0.5)),
-            max_targets=max(1, int(params.get("MAX_TARGETS", 8))),
-            mode=str(params.get("YOLO_OBB_MODE", "direct")).strip().lower(),
-        )
+
+            _compute_runtime = str(params.get("COMPUTE_RUNTIME", "cpu"))
+            _raw_tier = str(params.get("RUNTIME_TIER", "") or "").strip().lower()
+            _runtime_tier = (
+                _raw_tier
+                if _raw_tier in {"cpu", "gpu", "gpu_fast"}
+                else migrate_runtime_to_tier({_compute_runtime})
+            )
+            bgsub_cfg = BgSubConfig.from_params(params)
+            if native_level is GeometryLevel.POLYGON:
+                bgsub_cfg.emit_native_geometry = True
+            cfg = InferenceConfig(
+                obb=None,
+                bgsub=bgsub_cfg,
+                runtime_tier=_runtime_tier,
+                detection_batch_size=int(params.get("DETECTION_BATCH_SIZE", 1) or 1),
+            )
+        else:
+            from ..core.inference.config import build_obb_only_config
+
+            mode = str(params.get("YOLO_OBB_MODE", "direct")).strip().lower()
+            task = (
+                (
+                    str(params.get("YOLO_OBB_STAGE2_TASK", "obb"))
+                    if mode == "sequential"
+                    else str(params.get("YOLO_OBB_DIRECT_TASK", "obb"))
+                )
+                .strip()
+                .lower()
+            )
+            model_path = str(
+                params.get(
+                    "YOLO_OBB_DIRECT_MODEL_PATH",
+                    params.get("YOLO_MODEL_PATH", "yolo26s-obb.pt"),
+                )
+                or "yolo26s-obb.pt"
+            )
+            cfg = build_obb_only_config(
+                model_path,
+                runtime_tier=str(params.get("RUNTIME_TIER", "") or "") or None,
+                confidence_threshold=float(
+                    params.get("DATASET_YOLO_CONFIDENCE_THRESHOLD", 0.05)
+                ),
+                iou_threshold=float(params.get("DATASET_YOLO_IOU_THRESHOLD", 0.5)),
+                max_targets=max(1, int(params.get("MAX_TARGETS", 8))),
+                mode=mode,
+                model_task=task,
+                emit_native_geometry=(native_level is GeometryLevel.POLYGON),
+            )
+
         runner = InferenceRunner(cfg)
-        logger.info("Detection runner initialized for dimension extraction")
+        logger.info(
+            "Detection runner initialized for dataset export (method=%s, level=%s)",
+            method,
+            native_level.label,
+        )
         return runner
     except Exception as e:
         logger.warning(
-            f"Could not initialize detection runner: {e}. Using reference size approximation."
+            "Could not initialize detection runner: %s. "
+            "Labels will fall back to reference-size approximation.",
+            e,
         )
         return None
 

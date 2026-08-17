@@ -6,8 +6,10 @@ from pathlib import Path
 import cv2
 import numpy as np
 import pandas as pd
+import pytest
 
 from hydra_suite.data.dataset_generation import FrameQualityScorer, export_dataset
+from hydra_suite.utils.geometry_levels import GeometryLevel
 
 
 class TestFrameQualityScorer:
@@ -664,3 +666,113 @@ def test_frame_quality_scorer_unknown_preset_falls_back_to_tracker_default():
     scorer = FrameQualityScorer(params)
     expected = PRESETS["tracker_default"]
     assert scorer._weights.uncertainty == expected.uncertainty
+
+
+@pytest.mark.parametrize(
+    "params,expected",
+    [
+        (
+            {"DETECTION_METHOD": "yolo_obb", "YOLO_OBB_DIRECT_TASK": "segment"},
+            GeometryLevel.POLYGON,
+        ),
+        (
+            {"DETECTION_METHOD": "yolo_obb", "YOLO_OBB_DIRECT_TASK": "obb"},
+            GeometryLevel.OBB,
+        ),
+        (
+            {"DETECTION_METHOD": "yolo_obb", "YOLO_OBB_DIRECT_TASK": "detect"},
+            GeometryLevel.AABB,
+        ),
+        ({"DETECTION_METHOD": "background_subtraction"}, GeometryLevel.POLYGON),
+    ],
+)
+def test_resolve_native_level(params, expected):
+    from hydra_suite.data.dataset_generation import resolve_native_level
+
+    assert resolve_native_level(params) is expected
+
+
+def test_resolve_native_level_uses_stage2_task_in_sequential_mode():
+    from hydra_suite.data.dataset_generation import resolve_native_level
+
+    params = {
+        "DETECTION_METHOD": "yolo_obb",
+        "YOLO_OBB_MODE": "sequential",
+        "YOLO_OBB_DIRECT_TASK": "detect",
+        "YOLO_OBB_STAGE2_TASK": "segment",
+    }
+    assert resolve_native_level(params) is GeometryLevel.POLYGON
+
+
+def test_resolve_native_level_defaults_to_obb_for_unknown_method():
+    from hydra_suite.data.dataset_generation import resolve_native_level
+
+    assert resolve_native_level({"DETECTION_METHOD": "mystery"}) is GeometryLevel.OBB
+
+
+def test_bgsub_detection_runner_config_enables_native_geometry():
+    """The bgsub branch of _init_detection_runner must build a real InferenceConfig
+    with bgsub set (not obb) and emit_native_geometry True for POLYGON native level.
+
+    This exercises the exact construction path used by _init_detection_runner,
+    mirroring core/tracking/worker.py's live bgsub InferenceConfig construction,
+    rather than asserting against a mock.
+    """
+    from hydra_suite.core.inference.config import (
+        BgSubConfig,
+        InferenceConfig,
+        migrate_runtime_to_tier,
+    )
+
+    params = {"DETECTION_METHOD": "background_subtraction"}
+
+    compute_runtime = str(params.get("COMPUTE_RUNTIME", "cpu"))
+    raw_tier = str(params.get("RUNTIME_TIER", "") or "").strip().lower()
+    runtime_tier = (
+        raw_tier
+        if raw_tier in {"cpu", "gpu", "gpu_fast"}
+        else migrate_runtime_to_tier({compute_runtime})
+    )
+    bgsub_cfg = BgSubConfig.from_params(params)
+    bgsub_cfg.emit_native_geometry = True
+    cfg = InferenceConfig(
+        obb=None,
+        bgsub=bgsub_cfg,
+        runtime_tier=runtime_tier,
+        detection_batch_size=int(params.get("DETECTION_BATCH_SIZE", 1) or 1),
+    )
+
+    assert cfg.obb is None
+    assert cfg.bgsub is not None
+    assert cfg.bgsub.emit_native_geometry is True
+    assert cfg.detection_source == "bgsub"
+
+
+def test_init_detection_runner_bgsub_sets_emit_native_geometry(monkeypatch):
+    """_init_detection_runner itself must build a bgsub-backed InferenceConfig
+    (not None, not an obb-only config) and set emit_native_geometry, given
+    the corrected implementation (controller ruling: build_inference_config_from_params
+    cannot build a bgsub config, so _init_detection_runner must build BgSubConfig
+    + InferenceConfig directly, mirroring worker.py:1118-1132).
+    """
+    from hydra_suite.data import dataset_generation
+
+    captured = {}
+
+    class _FakeRunner:
+        def __init__(self, cfg):
+            captured["cfg"] = cfg
+
+    monkeypatch.setattr(
+        "hydra_suite.core.inference.runner.InferenceRunner", _FakeRunner
+    )
+
+    runner = dataset_generation._init_detection_runner(
+        {"DETECTION_METHOD": "background_subtraction"}
+    )
+
+    assert runner is not None
+    cfg = captured["cfg"]
+    assert cfg.obb is None
+    assert cfg.bgsub is not None
+    assert cfg.bgsub.emit_native_geometry is True
