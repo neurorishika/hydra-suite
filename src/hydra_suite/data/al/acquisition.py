@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, fields
 from typing import Sequence
 
@@ -76,12 +75,7 @@ def _channel_array(signals: Sequence[ALSignals], attr: str) -> np.ndarray:
     if attr in {"assignment", "track_loss", "position_uncertainty"}:
         vals = [s.extras.get(attr, 0.0) for s in signals]
     elif attr == "uncertainty":
-        vals = []
-        for s in signals:
-            if math.isnan(s.mean_confidence):
-                vals.append(0.0)
-            else:
-                vals.append(max(0.0, min(1.0, 1.0 - s.mean_confidence)))
+        vals = [s.uncertainty_score for s in signals]
     else:
         # Map channel names to ALSignals attributes
         attr_map = {
@@ -98,27 +92,27 @@ def _channel_array(signals: Sequence[ALSignals], attr: str) -> np.ndarray:
     return arr
 
 
-def _minmax(arr: np.ndarray) -> np.ndarray:
-    if arr.size == 0:
-        return arr
-    lo, hi = float(arr.min()), float(arr.max())
-    if hi - lo <= 1e-12:
-        return np.zeros_like(arr)
-    return (arr - lo) / (hi - lo)
-
-
 def _composite_score(
     signals: Sequence[ALSignals],
     weights: AcquisitionWeights,
 ) -> np.ndarray:
+    """Weighted sum of ABSOLUTE per-channel severities, in [0, 1].
+
+    Deliberately NOT min-max normalized: a within-run rescale makes the top
+    frame score ~1 however easy the video was, which both defeats `min_score`
+    as a gate and makes scores incomparable across videos. A perfectly tracked
+    video must be able to legitimately produce zero candidates -- that is the
+    entire point of restoring absolute semantics. Do NOT reintroduce
+    normalization here.
+    """
     w = weights.normalized()
     channels = {
         "uncertainty": w.uncertainty,
         "nms_instability": w.nms_instability,
         "count": w.count,
         "crowd": w.crowd,
-        "edge": w.edge,
         "fragmentation": w.fragmentation,
+        "edge": w.edge,
         "assignment": w.assignment,
         "track_loss": w.track_loss,
         "position_uncertainty": w.position_uncertainty,
@@ -128,8 +122,37 @@ def _composite_score(
     for name, weight in channels.items():
         if weight <= 0:
             continue
-        score += weight * _minmax(_channel_array(signals, name))
+        score += weight * np.clip(_channel_array(signals, name), 0.0, 1.0)
     return score
+
+
+def explain(
+    signals: Sequence[ALSignals],
+    weights: AcquisitionWeights,
+) -> dict[str, float]:
+    """Per-channel maxima observed across `signals`, for weighted channels only.
+
+    Used to tell the user WHY a selection came back empty under absolute
+    scoring, rather than surfacing a bare "no frames met the criteria".
+    """
+    w = weights.normalized()
+    out: dict[str, float] = {}
+    for name in (
+        "uncertainty",
+        "nms_instability",
+        "count",
+        "crowd",
+        "fragmentation",
+        "edge",
+        "assignment",
+        "track_loss",
+        "position_uncertainty",
+    ):
+        if getattr(w, name) <= 0:
+            continue
+        arr = _channel_array(signals, name)
+        out[name] = float(arr.max()) if arr.size else 0.0
+    return out
 
 
 def select(

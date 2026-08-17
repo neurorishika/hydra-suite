@@ -1,6 +1,6 @@
 """Active learning core: frame sources, candidate pool, signals, acquisition."""
 
-from .acquisition import PRESETS, AcquisitionWeights, select
+from .acquisition import PRESETS, AcquisitionWeights, explain, select
 from .candidate_pool import CandidatePoolConfig, build_candidate_pool
 from .frame_source import (
     DetectKitProjectSource,
@@ -28,6 +28,7 @@ __all__ = [
     "PRESETS",
     "VideoFrameSource",
     "build_candidate_pool",
+    "explain",
     "score_count_deviation",
     "score_crowd",
     "score_nms_instability",

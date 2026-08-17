@@ -126,9 +126,8 @@ class FrameQualityScorer:
         # New pipeline: build ALSignals and store for get_worst_frames.
         # ------------------------------------------------------------------
         confidences = detection_data.get("confidences") or []
-        mean_conf, margin = score_uncertainty(
-            confidences, conf_floor=self.conf_threshold
-        )
+        mean_conf = float(np.mean(confidences)) if confidences else float("nan")
+        uncertainty = score_uncertainty(confidences, conf_floor=self.conf_threshold)
 
         n_dets = int(detection_data.get("count", len(confidences)))
         count_dev = score_count_deviation(n_dets, self.max_targets)
@@ -159,7 +158,7 @@ class FrameQualityScorer:
             frame_id=int(frame_id),
             n_detections=n_dets,
             mean_confidence=mean_conf,
-            margin=margin,
+            uncertainty_score=uncertainty,
             count_deviation=count_dev,
             crowd_score=crowd,
             edge_score=edge,

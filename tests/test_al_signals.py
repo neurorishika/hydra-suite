@@ -22,29 +22,26 @@ def test_alsignals_defaults():
     assert s.extras == {}
 
 
-def test_score_uncertainty_high_confidence_yields_high_margin():
-    mean_conf, margin = score_uncertainty([0.95, 0.92, 0.97], conf_floor=0.5)
-    assert mean_conf > 0.9
-    assert margin > 0.4  # well above the floor
+def test_score_uncertainty_high_confidence_is_zero_severity():
+    severity = score_uncertainty([0.95, 0.92, 0.97], conf_floor=0.5)
+    assert severity == 0.0  # well above the floor -- not a candidate
 
 
-def test_score_uncertainty_low_confidence_yields_low_margin():
-    mean_conf, margin = score_uncertainty([0.4, 0.45, 0.55], conf_floor=0.5)
-    assert mean_conf < 0.55
-    assert margin <= 0.05
+def test_score_uncertainty_low_confidence_yields_high_severity():
+    severity = score_uncertainty([0.4, 0.45, 0.55], conf_floor=0.5)
+    assert 0.0 < severity <= 1.0
 
 
-def test_score_uncertainty_empty_returns_nan_zero():
-    mean_conf, margin = score_uncertainty([], conf_floor=0.5)
-    assert math.isnan(mean_conf)
-    assert margin == 0.0
+def test_score_uncertainty_empty_returns_zero():
+    assert score_uncertainty([], conf_floor=0.5) == 0.0
 
 
 def test_score_count_deviation():
     assert score_count_deviation(4, expected=4) == 0.0
     assert score_count_deviation(0, expected=4) == 1.0
     assert score_count_deviation(2, expected=4) == 0.5
-    assert score_count_deviation(8, expected=4) == 1.0  # clipped
+    assert score_count_deviation(8, expected=4) == 0.5  # overcount halved, clipped
+    assert score_count_deviation(100, expected=4) == 0.5  # overcount clip ceiling
     assert score_count_deviation(3, expected=0) == 0.0  # no expected -> no signal
 
 

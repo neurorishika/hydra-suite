@@ -22,7 +22,7 @@ class ALSignals:
     frame_id: int
     n_detections: int = 0
     mean_confidence: float = float("nan")
-    margin: float = 0.0
+    uncertainty_score: float | None = None
     nms_instability: float = 0.0
     count_deviation: float = 0.0
     crowd_score: float = 0.0
@@ -30,30 +30,59 @@ class ALSignals:
     edge_score: float = 0.0
     extras: dict[str, float] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        """Derive `uncertainty_score` from `mean_confidence` when not supplied.
+
+        Callers that already know their detector's confidence floor (e.g.
+        `al_worker.py`, `dataset_generation.py`) compute the absolute severity
+        themselves via `score_uncertainty(confidences, conf_floor=...)` and
+        pass it in explicitly -- that value (including an explicit 0.0) is
+        always respected. Callers that only have the mean (hand-built
+        `ALSignals` in tests, or any future lightweight caller) get a
+        best-effort severity derived here with the standard floor (0.5), since
+        `mean_confidence` alone cannot be turned into a severity without
+        knowing what floor to compare it against.
+        """
+        if self.uncertainty_score is None:
+            self.uncertainty_score = score_uncertainty([self.mean_confidence])
+
 
 def score_uncertainty(
     confidences: Sequence[float],
     conf_floor: float = 0.5,
-) -> tuple[float, float]:
-    """Return (mean_confidence, margin).
+) -> float:
+    """Return absolute detection-uncertainty severity in [0, 1].
 
-    `margin` is `min(c) - conf_floor` clipped to [0, 1]. A small/zero margin
-    indicates at least one detection sits at or below the floor.
+    Exactly 0 when the frame's mean confidence sits at or above `conf_floor` --
+    a confidently-detected frame is not an active-learning candidate. All-NaN
+    confidences (bg-sub, which has no confidence head) also score 0; treating
+    "no information" as "maximum uncertainty" would make every bg-sub frame a
+    candidate.
     """
     valid = [float(c) for c in confidences if c is not None and not math.isnan(c)]
     if not valid:
-        return float("nan"), 0.0
+        return 0.0
     mean_conf = float(np.mean(valid))
-    raw_margin = float(min(valid) - conf_floor)
-    margin = float(max(0.0, min(1.0, raw_margin)))
-    return mean_conf, margin
+    floor = max(float(conf_floor), 1e-6)
+    if mean_conf >= floor:
+        return 0.0
+    return float(min(1.0, (floor - mean_conf) / floor))
 
 
 def score_count_deviation(n: int, expected: int) -> float:
-    """Return |n - expected| / max(expected, 1), clipped to [0, 1]. 0 if expected<=0."""
+    """Return absolute count-mismatch severity in [0, 1]. 0 if expected <= 0.
+
+    Asymmetric by design, preserving the legacy scorer's judgement: a missed
+    animal is twice as bad as a spurious box, because a false negative removes
+    training signal while a false positive is easy to delete during review.
+    """
     if expected <= 0:
         return 0.0
-    return float(min(1.0, abs(n - expected) / float(expected)))
+    if n == expected:
+        return 0.0
+    if n < expected:
+        return float(min(1.0, (expected - n) / float(expected)))
+    return float(min(1.0, (n - expected) / float(expected)) * 0.5)
 
 
 def score_crowd(

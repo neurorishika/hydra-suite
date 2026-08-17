@@ -29,15 +29,9 @@ def test_presets_are_normalized():
 
 def test_select_picks_highest_score():
     signals = [
-        _signal(
-            0, mean_confidence=0.95, margin=0.4, count_deviation=0.0, crowd_score=0.0
-        ),
-        _signal(
-            100, mean_confidence=0.4, margin=0.0, count_deviation=0.5, crowd_score=0.7
-        ),
-        _signal(
-            200, mean_confidence=0.85, margin=0.3, count_deviation=0.0, crowd_score=0.2
-        ),
+        _signal(0, mean_confidence=0.95, count_deviation=0.0, crowd_score=0.0),
+        _signal(100, mean_confidence=0.4, count_deviation=0.5, crowd_score=0.7),
+        _signal(200, mean_confidence=0.85, count_deviation=0.0, crowd_score=0.2),
     ]
     picks = select(
         signals,

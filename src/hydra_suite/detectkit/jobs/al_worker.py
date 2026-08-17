@@ -26,6 +26,7 @@ from hydra_suite.data.al.signals import (
     ALSignals,
     score_count_deviation,
     score_crowd,
+    score_fragmentation,
     score_nms_instability,
     score_uncertainty,
 )
@@ -92,7 +93,7 @@ def _frame_signals(
     # for both, so no branching is needed here.
     detections = list(detector_fn(frame, base_conf, base_iou))
     confidences = [d[5] for d in detections]
-    mean_conf, margin = score_uncertainty(confidences, conf_floor=base_conf)
+    uncertainty = score_uncertainty(confidences, conf_floor=base_conf)
     count_dev = score_count_deviation(len(detections), expected_count)
 
     h, w = frame.shape[:2]
@@ -106,11 +107,12 @@ def _frame_signals(
     signal = ALSignals(
         frame_id=frame_id,
         n_detections=len(detections),
-        mean_confidence=mean_conf,
-        margin=margin,
+        mean_confidence=float(np.mean(confidences)) if confidences else float("nan"),
+        uncertainty_score=uncertainty,
         nms_instability=nms,
         count_deviation=count_dev,
         crowd_score=crowd,
+        fragmentation_score=score_fragmentation(obb_corners),
         edge_score=edge,
     )
     return signal, detections
