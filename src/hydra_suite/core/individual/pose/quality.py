@@ -376,24 +376,46 @@ def _collect_body_lengths(
     posterior_indices: List[int],
     min_valid_conf: float,
 ) -> List[float]:
-    """Extract valid body lengths from high-confidence rows."""
-    body_lengths: List[float] = []
-    for _, row in high_conf_df.iterrows():
-        kpts = _extract_keypoints_from_row(row, pose_labels)
-        if kpts is None:
-            continue
-        geom = compute_pose_geometry_from_keypoints(
-            kpts,
-            anterior_indices,
-            posterior_indices,
-            min_valid_conf,
-        )
-        if geom is None:
-            continue
-        bl = geom.get("body_length")
-        if bl is not None and float(bl) > 0.0:
-            body_lengths.append(float(bl))
-    return body_lengths
+    """Extract valid body lengths from high-confidence rows.
+
+    Vectorized equivalent of the historical ``iterrows()`` loop that called
+    ``_extract_keypoints_from_row`` + ``compute_pose_geometry_from_keypoints``
+    per row. Produces the identical sample sequence (same rows, same order,
+    same NaN/valid filtering) because ``calibrate_body_length_prior`` never
+    passes ``ignore_indices`` -- the ignore set is always empty here, which
+    is what makes the anterior/posterior weighted-centroid math reducible to
+    a per-index accumulation across all rows at once.
+    """
+    if high_conf_df.empty:
+        return []
+
+    kpts, any_found = _stack_keypoints(high_conf_df, pose_labels)
+    if not bool(any_found.any()):
+        return []
+
+    ax, ay, a_valid = _weighted_centroid_batch(kpts, anterior_indices, min_valid_conf)
+    px, py, p_valid = _weighted_centroid_batch(kpts, posterior_indices, min_valid_conf)
+
+    dx = ax - px
+    dy = ay - py
+    coords_finite = np.isfinite(dx) & np.isfinite(dy)
+    candidate_mask = any_found & a_valid & p_valid & coords_finite
+
+    # NOTE: original code computes body length via ``math.hypot(dx, dy)``
+    # (features.py), NOT ``sqrt(dx**2 + dy**2)``. ``np.hypot`` is NOT
+    # guaranteed bit-identical to ``math.hypot`` -- numpy's vectorized hypot
+    # ufunc can differ from the platform libm scalar ``hypot`` by up to 1
+    # ULP (empirically confirmed on this box), unlike ``sqrt`` which IEEE-754
+    # requires to be correctly rounded (and where numpy/libm therefore always
+    # agree). So body length is computed with ``math.hypot`` in a scalar loop
+    # restricted to candidate rows only, to guarantee exact equality with the
+    # original per-row computation.
+    body_length = np.zeros(dx.shape[0], dtype=np.float64)
+    for row_idx in np.nonzero(candidate_mask)[0]:
+        body_length[row_idx] = math.hypot(dx[row_idx], dy[row_idx])
+
+    mask = candidate_mask & (body_length > 0.0)
+    return [float(v) for v in body_length[mask]]
 
 
 def _body_length_prior_from_samples(samples: List[float]) -> BodyLengthPrior:
@@ -488,24 +510,78 @@ def _accumulate_edge_samples(
     skeleton_edges: List[Tuple[int, int]],
     min_valid_conf: float,
 ) -> Dict[Tuple[int, int], List[float]]:
-    """Accumulate per-edge distance samples from high-confidence rows."""
+    """Accumulate per-edge distance samples from high-confidence rows.
+
+    Vectorized equivalent of the historical ``iterrows()`` loop that called
+    ``_extract_keypoints_from_row`` + ``_measure_edge_distance`` per row per
+    edge, with a **row-major** outer loop and a ``skeleton_edges``-inner
+    loop -- i.e. for a fixed canonical key produced by two or more edges
+    (e.g. a duplicate/reversed edge pair), the merged sample sequence is
+    ``[row0_edgeA, row0_edgeB, row1_edgeA, row1_edgeB, ...]``, not
+    edge-major ``[row0_edgeA, row1_edgeA, ..., row0_edgeB, row1_edgeB,
+    ...]``.
+
+    The per-edge distance/validity computation is fully vectorized across
+    all rows at once (replacing the per-row column lookups and Python-level
+    keypoint extraction). Only the small, fixed-size loop over
+    ``skeleton_edges`` remains in Python. To reproduce the exact row-major
+    merge order for edges sharing a canonical key, each edge's valid samples
+    are first collected as ``(row_idx, edge_position, distance)`` triples;
+    once every edge has been processed, each key's triples are stably
+    sorted by ``(row_idx, edge_position)`` before flattening to the final
+    per-key sample list -- this reproduces the original nested loop's
+    interleaving (row outer, ``skeleton_edges`` order inner) regardless of
+    the order in which edges were vectorized.
+    """
     edge_samples: Dict[Tuple[int, int], List[float]] = {}
     K = len(pose_labels)
-    for _, row in high_conf_df.iterrows():
-        kpts = _extract_keypoints_from_row(row, pose_labels)
-        if kpts is None or len(kpts) < K:
+    if high_conf_df.empty:
+        return edge_samples
+
+    kpts, any_found = _stack_keypoints(high_conf_df, pose_labels)
+    if K == 0 or not bool(any_found.any()):
+        return edge_samples
+
+    # Per canonical key: list of (row_idx, edge_position_in_skeleton_edges,
+    # distance) triples, merged and ordered row-major after all edges have
+    # been processed.
+    entries_by_key: Dict[Tuple[int, int], List[Tuple[int, int, float]]] = {}
+
+    for edge_pos, edge in enumerate(skeleton_edges):
+        try:
+            ei, ej = int(edge[0]), int(edge[1])
+        except Exception:
             continue
-        for edge in skeleton_edges:
-            try:
-                ei, ej = int(edge[0]), int(edge[1])
-            except Exception:
-                continue
-            if ei >= K or ej >= K:
-                continue
-            dist = _measure_edge_distance(kpts, ei, ej, min_valid_conf)
-            if dist is not None:
-                key = (min(ei, ej), max(ei, ej))
-                edge_samples.setdefault(key, []).append(dist)
+        if ei >= K or ej >= K:
+            continue
+
+        xi = kpts[:, ei, 0].astype(np.float64)
+        yi = kpts[:, ei, 1].astype(np.float64)
+        ci = kpts[:, ei, 2].astype(np.float64)
+        xj = kpts[:, ej, 0].astype(np.float64)
+        yj = kpts[:, ej, 1].astype(np.float64)
+        cj = kpts[:, ej, 2].astype(np.float64)
+
+        # Mirrors _measure_edge_distance exactly: NaN confidence does NOT
+        # fail the gate (NaN < threshold is False), only an explicit
+        # below-threshold confidence does.
+        conf_ok = ~(ci < float(min_valid_conf)) & ~(cj < float(min_valid_conf))
+        coord_ok = np.isfinite(xi) & np.isfinite(yi) & np.isfinite(xj) & np.isfinite(yj)
+
+        dist = np.sqrt((xi - xj) ** 2 + (yi - yj) ** 2)
+        valid = any_found & conf_ok & coord_ok & (dist > 0.0)
+        row_indices = np.nonzero(valid)[0]
+        if row_indices.size == 0:
+            continue
+
+        key = (min(ei, ej), max(ei, ej))
+        bucket = entries_by_key.setdefault(key, [])
+        for row_idx in row_indices:
+            bucket.append((int(row_idx), edge_pos, float(dist[row_idx])))
+
+    for key, entries in entries_by_key.items():
+        entries.sort(key=lambda t: (t[0], t[1]))
+        edge_samples[key] = [d for _, _, d in entries]
     return edge_samples
 
 
@@ -702,6 +778,7 @@ def apply_quality_to_dataframe(
     min_valid_keypoints = int(params.get("POSE_EXPORT_MIN_VALID_KEYPOINTS", 3))
     ignore_kpts_raw = params.get("POSE_IGNORE_KEYPOINTS", [])
     ignore_indices: List[int] = [int(i) for i in (ignore_kpts_raw or [])]
+    ignore_set = set(ignore_indices)
 
     # ------------------------------------------------------------------
     # Build column triplets
@@ -726,54 +803,296 @@ def apply_quality_to_dataframe(
     # Determine which rows have any pose data
     all_conf_cols = [c for _, _, c in col_triplets if c in out.columns]
 
-    for row_idx in out.index:
-        row = out.loc[row_idx]
+    if not all_conf_cols:
+        # No pose columns at all -- every row is "no_pose" (matches the
+        # per-row loop, which would compute has_pose=False for every row).
+        out["PoseQualityState"] = "no_pose"
+        out["PoseQualityScore"] = 0.0
+        out["PoseSource"] = ""
+        return out
 
-        # Check if this row has any pose data at all
-        has_pose = False
-        if all_conf_cols:
-            try:
-                has_pose = any(
-                    not pd.isna(row[c]) for c in all_conf_cols if c in out.columns
-                )
-            except Exception:
-                has_pose = False
+    has_pose = out[all_conf_cols].notna().any(axis=1).to_numpy()
 
-        if not has_pose:
-            out.at[row_idx, "PoseQualityState"] = "no_pose"
-            out.at[row_idx, "PoseQualityScore"] = 0.0
-            out.at[row_idx, "PoseSource"] = ""
-            continue
+    # Default state for every row is "no_pose" / score 0.0 / source "" --
+    # matches the per-row loop's ``continue`` branch. Flags/WasCleaned keep
+    # their init defaults ("" / 0) for these rows, exactly as before.
+    out["PoseQualityState"] = "no_pose"
+    out["PoseQualityScore"] = 0.0
+    out["PoseSource"] = ""
 
-        # Extract keypoints for this row
-        kpts = _extract_keypoints_from_row(row, pose_labels)
+    if not bool(has_pose.any()):
+        return out
 
-        result = assess_pose_row(
+    # ------------------------------------------------------------------
+    # Batch-extract (N, K, 3) float32 keypoints, mirroring
+    # ``_extract_keypoints_from_row`` exactly (see ``_stack_keypoints``
+    # docstring for the equivalence argument).
+    # ------------------------------------------------------------------
+    kpts, any_found = _stack_keypoints(out, pose_labels)
+
+    # Rows where has_pose=True but extraction found nothing at all
+    # (``_extract_keypoints_from_row`` would have returned None ->
+    # ``assess_pose_row(None, ...)`` -> ``_rejected_result(0, ["null_input"])``).
+    # cleaned_keypoints has length 0 in that case, so the write-back loop
+    # never touches the confidence columns for these rows.
+    null_input_mask = has_pose & ~any_found
+
+    # Rows where extraction succeeded but every value is non-finite
+    # (assess_pose_row's ``if not np.any(np.isfinite(arr))`` branch ->
+    # ``_rejected_result(len(arr), ["all_nan"])``, which DOES zero every
+    # confidence column via ``np.zeros((n_kpts, 3), dtype=np.float32)``).
+    all_nan_mask = has_pose & any_found & ~np.any(np.isfinite(kpts), axis=(1, 2))
+
+    # Remaining rows go through the full clean -> reject -> score pipeline.
+    normal_mask = has_pose & any_found & ~all_nan_mask
+
+    conf_cols_by_label = [f"PoseKpt_{label}_Conf" for label in pose_labels]
+
+    if bool(null_input_mask.any()):
+        idxs = out.index[null_input_mask]
+        out.loc[idxs, "PoseQualityState"] = "rejected"
+        out.loc[idxs, "PoseQualityScore"] = 0.0
+        out.loc[idxs, "PoseQualityFlags"] = "null_input"
+        out.loc[idxs, "PoseWasCleaned"] = 1
+        out.loc[idxs, "PoseSource"] = "cache"
+
+    if bool(all_nan_mask.any()):
+        idxs = out.index[all_nan_mask]
+        out.loc[idxs, "PoseQualityState"] = "rejected"
+        out.loc[idxs, "PoseQualityScore"] = 0.0
+        out.loc[idxs, "PoseQualityFlags"] = "all_nan"
+        out.loc[idxs, "PoseWasCleaned"] = 1
+        out.loc[idxs, "PoseSource"] = "cache"
+        for c_col in conf_cols_by_label:
+            if c_col in out.columns:
+                out.loc[idxs, c_col] = 0.0
+
+    if bool(normal_mask.any()):
+        _apply_quality_normal_rows(
+            out,
             kpts,
-            min_valid_conf=min_valid_conf,
-            min_valid_fraction=min_valid_fraction,
-            min_valid_keypoints=min_valid_keypoints,
-            ignore_indices=ignore_indices if ignore_indices else None,
-            body_length_prior=body_length_prior,
-            anterior_indices=anterior_indices,
-            posterior_indices=posterior_indices,
-            skeleton_edges=skeleton_edges,
-            edge_length_priors=edge_length_priors,
+            normal_mask,
+            pose_labels,
+            conf_cols_by_label,
+            min_valid_conf,
+            min_valid_fraction,
+            min_valid_keypoints,
+            ignore_set,
+            body_length_prior,
+            anterior_indices,
+            posterior_indices,
+            skeleton_edges,
+            edge_length_priors,
         )
 
-        # Write cleaned confidences back
-        for i, label in enumerate(pose_labels):
-            c_col = f"PoseKpt_{label}_Conf"
-            if c_col in out.columns and i < len(result.cleaned_keypoints):
-                out.at[row_idx, c_col] = float(result.cleaned_keypoints[i, 2])
-
-        out.at[row_idx, "PoseQualityScore"] = result.quality_score
-        out.at[row_idx, "PoseQualityState"] = result.quality_state
-        out.at[row_idx, "PoseQualityFlags"] = "|".join(result.quality_flags)
-        out.at[row_idx, "PoseWasCleaned"] = int(result.was_cleaned)
-        out.at[row_idx, "PoseSource"] = "cache"
-
     return out
+
+
+# Matches the (unexposed) defaults of ``assess_pose_row``'s
+# ``body_length_z_threshold`` / ``edge_length_z_threshold`` parameters --
+# ``apply_quality_to_dataframe`` never overrides them.
+_BODY_LENGTH_Z_THRESHOLD_DEFAULT = 3.5
+_EDGE_LENGTH_Z_THRESHOLD_DEFAULT = 4.0
+
+
+def _apply_quality_normal_rows(
+    out: pd.DataFrame,
+    kpts: np.ndarray,
+    normal_mask: np.ndarray,
+    pose_labels: List[str],
+    conf_cols_by_label: List[str],
+    min_valid_conf: float,
+    min_valid_fraction: float,
+    min_valid_keypoints: int,
+    ignore_set: set,
+    body_length_prior: Optional[BodyLengthPrior],
+    anterior_indices: Optional[List[int]],
+    posterior_indices: Optional[List[int]],
+    skeleton_edges: Optional[List[Tuple[int, int]]],
+    edge_length_priors: Optional[EdgeLengthPriors],
+) -> None:
+    """Vectorized equivalent of the ``assess_pose_row`` "normal path" (steps
+    2-8: per-keypoint cleaning, valid-fraction rejection, body-length +
+    edge-length outlier checks, quality score/state) for every row flagged
+    True in *normal_mask*. Writes results directly into *out* in-place.
+    """
+    N, K, _ = kpts.shape
+
+    ignore_mask_k = np.zeros(K, dtype=bool)
+    for i in ignore_set:
+        if 0 <= i < K:
+            ignore_mask_k[i] = True
+    not_ignored = ~ignore_mask_k
+
+    x = kpts[:, :, 0]
+    y = kpts[:, :, 1]
+    conf = kpts[:, :, 2]
+    conf_f64 = conf.astype(np.float64)
+
+    # 2. Per-keypoint cleaning (mirrors ``_clean_keypoints`` exactly: the
+    # float32->float64 widening below is exact/lossless, so this comparison
+    # is bit-identical to the scalar ``float(arr[i, 2]) >= float(min_valid_conf)``.)
+    coords_ok = np.isfinite(x) & np.isfinite(y)
+    conf_ok = np.isfinite(conf_f64) & (conf_f64 >= float(min_valid_conf))
+
+    valid_mask = coords_ok & conf_ok & not_ignored[None, :]
+    to_zero = not_ignored[None, :] & ~valid_mask
+    zero_low_conf = to_zero & ~conf_ok
+    zero_invalid_coords = to_zero & conf_ok & ~coords_ok
+
+    low_conf_count = zero_low_conf.sum(axis=1)
+    invalid_coords_count = zero_invalid_coords.sum(axis=1)
+
+    cleaned_conf = np.where(to_zero, np.float32(0.0), conf)
+    was_cleaned_step1 = (low_conf_count > 0) | (invalid_coords_count > 0)
+
+    # 3-4. Valid fraction (num_considered is constant across rows).
+    num_considered = int(np.sum(not_ignored))
+    num_valid = valid_mask.sum(axis=1)
+    if num_considered > 0:
+        valid_fraction = num_valid.astype(np.float64) / float(num_considered)
+    else:
+        valid_fraction = np.zeros(N, dtype=np.float64)
+
+    # 5. Rejection check.
+    rejected = (valid_fraction < float(min_valid_fraction)) | (
+        num_valid < int(min_valid_keypoints)
+    )
+    reject_zero = rejected[:, None] & not_ignored[None, :]
+    final_cleaned_conf = np.where(reject_zero, np.float32(0.0), cleaned_conf)
+    was_cleaned_final = was_cleaned_step1 | rejected
+
+    # 6. Body-length outlier check (on ORIGINAL keypoints before zeroing).
+    body_length_outlier = np.zeros(N, dtype=bool)
+    if (
+        body_length_prior is not None
+        and body_length_prior.is_valid
+        and anterior_indices
+        and posterior_indices
+    ):
+        ant_filtered = [i for i in anterior_indices if int(i) not in ignore_set]
+        post_filtered = [i for i in posterior_indices if int(i) not in ignore_set]
+        # Rows outside normal_mask may carry non-finite (e.g. inf) keypoint
+        # values -- results for those rows are discarded by the caller, but
+        # the elementwise math below still runs over the full array, which
+        # can trip numpy's invalid-value warnings on that garbage input.
+        with np.errstate(invalid="ignore", divide="ignore", over="ignore"):
+            ax, ay, a_valid = _weighted_centroid_batch(
+                kpts, ant_filtered, min_valid_conf
+            )
+            px, py, p_valid = _weighted_centroid_batch(
+                kpts, post_filtered, min_valid_conf
+            )
+            dx = ax - px
+            dy = ay - py
+        coords_finite = np.isfinite(dx) & np.isfinite(dy)
+        candidate_mask = a_valid & p_valid & coords_finite
+
+        # See the module-level note on ``math.hypot`` vs ``np.hypot`` (1-ULP
+        # divergence risk): compute body length with a scalar ``math.hypot``
+        # loop restricted to candidate rows, exactly mirroring
+        # ``_check_body_length_outlier`` / ``compute_pose_geometry_from_keypoints``.
+        body_length = np.zeros(N, dtype=np.float64)
+        for row_idx in np.nonzero(candidate_mask)[0]:
+            body_length[row_idx] = math.hypot(dx[row_idx], dy[row_idx])
+
+        denom = max(float(body_length_prior.mad_px), 1.0)
+        z_score = np.abs(body_length - float(body_length_prior.median_px)) / denom
+        body_length_outlier = candidate_mask & (
+            z_score > float(_BODY_LENGTH_Z_THRESHOLD_DEFAULT)
+        )
+
+    # 6b. Per-edge skeleton length check (uses X/Y from ``kpts``, which
+    # cleaning never modifies, and ``valid_mask`` as computed above).
+    n_edge_outliers = np.zeros(N, dtype=np.int64)
+    if (
+        skeleton_edges
+        and edge_length_priors is not None
+        and edge_length_priors.is_valid
+    ):
+        for edge in skeleton_edges:
+            try:
+                ei, ej = int(edge[0]), int(edge[1])
+            except Exception:
+                continue
+            if ei >= K or ej >= K:
+                continue
+            key = (min(ei, ej), max(ei, ej))
+            prior = edge_length_priors.priors.get(key)
+            if prior is None or int(prior.get("n_samples", 0)) < 20:
+                continue
+
+            valid_edge = valid_mask[:, ei] & valid_mask[:, ej]
+            xi = kpts[:, ei, 0].astype(np.float64)
+            yi = kpts[:, ei, 1].astype(np.float64)
+            xj = kpts[:, ej, 0].astype(np.float64)
+            yj = kpts[:, ej, 1].astype(np.float64)
+            # ``sqrt`` is IEEE-754 correctly rounded, so numpy/libm always
+            # agree here (unlike ``hypot`` above) -- safe to vectorize.
+            # (errstate: see the body-length block above -- discarded rows
+            # may hold non-finite garbage.)
+            with np.errstate(invalid="ignore", over="ignore"):
+                edge_len = np.sqrt((xi - xj) ** 2 + (yi - yj) ** 2)
+            denom = max(float(prior.get("mad_px", 1.0)), 1.0)
+            z = np.abs(edge_len - float(prior["median_px"])) / denom
+            is_outlier = valid_edge & (z > float(_EDGE_LENGTH_Z_THRESHOLD_DEFAULT))
+            n_edge_outliers += is_outlier.astype(np.int64)
+
+    # 7-8. Quality score and state (mirrors ``_compute_quality`` exactly;
+    # the zero-injection for non-valid entries is an exact IEEE-754 no-op,
+    # so the masked sum below is bit-identical to summing only the valid
+    # subset in index order -- see ``_weighted_centroid_batch``'s docstring
+    # for the same argument applied elsewhere in this module).
+    cleaned_f64 = cleaned_conf.astype(np.float64)
+    masked_conf_sum = np.where(valid_mask, cleaned_f64, 0.0).sum(axis=1)
+    mean_conf = np.where(num_valid > 0, masked_conf_sum / np.maximum(num_valid, 1), 0.0)
+    score = valid_fraction * mean_conf
+    score = np.where(body_length_outlier, score * 0.7, score)
+    edge_factor = np.maximum(0.5, 1.0 - 0.15 * n_edge_outliers.astype(np.float64))
+    score = np.where(n_edge_outliers > 0, score * edge_factor, score)
+    score = np.clip(score, 0.0, 1.0)
+
+    state = np.where(score < 0.2, "bad", np.where(score < 0.7, "partial", "good"))
+
+    final_score = np.where(rejected, 0.0, score)
+    final_state = np.where(rejected, "rejected", state)
+
+    # Flag-string assembly, in the EXACT original token order:
+    # low_conf -> invalid_coords -> too_few_valid -> body_length_outlier
+    # -> edge_outlier. Body-length/edge checks are skipped entirely for
+    # rejected rows in the scalar version (early return), so their flags
+    # (and any geometry-outlier state) must not appear for those rows.
+    has_bl = body_length_outlier & ~rejected
+    has_edge = (n_edge_outliers > 0) & ~rejected
+
+    row_positions = np.nonzero(normal_mask)[0]
+    flags_arr = np.empty(N, dtype=object)
+    for r in row_positions:
+        toks = []
+        if low_conf_count[r] > 0:
+            toks.append(f"low_conf:{int(low_conf_count[r])}")
+        if invalid_coords_count[r] > 0:
+            toks.append(f"invalid_coords:{int(invalid_coords_count[r])}")
+        if rejected[r]:
+            toks.append("too_few_valid")
+        if has_bl[r]:
+            toks.append("body_length_outlier")
+        if has_edge[r]:
+            toks.append(f"edge_outlier:{int(n_edge_outliers[r])}")
+        flags_arr[r] = "|".join(toks)
+
+    idxs = out.index[normal_mask]
+    for i, c_col in enumerate(conf_cols_by_label):
+        if c_col in out.columns:
+            out.loc[idxs, c_col] = final_cleaned_conf[row_positions, i].astype(
+                np.float64
+            )
+
+    out.loc[idxs, "PoseQualityScore"] = final_score[row_positions]
+    out.loc[idxs, "PoseQualityState"] = final_state[row_positions]
+    out.loc[idxs, "PoseQualityFlags"] = flags_arr[row_positions]
+    out.loc[idxs, "PoseWasCleaned"] = was_cleaned_final[row_positions].astype(int)
+    out.loc[idxs, "PoseSource"] = "cache"
 
 
 # ---------------------------------------------------------------------------
@@ -815,6 +1134,26 @@ def _suppress_temporal_outliers(
             )
 
 
+def _notna_positive_mask(col: pd.Series) -> np.ndarray:
+    """Vectorized equivalent of ``col.apply(lambda v: pd.notna(v) and float(v) > 0.0)``.
+
+    For numeric dtypes this is a single vectorized comparison. For
+    object-dtype columns it falls back to an elementwise ``float(v)`` (only
+    for not-null cells, exactly mirroring the short-circuit ``and`` in the
+    original lambda), which -- like the original -- lets a non-numeric,
+    non-null cell raise instead of being silently swallowed.
+    """
+    raw = col.to_numpy()
+    notna = pd.notna(raw)
+    result = np.zeros(len(raw), dtype=bool)
+    if raw.dtype.kind in "fiub":
+        result[notna] = raw[notna].astype(np.float64) > 0.0
+    else:
+        for i in np.nonzero(notna)[0]:
+            result[i] = float(raw[i]) > 0.0
+    return result
+
+
 def _get_valid_label_indices(
     out: pd.DataFrame,
     c_col: str,
@@ -822,10 +1161,10 @@ def _get_valid_label_indices(
 ) -> list:
     """Return row indices where quality state is acceptable and conf > 0."""
     if "PoseQualityState" in out.columns:
-        quality_ok = out["PoseQualityState"].isin(valid_states)
+        quality_ok = out["PoseQualityState"].isin(valid_states).to_numpy()
     else:
-        quality_ok = pd.Series([True] * len(out), index=out.index)
-    conf_ok = out[c_col].apply(lambda v: pd.notna(v) and float(v) > 0.0)
+        quality_ok = np.ones(len(out), dtype=bool)
+    conf_ok = _notna_positive_mask(out[c_col])
     return out.index[quality_ok & conf_ok].tolist()
 
 
@@ -841,20 +1180,36 @@ def _flag_rolling_outliers(
     roll_mean = series.rolling(rolling_window, min_periods=3, center=True).mean()
     roll_std = series.rolling(rolling_window, min_periods=3, center=True).std()
 
-    for idx_val in valid_idx:
-        if idx_val not in roll_mean.index:
-            continue
-        mean_v = roll_mean.loc[idx_val]
-        if pd.isna(mean_v):
-            continue
-        std_v = (
-            float(roll_std.loc[idx_val]) if not pd.isna(roll_std.loc[idx_val]) else 0.0
-        )
-        z = abs(float(series.loc[idx_val]) - float(mean_v)) / max(std_v, 1e-6)
-        if z > float(z_score_threshold):
-            out.at[idx_val, c_col] = 0.0
-            _add_flag(out, idx_val, "temporal_outlier")
-            out.at[idx_val, "PoseWasCleaned"] = 1
+    mean_arr = roll_mean.to_numpy(dtype=np.float64)
+    std_arr = roll_std.to_numpy(dtype=np.float64)
+    series_arr = series.to_numpy(dtype=np.float64)
+
+    valid_mean = ~np.isnan(mean_arr)
+    std_eff = np.where(np.isnan(std_arr), 0.0, std_arr)
+    z = np.abs(series_arr - mean_arr) / np.maximum(std_eff, 1e-6)
+    outlier = valid_mean & (z > float(z_score_threshold))
+
+    if not np.any(outlier):
+        return
+
+    outlier_idx = series.index[outlier]
+
+    out.loc[outlier_idx, c_col] = 0.0
+    out.loc[outlier_idx, "PoseWasCleaned"] = 1
+
+    if "PoseQualityFlags" in out.columns:
+        current = out.loc[outlier_idx, "PoseQualityFlags"]
+        current_str = current.where(current.notna(), "").astype(str)
+        already = current_str.apply(lambda s: "temporal_outlier" in s.split("|"))
+        need_update = ~already
+        if bool(need_update.any()):
+            upd_idx = outlier_idx[need_update.to_numpy()]
+            upd_current = current_str[need_update].to_numpy()
+            new_vals = [
+                f"{c}|temporal_outlier" if c else "temporal_outlier"
+                for c in upd_current
+            ]
+            out.loc[upd_idx, "PoseQualityFlags"] = new_vals
 
 
 def _interpolate_gaps(
@@ -862,7 +1217,16 @@ def _interpolate_gaps(
     pose_labels: List[str],
     max_gap: int,
 ) -> None:
-    """Linearly interpolate keypoint X/Y across short gaps (in-place)."""
+    """Linearly interpolate keypoint X/Y across short gaps (in-place).
+
+    Vectorized equivalent of the original per-pair Python loop (which called
+    ``_fill_single_gap`` for every consecutive pair of valid positions).
+    Fills are disjoint by construction -- each covers positions strictly
+    between two *consecutive* valid points -- so the fill order never
+    matters, and no fill position ever coincides with a "valid" endpoint
+    used to compute another gap's interpolation, making a single batched
+    computation over all qualifying gaps exact.
+    """
     for label in pose_labels:
         x_col = f"PoseKpt_{label}_X"
         y_col = f"PoseKpt_{label}_Y"
@@ -871,49 +1235,53 @@ def _interpolate_gaps(
         if not all(c in out.columns for c in (x_col, y_col, c_col)):
             continue
 
-        valid_mask = out[c_col].apply(lambda v: pd.notna(v) and float(v) > 0.0)
-        valid_positions = out.index[valid_mask].tolist()
-        if len(valid_positions) < 2:
+        valid_mask = _notna_positive_mask(out[c_col])
+        valid_iloc = np.nonzero(valid_mask)[0]
+        if len(valid_iloc) < 2:
             continue
 
-        for seg_start_pos, seg_end_pos in zip(
-            valid_positions[:-1], valid_positions[1:]
-        ):
-            _fill_single_gap(
-                out, seg_start_pos, seg_end_pos, x_col, y_col, c_col, max_gap
-            )
+        starts = valid_iloc[:-1]
+        ends = valid_iloc[1:]
+        gap_lengths = ends - starts - 1
+        fillable = (gap_lengths > 0) & (gap_lengths <= max_gap)
+        if not np.any(fillable):
+            continue
 
+        starts_q = starts[fillable]
+        ends_q = ends[fillable]
+        lengths_q = gap_lengths[fillable]
 
-def _fill_single_gap(
-    out: pd.DataFrame,
-    seg_start_pos,
-    seg_end_pos,
-    x_col: str,
-    y_col: str,
-    c_col: str,
-    max_gap: int,
-) -> None:
-    """Linearly interpolate X/Y for a single gap between two valid positions."""
-    start_iloc = out.index.get_loc(seg_start_pos)
-    end_iloc = out.index.get_loc(seg_end_pos)
-    gap_length = end_iloc - start_iloc - 1
+        n_total = int(lengths_q.sum())
+        if n_total == 0:
+            continue
 
-    if gap_length <= 0 or gap_length > max_gap:
-        return
+        group_offsets = np.concatenate(([0], np.cumsum(lengths_q)[:-1]))
+        flat_pos = np.arange(n_total)
+        step = flat_pos - np.repeat(group_offsets, lengths_q) + 1  # 1-indexed
 
-    x_start = float(out.at[seg_start_pos, x_col])
-    x_end = float(out.at[seg_end_pos, x_col])
-    y_start = float(out.at[seg_start_pos, y_col])
-    y_end = float(out.at[seg_end_pos, y_col])
+        fill_iloc = np.repeat(starts_q, lengths_q) + step
 
-    gap_indices = out.index[start_iloc + 1 : end_iloc]
-    for step, gap_idx in enumerate(gap_indices, start=1):
-        t = float(step) / float(gap_length + 1)
-        out.at[gap_idx, x_col] = x_start + t * (x_end - x_start)
-        out.at[gap_idx, y_col] = y_start + t * (y_end - y_start)
-        out.at[gap_idx, c_col] = 0.3  # low-trust interpolated conf
-        out.at[gap_idx, "PoseSource"] = "cleaned"
-        out.at[gap_idx, "PoseWasCleaned"] = 1
+        x_arr = out[x_col].to_numpy(dtype=np.float64)
+        y_arr = out[y_col].to_numpy(dtype=np.float64)
+
+        x_start = np.repeat(x_arr[starts_q], lengths_q)
+        x_end = np.repeat(x_arr[ends_q], lengths_q)
+        y_start = np.repeat(y_arr[starts_q], lengths_q)
+        y_end = np.repeat(y_arr[ends_q], lengths_q)
+        lengths_rep = np.repeat(lengths_q, lengths_q).astype(np.float64)
+
+        t = step.astype(np.float64) / (lengths_rep + 1.0)
+
+        new_x = x_start + t * (x_end - x_start)
+        new_y = y_start + t * (y_end - y_start)
+
+        fill_labels = out.index[fill_iloc]
+
+        out.loc[fill_labels, x_col] = new_x
+        out.loc[fill_labels, y_col] = new_y
+        out.loc[fill_labels, c_col] = 0.3  # low-trust interpolated conf
+        out.loc[fill_labels, "PoseSource"] = "cleaned"
+        out.loc[fill_labels, "PoseWasCleaned"] = 1
 
 
 def apply_temporal_pose_postprocessing(
@@ -965,6 +1333,133 @@ def apply_temporal_pose_postprocessing(
 # ---------------------------------------------------------------------------
 
 
+def _to_float_array(raw: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Elementwise emulate ``float(x)`` semantics for a 1-D array.
+
+    Returns ``(values, ok)`` where ``values`` is float64 (NaN where a
+    conversion failed or wasn't attempted) and ``ok`` is a bool mask that is
+    True exactly where ``float(x)`` would succeed without raising.  Numeric
+    dtypes (float/int/bool) always succeed, matching ``float(x)`` for a
+    plain numpy scalar (including NaN, which converts to NaN without
+    raising). Object-dtype columns fall back to an elementwise try/except to
+    stay faithful to arbitrary cell contents (e.g. a stray non-numeric
+    string), matching the original per-row ``float(x)`` conversion exactly.
+    """
+    if raw.dtype.kind in "fiub":
+        vals = raw.astype(np.float64, copy=False)
+        ok = np.ones(len(raw), dtype=bool)
+        return vals, ok
+
+    n = len(raw)
+    vals = np.full(n, np.nan, dtype=np.float64)
+    ok = np.zeros(n, dtype=bool)
+    for idx in range(n):
+        try:
+            vals[idx] = float(raw[idx])
+            ok[idx] = True
+        except (ValueError, TypeError):
+            ok[idx] = False
+    return vals, ok
+
+
+def _stack_keypoints(
+    df: pd.DataFrame, pose_labels: List[str]
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Vectorized equivalent of calling ``_extract_keypoints_from_row`` for
+    every row of *df*.
+
+    Returns ``(kpts, any_found)`` where ``kpts`` is ``(M, K, 3)`` float32
+    (NaN x/y, conf=0.0 defaults, exactly as ``_extract_keypoints_from_row``
+    initializes each row) and ``any_found[m]`` is True iff at least one
+    keypoint was successfully extracted for row *m* -- mirroring that
+    function returning ``None`` for a row when nothing was found.
+    """
+    M = len(df)
+    K = len(pose_labels)
+    kpts = np.full((M, K, 3), np.nan, dtype=np.float32)
+    kpts[:, :, 2] = 0.0
+    any_found = np.zeros(M, dtype=bool)
+
+    for i, label in enumerate(pose_labels):
+        x_col = f"PoseKpt_{label}_X"
+        y_col = f"PoseKpt_{label}_Y"
+        c_col = f"PoseKpt_{label}_Conf"
+        if (
+            x_col not in df.columns
+            or y_col not in df.columns
+            or c_col not in df.columns
+        ):
+            continue
+
+        fx, ok_x = _to_float_array(df[x_col].to_numpy())
+        fy, ok_y = _to_float_array(df[y_col].to_numpy())
+        fc, ok_c = _to_float_array(df[c_col].to_numpy())
+        ok = ok_x & ok_y & ok_c
+        if not np.any(ok):
+            continue
+
+        kpts[ok, i, 0] = fx[ok].astype(np.float32)
+        kpts[ok, i, 1] = fy[ok].astype(np.float32)
+        kpts[ok, i, 2] = fc[ok].astype(np.float32)
+        any_found |= ok
+
+    return kpts, any_found
+
+
+def _weighted_centroid_batch(
+    kpts: np.ndarray,
+    indices: Optional[List[int]],
+    min_valid_conf: float,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Vectorized equivalent of ``_weighted_centroid`` (features.py) across
+    all rows of a stacked ``(M, K, 3)`` keypoints array, for an always-empty
+    ignore set (the only case this calibration path needs).
+
+    Returns ``(cx, cy, has_valid)``, each length ``M``. Accumulation is a
+    left-to-right running sum over *indices* (matching the accumulation
+    order ``_weighted_centroid``'s python loop would use) with invalid
+    entries contributing an exact ``+0.0`` -- mathematically a no-op under
+    IEEE-754 addition, so the running sum for each row is bit-identical to
+    summing only the valid terms in the same order. Separately,
+    ``_weighted_centroid`` itself calls ``np.average``, whose internal
+    ``np.sum`` uses pairwise summation that only diverges from a plain
+    sequential sum once a reduction axis exceeds ~128 elements; real
+    anterior/posterior index sets are tiny (a handful of keypoints), so
+    numpy's pairwise reduction degenerates to the same sequential
+    accumulation this function performs, and exact equality is not solely
+    resting on the ``+0.0``-no-op argument above.
+    """
+    M, K, _ = kpts.shape
+    sum_w = np.zeros(M, dtype=np.float64)
+    sum_wx = np.zeros(M, dtype=np.float64)
+    sum_wy = np.zeros(M, dtype=np.float64)
+    has_valid = np.zeros(M, dtype=bool)
+
+    for idx in indices or []:
+        idx = int(idx)
+        if idx < 0 or idx >= K:
+            continue
+        x = kpts[:, idx, 0].astype(np.float64)
+        y = kpts[:, idx, 1].astype(np.float64)
+        c = kpts[:, idx, 2].astype(np.float64)
+        valid = (
+            np.isfinite(x)
+            & np.isfinite(y)
+            & np.isfinite(c)
+            & (c >= float(min_valid_conf))
+        )
+        w = np.where(valid, np.maximum(1e-6, c), 0.0)
+        sum_w = sum_w + w
+        sum_wx = sum_wx + np.where(valid, w * x, 0.0)
+        sum_wy = sum_wy + np.where(valid, w * y, 0.0)
+        has_valid |= valid
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        cx = sum_wx / sum_w
+        cy = sum_wy / sum_w
+    return cx, cy, has_valid
+
+
 def _extract_keypoints_from_row(row, pose_labels: List[str]) -> Optional[np.ndarray]:
     """Extract a [K, 3] float32 keypoints array from a DataFrame row."""
     K = len(pose_labels)
@@ -1007,28 +1502,22 @@ def _add_flag(df: pd.DataFrame, idx, flag: str) -> None:
     df.at[idx, "PoseQualityFlags"] = new_val
 
 
-def _collect_row_conf_stats(
-    row,
-    present_conf_cols: List[str],
-) -> Tuple[List[float], int]:
-    """Collect finite confidence values and count of positive-confidence keypoints."""
-    confs: List[float] = []
-    valid_count = 0
-    for c in present_conf_cols:
-        v = row[c]
-        try:
-            fv = float(v)
-            if np.isfinite(fv):
-                confs.append(fv)
-                if fv > 0.0:
-                    valid_count += 1
-        except (ValueError, TypeError):
-            pass
-    return confs, valid_count
-
-
 def _recompute_pose_summary(df: pd.DataFrame, pose_labels: List[str]) -> None:
-    """Recompute PoseMeanConf and PoseValidFraction columns in-place."""
+    """Recompute PoseMeanConf and PoseValidFraction columns in-place.
+
+    Vectorized, with one deliberate exception: per-row ``PoseMeanConf`` is
+    ``float(np.mean(confs))`` over the *compacted* list of finite
+    confidences (non-finite/unparsable cells are dropped entirely, not
+    zero-padded). Padding a variable-length reduction with zeros to make it
+    rectangular changes numpy's pairwise-summation split points and can flip
+    the last bit of the result (verified empirically -- not a hypothetical),
+    so rows with 100% finite values use a single fully vectorized
+    ``.mean(axis=1)`` (proven bit-identical to the per-row reduction when
+    the compacted set equals the full row), and only rows with a partial
+    exclusion fall back to a per-row ``np.mean`` call -- still far fewer,
+    cheaper array-level operations than the original's per-cell
+    ``df.loc``/``df.at`` pandas indexing.
+    """
     if not pose_labels:
         return
     conf_cols = [f"PoseKpt_{label}_Conf" for label in pose_labels]
@@ -1039,13 +1528,34 @@ def _recompute_pose_summary(df: pd.DataFrame, pose_labels: List[str]) -> None:
     K = len(pose_labels)
     has_mean = "PoseMeanConf" in df.columns
     has_frac = "PoseValidFraction" in df.columns
+    if not (has_mean or has_frac):
+        return
 
-    if has_mean or has_frac:
-        for idx in df.index:
-            confs, valid_count = _collect_row_conf_stats(df.loc[idx], present_conf_cols)
-            if has_mean:
-                df.at[idx, "PoseMeanConf"] = float(np.mean(confs)) if confs else 0.0
-            if has_frac:
-                df.at[idx, "PoseValidFraction"] = (
-                    float(valid_count) / float(K) if K > 0 else 0.0
-                )
+    n = len(df)
+    c = len(present_conf_cols)
+    vals = np.empty((n, c), dtype=np.float64)
+    finite = np.empty((n, c), dtype=bool)
+    for j, col in enumerate(present_conf_cols):
+        v, ok = _to_float_array(df[col].to_numpy())
+        vals[:, j] = v
+        finite[:, j] = ok & np.isfinite(v)
+
+    if has_mean:
+        full_row = finite.all(axis=1)
+        mean_conf = np.zeros(n, dtype=np.float64)
+        if np.any(full_row):
+            mean_conf[full_row] = vals[full_row].mean(axis=1)
+        for r in np.nonzero(~full_row)[0]:
+            row_finite = finite[r]
+            if row_finite.any():
+                mean_conf[r] = float(np.mean(vals[r, row_finite].tolist()))
+        df["PoseMeanConf"] = mean_conf
+
+    if has_frac:
+        valid_count = (finite & (vals > 0.0)).sum(axis=1)
+        valid_fraction = (
+            valid_count.astype(np.float64) / float(K)
+            if K > 0
+            else np.zeros(n, dtype=np.float64)
+        )
+        df["PoseValidFraction"] = valid_fraction

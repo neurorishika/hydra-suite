@@ -4151,10 +4151,24 @@ def _fix_heading_globally(theta: np.ndarray) -> np.ndarray:
         parent[vi] = new_parent
 
     # Back-track to find the optimal state sequence.
-    states = [None] * len(valid_idx)
-    states[-1] = 0 if dp[0] <= dp[1] else 1
-    for vi in range(len(valid_idx) - 1, 0, -1):
-        states[vi - 1] = parent[vi][states[vi]]
+    #
+    # The pairwise DP cost is invariant under a global pi-flip, so dp[0]==dp[1]
+    # in exact arithmetic and the old `dp[0] <= dp[1]` terminal choice was decided
+    # by ~1e-15 float rounding -- any ~1e-3 input perturbation flipped the WHOLE
+    # trajectory by pi. Anchor the global orientation to the RAW directed headings
+    # instead: back-track BOTH terminal states and keep the assignment that flips
+    # FEWER frames away from their raw head call (summed circular distance to raw
+    # == pi * flip-count), a robust integer majority. Exact tie -> terminal state 0.
+    def _backtrack(term_state):
+        st = [None] * len(valid_idx)
+        st[-1] = term_state
+        for vj in range(len(valid_idx) - 1, 0, -1):
+            st[vj - 1] = parent[vj][st[vj]]
+        return st
+
+    states0 = _backtrack(0)
+    states1 = _backtrack(1)
+    states = states0 if sum(states0) <= sum(states1) else states1
 
     # Apply flips.
     for vi, i in enumerate(valid_idx):

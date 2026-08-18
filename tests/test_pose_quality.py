@@ -6,9 +6,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from hydra_suite.core.individual.pose.quality import BodyLengthPrior, EdgeLengthPriors
 from hydra_suite.core.individual.pose.quality import (
-    BodyLengthPrior,
-    EdgeLengthPriors,
+    _extract_keypoints_from_row as _ref_extract_keypoints_from_row,
+)
+from hydra_suite.core.individual.pose.quality import (
     apply_quality_to_dataframe,
     apply_temporal_pose_postprocessing,
     assess_pose_row,
@@ -548,6 +550,429 @@ class TestApplyQualityToDataframe:
         _ = apply_quality_to_dataframe(df, _LABELS, self._PARAMS)
         # Input df should be unchanged
         pd.testing.assert_series_equal(df["PoseKpt_head_Conf"], original_vals)
+
+
+# ---------------------------------------------------------------------------
+# Frozen pre-vectorization reference of apply_quality_to_dataframe
+#
+# This is a literal copy of the row-loop implementation as it existed BEFORE
+# Task 7's vectorization, built only from helpers that Task 7 does NOT touch
+# (``_extract_keypoints_from_row`` and ``assess_pose_row``). It is the
+# non-tautological oracle for the characterization test below: it must match
+# the CURRENT (pre-vectorization) code exactly, and must continue to match
+# the vectorized code after the change.
+# ---------------------------------------------------------------------------
+
+
+def _reference_apply_quality_to_dataframe(
+    df,
+    pose_labels,
+    params,
+    body_length_prior=None,
+    anterior_indices=None,
+    posterior_indices=None,
+    skeleton_edges=None,
+    edge_length_priors=None,
+):
+    if df is None or df.empty:
+        return df
+
+    min_valid_conf = float(params.get("POSE_MIN_KPT_CONF_VALID", 0.2))
+    min_valid_fraction = float(params.get("POSE_EXPORT_MIN_VALID_FRACTION", 0.5))
+    min_valid_keypoints = int(params.get("POSE_EXPORT_MIN_VALID_KEYPOINTS", 3))
+    ignore_kpts_raw = params.get("POSE_IGNORE_KEYPOINTS", [])
+    ignore_indices = [int(i) for i in (ignore_kpts_raw or [])]
+
+    col_triplets = []
+    for label in pose_labels:
+        col_triplets.append(
+            (f"PoseKpt_{label}_X", f"PoseKpt_{label}_Y", f"PoseKpt_{label}_Conf")
+        )
+
+    out = df.copy()
+
+    out["PoseQualityScore"] = float("nan")
+    out["PoseQualityState"] = ""
+    out["PoseQualityFlags"] = ""
+    out["PoseSource"] = ""
+    out["PoseWasCleaned"] = 0
+
+    all_conf_cols = [c for _, _, c in col_triplets if c in out.columns]
+
+    for row_idx in out.index:
+        row = out.loc[row_idx]
+
+        has_pose = False
+        if all_conf_cols:
+            try:
+                has_pose = any(
+                    not pd.isna(row[c]) for c in all_conf_cols if c in out.columns
+                )
+            except Exception:
+                has_pose = False
+
+        if not has_pose:
+            out.at[row_idx, "PoseQualityState"] = "no_pose"
+            out.at[row_idx, "PoseQualityScore"] = 0.0
+            out.at[row_idx, "PoseSource"] = ""
+            continue
+
+        kpts = _ref_extract_keypoints_from_row(row, pose_labels)
+
+        result = assess_pose_row(
+            kpts,
+            min_valid_conf=min_valid_conf,
+            min_valid_fraction=min_valid_fraction,
+            min_valid_keypoints=min_valid_keypoints,
+            ignore_indices=ignore_indices if ignore_indices else None,
+            body_length_prior=body_length_prior,
+            anterior_indices=anterior_indices,
+            posterior_indices=posterior_indices,
+            skeleton_edges=skeleton_edges,
+            edge_length_priors=edge_length_priors,
+        )
+
+        for i, label in enumerate(pose_labels):
+            c_col = f"PoseKpt_{label}_Conf"
+            if c_col in out.columns and i < len(result.cleaned_keypoints):
+                out.at[row_idx, c_col] = float(result.cleaned_keypoints[i, 2])
+
+        out.at[row_idx, "PoseQualityScore"] = result.quality_score
+        out.at[row_idx, "PoseQualityState"] = result.quality_state
+        out.at[row_idx, "PoseQualityFlags"] = "|".join(result.quality_flags)
+        out.at[row_idx, "PoseWasCleaned"] = int(result.was_cleaned)
+        out.at[row_idx, "PoseSource"] = "cache"
+
+    return out
+
+
+_CHAR_LABELS = [f"p{i}" for i in range(10)]
+
+
+def _char_row(overrides=None):
+    """Baseline fully-valid 10-keypoint row: p0=anterior, p9=posterior,
+    edge (p3,p4) distance ~10, body length (p0-p9) distance ~30."""
+    vals = {
+        0: (0.0, 0.0, 0.9),
+        1: (1.0, 0.0, 0.9),
+        2: (2.0, 0.0, 0.9),
+        3: (0.0, 0.0, 0.9),
+        4: (10.0, 0.0, 0.9),
+        5: (5.0, 0.0, 0.9),
+        6: (6.0, 0.0, 0.9),
+        7: (7.0, 0.0, 0.9),
+        8: (8.0, 0.0, 0.9),
+        9: (30.0, 0.0, 0.9),
+    }
+    if overrides:
+        vals.update(overrides)
+    row = {}
+    for i in range(10):
+        x, y, c = vals[i]
+        row[f"PoseKpt_p{i}_X"] = x
+        row[f"PoseKpt_p{i}_Y"] = y
+        row[f"PoseKpt_p{i}_Conf"] = c
+    return row
+
+
+def _build_characterization_df():
+    rows = []
+    row_names = []
+
+    # 1. fully valid, clean, no flags
+    rows.append(_char_row())
+    row_names.append("good_all_valid_clean")
+
+    # 2. low_conf:2
+    rows.append(_char_row({1: (1.0, 0.0, 0.1), 2: (2.0, 0.0, 0.1)}))
+    row_names.append("low_conf_2kpts")
+
+    # 3. invalid_coords:1
+    rows.append(_char_row({2: (float("nan"), 0.0, 0.9)}))
+    row_names.append("invalid_coords_1kpt")
+
+    # 4. rejected (too_few_valid), all non-ignored confs zeroed incl. previously-valid
+    overrides = {i: (float(i), 0.0, 0.05) for i in range(1, 9)}
+    rows.append(_char_row(overrides))
+    row_names.append("rejected_too_few")
+
+    # 5. boundary partial near 0.2 (score=0.204)
+    ov5 = {}
+    base = _char_row()
+    for i in range(10):
+        x = base[f"PoseKpt_p{i}_X"]
+        y = base[f"PoseKpt_p{i}_Y"]
+        if i in (0, 5, 6, 9):
+            ov5[i] = (x, y, 0.51)
+        else:
+            ov5[i] = (x, y, 0.1)
+    rows.append(_char_row(ov5))
+    row_names.append("boundary_partial_0.2")
+
+    # 6. boundary bad near 0.2 (score=0.196)
+    ov6 = dict(ov5)
+    for i in (0, 5, 6, 9):
+        x, y, _ = ov6[i]
+        ov6[i] = (x, y, 0.49)
+    rows.append(_char_row(ov6))
+    row_names.append("boundary_bad_0.2")
+
+    # 7. boundary partial near 0.7 (score=0.688)
+    ov7 = {}
+    for i in range(10):
+        x = base[f"PoseKpt_p{i}_X"]
+        y = base[f"PoseKpt_p{i}_Y"]
+        if i in (1, 2):
+            ov7[i] = (x, y, 0.1)
+        else:
+            ov7[i] = (x, y, 0.86)
+    rows.append(_char_row(ov7))
+    row_names.append("boundary_partial_0.7")
+
+    # 8. boundary good near 0.7 (score=0.704)
+    ov8 = dict(ov7)
+    for i in range(10):
+        if i not in (1, 2):
+            x, y, _ = ov8[i]
+            ov8[i] = (x, y, 0.88)
+    rows.append(_char_row(ov8))
+    row_names.append("boundary_good_0.7")
+
+    # 9. body_length_outlier flagged
+    rows.append(_char_row({9: (1000.0, 0.0, 0.9)}))
+    row_names.append("body_length_outlier_flagged")
+
+    # 10. edge_outlier flagged
+    rows.append(_char_row({4: (500.0, 0.0, 0.9)}))
+    row_names.append("edge_outlier_flagged")
+
+    # 11. multiple flags co-occurring (token order)
+    rows.append(
+        _char_row(
+            {
+                1: (1.0, 0.0, 0.1),  # low_conf
+                2: (float("nan"), 0.0, 0.9),  # invalid_coords
+                9: (1000.0, 0.0, 0.9),  # body_length_outlier
+                4: (500.0, 0.0, 0.9),  # edge_outlier
+            }
+        )
+    )
+    row_names.append("multi_flag_order")
+
+    # 12. no_pose: all conf NaN
+    ov12 = {i: (float("nan"), float("nan"), float("nan")) for i in range(10)}
+    rows.append(_char_row(ov12))
+    row_names.append("no_pose")
+
+    # 13. all_nan edge case: has_pose True (conf=inf, not NaN) but nothing finite
+    ov13 = {i: (float("inf"), float("inf"), float("inf")) for i in range(10)}
+    rows.append(_char_row(ov13))
+    row_names.append("all_nan_edge_case")
+
+    # 14. null_input edge case: conf non-NaN but X is a non-numeric string
+    # for every keypoint -> extraction fails entirely despite has_pose True.
+    ov14 = {}
+    for i in range(10):
+        ov14[i] = ("bad", 0.0, 0.9)
+    row14 = {}
+    for i in range(10):
+        x, y, c = ov14[i]
+        row14[f"PoseKpt_p{i}_X"] = x
+        row14[f"PoseKpt_p{i}_Y"] = y
+        row14[f"PoseKpt_p{i}_Conf"] = c
+    rows.append(row14)
+    row_names.append("null_input_edge_case")
+
+    df = pd.DataFrame(rows)
+    df.insert(0, "FrameID", list(range(len(rows))))
+    df.insert(1, "RowName", row_names)
+    return df
+
+
+_CHAR_PARAMS = {
+    "POSE_MIN_KPT_CONF_VALID": 0.2,
+    "POSE_EXPORT_MIN_VALID_FRACTION": 0.3,
+    "POSE_EXPORT_MIN_VALID_KEYPOINTS": 2,
+    "POSE_IGNORE_KEYPOINTS": [],
+}
+_CHAR_ANTERIOR = [0]
+_CHAR_POSTERIOR = [9]
+_CHAR_SKELETON_EDGES = [(3, 4)]
+_CHAR_BODY_LENGTH_PRIOR = BodyLengthPrior(
+    median_px=30.0, mad_px=2.0, n_samples=50, is_valid=True
+)
+_CHAR_EDGE_PRIORS = EdgeLengthPriors(
+    priors={(3, 4): {"median_px": 10.0, "mad_px": 1.0, "n_samples": 25}},
+    is_valid=True,
+)
+
+
+class TestApplyQualityToDataframeCharacterization:
+    """Non-tautological byte-identity oracle for Task 7's vectorization.
+
+    Compares the LIVE ``apply_quality_to_dataframe`` against the FROZEN
+    pre-vectorization reference implementation above, across a DataFrame
+    exercising every branch: clean/low_conf/invalid_coords, valid-fraction
+    rejection (incl. zeroing of previously-valid confs), score/state
+    thresholds straddling 0.2 and 0.7, body-length outlier, edge outlier,
+    multiple co-occurring flags (token order), no_pose, and the two
+    keypoint-extraction edge cases (all_nan / null_input).
+    """
+
+    def _run_both(self):
+        df = _build_characterization_df()
+        reference = _reference_apply_quality_to_dataframe(
+            df,
+            _CHAR_LABELS,
+            _CHAR_PARAMS,
+            body_length_prior=_CHAR_BODY_LENGTH_PRIOR,
+            anterior_indices=_CHAR_ANTERIOR,
+            posterior_indices=_CHAR_POSTERIOR,
+            skeleton_edges=_CHAR_SKELETON_EDGES,
+            edge_length_priors=_CHAR_EDGE_PRIORS,
+        )
+        live = apply_quality_to_dataframe(
+            df,
+            _CHAR_LABELS,
+            _CHAR_PARAMS,
+            body_length_prior=_CHAR_BODY_LENGTH_PRIOR,
+            anterior_indices=_CHAR_ANTERIOR,
+            posterior_indices=_CHAR_POSTERIOR,
+            skeleton_edges=_CHAR_SKELETON_EDGES,
+            edge_length_priors=_CHAR_EDGE_PRIORS,
+        )
+        return df, reference, live
+
+    def test_reference_matches_live_exact(self):
+        df, reference, live = self._run_both()
+        pd.testing.assert_frame_equal(
+            reference, live, check_exact=True, check_dtype=True
+        )
+
+    def test_reference_matches_live_csv_text(self):
+        """Catch write-boundary formatting divergence (float32 round-trip,
+        flag-string order) that DataFrame equality alone might not surface."""
+        df, reference, live = self._run_both()
+        conf_cols = [f"PoseKpt_p{i}_Conf" for i in range(10)]
+        meta_cols = [
+            "PoseQualityScore",
+            "PoseQualityState",
+            "PoseQualityFlags",
+            "PoseSource",
+            "PoseWasCleaned",
+        ]
+        cols = conf_cols + meta_cols
+        ref_csv = reference[cols].to_csv(index=False)
+        live_csv = live[cols].to_csv(index=False)
+        assert ref_csv == live_csv
+
+    def test_expected_states_and_flags(self):
+        df, reference, live = self._run_both()
+        expected_state = {
+            "good_all_valid_clean": "good",
+            "low_conf_2kpts": "good",
+            "invalid_coords_1kpt": "good",
+            "rejected_too_few": "rejected",
+            "boundary_partial_0.2": "partial",
+            "boundary_bad_0.2": "bad",
+            "boundary_partial_0.7": "partial",
+            "boundary_good_0.7": "good",
+            "body_length_outlier_flagged": "partial",
+            "edge_outlier_flagged": "good",
+            "multi_flag_order": "partial",
+            "no_pose": "no_pose",
+            "all_nan_edge_case": "rejected",
+            "null_input_edge_case": "rejected",
+        }
+        expected_flags = {
+            "good_all_valid_clean": "",
+            "low_conf_2kpts": "low_conf:2",
+            "invalid_coords_1kpt": "invalid_coords:1",
+            "rejected_too_few": "low_conf:8|too_few_valid",
+            "boundary_partial_0.2": "low_conf:6",
+            "boundary_bad_0.2": "low_conf:6",
+            "boundary_partial_0.7": "low_conf:2",
+            "boundary_good_0.7": "low_conf:2",
+            "body_length_outlier_flagged": "body_length_outlier",
+            "edge_outlier_flagged": "edge_outlier:1",
+            "multi_flag_order": "low_conf:1|invalid_coords:1|body_length_outlier|edge_outlier:1",
+            "no_pose": "",
+            "all_nan_edge_case": "all_nan",
+            "null_input_edge_case": "null_input",
+        }
+        for name, exp_state in expected_state.items():
+            i = df.index[df["RowName"] == name][0]
+            assert (
+                live.loc[i, "PoseQualityState"] == exp_state
+            ), f"{name}: state {live.loc[i, 'PoseQualityState']!r} != {exp_state!r}"
+            assert (
+                live.loc[i, "PoseQualityFlags"] == expected_flags[name]
+            ), f"{name}: flags {live.loc[i, 'PoseQualityFlags']!r} != {expected_flags[name]!r}"
+
+    def test_null_input_leaves_conf_columns_untouched(self):
+        df, reference, live = self._run_both()
+        i = df.index[df["RowName"] == "null_input_edge_case"][0]
+        for label in _CHAR_LABELS:
+            assert live.loc[i, f"PoseKpt_{label}_Conf"] == 0.9
+        assert live.loc[i, "PoseWasCleaned"] == 1
+
+    def test_all_nan_zeroes_all_conf_columns(self):
+        df, reference, live = self._run_both()
+        i = df.index[df["RowName"] == "all_nan_edge_case"][0]
+        for label in _CHAR_LABELS:
+            assert live.loc[i, f"PoseKpt_{label}_Conf"] == 0.0
+
+    def test_rejected_zeroes_previously_valid_confs(self):
+        df, reference, live = self._run_both()
+        i = df.index[df["RowName"] == "rejected_too_few"][0]
+        for label in _CHAR_LABELS:
+            assert live.loc[i, f"PoseKpt_{label}_Conf"] == 0.0
+
+    def test_was_cleaned_false_when_only_geometry_flag(self):
+        df, reference, live = self._run_both()
+        i = df.index[df["RowName"] == "body_length_outlier_flagged"][0]
+        assert live.loc[i, "PoseWasCleaned"] == 0
+        i2 = df.index[df["RowName"] == "edge_outlier_flagged"][0]
+        assert live.loc[i2, "PoseWasCleaned"] == 0
+
+
+class TestApplyQualityToDataframeIgnoreIndices:
+    """Ignored keypoints must be excluded from cleaning, counting, and
+    the valid-fraction denominator, and must never be zeroed."""
+
+    def test_ignored_keypoint_untouched_and_not_counted(self):
+        labels = ["a", "b", "c", "d"]
+        df = pd.DataFrame(
+            {
+                "PoseKpt_a_X": [0.0],
+                "PoseKpt_a_Y": [0.0],
+                "PoseKpt_a_Conf": [0.9],
+                "PoseKpt_b_X": [1.0],
+                "PoseKpt_b_Y": [0.0],
+                "PoseKpt_b_Conf": [0.05],  # would be low_conf, but ignored
+                "PoseKpt_c_X": [2.0],
+                "PoseKpt_c_Y": [0.0],
+                "PoseKpt_c_Conf": [0.9],
+                "PoseKpt_d_X": [3.0],
+                "PoseKpt_d_Y": [0.0],
+                "PoseKpt_d_Conf": [0.9],
+            }
+        )
+        params = {
+            "POSE_MIN_KPT_CONF_VALID": 0.2,
+            "POSE_EXPORT_MIN_VALID_FRACTION": 0.5,
+            "POSE_EXPORT_MIN_VALID_KEYPOINTS": 2,
+            "POSE_IGNORE_KEYPOINTS": [1],
+        }
+        reference = _reference_apply_quality_to_dataframe(df, labels, params)
+        live = apply_quality_to_dataframe(df, labels, params)
+        pd.testing.assert_frame_equal(
+            reference, live, check_exact=True, check_dtype=True
+        )
+        assert live.loc[0, "PoseQualityState"] == "good"
+        assert live.loc[0, "PoseQualityFlags"] == ""
+        assert live.loc[0, "PoseKpt_b_Conf"] == pytest.approx(0.05)  # untouched
+        assert live.loc[0, "PoseWasCleaned"] == 0
 
 
 # ---------------------------------------------------------------------------
