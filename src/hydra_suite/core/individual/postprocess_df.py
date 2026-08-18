@@ -73,97 +73,152 @@ def apply_identity_postprocessing_to_df(
             col: f"{str(col)[: -len('_Class')]}_Conf" for col in cnn_class_columns
         }
 
-        def _row_sources(row: pd.Series) -> object:
-            sources = []
-            if pd.notna(row.get("DetectedTagID")) or pd.notna(row.get("InterpTagID")):
-                sources.append("apriltag")
-            if any(pd.notna(row.get(col)) for col in cnn_class_columns):
-                sources.append("cnn")
-            final_label_present = pd.notna(row.get(C.FINAL_LABEL)) or pd.notna(
-                row.get(C.FINAL_SMOOTHED_LABEL)
-            )
-            if final_label_present:
-                # Prefer the explicit IdentityFinalSource when present -- it
-                # is the authoritative provenance signal (Task 5's
-                # realtime/tag mirror leaves it "realtime"/"tag" so a
-                # merely-mirrored row is not misreported as "offline"). Rows
-                # with a Final label but no source recorded (legacy/synthetic
-                # data written directly by the offline solver's own tests)
-                # fall back to "offline", the pre-mirror default.
-                final_source = row.get(C.FINAL_SOURCE)
-                final_source_token = (
-                    str(final_source).strip() if pd.notna(final_source) else ""
-                )
-                if final_source_token == C.IdentityFinalSource.REALTIME:
-                    pass  # already covered by the C.REALTIME_LABEL check below
-                elif final_source_token == C.IdentityFinalSource.TAG:
-                    if "apriltag" not in sources:
-                        sources.append("apriltag")
-                else:
-                    sources.append("offline")
-            if pd.notna(row.get(C.REALTIME_LABEL)) and not sources:
-                sources.append("realtime")
-            if not sources:
-                return np.nan
-            return ",".join(sorted(set(sources)))
+        def _column_or_nan(frame: pd.DataFrame, name: str) -> pd.Series:
+            if name in frame.columns:
+                return frame[name]
+            return pd.Series(np.nan, index=frame.index)
 
-        def _row_conflict(row: pd.Series) -> int:
-            assigned = row.get(C.REALTIME_LABEL)
-            observed = set()
-            detected_tag_label = row.get("DetectedTagLabel")
-            if pd.notna(detected_tag_label):
-                observed.add(str(detected_tag_label))
-            for col in cnn_class_columns:
-                value = row.get(col)
-                if pd.notna(value):
-                    observed.add(str(value))
-            if pd.notna(assigned):
-                assigned_label = str(assigned)
-                if any(label != assigned_label for label in observed):
-                    return 1
-            return 1 if len(observed) > 1 else 0
+        def _sources_and_conflict_columns(
+            frame: pd.DataFrame,
+        ) -> tuple:
+            """Vectorized (column-wise) equivalent of ``_row_sources`` /
+            ``_row_conflict``.
 
-        def _row_top_evidence(row: pd.Series) -> tuple:
-            """Per-row top calibrated evidence: (top_label, confidence).
-
-            Prefers the CNN classifier head with the highest reported
-            confidence (``CNN_*_Class``/``CNN_*_Conf`` pairs); falls back to
-            a detected AprilTag label/confidence when no CNN evidence is
-            present on the row.
+            Loops only over the small, fixed set of evidence columns
+            (AprilTag/CNN/Final/Realtime), never over rows -- semantics
+            (including the sorted-set join order, the tag/apriltag
+            precedence, and the "falls through to the length check even
+            when an assigned label is present and matches" conflict
+            behavior) are preserved exactly.
             """
-            best_label = np.nan
-            best_conf = np.nan
+            n = len(frame)
+            idx = frame.index
+
+            tag_id = _column_or_nan(frame, "DetectedTagID")
+            interp_id = _column_or_nan(frame, "InterpTagID")
+            has_apriltag = tag_id.notna() | interp_id.notna()
+
+            has_cnn = pd.Series(False, index=idx)
+            for col in cnn_class_columns:
+                has_cnn = has_cnn | frame[col].notna()
+
+            final_label = _column_or_nan(frame, C.FINAL_LABEL)
+            final_smoothed = _column_or_nan(frame, C.FINAL_SMOOTHED_LABEL)
+            final_label_present = final_label.notna() | final_smoothed.notna()
+
+            final_source = _column_or_nan(frame, C.FINAL_SOURCE)
+            final_source_token = pd.Series("", index=idx, dtype=object)
+            final_source_notna = final_source.notna()
+            final_source_token = final_source_token.mask(
+                final_source_notna, final_source.astype(str).str.strip()
+            )
+
+            is_realtime_source = final_label_present & (
+                final_source_token == C.IdentityFinalSource.REALTIME
+            )
+            is_tag_source = final_label_present & (
+                final_source_token == C.IdentityFinalSource.TAG
+            )
+            offline_flag = final_label_present & ~is_realtime_source & ~is_tag_source
+
+            # The tag/apriltag precedence: a tag-sourced Final label folds
+            # into "apriltag" (matching the original's
+            # `if "apriltag" not in sources: sources.append("apriltag")`).
+            has_apriltag_final = has_apriltag | is_tag_source
+
+            realtime_label = _column_or_nan(frame, C.REALTIME_LABEL)
+            realtime_notna = realtime_label.notna()
+            not_sources_before_realtime = ~(has_apriltag_final | has_cnn | offline_flag)
+            has_realtime_final = realtime_notna & not_sources_before_realtime
+
+            have_any = np.zeros(n, dtype=bool)
+            sources_arr = np.full(n, "", dtype=object)
+            for token, flag in (
+                ("apriltag", has_apriltag_final),
+                ("cnn", has_cnn),
+                ("offline", offline_flag),
+                ("realtime", has_realtime_final),
+            ):
+                flag_arr = flag.to_numpy(dtype=bool, na_value=False)
+                addition = np.where(
+                    flag_arr, np.where(have_any, "," + token, token), ""
+                )
+                sources_arr = sources_arr + addition
+                have_any = have_any | flag_arr
+            sources_final = np.where(have_any, sources_arr, np.nan)
+            sources_series = pd.Series(list(sources_final), index=idx)
+
+            # -- conflict flag --
+            assigned = realtime_label
+            assigned_notna = realtime_notna
+            assigned_str = assigned.astype(str)
+
+            observed_cols = []
+            if "DetectedTagLabel" in frame.columns:
+                observed_cols.append("DetectedTagLabel")
+            observed_cols.extend(cnn_class_columns)
+
+            any_mismatch = pd.Series(False, index=idx)
+            running_first = pd.Series(np.nan, index=idx, dtype=object)
+            multi_distinct = pd.Series(False, index=idx)
+            for col in observed_cols:
+                value = frame[col]
+                present = value.notna()
+                value_str = value.astype(str)
+                any_mismatch = any_mismatch | (
+                    present & assigned_notna & (value_str != assigned_str)
+                )
+                set_first_mask = present & running_first.isna()
+                differs_mask = (
+                    present & running_first.notna() & (value_str != running_first)
+                )
+                multi_distinct = multi_distinct | differs_mask
+                running_first = running_first.where(~set_first_mask, value_str)
+
+            conflict_bool = (assigned_notna & any_mismatch) | multi_distinct
+            conflict_series = conflict_bool.astype(int)
+
+            return sources_series, conflict_series
+
+        def _top_evidence_columns(frame: pd.DataFrame) -> tuple:
+            """Vectorized (column-wise) equivalent of ``_row_top_evidence``.
+
+            Loops only over the CNN classifier head columns (a running
+            argmax-by-confidence scan that keeps the first head on exact
+            ties, matching the original's strict ``conf > best_conf``),
+            then falls back to a detected AprilTag label/confidence.
+            """
+            idx = frame.index
+            best_label = pd.Series(np.nan, index=idx, dtype=object)
+            best_conf = pd.Series(np.nan, index=idx, dtype=float)
             for class_col, conf_col in cnn_conf_columns.items():
-                label = row.get(class_col)
-                conf = row.get(conf_col)
-                if pd.isna(label) or pd.isna(conf):
-                    continue
-                conf = float(conf)
-                if pd.isna(best_conf) or conf > best_conf:
-                    best_label = label
-                    best_conf = conf
-            if pd.isna(best_label):
-                tag_label = row.get("DetectedTagLabel")
-                if pd.notna(tag_label):
-                    tag_conf = row.get("DetectedTagConf")
-                    best_label = tag_label
-                    best_conf = float(tag_conf) if pd.notna(tag_conf) else np.nan
-            return best_label, best_conf
+                label = frame[class_col]
+                conf = frame[conf_col]
+                valid = label.notna() & conf.notna()
+                conf_f = conf.astype(float)
+                update = valid & (best_conf.isna() | (conf_f > best_conf))
+                best_label = best_label.where(~update, label)
+                best_conf = best_conf.where(~update, conf_f)
 
-        out[C.EVIDENCE_SOURCES] = out.apply(_row_sources, axis=1)
-        out[C.EVIDENCE_CONFLICT_FLAG] = out.apply(_row_conflict, axis=1).astype(int)
+            tag_label = _column_or_nan(frame, "DetectedTagLabel")
+            tag_conf = _column_or_nan(frame, "DetectedTagConf")
+            need_fallback = best_label.isna() & tag_label.notna()
+            best_label = best_label.where(~need_fallback, tag_label)
+            best_conf = best_conf.where(
+                ~need_fallback, pd.to_numeric(tag_conf, errors="coerce")
+            )
 
-        top_evidence = out.apply(_row_top_evidence, axis=1, result_type="expand")
-        if top_evidence.empty:
-            out[C.EVIDENCE_TOPLABEL] = pd.Series(
-                [np.nan] * len(out), index=out.index, dtype=object
-            )
-            out[C.EVIDENCE_CONFIDENCE] = pd.Series(
-                [np.nan] * len(out), index=out.index, dtype=float
-            )
-        else:
-            out[C.EVIDENCE_TOPLABEL] = top_evidence[0].astype(object)
-            out[C.EVIDENCE_CONFIDENCE] = pd.to_numeric(top_evidence[1], errors="coerce")
+            top_label = best_label.astype(object)
+            top_confidence = pd.to_numeric(best_conf, errors="coerce")
+            return top_label, top_confidence
+
+        sources_series, conflict_series = _sources_and_conflict_columns(out)
+        out[C.EVIDENCE_SOURCES] = sources_series
+        out[C.EVIDENCE_CONFLICT_FLAG] = conflict_series
+
+        top_label, top_confidence = _top_evidence_columns(out)
+        out[C.EVIDENCE_TOPLABEL] = top_label
+        out[C.EVIDENCE_CONFIDENCE] = top_confidence
         return out
 
     def _mirror_realtime_and_tag_into_final(df: pd.DataFrame) -> pd.DataFrame:
