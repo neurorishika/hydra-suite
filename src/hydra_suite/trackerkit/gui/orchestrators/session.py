@@ -1217,8 +1217,6 @@ class SessionOrchestrator:
             self._mw._dataset_panel.chk_suppress_foreign_obb_individual_dataset.setEnabled(
                 save_enabled
             )
-            self._mw._dataset_panel.lbl_individual_info.setVisible(save_enabled)
-            self._mw._dataset_panel.lbl_oriented_video_info.setVisible(pipeline_enabled)
             has_headtail = bool(
                 str(
                     self._mw._identity_panel._get_selected_yolo_headtail_model_path()

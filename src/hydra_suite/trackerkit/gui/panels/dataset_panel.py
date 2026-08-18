@@ -180,24 +180,29 @@ class DatasetPanel(QWidget):
         # Advanced options (collapsed by default)
         # ============================================================
         self.al_advanced = CollapsibleGroupBox("Advanced options")
+        # One help affordance for the whole advanced block. The nested group
+        # boxes below do not get their own: CompactHelpLabel only attaches to
+        # a section title reliably at the top level, so a per-group help label
+        # renders as a bare "?" floating in the body with nothing beside it.
         self.al_advanced.setHelpToolTip(
             "The defaults suit most users: every label level the detector "
             "supports is exported, and frames are ranked by how much trouble "
-            "the tracker had with them. Open this only to override that."
+            "the tracker had with them. Open this only to override that.\n\n"
+            "LABEL LEVELS\n"
+            "Levels the detector cannot produce are greyed out. Each enabled "
+            "level becomes its own DetectKit source; images are hardlinked, so "
+            "extra levels cost almost no disk.\n\n"
+            "FRAME SELECTION\n"
+            "YOLO detection sensitivity for export (confidence=0.05, IOU=0.5) "
+            "can be customized in advanced_config.json. These are separate from "
+            "tracking parameters and optimized for annotation (detect "
+            "everything, manual review corrects errors)."
         )
 
         # Export level overrides
         self.g_export_levels = QGroupBox("Which label levels should be exported?")
         self._main_window._set_compact_section_widget(self.g_export_levels)
         v_levels = QVBoxLayout(self.g_export_levels)
-        v_levels.addWidget(
-            self._main_window._create_help_label(
-                "Levels the detector cannot produce are greyed out. Each enabled "
-                "level becomes its own DetectKit source; images are hardlinked, "
-                "so extra levels cost almost no disk.",
-                attach_to_title=False,
-            )
-        )
         self.chk_level_polygon = QCheckBox("polygon (segmentation masks)")
         self.chk_level_obb = QCheckBox("obb (oriented boxes)")
         self.chk_level_aabb = QCheckBox("aabb (axis-aligned boxes)")
@@ -315,15 +320,6 @@ class DatasetPanel(QWidget):
         _sel_chk_row.addWidget(self.chk_dataset_probabilistic)
         v_selection.addLayout(_sel_chk_row)
 
-        # Add help label explaining advanced options
-        advanced_help = self._main_window._create_help_label(
-            "Note: YOLO detection sensitivity for export (confidence=0.05, IOU=0.5) can be "
-            "customized in advanced_config.json. These are separate from tracking parameters and "
-            "optimized for annotation (detect everything, manual review corrects errors).",
-            attach_to_title=False,
-        )
-        v_selection.addWidget(advanced_help)
-
         self.al_advanced.addWidget(self.g_frame_selection)
 
         # Quality metrics
@@ -390,12 +386,16 @@ class DatasetPanel(QWidget):
 
         vl_content.addWidget(self.al_advanced)
 
-        self.lbl_bgsub_notice = self._main_window._create_help_label(
+        # A conditional notice, shown only in background-subtraction mode. It
+        # has to read as a sentence: collapsed to a "?" icon it was a control
+        # that silently appeared and disappeared with no adjacent label.
+        self.lbl_bgsub_notice = QLabel(
             "Background subtraction produces no detection confidences, so the "
             "confidence signal is disabled and the remaining frame-selection "
-            "signals are reweighted to compensate.",
-            attach_to_title=False,
+            "signals are reweighted to compensate."
         )
+        self.lbl_bgsub_notice.setWordWrap(True)
+        self.lbl_bgsub_notice.setStyleSheet("color: #b8b8b8; font-size: 11px;")
         self.lbl_bgsub_notice.setVisible(False)
         vl_content.addWidget(self.lbl_bgsub_notice)
 
@@ -423,7 +423,11 @@ class DatasetPanel(QWidget):
                 "• Includes both detected frames and interpolated frames from the final trajectory set\n"
                 "• Intended for downstream labeling/training workflows that need stable head-tail direction\n"
                 "• Saved under individual_crops/<run_id>/images\n\n"
-                "Note: Available only in YOLO OBB mode."
+                "Note: Available only in YOLO OBB mode.\n\n"
+                "Final canonical images reuse detections already filtered by ROI and size\n"
+                "settings; no forward-pass media export is performed.\n\n"
+                "Padding, background, interpolation, and head-tail settings are configured in:\n"
+                "Analyze Individuals -> Individual Analysis Pipeline Settings"
             )
         )
 
@@ -481,19 +485,6 @@ class DatasetPanel(QWidget):
         )
         vl_ind_dataset.addWidget(self.chk_suppress_foreign_obb_individual_dataset)
 
-        # Info label about filtering
-        # The padding/background/head-tail pointer used to be its own help
-        # icon; folded in here so the section carries one help affordance
-        # instead of stacking bare "?" rows.
-        self.lbl_individual_info = self._main_window._create_help_label(
-            "Final canonical images reuse detections already filtered by ROI and size settings.\n"
-            "No forward-pass media export is performed.\n\n"
-            "Padding, background, interpolation, and head-tail settings are configured in:\n"
-            "Analyze Individuals -> Individual Analysis Pipeline Settings",
-            attach_to_title=False,
-        )
-        vl_ind_dataset.addWidget(self.lbl_individual_info)
-
         form.addWidget(self.g_individual_dataset)
 
         # ============================================================
@@ -511,7 +502,9 @@ class DatasetPanel(QWidget):
                 "• Uses the detection cache plus interpolated ROI geometry\n"
                 "• Can run without saving individual crop images\n"
                 "• Saved beside active_learning/ and individual_crops/ under oriented_videos/<run_id>\n\n"
-                "Requires head-tail orientation to be configured in Analyze Individuals."
+                "Requires head-tail orientation to be configured in Analyze Individuals.\n\n"
+                "Oriented videos reuse detections already filtered by ROI and size settings;\n"
+                "no separate crop-dataset save is required."
             )
         )
 
@@ -615,12 +608,6 @@ class DatasetPanel(QWidget):
         )
         self.oriented_advanced.addWidget(self.chk_suppress_foreign_obb_oriented_videos)
 
-        self.lbl_oriented_video_info = self._main_window._create_help_label(
-            "Oriented videos reuse detections already filtered by ROI and size settings.\n"
-            "No separate crop-dataset save is required.",
-            attach_to_title=False,
-        )
-        self.oriented_advanced.addWidget(self.lbl_oriented_video_info)
         vl_oriented.addWidget(self.oriented_advanced)
 
         form.addWidget(self.g_oriented_videos)
@@ -630,8 +617,6 @@ class DatasetPanel(QWidget):
         self.g_oriented_videos.setVisible(False)
         self.ind_output_group.setVisible(False)
         self.chk_suppress_foreign_obb_individual_dataset.setVisible(False)
-        self.lbl_individual_info.setVisible(False)
-        self.lbl_oriented_video_info.setVisible(False)
         self.oriented_video_options.setVisible(False)
         self.oriented_advanced.setVisible(False)
         self._sync_oriented_video_postprocess_controls()
