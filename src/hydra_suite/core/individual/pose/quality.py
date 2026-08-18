@@ -376,24 +376,36 @@ def _collect_body_lengths(
     posterior_indices: List[int],
     min_valid_conf: float,
 ) -> List[float]:
-    """Extract valid body lengths from high-confidence rows."""
-    body_lengths: List[float] = []
-    for _, row in high_conf_df.iterrows():
-        kpts = _extract_keypoints_from_row(row, pose_labels)
-        if kpts is None:
-            continue
-        geom = compute_pose_geometry_from_keypoints(
-            kpts,
-            anterior_indices,
-            posterior_indices,
-            min_valid_conf,
-        )
-        if geom is None:
-            continue
-        bl = geom.get("body_length")
-        if bl is not None and float(bl) > 0.0:
-            body_lengths.append(float(bl))
-    return body_lengths
+    """Extract valid body lengths from high-confidence rows.
+
+    Vectorized equivalent of the historical ``iterrows()`` loop that called
+    ``_extract_keypoints_from_row`` + ``compute_pose_geometry_from_keypoints``
+    per row. Produces the identical sample sequence (same rows, same order,
+    same NaN/valid filtering) because ``calibrate_body_length_prior`` never
+    passes ``ignore_indices`` -- the ignore set is always empty here, which
+    is what makes the anterior/posterior weighted-centroid math reducible to
+    a per-index accumulation across all rows at once.
+    """
+    if high_conf_df.empty:
+        return []
+
+    kpts, any_found = _stack_keypoints(high_conf_df, pose_labels)
+    if not bool(any_found.any()):
+        return []
+
+    ax, ay, a_valid = _weighted_centroid_batch(kpts, anterior_indices, min_valid_conf)
+    px, py, p_valid = _weighted_centroid_batch(kpts, posterior_indices, min_valid_conf)
+
+    dx = ax - px
+    dy = ay - py
+    coords_finite = np.isfinite(dx) & np.isfinite(dy)
+
+    # math.hypot(dx, dy) per row, matching np.hypot's elementwise semantics
+    # exactly (both ultimately delegate to the platform libm hypot).
+    body_length = np.hypot(dx, dy)
+
+    mask = any_found & a_valid & p_valid & coords_finite & (body_length > 0.0)
+    return [float(v) for v in body_length[mask]]
 
 
 def _body_length_prior_from_samples(samples: List[float]) -> BodyLengthPrior:
@@ -488,24 +500,56 @@ def _accumulate_edge_samples(
     skeleton_edges: List[Tuple[int, int]],
     min_valid_conf: float,
 ) -> Dict[Tuple[int, int], List[float]]:
-    """Accumulate per-edge distance samples from high-confidence rows."""
+    """Accumulate per-edge distance samples from high-confidence rows.
+
+    Vectorized equivalent of the historical ``iterrows()`` loop that called
+    ``_extract_keypoints_from_row`` + ``_measure_edge_distance`` per row per
+    edge. The outer loop over rows is replaced by numpy operations across
+    all rows at once; the (small, fixed-size) loop over ``skeleton_edges``
+    is retained so that per-edge sample lists are appended in the exact row
+    order the ``iterrows()`` path produced -- this matters when multiple
+    edges canonicalize to the same ``(min_idx, max_idx)`` key (e.g. a
+    duplicate/reversed edge pair), since both edges' samples must interleave
+    the same way per row within that shared list.
+    """
     edge_samples: Dict[Tuple[int, int], List[float]] = {}
     K = len(pose_labels)
-    for _, row in high_conf_df.iterrows():
-        kpts = _extract_keypoints_from_row(row, pose_labels)
-        if kpts is None or len(kpts) < K:
+    if high_conf_df.empty:
+        return edge_samples
+
+    kpts, any_found = _stack_keypoints(high_conf_df, pose_labels)
+    if K == 0 or not bool(any_found.any()):
+        return edge_samples
+
+    for edge in skeleton_edges:
+        try:
+            ei, ej = int(edge[0]), int(edge[1])
+        except Exception:
             continue
-        for edge in skeleton_edges:
-            try:
-                ei, ej = int(edge[0]), int(edge[1])
-            except Exception:
-                continue
-            if ei >= K or ej >= K:
-                continue
-            dist = _measure_edge_distance(kpts, ei, ej, min_valid_conf)
-            if dist is not None:
-                key = (min(ei, ej), max(ei, ej))
-                edge_samples.setdefault(key, []).append(dist)
+        if ei >= K or ej >= K:
+            continue
+
+        xi = kpts[:, ei, 0].astype(np.float64)
+        yi = kpts[:, ei, 1].astype(np.float64)
+        ci = kpts[:, ei, 2].astype(np.float64)
+        xj = kpts[:, ej, 0].astype(np.float64)
+        yj = kpts[:, ej, 1].astype(np.float64)
+        cj = kpts[:, ej, 2].astype(np.float64)
+
+        # Mirrors _measure_edge_distance exactly: NaN confidence does NOT
+        # fail the gate (NaN < threshold is False), only an explicit
+        # below-threshold confidence does.
+        conf_ok = ~(ci < float(min_valid_conf)) & ~(cj < float(min_valid_conf))
+        coord_ok = np.isfinite(xi) & np.isfinite(yi) & np.isfinite(xj) & np.isfinite(yj)
+
+        dist = np.sqrt((xi - xj) ** 2 + (yi - yj) ** 2)
+        valid = any_found & conf_ok & coord_ok & (dist > 0.0)
+        if not np.any(valid):
+            continue
+
+        key = (min(ei, ej), max(ei, ej))
+        samples = [float(v) for v in dist[valid]]
+        edge_samples.setdefault(key, []).extend(samples)
     return edge_samples
 
 
@@ -963,6 +1007,126 @@ def apply_temporal_pose_postprocessing(
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _to_float_array(raw: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Elementwise emulate ``float(x)`` semantics for a 1-D array.
+
+    Returns ``(values, ok)`` where ``values`` is float64 (NaN where a
+    conversion failed or wasn't attempted) and ``ok`` is a bool mask that is
+    True exactly where ``float(x)`` would succeed without raising.  Numeric
+    dtypes (float/int/bool) always succeed, matching ``float(x)`` for a
+    plain numpy scalar (including NaN, which converts to NaN without
+    raising). Object-dtype columns fall back to an elementwise try/except to
+    stay faithful to arbitrary cell contents (e.g. a stray non-numeric
+    string), matching the original per-row ``float(x)`` conversion exactly.
+    """
+    if raw.dtype.kind in "fiub":
+        vals = raw.astype(np.float64, copy=False)
+        ok = np.ones(len(raw), dtype=bool)
+        return vals, ok
+
+    n = len(raw)
+    vals = np.full(n, np.nan, dtype=np.float64)
+    ok = np.zeros(n, dtype=bool)
+    for idx in range(n):
+        try:
+            vals[idx] = float(raw[idx])
+            ok[idx] = True
+        except (ValueError, TypeError):
+            ok[idx] = False
+    return vals, ok
+
+
+def _stack_keypoints(
+    df: pd.DataFrame, pose_labels: List[str]
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Vectorized equivalent of calling ``_extract_keypoints_from_row`` for
+    every row of *df*.
+
+    Returns ``(kpts, any_found)`` where ``kpts`` is ``(M, K, 3)`` float32
+    (NaN x/y, conf=0.0 defaults, exactly as ``_extract_keypoints_from_row``
+    initializes each row) and ``any_found[m]`` is True iff at least one
+    keypoint was successfully extracted for row *m* -- mirroring that
+    function returning ``None`` for a row when nothing was found.
+    """
+    M = len(df)
+    K = len(pose_labels)
+    kpts = np.full((M, K, 3), np.nan, dtype=np.float32)
+    kpts[:, :, 2] = 0.0
+    any_found = np.zeros(M, dtype=bool)
+
+    for i, label in enumerate(pose_labels):
+        x_col = f"PoseKpt_{label}_X"
+        y_col = f"PoseKpt_{label}_Y"
+        c_col = f"PoseKpt_{label}_Conf"
+        if (
+            x_col not in df.columns
+            or y_col not in df.columns
+            or c_col not in df.columns
+        ):
+            continue
+
+        fx, ok_x = _to_float_array(df[x_col].to_numpy())
+        fy, ok_y = _to_float_array(df[y_col].to_numpy())
+        fc, ok_c = _to_float_array(df[c_col].to_numpy())
+        ok = ok_x & ok_y & ok_c
+        if not np.any(ok):
+            continue
+
+        kpts[ok, i, 0] = fx[ok].astype(np.float32)
+        kpts[ok, i, 1] = fy[ok].astype(np.float32)
+        kpts[ok, i, 2] = fc[ok].astype(np.float32)
+        any_found |= ok
+
+    return kpts, any_found
+
+
+def _weighted_centroid_batch(
+    kpts: np.ndarray,
+    indices: Optional[List[int]],
+    min_valid_conf: float,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Vectorized equivalent of ``_weighted_centroid`` (features.py) across
+    all rows of a stacked ``(M, K, 3)`` keypoints array, for an always-empty
+    ignore set (the only case this calibration path needs).
+
+    Returns ``(cx, cy, has_valid)``, each length ``M``. Accumulation is a
+    left-to-right running sum over *indices* (matching the accumulation
+    order ``_weighted_centroid``'s python loop would use) with invalid
+    entries contributing an exact ``+0.0`` -- mathematically a no-op under
+    IEEE-754 addition, so the running sum for each row is bit-identical to
+    summing only the valid terms in the same order.
+    """
+    M, K, _ = kpts.shape
+    sum_w = np.zeros(M, dtype=np.float64)
+    sum_wx = np.zeros(M, dtype=np.float64)
+    sum_wy = np.zeros(M, dtype=np.float64)
+    has_valid = np.zeros(M, dtype=bool)
+
+    for idx in indices or []:
+        idx = int(idx)
+        if idx < 0 or idx >= K:
+            continue
+        x = kpts[:, idx, 0].astype(np.float64)
+        y = kpts[:, idx, 1].astype(np.float64)
+        c = kpts[:, idx, 2].astype(np.float64)
+        valid = (
+            np.isfinite(x)
+            & np.isfinite(y)
+            & np.isfinite(c)
+            & (c >= float(min_valid_conf))
+        )
+        w = np.where(valid, np.maximum(1e-6, c), 0.0)
+        sum_w = sum_w + w
+        sum_wx = sum_wx + np.where(valid, w * x, 0.0)
+        sum_wy = sum_wy + np.where(valid, w * y, 0.0)
+        has_valid |= valid
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        cx = sum_wx / sum_w
+        cy = sum_wy / sum_w
+    return cx, cy, has_valid
 
 
 def _extract_keypoints_from_row(row, pose_labels: List[str]) -> Optional[np.ndarray]:
