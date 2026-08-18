@@ -177,27 +177,34 @@ def _run_rich_export(clip_name: str, outdir: Path) -> Path:
     return rich_csv
 
 
-def _fixtures_available() -> bool:
+def _fixtures_available(clip_name: str) -> bool:
+    """Fixture presence check for ONE clip (not the whole CLIPS list), so a
+    missing fixture for one clip doesn't spuriously skip the other's case."""
     if not (RUNNER_SCRIPT.exists() and SKELETON_FILE.exists()):
         return False
-    for clip in CLIPS:
-        if not (FIXTURE_CLIPS_DIR / f"{clip}.mp4").exists():
-            return False
-        if not (FIXTURE_CONFIGS_DIR / f"{clip}.json").exists():
-            return False
+    if not (FIXTURE_CLIPS_DIR / f"{clip_name}.mp4").exists():
+        return False
+    if not (FIXTURE_CONFIGS_DIR / f"{clip_name}.json").exists():
+        return False
     return True
 
 
 @pytest.mark.slow
+@pytest.mark.timeout(900)
 @pytest.mark.parametrize("clip_name", CLIPS)
 def test_rich_export_matches_golden_byte_for_byte(clip_name, tmp_path):
+    # 900s comfortably exceeds the observed ~304s/clip (even under box
+    # contention) while staying below the internal subprocess timeout=1800
+    # cap in _run_rich_export -- overrides the repo-wide pytest.ini
+    # --timeout=300, which would otherwise kill this heavy pipeline run
+    # before it ever reaches the byte comparison.
     golden_path = GOLDEN_DIR / f"{clip_name}_with_individual.csv"
     if not golden_path.exists():
         pytest.fail(
             f"Golden missing: {golden_path}. Capture it per "
             "tests/goldens/rich_export (see test_rich_export_golden.py docstring)."
         )
-    if not _fixtures_available():
+    if not _fixtures_available(clip_name):
         pytest.skip(
             f"{clip_name} equivalence fixtures missing "
             "(run tools/equivalence/fixtures/fetch_fixtures.sh)."
