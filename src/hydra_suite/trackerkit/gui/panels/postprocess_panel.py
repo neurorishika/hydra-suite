@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from hydra_suite.trackerkit.config.schemas import TrackerConfig
+from hydra_suite.trackerkit.gui.widgets.collapsible import CollapsibleGroupBox
 
 if TYPE_CHECKING:
     from hydra_suite.trackerkit.gui.main_window import MainWindow
@@ -107,10 +108,20 @@ class PostProcessPanel(QWidget):
             "Only used when pose extraction is enabled. These gates suppress weak pose rows and temporal outliers.",
         )
 
+        self.g_gap_filling, f_gap_filling = self._create_subsection_form(
+            "Gap Filling",
+            "How short gaps in a trajectory are filled once cleaning has run.",
+        )
+
         self.g_interpolation_merge, f_interpolation_merge = (
             self._create_subsection_form(
-                "Interpolation And Merge",
-                "Fill short gaps and control how forward/backward trajectories are merged into final clean tracks.",
+                "Merge And Stitching",
+                "Control how forward/backward trajectories are merged into final clean tracks, "
+                "and how consecutive fragments are stitched back together.\n\n"
+                "Stitching reconnects fragments using motion prediction (end-velocity x gap), "
+                "heading consistency, and a density-aware spatial gate. To stay conservative, "
+                "a stitch is accepted only when it is unambiguously better than the runner-up "
+                "and both endpoints agree on each other as the best partner.",
             )
         )
 
@@ -392,7 +403,7 @@ class PostProcessPanel(QWidget):
             ],
             columns=2,
         )
-        f_interpolation_merge.addRow(self.interpolation_row_widget)
+        f_gap_filling.addRow(self.interpolation_row_widget)
 
         self.spin_heading_flip_max_burst = QSpinBox()
         self.spin_heading_flip_max_burst.setRange(1, 50)
@@ -430,23 +441,18 @@ class PostProcessPanel(QWidget):
         )
         f_interpolation_merge.addRow(self.heading_flip_burst_row_widget)
         # Post-hoc note shown in place of the burst row.
-        self.lbl_heading_flip_posthoc_note = self._main_window._create_help_label(
+        # Swapped in where the burst row was, so it has to read as a sentence:
+        # a bare "?" in that slot looks like a control, not an explanation.
+        self.lbl_heading_flip_posthoc_note = QLabel(
             "Global heading consistency (minimum-flips DP) is applied per track — "
             "the burst-flip threshold is not used."
         )
+        self.lbl_heading_flip_posthoc_note.setWordWrap(True)
+        self.lbl_heading_flip_posthoc_note.setStyleSheet(
+            "color: #b8b8b8; font-size: 11px;"
+        )
         self.lbl_heading_flip_posthoc_note.setVisible(False)
         f_interpolation_merge.addRow(self.lbl_heading_flip_posthoc_note)
-        self.merge_threshold_row_widget = self._build_field_grid(
-            [
-                (
-                    self.lbl_merge_overlap_multiplier,
-                    self.spin_merge_overlap_multiplier,
-                ),
-            ],
-            columns=1,
-        )
-        f_interpolation_merge.addRow(self.merge_threshold_row_widget)
-
         self.spin_min_overlap_frames = QSpinBox()
         self.spin_min_overlap_frames.setRange(1, 100)
         self.spin_min_overlap_frames.setValue(5)
@@ -457,24 +463,24 @@ class PostProcessPanel(QWidget):
             "Recommended: 5-15 frames."
         )
         self.lbl_min_overlap_frames = QLabel("Minimum overlap frames")
-        self.min_overlap_row_widget = self._build_field_grid(
-            [(self.lbl_min_overlap_frames, self.spin_min_overlap_frames)],
-            columns=1,
+        self.merge_threshold_row_widget = self._build_field_grid(
+            [
+                (
+                    self.lbl_merge_overlap_multiplier,
+                    self.spin_merge_overlap_multiplier,
+                ),
+                (self.lbl_min_overlap_frames, self.spin_min_overlap_frames),
+            ],
+            columns=2,
         )
-        f_interpolation_merge.addRow(self.min_overlap_row_widget)
+        f_interpolation_merge.addRow(self.merge_threshold_row_widget)
 
         # ── Fragment stitching (motion-aware, single-option matcher) ──────────
+        # The explanation that used to sit here as a bare "?" now lives in the
+        # group's title help, which is the one help affordance for this group.
         self.lbl_stitch_header = QLabel("Fragment stitching")
         self.lbl_stitch_header.setStyleSheet("font-weight: bold; margin-top: 6px;")
         f_interpolation_merge.addRow(self.lbl_stitch_header)
-        self.lbl_stitch_help = self._main_window._create_help_label(
-            "Reconnects consecutive fragments using motion prediction "
-            "(end-velocity × gap), heading consistency, and a density-aware "
-            "spatial gate. To stay conservative, a stitch is accepted only when "
-            "it is unambiguously better than the runner-up and both endpoints "
-            "agree on each other as the best partner."
-        )
-        f_interpolation_merge.addRow(self.lbl_stitch_help)
 
         self.spin_stitch_max_gap_seconds = QDoubleSpinBox()
         self.spin_stitch_max_gap_seconds.setRange(0.0, 2.0)
@@ -744,20 +750,21 @@ class PostProcessPanel(QWidget):
             "× length objective. Uncheck to run PELT changepoint detection only\n"
             "(log changepoints without modifying any labels)."
         )
+        # The evidence-weight explanation used to sit below as its own help
+        # icon, orphaned in the middle of a form. It belongs to the toggle
+        # that gates these controls.
+        self.chk_enable_fragment_scoring.setToolTip(
+            (self.chk_enable_fragment_scoring.toolTip() or "").rstrip()
+            + "\n\nEvidence weights — CNN, AprilTag, and the online prior set the\n"
+            "fragment unary evidence used by the iterative solver. Spatial\n"
+            "continuity is applied separately as a velocity-based gate."
+        )
         fs_layout.addRow(self.chk_enable_fragment_scoring)
 
         self.refinement_controls_widget = QWidget()
         refinement_layout = QFormLayout(self.refinement_controls_widget)
         refinement_layout.setContentsMargins(16, 0, 0, 0)
         refinement_layout.setSpacing(4)
-
-        refinement_layout.addRow(
-            self._main_window._create_help_label(
-                "Evidence weights — CNN, AprilTag, and the online prior set the "
-                "fragment unary evidence used by the iterative solver. Spatial "
-                "continuity is applied separately as a velocity-based gate."
-            )
-        )
 
         self.spin_fragment_cnn_weight = QDoubleSpinBox()
         self.spin_fragment_cnn_weight.setRange(0.0, 2.0)
@@ -895,11 +902,24 @@ class PostProcessPanel(QWidget):
         vl_identity_postprocess.addWidget(self.fragment_solver_content)
 
         cleaning_sections_layout.addWidget(self.g_cleaning_filters)
-        cleaning_sections_layout.addWidget(self.g_motion_breaks)
-        cleaning_sections_layout.addWidget(self.g_relinking)
-        cleaning_sections_layout.addWidget(self.g_pose_quality)
-        cleaning_sections_layout.addWidget(self.g_interpolation_merge)
-        cleaning_sections_layout.addWidget(self.g_identity_postprocess)
+        cleaning_sections_layout.addWidget(self.g_gap_filling)
+
+        # Everything below is a tuning knob, not a decision most users make.
+        # One collapsible for the lot; the nested groups keep their own help
+        # text, which attaches to their titles.
+        self.clean_advanced = CollapsibleGroupBox("Advanced options")
+        self.clean_advanced.setHelpToolTip(
+            "Defaults suit most videos. These control how tracks are split at "
+            "implausible motion, how fragments are reconnected, how "
+            "forward/backward passes are merged, and -- when identity "
+            "classification is on -- how identity refines the result."
+        )
+        self.clean_advanced.addWidget(self.g_motion_breaks)
+        self.clean_advanced.addWidget(self.g_relinking)
+        self.clean_advanced.addWidget(self.g_pose_quality)
+        self.clean_advanced.addWidget(self.g_interpolation_merge)
+        self.clean_advanced.addWidget(self.g_identity_postprocess)
+        cleaning_sections_layout.addWidget(self.clean_advanced)
         vl_pp.addWidget(self.cleaning_sections_widget)
         vbox.addWidget(g_pp)
 
@@ -1285,23 +1305,43 @@ class PostProcessPanel(QWidget):
             grid.setColumnStretch(column, 1)
         return widget
 
+    def set_identity_section_visible(self, visible: bool) -> None:
+        """Show or hide the whole identity post-processing section.
+
+        Mirrors ``TrackingPanel.set_identity_section_visible``. Clean Results
+        was never wired into the same sync, so this section stayed on screen
+        with identity classification off -- a block of controls that could not
+        affect the run.
+        """
+        self._identity_active = bool(visible)
+        self._set_cleaning_section_state(self.enable_postprocessing.isChecked())
+
     def _set_cleaning_section_state(self, enabled: bool) -> None:
         """Show or hide post-processing subsections based on the cleaning toggle."""
         pose_enabled = bool(enabled and self._main_window._is_pose_export_enabled())
+        identity_enabled = bool(enabled and getattr(self, "_identity_active", False))
         self.cleaning_sections_widget.setVisible(enabled)
         self.cleaning_sections_widget.setEnabled(enabled)
         self.g_cleaning_filters.setVisible(enabled)
         self.g_cleaning_filters.setEnabled(enabled)
+        self.g_gap_filling.setVisible(enabled)
+        self.g_gap_filling.setEnabled(enabled)
+        self.clean_advanced.setVisible(enabled)
+        self.clean_advanced.setEnabled(enabled)
         self.g_motion_breaks.setVisible(enabled)
         self.g_motion_breaks.setEnabled(enabled)
         self.g_relinking.setVisible(enabled)
         self.g_relinking.setEnabled(enabled)
+        # Both relink knobs score pose similarity; without pose, relinking
+        # falls back to motion-only and neither value is consulted. The
+        # toggle itself stays -- relinking still runs.
+        self.relink_quality_row_widget.setVisible(pose_enabled)
         self.g_interpolation_merge.setVisible(enabled)
         self.g_interpolation_merge.setEnabled(enabled)
         self.g_pose_quality.setVisible(pose_enabled)
         self.g_pose_quality.setEnabled(pose_enabled)
-        self.g_identity_postprocess.setVisible(enabled)
-        self.g_identity_postprocess.setEnabled(enabled)
+        self.g_identity_postprocess.setVisible(identity_enabled)
+        self.g_identity_postprocess.setEnabled(identity_enabled)
         if not enabled:
             self.fragment_solver_content.setVisible(False)
 

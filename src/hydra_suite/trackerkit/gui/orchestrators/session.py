@@ -1195,6 +1195,10 @@ class SessionOrchestrator:
                 and self._mw._identity_panel.g_identity.isChecked()
             )
             self._mw._tracking_panel.set_identity_section_visible(identity_active)
+            if hasattr(self._mw, "_postprocess_panel"):
+                self._mw._postprocess_panel.set_identity_section_visible(
+                    identity_active
+                )
         if hasattr(self._mw, "_dataset_panel"):
             self._mw._dataset_panel.g_individual_dataset.setVisible(pipeline_enabled)
             self._mw._dataset_panel.g_individual_dataset.setEnabled(pipeline_enabled)
