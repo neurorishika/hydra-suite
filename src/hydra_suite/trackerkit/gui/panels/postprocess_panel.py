@@ -943,7 +943,9 @@ class PostProcessPanel(QWidget):
             self._main_window._create_help_label(
                 "Generate annotated video from final post-processed trajectories. "
                 "Video is created AFTER merging and interpolation, showing clean tracks with stable IDs. "
-                "This is recommended over real-time video output during tracking."
+                "This is recommended over real-time video output during tracking.\n\n"
+                "Pose overlay options appear here only when Pose Extraction is enabled "
+                "in Analyze Individuals."
             )
         )
 

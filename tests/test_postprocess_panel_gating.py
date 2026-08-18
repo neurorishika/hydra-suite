@@ -116,3 +116,29 @@ def test_relinking_hidden_when_the_post_pass_that_runs_it_is_off(qapp, main_wind
     dataset.chk_enable_individual_dataset.setChecked(True)
     panel._set_cleaning_section_state(True)
     _settle(qapp)
+
+
+def test_pose_overlay_section_hidden_entirely_without_pose(qapp, main_window):
+    """With pose off the subsection collapsed to a title, a dead checkbox and a
+    line of explanation -- it looked like a setting but could not be set."""
+    panel = main_window._postprocess_panel
+    orch = main_window._session_orch
+    panel.check_video_output.setChecked(True)
+    _settle(qapp)
+
+    assert orch._is_pose_inference_enabled() is False
+    assert panel.g_video_pose_overlay.isVisibleTo(panel) is False
+
+    # ...and it must come back when pose inference is actually available.
+    original = orch._is_pose_inference_enabled
+    try:
+        orch._is_pose_inference_enabled = lambda *a, **k: True
+        main_window._sync_video_pose_overlay_controls()
+        _settle(qapp)
+        assert panel.g_video_pose_overlay.isVisibleTo(panel) is True
+        assert panel.check_video_show_pose.isEnabled() is True
+    finally:
+        orch._is_pose_inference_enabled = original
+        main_window._sync_video_pose_overlay_controls()
+        panel.check_video_output.setChecked(False)
+        _settle(qapp)
