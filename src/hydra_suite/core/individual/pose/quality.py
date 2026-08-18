@@ -778,6 +778,7 @@ def apply_quality_to_dataframe(
     min_valid_keypoints = int(params.get("POSE_EXPORT_MIN_VALID_KEYPOINTS", 3))
     ignore_kpts_raw = params.get("POSE_IGNORE_KEYPOINTS", [])
     ignore_indices: List[int] = [int(i) for i in (ignore_kpts_raw or [])]
+    ignore_set = set(ignore_indices)
 
     # ------------------------------------------------------------------
     # Build column triplets
@@ -802,54 +803,296 @@ def apply_quality_to_dataframe(
     # Determine which rows have any pose data
     all_conf_cols = [c for _, _, c in col_triplets if c in out.columns]
 
-    for row_idx in out.index:
-        row = out.loc[row_idx]
+    if not all_conf_cols:
+        # No pose columns at all -- every row is "no_pose" (matches the
+        # per-row loop, which would compute has_pose=False for every row).
+        out["PoseQualityState"] = "no_pose"
+        out["PoseQualityScore"] = 0.0
+        out["PoseSource"] = ""
+        return out
 
-        # Check if this row has any pose data at all
-        has_pose = False
-        if all_conf_cols:
-            try:
-                has_pose = any(
-                    not pd.isna(row[c]) for c in all_conf_cols if c in out.columns
-                )
-            except Exception:
-                has_pose = False
+    has_pose = out[all_conf_cols].notna().any(axis=1).to_numpy()
 
-        if not has_pose:
-            out.at[row_idx, "PoseQualityState"] = "no_pose"
-            out.at[row_idx, "PoseQualityScore"] = 0.0
-            out.at[row_idx, "PoseSource"] = ""
-            continue
+    # Default state for every row is "no_pose" / score 0.0 / source "" --
+    # matches the per-row loop's ``continue`` branch. Flags/WasCleaned keep
+    # their init defaults ("" / 0) for these rows, exactly as before.
+    out["PoseQualityState"] = "no_pose"
+    out["PoseQualityScore"] = 0.0
+    out["PoseSource"] = ""
 
-        # Extract keypoints for this row
-        kpts = _extract_keypoints_from_row(row, pose_labels)
+    if not bool(has_pose.any()):
+        return out
 
-        result = assess_pose_row(
+    # ------------------------------------------------------------------
+    # Batch-extract (N, K, 3) float32 keypoints, mirroring
+    # ``_extract_keypoints_from_row`` exactly (see ``_stack_keypoints``
+    # docstring for the equivalence argument).
+    # ------------------------------------------------------------------
+    kpts, any_found = _stack_keypoints(out, pose_labels)
+
+    # Rows where has_pose=True but extraction found nothing at all
+    # (``_extract_keypoints_from_row`` would have returned None ->
+    # ``assess_pose_row(None, ...)`` -> ``_rejected_result(0, ["null_input"])``).
+    # cleaned_keypoints has length 0 in that case, so the write-back loop
+    # never touches the confidence columns for these rows.
+    null_input_mask = has_pose & ~any_found
+
+    # Rows where extraction succeeded but every value is non-finite
+    # (assess_pose_row's ``if not np.any(np.isfinite(arr))`` branch ->
+    # ``_rejected_result(len(arr), ["all_nan"])``, which DOES zero every
+    # confidence column via ``np.zeros((n_kpts, 3), dtype=np.float32)``).
+    all_nan_mask = has_pose & any_found & ~np.any(np.isfinite(kpts), axis=(1, 2))
+
+    # Remaining rows go through the full clean -> reject -> score pipeline.
+    normal_mask = has_pose & any_found & ~all_nan_mask
+
+    conf_cols_by_label = [f"PoseKpt_{label}_Conf" for label in pose_labels]
+
+    if bool(null_input_mask.any()):
+        idxs = out.index[null_input_mask]
+        out.loc[idxs, "PoseQualityState"] = "rejected"
+        out.loc[idxs, "PoseQualityScore"] = 0.0
+        out.loc[idxs, "PoseQualityFlags"] = "null_input"
+        out.loc[idxs, "PoseWasCleaned"] = 1
+        out.loc[idxs, "PoseSource"] = "cache"
+
+    if bool(all_nan_mask.any()):
+        idxs = out.index[all_nan_mask]
+        out.loc[idxs, "PoseQualityState"] = "rejected"
+        out.loc[idxs, "PoseQualityScore"] = 0.0
+        out.loc[idxs, "PoseQualityFlags"] = "all_nan"
+        out.loc[idxs, "PoseWasCleaned"] = 1
+        out.loc[idxs, "PoseSource"] = "cache"
+        for c_col in conf_cols_by_label:
+            if c_col in out.columns:
+                out.loc[idxs, c_col] = 0.0
+
+    if bool(normal_mask.any()):
+        _apply_quality_normal_rows(
+            out,
             kpts,
-            min_valid_conf=min_valid_conf,
-            min_valid_fraction=min_valid_fraction,
-            min_valid_keypoints=min_valid_keypoints,
-            ignore_indices=ignore_indices if ignore_indices else None,
-            body_length_prior=body_length_prior,
-            anterior_indices=anterior_indices,
-            posterior_indices=posterior_indices,
-            skeleton_edges=skeleton_edges,
-            edge_length_priors=edge_length_priors,
+            normal_mask,
+            pose_labels,
+            conf_cols_by_label,
+            min_valid_conf,
+            min_valid_fraction,
+            min_valid_keypoints,
+            ignore_set,
+            body_length_prior,
+            anterior_indices,
+            posterior_indices,
+            skeleton_edges,
+            edge_length_priors,
         )
 
-        # Write cleaned confidences back
-        for i, label in enumerate(pose_labels):
-            c_col = f"PoseKpt_{label}_Conf"
-            if c_col in out.columns and i < len(result.cleaned_keypoints):
-                out.at[row_idx, c_col] = float(result.cleaned_keypoints[i, 2])
-
-        out.at[row_idx, "PoseQualityScore"] = result.quality_score
-        out.at[row_idx, "PoseQualityState"] = result.quality_state
-        out.at[row_idx, "PoseQualityFlags"] = "|".join(result.quality_flags)
-        out.at[row_idx, "PoseWasCleaned"] = int(result.was_cleaned)
-        out.at[row_idx, "PoseSource"] = "cache"
-
     return out
+
+
+# Matches the (unexposed) defaults of ``assess_pose_row``'s
+# ``body_length_z_threshold`` / ``edge_length_z_threshold`` parameters --
+# ``apply_quality_to_dataframe`` never overrides them.
+_BODY_LENGTH_Z_THRESHOLD_DEFAULT = 3.5
+_EDGE_LENGTH_Z_THRESHOLD_DEFAULT = 4.0
+
+
+def _apply_quality_normal_rows(
+    out: pd.DataFrame,
+    kpts: np.ndarray,
+    normal_mask: np.ndarray,
+    pose_labels: List[str],
+    conf_cols_by_label: List[str],
+    min_valid_conf: float,
+    min_valid_fraction: float,
+    min_valid_keypoints: int,
+    ignore_set: set,
+    body_length_prior: Optional[BodyLengthPrior],
+    anterior_indices: Optional[List[int]],
+    posterior_indices: Optional[List[int]],
+    skeleton_edges: Optional[List[Tuple[int, int]]],
+    edge_length_priors: Optional[EdgeLengthPriors],
+) -> None:
+    """Vectorized equivalent of the ``assess_pose_row`` "normal path" (steps
+    2-8: per-keypoint cleaning, valid-fraction rejection, body-length +
+    edge-length outlier checks, quality score/state) for every row flagged
+    True in *normal_mask*. Writes results directly into *out* in-place.
+    """
+    N, K, _ = kpts.shape
+
+    ignore_mask_k = np.zeros(K, dtype=bool)
+    for i in ignore_set:
+        if 0 <= i < K:
+            ignore_mask_k[i] = True
+    not_ignored = ~ignore_mask_k
+
+    x = kpts[:, :, 0]
+    y = kpts[:, :, 1]
+    conf = kpts[:, :, 2]
+    conf_f64 = conf.astype(np.float64)
+
+    # 2. Per-keypoint cleaning (mirrors ``_clean_keypoints`` exactly: the
+    # float32->float64 widening below is exact/lossless, so this comparison
+    # is bit-identical to the scalar ``float(arr[i, 2]) >= float(min_valid_conf)``.)
+    coords_ok = np.isfinite(x) & np.isfinite(y)
+    conf_ok = np.isfinite(conf_f64) & (conf_f64 >= float(min_valid_conf))
+
+    valid_mask = coords_ok & conf_ok & not_ignored[None, :]
+    to_zero = not_ignored[None, :] & ~valid_mask
+    zero_low_conf = to_zero & ~conf_ok
+    zero_invalid_coords = to_zero & conf_ok & ~coords_ok
+
+    low_conf_count = zero_low_conf.sum(axis=1)
+    invalid_coords_count = zero_invalid_coords.sum(axis=1)
+
+    cleaned_conf = np.where(to_zero, np.float32(0.0), conf)
+    was_cleaned_step1 = (low_conf_count > 0) | (invalid_coords_count > 0)
+
+    # 3-4. Valid fraction (num_considered is constant across rows).
+    num_considered = int(np.sum(not_ignored))
+    num_valid = valid_mask.sum(axis=1)
+    if num_considered > 0:
+        valid_fraction = num_valid.astype(np.float64) / float(num_considered)
+    else:
+        valid_fraction = np.zeros(N, dtype=np.float64)
+
+    # 5. Rejection check.
+    rejected = (valid_fraction < float(min_valid_fraction)) | (
+        num_valid < int(min_valid_keypoints)
+    )
+    reject_zero = rejected[:, None] & not_ignored[None, :]
+    final_cleaned_conf = np.where(reject_zero, np.float32(0.0), cleaned_conf)
+    was_cleaned_final = was_cleaned_step1 | rejected
+
+    # 6. Body-length outlier check (on ORIGINAL keypoints before zeroing).
+    body_length_outlier = np.zeros(N, dtype=bool)
+    if (
+        body_length_prior is not None
+        and body_length_prior.is_valid
+        and anterior_indices
+        and posterior_indices
+    ):
+        ant_filtered = [i for i in anterior_indices if int(i) not in ignore_set]
+        post_filtered = [i for i in posterior_indices if int(i) not in ignore_set]
+        # Rows outside normal_mask may carry non-finite (e.g. inf) keypoint
+        # values -- results for those rows are discarded by the caller, but
+        # the elementwise math below still runs over the full array, which
+        # can trip numpy's invalid-value warnings on that garbage input.
+        with np.errstate(invalid="ignore", divide="ignore", over="ignore"):
+            ax, ay, a_valid = _weighted_centroid_batch(
+                kpts, ant_filtered, min_valid_conf
+            )
+            px, py, p_valid = _weighted_centroid_batch(
+                kpts, post_filtered, min_valid_conf
+            )
+            dx = ax - px
+            dy = ay - py
+        coords_finite = np.isfinite(dx) & np.isfinite(dy)
+        candidate_mask = a_valid & p_valid & coords_finite
+
+        # See the module-level note on ``math.hypot`` vs ``np.hypot`` (1-ULP
+        # divergence risk): compute body length with a scalar ``math.hypot``
+        # loop restricted to candidate rows, exactly mirroring
+        # ``_check_body_length_outlier`` / ``compute_pose_geometry_from_keypoints``.
+        body_length = np.zeros(N, dtype=np.float64)
+        for row_idx in np.nonzero(candidate_mask)[0]:
+            body_length[row_idx] = math.hypot(dx[row_idx], dy[row_idx])
+
+        denom = max(float(body_length_prior.mad_px), 1.0)
+        z_score = np.abs(body_length - float(body_length_prior.median_px)) / denom
+        body_length_outlier = candidate_mask & (
+            z_score > float(_BODY_LENGTH_Z_THRESHOLD_DEFAULT)
+        )
+
+    # 6b. Per-edge skeleton length check (uses X/Y from ``kpts``, which
+    # cleaning never modifies, and ``valid_mask`` as computed above).
+    n_edge_outliers = np.zeros(N, dtype=np.int64)
+    if (
+        skeleton_edges
+        and edge_length_priors is not None
+        and edge_length_priors.is_valid
+    ):
+        for edge in skeleton_edges:
+            try:
+                ei, ej = int(edge[0]), int(edge[1])
+            except Exception:
+                continue
+            if ei >= K or ej >= K:
+                continue
+            key = (min(ei, ej), max(ei, ej))
+            prior = edge_length_priors.priors.get(key)
+            if prior is None or int(prior.get("n_samples", 0)) < 20:
+                continue
+
+            valid_edge = valid_mask[:, ei] & valid_mask[:, ej]
+            xi = kpts[:, ei, 0].astype(np.float64)
+            yi = kpts[:, ei, 1].astype(np.float64)
+            xj = kpts[:, ej, 0].astype(np.float64)
+            yj = kpts[:, ej, 1].astype(np.float64)
+            # ``sqrt`` is IEEE-754 correctly rounded, so numpy/libm always
+            # agree here (unlike ``hypot`` above) -- safe to vectorize.
+            # (errstate: see the body-length block above -- discarded rows
+            # may hold non-finite garbage.)
+            with np.errstate(invalid="ignore", over="ignore"):
+                edge_len = np.sqrt((xi - xj) ** 2 + (yi - yj) ** 2)
+            denom = max(float(prior.get("mad_px", 1.0)), 1.0)
+            z = np.abs(edge_len - float(prior["median_px"])) / denom
+            is_outlier = valid_edge & (z > float(_EDGE_LENGTH_Z_THRESHOLD_DEFAULT))
+            n_edge_outliers += is_outlier.astype(np.int64)
+
+    # 7-8. Quality score and state (mirrors ``_compute_quality`` exactly;
+    # the zero-injection for non-valid entries is an exact IEEE-754 no-op,
+    # so the masked sum below is bit-identical to summing only the valid
+    # subset in index order -- see ``_weighted_centroid_batch``'s docstring
+    # for the same argument applied elsewhere in this module).
+    cleaned_f64 = cleaned_conf.astype(np.float64)
+    masked_conf_sum = np.where(valid_mask, cleaned_f64, 0.0).sum(axis=1)
+    mean_conf = np.where(num_valid > 0, masked_conf_sum / np.maximum(num_valid, 1), 0.0)
+    score = valid_fraction * mean_conf
+    score = np.where(body_length_outlier, score * 0.7, score)
+    edge_factor = np.maximum(0.5, 1.0 - 0.15 * n_edge_outliers.astype(np.float64))
+    score = np.where(n_edge_outliers > 0, score * edge_factor, score)
+    score = np.clip(score, 0.0, 1.0)
+
+    state = np.where(score < 0.2, "bad", np.where(score < 0.7, "partial", "good"))
+
+    final_score = np.where(rejected, 0.0, score)
+    final_state = np.where(rejected, "rejected", state)
+
+    # Flag-string assembly, in the EXACT original token order:
+    # low_conf -> invalid_coords -> too_few_valid -> body_length_outlier
+    # -> edge_outlier. Body-length/edge checks are skipped entirely for
+    # rejected rows in the scalar version (early return), so their flags
+    # (and any geometry-outlier state) must not appear for those rows.
+    has_bl = body_length_outlier & ~rejected
+    has_edge = (n_edge_outliers > 0) & ~rejected
+
+    row_positions = np.nonzero(normal_mask)[0]
+    flags_arr = np.empty(N, dtype=object)
+    for r in row_positions:
+        toks = []
+        if low_conf_count[r] > 0:
+            toks.append(f"low_conf:{int(low_conf_count[r])}")
+        if invalid_coords_count[r] > 0:
+            toks.append(f"invalid_coords:{int(invalid_coords_count[r])}")
+        if rejected[r]:
+            toks.append("too_few_valid")
+        if has_bl[r]:
+            toks.append("body_length_outlier")
+        if has_edge[r]:
+            toks.append(f"edge_outlier:{int(n_edge_outliers[r])}")
+        flags_arr[r] = "|".join(toks)
+
+    idxs = out.index[normal_mask]
+    for i, c_col in enumerate(conf_cols_by_label):
+        if c_col in out.columns:
+            out.loc[idxs, c_col] = final_cleaned_conf[row_positions, i].astype(
+                np.float64
+            )
+
+    out.loc[idxs, "PoseQualityScore"] = final_score[row_positions]
+    out.loc[idxs, "PoseQualityState"] = final_state[row_positions]
+    out.loc[idxs, "PoseQualityFlags"] = flags_arr[row_positions]
+    out.loc[idxs, "PoseWasCleaned"] = was_cleaned_final[row_positions].astype(int)
+    out.loc[idxs, "PoseSource"] = "cache"
 
 
 # ---------------------------------------------------------------------------
