@@ -175,9 +175,10 @@ def test_detector_points_are_scaled_back_to_original_frame_space():
     runner = _FakeRunner({0: obb_result})
 
     frames = {0: np.zeros((3, 3, 3), dtype=np.uint8)}
-    records_by_frame = _detect_records_for_frames(
+    records_by_frame, stats = _detect_records_for_frames(
         runner, frames, {"RESIZE_FACTOR": resize_factor}, GeometryLevel.OBB
     )
+    assert stats["detection_failed"] == 0
 
     records = records_by_frame[0]
     assert len(records) == 1

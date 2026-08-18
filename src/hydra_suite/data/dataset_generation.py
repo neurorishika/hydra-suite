@@ -39,12 +39,104 @@ def resolve_native_level(params) -> GeometryLevel:
     if method != "yolo_obb":
         return GeometryLevel.OBB
 
+    return _TASK_LEVELS.get(resolve_detection_task(params), GeometryLevel.OBB)
+
+
+def resolve_detection_task(params) -> str:
+    """The YOLO head the export detection pass will actually run.
+
+    Single authority so `resolve_native_level`, `_init_detection_runner` and
+    the exported provenance can never disagree about which task ran. The
+    sequential stage-2 key is ``YOLO_SEQ_STAGE2_TASK`` -- the one
+    ``core/inference/config.build_inference_config_from_params`` reads;
+    ``YOLO_OBB_STAGE2_TASK`` was a key nothing ever wrote, so sequential rounds
+    silently resolved to the direct-mode default.
+    """
     mode = str(params.get("YOLO_OBB_MODE", "direct")).strip().lower()
     if mode == "sequential":
-        task = str(params.get("YOLO_OBB_STAGE2_TASK", "obb")).strip().lower()
+        raw = params.get(
+            "YOLO_SEQ_STAGE2_TASK", params.get("YOLO_OBB_STAGE2_TASK", "obb")
+        )
     else:
-        task = str(params.get("YOLO_OBB_DIRECT_TASK", "obb")).strip().lower()
-    return _TASK_LEVELS.get(task, GeometryLevel.OBB)
+        raw = params.get("YOLO_OBB_DIRECT_TASK", "obb")
+    task = str(raw or "obb").strip().lower()
+    return task if task in _TASK_LEVELS else "obb"
+
+
+def resolve_detection_model_path(params) -> str:
+    """The checkpoint the export detection pass will actually load.
+
+    Sequential mode runs the *crop* OBB model as its geometry stage, not the
+    direct model -- stamping the direct path into provenance made a sequential
+    round claim a model it never ran.
+    """
+    mode = str(params.get("YOLO_OBB_MODE", "direct")).strip().lower()
+    if mode == "sequential":
+        return str(
+            params.get("YOLO_CROP_OBB_MODEL_PATH", "")
+            or params.get("YOLO_MODEL_PATH", "")
+            or ""
+        )
+    return str(
+        params.get(
+            "YOLO_OBB_DIRECT_MODEL_PATH",
+            params.get("YOLO_MODEL_PATH", ""),
+        )
+        or ""
+    )
+
+
+def effective_acquisition_weights(params):
+    """The acquisition weights that actually rank frames for `params`.
+
+    The preset is only the starting point: every channel whose ``METRIC_*``
+    toggle is off is zeroed, the uncertainty channel is zeroed for bg-sub
+    (which reports NaN confidences), and the survivors are renormalized. This
+    is the single derivation -- `FrameQualityScorer` consumes it, and the
+    exporter stamps it into provenance, so a round's recorded weights are by
+    construction the ones that produced it.
+    """
+    from hydra_suite.data.al.acquisition import PRESETS, AcquisitionWeights
+
+    method = str(params.get("DETECTION_METHOD", "")).strip().lower()
+    confidence_available = method != "background_subtraction"
+
+    enabled = {
+        "uncertainty": bool(params.get("METRIC_LOW_CONFIDENCE", True))
+        and confidence_available,
+        "count": bool(params.get("METRIC_COUNT_MISMATCH", True)),
+        "assignment": bool(params.get("METRIC_HIGH_ASSIGNMENT_COST", True)),
+        "track_loss": bool(params.get("METRIC_TRACK_LOSS", True)),
+        "position_uncertainty": bool(params.get("METRIC_HIGH_UNCERTAINTY", False)),
+        "crowd": bool(params.get("METRIC_CROWDING", True)),
+        "fragmentation": bool(params.get("METRIC_FRAGMENTED_DETECTIONS", True)),
+    }
+
+    base = PRESETS.get(
+        params.get("DATASET_AL_PRESET", "tracker_default"), PRESETS["tracker_default"]
+    )
+    weights = AcquisitionWeights(
+        uncertainty=base.uncertainty if enabled["uncertainty"] else 0.0,
+        nms_instability=0.0,
+        count=base.count if enabled["count"] else 0.0,
+        crowd=base.crowd if enabled["crowd"] else 0.0,
+        edge=base.edge,
+        fragmentation=base.fragmentation if enabled["fragmentation"] else 0.0,
+        assignment=base.assignment if enabled["assignment"] else 0.0,
+        track_loss=base.track_loss if enabled["track_loss"] else 0.0,
+        position_uncertainty=(
+            base.position_uncertainty if enabled["position_uncertainty"] else 0.0
+        ),
+    ).normalized()
+    return weights, enabled
+
+
+def _effective_acquisition_weights(params) -> dict:
+    """`effective_acquisition_weights` as a JSON-serializable dict."""
+    from dataclasses import asdict
+
+    weights, _enabled = effective_acquisition_weights(params)
+    return {k: float(v) for k, v in asdict(weights).items()}
 
 
 class FrameQualityScorer:
@@ -55,19 +147,52 @@ class FrameQualityScorer:
     """
 
     def __init__(self, params, frame_shape: tuple[int, int] | None = None):
-        from hydra_suite.data.al.acquisition import PRESETS, AcquisitionWeights
-
         self.params = params
         self.frame_signals: dict = {}
         self.max_targets = params.get("MAX_TARGETS", 4)
         self.conf_threshold = params.get("DATASET_CONF_THRESHOLD", 0.5)
+
+        # -------------------------------------------------------------------
+        # COORDINATE SPACE: this scorer operates entirely in RESIZE_FACTOR
+        # WORKING space, because that is the space `detection_data["obb_corners"]`
+        # arrives in -- the detection cache is written from the resized
+        # detection frame (see core/inference), never from the original frame.
+        #
+        # Callers hand us ORIGINAL-space quantities: `frame_shape` comes from
+        # cv2.CAP_PROP_FRAME_{WIDTH,HEIGHT}, and REFERENCE_BODY_SIZE is an
+        # original-space length (core/canonicalization/geometry.py:83,
+        # core/tracking/worker.py, core/assigners/hungarian.py all multiply it
+        # by RESIZE_FACTOR to reach working space). Both are converted ONCE
+        # here. Comparing an original-space reference length against
+        # working-space corners made `fragmentation` -- the largest weight in
+        # `tracker_default` -- a function of the resize knob rather than of the
+        # scene, and `edge` had the mirror defect. This is the second time this
+        # class of bug has appeared; do not "simplify" these two lines away.
+        # -------------------------------------------------------------------
+        resize_factor = float(params.get("RESIZE_FACTOR", 1.0) or 1.0)
+        if resize_factor <= 0:
+            resize_factor = 1.0
+        self.resize_factor = resize_factor
+
+        # Original-space value, kept under its historical public name.
         self.reference_body_size = max(
             float(params.get("REFERENCE_BODY_SIZE", 20.0)), 1.0
+        )
+        # Working-space value: what every signal below is actually scored with.
+        self.reference_body_size_working = max(
+            self.reference_body_size * resize_factor, 1.0
         )
         # (H, W) of the coordinate space `obb_corners` live in. Required for a
         # meaningful edge score: passing (1, 1) with pixel-space corners made
         # score_crowd return values in the hundreds.
-        self.frame_shape = tuple(frame_shape) if frame_shape else None
+        self.frame_shape = (
+            (
+                max(int(round(float(frame_shape[0]) * resize_factor)), 1),
+                max(int(round(float(frame_shape[1]) * resize_factor)), 1),
+            )
+            if frame_shape
+            else None
+        )
 
         # Public legacy boolean flags (kept for backward compat).
         self.use_confidence = bool(params.get("METRIC_LOW_CONFIDENCE", True))
@@ -89,35 +214,7 @@ class FrameQualityScorer:
         method = str(params.get("DETECTION_METHOD", "")).strip().lower()
         self._confidence_available = method != "background_subtraction"
 
-        self._enabled = {
-            "uncertainty": self.use_confidence and self._confidence_available,
-            "count": self.use_count_mismatch,
-            "assignment": self.use_assignment_cost,
-            "track_loss": self.use_track_loss,
-            "position_uncertainty": self.use_uncertainty,
-            "crowd": self.use_crowd,
-            "fragmentation": self.use_fragmented_detections,
-        }
-
-        preset_name = params.get("DATASET_AL_PRESET", "tracker_default")
-        base = PRESETS.get(preset_name, PRESETS["tracker_default"])
-        self._weights = AcquisitionWeights(
-            uncertainty=base.uncertainty if self._enabled["uncertainty"] else 0.0,
-            nms_instability=0.0,
-            count=base.count if self._enabled["count"] else 0.0,
-            crowd=base.crowd if self._enabled["crowd"] else 0.0,
-            edge=base.edge,
-            fragmentation=(
-                base.fragmentation if self._enabled["fragmentation"] else 0.0
-            ),
-            assignment=base.assignment if self._enabled["assignment"] else 0.0,
-            track_loss=base.track_loss if self._enabled["track_loss"] else 0.0,
-            position_uncertainty=(
-                base.position_uncertainty
-                if self._enabled["position_uncertainty"]
-                else 0.0
-            ),
-        ).normalized()
+        self._weights, self._enabled = effective_acquisition_weights(params)
 
     def score_frame(self, frame_id, detection_data=None, tracking_data=None):
         from hydra_suite.data.al.signals import (
@@ -152,7 +249,8 @@ class FrameQualityScorer:
         else:
             crowd, edge = 0.0, 0.0
         fragmentation = score_fragmentation(
-            obb_corners, reference_major_axis=self.reference_body_size * 2.2
+            obb_corners,
+            reference_major_axis=self.reference_body_size_working * 2.2,
         )
 
         extras: dict[str, float] = {}
@@ -264,22 +362,24 @@ def _init_detection_runner(params):
             from ..core.inference.config import build_obb_only_config
 
             mode = str(params.get("YOLO_OBB_MODE", "direct")).strip().lower()
-            task = (
-                (
-                    str(params.get("YOLO_OBB_STAGE2_TASK", "obb"))
-                    if mode == "sequential"
-                    else str(params.get("YOLO_OBB_DIRECT_TASK", "obb"))
+            task = resolve_detection_task(params)
+            model_path = resolve_detection_model_path(params) or "yolo26s-obb.pt"
+            # Sequential mode's geometry stage is the CROP model, and its
+            # stage-1 detector plus every YOLO_SEQ_* knob live in keys
+            # `build_obb_only_config` does not take. Without these the export
+            # pass silently built a sequential config with an empty stage-1
+            # model path and dataclass-default stage-2 knobs -- a different
+            # detector from the one that produced the tracking being reviewed.
+            extra_params = None
+            if mode == "sequential":
+                extra_params = {
+                    k: v for k, v in params.items() if str(k).startswith("YOLO_SEQ_")
+                }
+                extra_params["YOLO_DETECT_MODEL_PATH"] = params.get(
+                    "YOLO_DETECT_MODEL_PATH", ""
                 )
-                .strip()
-                .lower()
-            )
-            model_path = str(
-                params.get(
-                    "YOLO_OBB_DIRECT_MODEL_PATH",
-                    params.get("YOLO_MODEL_PATH", "yolo26s-obb.pt"),
-                )
-                or "yolo26s-obb.pt"
-            )
+                extra_params["YOLO_CROP_OBB_MODEL_PATH"] = model_path
+                extra_params["YOLO_SEQ_STAGE2_TASK"] = task
             cfg = build_obb_only_config(
                 model_path,
                 runtime_tier=str(params.get("RUNTIME_TIER", "") or "") or None,
@@ -291,6 +391,7 @@ def _init_detection_runner(params):
                 mode=mode,
                 model_task=task,
                 emit_native_geometry=(native_level is GeometryLevel.POLYGON),
+                extra_params=extra_params,
             )
 
         runner = InferenceRunner(cfg)
@@ -301,12 +402,18 @@ def _init_detection_runner(params):
         )
         return runner
     except Exception as e:
-        logger.warning(
-            "Could not initialize detection runner: %s. "
-            "Labels will fall back to reference-size approximation.",
-            e,
-        )
-        return None
+        # Whole-run failure => loud. This used to return None and let the
+        # export continue, which was survivable only while a fabricated
+        # reference-size box existed as a fallback. That fallback is gone, so
+        # `None` now means "write an empty label file for every frame" --
+        # fabricated *negative* ground truth, strictly worse than the failure
+        # it was hiding.
+        raise RuntimeError(
+            "Could not initialize the export detection runner "
+            f"(method={method}, level={native_level.label}): {e}. "
+            "No labels can be produced without it; fix the detection "
+            "configuration (model path, runtime) and export again."
+        ) from e
 
 
 def _expand_frame_ids(frame_ids, include_context, total_frames):
@@ -453,14 +560,24 @@ class _LazyDetectionFrames(Mapping):
 
 
 def _detect_records_for_frames(runner, frames, params, native_level):
-    """Run detection over `frames` and return {frame_id: [LabelRecord]}.
+    """Run detection over `frames`.
+
+    Returns ``({frame_id: [LabelRecord]}, stats)`` where ``stats`` counts the
+    per-frame failures under named keys (currently ``detection_failed``).
 
     `frames` is a Mapping[frame_id, image] consulted in batches -- only the
     current batch's images are held in memory at once, whether `frames` is a
     plain dict (tests) or a lazy, decode-on-access mapping (production).
+
+    Per-frame failure semantics: a frame whose detection (or whose geometry
+    extraction) raises is dropped and *counted*, never silently swallowed.
+    Swallowing it would have handed the exporter a frame with zero records,
+    which becomes an empty YOLO label file -- i.e. "I could not compute
+    geometry" written to disk as "there is no geometry here".
     """
+    stats = {"detection_failed": 0}
     if runner is None:
-        return {}
+        return {}, stats
     batch_size = _get_detector_batch_size(runner)
     # Detection runs on the RESIZE_FACTOR-scaled frame (`_LazyDetectionFrames`
     # yields `frame_for_detection`, never the original), so raw obb corners
@@ -495,14 +612,22 @@ def _detect_records_for_frames(runner, frames, params, native_level):
             logger.warning(
                 "Detection failed for batch starting at %s: %s", valid_chunk[0], e
             )
+            stats["detection_failed"] += len(valid_chunk)
             continue
         for fid, obb in zip(valid_chunk, results):
-            records = records_from_obb_result(obb, native_level)
+            # Geometry extraction is inside the per-frame guard: a missing
+            # native contour on one frame must cost that frame, not the round.
+            try:
+                records = records_from_obb_result(obb, native_level)
+            except Exception as e:
+                logger.warning("Geometry extraction failed for frame %s: %s", fid, e)
+                stats["detection_failed"] += 1
+                continue
             if detection_scale_back != 1.0:
                 for rec in records:
                     rec.points = (rec.points * detection_scale_back).astype(np.float32)
             out[fid] = records
-    return out
+    return out, stats
 
 
 _LOST_STATES = {"lost", "interpolated", "predicted"}
@@ -642,7 +767,7 @@ def export_dataset(
         images = _LazyFrameImages(cap, params, valid_frame_ids)
         detection_frames = _LazyDetectionFrames(cap, params, valid_frame_ids)
 
-        records_by_frame = _detect_records_for_frames(
+        records_by_frame, detection_stats = _detect_records_for_frames(
             runner, detection_frames, params, native_level
         )
 
@@ -676,19 +801,39 @@ def export_dataset(
             "source_video": str(video_path),
             "source_csv": str(csv_path),
             "detection_method": params.get("DETECTION_METHOD"),
-            "model_path": params.get("YOLO_OBB_DIRECT_MODEL_PATH"),
-            "model_task": params.get("YOLO_OBB_DIRECT_TASK"),
+            # The model/task actually run by the export pass. Sequential mode
+            # runs the crop-OBB checkpoint under its stage-2 task, so reading
+            # the direct-mode keys unconditionally made a sequential round
+            # claim a model and a task it never used.
+            "yolo_obb_mode": str(params.get("YOLO_OBB_MODE", "direct")).strip().lower(),
+            "model_path": resolve_detection_model_path(params) or None,
+            "model_task": resolve_detection_task(params),
             "export_confidence_threshold": params.get(
                 "DATASET_YOLO_CONFIDENCE_THRESHOLD", 0.05
             ),
             "export_iou_threshold": params.get("DATASET_YOLO_IOU_THRESHOLD", 0.5),
             "acquisition_preset": params.get("DATASET_AL_PRESET"),
+            # The preset NAME alone does not reproduce a round: presets change,
+            # and the scorer zeroes channels whose METRIC_* toggle is off and
+            # renormalizes. Record the effective weights that actually ranked
+            # these frames.
+            "acquisition_weights": _effective_acquisition_weights(params),
+            "resize_factor": float(params.get("RESIZE_FACTOR", 1.0) or 1.0),
+            "reference_body_size": float(params.get("REFERENCE_BODY_SIZE", 20.0)),
             "image_width": frame_width,
             "image_height": frame_height,
             "note": (
                 "Labels come from a dedicated export detection pass at lower "
                 "confidence than tracking, so they may differ from the tracked "
-                "detections. Review before training."
+                "detections. Every exported label is a detection that bound "
+                "one-to-one to a tracked CSV row. KNOWN LIMITATION: a "
+                "detection that binds to no row is dropped silently and is "
+                "NOT counted anywhere (`dropped_unmatched` counts the mirror "
+                "case, rows with no detection), so an animal the tracker "
+                "missed can be visible in an exported image yet carry no "
+                "label -- review every image before training. Frames where no "
+                "detection survived are not exported at all, rather than "
+                "written as empty (background) labels."
             ),
         }
 
@@ -702,6 +847,7 @@ def export_dataset(
             levels=levels,
             class_names=resolved_class_names,
             provenance=provenance,
+            extra_totals=detection_stats,
         )
     finally:
         cap.release()

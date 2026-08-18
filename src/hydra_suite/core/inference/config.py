@@ -1067,6 +1067,7 @@ def build_obb_only_config(
     mode: str = "direct",
     model_task: str = "obb",
     emit_native_geometry: bool = False,
+    extra_params: dict | None = None,
 ) -> InferenceConfig:
     """Detection-only InferenceConfig for one-shot / dataset OBB detection.
 
@@ -1074,6 +1075,11 @@ def build_obb_only_config(
     it MUST match the checkpoint, which ``stages/obb.py`` verifies loudly.
     ``emit_native_geometry`` is the export-only opt-in that populates
     ``OBBResult.polygons`` with native contours (segment task only).
+
+    ``extra_params`` supplies additional raw params keys that this helper's
+    explicit arguments do not cover -- notably the ``YOLO_SEQ_*`` /
+    ``YOLO_DETECT_MODEL_PATH`` / ``YOLO_CROP_OBB_MODEL_PATH`` family a
+    ``mode="sequential"`` config needs. Keys set explicitly above always win.
     """
     task = str(model_task).strip().lower()
     if task not in {"obb", "detect", "segment"}:
@@ -1092,6 +1098,8 @@ def build_obb_only_config(
     }
     if runtime_tier:
         params["RUNTIME_TIER"] = runtime_tier
+    for key, value in (extra_params or {}).items():
+        params.setdefault(key, value)
     cfg = build_inference_config_from_params(params)
     if emit_native_geometry:
         cfg.obb.emit_native_geometry = True

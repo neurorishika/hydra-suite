@@ -153,12 +153,32 @@ def generate_active_learning_dataset(
         _emit(progress, 15, "Initializing quality scorer...")
         cap = cv2.VideoCapture(str(video_path))
         try:
+            # An unopenable video reports 0x0. Handing (0, 0) to the scorer is
+            # worse than handing it nothing: `score_crowd` would compute every
+            # edge margin against a zero-sized frame and call every detection
+            # maximally close to the border. `None` degrades honestly to
+            # edge_score 0.0 instead.
             frame_shape = (
-                int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
-                int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+                (
+                    int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+                    int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+                )
+                if cap.isOpened()
+                else None
             )
         finally:
             cap.release()
+        if frame_shape is not None and min(frame_shape) <= 0:
+            frame_shape = None
+        if frame_shape is None:
+            logger.warning(
+                "Could not read frame dimensions from %s; edge scoring disabled "
+                "for this run.",
+                video_path,
+            )
+        # ORIGINAL video space -- FrameQualityScorer converts it (and
+        # REFERENCE_BODY_SIZE) to RESIZE_FACTOR working space, which is the
+        # space the cached `obb_corners` below actually live in.
         scorer = FrameQualityScorer(params, frame_shape=frame_shape)
         if detection_cache_path and os.path.exists(detection_cache_path):
             try:

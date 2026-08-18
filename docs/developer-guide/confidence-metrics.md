@@ -62,3 +62,27 @@ When a selection run comes back empty (no frame clears `min_score`),
 `hydra_suite.data.al.acquisition.explain()` reports the observed maximum of
 each weighted channel, so the caller can report *why* nothing was selected
 instead of a bare empty result.
+
+## Coordinate space: the scorer is working-space only
+
+`FrameQualityScorer` scores entirely in **`RESIZE_FACTOR` working space**,
+because that is the space `detection_data["obb_corners"]` arrives in — the
+detection cache is written from the resized detection frame, never from the
+original frame.
+
+Callers pass **original-space** quantities: `frame_shape` comes from
+`cv2.CAP_PROP_FRAME_{WIDTH,HEIGHT}`, and `REFERENCE_BODY_SIZE` is an
+original-space length (`core/canonicalization/geometry.py`,
+`core/tracking/worker.py` and `core/assigners/hungarian.py` all multiply it by
+`RESIZE_FACTOR` to reach working space). Both are converted **once**, in
+`FrameQualityScorer.__init__`; `self.reference_body_size` keeps the
+original-space value under its historical public name and
+`self.reference_body_size_working` is what every signal actually uses.
+
+Mixing the two spaces made `fragmentation` — the largest weight in
+`tracker_default` — a function of the resize knob rather than of the scene
+(the same two animals 16 px apart scored `0.000` at `RESIZE_FACTOR=1.0` and
+`0.651` at `0.5`), and `edge` had the mirror defect. `tests/test_dataset_generation.py`
+pins invariance across `RESIZE_FACTOR` 1.0 vs 0.5 for the same physical scene.
+An unopenable video yields `frame_shape=None` (edge score `0.0`) rather than
+`(0, 0)`, which would have called every detection maximally close to the border.

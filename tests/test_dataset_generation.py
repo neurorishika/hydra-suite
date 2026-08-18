@@ -347,9 +347,10 @@ def test_export_dataset_writes_three_roots_for_segmentation(tmp_path, monkeypatc
     monkeypatch.setattr(
         dg,
         "_detect_records_for_frames",
-        lambda runner, frames, params, level: {
-            0: dg.records_from_obb_result(_seg_obb_result(), level)
-        },
+        lambda runner, frames, params, level: (
+            {0: dg.records_from_obb_result(_seg_obb_result(), level)},
+            {"detection_failed": 0},
+        ),
     )
 
     manifest = dg.export_dataset(
@@ -397,9 +398,10 @@ def test_export_dataset_writes_two_roots_for_obb_model(tmp_path, monkeypatch):
     monkeypatch.setattr(
         dg,
         "_detect_records_for_frames",
-        lambda runner, frames, params, level: {
-            0: dg.records_from_obb_result(_seg_obb_result(), level)
-        },
+        lambda runner, frames, params, level: (
+            {0: dg.records_from_obb_result(_seg_obb_result(), level)},
+            {"detection_failed": 0},
+        ),
     )
 
     manifest = dg.export_dataset(
@@ -975,3 +977,465 @@ def test_fragmented_detections_frame_outranks_clean_frame():
 
     worst = scorer.get_worst_frames(1, diversity_window=0, probabilistic=False)
     assert worst == [1]
+
+
+# =============================================================================
+# Whole-branch review fixes
+# =============================================================================
+
+
+def _tracks_csv(path, frames, x=100.0, y=50.0):
+    import pandas as pd
+
+    pd.DataFrame(
+        [
+            {
+                "FrameID": f,
+                "TrackID": 1,
+                "X": x,
+                "Y": y,
+                "Theta": 0.0,
+                "State": "tracked",
+            }
+            for f in frames
+        ]
+    ).to_csv(path, index=False)
+
+
+def _bgsub_empty_result(frame_idx):
+    """Byte-for-byte the shape `stages/bgsub._empty_result` returns."""
+    from hydra_suite.core.inference.result import OBBResult
+
+    return OBBResult(
+        frame_idx=frame_idx,
+        centroids=np.zeros((0, 2), np.float32),
+        angles=np.zeros((0,), np.float32),
+        sizes=np.zeros((0,), np.float32),
+        shapes=np.zeros((0, 2), np.float32),
+        confidences=np.zeros((0,), np.float32),
+        corners=np.zeros((0, 4, 2), np.float32),
+        detection_ids=OBBResult.make_detection_ids(frame_idx, 0),
+        class_ids=np.zeros(0, dtype=np.int64),
+    )
+
+
+def _bgsub_contour_result(frame_idx, cx=100.0, cy=50.0):
+    """A bg-sub frame WITH a detection: a real 6-point foreground contour."""
+    from hydra_suite.core.inference.result import OBBResult
+
+    poly = np.array(
+        [
+            [cx - 10, cy - 5],
+            [cx, cy - 8],
+            [cx + 10, cy - 5],
+            [cx + 10, cy + 5],
+            [cx, cy + 8],
+            [cx - 10, cy + 5],
+        ],
+        dtype=np.float32,
+    )
+    return OBBResult(
+        frame_idx=frame_idx,
+        centroids=np.array([[cx, cy]], dtype=np.float32),
+        angles=np.array([0.0], dtype=np.float32),
+        sizes=np.array([200.0], dtype=np.float32),
+        shapes=np.array([[200.0, 2.0]], dtype=np.float32),
+        confidences=np.array([float("nan")], dtype=np.float32),
+        corners=np.array(
+            [
+                [
+                    [cx - 10, cy - 8],
+                    [cx + 10, cy - 8],
+                    [cx + 10, cy + 8],
+                    [cx - 10, cy + 8],
+                ]
+            ],
+            dtype=np.float32,
+        ),
+        detection_ids=OBBResult.make_detection_ids(frame_idx, 1),
+        class_ids=np.zeros(1, dtype=np.int64),
+        polygons=[poly],
+    )
+
+
+class _FakeRunner:
+    """InferenceRunner stand-in returning a canned OBBResult per frame."""
+
+    def __init__(self, by_frame):
+        self._by_frame = by_frame
+        self.config = None
+        self.closed = False
+
+    def detect_batch(self, images, frame_indices):
+        return [self._by_frame[int(fid)] for fid in frame_indices]
+
+    def close(self):
+        self.closed = True
+
+
+BGSUB_PARAMS = {
+    "DETECTION_METHOD": "background_subtraction",
+    "REFERENCE_BODY_SIZE": 20.0,
+}
+
+
+def test_bgsub_export_survives_a_zero_detection_frame(tmp_path, monkeypatch):
+    """FINDING 1 (end to end, `_detect_records_for_frames` NOT monkeypatched).
+
+    `run_bgsub` returns `_empty_result` (polygons=None) for every empty frame,
+    always including frame 0 -- "the model has no history yet". The polygon
+    level used to raise on that shape, which unwound through `export_dataset`
+    into its broad handler and killed the whole round with the misleading
+    message "the detection stage was not run with emit_native_geometry=True".
+    """
+    import hydra_suite.data.dataset_generation as dg
+
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"")
+    csv_path = tmp_path / "tracks.csv"
+    _tracks_csv(csv_path, [0, 1, 2])
+
+    frame = np.zeros((200, 400, 3), dtype=np.uint8)
+    runner = _FakeRunner(
+        {
+            0: _bgsub_empty_result(0),  # first frame: no history
+            1: _bgsub_contour_result(1),
+            2: _bgsub_contour_result(2),
+        }
+    )
+    monkeypatch.setattr(dg, "_open_video", lambda p: _FakeCap(frame, total=3))
+    monkeypatch.setattr(dg, "_init_detection_runner", lambda params: runner)
+
+    manifest = dg.export_dataset(
+        video_path=str(video),
+        csv_path=str(csv_path),
+        frame_ids=[1],
+        output_dir=str(tmp_path / "out"),
+        dataset_name="round",
+        class_name="ant",
+        params=BGSUB_PARAMS,
+        include_context=True,
+    )
+
+    assert manifest["native_level"] == "polygon"
+    # The empty frame is a legitimate zero-detection frame, not a failure.
+    assert manifest["totals"]["detection_failed"] == 0
+    # ...but it is still not exported as a background sample (FINDING 4).
+    assert manifest["totals"]["frames_skipped_no_records"] == 1
+    assert manifest["skipped_frame_ids_no_records"] == [0]
+    assert manifest["totals"]["frames_exported"] == 2
+
+    labels = sorted(
+        p.name for p in (Path(manifest["round_dir"]) / "polygon" / "labels").iterdir()
+    )
+    assert labels == ["f000001.txt", "f000002.txt"]
+    for name in labels:
+        text = (Path(manifest["round_dir"]) / "polygon" / "labels" / name).read_text()
+        assert text.strip(), "an exported label file must never be empty"
+
+
+def test_zero_record_frames_are_never_exported_as_background(tmp_path, monkeypatch):
+    """FINDING 4: an under-detected frame must not become a background sample.
+
+    YOLO reads an empty .txt as "this image contains no objects". Writing one
+    for a frame where the export pass found nothing is fabricated negative
+    ground truth.
+    """
+    import hydra_suite.data.dataset_generation as dg
+
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"")
+    csv_path = tmp_path / "tracks.csv"
+    _tracks_csv(csv_path, [0, 1])
+
+    frame = np.zeros((200, 400, 3), dtype=np.uint8)
+    monkeypatch.setattr(dg, "_open_video", lambda p: _FakeCap(frame, total=2))
+    monkeypatch.setattr(dg, "_init_detection_runner", lambda params: None)
+    monkeypatch.setattr(
+        dg,
+        "_detect_records_for_frames",
+        lambda runner, frames, params, level: (
+            {0: dg.records_from_obb_result(_seg_obb_result(), level)},
+            {"detection_failed": 0},
+        ),
+    )
+
+    manifest = dg.export_dataset(
+        video_path=str(video),
+        csv_path=str(csv_path),
+        frame_ids=[0, 1],
+        output_dir=str(tmp_path / "out"),
+        dataset_name="round",
+        class_name="ant",
+        params={"DETECTION_METHOD": "yolo_obb", "YOLO_OBB_DIRECT_TASK": "obb"},
+        include_context=False,
+    )
+
+    round_dir = Path(manifest["round_dir"])
+    assert sorted(p.name for p in (round_dir / "obb" / "labels").iterdir()) == [
+        "f000000.txt"
+    ]
+    assert sorted(p.name for p in (round_dir / "obb" / "images").iterdir()) == [
+        "f000000.jpg"
+    ]
+    assert manifest["totals"]["frames_skipped_no_records"] == 1
+    assert manifest["skipped_frame_ids_no_records"] == [1]
+
+
+def test_export_fails_loudly_when_no_frame_has_geometry(tmp_path, monkeypatch):
+    """FINDING 4: a round with nothing to label is an error, not an empty dataset."""
+    import hydra_suite.data.dataset_generation as dg
+
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"")
+    csv_path = tmp_path / "tracks.csv"
+    _tracks_csv(csv_path, [0])
+
+    frame = np.zeros((200, 400, 3), dtype=np.uint8)
+    monkeypatch.setattr(dg, "_open_video", lambda p: _FakeCap(frame, total=1))
+    monkeypatch.setattr(dg, "_init_detection_runner", lambda params: None)
+    monkeypatch.setattr(
+        dg,
+        "_detect_records_for_frames",
+        lambda runner, frames, params, level: ({}, {"detection_failed": 0}),
+    )
+
+    with pytest.raises(ValueError, match="no frame in this round"):
+        dg.export_dataset(
+            video_path=str(video),
+            csv_path=str(csv_path),
+            frame_ids=[0],
+            output_dir=str(tmp_path / "out"),
+            dataset_name="round",
+            class_name="ant",
+            params={"DETECTION_METHOD": "yolo_obb", "YOLO_OBB_DIRECT_TASK": "obb"},
+            include_context=False,
+        )
+
+
+def test_detection_failure_is_counted_not_swallowed(tmp_path):
+    """DESIGN RULE: a per-frame detection failure is named in the manifest."""
+    import hydra_suite.data.dataset_generation as dg
+
+    class _BoomRunner:
+        config = None
+
+        def detect_batch(self, images, frame_indices):
+            raise RuntimeError("model exploded")
+
+    frames = {0: np.zeros((4, 4, 3), np.uint8), 1: np.zeros((4, 4, 3), np.uint8)}
+    records, stats = dg._detect_records_for_frames(
+        _BoomRunner(), frames, {}, GeometryLevel.OBB
+    )
+    assert records == {}
+    assert stats["detection_failed"] == 2
+
+
+def test_missing_contour_costs_only_its_own_frame():
+    """DESIGN RULE: a per-frame geometry failure must not kill the round."""
+    import hydra_suite.data.dataset_generation as dg
+    from hydra_suite.core.inference.result import OBBResult
+
+    broken = _bgsub_contour_result(0)
+    broken = OBBResult(**{**broken.__dict__, "polygons": None})
+    runner = _FakeRunner({0: broken, 1: _bgsub_contour_result(1)})
+    frames = {0: np.zeros((4, 4, 3), np.uint8), 1: np.zeros((4, 4, 3), np.uint8)}
+
+    records, stats = dg._detect_records_for_frames(
+        runner, frames, {}, GeometryLevel.POLYGON
+    )
+    assert stats["detection_failed"] == 1
+    assert set(records) == {1}
+
+
+def test_init_detection_runner_failure_is_loud(monkeypatch):
+    """DESIGN RULE: a whole-run failure is loud.
+
+    Returning None used to be survivable only while a fabricated
+    reference-size box existed as a fallback; now it means "write an empty
+    label file for every frame".
+    """
+    import hydra_suite.core.inference.config as cfgmod
+    import hydra_suite.data.dataset_generation as dg
+
+    def boom(*a, **kw):
+        raise RuntimeError("checkpoint not found")
+
+    monkeypatch.setattr(cfgmod, "build_obb_only_config", boom)
+    with pytest.raises(RuntimeError, match="Could not initialize the export"):
+        dg._init_detection_runner(
+            {"DETECTION_METHOD": "yolo_obb", "YOLO_OBB_DIRECT_TASK": "obb"}
+        )
+
+
+# ---------------------------------------------------------------------------
+# FINDING 2: the scorer must operate in one coordinate space
+# ---------------------------------------------------------------------------
+
+
+def _two_animals(gap_px, scale=1.0, cx=500.0, cy=500.0):
+    """Two 44x16 animals whose CENTRES are `gap_px` apart, in working space.
+
+    `scale` is RESIZE_FACTOR: the detection cache stores corners in that
+    working space, so a physical scene at RESIZE_FACTOR=0.5 is the same scene
+    with every coordinate halved.
+    """
+    half = gap_px / 2.0
+    return [
+        obb_corners_from_dims(
+            (cx - half) * scale, cy * scale, 44.0 * scale, 16.0 * scale, 0.0
+        ),
+        obb_corners_from_dims(
+            (cx + half) * scale, cy * scale, 44.0 * scale, 16.0 * scale, 0.0
+        ),
+    ]
+
+
+def _animal_near_left_edge(scale=1.0, cx=60.0, cy=500.0):
+    return [
+        obb_corners_from_dims(cx * scale, cy * scale, 44.0 * scale, 16.0 * scale, 0.0)
+    ]
+
+
+@pytest.mark.parametrize("gap_px", [16.0, 24.0])
+def test_fragmentation_is_invariant_to_resize_factor(gap_px):
+    """The same physical scene must score the same at any RESIZE_FACTOR.
+
+    `obb_corners` come from the detection cache, written in RESIZE_FACTOR
+    working space, while `frame_shape` (CAP_PROP_FRAME_*) and
+    REFERENCE_BODY_SIZE are original-space. Mixing the two made
+    `fragmentation` -- the LARGEST weight (0.30) in `tracker_default` -- an
+    artefact of the resize knob: for these two scenes it read 0.000 at
+    RESIZE_FACTOR=1.0 and 0.651 / 0.527 at 0.5.
+    """
+    frame_shape = (1000, 1000)  # original space, as the caller supplies it
+    base = {"DETECTION_METHOD": "yolo_obb", "REFERENCE_BODY_SIZE": 20.0}
+
+    scores = {}
+    for rf in (1.0, 0.5):
+        scorer = FrameQualityScorer(
+            {**base, "RESIZE_FACTOR": rf}, frame_shape=frame_shape
+        )
+        scorer.score_frame(0, {"obb_corners": _two_animals(gap_px, scale=rf)})
+        sig = scorer.frame_signals[0]
+        scores[rf] = (sig.fragmentation_score, sig.crowd_score)
+
+    assert scores[0.5][0] == pytest.approx(scores[1.0][0], abs=1e-6)
+    assert scores[0.5][1] == pytest.approx(scores[1.0][1], abs=1e-6)
+
+
+def test_edge_score_is_invariant_to_resize_factor():
+    """`edge_score` had the mirror defect: original-space `frame_shape`
+    against working-space corners."""
+    frame_shape = (1000, 1000)
+    base = {"DETECTION_METHOD": "yolo_obb", "REFERENCE_BODY_SIZE": 20.0}
+
+    edges = {}
+    for rf in (1.0, 0.5):
+        scorer = FrameQualityScorer(
+            {**base, "RESIZE_FACTOR": rf}, frame_shape=frame_shape
+        )
+        scorer.score_frame(0, {"obb_corners": _animal_near_left_edge(scale=rf)})
+        edges[rf] = scorer.frame_signals[0].edge_score
+
+    assert edges[1.0] > 0.0  # the scene is genuinely near the border
+    assert edges[0.5] == pytest.approx(edges[1.0], abs=1e-6)
+
+
+def test_unopenable_video_degrades_to_no_frame_shape_not_zero_shape():
+    """`dataset_export` used to hand the scorer (0, 0) for an unopenable
+    video, which made every detection maximally close to the border."""
+    scorer = FrameQualityScorer({"REFERENCE_BODY_SIZE": 20.0}, frame_shape=None)
+    scorer.score_frame(0, {"obb_corners": _animal_near_left_edge()})
+    assert scorer.frame_signals[0].edge_score == 0.0
+
+
+def test_scorer_converts_reference_and_frame_shape_to_working_space():
+    scorer = FrameQualityScorer(
+        {"REFERENCE_BODY_SIZE": 20.0, "RESIZE_FACTOR": 0.5}, frame_shape=(1000, 800)
+    )
+    assert scorer.reference_body_size == pytest.approx(20.0)  # original space
+    assert scorer.reference_body_size_working == pytest.approx(10.0)
+    assert scorer.frame_shape == (500, 400)
+
+
+# ---------------------------------------------------------------------------
+# FINDING 5: provenance must name the model that actually ran
+# ---------------------------------------------------------------------------
+
+
+SEQUENTIAL_PARAMS = {
+    "DETECTION_METHOD": "yolo_obb",
+    "YOLO_OBB_MODE": "sequential",
+    "YOLO_OBB_DIRECT_TASK": "obb",
+    "YOLO_OBB_DIRECT_MODEL_PATH": "/models/direct-obb.pt",
+    "YOLO_CROP_OBB_MODEL_PATH": "/models/crop-seg.pt",
+    "YOLO_SEQ_STAGE2_TASK": "segment",
+    "DATASET_AL_PRESET": "tracker_default",
+}
+
+
+def test_resolve_native_level_reads_the_real_sequential_stage2_key():
+    """`YOLO_OBB_STAGE2_TASK` was a key nothing ever wrote."""
+    import hydra_suite.data.dataset_generation as dg
+
+    assert dg.resolve_native_level(SEQUENTIAL_PARAMS) is GeometryLevel.POLYGON
+    assert dg.resolve_detection_task(SEQUENTIAL_PARAMS) == "segment"
+    assert dg.resolve_detection_model_path(SEQUENTIAL_PARAMS) == "/models/crop-seg.pt"
+
+
+def test_provenance_records_the_sequential_model_and_the_weights(tmp_path, monkeypatch):
+    import json
+
+    import hydra_suite.data.dataset_generation as dg
+
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"")
+    csv_path = tmp_path / "tracks.csv"
+    _tracks_csv(csv_path, [0])
+
+    frame = np.zeros((200, 400, 3), dtype=np.uint8)
+    monkeypatch.setattr(dg, "_open_video", lambda p: _FakeCap(frame, total=1))
+    monkeypatch.setattr(dg, "_init_detection_runner", lambda params: None)
+    monkeypatch.setattr(
+        dg,
+        "_detect_records_for_frames",
+        lambda runner, frames, params, level: (
+            {0: dg.records_from_obb_result(_bgsub_contour_result(0), level)},
+            {"detection_failed": 0},
+        ),
+    )
+
+    manifest = dg.export_dataset(
+        video_path=str(video),
+        csv_path=str(csv_path),
+        frame_ids=[0],
+        output_dir=str(tmp_path / "out"),
+        dataset_name="round",
+        class_name="ant",
+        params=SEQUENTIAL_PARAMS,
+        include_context=False,
+    )
+
+    prov = manifest["provenance"]
+    assert prov["model_path"] == "/models/crop-seg.pt"
+    assert prov["model_task"] == "segment"
+    assert prov["yolo_obb_mode"] == "sequential"
+    weights = prov["acquisition_weights"]
+    assert weights["fragmentation"] > 0
+    assert sum(weights.values()) == pytest.approx(1.0)
+
+    on_disk = json.loads(
+        (Path(manifest["round_dir"]) / "polygon" / "source.json").read_text()
+    )
+    assert on_disk["provenance"]["model_path"] == "/models/crop-seg.pt"
+
+
+def test_acquisition_weights_reflect_disabled_metrics():
+    from hydra_suite.data.dataset_generation import _effective_acquisition_weights
+
+    weights = _effective_acquisition_weights(
+        {"DETECTION_METHOD": "yolo_obb", "METRIC_FRAGMENTED_DETECTIONS": False}
+    )
+    assert weights["fragmentation"] == 0.0
+    assert sum(weights.values()) == pytest.approx(1.0)

@@ -110,6 +110,38 @@ appear in each root's `source.json` totals and in `manifest.json`, and are
 summarized to the user at the end of the export in the finish message /
 dataset panel summary.
 
+### Known limitation: detections with no tracking row are dropped
+
+Matching is mutual-exclusion in **both** directions. A row with no detection
+is dropped (above), and so is a **detection with no row** — which means an
+animal the tracker never picked up can be visible in an exported image while
+carrying no label. That direction is dropped *silently*: `dropped_unmatched`
+counts only the mirror case (rows with no detection), and there is no counter
+for detections with no row. Review each exported image before training; this
+is inherent to binding labels to tracking output and is not something the
+export can detect on your behalf. The caveat is also stated in every root's
+`source.json` provenance note.
+
+### Frames where nothing survived are not exported
+
+A frame whose export detection pass produced no surviving label is **skipped**,
+not written with an empty label file. YOLO reads an empty `.txt` as "this
+image contains no objects", so exporting one would assert, as ground truth,
+that a frame the exporter simply failed on is empty background — exactly the
+frames active learning picks. Skipped frames are counted in `manifest.json`
+under `frames_skipped_no_records`, with their ids in
+`skipped_frame_ids_no_records`, and per-frame detection failures under
+`detection_failed`. If **no** frame in a round carries any geometry, the
+export fails loudly rather than writing an empty dataset.
+
+### Multi-class checkpoints
+
+Class ids come from the detection model; class names come from your project.
+If the model emits an id beyond the names you supplied, `classes.txt` is
+padded with `class_<n>` placeholders so every label id indexes a real line,
+and the padded names are recorded in `class_names_autofilled` in both
+`manifest.json` and each root's `source.json`. Rename them in DetectKit.
+
 ## When to Use
 
 - Detector underperforms on specific lighting or behaviors.
