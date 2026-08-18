@@ -60,7 +60,9 @@ class _SelectedFrameSource:
 
 
 def _dedup_selected_frames(video_path, frame_ids, method, threshold):
-    """Drop perceptually near-duplicate picks. Returns `(kept_ids, error)`.
+    """Drop perceptually near-duplicate picks.
+
+    Returns `(kept_ids, error, unreadable_count)`.
 
     Scoped to `frame_ids` only (see `_SelectedFrameSource`) -- never the whole
     video. `error` is `None` on success; it is set (and `kept_ids` is empty)
@@ -68,9 +70,14 @@ def _dedup_selected_frames(video_path, frame_ids, method, threshold):
     be read" from "every pick collapsed as a near-duplicate" -- collapsing
     those into one silent empty result would misreport unreadable frames as
     "near-duplicates" to the user (see `generate_active_learning_dataset`).
+
+    `unreadable_count` is returned even when `kept_ids` is non-empty: a
+    partial dropout (some frames unreadable, the rest genuine survivors or
+    dropped as duplicates) must not have its unreadable frames silently
+    counted as "near-duplicates" in the caller's drop message either.
     """
     if str(method).strip().lower() == "none" or len(frame_ids) < 2:
-        return list(frame_ids), None
+        return list(frame_ids), None, 0
     total = len(frame_ids)
     source = _SelectedFrameSource(str(video_path), frame_ids)
     cfg = CandidatePoolConfig(
@@ -79,9 +86,6 @@ def _dedup_selected_frames(video_path, frame_ids, method, threshold):
     )
     kept = build_candidate_pool(source, cfg)
     kept_ids = [ref.frame_id for ref in kept]
-    if kept_ids:
-        return kept_ids, None
-
     unreadable = source.unreadable_count
     if unreadable:
         logger.warning(
@@ -90,6 +94,9 @@ def _dedup_selected_frames(video_path, frame_ids, method, threshold):
             total,
             video_path,
         )
+    if kept_ids:
+        return kept_ids, None, unreadable
+
     if unreadable >= total:
         error = (
             f"Could not read any of the {total} selected frames from the "
@@ -110,7 +117,7 @@ def _dedup_selected_frames(video_path, frame_ids, method, threshold):
             "near-duplicates (dedup_threshold may be too permissive). Raise "
             "the threshold or disable dedup."
         )
-    return [], error
+    return [], error, unreadable
 
 
 def generate_active_learning_dataset(
@@ -247,18 +254,31 @@ def generate_active_learning_dataset(
             }
 
         before_dedup = len(selected_frames)
-        selected_frames, dedup_error = _dedup_selected_frames(
+        selected_frames, dedup_error, dedup_unreadable = _dedup_selected_frames(
             video_path, selected_frames, dedup_method, dedup_threshold
         )
         if dedup_error is not None:
             return {"success": False, "error": dedup_error}
         if len(selected_frames) < before_dedup:
-            _emit(
-                progress,
-                55,
-                f"Perceptual dedup dropped {before_dedup - len(selected_frames)} "
-                f"near-duplicate frames.",
-            )
+            # Two independent causes can drop a pick: it was a genuine
+            # near-duplicate of another pick, or it could not be read from
+            # the video at all. Report each with its own count -- rolling
+            # them into one "near-duplicate" figure would misattribute
+            # unreadable frames as duplicates (see _dedup_selected_frames).
+            duplicate_dropped = before_dedup - len(selected_frames) - dedup_unreadable
+            sentences = []
+            if duplicate_dropped > 0:
+                sentences.append(
+                    f"Perceptual dedup dropped {duplicate_dropped} "
+                    "near-duplicate frames."
+                )
+            if dedup_unreadable > 0:
+                plural = "s" if dedup_unreadable != 1 else ""
+                sentences.append(
+                    f"{dedup_unreadable} frame{plural} could not be read "
+                    "from the video."
+                )
+            _emit(progress, 55, " ".join(sentences))
 
         _emit(progress, 60, f"Exporting {len(selected_frames)} frames...")
         if _stopped(should_stop):

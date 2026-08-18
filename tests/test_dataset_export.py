@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 
 from hydra_suite.core.post import dataset_export
@@ -346,3 +347,143 @@ def test_dedup_genuine_collapse_reports_duplicates_not_unreadable(
     assert "near-duplicate" in result["error"].lower()
     assert "unreadable" not in result["error"].lower()
     assert "could not read" not in result["error"].lower()
+
+
+class _FakeVideoFrameSourceForMix:
+    """Stand-in for VideoFrameSource: per-frame-id canned reads.
+
+    Used to exercise the REAL `_SelectedFrameSource.read()` counting logic
+    (and the real `build_candidate_pool`) end to end, rather than
+    monkeypatching `build_candidate_pool` itself -- the mixed-cause scenario
+    only exists inside that real counting path.
+    """
+
+    def __init__(self, video_path, stride=1):
+        self._frames = {
+            0: np.random.RandomState(0).randint(0, 255, (64, 64, 3), dtype=np.uint8),
+            1: np.random.RandomState(0).randint(0, 255, (64, 64, 3), dtype=np.uint8),
+            2: None,  # unreadable
+        }
+
+    def read(self, ref):
+        return self._frames.get(ref.frame_id)
+
+    def length(self):
+        return len(self._frames)
+
+    def __iter__(self):
+        return iter(())
+
+
+def test_dedup_mixed_unreadable_and_duplicate_reports_both_counts(
+    monkeypatch, tmp_path
+):
+    """Unreadable frames and genuine duplicates must be reported separately."""
+    import hydra_suite.core.post.dataset_export as de
+
+    csv = tmp_path / "track.csv"
+    pd.DataFrame({"FrameID": [0, 1, 2], "State": ["active"] * 3}).to_csv(
+        csv, index=False
+    )
+
+    class _Scorer(_StubScorer):
+        def get_worst_frames(self, max_frames, diversity_window=30, probabilistic=True):
+            # frame 0 and frame 1 are identical (RandomState(0) reused) --
+            # a genuine duplicate. Frame 2 is unreadable. Frame 0 survives.
+            return [0, 1, 2]
+
+    monkeypatch.setattr(de, "FrameQualityScorer", _Scorer)
+    # Real build_candidate_pool + real _SelectedFrameSource; only the inner
+    # VideoFrameSource is swapped for one with canned per-id reads.
+    monkeypatch.setattr(de, "VideoFrameSource", _FakeVideoFrameSourceForMix)
+
+    fake_manifest = {"round_dir": str(tmp_path / "dataset_dir"), "roots": []}
+    exported = {}
+
+    def _fake_export_dataset(**kwargs):
+        exported["frame_ids"] = kwargs["frame_ids"]
+        return fake_manifest
+
+    monkeypatch.setattr(de, "export_dataset", _fake_export_dataset)
+
+    messages = []
+
+    def _progress(pct, msg):
+        messages.append(msg)
+
+    result = de.generate_active_learning_dataset(
+        video_path=str(tmp_path / "in.mp4"),
+        csv_path=str(csv),
+        detection_cache_path=None,
+        output_dir=str(tmp_path / "out"),
+        dataset_name="",
+        class_name="object",
+        params={},
+        max_frames=5,
+        diversity_window=30,
+        include_context=True,
+        probabilistic=False,
+        progress=_progress,
+    )
+
+    assert result["success"] is True
+    # Frame 0 survives (unique); frame 1 dropped as a duplicate of frame 0;
+    # frame 2 dropped because it could not be read.
+    assert exported["frame_ids"] == [0]
+
+    drop_messages = [m for m in messages if "dropped" in m or "could not be read" in m]
+    assert len(drop_messages) == 1
+    message = drop_messages[0]
+    assert "dropped 1 near-duplicate frame" in message
+    assert "1 frame could not be read" in message
+    # The unreadable frame must not be folded into the duplicate count.
+    assert "dropped 2" not in message
+
+
+def test_dedup_all_readable_partial_drop_message_unchanged(monkeypatch, tmp_path):
+    """With nothing unreadable, the message must read exactly as before --
+    no stray '0 frames could not be read' clause."""
+    import hydra_suite.core.post.dataset_export as de
+
+    csv = tmp_path / "track.csv"
+    pd.DataFrame({"FrameID": [0, 1, 2], "State": ["active"] * 3}).to_csv(
+        csv, index=False
+    )
+
+    monkeypatch.setattr(de, "FrameQualityScorer", _StubScorer)
+
+    seen = {}
+
+    def fake_pool(source, cfg):
+        seen["n_candidates"] = source.length()
+        return [ref for ref in source][:1]
+
+    monkeypatch.setattr(de, "build_candidate_pool", fake_pool)
+
+    fake_manifest = {"round_dir": str(tmp_path / "dataset_dir"), "roots": []}
+    monkeypatch.setattr(de, "export_dataset", lambda **kwargs: fake_manifest)
+
+    messages = []
+
+    def _progress(pct, msg):
+        messages.append(msg)
+
+    result = de.generate_active_learning_dataset(
+        video_path=str(tmp_path / "in.mp4"),
+        csv_path=str(csv),
+        detection_cache_path=None,
+        output_dir=str(tmp_path / "out"),
+        dataset_name="",
+        class_name="object",
+        params={},
+        max_frames=5,
+        diversity_window=30,
+        include_context=True,
+        probabilistic=False,
+        progress=_progress,
+    )
+
+    assert result["success"] is True
+    drop_messages = [m for m in messages if "dropped" in m]
+    assert drop_messages == ["Perceptual dedup dropped 2 near-duplicate frames."]
+    assert not any("could not be read" in m for m in messages)
