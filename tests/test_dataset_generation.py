@@ -1439,3 +1439,41 @@ def test_acquisition_weights_reflect_disabled_metrics():
     )
     assert weights["fragmentation"] == 0.0
     assert sum(weights.values()) == pytest.approx(1.0)
+
+
+def test_video_capture_is_released_when_the_detection_runner_raises(
+    tmp_path, monkeypatch
+):
+    """`_init_detection_runner` raises on failure (it used to return None).
+    Built above the `try`, it leaked the VideoCapture on every bad model path
+    or runtime -- the failure it was made loud to report."""
+    from hydra_suite.data import dataset_generation as dg
+
+    released: list[bool] = []
+
+    class _FakeCap:
+        def release(self):
+            released.append(True)
+
+        def get(self, _prop):  # pragma: no cover - not reached
+            return 0
+
+    monkeypatch.setattr(dg, "_open_video", lambda _p: _FakeCap())
+
+    def _boom(_params):
+        raise RuntimeError("Could not initialize the export detection runner")
+
+    monkeypatch.setattr(dg, "_init_detection_runner", _boom)
+
+    with pytest.raises(RuntimeError, match="detection runner"):
+        dg.export_dataset(
+            video_path="video.mp4",
+            csv_path="tracks.csv",
+            frame_ids=[0, 1],
+            output_dir=str(tmp_path),
+            dataset_name="round",
+            class_name="ant",
+            params={"DETECTION_METHOD": "yolo_obb", "YOLO_OBB_DIRECT_TASK": "obb"},
+        )
+
+    assert released == [True], "VideoCapture leaked when the runner failed"

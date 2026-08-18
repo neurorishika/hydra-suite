@@ -355,3 +355,79 @@ def test_extra_totals_are_merged_into_the_manifest(tmp_path):
         extra_totals={"detection_failed": 3},
     )
     assert manifest["totals"]["detection_failed"] == 3
+
+
+def _degenerate_frame(frame_id, n_points, extra_good=0):
+    """A frame whose first record has `n_points` vertices, plus `extra_good` valid ones."""
+    records = [
+        LabelRecord(
+            class_id=0,
+            confidence=0.9,
+            points=np.array([[10, 20], [30, 25]][:n_points], dtype=np.float32),
+            level=GeometryLevel.POLYGON,
+        )
+    ]
+    for _ in range(extra_good):
+        records.append(
+            LabelRecord(
+                class_id=0,
+                confidence=0.8,
+                points=np.array(
+                    [[10, 20], [30, 20], [30, 40], [10, 45]], dtype=np.float32
+                ),
+                level=GeometryLevel.POLYGON,
+            )
+        )
+    return ExportedFrame(
+        frame_id=frame_id,
+        image_name=f"f{frame_id:06d}.jpg",
+        records=records,
+    )
+
+
+def test_degenerate_contour_drops_its_record_not_the_round(tmp_path):
+    """A contour with <3 vertices used to raise from inside write_label_file,
+    aborting the whole round and losing every good frame with it. Every other
+    per-frame failure here drops-and-counts; this one now matches."""
+    frames = [_degenerate_frame(0, n_points=2, extra_good=1), _frame(1)]
+    manifest = export_al_dataset(
+        round_dir=tmp_path / "round",
+        frames=frames,
+        images=_images([0, 1]),
+        native_level=GeometryLevel.POLYGON,
+        levels=[GeometryLevel.POLYGON],
+        class_names=["ant"],
+        provenance=_provenance(),
+    )
+
+    assert manifest["totals"]["dropped_degenerate_geometry"] == 1
+    # Both frames survive: frame 0 still had one good record.
+    assert manifest["totals"]["frames_exported"] == 2
+    assert manifest["totals"]["objects"] == 2
+    labels = sorted((tmp_path / "round" / "polygon" / "labels").glob("*.txt"))
+    assert len(labels) == 2
+    assert len(labels[0].read_text().strip().splitlines()) == 1
+
+
+def test_frame_emptied_by_degenerate_drops_is_skipped_not_written_empty(tmp_path):
+    """Dropping the last record must route into the accounted zero-record skip,
+    never write an empty .txt -- YOLO reads that as 'no objects here'."""
+    frames = [_degenerate_frame(0, n_points=2), _frame(1)]
+    manifest = export_al_dataset(
+        round_dir=tmp_path / "round",
+        frames=frames,
+        images=_images([0, 1]),
+        native_level=GeometryLevel.POLYGON,
+        levels=[GeometryLevel.POLYGON],
+        class_names=["ant"],
+        provenance=_provenance(),
+    )
+
+    assert manifest["totals"]["dropped_degenerate_geometry"] == 1
+    assert manifest["totals"]["frames_skipped_no_records"] == 1
+    assert manifest["totals"]["frames_exported"] == 1
+    assert manifest["skipped_frame_ids_no_records"] == [0]
+    assert manifest["selected_frame_ids"] == [1]
+    labels = list((tmp_path / "round" / "polygon" / "labels").glob("*.txt"))
+    assert len(labels) == 1
+    assert labels[0].read_text().strip() != ""

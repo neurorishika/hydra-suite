@@ -191,3 +191,46 @@ def test_al_worker_drops_frames_that_fail_to_re_read(tmp_path):
     assert len(image_files) == 3
     assert len(label_files) == 3
     assert "f_000001.jpg" not in image_files
+
+
+def test_n_picked_counts_images_on_disk_not_probe_survivors(tmp_path):
+    """`written_ids` counts frames that passed the readability probe. The
+    exporter then drops any frame whose records did not survive, so reporting
+    the probe count claimed more images than exist on disk."""
+    from hydra_suite.detectkit.jobs.al_worker import ALRequest, run_active_learning
+
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+    project = DetectKitProject(project_dir=project_dir, sources=[])
+    folder = _seed_image_folder(tmp_path, n=6)
+
+    seen: list[int] = []
+
+    def detector_with_one_empty_frame(frame, conf, iou):
+        # First frame the exporter sees yields nothing; the rest are normal.
+        seen.append(1)
+        if len(seen) == 1:
+            return []
+        return [(10, 10, 8, 4, 0.0, 0.95)]
+
+    request = ALRequest(
+        input_kind="folder",
+        input_path=str(folder),
+        project=project,
+        budget=3,
+        preset="balanced",
+        expected_count=1,
+        detector_fn=detector_with_one_empty_frame,
+        diversity_window=0,
+        probabilistic=False,
+    )
+
+    result = run_active_learning(request)
+
+    images = list((Path(result.source_path) / "images").iterdir())
+    labels = list((Path(result.source_path) / "labels").iterdir())
+    assert result.n_picked == len(images) == len(labels)
+    assert len(result.selected_frames) == result.n_picked
+    # No empty label file was written for the dropped frame.
+    for lf in labels:
+        assert lf.read_text().strip() != ""

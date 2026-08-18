@@ -337,10 +337,28 @@ def run_active_learning(
     if progress:
         progress(100, "Active learning complete")
 
+    # `written_ids` is the pre-export list: it counts every frame that passed
+    # the readability probe. The exporter then drops frames whose records did
+    # not survive (see `frames_skipped_no_records`), so reporting the probe
+    # count claimed more images than exist on disk. Take the truth from the
+    # manifest, and report the frames actually written.
+    # From the manifest, not recomputed from `exported`: the exporter also
+    # drops degenerate records, which can empty a frame that still looks
+    # non-empty in the list handed to it.
+    exported_ids = [int(fid) for fid in manifest["selected_frame_ids"]]
+    skipped = int(manifest["totals"].get("frames_skipped_no_records", 0))
+    if skipped:
+        logger.warning(
+            "%d of %d picked frame(s) carried no label geometry and were not "
+            "exported.",
+            skipped,
+            len(written_ids),
+        )
+
     return ALResult(
         source_path=source_path,
-        n_picked=len(written_ids),
-        selected_frames=written_ids,
+        n_picked=int(manifest["totals"]["frames_exported"]),
+        selected_frames=exported_ids,
     )
 
 

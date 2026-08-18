@@ -21,7 +21,7 @@ import json
 import logging
 import shutil
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import cv2
@@ -151,6 +151,32 @@ def export_al_dataset(
                 f"{native_level.label!r}: upward derivation is refused"
             )
 
+    # A contour with fewer than 3 vertices is not a usable annotation at any
+    # level -- as a polygon it is not a shape, and derived down it is a
+    # zero-area box. Drop those records here, BEFORE the zero-record check, so
+    # one malformed contour costs its own record instead of aborting the round
+    # from inside `write_label_file`, and so a frame left with nothing falls
+    # into the accounted skip below rather than writing an empty label file.
+    dropped_degenerate = 0
+    filtered: list[ExportedFrame] = []
+    for frame in frames:
+        keep = [
+            r
+            for r in frame.records
+            if np.asarray(r.points).reshape(-1, 2).shape[0] >= 3
+        ]
+        dropped = len(frame.records) - len(keep)
+        if dropped:
+            dropped_degenerate += dropped
+            logger.warning(
+                "Frame %s: dropped %d record(s) with fewer than 3 vertices.",
+                frame.frame_id,
+                dropped,
+            )
+            frame = replace(frame, records=keep)
+        filtered.append(frame)
+    frames = filtered
+
     # A frame with zero surviving records must NOT be exported. YOLO reads an
     # empty .txt as "this image contains no objects" -- a background sample.
     # For an AL round that is fabricated negative ground truth: the frame was
@@ -228,6 +254,7 @@ def export_al_dataset(
         totals = {
             "frames_exported": len(frames),
             "frames_skipped_no_records": len(skipped_no_records),
+            "dropped_degenerate_geometry": dropped_degenerate,
             "dropped_lost": sum(
                 int(f.drops.get("lost", 0)) for f in frames + skipped_no_records
             ),

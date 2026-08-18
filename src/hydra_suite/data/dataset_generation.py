@@ -745,8 +745,13 @@ def export_dataset(
     )
 
     cap = _open_video(video_path)
-    runner = _init_detection_runner(params)
+    # Bound before the try so the `finally` can always read it: the runner is
+    # built INSIDE the try because `_init_detection_runner` raises on failure
+    # (it used to return None), and building it above leaked `cap` on every
+    # bad model path or runtime.
+    runner = None
     try:
+        runner = _init_detection_runner(params)
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
