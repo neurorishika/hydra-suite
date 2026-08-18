@@ -13,7 +13,7 @@ class DatasetGenerationWorker(BaseWorker):
     """Worker thread for generating training datasets without blocking the UI."""
 
     progress_signal = Signal(int, str)  # progress value, status message
-    finished_signal = Signal(str, int)  # dataset_dir, num_frames
+    finished_signal = Signal(str, int, dict)  # dataset_dir, num_frames, manifest
     error_signal = Signal(str)  # error message
 
     def __init__(
@@ -73,6 +73,8 @@ class DatasetGenerationWorker(BaseWorker):
         if self._should_stop() or result.get("cancelled"):
             return
         if result.get("success"):
-            self.finished_signal.emit(result["dir"], result["num_frames"])
+            self.finished_signal.emit(
+                result["dir"], result["num_frames"], result.get("manifest", {})
+            )
         else:
             self.error_signal.emit(result.get("error", "Dataset generation failed."))

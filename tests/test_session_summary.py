@@ -43,3 +43,70 @@ def test_summary_dataset_success():
         },
     )
     assert any("Dataset generated: 42 frame(s)" in line for line in lines)
+
+
+def test_summary_dataset_success_reports_manifest_drop_accounting():
+    """The manifest's honest drop accounting (dropped_lost/dropped_unmatched)
+    must actually reach the user, not just live in the manifest dict."""
+    lines = build_session_summary_lines(
+        {"detection_method": "yolo_obb"},
+        {
+            "wall_seconds": None,
+            "frames_processed": 0,
+            "fps_list": [],
+            "video_path": None,
+            "csv_path": None,
+            "trajectory_count": None,
+            "dataset": {
+                "success": True,
+                "num_frames": 42,
+                "dir": "/out/ds",
+                "manifest": {
+                    "roots": [
+                        {"level": "obb", "authoritative": True},
+                        {"level": "aabb", "authoritative": False},
+                    ],
+                    "totals": {
+                        "objects": 210,
+                        "dropped_lost": 3,
+                        "dropped_unmatched": 7,
+                    },
+                },
+            },
+        },
+    )
+    joined = "\n".join(lines)
+    assert "Label levels: obb, aabb" in joined
+    assert "Objects labelled: 210" in joined
+    assert "Dropped (lost/interpolated tracks): 3" in joined
+    assert "Dropped (no matching detection): 7" in joined
+
+
+def test_summary_dataset_success_no_drops_stays_quiet():
+    """No spurious drop lines when nothing was dropped."""
+    lines = build_session_summary_lines(
+        {"detection_method": "yolo_obb"},
+        {
+            "wall_seconds": None,
+            "frames_processed": 0,
+            "fps_list": [],
+            "video_path": None,
+            "csv_path": None,
+            "trajectory_count": None,
+            "dataset": {
+                "success": True,
+                "num_frames": 10,
+                "dir": "/out/ds",
+                "manifest": {
+                    "roots": [{"level": "polygon", "authoritative": True}],
+                    "totals": {
+                        "objects": 40,
+                        "dropped_lost": 0,
+                        "dropped_unmatched": 0,
+                    },
+                },
+            },
+        },
+    )
+    joined = "\n".join(lines)
+    assert "Dropped" not in joined

@@ -1118,6 +1118,8 @@ class SessionOrchestrator:
             self._mw._detection_panel._sync_live_detection_batch_controls()
         if hasattr(self._mw, "_identity_panel"):
             self._mw._identity_panel._sync_realtime_individual_batch_ui()
+        if hasattr(self._mw, "_dataset_panel"):
+            self._mw._dataset_panel.refresh_export_levels()
 
     def _set_form_row_visible(self, form_layout, field_widget, visible: bool):
         """Show/hide a QFormLayout row by field widget."""

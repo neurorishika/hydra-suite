@@ -1903,6 +1903,8 @@ class DetectionPanel(QWidget):
             )
         self._main_window._update_obb_mode_warning()
         self._sync_live_detection_batch_controls()
+        if hasattr(self._main_window, "_dataset_panel"):
+            self._main_window._dataset_panel.refresh_export_levels()
 
     def _on_yolo_direct_task_changed(self, _index: object) -> object:
         """Show the fixed-angle control only when the direct task is 'Detect'."""
@@ -1923,6 +1925,8 @@ class DetectionPanel(QWidget):
 
         is_detect = self.combo_yolo_direct_task.currentIndex() == 1
         _set_row_visible(getattr(self, "spin_yolo_fixed_angle", None), is_detect)
+        if hasattr(self._main_window, "_dataset_panel"):
+            self._main_window._dataset_panel.refresh_export_levels()
 
     # =========================================================================
     # YOLO MODEL CHANGED (moved from MainWindow)

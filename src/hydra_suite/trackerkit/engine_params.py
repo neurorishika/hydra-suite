@@ -1251,9 +1251,6 @@ def build_engine_params(
             _cfg_get(cfg, "dataset_dedup_threshold", default=8)
         ),
         "DATASET_CLASS_NAMES": _dataset_class_names(cfg),
-        "DATASET_DETECTKIT_PROJECT": str(
-            _cfg_get(cfg, "dataset_detectkit_project", default="")
-        ),
         # Active-learning metric selectors (bridge: config.py:2394-2399).
         "METRIC_LOW_CONFIDENCE": bool(
             _cfg_get(cfg, "metric_low_confidence", default=True)
@@ -1264,6 +1261,7 @@ def build_engine_params(
         "METRIC_FRAGMENTED_DETECTIONS": bool(
             _cfg_get(cfg, "metric_fragmented_detections", default=True)
         ),
+        "METRIC_CROWDING": bool(_cfg_get(cfg, "metric_crowding", default=True)),
         "METRIC_HIGH_ASSIGNMENT_COST": bool(
             _cfg_get(cfg, "metric_high_assignment_cost", default=True)
         ),

@@ -39,7 +39,6 @@ class TrackerConfig:
     dataset_dedup_method: str = "phash"
     dataset_dedup_threshold: int = 8
     dataset_class_names: str = ""
-    dataset_detectkit_project: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a JSON-compatible dict."""
@@ -55,7 +54,6 @@ class TrackerConfig:
             "dataset_dedup_method": self.dataset_dedup_method,
             "dataset_dedup_threshold": self.dataset_dedup_threshold,
             "dataset_class_names": self.dataset_class_names,
-            "dataset_detectkit_project": self.dataset_detectkit_project,
         }
 
     @classmethod
@@ -83,5 +81,4 @@ class TrackerConfig:
             dataset_dedup_method=str(data.get("dataset_dedup_method", "phash")),
             dataset_dedup_threshold=int(data.get("dataset_dedup_threshold", 8)),
             dataset_class_names=str(data.get("dataset_class_names", "")),
-            dataset_detectkit_project=str(data.get("dataset_detectkit_project", "")),
         )

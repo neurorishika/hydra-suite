@@ -23,12 +23,28 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hydra_suite.data.al.escalation import achievable_levels
+from hydra_suite.data.dataset_generation import resolve_native_level
 from hydra_suite.trackerkit.config.schemas import TrackerConfig
+from hydra_suite.utils.geometry_levels import GeometryLevel
 
 if TYPE_CHECKING:
     from hydra_suite.trackerkit.gui.main_window import MainWindow
 
 logger = logging.getLogger(__name__)
+
+
+def format_level_status(native_level: GeometryLevel) -> str:
+    """Human-readable summary of which label levels this detector can produce."""
+    labels = " + ".join(lvl.label for lvl in achievable_levels(native_level))
+    if native_level is GeometryLevel.POLYGON:
+        return f"Will export: {labels}"
+    if native_level is GeometryLevel.OBB:
+        return f"Will export: {labels} — polygon labels require a segmentation model"
+    return (
+        f"Will export: {labels} — oriented and polygon labels require an OBB or "
+        "segmentation model"
+    )
 
 
 class DatasetPanel(QWidget):
@@ -99,14 +115,34 @@ class DatasetPanel(QWidget):
 
         # Class name
         self.line_dataset_class_name = QLineEdit()
-        self.line_dataset_class_name.setPlaceholderText("e.g., ant")
+        self.line_dataset_class_name.setPlaceholderText("e.g., ant  (or: ant, larva)")
         self.line_dataset_class_name.setText("object")
         self.line_dataset_class_name.setToolTip(
-            "Name of the object class being tracked.\n"
-            "This will be used in the classes.txt file for YOLO training.\n"
-            "Examples: ant, bee, mouse, fish, etc."
+            "Ordered class names, comma-separated. Position determines class id: "
+            "the first name is class 0, the second class 1, and so on.\n"
+            "Single-class users can just type one name."
         )
         f_config.addRow("Class label", self.line_dataset_class_name)
+
+        # Export levels -- what the detector can actually produce.
+        self.lbl_export_level_status = QLabel(format_level_status(GeometryLevel.OBB))
+        self.lbl_export_level_status.setWordWrap(True)
+        f_config.addRow("Label levels", self.lbl_export_level_status)
+
+        self.chk_level_polygon = QCheckBox("polygon (segmentation masks)")
+        self.chk_level_obb = QCheckBox("obb (oriented boxes)")
+        self.chk_level_aabb = QCheckBox("aabb (axis-aligned boxes)")
+        for chk in (self.chk_level_polygon, self.chk_level_obb, self.chk_level_aabb):
+            chk.setChecked(True)
+            chk.setToolTip(
+                "Each enabled level is written as its own DetectKit source. "
+                "Images are hardlinked, so extra levels cost almost no disk."
+            )
+        _levels_row = QVBoxLayout()
+        _levels_row.addWidget(self.chk_level_polygon)
+        _levels_row.addWidget(self.chk_level_obb)
+        _levels_row.addWidget(self.chk_level_aabb)
+        f_config.addRow("Export as", _levels_row)
 
         vl_content.addWidget(self.g_dataset_config)
 
@@ -134,10 +170,10 @@ class DatasetPanel(QWidget):
         self.spin_dataset_min_selection_score.setValue(0.0)
         self.spin_dataset_min_selection_score.setToolTip(
             "Min selection score (0.0-1.0).\n\n"
-            "Frames with a normalized acquisition score below this value are\n"
-            "discarded before top-K selection. 0.0 = no filter (default).\n\n"
-            "Replaces the legacy 'Quality threshold' control: under the new\n"
-            "normalized scoring, an unbounded threshold no longer makes sense."
+            "Scores are ABSOLUTE severities: a frame with nothing wrong scores "
+            "exactly 0, and the value is comparable across videos. A cleanly "
+            "tracked video can legitimately export no frames.\n\n"
+            "0.0 = export the best available frames regardless of severity."
         )
         f_selection.addRow("Min selection score", self.spin_dataset_min_selection_score)
 
@@ -154,6 +190,25 @@ class DatasetPanel(QWidget):
             "signals (assignment cost, track loss). Others apply to detector-only paths."
         )
         f_selection.addRow("Acquisition preset", self.combo_dataset_preset)
+
+        self.combo_dataset_dedup = QComboBox()
+        for method in ("phash", "ahash", "dhash", "histogram", "none"):
+            self.combo_dataset_dedup.addItem(method)
+        self.combo_dataset_dedup.setToolTip(
+            "Perceptual dedup applied to the SELECTED frames (and their context "
+            "frames) after ranking. Removes near-identical picks that the "
+            "diversity window cannot catch. 'none' disables it."
+        )
+        f_selection.addRow("Duplicate filter", self.combo_dataset_dedup)
+
+        self.spin_dataset_dedup_threshold = QSpinBox()
+        self.spin_dataset_dedup_threshold.setRange(0, 64)
+        self.spin_dataset_dedup_threshold.setValue(8)
+        self.spin_dataset_dedup_threshold.setToolTip(
+            "Hamming distance (hash methods) or bin distance (histogram) below "
+            "which two frames count as duplicates. Higher = more aggressive."
+        )
+        f_selection.addRow("Duplicate threshold", self.spin_dataset_dedup_threshold)
 
         # Add help label explaining advanced options
         advanced_help = self._main_window._create_help_label(
@@ -227,6 +282,12 @@ class DatasetPanel(QWidget):
             "Flag frames where detections overlap or cluster tightly enough to suggest one animal "
             "was split into multiple detections."
         )
+        self.chk_metric_crowding = QCheckBox("Flag animal crowding")
+        self.chk_metric_crowding.setChecked(True)
+        self.chk_metric_crowding.setToolTip(
+            "Flag frames where animals are genuinely close together or "
+            "overlapping (a separate signal from split/duplicate detections)."
+        )
         self.chk_metric_high_assignment_cost = QCheckBox(
             "Flag uncertain track assignment"
         )
@@ -249,8 +310,9 @@ class DatasetPanel(QWidget):
         _m_row1.addWidget(self.chk_metric_count_mismatch)
         _m_row2 = QHBoxLayout()
         _m_row2.addWidget(self.chk_metric_fragmented_detections)
-        _m_row2.addWidget(self.chk_metric_high_assignment_cost)
+        _m_row2.addWidget(self.chk_metric_crowding)
         _m_row3 = QHBoxLayout()
+        _m_row3.addWidget(self.chk_metric_high_assignment_cost)
         _m_row3.addWidget(self.chk_metric_track_loss)
         v_metrics.addLayout(_m_row1)
         v_metrics.addLayout(_m_row2)
@@ -258,6 +320,15 @@ class DatasetPanel(QWidget):
         v_metrics.addWidget(self.chk_metric_high_uncertainty)
 
         vl_content.addWidget(self.g_quality_metrics)
+
+        self.lbl_bgsub_notice = self._main_window._create_help_label(
+            "Background subtraction produces no detection confidences, so the "
+            "confidence signal is disabled and the remaining frame-selection "
+            "signals are reweighted to compensate.",
+            attach_to_title=False,
+        )
+        self.lbl_bgsub_notice.setVisible(False)
+        vl_content.addWidget(self.lbl_bgsub_notice)
 
         # Add content to main group box
         vl_active.addWidget(self.active_learning_content)
@@ -484,6 +555,9 @@ class DatasetPanel(QWidget):
         vl_downstream.addWidget(
             self._main_window._create_help_label(
                 "TrackerKit no longer launches annotation tools from this tab.\n\n"
+                "Each exported level folder is a DetectKit source (it carries its own "
+                "source.json) -- add it from DetectKit's import dialog; it is not "
+                "registered automatically.\n"
                 "Use DetectKit from the HYDRA Suite launcher to review and correct detection datasets.\n"
                 "Use PoseKit from the HYDRA Suite launcher to label pose datasets generated from individual crops."
             )
@@ -514,6 +588,28 @@ class DatasetPanel(QWidget):
     def apply_config(self, config: TrackerConfig) -> None:
         """Update panel widgets to reflect a new config object."""
         self._config = config
+        self.refresh_export_levels()
+
+    def refresh_export_levels(self) -> None:
+        """Sync the level status label and checkboxes to the detection config."""
+        params = self._main_window.get_parameters_dict()
+        native = resolve_native_level(params)
+        allowed = set(achievable_levels(native))
+        self.lbl_export_level_status.setText(format_level_status(native))
+        for level, chk in (
+            (GeometryLevel.POLYGON, self.chk_level_polygon),
+            (GeometryLevel.OBB, self.chk_level_obb),
+            (GeometryLevel.AABB, self.chk_level_aabb),
+        ):
+            available = level in allowed
+            chk.setEnabled(available)
+            if not available:
+                chk.setChecked(False)
+
+        is_bgsub = (
+            str(params.get("DETECTION_METHOD", "")).lower() == "background_subtraction"
+        )
+        self.lbl_bgsub_notice.setVisible(is_bgsub)
 
     # =========================================================================
     # Handler methods (moved from MainWindow)

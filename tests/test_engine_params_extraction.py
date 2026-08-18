@@ -14,10 +14,11 @@ from pathlib import Path
 
 import pytest
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
 from hydra_suite.trackerkit import cli_config
 from hydra_suite.trackerkit.engine_params import RuntimeContext, build_engine_params
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
 
 FIXTURE_CONFIG_PATH = (
     Path(__file__).resolve().parents[1]
@@ -145,7 +146,6 @@ def test_dataset_export_knob_defaults():
     assert params["DATASET_EXPORT_LEVELS"] == ["polygon", "obb", "aabb"]
     assert params["DATASET_DEDUP_METHOD"] == "phash"
     assert params["DATASET_DEDUP_THRESHOLD"] == 8
-    assert params["DATASET_DETECTKIT_PROJECT"] == ""
 
 
 def test_tracker_config_dataset_fields_round_trip():
@@ -156,14 +156,12 @@ def test_tracker_config_dataset_fields_round_trip():
     cfg.dataset_dedup_method = "dhash"
     cfg.dataset_dedup_threshold = 4
     cfg.dataset_class_names = "x,y"
-    cfg.dataset_detectkit_project = "proj1"
 
     restored = TrackerConfig.from_dict(cfg.to_dict())
     assert restored.dataset_export_levels == ["obb"]
     assert restored.dataset_dedup_method == "dhash"
     assert restored.dataset_dedup_threshold == 4
     assert restored.dataset_class_names == "x,y"
-    assert restored.dataset_detectkit_project == "proj1"
 
     # And a fresh default TrackerConfig round-trips the documented defaults.
     default_restored = TrackerConfig.from_dict(TrackerConfig().to_dict())
@@ -171,7 +169,6 @@ def test_tracker_config_dataset_fields_round_trip():
     assert default_restored.dataset_dedup_method == "phash"
     assert default_restored.dataset_dedup_threshold == 8
     assert default_restored.dataset_class_names == ""
-    assert default_restored.dataset_detectkit_project == ""
 
 
 def test_engine_params_module_is_qt_free(monkeypatch):

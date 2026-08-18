@@ -1047,7 +1047,10 @@ class ConfigOrchestrator:
             get_cfg("enable_dataset_generation", default=False)
         )
         self._panels.dataset.line_dataset_class_name.setText(
-            get_cfg("dataset_class_name", default="object")
+            get_cfg(
+                "dataset_class_names",
+                default=get_cfg("dataset_class_name", default="object"),
+            )
         )
         self._panels.dataset.spin_dataset_max_frames.setValue(
             get_cfg("dataset_max_frames", default=100)
@@ -1064,6 +1067,21 @@ class ConfigOrchestrator:
         self._panels.dataset.spin_dataset_diversity_window.setValue(
             get_cfg("dataset_diversity_window", default=30)
         )
+        export_levels = get_cfg(
+            "dataset_export_levels", default=["polygon", "obb", "aabb"]
+        )
+        self._panels.dataset.chk_level_polygon.setChecked("polygon" in export_levels)
+        self._panels.dataset.chk_level_obb.setChecked("obb" in export_levels)
+        self._panels.dataset.chk_level_aabb.setChecked("aabb" in export_levels)
+        dedup_idx = self._panels.dataset.combo_dataset_dedup.findText(
+            get_cfg("dataset_dedup_method", default="phash")
+        )
+        self._panels.dataset.combo_dataset_dedup.setCurrentIndex(
+            dedup_idx if dedup_idx >= 0 else 0
+        )
+        self._panels.dataset.spin_dataset_dedup_threshold.setValue(
+            get_cfg("dataset_dedup_threshold", default=8)
+        )
         self._panels.dataset.chk_dataset_include_context.setChecked(
             get_cfg("dataset_include_context", default=True)
         )
@@ -1079,6 +1097,9 @@ class ConfigOrchestrator:
         self._panels.dataset.chk_metric_fragmented_detections.setChecked(
             get_cfg("metric_fragmented_detections", default=True)
         )
+        self._panels.dataset.chk_metric_crowding.setChecked(
+            get_cfg("metric_crowding", default=True)
+        )
         self._panels.dataset.chk_metric_high_assignment_cost.setChecked(
             get_cfg("metric_high_assignment_cost", default=True)
         )
@@ -1088,6 +1109,7 @@ class ConfigOrchestrator:
         self._panels.dataset.chk_metric_high_uncertainty.setChecked(
             get_cfg("metric_high_uncertainty", default=False)
         )
+        self._panels.dataset.refresh_export_levels()
 
     def _load_config_individual_analysis(self, cfg, get_cfg):
         old_method = str(get_cfg("identity_method", default="none_disabled")).lower()
@@ -1811,9 +1833,18 @@ class ConfigOrchestrator:
                 # === DATASET GENERATION ===
                 "enable_dataset_generation": self._panels.dataset.chk_enable_dataset_gen.isChecked(),
                 "dataset_class_name": self._panels.dataset.line_dataset_class_name.text(),
+                "dataset_class_names": self._panels.dataset.line_dataset_class_name.text(),
                 "dataset_max_frames": self._panels.dataset.spin_dataset_max_frames.value(),
             }
         )
+
+        _export_levels = []
+        if self._panels.dataset.chk_level_polygon.isChecked():
+            _export_levels.append("polygon")
+        if self._panels.dataset.chk_level_obb.isChecked():
+            _export_levels.append("obb")
+        if self._panels.dataset.chk_level_aabb.isChecked():
+            _export_levels.append("aabb")
 
         cfg.update(
             {
@@ -1821,11 +1852,15 @@ class ConfigOrchestrator:
                 "dataset_al_preset": self._panels.dataset.combo_dataset_preset.currentText(),
                 # Note: dataset YOLO conf/IOU now in advanced_config.json, not per-video config
                 "dataset_diversity_window": self._panels.dataset.spin_dataset_diversity_window.value(),
+                "dataset_export_levels": _export_levels,
+                "dataset_dedup_method": self._panels.dataset.combo_dataset_dedup.currentText(),
+                "dataset_dedup_threshold": self._panels.dataset.spin_dataset_dedup_threshold.value(),
                 "dataset_include_context": self._panels.dataset.chk_dataset_include_context.isChecked(),
                 "dataset_probabilistic_sampling": self._panels.dataset.chk_dataset_probabilistic.isChecked(),
                 "metric_low_confidence": self._panels.dataset.chk_metric_low_confidence.isChecked(),
                 "metric_count_mismatch": self._panels.dataset.chk_metric_count_mismatch.isChecked(),
                 "metric_fragmented_detections": self._panels.dataset.chk_metric_fragmented_detections.isChecked(),
+                "metric_crowding": self._panels.dataset.chk_metric_crowding.isChecked(),
                 "metric_high_assignment_cost": self._panels.dataset.chk_metric_high_assignment_cost.isChecked(),
                 "metric_track_loss": self._panels.dataset.chk_metric_track_loss.isChecked(),
                 "metric_high_uncertainty": self._panels.dataset.chk_metric_high_uncertainty.isChecked(),
