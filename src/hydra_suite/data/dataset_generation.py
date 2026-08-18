@@ -462,6 +462,19 @@ def _detect_records_for_frames(runner, frames, params, native_level):
     if runner is None:
         return {}
     batch_size = _get_detector_batch_size(runner)
+    # Detection runs on the RESIZE_FACTOR-scaled frame (`_LazyDetectionFrames`
+    # yields `frame_for_detection`, never the original), so raw obb corners
+    # come back in resized-frame space. Every downstream consumer -- the
+    # strict-label matcher against original-space CSV rows, and label
+    # normalization against the original frame's `.shape` -- needs original
+    # pixel space. Scale once, here, so nobody downstream has to remember to.
+    # Do not remove this: it replaces the scale-back the deleted legacy
+    # `_measurements_to_detections` used to do; dropping it silently
+    # re-introduces a coordinate-space mismatch whenever RESIZE_FACTOR < 1.
+    resize_factor = params.get("RESIZE_FACTOR", 1.0)
+    detection_scale_back = (
+        1.0 / resize_factor if resize_factor and resize_factor < 1.0 else 1.0
+    )
     out: dict[int, list[LabelRecord]] = {}
     frame_ids = sorted(frames)
     for start in range(0, len(frame_ids), batch_size):
@@ -484,7 +497,11 @@ def _detect_records_for_frames(runner, frames, params, native_level):
             )
             continue
         for fid, obb in zip(valid_chunk, results):
-            out[fid] = records_from_obb_result(obb, native_level)
+            records = records_from_obb_result(obb, native_level)
+            if detection_scale_back != 1.0:
+                for rec in records:
+                    rec.points = (rec.points * detection_scale_back).astype(np.float32)
+            out[fid] = records
     return out
 
 
@@ -544,7 +561,18 @@ def _select_records_for_frame(rows, frame_records, params, scale_back):
     targets = np.array(live_rows, dtype=np.float64)
     cost = np.linalg.norm(targets[:, None, :] - centers[None, :, :], axis=2)
 
-    row_idx, col_idx = linear_sum_assignment(cost)
+    # linear_sum_assignment minimizes TOTAL cost, not "prefer in-radius pairs".
+    # Solving on the raw distance matrix and filtering afterwards can leave a
+    # row unmatched even though a fully in-radius assignment existed, because
+    # the optimizer chose a globally-cheaper arrangement that used a different
+    # (also in-radius) detection for that row's rightful match, stranding it
+    # on an out-of-radius leftover. Penalize out-of-radius pairs with a large
+    # sentinel *before* solving so the optimizer maximizes in-radius pairings
+    # first, then apply the real `max_distance` gate against the ORIGINAL
+    # (unpenalized) cost matrix. Do not use np.inf: scipy raises on infeasible
+    # (all-inf-row/col) matrices.
+    solve_cost = np.where(cost <= max_distance, cost, max_distance * 1e6)
+    row_idx, col_idx = linear_sum_assignment(solve_cost)
     matched_detections: list[int] = []
     matched_rows = set()
     for r, c in zip(row_idx, col_idx):
