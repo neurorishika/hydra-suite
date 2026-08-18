@@ -244,6 +244,14 @@ class ConfigOrchestrator:
         except Exception as e:
             logger.warning(f"Failed to load configuration: {e}")
 
+        # Derived UI refresh, after every panel has been populated and under
+        # its own guard: a failure here must not cost the caller any config
+        # loading, and config loading must not be able to leave it unrun.
+        try:
+            self._panels.dataset.refresh_export_levels()
+        except Exception as e:
+            logger.warning(f"Failed to refresh dataset export levels: {e}")
+
     def _load_config_file_paths(self, cfg, get_cfg, preset_mode):
         if preset_mode:
             return
@@ -1109,7 +1117,11 @@ class ConfigOrchestrator:
         self._panels.dataset.chk_metric_high_uncertainty.setChecked(
             get_cfg("metric_high_uncertainty", default=False)
         )
-        self._panels.dataset.refresh_export_levels()
+        # NOTE: `refresh_export_levels()` is deliberately NOT called here. It
+        # is a derived-UI refresh, not config loading, and running it mid-chain
+        # inside the caller's single try/except let any throw in it silently
+        # skip `_load_config_individual_analysis` for that video. It is
+        # invoked once, last, under its own guard -- see `_load_config`.
 
     def _load_config_individual_analysis(self, cfg, get_cfg):
         old_method = str(get_cfg("identity_method", default="none_disabled")).lower()

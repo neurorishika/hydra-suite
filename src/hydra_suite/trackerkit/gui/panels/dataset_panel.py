@@ -604,9 +604,44 @@ class DatasetPanel(QWidget):
         self._config = config
         self.refresh_export_levels()
 
+    def _detection_level_params(self) -> dict:
+        """The three keys `resolve_native_level` needs, read straight off the
+        detection panel.
+
+        Deliberately NOT `get_parameters_dict()`: that commits pending spinbox
+        edits and can rasterize an ROI mask, and this runs on every detector
+        and runtime change. Routing a three-key question through the full
+        param build was both heavyweight and a throw hazard inside the config
+        loader's shared try/except.
+        """
+        panel = getattr(self._main_window, "_detection_panel", None)
+        if panel is None:
+            return {}
+        try:
+            method = (
+                "background_subtraction"
+                if panel.combo_detection_method.currentIndex() == 0
+                else "yolo_obb"
+            )
+            mode = (
+                "sequential"
+                if panel.combo_yolo_obb_mode.currentIndex() == 1
+                else "direct"
+            )
+            direct_task = ["obb", "detect", "segment"][
+                panel.combo_yolo_direct_task.currentIndex()
+            ]
+        except Exception:  # pragma: no cover - defensive during construction
+            return {}
+        return {
+            "DETECTION_METHOD": method,
+            "YOLO_OBB_MODE": mode,
+            "YOLO_OBB_DIRECT_TASK": direct_task,
+        }
+
     def refresh_export_levels(self) -> None:
         """Sync the level status label and checkboxes to the detection config."""
-        params = self._main_window.get_parameters_dict()
+        params = self._detection_level_params()
         native = resolve_native_level(params)
         allowed = set(achievable_levels(native))
         for level, chk in (
