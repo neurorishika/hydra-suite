@@ -43,33 +43,74 @@ class _SelectedFrameSource:
         self._inner = VideoFrameSource(video_path)
         self._ids = sorted(int(f) for f in frame_ids)
         self._source_id = f"selected:{len(self._ids)}"
+        self.unreadable_count = 0
 
     def __iter__(self):
         for fid in self._ids:
             yield FrameRef(source_id=self._source_id, frame_id=fid, path=None)
 
     def read(self, ref):
-        return self._inner.read(ref)
+        img = self._inner.read(ref)
+        if img is None:
+            self.unreadable_count += 1
+        return img
 
     def length(self) -> int:
         return len(self._ids)
 
 
 def _dedup_selected_frames(video_path, frame_ids, method, threshold):
-    """Drop perceptually near-duplicate picks. Returns the surviving ids.
+    """Drop perceptually near-duplicate picks. Returns `(kept_ids, error)`.
 
     Scoped to `frame_ids` only (see `_SelectedFrameSource`) -- never the whole
-    video.
+    video. `error` is `None` on success; it is set (and `kept_ids` is empty)
+    when dedup leaves nothing to export, distinguishing "the video could not
+    be read" from "every pick collapsed as a near-duplicate" -- collapsing
+    those into one silent empty result would misreport unreadable frames as
+    "near-duplicates" to the user (see `generate_active_learning_dataset`).
     """
     if str(method).strip().lower() == "none" or len(frame_ids) < 2:
-        return list(frame_ids)
+        return list(frame_ids), None
+    total = len(frame_ids)
     source = _SelectedFrameSource(str(video_path), frame_ids)
     cfg = CandidatePoolConfig(
         dedup_method=str(method).strip().lower(),
         dedup_threshold=int(threshold),
     )
     kept = build_candidate_pool(source, cfg)
-    return [ref.frame_id for ref in kept]
+    kept_ids = [ref.frame_id for ref in kept]
+    if kept_ids:
+        return kept_ids, None
+
+    unreadable = source.unreadable_count
+    if unreadable:
+        logger.warning(
+            "Perceptual dedup could not read %d/%d selected frames from %s",
+            unreadable,
+            total,
+            video_path,
+        )
+    if unreadable >= total:
+        error = (
+            f"Could not read any of the {total} selected frames from the "
+            "video for perceptual dedup (file missing, moved, or unreadable "
+            "at export time). Check the video path, or disable dedup, and "
+            "try again."
+        )
+    elif unreadable:
+        error = (
+            f"Perceptual dedup left no frames to export: {unreadable}/{total} "
+            "selected frames could not be read from the video, and the "
+            "remaining readable frames collapsed as near-duplicates. Check "
+            "the video path, raise the dedup threshold, or disable dedup."
+        )
+    else:
+        error = (
+            f"Perceptual dedup collapsed all {total} selected frames into "
+            "near-duplicates (dedup_threshold may be too permissive). Raise "
+            "the threshold or disable dedup."
+        )
+    return [], error
 
 
 def generate_active_learning_dataset(
@@ -206,9 +247,11 @@ def generate_active_learning_dataset(
             }
 
         before_dedup = len(selected_frames)
-        selected_frames = _dedup_selected_frames(
+        selected_frames, dedup_error = _dedup_selected_frames(
             video_path, selected_frames, dedup_method, dedup_threshold
         )
+        if dedup_error is not None:
+            return {"success": False, "error": dedup_error}
         if len(selected_frames) < before_dedup:
             _emit(
                 progress,

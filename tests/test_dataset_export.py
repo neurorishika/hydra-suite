@@ -182,6 +182,11 @@ def test_dedup_runs_over_selected_frames_only(monkeypatch, tmp_path):
 
     monkeypatch.setattr(de, "export_dataset", _fake_export_dataset)
 
+    messages = []
+
+    def _progress(pct, msg):
+        messages.append(msg)
+
     result = de.generate_active_learning_dataset(
         video_path=str(tmp_path / "in.mp4"),
         csv_path=str(csv),
@@ -194,6 +199,7 @@ def test_dedup_runs_over_selected_frames_only(monkeypatch, tmp_path):
         diversity_window=30,
         include_context=True,
         probabilistic=False,
+        progress=_progress,
     )
 
     assert seen["n_candidates"] == 3
@@ -202,6 +208,11 @@ def test_dedup_runs_over_selected_frames_only(monkeypatch, tmp_path):
     assert exported["frame_ids"] == [0]
     assert result["success"] is True
     assert result["num_frames"] == 1
+    # The drop-count message must be accurate for the normal partial-drop
+    # case, and must never claim frames were unreadable when they weren't.
+    drop_messages = [m for m in messages if "dropped" in m]
+    assert drop_messages == ["Perceptual dedup dropped 2 near-duplicate frames."]
+    assert not any("unreadable" in m.lower() for m in messages)
 
 
 def test_dedup_none_skips_the_pool_entirely(monkeypatch, tmp_path):
@@ -245,3 +256,93 @@ def test_dedup_none_skips_the_pool_entirely(monkeypatch, tmp_path):
     assert result["success"] is True
     # All 3 selected frames pass through untouched -- no dedup work happened.
     assert exported["frame_ids"] == [0, 1, 2]
+
+
+def test_dedup_unreadable_video_returns_diagnostic_error(monkeypatch, tmp_path):
+    """An unreadable video must be reported as unreadable, not as a dedup drop."""
+    import hydra_suite.core.post.dataset_export as de
+
+    csv = tmp_path / "track.csv"
+    pd.DataFrame({"FrameID": [0, 1, 2], "State": ["active"] * 3}).to_csv(
+        csv, index=False
+    )
+
+    monkeypatch.setattr(de, "FrameQualityScorer", _StubScorer)
+
+    def _boom_export(**kwargs):
+        raise AssertionError("export_dataset must not run when dedup left nothing")
+
+    monkeypatch.setattr(de, "export_dataset", _boom_export)
+
+    # "in.mp4" is never created, so every read through the real
+    # build_candidate_pool -> _SelectedFrameSource -> VideoFrameSource chain
+    # fails, exercising the real (non-monkeypatched) dedup path end to end.
+    result = de.generate_active_learning_dataset(
+        video_path=str(tmp_path / "in.mp4"),
+        csv_path=str(csv),
+        detection_cache_path=None,
+        output_dir=str(tmp_path / "out"),
+        dataset_name="",
+        class_name="object",
+        params={},
+        max_frames=5,
+        diversity_window=30,
+        include_context=True,
+        probabilistic=False,
+    )
+
+    assert result["success"] is False
+    assert "cancelled" not in result or not result.get("cancelled")
+    assert "error" in result
+    assert (
+        "unreadable" in result["error"].lower()
+        or "could not read" in result["error"].lower()
+    )
+    assert "near-duplicate" not in result["error"].lower()
+
+
+def test_dedup_genuine_collapse_reports_duplicates_not_unreadable(
+    monkeypatch, tmp_path
+):
+    """All-readable frames that all dedup away must not be blamed on I/O."""
+    import hydra_suite.core.post.dataset_export as de
+
+    csv = tmp_path / "track.csv"
+    pd.DataFrame({"FrameID": [0, 1, 2], "State": ["active"] * 3}).to_csv(
+        csv, index=False
+    )
+
+    monkeypatch.setattr(de, "FrameQualityScorer", _StubScorer)
+
+    def _fake_pool_collapses_everything(source, cfg):
+        # Simulates every candidate being read successfully but judged a
+        # near-duplicate of an earlier one -- never touches source.read(),
+        # so unreadable_count stays 0.
+        return []
+
+    monkeypatch.setattr(de, "build_candidate_pool", _fake_pool_collapses_everything)
+
+    def _boom_export(**kwargs):
+        raise AssertionError("export_dataset must not run when dedup left nothing")
+
+    monkeypatch.setattr(de, "export_dataset", _boom_export)
+
+    result = de.generate_active_learning_dataset(
+        video_path=str(tmp_path / "in.mp4"),
+        csv_path=str(csv),
+        detection_cache_path=None,
+        output_dir=str(tmp_path / "out"),
+        dataset_name="",
+        class_name="object",
+        params={},
+        max_frames=5,
+        diversity_window=30,
+        include_context=True,
+        probabilistic=False,
+    )
+
+    assert result["success"] is False
+    assert "error" in result
+    assert "near-duplicate" in result["error"].lower()
+    assert "unreadable" not in result["error"].lower()
+    assert "could not read" not in result["error"].lower()
