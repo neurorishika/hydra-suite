@@ -70,7 +70,6 @@ def test_dataset_panel_wired_in_main_window(main_window):
         main_window._dataset_panel,
         "chk_enable_oriented_video_affine_stabilization",
     )
-    assert hasattr(main_window._dataset_panel, "g_downstream_tools")
 
 
 def test_setup_panel_wired_in_main_window(main_window):

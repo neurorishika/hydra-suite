@@ -208,14 +208,25 @@ class DatasetPanel(QWidget):
                 "Images are hardlinked, so extra levels cost almost no disk."
             )
             chk.toggled.connect(self._on_export_level_toggled)
-            v_levels.addWidget(chk)
+        _levels_row = QHBoxLayout()
+        _levels_row.addWidget(self.chk_level_polygon)
+        _levels_row.addWidget(self.chk_level_obb)
+        _levels_row.addWidget(self.chk_level_aabb)
+        v_levels.addLayout(_levels_row)
         self.al_advanced.addWidget(self.g_export_levels)
 
         # Frame selection parameters
         self.g_frame_selection = QGroupBox("How should frames be selected?")
         self._main_window._set_compact_section_widget(self.g_frame_selection)
-        f_selection = QFormLayout(self.g_frame_selection)
+        v_selection = QVBoxLayout(self.g_frame_selection)
+        _sel_cols = QHBoxLayout()
+        f_selection = QFormLayout()
         f_selection.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        f_selection_right = QFormLayout()
+        f_selection_right.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        _sel_cols.addLayout(f_selection, 1)
+        _sel_cols.addLayout(f_selection_right, 1)
+        v_selection.addLayout(_sel_cols)
 
         self.spin_dataset_min_selection_score = QDoubleSpinBox()
         self.spin_dataset_min_selection_score.setRange(0.0, 1.0)
@@ -253,7 +264,7 @@ class DatasetPanel(QWidget):
             "frames) after ranking. Removes near-identical picks that the "
             "diversity window cannot catch. 'none' disables it."
         )
-        f_selection.addRow("Duplicate filter", self.combo_dataset_dedup)
+        f_selection_right.addRow("Duplicate filter", self.combo_dataset_dedup)
 
         self.spin_dataset_dedup_threshold = QSpinBox()
         self.spin_dataset_dedup_threshold.setRange(0, 64)
@@ -262,7 +273,9 @@ class DatasetPanel(QWidget):
             "Hamming distance (hash methods) or bin distance (histogram) below "
             "which two frames count as duplicates. Higher = more aggressive."
         )
-        f_selection.addRow("Duplicate threshold", self.spin_dataset_dedup_threshold)
+        f_selection_right.addRow(
+            "Duplicate threshold", self.spin_dataset_dedup_threshold
+        )
 
         # Visual diversity window
         self.spin_dataset_diversity_window = QSpinBox()
@@ -274,7 +287,7 @@ class DatasetPanel(QWidget):
             "Higher = more spread out frames, more visual variety.\n"
             "Recommended: 20-50 frames (depends on video frame rate)."
         )
-        f_selection.addRow(
+        f_selection_right.addRow(
             "Diversity window (frames)",
             self.spin_dataset_diversity_window,
         )
@@ -300,7 +313,7 @@ class DatasetPanel(QWidget):
         _sel_chk_row = QHBoxLayout()
         _sel_chk_row.addWidget(self.chk_dataset_include_context)
         _sel_chk_row.addWidget(self.chk_dataset_probabilistic)
-        f_selection.addRow(_sel_chk_row)
+        v_selection.addLayout(_sel_chk_row)
 
         # Add help label explaining advanced options
         advanced_help = self._main_window._create_help_label(
@@ -309,7 +322,7 @@ class DatasetPanel(QWidget):
             "optimized for annotation (detect everything, manual review corrects errors).",
             attach_to_title=False,
         )
-        f_selection.addRow(advanced_help)
+        v_selection.addWidget(advanced_help)
 
         self.al_advanced.addWidget(self.g_frame_selection)
 
@@ -454,20 +467,6 @@ class DatasetPanel(QWidget):
 
         vl_ind_dataset.addWidget(self.ind_output_group)
 
-        self.ind_advanced = CollapsibleGroupBox("Advanced options")
-        self.ind_advanced.setHelpToolTip(
-            "Padding, background, interpolation, and head-tail settings are "
-            "configured in Analyze Individuals -> Individual Analysis Pipeline "
-            "Settings, not here."
-        )
-        self.ind_advanced.addWidget(
-            self._main_window._create_help_label(
-                "Padding, background, interpolation, and head-tail settings are configured in:\n"
-                "Analyze Individuals -> Individual Analysis Pipeline Settings",
-                attach_to_title=False,
-            )
-        )
-
         self.chk_suppress_foreign_obb_individual_dataset = QCheckBox(
             "Suppress foreign animal regions in saved crop images"
         )
@@ -480,16 +479,20 @@ class DatasetPanel(QWidget):
             "downstream labeling or training. Only applies to YOLO OBB detections\n"
             "(no effect in background-subtraction mode)."
         )
-        self.ind_advanced.addWidget(self.chk_suppress_foreign_obb_individual_dataset)
+        vl_ind_dataset.addWidget(self.chk_suppress_foreign_obb_individual_dataset)
 
         # Info label about filtering
+        # The padding/background/head-tail pointer used to be its own help
+        # icon; folded in here so the section carries one help affordance
+        # instead of stacking bare "?" rows.
         self.lbl_individual_info = self._main_window._create_help_label(
             "Final canonical images reuse detections already filtered by ROI and size settings.\n"
-            "No forward-pass media export is performed.",
+            "No forward-pass media export is performed.\n\n"
+            "Padding, background, interpolation, and head-tail settings are configured in:\n"
+            "Analyze Individuals -> Individual Analysis Pipeline Settings",
             attach_to_title=False,
         )
-        self.ind_advanced.addWidget(self.lbl_individual_info)
-        vl_ind_dataset.addWidget(self.ind_advanced)
+        vl_ind_dataset.addWidget(self.lbl_individual_info)
 
         form.addWidget(self.g_individual_dataset)
 
@@ -533,8 +536,13 @@ class DatasetPanel(QWidget):
         )
 
         self.oriented_video_options = QGroupBox("Oriented Video Post-Processing")
-        oriented_options_layout = QFormLayout(self.oriented_video_options)
+        _oriented_cols = QHBoxLayout(self.oriented_video_options)
+        oriented_options_layout = QFormLayout()
         oriented_options_layout.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        oriented_options_right = QFormLayout()
+        oriented_options_right.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        _oriented_cols.addLayout(oriented_options_layout, 1)
+        _oriented_cols.addLayout(oriented_options_right, 1)
 
         self.chk_fix_oriented_video_direction_flips = QCheckBox(
             "Fix short head-tail direction flip bursts"
@@ -573,7 +581,7 @@ class DatasetPanel(QWidget):
         self.chk_enable_oriented_video_affine_stabilization.toggled.connect(
             self._sync_oriented_video_postprocess_controls
         )
-        oriented_options_layout.addRow(
+        oriented_options_right.addRow(
             "Affine stabilization",
             self.chk_enable_oriented_video_affine_stabilization,
         )
@@ -586,7 +594,7 @@ class DatasetPanel(QWidget):
             "Centered temporal smoothing window used for affine stabilization.\n"
             "Odd values work best; even values are rounded up internally."
         )
-        oriented_options_layout.addRow(
+        oriented_options_right.addRow(
             "Stabilization window (frames)",
             self.spin_oriented_video_stabilization_window,
         )
@@ -617,32 +625,6 @@ class DatasetPanel(QWidget):
 
         form.addWidget(self.g_oriented_videos)
 
-        # ============================================================
-        # Next-step guidance
-        # ============================================================
-        self.g_downstream_tools = QGroupBox("What should you use next?")
-        self._main_window._set_compact_section_widget(self.g_downstream_tools)
-        vl_downstream = QVBoxLayout(self.g_downstream_tools)
-        vl_downstream.addWidget(
-            self._main_window._create_help_label(
-                "TrackerKit no longer launches annotation tools from this tab.\n\n"
-                "Each exported level folder is a DetectKit source (it carries its own "
-                "source.json) -- add it from DetectKit's import dialog; it is not "
-                "registered automatically.\n"
-                "Use DetectKit from the HYDRA Suite launcher to review and correct detection datasets.\n"
-                "Use PoseKit from the HYDRA Suite launcher to label pose datasets generated from individual crops."
-            )
-        )
-        guidance = QLabel(
-            "Detection review: open DetectKit from HYDRA Suite\n"
-            "Pose labeling: open PoseKit from HYDRA Suite"
-        )
-        guidance.setWordWrap(True)
-        guidance.setStyleSheet("color: #b8b8b8; font-size: 11px;")
-        vl_downstream.addWidget(guidance)
-
-        form.addWidget(self.g_downstream_tools)
-
         # Initially hide individual dataset widgets (checkbox starts unchecked)
         self.g_individual_dataset.setVisible(False)
         self.g_oriented_videos.setVisible(False)
@@ -651,7 +633,6 @@ class DatasetPanel(QWidget):
         self.lbl_individual_info.setVisible(False)
         self.lbl_oriented_video_info.setVisible(False)
         self.oriented_video_options.setVisible(False)
-        self.ind_advanced.setVisible(False)
         self.oriented_advanced.setVisible(False)
         self._sync_oriented_video_postprocess_controls()
 
