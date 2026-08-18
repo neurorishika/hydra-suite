@@ -627,9 +627,7 @@ class SetupPanel(QWidget):
         self.lbl_runtime_fallback.setStyleSheet("color: gray; font-size: 10px;")
         self.lbl_runtime_fallback.setVisible(False)
 
-        scale_card = self._create_performance_control_card("Scale", self.spin_resize)
-        self._performance_base_control_cards.append(scale_card)
-        self._performance_control_cards.append(scale_card)
+        self._register_optional_performance_control(self.spin_resize, "Scale")
         # Stack the tier combo and the fallback hint in one container so the hint
         # renders inside the "Compute tier" card.
         _tier_container = QWidget()
@@ -681,10 +679,8 @@ class SetupPanel(QWidget):
         perf_toggle_grid.setHorizontalSpacing(12)
         perf_toggle_grid.setVerticalSpacing(6)
         perf_toggle_grid.setContentsMargins(0, 0, 0, 0)
-        perf_toggle_grid.addWidget(self.chk_use_cached_detections, 0, 0)
-        perf_toggle_grid.addWidget(self.chk_realtime_mode, 0, 1)
+        perf_toggle_grid.addWidget(self.chk_realtime_mode, 0, 0)
         perf_toggle_grid.setColumnStretch(0, 1)
-        perf_toggle_grid.setColumnStretch(1, 1)
         self._reflow_performance_controls()
         vl_sys.addLayout(self.performance_control_grid)
         vl_sys.addLayout(perf_toggle_grid)
@@ -699,8 +695,13 @@ class SetupPanel(QWidget):
         self.btn_clear_detection_caches.clicked.connect(
             self._main_window._clear_detection_caches
         )
+        # "Reuse cache" sits beside the button that clears those same caches.
+        self.chk_use_cached_detections.setSizePolicy(
+            QSizePolicy.Maximum, QSizePolicy.Fixed
+        )
         _perf_actions_row = QHBoxLayout()
         _perf_actions_row.setContentsMargins(0, 0, 0, 0)
+        _perf_actions_row.addWidget(self.chk_use_cached_detections)
         _perf_actions_row.addStretch(1)
         _perf_actions_row.addWidget(self.btn_clear_detection_caches)
         vl_sys.addLayout(_perf_actions_row)
@@ -908,31 +909,22 @@ class SetupPanel(QWidget):
         "1.0 = full resolution, 0.5 = half resolution (4× faster).\n"
         "All body-size-based parameters auto-scale with this value."
     )
-    _SCALE_TOOLTIP_INACTIVE = (
-        "Scale applies to background subtraction only.\n"
-        "\n"
-        "YOLO letterboxes every frame to its own input size, so pre-downscaling\n"
-        "would cost detection quality without saving inference time. The engine\n"
-        "clamps Scale to 1.0 for YOLO OBB (see engine_params.build_engine_params)."
-    )
 
     def sync_scale_control_for_detection_method(
         self,
         is_background_subtraction: bool,
     ) -> None:
-        """Enable Scale only for background subtraction, which is the sole honorer.
+        """Show Scale only for background subtraction, which is the sole honorer.
 
         `build_engine_params` clamps RESIZE_FACTOR to 1.0 for every other method,
-        so leaving the spinbox live would let an operator set a value the run
+        so leaving the spinbox visible would let an operator set a value the run
         silently discards.
         """
         enabled = bool(is_background_subtraction)
-        self.spin_resize.setEnabled(enabled)
-        self.spin_resize.setToolTip(
-            self._SCALE_TOOLTIP_ACTIVE if enabled else self._SCALE_TOOLTIP_INACTIVE
-        )
+        self.spin_resize.setToolTip(self._SCALE_TOOLTIP_ACTIVE)
         if not enabled:
             self.spin_resize.setValue(1.0)
+        self._set_performance_control_visible(self.spin_resize, enabled)
 
     def _sync_batch_policy_controls(self, *_args) -> None:
         """Notify dependent panels when realtime or animal-count policy changes."""
