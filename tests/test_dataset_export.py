@@ -3,6 +3,19 @@ import pandas as pd
 from hydra_suite.core.post import dataset_export
 
 
+class _StubScorer:
+    """Minimal FrameQualityScorer stand-in returning a fixed selection."""
+
+    def __init__(self, params, frame_shape=None):
+        pass
+
+    def score_frame(self, frame_id, detection_data=None, tracking_data=None):
+        pass
+
+    def get_worst_frames(self, max_frames, diversity_window=30, probabilistic=True):
+        return [0, 1, 2]
+
+
 def test_generate_dataset_reports_error_on_empty_selection(tmp_path, monkeypatch):
     csv = tmp_path / "track.csv"
     pd.DataFrame({"FrameID": [0, 1], "State": ["active", "active"]}).to_csv(
@@ -71,6 +84,10 @@ def test_generate_dataset_success(tmp_path, monkeypatch):
         diversity_window=30,
         include_context=True,
         probabilistic=False,
+        # No real video backs `in.mp4` here; dedup is exercised separately
+        # below (test_dedup_*). Disable it so this test stays focused on the
+        # selection/export/return-value contract.
+        dedup_method="none",
     )
     assert result == {
         "success": True,
@@ -125,9 +142,106 @@ def test_generate_dataset_cancelled_after_export(tmp_path, monkeypatch):
         include_context=True,
         probabilistic=False,
         should_stop=_should_stop,
+        # No real video backs `in.mp4` here; dedup is exercised separately
+        # below (test_dedup_*). Disable it so this test stays focused on the
+        # cancellation-after-export contract.
+        dedup_method="none",
     )
     assert result["success"] is False
     assert result["cancelled"] is True
     assert result["dir"] == str(tmp_path / "dataset_dir")
     assert result["num_frames"] == 2
     assert result["manifest"] == fake_manifest
+
+
+def test_dedup_runs_over_selected_frames_only(monkeypatch, tmp_path):
+    """pHash over a whole video is prohibitive; only the picks get deduped."""
+    import hydra_suite.core.post.dataset_export as de
+
+    csv = tmp_path / "track.csv"
+    pd.DataFrame({"FrameID": [0, 1, 2], "State": ["active"] * 3}).to_csv(
+        csv, index=False
+    )
+
+    seen = {}
+
+    def fake_pool(source, cfg):
+        seen["n_candidates"] = source.length()
+        seen["method"] = cfg.dedup_method
+        return [ref for ref in source][:1]
+
+    monkeypatch.setattr(de, "build_candidate_pool", fake_pool)
+    monkeypatch.setattr(de, "FrameQualityScorer", _StubScorer)
+
+    fake_manifest = {"round_dir": str(tmp_path / "dataset_dir"), "roots": []}
+    exported = {}
+
+    def _fake_export_dataset(**kwargs):
+        exported["frame_ids"] = kwargs["frame_ids"]
+        return fake_manifest
+
+    monkeypatch.setattr(de, "export_dataset", _fake_export_dataset)
+
+    result = de.generate_active_learning_dataset(
+        video_path=str(tmp_path / "in.mp4"),
+        csv_path=str(csv),
+        detection_cache_path=None,
+        output_dir=str(tmp_path / "out"),
+        dataset_name="",
+        class_name="object",
+        params={},
+        max_frames=5,
+        diversity_window=30,
+        include_context=True,
+        probabilistic=False,
+    )
+
+    assert seen["n_candidates"] == 3
+    assert seen["method"] == "phash"
+    # fake_pool kept only the first candidate -- confirm that survives to export.
+    assert exported["frame_ids"] == [0]
+    assert result["success"] is True
+    assert result["num_frames"] == 1
+
+
+def test_dedup_none_skips_the_pool_entirely(monkeypatch, tmp_path):
+    import hydra_suite.core.post.dataset_export as de
+
+    csv = tmp_path / "track.csv"
+    pd.DataFrame({"FrameID": [0, 1, 2], "State": ["active"] * 3}).to_csv(
+        csv, index=False
+    )
+
+    def boom(*args, **kwargs):
+        raise AssertionError("build_candidate_pool must not run when method='none'")
+
+    monkeypatch.setattr(de, "build_candidate_pool", boom)
+    monkeypatch.setattr(de, "FrameQualityScorer", _StubScorer)
+
+    fake_manifest = {"round_dir": str(tmp_path / "dataset_dir"), "roots": []}
+    exported = {}
+
+    def _fake_export_dataset(**kwargs):
+        exported["frame_ids"] = kwargs["frame_ids"]
+        return fake_manifest
+
+    monkeypatch.setattr(de, "export_dataset", _fake_export_dataset)
+
+    result = de.generate_active_learning_dataset(
+        video_path=str(tmp_path / "in.mp4"),
+        csv_path=str(csv),
+        detection_cache_path=None,
+        output_dir=str(tmp_path / "out"),
+        dataset_name="",
+        class_name="object",
+        params={},
+        max_frames=5,
+        diversity_window=30,
+        include_context=True,
+        probabilistic=False,
+        dedup_method="none",
+    )
+
+    assert result["success"] is True
+    # All 3 selected frames pass through untouched -- no dedup work happened.
+    assert exported["frame_ids"] == [0, 1, 2]
