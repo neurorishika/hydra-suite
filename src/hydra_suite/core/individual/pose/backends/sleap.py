@@ -1012,6 +1012,78 @@ def auto_export_sleap_model(config: PoseRuntimeConfig, runtime_flavor: str) -> s
     return str(export_dir.resolve())
 
 
+def share_crop_to_shm(index: int, crop: np.ndarray):
+    """Publish one crop into a POSIX shared-memory segment for the SLEAP service.
+
+    Returns ``(image_id, payload, handle)``; ``payload``/``handle`` are ``None``
+    when the crop is unusable (bad dtype/shape), so the caller can emit an empty
+    pose result for it.
+
+    The local mapping is released as soon as the pixels are written: a live
+    ``SharedMemory`` holds an open fd *and* an mmap, and a batch keeps one
+    segment per crop, so holding them all mapped exhausted the process fd limit
+    on real batches ("[Errno 24] Too many open files" -- plus the KeyError that
+    CPython's own failed-creation cleanup raises inside resource_tracker,
+    because it unregisters a name it never registered). A POSIX segment outlives
+    every mapping of it until ``unlink()``, so the service can still attach by
+    name; the returned (already-closed) handle is only kept to unlink later.
+    """
+    image_id = f"inmem_crop_{index:06d}"
+    try:
+        arr = np.ascontiguousarray(np.asarray(crop, dtype=np.uint8))
+    except Exception:
+        return image_id, None, None
+    if arr.ndim not in (2, 3) or any(int(v) <= 0 for v in arr.shape):
+        return image_id, None, None
+    shm = shared_memory.SharedMemory(create=True, size=arr.nbytes)
+    try:
+        view = np.ndarray(arr.shape, dtype=arr.dtype, buffer=shm.buf)
+        view[:] = arr
+        # Drop every export of shm.buf before close(): a live memoryview makes
+        # SharedMemory.close() raise BufferError.
+        del view
+        shm.close()
+    except BaseException:
+        try:
+            shm.close()
+        except Exception:
+            pass
+        try:
+            shm.unlink()
+        except Exception:
+            pass
+        raise
+    payload = {
+        "id": image_id,
+        "shape": [int(v) for v in arr.shape],
+        "dtype": "uint8",
+        "shm_name": shm.name,
+        "nbytes": int(arr.nbytes),
+    }
+    return image_id, payload, shm
+
+
+def _unlink_shared_crops(encoded: Sequence[tuple]) -> None:
+    """Destroy every shared-memory segment produced by ``share_crop_to_shm``."""
+    for entry in encoded:
+        shm = entry[2] if len(entry) > 2 else None
+        if shm is None:
+            continue
+        try:
+            shm.close()  # idempotent; the writer already closed its mapping
+        except Exception:
+            pass
+        try:
+            shm.unlink()
+        except FileNotFoundError:
+            pass
+        except Exception:
+            logger.debug(
+                "Failed to unlink temporary SLEAP shared-memory payload.",
+                exc_info=True,
+            )
+
+
 class SleapServiceBackend:
     """SLEAP runtime adapter via PoseInferenceService HTTP service."""
 
@@ -1173,27 +1245,16 @@ class SleapServiceBackend:
         if not crops:
             return []
 
-        def _share_crop(i: int, crop: np.ndarray):
-            image_id = f"inmem_crop_{i:06d}"
-            try:
-                arr = np.ascontiguousarray(np.asarray(crop, dtype=np.uint8))
-            except Exception:
-                return image_id, None, None
-            if arr.ndim not in (2, 3) or any(int(v) <= 0 for v in arr.shape):
-                return image_id, None, None
-            shm = shared_memory.SharedMemory(create=True, size=arr.nbytes)
-            np.ndarray(arr.shape, dtype=arr.dtype, buffer=shm.buf)[:] = arr
-            payload = {
-                "id": image_id,
-                "shape": [int(v) for v in arr.shape],
-                "dtype": "uint8",
-                "shm_name": shm.name,
-                "nbytes": int(arr.nbytes),
-            }
-            return image_id, payload, shm
-
         transport_start = time.perf_counter()
-        encoded = [_share_crop(i, crop) for i, crop in enumerate(crops)]
+        encoded: List[tuple] = []
+        try:
+            for i, crop in enumerate(crops):
+                encoded.append(share_crop_to_shm(i, crop))
+        except BaseException:
+            # A failure part-way through the batch must not strand the segments
+            # already created (they outlive this process until unlinked).
+            _unlink_shared_crops(encoded)
+            raise
         transport_s = time.perf_counter() - transport_start
 
         image_payloads = [payload for _, payload, _ in encoded if payload is not None]
@@ -1229,22 +1290,7 @@ class SleapServiceBackend:
             else:
                 service_call_s = 0.0
         finally:
-            for _, _, shm in encoded:
-                if shm is None:
-                    continue
-                try:
-                    shm.close()
-                except Exception:
-                    pass
-                try:
-                    shm.unlink()
-                except FileNotFoundError:
-                    pass
-                except Exception:
-                    logger.debug(
-                        "Failed to unlink temporary SLEAP shared-memory payload.",
-                        exc_info=True,
-                    )
+            _unlink_shared_crops(encoded)
 
         outputs: List[PoseResult] = []
         postprocess_start = time.perf_counter()
