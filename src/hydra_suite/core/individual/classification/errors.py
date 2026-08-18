@@ -37,3 +37,13 @@ class CalibrationRequiredError(ClassifierConfigError):
     ``IDENTITY_CALIBRATION_OVERRIDE`` param, which downgrades this to a
     logged warning instead of raising.
     """
+
+
+class PoseModelUnresolvedError(ClassifierConfigError):
+    """Pose extraction is enabled but no usable pose model path resolved.
+
+    Raised by ``build_inference_config_from_params`` instead of quietly
+    returning ``pose=None``: a dropped stage is also dropped from the cache-key
+    set, so ``InferenceRunner.caches_all_valid()`` would accept a cache written
+    without pose and the run would skip pose inference entirely.
+    """

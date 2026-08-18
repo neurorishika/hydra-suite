@@ -11,7 +11,10 @@ from hydra_suite.core.canonicalization.geometry import (
     CanonicalGeometry,
     canonical_geometry_from_params,
 )
-from hydra_suite.core.individual.classification.errors import CalibrationRequiredError
+from hydra_suite.core.individual.classification.errors import (
+    CalibrationRequiredError,
+    PoseModelUnresolvedError,
+)
 from hydra_suite.runtime.resolver import RuntimeTier
 
 logger = logging.getLogger(__name__)
@@ -915,7 +918,17 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
     # HeadTail
     headtail_model_path = str(params.get("YOLO_HEADTAIL_MODEL_PATH", "") or "").strip()
     headtail_cfg = None
-    if headtail_model_path and os.path.exists(headtail_model_path):
+    if headtail_model_path and not os.path.exists(headtail_model_path):
+        # engine_params only emits this path when the user enabled head-tail
+        # orientation, so a missing file is a real misconfiguration. Dropping
+        # the stage silently also drops it from the cache-key set, so a cache
+        # written without head-tail would still pass caches_all_valid().
+        logger.error(
+            "Head-tail orientation is configured but its model file is missing: "
+            "%s -- the head-tail stage will NOT run.",
+            headtail_model_path,
+        )
+    elif headtail_model_path:
         headtail_cfg = HeadTailConfig(
             model_path=headtail_model_path,
             confidence_threshold=float(params.get("YOLO_HEADTAIL_CONF_THRESHOLD", 0.5)),
@@ -937,6 +950,12 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
     for cnn_cfg_dict in params.get("CNN_CLASSIFIERS", []):
         cnn_model_path = str(cnn_cfg_dict.get("model_path", "")).strip()
         if not cnn_model_path or not os.path.exists(cnn_model_path):
+            logger.error(
+                "CNN classifier phase %r is configured but its model file is "
+                "missing: %r -- this phase will NOT run.",
+                cnn_cfg_dict.get("label", "cnn_identity"),
+                cnn_model_path,
+            )
             continue
         cnn_label = str(cnn_cfg_dict.get("label", "cnn_identity"))
         cnn_phases.append(
@@ -979,23 +998,34 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
             ignore_keypoints=list(params.get("POSE_IGNORE_KEYPOINTS", []) or []),
             overrides_headtail=bool(params.get("POSE_OVERRIDES_HEADTAIL", True)),
         )
-        sleap_model_path = str(
-            params.get("POSE_SLEAP_MODEL_DIR", params.get("POSE_MODEL_DIR", "")) or ""
-        ).strip()
-        yolo_model_path = str(
-            params.get(
-                "POSE_YOLO_MODEL_DIR",
-                params.get("POSE_MODEL_PATH", params.get("YOLO_POSE_MODEL_PATH", "")),
-            )
-            or ""
-        ).strip()
-        vitpose_model_path = str(
-            params.get(
-                "POSE_VITPOSE_MODEL_PATH",
-                params.get("POSE_MODEL_PATH", params.get("POSE_MODEL_DIR", "")),
-            )
-            or ""
-        ).strip()
+
+        # POSE_MODEL_DIR is the key the shared param-builder actually emits
+        # (trackerkit/engine_params.py); the backend-specific POSE_*_MODEL_DIR
+        # keys only appear on hand-built dicts (preview worker, tests). Every
+        # backend must therefore fall back to POSE_MODEL_DIR -- the yolo branch
+        # did not, so every GUI/CLI YOLO-pose run got pose_cfg=None: the pose
+        # stage vanished from the pipeline AND from the cache-key set, so a
+        # detection-only cache passed caches_all_valid() and a re-run with pose
+        # enabled silently reused it instead of computing pose.
+        # ``_first_path`` also skips keys that are PRESENT but empty, which
+        # dict.get chaining would have accepted as a resolved (empty) path.
+        def _first_path(*keys: str) -> str:
+            for key in keys:
+                value = str(params.get(key, "") or "").strip()
+                if value:
+                    return value
+            return ""
+
+        sleap_model_path = _first_path("POSE_SLEAP_MODEL_DIR", "POSE_MODEL_DIR")
+        yolo_model_path = _first_path(
+            "POSE_YOLO_MODEL_DIR",
+            "POSE_MODEL_PATH",
+            "YOLO_POSE_MODEL_PATH",
+            "POSE_MODEL_DIR",
+        )
+        vitpose_model_path = _first_path(
+            "POSE_VITPOSE_MODEL_PATH", "POSE_MODEL_PATH", "POSE_MODEL_DIR"
+        )
         if pose_model_type == "sleap" and sleap_model_path:
             pose_cfg = PoseConfig(
                 backend="sleap",
@@ -1027,6 +1057,18 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
                     batch_size=int(params.get("POSE_BATCH_SIZE", 64)),
                 ),
                 **common_pose_kwargs,
+            )
+        if pose_cfg is None:
+            # Never fall through silently: a dropped pose stage is invisible to
+            # caches_all_valid(), so the run would not only skip pose but also
+            # reuse a pose-less cache forever (the user sees "tracking started,
+            # pose never ran"). Fail loudly with the paths we actually looked at.
+            raise PoseModelUnresolvedError(
+                "Pose extraction is enabled (ENABLE_POSE_EXTRACTOR) but no usable "
+                f"{pose_model_type or 'pose'} model could be resolved. Checked: "
+                f"sleap={sleap_model_path!r}, yolo={yolo_model_path!r}, "
+                f"vitpose={vitpose_model_path!r}. Select a pose model in the "
+                "Individual Analysis panel, or disable pose extraction."
             )
 
     # AprilTag

@@ -90,3 +90,49 @@ def test_direct_detect_task_fixed_angle_flows():
         }
     ).obb.direct
     assert d.model_task == "detect" and abs(d.fixed_angle_deg - 42.5) < 1e-9
+
+
+def test_yolo_pose_resolves_from_pose_model_dir(tmp_path):
+    """A GUI/CLI params dict carries only POSE_MODEL_DIR (engine_params.py).
+
+    The yolo branch must honour it exactly like the sleap/vitpose branches do;
+    otherwise the pose stage is silently dropped from the pipeline AND from the
+    cache-validity set, so a detection-only cache is judged "all valid" and
+    reused -- pose never runs on a re-run.
+    """
+    model = tmp_path / "pose.pt"
+    model.write_bytes(b"stub")
+    cfg = build_inference_config_from_params(
+        {
+            "YOLO_OBB_MODE": "direct",
+            "YOLO_MODEL_PATH": "m.pt",
+            "ENABLE_POSE_EXTRACTOR": True,
+            "POSE_MODEL_TYPE": "yolo",
+            "POSE_MODEL_DIR": str(model),
+        }
+    )
+    assert cfg.pose is not None
+    assert cfg.pose.backend == "yolo"
+    assert cfg.pose.yolo.model_path == str(model)
+
+
+def test_enabled_pose_with_unresolvable_model_raises(tmp_path):
+    """Pose enabled but no usable model must fail loudly, not silently no-op.
+
+    A silently dropped pose stage also disappears from the cache-key set, so the
+    stale detection-only cache passes ``caches_all_valid()``.
+    """
+    import pytest
+
+    from hydra_suite.core.inference.config import PoseModelUnresolvedError
+
+    with pytest.raises(PoseModelUnresolvedError):
+        build_inference_config_from_params(
+            {
+                "YOLO_OBB_MODE": "direct",
+                "YOLO_MODEL_PATH": "m.pt",
+                "ENABLE_POSE_EXTRACTOR": True,
+                "POSE_MODEL_TYPE": "yolo",
+                "POSE_MODEL_DIR": str(tmp_path / "missing.pt"),
+            }
+        )

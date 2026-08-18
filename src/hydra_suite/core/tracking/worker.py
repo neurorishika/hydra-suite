@@ -994,6 +994,10 @@ class TrackingEngineCore:
                 logger.error(
                     "Failed to build InferenceConfig from params: %s", _cfg_err
                 )
+                # Surface it in the GUI too: a config gap here (e.g. pose
+                # enabled with an unresolvable model) otherwise looks like a
+                # run that just ended with no explanation.
+                self._emit_warning("Inference Configuration Error", str(_cfg_err))
                 cap.release()
                 self._emit_finished(False, [], [])
                 return
