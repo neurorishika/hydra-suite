@@ -1218,6 +1218,9 @@ class SessionOrchestrator:
                 save_enabled
             )
             self._mw._dataset_panel.lbl_individual_info.setVisible(save_enabled)
+            # The crop "Advanced options" collapsible holds the suppression
+            # toggle and info label above, so it follows the same gate.
+            self._mw._dataset_panel.ind_advanced.setVisible(save_enabled)
             self._mw._dataset_panel.lbl_oriented_video_info.setVisible(pipeline_enabled)
             has_headtail = bool(
                 str(
