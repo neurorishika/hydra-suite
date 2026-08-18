@@ -2517,11 +2517,13 @@ class DetectionPanel(QWidget):
     def _notify_matched_geometry(self) -> None:
         """Show a dismissible "Matched trained SAHI geometry" banner.
 
-        Reuses TrackerKit's existing status-bar notification mechanism (see
-        MainWindow._auto_apply_yolo_training_params, which already surfaces
-        auto-applied model metadata via `self.statusBar().showMessage(...)`).
+        Only for a user-driven model selection: during a config/preset restore
+        the match is silent (logged), since the user did not just act.
         """
         main_window = self._main_window
+        logger.info("Matched trained SAHI geometry from model sidecar")
+        if getattr(main_window, "_restoring_config", False):
+            return
         if hasattr(main_window, "statusBar"):
             try:
                 main_window.statusBar().showMessage(

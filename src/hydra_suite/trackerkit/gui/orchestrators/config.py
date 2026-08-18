@@ -218,6 +218,10 @@ class ConfigOrchestrator:
         """
         if not os.path.isfile(config_path):
             return
+        # Programmatic restore: model-selection signals must not be mistaken
+        # for user intent (selecting a sequential model normally flips the OBB
+        # mode to Sequential — during a restore the saved mode is authoritative).
+        self._mw._restoring_config = True
         try:
             with open(config_path, "r") as f:
                 cfg = json.load(f)
@@ -243,6 +247,8 @@ class ConfigOrchestrator:
             self._load_config_individual_analysis(cfg, get_cfg)
         except Exception as e:
             logger.warning(f"Failed to load configuration: {e}")
+        finally:
+            self._mw._restoring_config = False
 
         # Derived UI refresh, after every panel has been populated and under
         # its own guard: a failure here must not cost the caller any config

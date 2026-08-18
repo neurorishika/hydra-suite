@@ -16,6 +16,7 @@ from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QFrame,
@@ -104,6 +105,9 @@ class MainWindow(QMainWindow):
         """Initialize the main application window and UI components."""
         super().__init__()
         self.config = TrackerConfig()
+        #: True while a config/preset is being restored into the widgets, so
+        #: programmatic selection signals are not treated as user intent.
+        self._restoring_config = False
         self.setWindowTitle("HYDRA")
         self.resize(1360, 850)
 
@@ -842,6 +846,7 @@ class MainWindow(QMainWindow):
         btn_layout = QHBoxLayout()
 
         self.btn_preview = QPushButton("Preview Mode")
+        self.btn_preview.setObjectName("ActionBtn")
         self.btn_preview.setCheckable(True)
         self.btn_preview.clicked.connect(lambda ch: self.toggle_preview(ch))
         self.btn_preview.setMinimumHeight(34)
@@ -852,19 +857,18 @@ class MainWindow(QMainWindow):
         self.btn_start.clicked.connect(lambda ch: self.toggle_tracking(ch))
         self.btn_start.setMinimumHeight(34)
 
-        self.btn_debug_mode = QPushButton("Debug Mode")
-        self.btn_debug_mode.setCheckable(True)
+        self.btn_debug_mode = QCheckBox("Debug Mode")
         self.btn_debug_mode.setChecked(self.config.debug_mode)
         self.btn_debug_mode.setToolTip(
             "Debug Mode: retain all intermediate files, diagnostic columns, "
             "profiling, and overlays. Off = clean single trajectory CSV."
         )
-        self.btn_debug_mode.setMinimumHeight(34)
-        self.btn_debug_mode.clicked.connect(self._on_debug_mode_toggled)
+        self.btn_debug_mode.toggled.connect(self._on_debug_mode_toggled)
 
-        btn_layout.addWidget(self.btn_preview)
         btn_layout.addWidget(self.btn_debug_mode)
-        btn_layout.addWidget(self.btn_start)
+        btn_layout.addSpacing(8)
+        btn_layout.addWidget(self.btn_preview, 1)
+        btn_layout.addWidget(self.btn_start, 1)
 
         action_layout.addLayout(prog_layout)
         action_layout.addLayout(stats_layout)
@@ -2275,15 +2279,19 @@ class MainWindow(QMainWindow):
                     "Failed to apply slice_meta sidecar for %s", model_path
                 )
 
-        try:
-            if role in ("seq_detect", "seq_crop_obb"):
-                if panel.combo_yolo_obb_mode.currentIndex() != 1:
-                    panel.combo_yolo_obb_mode.setCurrentIndex(1)
-            elif role == "obb_direct":
-                if panel.combo_yolo_obb_mode.currentIndex() != 0:
-                    panel.combo_yolo_obb_mode.setCurrentIndex(0)
-        except Exception:
-            pass
+        # Only a user-driven model selection implies a mode choice. During a
+        # config/preset restore the saved ``yolo_obb_mode`` is authoritative —
+        # populating the sequential combos must not flip a saved Direct config.
+        if not getattr(self, "_restoring_config", False):
+            try:
+                if role in ("seq_detect", "seq_crop_obb"):
+                    if panel.combo_yolo_obb_mode.currentIndex() != 1:
+                        panel.combo_yolo_obb_mode.setCurrentIndex(1)
+                elif role == "obb_direct":
+                    if panel.combo_yolo_obb_mode.currentIndex() != 0:
+                        panel.combo_yolo_obb_mode.setCurrentIndex(0)
+            except Exception:
+                pass
 
         meta = get_yolo_model_metadata(model_path) or {}
         tp = meta.get("training_params")
@@ -2333,19 +2341,13 @@ class MainWindow(QMainWindow):
                 applied.append(f"trained_imgsz={int(tp['imgsz'])}")
 
         if applied:
+            # Log only — auto-applied defaults are visible in the widgets
+            # themselves, so they do not warrant a status-bar interruption.
             logger.info(
                 "Auto-configured %s params from model metadata: %s",
                 role,
                 ", ".join(applied),
             )
-            if hasattr(self, "statusBar"):
-                try:
-                    self.statusBar().showMessage(
-                        f"Applied {role} model defaults: {', '.join(applied)}",
-                        4000,
-                    )
-                except Exception:
-                    pass
 
     def on_yolo_headtail_model_changed(self: object, index: object) -> object:
         """Handle head/tail classification model combo-box changes.
