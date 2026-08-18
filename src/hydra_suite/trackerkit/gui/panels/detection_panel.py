@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
-from PySide6.QtCore import Qt, Signal, Slot
+from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFormLayout,
     QFrame,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -34,11 +35,60 @@ from PySide6.QtWidgets import (
 from hydra_suite.trackerkit.config.schemas import TrackerConfig
 from hydra_suite.utils.batch_policy import is_realtime_workflow
 from hydra_suite.utils.gpu_utils import MPS_AVAILABLE, TORCH_CUDA_AVAILABLE
+from hydra_suite.widgets.workers import BaseWorker
 
 if TYPE_CHECKING:
     from hydra_suite.trackerkit.gui.main_window import MainWindow
 
 logger = logging.getLogger(__name__)
+
+#: Direct-model checkpoint tasks -> combo indices (combo_yolo_direct_task is the
+#: hidden serialized state holder; the visible label is auto-inferred).
+_DIRECT_TASK_INDEX = {"obb": 0, "detect": 1, "segment": 2}
+_DIRECT_TASK_LABELS = {
+    "obb": "OBB (native)",
+    "detect": "Detect (fixed angle)",
+    "segment": "Segment (rotated mask)",
+}
+
+
+#: In-flight task-inference workers. Holds a strong reference until each worker
+#: finishes, so closing the window mid-inference can never destroy a running
+#: QThread (abort). Entries are removed by the worker's own `finished` handler.
+_INFLIGHT_TASK_WORKERS: set = set()
+
+
+class _DirectTaskInferenceWorker(BaseWorker):
+    """Background checkpoint-properties reader.
+
+    Loading an ultralytics checkpoint takes seconds on large OBB models, so the
+    task/imgsz are read off the GUI thread. Emits ``props_inferred`` with
+    ``(task, imgsz)`` — task is 'obb'|'detect'|'segment'|'pose'|'classify'|''
+    and imgsz is the trained input size (0 when unknown) — and lets the panel
+    decide whether the result is still current.
+    """
+
+    props_inferred: Signal = Signal(str, int)
+
+    def __init__(self, model_path: str) -> None:
+        super().__init__()
+        self._model_path = str(model_path or "")
+        _INFLIGHT_TASK_WORKERS.add(self)
+        self.finished.connect(self._release_inflight_ref)
+
+    def _release_inflight_ref(self) -> None:
+        _INFLIGHT_TASK_WORKERS.discard(self)
+
+    def execute(self) -> None:
+        from hydra_suite.core.inference.model_paths import (
+            infer_checkpoint_imgsz,
+            infer_checkpoint_task,
+        )
+
+        self.props_inferred.emit(
+            infer_checkpoint_task(self._model_path),
+            infer_checkpoint_imgsz(self._model_path),
+        )
 
 
 class DetectionPanel(QWidget):
@@ -55,6 +105,10 @@ class DetectionPanel(QWidget):
         super().__init__(parent)
         self._main_window = main_window
         self._config = config
+        self._task_worker: BaseWorker | None = None
+        self._seq_crop_worker: BaseWorker | None = None
+        self._task_kick_scheduled = False
+        self._seq_crop_kick_scheduled = False
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._build_ui()
@@ -554,17 +608,38 @@ class DetectionPanel(QWidget):
 
         self.yolo_group = QGroupBox("YOLO")
         self._main_window._set_compact_section_widget(self.yolo_group)
-        f_yolo = QFormLayout(self.yolo_group)
-        f_yolo.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
-        f_yolo.setHorizontalSpacing(10)
-        f_yolo.setVerticalSpacing(8)
-        self.yolo_group.layout().setContentsMargins(9, 10, 9, 9)
-        self.yolo_group.layout().setSpacing(8)
-        self.yolo_group.layout().addWidget(
+        f_yolo = QGridLayout(self.yolo_group)
+        f_yolo.setContentsMargins(9, 10, 9, 9)
+        f_yolo.setHorizontalSpacing(14)
+        f_yolo.setVerticalSpacing(6)
+        f_yolo.setColumnStretch(0, 1)
+        f_yolo.setColumnStretch(1, 1)
+        f_yolo.addWidget(
             self._main_window._create_help_label(
                 "YOLO uses a trained neural network to detect animals. Choose your model file and adjust thresholds to balance recall and false positives."
-            )
+            ),
+            0,
+            0,
+            1,
+            2,
         )
+
+        def _yolo_label(text: str, tooltip: str = "") -> QLabel:
+            lbl = QLabel(text)
+            if tooltip:
+                lbl.setToolTip(tooltip)
+            return lbl
+
+        def _labeled_row(
+            label_text: str, field: QWidget, *, tooltip: str = ""
+        ) -> QWidget:
+            row = QWidget()
+            lay = QHBoxLayout(row)
+            lay.setContentsMargins(0, 0, 0, 0)
+            lay.setSpacing(6)
+            lay.addWidget(_yolo_label(label_text, tooltip))
+            lay.addWidget(field, 1)
+            return row
 
         self.combo_yolo_obb_mode = QComboBox()
         self.combo_yolo_obb_mode.addItems(["Direct", "Sequential (Faster)"])
@@ -574,7 +649,15 @@ class DetectionPanel(QWidget):
             "Direct: run OBB on full frame.\n"
             "Sequential: run detect model first, crop detections, then run OBB on crops."
         )
-        f_yolo.addRow("YOLO OBB mode", self.combo_yolo_obb_mode)
+        self.row_mode = _labeled_row(
+            "YOLO OBB mode",
+            self.combo_yolo_obb_mode,
+            tooltip=(
+                "Direct: run OBB on full frame.\n"
+                "Sequential: run detect model first, crop detections, then run OBB on crops."
+            ),
+        )
+        f_yolo.addWidget(self.row_mode, 1, 0, 1, 2)
 
         self.lbl_obb_mode_warning = QLabel()
         self.lbl_obb_mode_warning.setWordWrap(True)
@@ -582,23 +665,52 @@ class DetectionPanel(QWidget):
             "color: #f0ad4e; font-style: italic; padding: 2px 0px;"
         )
         self.lbl_obb_mode_warning.setVisible(False)
-        f_yolo.addRow("", self.lbl_obb_mode_warning)
+        f_yolo.addWidget(self.lbl_obb_mode_warning, 2, 0, 1, 2)
 
+        # ------------------------------------------------------------------
+        # Direct model selector + inferred task (left column of the grid).
+        # ------------------------------------------------------------------
+        self.combo_yolo_model = QComboBox()
+        self.combo_yolo_model.activated.connect(self.on_yolo_model_changed)
+        self.combo_yolo_model.currentIndexChanged.connect(
+            lambda _index: (
+                self._sync_model_selector_buttons(),
+                self._main_window._auto_apply_yolo_training_params("obb_direct"),
+                self._kick_direct_task_inference(),
+            )
+        )
+        self.combo_yolo_model.setFixedHeight(30)
+        self.combo_yolo_model.setToolTip(
+            "Direct detection model (native OBB, plain detect, or segmentation checkpoint)."
+        )
+        self.btn_remove_yolo_model = self._create_model_remove_button(
+            "Remove the selected direct model from the local repository."
+        )
+        self.btn_remove_yolo_model.clicked.connect(
+            lambda: self._main_window._handle_remove_selected_yolo_model(
+                combo=self.combo_yolo_model,
+                refresh_callback=self._refresh_yolo_model_combo,
+                selection_callback=self._main_window._set_yolo_model_selection,
+                model_kind="direct model",
+            )
+        )
+        self.direct_model_row_widget = self._build_model_selector_row(
+            self.combo_yolo_model,
+            self.btn_remove_yolo_model,
+        )
+
+        # Inferred direct-model task. The combo below is kept ONLY as the
+        # serialized state holder (config save/load, dataset-panel export
+        # levels) and is driven automatically from the checkpoint; users never
+        # see or edit it. The read-only label is the visible affordance.
         self.combo_yolo_direct_task = QComboBox()
         self.combo_yolo_direct_task.addItems(
             ["OBB (native)", "Detect (fixed angle)", "Segment (rotated mask)"]
         )
-        self.combo_yolo_direct_task.setFixedHeight(30)
+        self.combo_yolo_direct_task.setVisible(False)
         self.combo_yolo_direct_task.currentIndexChanged.connect(
             self._on_yolo_direct_task_changed
         )
-        self.combo_yolo_direct_task.setToolTip(
-            "Direct-mode model source: a native OBB checkpoint, a plain "
-            "detect checkpoint (fixed angle applied to every detection), or "
-            "a segmentation checkpoint (angle derived from a GPU-native "
-            "rotated-rectangle search over the predicted mask)."
-        )
-        f_yolo.addRow("Direct model task", self.combo_yolo_direct_task)
 
         self.spin_yolo_fixed_angle = QDoubleSpinBox()
         self.spin_yolo_fixed_angle.setRange(-180.0, 180.0)
@@ -606,17 +718,47 @@ class DetectionPanel(QWidget):
         self.spin_yolo_fixed_angle.setSuffix(" deg")
         self.spin_yolo_fixed_angle.setFixedHeight(30)
         self.spin_yolo_fixed_angle.setToolTip(
-            "Fixed OBB angle applied to every detection when Direct model "
-            "task is 'Detect (fixed angle)'."
+            "Fixed OBB angle applied to every detection when the direct model "
+            "is a plain 'Detect (fixed angle)' checkpoint."
         )
-        f_yolo.addRow("Fixed angle", self.spin_yolo_fixed_angle)
+        self.lbl_yolo_fixed_angle = _yolo_label(
+            "Fixed angle",
+            "Fixed OBB angle applied to every detection when the direct model "
+            "is a plain 'Detect (fixed angle)' checkpoint.",
+        )
+        self.lbl_direct_task_inferred = QLabel()
+        self.lbl_direct_task_inferred.setToolTip(
+            "Inferred automatically from the selected checkpoint. "
+            "Native OBB checkpoints detect rotated boxes directly; plain detect "
+            "checkpoints get a fixed angle; segmentation checkpoints derive the "
+            "angle from the predicted mask."
+        )
+        # Full-width row: the model selector with its auto-inferred task inline
+        # ("Direct Model", since the checkpoint may be OBB, plain detect, or
+        # segmentation — not necessarily OBB).
+        self.row_direct_model = QWidget()
+        _row_direct_lay = QHBoxLayout(self.row_direct_model)
+        _row_direct_lay.setContentsMargins(0, 0, 0, 0)
+        _row_direct_lay.setSpacing(6)
+        _row_direct_lay.addWidget(_yolo_label("Direct Model"))
+        _row_direct_lay.addWidget(self.direct_model_row_widget, 1)
+        _row_direct_lay.addWidget(_yolo_label("Task"))
+        _row_direct_lay.addWidget(self.lbl_direct_task_inferred)
+        _row_direct_lay.addWidget(self.lbl_yolo_fixed_angle)
+        _row_direct_lay.addWidget(self.spin_yolo_fixed_angle)
+        f_yolo.addWidget(self.row_direct_model, 3, 0, 1, 2)
 
+        # ------------------------------------------------------------------
+        # Sliced inference (SAHI) — right column, shown only in direct mode.
+        # ------------------------------------------------------------------
         self.chk_slice_enabled = QCheckBox("Enable sliced inference (SAHI)")
         self.chk_slice_enabled.setToolTip(
             "Tile each frame and detect per tile to recover small-object recall "
             "and reduce crowding. Off by default; direct mode only."
         )
-        f_yolo.addRow("Sliced inference", self.chk_slice_enabled)
+        self.chk_slice_enabled.toggled.connect(self._on_slice_toggled)
+        self.row_slice_toggle = _labeled_row("Sliced inference", self.chk_slice_enabled)
+        f_yolo.addWidget(self.row_slice_toggle, 8, 0)
 
         self.combo_slice_geometry = QComboBox()
         self.combo_slice_geometry.addItems(["auto_model", "auto_object", "custom"])
@@ -624,37 +766,90 @@ class DetectionPanel(QWidget):
         self.combo_slice_geometry.setToolTip(
             "auto_model: tile = model input size (fastest, no resample). "
             "auto_object: size tiles from expected object size. "
-            "custom: explicit tile size (advanced config)."
+            "custom: explicit tile size."
         )
-        f_yolo.addRow("Slice geometry", self.combo_slice_geometry)
+        self.combo_slice_geometry.currentIndexChanged.connect(
+            self._on_slice_geometry_changed
+        )
+        self.row_slice_geometry = _labeled_row(
+            "Slice geometry", self.combo_slice_geometry
+        )
+        f_yolo.addWidget(self.row_slice_geometry, 8, 1)
 
-        self.combo_yolo_model = QComboBox()
-        self.combo_yolo_model.activated.connect(self.on_yolo_model_changed)
-        self.combo_yolo_model.currentIndexChanged.connect(
-            lambda _index: (
-                self._sync_model_selector_buttons(),
-                self._main_window._auto_apply_yolo_training_params("obb_direct"),
-            )
+        # SAHI parameters. `custom` needs an explicit tile size, `auto_object`
+        # a target object fraction; tile overlap applies to every mode. These
+        # bind straight to the advanced_config keys engine_params.py reads
+        # (SLICE_OVERLAP / SLICE_HEIGHT / SLICE_WIDTH / SLICE_OBJECT_TILE_FRACTION).
+        advanced = self._main_window.advanced_config
+        self.spin_slice_overlap = QDoubleSpinBox()
+        self.spin_slice_overlap.setRange(0.0, 0.9)
+        self.spin_slice_overlap.setSingleStep(0.05)
+        self.spin_slice_overlap.setValue(float(advanced.get("slice_overlap", 0.2)))
+        self.spin_slice_overlap.setToolTip(
+            "Fraction of each tile that overlaps its neighbours (0.0–0.9). "
+            "Higher overlap reduces missed detections on tile seams but repeats "
+            "inference on more area."
         )
-        self.combo_yolo_model.setFixedHeight(30)
-        self.combo_yolo_model.setToolTip("Direct-mode YOLO OBB model.")
-        self.btn_remove_yolo_model = self._create_model_remove_button(
-            "Remove the selected direct OBB model from the local repository."
+        self.spin_slice_tile_w = QSpinBox()
+        self.spin_slice_tile_w.setRange(0, 8192)
+        self.spin_slice_tile_w.setValue(int(advanced.get("slice_width", 0)))
+        self.spin_slice_tile_w.setToolTip(
+            "Custom tile width in original-frame pixels (0 = model input size)."
         )
-        self.btn_remove_yolo_model.clicked.connect(
-            lambda: self._main_window._handle_remove_selected_yolo_model(
-                combo=self.combo_yolo_model,
-                refresh_callback=self._refresh_yolo_model_combo,
-                selection_callback=self._main_window._set_yolo_model_selection,
-                model_kind="direct OBB model",
-            )
+        self.spin_slice_tile_h = QSpinBox()
+        self.spin_slice_tile_h.setRange(0, 8192)
+        self.spin_slice_tile_h.setValue(int(advanced.get("slice_height", 0)))
+        self.spin_slice_tile_h.setToolTip(
+            "Custom tile height in original-frame pixels (0 = model input size)."
         )
-        self.direct_model_row_widget = self._build_model_selector_row(
-            self.combo_yolo_model,
-            self.btn_remove_yolo_model,
+        self.spin_slice_object_fraction = QDoubleSpinBox()
+        self.spin_slice_object_fraction.setRange(0.01, 0.9)
+        self.spin_slice_object_fraction.setSingleStep(0.01)
+        self.spin_slice_object_fraction.setValue(
+            float(advanced.get("slice_object_tile_fraction", 0.15))
         )
-        f_yolo.addRow("Direct OBB model", self.direct_model_row_widget)
+        self.spin_slice_object_fraction.setToolTip(
+            "Tile size for auto_object: the reference object spans this "
+            "fraction of the tile."
+        )
+        self.lbl_slice_overlap = _yolo_label("Tile overlap")
+        self.lbl_slice_tile_w = _yolo_label("Tile W (px)")
+        self.lbl_slice_tile_h = _yolo_label("Tile H (px)")
+        self.lbl_slice_object_fraction = _yolo_label("Object tile fraction")
+        self.row_slice_params = QWidget()
+        _slice_params_lay = QHBoxLayout(self.row_slice_params)
+        _slice_params_lay.setContentsMargins(0, 0, 0, 0)
+        _slice_params_lay.setSpacing(6)
+        _slice_params_lay.addWidget(self.lbl_slice_overlap)
+        _slice_params_lay.addWidget(self.spin_slice_overlap)
+        _slice_params_lay.addSpacing(10)
+        _slice_params_lay.addWidget(self.lbl_slice_tile_w)
+        _slice_params_lay.addWidget(self.spin_slice_tile_w)
+        _slice_params_lay.addWidget(self.lbl_slice_tile_h)
+        _slice_params_lay.addWidget(self.spin_slice_tile_h)
+        _slice_params_lay.addWidget(self.lbl_slice_object_fraction)
+        _slice_params_lay.addWidget(self.spin_slice_object_fraction)
+        _slice_params_lay.addStretch(1)
+        f_yolo.addWidget(self.row_slice_params, 9, 0, 1, 2)
 
+        for key, spin in (
+            ("slice_overlap", self.spin_slice_overlap),
+            ("slice_width", self.spin_slice_tile_w),
+            ("slice_height", self.spin_slice_tile_h),
+            ("slice_object_tile_fraction", self.spin_slice_object_fraction),
+        ):
+
+            def _sync_advanced(value, _key=key, _spin=spin):
+                self._main_window.advanced_config[_key] = (
+                    int(value) if isinstance(_spin, QSpinBox) else float(value)
+                )
+
+            spin.valueChanged.connect(_sync_advanced)
+
+        # ------------------------------------------------------------------
+        # Sequential model selectors (right column in direct mode swaps to the
+        # seq selectors when the mode is Sequential).
+        # ------------------------------------------------------------------
         self.combo_yolo_detect_model = QComboBox()
         self.combo_yolo_detect_model.activated.connect(
             self.on_yolo_detect_model_changed
@@ -663,6 +858,7 @@ class DetectionPanel(QWidget):
             lambda _index: (
                 self._sync_model_selector_buttons(),
                 self._main_window._auto_apply_yolo_training_params("seq_detect"),
+                self._sync_seq_advanced_derived_state(),
             )
         )
         self.combo_yolo_detect_model.setFixedHeight(30)
@@ -684,7 +880,10 @@ class DetectionPanel(QWidget):
             self.combo_yolo_detect_model,
             self.btn_remove_yolo_detect_model,
         )
-        f_yolo.addRow("Seq detect model", self.seq_detect_model_row_widget)
+        self.row_seq_detect = _labeled_row(
+            "Seq detect model", self.seq_detect_model_row_widget
+        )
+        f_yolo.addWidget(self.row_seq_detect, 4, 0)
 
         self.combo_yolo_crop_obb_model = QComboBox()
         self.combo_yolo_crop_obb_model.activated.connect(
@@ -694,6 +893,8 @@ class DetectionPanel(QWidget):
             lambda _index: (
                 self._sync_model_selector_buttons(),
                 self._main_window._auto_apply_yolo_training_params("seq_crop_obb"),
+                self._kick_seq_crop_model_props(),
+                self._sync_seq_advanced_derived_state(),
             )
         )
         self.combo_yolo_crop_obb_model.setFixedHeight(30)
@@ -715,27 +916,53 @@ class DetectionPanel(QWidget):
             self.combo_yolo_crop_obb_model,
             self.btn_remove_yolo_crop_obb_model,
         )
-        f_yolo.addRow("Seq crop OBB model", self.seq_crop_obb_model_row_widget)
+        self.row_seq_crop = _labeled_row(
+            "Seq crop OBB model", self.seq_crop_obb_model_row_widget
+        )
+        f_yolo.addWidget(self.row_seq_crop, 4, 1)
 
         self.yolo_seq_advanced = CollapsibleGroupBox(
             "Sequential Advanced Settings", initially_expanded=False
         )
         self.yolo_seq_advanced_content = QWidget()
-        f_seq_adv = QFormLayout(self.yolo_seq_advanced_content)
+        # Compact 2-column grid: label|field | label|field per row.
+        f_seq_adv = QGridLayout(self.yolo_seq_advanced_content)
+        f_seq_adv.setHorizontalSpacing(12)
+        f_seq_adv.setVerticalSpacing(6)
+        f_seq_adv.setColumnStretch(1, 1)
+        f_seq_adv.setColumnStretch(3, 1)
+
         self.spin_yolo_seq_crop_pad = QDoubleSpinBox()
         self.spin_yolo_seq_crop_pad.setRange(0.0, 1.0)
         self.spin_yolo_seq_crop_pad.setSingleStep(0.01)
         self.spin_yolo_seq_crop_pad.setValue(0.15)
         self.spin_yolo_seq_crop_pad.setFixedHeight(30)
-        f_seq_adv.addRow("Crop pad ratio", self.spin_yolo_seq_crop_pad)
+        self.spin_yolo_seq_crop_pad.setToolTip(
+            "Padding added around each stage-1 detection before cropping. "
+            "Auto-set from the sequential models' training when available."
+        )
+        f_seq_adv.addWidget(_yolo_label("Crop pad ratio"), 0, 0)
+        f_seq_adv.addWidget(self.spin_yolo_seq_crop_pad, 0, 1)
+
         self.spin_yolo_seq_min_crop_px = QSpinBox()
         self.spin_yolo_seq_min_crop_px.setRange(8, 1024)
         self.spin_yolo_seq_min_crop_px.setValue(64)
         self.spin_yolo_seq_min_crop_px.setFixedHeight(30)
-        f_seq_adv.addRow("Min crop size (px)", self.spin_yolo_seq_min_crop_px)
+        self.spin_yolo_seq_min_crop_px.setToolTip(
+            "Smallest crop (px) sent to stage-2. "
+            "Auto-set from the sequential models' training when available."
+        )
+        f_seq_adv.addWidget(_yolo_label("Min crop size (px)"), 0, 2)
+        f_seq_adv.addWidget(self.spin_yolo_seq_min_crop_px, 0, 3)
+
         self.chk_yolo_seq_square_crop = QCheckBox("Enforce square crop")
         self.chk_yolo_seq_square_crop.setChecked(True)
-        f_seq_adv.addRow("", self.chk_yolo_seq_square_crop)
+        self.chk_yolo_seq_square_crop.setToolTip(
+            "Force square stage-2 crops. "
+            "Auto-set from the sequential models' training when available."
+        )
+        f_seq_adv.addWidget(self.chk_yolo_seq_square_crop, 1, 0, 1, 2)
+
         self.spin_yolo_seq_detect_conf = QDoubleSpinBox()
         self.spin_yolo_seq_detect_conf.setRange(0.01, 1.0)
         self.spin_yolo_seq_detect_conf.setSingleStep(0.01)
@@ -743,19 +970,25 @@ class DetectionPanel(QWidget):
         self.spin_yolo_seq_detect_conf.setFixedHeight(30)
         self.spin_yolo_seq_detect_conf.setToolTip(
             "Minimum confidence for the stage-1 detection model (sequential mode only).\n"
+            "A runtime choice — no model metadata records it.\n"
             "Lower = more crops sent to stage-2 (higher recall, slower).\n"
             "Higher = fewer crops (faster, may miss occluded animals).\n"
             "Recommended: 0.1–0.3"
         )
-        f_seq_adv.addRow("Stage-1 detect conf", self.spin_yolo_seq_detect_conf)
+        f_seq_adv.addWidget(_yolo_label("Stage-1 detect conf"), 1, 2)
+        f_seq_adv.addWidget(self.spin_yolo_seq_detect_conf, 1, 3)
+
         self.spin_yolo_seq_stage2_imgsz = QSpinBox()
         self.spin_yolo_seq_stage2_imgsz.setRange(0, 2048)
         self.spin_yolo_seq_stage2_imgsz.setValue(160)
         self.spin_yolo_seq_stage2_imgsz.setFixedHeight(30)
         self.spin_yolo_seq_stage2_imgsz.setToolTip(
-            "Crop OBB stage input size in pixels. Set 0 to disable pre-resize."
+            "Crop OBB stage input size in pixels (0 = disable pre-resize). "
+            "Auto-set from the crop model's training / checkpoint when available."
         )
-        f_seq_adv.addRow("Stage-2 imgsz (px)", self.spin_yolo_seq_stage2_imgsz)
+        f_seq_adv.addWidget(_yolo_label("Stage-2 imgsz (px)"), 2, 0)
+        f_seq_adv.addWidget(self.spin_yolo_seq_stage2_imgsz, 2, 1)
+
         self.spin_yolo_seq_individual_batch_size = QSpinBox()
         self.spin_yolo_seq_individual_batch_size.setRange(1, 1024)
         self.spin_yolo_seq_individual_batch_size.setValue(
@@ -768,21 +1001,28 @@ class DetectionPanel(QWidget):
         self.spin_yolo_seq_individual_batch_size.setFixedHeight(30)
         self.spin_yolo_seq_individual_batch_size.setToolTip(
             "Maximum number of sequential crops to send to stage-2 OBB at once.\n"
+            "A runtime/GPU choice — no model metadata records it.\n"
             "Non-realtime mode first batches frames, then groups crops across those frames using this size.\n"
             "Realtime mode still fixes frame batching to 1, but stage-2 crop batching uses this value."
         )
-        f_seq_adv.addRow("Stage-2 crop batch", self.spin_yolo_seq_individual_batch_size)
+        f_seq_adv.addWidget(_yolo_label("Stage-2 crop batch"), 2, 2)
+        f_seq_adv.addWidget(self.spin_yolo_seq_individual_batch_size, 2, 3)
+
         self.chk_yolo_seq_stage2_pow2_pad = QCheckBox(
             "Pad stage-2 batch to power-of-two"
         )
         self.chk_yolo_seq_stage2_pow2_pad.setChecked(False)
         self.chk_yolo_seq_stage2_pow2_pad.setToolTip(
+            "Runtime choice — no model metadata records it. "
             "Reduces dynamic batch-size variants in sequential stage-2 inference."
         )
-        f_seq_adv.addRow("", self.chk_yolo_seq_stage2_pow2_pad)
+        f_seq_adv.addWidget(self.chk_yolo_seq_stage2_pow2_pad, 3, 0, 1, 2)
         self.yolo_seq_advanced.setContentLayout(f_seq_adv)
-        f_yolo.addRow(self.yolo_seq_advanced)
+        f_yolo.addWidget(self.yolo_seq_advanced, 5, 0, 1, 2)
 
+        # ------------------------------------------------------------------
+        # Thresholds + classes — shared by both modes.
+        # ------------------------------------------------------------------
         self.spin_yolo_confidence = QDoubleSpinBox()
         self.spin_yolo_confidence.setRange(0.01, 1.0)
         self.spin_yolo_confidence.setValue(0.25)
@@ -803,13 +1043,15 @@ class DetectionPanel(QWidget):
             "Higher = keep more overlapping detections.\n"
             "Recommended: 0.5-0.8"
         )
-        _yolo_thresh_row = QHBoxLayout()
+        self.row_thresholds = QWidget()
+        _yolo_thresh_row = QHBoxLayout(self.row_thresholds)
+        _yolo_thresh_row.setContentsMargins(0, 0, 0, 0)
         _yolo_thresh_row.addWidget(QLabel("Confidence:"))
         _yolo_thresh_row.addWidget(self.spin_yolo_confidence, 1)
-        _yolo_thresh_row.addSpacing(8)
+        _yolo_thresh_row.addSpacing(12)
         _yolo_thresh_row.addWidget(QLabel("IOU:"))
         _yolo_thresh_row.addWidget(self.spin_yolo_iou, 1)
-        f_yolo.addRow(_yolo_thresh_row)
+        f_yolo.addWidget(self.row_thresholds, 6, 0, 1, 2)
 
         self.chk_use_custom_obb_iou = QCheckBox("Use custom OBB overlap filtering")
         self.chk_use_custom_obb_iou.setChecked(True)
@@ -828,7 +1070,9 @@ class DetectionPanel(QWidget):
             "Example: '0,1,2' to detect only classes 0, 1, and 2.\n"
             "Refer to your model's class definitions."
         )
-        f_yolo.addRow("Classes (optional)", self.line_yolo_classes)
+        self.row_classes = _labeled_row("Classes (optional)", self.line_yolo_classes)
+        f_yolo.addWidget(self.row_classes, 7, 0, 1, 2)
+
         self._on_yolo_mode_changed(self.combo_yolo_obb_mode.currentIndex())
         self._on_yolo_direct_task_changed(self.combo_yolo_direct_task.currentIndex())
 
@@ -1791,6 +2035,11 @@ class DetectionPanel(QWidget):
             usage_role="obb_direct",
         )
         self._sync_model_selector_buttons()
+        # The initial selection is made silently while signals are blocked
+        # (QComboBox auto-selects the first item on addItem), so the
+        # currentIndexChanged hook never fires for it — kick the checkpoint
+        # task inference explicitly here to cover init / config-load / import.
+        self._kick_direct_task_inference()
 
     def _refresh_yolo_detect_model_combo(self, preferred_model_path: object = None):
         self._main_window._populate_yolo_model_combo(
@@ -1802,6 +2051,11 @@ class DetectionPanel(QWidget):
             usage_role="seq_detect",
         )
         self._sync_model_selector_buttons()
+        # Same silent-first-selection note as _refresh_yolo_model_combo: the
+        # currentIndexChanged hook misses the initial pick, so apply the model's
+        # training defaults explicitly here.
+        self._main_window._auto_apply_yolo_training_params("seq_detect")
+        self._sync_seq_advanced_derived_state()
 
     def _refresh_yolo_crop_obb_model_combo(self, preferred_model_path: object = None):
         self._main_window._populate_yolo_model_combo(
@@ -1813,6 +2067,11 @@ class DetectionPanel(QWidget):
             usage_role="seq_crop_obb",
         )
         self._sync_model_selector_buttons()
+        # Silent-first-selection gap: apply training defaults + kick the
+        # checkpoint-imgsz fallback explicitly.
+        self._main_window._auto_apply_yolo_training_params("seq_crop_obb")
+        self._kick_seq_crop_model_props()
+        self._sync_seq_advanced_derived_state()
 
     @staticmethod
     def _create_model_remove_button(tooltip: str) -> QPushButton:
@@ -1856,45 +2115,59 @@ class DetectionPanel(QWidget):
     # YOLO MODE CHANGED (moved from MainWindow)
     # =========================================================================
 
-    def _on_yolo_mode_changed(self, _index: object) -> object:
-        """Toggle direct/sequential model controls."""
-        form = self.yolo_group.layout()
-
-        def _set_row_visible(widget: object, visible: bool):
-            if widget is None:
-                return
+    @staticmethod
+    def _set_widget_visible(widget: object, visible: bool) -> None:
+        """Set a widget's visibility without touching any form-label bookkeeping."""
+        if widget is not None:
             widget.setVisible(bool(visible))
-            if form is None:
-                return
-            try:
-                label = form.labelForField(widget)
-            except Exception:
-                label = None
-            if label is not None:
-                label.setVisible(bool(visible))
 
+    def _on_yolo_mode_changed(self, _index: object) -> object:
+        """Toggle direct/sequential model controls.
+
+        Only the controls relevant to the selected mode are shown: sequential
+        selectors / advanced settings appear solely in Sequential mode, and the
+        direct model / inferred task / SAHI controls solely in Direct mode.
+        Within Direct mode the SAHI geometry row additionally depends on the
+        SAHI checkbox (see ``_on_slice_toggled``).
+        """
         sequential = self.combo_yolo_obb_mode.currentIndex() == 1
-        _set_row_visible(getattr(self, "combo_yolo_model", None), not sequential)
-        _set_row_visible(getattr(self, "combo_yolo_detect_model", None), sequential)
-        _set_row_visible(getattr(self, "combo_yolo_crop_obb_model", None), sequential)
-        _set_row_visible(getattr(self, "yolo_seq_advanced", None), sequential)
-        # The direct-only task selector is meaningless in sequential mode; hide
-        # it (and the fixed-angle row) there. In direct mode the task combo is
-        # always shown, and _on_yolo_direct_task_changed governs the fixed-angle
-        # row's visibility (Detect task only).
-        _set_row_visible(getattr(self, "combo_yolo_direct_task", None), not sequential)
-        _set_row_visible(getattr(self, "chk_slice_enabled", None), not sequential)
-        _set_row_visible(getattr(self, "combo_slice_geometry", None), not sequential)
+
+        # Direct-mode controls (left column of the YOLO grid).
+        self._set_widget_visible(
+            getattr(self, "row_direct_model", None), not sequential
+        )
+        self._set_widget_visible(
+            getattr(self, "row_slice_toggle", None), not sequential
+        )
+        self._set_widget_visible(
+            getattr(self, "row_slice_geometry", None),
+            not sequential and self.chk_slice_enabled.isChecked(),
+        )
+        self._set_widget_visible(
+            getattr(self, "row_slice_params", None),
+            not sequential and self.chk_slice_enabled.isChecked(),
+        )
+        if not sequential and self.chk_slice_enabled.isChecked():
+            self._on_slice_geometry_changed(self.combo_slice_geometry.currentIndex())
+
+        # Sequential-mode controls (right column of the YOLO grid).
+        self._set_widget_visible(getattr(self, "row_seq_detect", None), sequential)
+        self._set_widget_visible(getattr(self, "row_seq_crop", None), sequential)
+        self._set_widget_visible(getattr(self, "yolo_seq_advanced", None), sequential)
+
         if sequential:
-            _set_row_visible(getattr(self, "spin_yolo_fixed_angle", None), False)
+            self._set_widget_visible(
+                getattr(self, "spin_yolo_fixed_angle", None), False
+            )
+            self._set_widget_visible(getattr(self, "lbl_yolo_fixed_angle", None), False)
         else:
             self._on_yolo_direct_task_changed(None)
 
         ip = getattr(self._main_window, "_identity_panel", None)
-        _set_row_visible(
+        self._set_widget_visible(
             getattr(self._main_window, "headtail_model_row_widget", None), True
         )
-        _set_row_visible(
+        self._set_widget_visible(
             getattr(self._main_window, "chk_pose_overrides_headtail", None), True
         )
         if ip is not None:
@@ -1906,27 +2179,280 @@ class DetectionPanel(QWidget):
         if hasattr(self._main_window, "_dataset_panel"):
             self._main_window._dataset_panel.refresh_export_levels()
 
+    def _on_slice_toggled(self, checked: bool) -> None:
+        """Show the slice-geometry picker only while sliced inference is on."""
+        if not hasattr(self, "row_slice_geometry"):
+            return
+        visible = self.combo_yolo_obb_mode.currentIndex() == 0 and bool(checked)
+        self._set_widget_visible(self.row_slice_geometry, visible)
+        self._set_widget_visible(self.row_slice_params, visible)
+        if visible:
+            self._on_slice_geometry_changed(self.combo_slice_geometry.currentIndex())
+
+    def _on_slice_geometry_changed(self, _index: object) -> None:
+        """Reveal only the SAHI parameters that apply to the chosen geometry mode.
+
+        custom needs an explicit tile size (W/H); auto_object needs a target
+        object fraction; auto_model derives the tile from the checkpoint and
+        needs nothing. Tile overlap applies to every mode.
+        """
+        if not hasattr(self, "combo_slice_geometry"):
+            return
+        mode = self.combo_slice_geometry.currentText()
+        is_custom = mode == "custom"
+        is_auto_object = mode == "auto_object"
+        self._set_widget_visible(getattr(self, "lbl_slice_tile_w", None), is_custom)
+        self._set_widget_visible(getattr(self, "spin_slice_tile_w", None), is_custom)
+        self._set_widget_visible(getattr(self, "lbl_slice_tile_h", None), is_custom)
+        self._set_widget_visible(getattr(self, "spin_slice_tile_h", None), is_custom)
+        self._set_widget_visible(
+            getattr(self, "lbl_slice_object_fraction", None), is_auto_object
+        )
+        self._set_widget_visible(
+            getattr(self, "spin_slice_object_fraction", None), is_auto_object
+        )
+
     def _on_yolo_direct_task_changed(self, _index: object) -> object:
-        """Show the fixed-angle control only when the direct task is 'Detect'."""
-        form = self.yolo_group.layout()
-
-        def _set_row_visible(widget: object, visible: bool):
-            if widget is None:
-                return
-            widget.setVisible(bool(visible))
-            if form is None:
-                return
-            try:
-                label = form.labelForField(widget)
-            except Exception:
-                label = None
-            if label is not None:
-                label.setVisible(bool(visible))
-
-        is_detect = self.combo_yolo_direct_task.currentIndex() == 1
-        _set_row_visible(getattr(self, "spin_yolo_fixed_angle", None), is_detect)
+        """Sync the inferred-task label and fixed-angle row to the current task."""
+        task = ["obb", "detect", "segment"][self.combo_yolo_direct_task.currentIndex()]
+        if hasattr(self, "lbl_direct_task_inferred"):
+            self.lbl_direct_task_inferred.setText(_DIRECT_TASK_LABELS[task])
+        is_detect = task == "detect"
+        self._set_widget_visible(getattr(self, "lbl_yolo_fixed_angle", None), is_detect)
+        self._set_widget_visible(
+            getattr(self, "spin_yolo_fixed_angle", None), is_detect
+        )
         if hasattr(self._main_window, "_dataset_panel"):
             self._main_window._dataset_panel.refresh_export_levels()
+
+    # =========================================================================
+    # DIRECT MODEL TASK INFERENCE (from checkpoint / registry)
+    # =========================================================================
+
+    def _kick_direct_task_inference(self) -> None:
+        """Schedule the background checkpoint-task inference (deferred).
+
+        The actual work is deferred with ``QTimer.singleShot(0, ...)`` so it
+        only starts once the application event loop is running. During MainWindow
+        construction (and in tests, which build windows without an event loop)
+        the timer never fires, so no checkpoint threads are spawned; in the app
+        the inference starts on the next loop iteration, keeping the GUI free.
+        """
+        if self._task_kick_scheduled:
+            return
+        self._task_kick_scheduled = True
+        QTimer.singleShot(0, self._run_scheduled_task_inference)
+
+    def _run_scheduled_task_inference(self) -> None:
+        """Infer the selected direct model's task and reflect it in the UI.
+
+        Prefers the value already recorded in the registry (instant). Otherwise
+        reads the checkpoint in a background worker so the GUI never freezes,
+        then records the result in the registry for future sessions.
+        """
+        self._task_kick_scheduled = False
+        if self._main_window is None:
+            return
+        try:
+            model_path = str(self._main_window._get_selected_yolo_model_path() or "")
+        except Exception:  # noqa: BLE001 - window may be mid-teardown
+            return
+        if not model_path:
+            return
+        from hydra_suite.core.inference.model_paths import (
+            get_yolo_model_registered_task,
+        )
+
+        task = get_yolo_model_registered_task(model_path)
+        if task in _DIRECT_TASK_INDEX:
+            self._set_direct_task(task)
+            return
+        self._start_props_worker(model_path, "direct")
+
+    def _kick_seq_crop_model_props(self) -> None:
+        """Schedule the background read of the sequential crop-OBB model's
+        trained input size (deferred to the event loop, like the task read).
+
+        The registry ``training_params.imgsz`` (recorded at DetectKit training
+        time) is the authoritative source; the checkpoint read only fills the
+        gap for models imported without that metadata.
+        """
+        if self._seq_crop_kick_scheduled:
+            return
+        self._seq_crop_kick_scheduled = True
+        QTimer.singleShot(0, self._run_scheduled_seq_crop_inference)
+
+    def _run_scheduled_seq_crop_inference(self) -> None:
+        self._seq_crop_kick_scheduled = False
+        if self._main_window is None:
+            return
+        try:
+            model_path = str(
+                self._main_window._get_selected_yolo_crop_obb_model_path() or ""
+            )
+        except Exception:  # noqa: BLE001 - window may be mid-teardown
+            return
+        if not model_path:
+            return
+        if (
+            self._seq_crop_worker is not None
+            and getattr(self._seq_crop_worker, "_model_path", None) == model_path
+        ):
+            return  # already reading this exact model
+        self._start_props_worker(model_path, "seq_crop_obb")
+
+    def _start_props_worker(self, model_path: str, role: str) -> None:
+        """Start a background checkpoint read for ``role`` (direct | seq_crop_obb).
+
+        Bound-method receivers, not lambdas: a lambda connected before the main
+        event loop starts (init / config-load populate) never receives its
+        queued emission from the worker thread in PySide6, while QObject
+        receivers do. The model path + role travel on the worker itself.
+        """
+        worker = _DirectTaskInferenceWorker(model_path)
+        worker._role = role
+        worker.props_inferred.connect(self._on_task_inferred)
+        worker.finished.connect(self._on_task_worker_finished)
+        if role == "seq_crop_obb":
+            self._seq_crop_worker = worker
+        else:
+            self._task_worker = worker
+        worker.start()
+
+    def _on_task_inferred(self, task: str, imgsz: int) -> None:
+        """Apply a background checkpoint-properties result if still current."""
+        worker = self.sender()
+        model_path = str(getattr(worker, "_model_path", "") or "")
+        role = str(getattr(worker, "_role", "") or "")
+        if role == "seq_crop_obb":
+            self._apply_seq_crop_imgsz(model_path, imgsz)
+            return
+        if str(self._main_window._get_selected_yolo_model_path() or "") != model_path:
+            return  # stale: the selection changed while the worker ran
+        if task not in _DIRECT_TASK_INDEX:
+            return  # unreadable checkpoint — keep the current (registry) value
+        self._set_direct_task(task)
+        try:
+            from hydra_suite.core.inference.model_paths import register_yolo_model_task
+
+            register_yolo_model_task(model_path, task)
+        except Exception:  # noqa: BLE001 - backfill is best-effort
+            logger.exception("Failed to backfill task metadata for %s", model_path)
+
+    def _apply_seq_crop_imgsz(self, model_path: str, imgsz: int) -> None:
+        """Auto-set stage-2 imgsz from the crop-OBB checkpoint when the
+        registry has no training-recorded ``imgsz`` (manually imported models).
+
+        The DetectKit-published ``training_params.imgsz`` wins whenever present;
+        the checkpoint read is only a fallback so the user never has to type the
+        model's own trained input size.
+        """
+        if imgsz <= 0:
+            return
+        try:
+            from hydra_suite.core.inference.model_paths import get_yolo_model_metadata
+
+            meta = get_yolo_model_metadata(model_path) or {}
+            tp = meta.get("training_params")
+            if isinstance(tp, dict) and tp.get("imgsz"):
+                return  # training-recorded value is authoritative
+        except Exception:  # noqa: BLE001 - best-effort
+            return
+        self.spin_yolo_seq_stage2_imgsz.setValue(int(imgsz))
+        logger.info("Auto-set stage-2 imgsz=%d from checkpoint %s", imgsz, model_path)
+        # Cache in the registry so subsequent selections are instant.
+        try:
+            from hydra_suite.core.inference.model_paths import (
+                get_yolo_model_metadata,
+                register_yolo_model,
+            )
+
+            meta = get_yolo_model_metadata(model_path) or {}
+            tp = dict(meta.get("training_params") or {})
+            tp["imgsz"] = int(imgsz)
+            meta["training_params"] = tp
+            register_yolo_model(model_path, meta)
+        except Exception:  # noqa: BLE001 - backfill is best-effort
+            logger.exception("Failed to backfill imgsz metadata for %s", model_path)
+        self._sync_seq_advanced_derived_state()
+
+    #: Sequential advanced knobs auto-derived from the models (field -> widget).
+    _SEQ_AUTO_FIELD_WIDGETS = {
+        "crop_pad": "spin_yolo_seq_crop_pad",
+        "min_crop": "spin_yolo_seq_min_crop_px",
+        "square": "chk_yolo_seq_square_crop",
+        "imgsz": "spin_yolo_seq_stage2_imgsz",
+    }
+
+    def _sync_seq_advanced_derived_state(self) -> None:
+        """Disable the sequential knobs whose values are auto-derived from the
+        selected models, so auto-set values can't be silently diverged from.
+
+        ``crop_pad`` / ``min_crop`` / ``square`` come from either sequential
+        model's ``training_params`` (shared crop policy); ``imgsz`` from the
+        crop model's ``training_params`` or the checkpoint fallback. Runtime
+        knobs (stage-1 conf, crop batch, pow2 pad) stay editable — no model
+        metadata records them. With no sequential models selected everything
+        stays editable (manual fallback).
+        """
+        try:
+            crop_path = str(
+                self._main_window._get_selected_yolo_crop_obb_model_path() or ""
+            )
+            detect_path = str(
+                self._main_window._get_selected_yolo_detect_model_path() or ""
+            )
+        except Exception:  # noqa: BLE001 - window may be mid-teardown
+            return
+        derived: set[str] = set()
+        for path, is_crop in ((detect_path, False), (crop_path, True)):
+            if not path:
+                continue
+            try:
+                from hydra_suite.core.inference.model_paths import (
+                    get_yolo_model_metadata,
+                )
+
+                tp = (get_yolo_model_metadata(path) or {}).get("training_params")
+            except Exception:  # noqa: BLE001 - best-effort
+                tp = None
+            if not isinstance(tp, dict):
+                continue
+            if "crop_pad_ratio" in tp:
+                derived.add("crop_pad")
+            if "min_crop_size_px" in tp:
+                derived.add("min_crop")
+            if "enforce_square" in tp:
+                derived.add("square")
+            if is_crop and tp.get("imgsz"):
+                derived.add("imgsz")
+        for field, attr in self._SEQ_AUTO_FIELD_WIDGETS.items():
+            widget = getattr(self, attr, None)
+            if widget is not None:
+                widget.setEnabled(field not in derived)
+
+    def _on_task_worker_finished(self) -> None:
+        """Drop the finished worker reference so the next selection can start a new one.
+
+        Only clears when the finishing worker is still the tracked one — a stale
+        worker finishing after a newer one started must not clobber the newer
+        worker's dedupe reference.
+        """
+        sender = self.sender()
+        if sender is self._task_worker:
+            self._task_worker = None
+        elif sender is self._seq_crop_worker:
+            self._seq_crop_worker = None
+
+    def _set_direct_task(self, task: str) -> None:
+        """Record an inferred task as the direct-model state (hidden combo)."""
+        idx = _DIRECT_TASK_INDEX.get(task)
+        if idx is None:
+            return
+        if self.combo_yolo_direct_task.currentIndex() != idx:
+            self.combo_yolo_direct_task.setCurrentIndex(idx)  # refreshes label/UI
+        else:
+            self._on_yolo_direct_task_changed(idx)
 
     # =========================================================================
     # YOLO MODEL CHANGED (moved from MainWindow)
@@ -1941,7 +2467,7 @@ class DetectionPanel(QWidget):
                 selection_callback=self._main_window._set_yolo_model_selection,
                 task_family="obb",
                 usage_role="obb_direct",
-                dialog_title="Add Direct OBB Model",
+                dialog_title="Add Direct Model",
             )
             return
         self._on_yolo_mode_changed(index)
@@ -1971,6 +2497,21 @@ class DetectionPanel(QWidget):
         adv["slice_overlap"] = float(values["overlap"])
         adv["slice_object_tile_fraction"] = float(values["object_tile_fraction"])
         adv["slice_trained_body_px"] = float(values["trained_body_px"])
+        # Display-sync the spins without letting their rounded values clobber
+        # the exact metadata (e.g. 300/640 -> spin shows 0.47, config keeps
+        # 0.46875).
+        for spin, value in (
+            (getattr(self, "spin_slice_overlap", None), values["overlap"]),
+            (
+                getattr(self, "spin_slice_object_fraction", None),
+                values["object_tile_fraction"],
+            ),
+        ):
+            if spin is None:
+                continue
+            spin.blockSignals(True)
+            spin.setValue(float(value))
+            spin.blockSignals(False)
         self._notify_matched_geometry()
 
     def _notify_matched_geometry(self) -> None:

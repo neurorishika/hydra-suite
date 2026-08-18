@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import shutil
+from functools import lru_cache
 
 logger = logging.getLogger(__name__)
 
@@ -280,6 +281,100 @@ def get_yolo_model_metadata(model_path: object) -> object:
     rel_path = make_model_path_relative(model_path)
     registry = load_yolo_model_registry()
     return _normalize_yolo_model_metadata(registry.get(rel_path, {}))
+
+
+@lru_cache(maxsize=128)
+def _checkpoint_props_cached(path: str, mtime_ns: int, size: int) -> tuple[str, int]:
+    """Cached ultralytics checkpoint properties read (see ``infer_checkpoint_task``).
+
+    Returns ``(task, imgsz)`` where ``task`` is the checkpoint's task
+    ('obb'|'detect'|'segment'|...) and ``imgsz`` its trained input size (0 when
+    unknown). The mtime/size are part of the cache key so an in-place
+    replacement of a checkpoint file is re-read instead of serving stale values.
+    """
+    try:
+        from ultralytics import YOLO
+
+        model = YOLO(path)
+        try:
+            task = str(getattr(model, "task", "") or "").strip().lower()
+            raw_imgsz = getattr(model, "args", {}).get("imgsz", 0)
+            if isinstance(raw_imgsz, (list, tuple)) and raw_imgsz:
+                imgsz = int(max(int(v) for v in raw_imgsz if v))
+            else:
+                imgsz = int(raw_imgsz or 0)
+            return task, max(imgsz, 0)
+        finally:
+            del model
+    except Exception:  # noqa: BLE001 - best-effort UI affordance
+        return "", 0
+
+
+def infer_checkpoint_task(model_path: object) -> str:
+    """Best-effort read of a YOLO checkpoint's task ('obb'|'detect'|'segment'|...).
+
+    Returns '' when the file cannot be loaded as an ultralytics checkpoint
+    (non-YOLO artifact, test stub, or corrupt file). The result is cached per
+    path+mtime. This is a UI affordance (auto-inferred task label / registry
+    backfill) and must never be used for runtime dispatch — the inference
+    pipeline reads the task from the checkpoint itself at load time.
+    """
+    return _checkpoint_props_for(model_path)[0]
+
+
+def infer_checkpoint_imgsz(model_path: object) -> int:
+    """Best-effort read of a YOLO checkpoint's trained input size (px).
+
+    Returns 0 when unknown or unreadable. Cached per path+mtime; a UI
+    affordance only — the runtime reads the checkpoint's own size itself.
+    """
+    return _checkpoint_props_for(model_path)[1]
+
+
+def _checkpoint_props_for(model_path: object) -> tuple[str, int]:
+    path = str(model_path or "").strip()
+    if not path:
+        return "", 0
+    abs_path = resolve_model_path(path)
+    if not abs_path or not os.path.isfile(str(abs_path)):
+        return "", 0
+    # Fast-path guard: real ultralytics .pt checkpoints are multi-MB. This
+    # keeps the heavy ultralytics import + torch.load off stub/garbage files
+    # (e.g. test fixtures), which would otherwise pay seconds per call.
+    try:
+        stat = os.stat(str(abs_path))
+        if stat.st_size < 64 * 1024:
+            return "", 0
+    except OSError:
+        return "", 0
+    return _checkpoint_props_cached(str(abs_path), stat.st_mtime_ns, stat.st_size)
+
+
+def get_yolo_model_registered_task(model_path: object) -> str:
+    """Return the ``task`` recorded in the registry for a model, if any."""
+    metadata = get_yolo_model_metadata(model_path)
+    if not isinstance(metadata, dict):
+        return ""
+    return str(metadata.get("task") or "").strip().lower()
+
+
+def register_yolo_model_task(model_path: object, task: str) -> bool:
+    """Record a checkpoint task ('obb'|'detect'|'segment'|...) in the registry.
+
+    Only writes when a real task is provided and the entry has no task yet;
+    an explicit existing value is never overwritten. Returns True when the
+    registry was updated.
+    """
+    task = str(task or "").strip().lower()
+    if task not in {"obb", "detect", "segment", "pose", "classify"}:
+        return False
+    rel_path = make_model_path_relative(model_path)
+    registry = load_yolo_model_registry()
+    if rel_path not in registry or registry[rel_path].get("task"):
+        return False
+    registry[rel_path]["task"] = task
+    save_yolo_model_registry(registry)
+    return True
 
 
 def register_yolo_model(model_path: object, metadata: object) -> object:
