@@ -13,3 +13,12 @@ if str(REPO_ROOT) not in sys.path:
 
 # Fixture helpers for classifier backend tests
 pytest_plugins = ["tests.test_classifier_fixtures"]
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--update-golden",
+        action="store_true",
+        default=False,
+        help="Rewrite characterization goldens instead of asserting against them.",
+    )
