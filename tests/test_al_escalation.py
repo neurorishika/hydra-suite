@@ -47,8 +47,45 @@ def test_records_from_obb_uses_native_polygons_at_polygon_level():
 
 
 def test_records_from_obb_rejects_polygon_level_without_polygons():
-    with pytest.raises(ValueError, match="native polygons"):
+    with pytest.raises(ValueError, match="native polygon"):
         records_from_obb_result(_obb_result(), GeometryLevel.POLYGON)
+
+
+def _empty_obb_result(frame_idx=0):
+    """The exact shape `stages/bgsub._empty_result` returns: no detections,
+    `polygons=None`."""
+    return OBBResult(
+        frame_idx=frame_idx,
+        centroids=np.zeros((0, 2), np.float32),
+        angles=np.zeros((0,), np.float32),
+        sizes=np.zeros((0,), np.float32),
+        shapes=np.zeros((0, 2), np.float32),
+        confidences=np.zeros((0,), np.float32),
+        corners=np.zeros((0, 4, 2), np.float32),
+        detection_ids=OBBResult.make_detection_ids(frame_idx, 0),
+        class_ids=np.zeros(0, dtype=np.int64),
+    )
+
+
+def test_zero_detection_frame_at_polygon_level_yields_no_records():
+    """A frame with no detections legitimately has no polygons.
+
+    `run_bgsub` returns `_empty_result` (polygons=None) for every empty frame,
+    always including frame 0. Raising there aborted the whole polygon-level
+    export with a misleading `emit_native_geometry=True` message.
+    """
+    assert records_from_obb_result(_empty_obb_result(), GeometryLevel.POLYGON) == []
+
+
+def test_polygon_level_still_raises_when_a_detection_has_no_contour():
+    """A frame WITH detections but no contours is a real error."""
+    with pytest.raises(ValueError, match="native polygon missing"):
+        records_from_obb_result(_obb_result(polygons=[None]), GeometryLevel.POLYGON)
+
+
+def test_polygon_level_raises_when_keep_index_exceeds_polygon_list():
+    with pytest.raises(ValueError, match="native polygon missing"):
+        records_from_obb_result(_obb_result(polygons=[]), GeometryLevel.POLYGON)
 
 
 def test_records_from_obb_honours_keep_indices():

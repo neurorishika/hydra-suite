@@ -43,17 +43,33 @@ def records_from_obb_result(
     """
     indices = range(obb.num_detections) if keep is None else [int(i) for i in keep]
 
-    if native_level is GeometryLevel.POLYGON and obb.polygons is None:
-        raise ValueError(
-            "native polygons requested but OBBResult.polygons is None; the "
-            "detection stage was not run with emit_native_geometry=True"
-        )
+    # The polygon-availability check is deliberately made PER DETECTION rather
+    # than once up front. A frame with zero detections legitimately has no
+    # polygons -- `stages/bgsub._empty_result` leaves `polygons=None`, and
+    # `run_bgsub` returns it for every empty frame (always including frame 0,
+    # where the background model has no history yet). Raising on that shape
+    # aborted the entire polygon-level export on the first empty frame, which
+    # is precisely where active learning most wants to look. A frame WITH
+    # detections but no contour for one of them is still a real error and
+    # still raises below.
+    polygons = obb.polygons if native_level is GeometryLevel.POLYGON else None
 
     class_ids = obb.class_ids_or_zeros
     records: list[LabelRecord] = []
     for i in indices:
         if native_level is GeometryLevel.POLYGON:
-            pts = np.asarray(obb.polygons[i], dtype=np.float32).reshape(-1, 2)
+            poly = (
+                None
+                if polygons is None or i >= len(polygons) or polygons[i] is None
+                else polygons[i]
+            )
+            if poly is None:
+                raise ValueError(
+                    f"native polygon missing for detection {i} of frame "
+                    f"{getattr(obb, 'frame_idx', '?')}; the detection stage "
+                    "was not run with emit_native_geometry=True"
+                )
+            pts = np.asarray(poly, dtype=np.float32).reshape(-1, 2)
         else:
             pts = np.asarray(obb.corners[i], dtype=np.float32).reshape(-1, 2)
         records.append(
