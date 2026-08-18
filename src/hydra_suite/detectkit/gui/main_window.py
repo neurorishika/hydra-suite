@@ -1361,33 +1361,25 @@ class DetectKitMainWindow(QMainWindow):
         from .dialogs.active_learning import ActiveLearningDialog
 
         dlg = ActiveLearningDialog(project=self._project, parent=self)
+        # DetectKit's inference resolver only ever distinguishes obb_direct /
+        # sequential model shapes (`detectkit_resolve_inference_models`) --
+        # there is no segment- or detect-only AL path yet, so the achievable
+        # level is always "obb" today. Routing through `set_model_task`
+        # (rather than hard-coding `export_level="obb"` on the request) keeps
+        # the dialog's own capability gate as the single source of truth, so
+        # a future segment/detect-only AL path only has to call this with the
+        # real task string.
+        dlg.set_model_task("obb")
         dlg.set_run_handler(lambda: self._start_al_round(dlg))
         dlg.finished.connect(lambda *_: self._cancel_al_round())
         dlg.open()
 
     def _start_al_round(self, dlg) -> None:
-        from hydra_suite.detectkit.jobs.al_worker import ALRequest, ALWorker
+        from hydra_suite.detectkit.jobs.al_worker import ALWorker
 
         try:
             detector_fn = self._load_active_detector_fn()
-            model_path = str(self._project.active_model_path or "").strip()
-            kind, _primary, _secondary = detectkit_resolve_inference_models(
-                self._project, model_path
-            )
-            request = ALRequest(
-                input_kind=(
-                    "video"
-                    if dlg.rb_video.isChecked()
-                    else "folder" if dlg.rb_folder.isChecked() else "project"
-                ),
-                input_path=dlg.input_path_edit.text(),
-                project=self._project,
-                budget=dlg.budget_spin.value(),
-                preset=dlg.preset_combo.currentText(),
-                expected_count=dlg.expected_count_spin.value(),
-                detector_fn=detector_fn,
-                export_level=self._resolve_export_level(kind),
-            )
+            request = dlg.build_request(detector_fn=detector_fn)
         except NotImplementedError as exc:
             dlg.status_label.setText(f"Error: {exc}")
             return
@@ -1413,11 +1405,6 @@ class DetectKitMainWindow(QMainWindow):
         worker = getattr(self, "_al_worker", None)
         if worker is not None:
             worker.requestInterruption()
-
-    def _resolve_export_level(self, kind: str) -> str:
-        # segment stage-2 -> polygon; obb -> obb; detect-only -> aabb.
-        # Direct OBB / sequential-with-OBB stage-2 keep obb.
-        return "obb"
 
     def _load_active_detector_fn(self):
         """Return a detector_fn(frame, conf, iou) -> list[(cx,cy,w,h,theta,conf)].

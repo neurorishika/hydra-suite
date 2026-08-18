@@ -3,25 +3,26 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Literal, Sequence
 
-import cv2
 import numpy as np
 from PySide6.QtCore import Signal
 
 from hydra_suite.data.al.acquisition import PRESETS, AcquisitionWeights, select
 from hydra_suite.data.al.candidate_pool import CandidatePoolConfig, build_candidate_pool
-from hydra_suite.data.al.escalation import LabelRecord, derive_down
+from hydra_suite.data.al.escalation import LabelRecord
+from hydra_suite.data.al.export import ExportedFrame, export_al_dataset
 from hydra_suite.data.al.frame_source import (
     DetectKitProjectSource,
+    FrameRef,
     FrameSource,
     ImageFolderFrameSource,
     VideoFrameSource,
 )
-from hydra_suite.data.al.labels import write_label_file
 from hydra_suite.data.al.signals import (
     ALSignals,
     score_count_deviation,
@@ -59,6 +60,7 @@ class ALRequest:
     base_conf: float = 0.25
     base_iou: float = 0.7
     export_level: str = "obb"
+    export_levels: list[str] = field(default_factory=lambda: ["obb"])
 
 
 @dataclass
@@ -68,6 +70,37 @@ class ALResult:
     source_path: str
     n_picked: int
     selected_frames: list[int]
+
+
+class _LazyALImages(Mapping):
+    """Picked-frame images, decoded from `source` on `__getitem__`.
+
+    `export_al_dataset`'s authoritative root reads each key exactly once, so
+    only the frame currently being written is ever resident -- there is no
+    eager dict of every picked frame's pixels.
+    """
+
+    def __init__(
+        self,
+        source: FrameSource,
+        frame_refs_by_id: dict[int, "FrameRef"],
+        frame_ids: Sequence[int],
+    ) -> None:
+        self._source = source
+        self._frame_refs_by_id = frame_refs_by_id
+        self._frame_ids = list(frame_ids)
+
+    def __getitem__(self, frame_id: int):
+        img = self._source.read(self._frame_refs_by_id[frame_id])
+        if img is None:
+            raise KeyError(frame_id)
+        return img
+
+    def __iter__(self):
+        return iter(self._frame_ids)
+
+    def __len__(self) -> int:
+        return len(self._frame_ids)
 
 
 def _build_frame_source(req: ALRequest) -> FrameSource:
@@ -203,49 +236,82 @@ def run_active_learning(
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     proj_dir = Path(req.project.project_dir)
     source_root = proj_dir / "sources" / f"al_round_{timestamp}"
-    images_dir = source_root / "images"
-    labels_dir = source_root / "labels"
-    images_dir.mkdir(parents=True, exist_ok=True)
-    labels_dir.mkdir(parents=True, exist_ok=True)
 
+    # Readability is probed (and the frame discarded) up front, same as a
+    # picked frame that fails re-read did under the old hand-rolled writer:
+    # log-and-skip rather than aborting the whole round. Frames that pass the
+    # probe are read a second time by `export_al_dataset`'s lazy `images`
+    # mapping below -- an extra decode, but it keeps this function from
+    # holding every picked frame resident at once (see `_LazyALImages`).
     written_ids: list[int] = []
     for fid in picked_ids:
         ref = frame_refs_by_id[fid]
-        img = source.read(ref)
-        if img is None:
+        if source.read(ref) is None:
             logger.warning("Could not re-read picked frame %s; skipping.", fid)
             continue
-        dets = detections_by_id[fid]
-        img_path = images_dir / f"f_{fid:06d}.jpg"
-        cv2.imwrite(str(img_path), img)
-        records = _records_from_detections(dets)
-        level = GeometryLevel.from_str(req.export_level)
-        write_label_file(
-            labels_dir / f"f_{fid:06d}.txt",
-            derive_down(records, level),
-            frame_size=img.shape[:2],
-            level=level,
-        )
         written_ids.append(fid)
 
-    (source_root / "classes.txt").write_text(req.project.class_name + "\n")
+    requested_levels = [
+        GeometryLevel.from_str(lbl) for lbl in (req.export_levels or [req.export_level])
+    ]
+    native_level = max(requested_levels)
 
-    new_source = OBBSource(
-        path=str(source_root),
-        name=f"al_round_{timestamp}",
-        validated=False,
-        original_path=req.input_path,
-        source_kind="detectkit_al",
-        imported=True,
-        level=req.export_level,
+    exported = [
+        ExportedFrame(
+            frame_id=fid,
+            image_name=f"f_{fid:06d}.jpg",
+            records=_records_from_detections(detections_by_id[fid]),
+        )
+        for fid in written_ids
+    ]
+
+    provenance = {
+        "input_kind": req.input_kind,
+        "input_path": req.input_path,
+        "preset": req.preset,
+        "budget": req.budget,
+        "expected_count": req.expected_count,
+        "base_conf": req.base_conf,
+        "base_iou": req.base_iou,
+    }
+
+    manifest = export_al_dataset(
+        round_dir=source_root,
+        frames=exported,
+        images=_LazyALImages(source, frame_refs_by_id, written_ids),
+        native_level=native_level,
+        levels=requested_levels,
+        class_names=[req.project.class_name],
+        provenance=provenance,
     )
-    req.project.sources.append(new_source)
+
+    # One OBBSource per written level. The exporter's per-root `source.json`
+    # already records `authoritative` (implied by `derived_from is None`),
+    # `derived_from`, and `reviewed`; mirror those into the OBBSource fields
+    # rather than inventing new semantics, so the authoritative root stays
+    # the single point of human review.
+    for root_meta in manifest["roots"]:
+        req.project.sources.append(
+            OBBSource(
+                path=root_meta["path"],
+                name=f"al_round_{timestamp}_{root_meta['level']}",
+                validated=False,
+                original_path=req.input_path,
+                source_kind="detectkit_al",
+                imported=True,
+                level=root_meta["level"],
+                reviewed=bool(root_meta["reviewed"]),
+                derived_from=root_meta["derived_from"],
+            )
+        )
+
+    source_path = manifest["roots"][0]["path"]
 
     if progress:
         progress(100, "Active learning complete")
 
     return ALResult(
-        source_path=str(source_root),
+        source_path=source_path,
         n_picked=len(written_ids),
         selected_frames=written_ids,
     )
