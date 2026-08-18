@@ -1502,26 +1502,6 @@ def _add_flag(df: pd.DataFrame, idx, flag: str) -> None:
     df.at[idx, "PoseQualityFlags"] = new_val
 
 
-def _collect_row_conf_stats(
-    row,
-    present_conf_cols: List[str],
-) -> Tuple[List[float], int]:
-    """Collect finite confidence values and count of positive-confidence keypoints."""
-    confs: List[float] = []
-    valid_count = 0
-    for c in present_conf_cols:
-        v = row[c]
-        try:
-            fv = float(v)
-            if np.isfinite(fv):
-                confs.append(fv)
-                if fv > 0.0:
-                    valid_count += 1
-        except (ValueError, TypeError):
-            pass
-    return confs, valid_count
-
-
 def _recompute_pose_summary(df: pd.DataFrame, pose_labels: List[str]) -> None:
     """Recompute PoseMeanConf and PoseValidFraction columns in-place.
 
