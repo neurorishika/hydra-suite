@@ -103,6 +103,77 @@ def test_no_output_dir_keys_emitted(fly_obb_cfg, fly_obb_probe):
         assert key not in params, f"unexpected output-dir key emitted: {key}"
 
 
+def test_dataset_export_knobs_reach_engine_params():
+    """Task 15: export levels / dedup / class-names flow from TrackerConfig,
+    through its own to_dict round-trip, through the shared build_engine_params --
+    never a parallel path."""
+    from hydra_suite.trackerkit.config.schemas import TrackerConfig
+
+    tracker_cfg = TrackerConfig()
+    tracker_cfg.dataset_export_levels = ["polygon", "obb"]
+    tracker_cfg.dataset_dedup_method = "dhash"
+    tracker_cfg.dataset_dedup_threshold = 12
+    tracker_cfg.dataset_class_names = "ant, larva"
+
+    cfg = tracker_cfg.to_dict()
+    rt = RuntimeContext(fps=30.0, total_frames=100, frame_width=640, frame_height=480)
+    params = build_engine_params(cfg, runtime=rt)
+
+    assert params["DATASET_EXPORT_LEVELS"] == ["polygon", "obb"]
+    assert params["DATASET_DEDUP_METHOD"] == "dhash"
+    assert params["DATASET_DEDUP_THRESHOLD"] == 12
+    assert params["DATASET_CLASS_NAMES"] == ["ant", "larva"]
+
+
+def test_dataset_class_names_falls_back_to_single_class_name():
+    """No dataset_class_names -> falls back to the legacy single class name."""
+    rt = RuntimeContext(fps=30.0, total_frames=100, frame_width=640, frame_height=480)
+    cfg = {"dataset_class_name": "bee", "dataset_class_names": ""}
+    params = build_engine_params(cfg, runtime=rt)
+    assert params["DATASET_CLASS_NAMES"] == ["bee"]
+
+
+def test_dataset_class_names_falls_back_to_object_when_nothing_set():
+    rt = RuntimeContext(fps=30.0, total_frames=100, frame_width=640, frame_height=480)
+    params = build_engine_params({}, runtime=rt)
+    assert params["DATASET_CLASS_NAMES"] == ["object"]
+
+
+def test_dataset_export_knob_defaults():
+    rt = RuntimeContext(fps=30.0, total_frames=100, frame_width=640, frame_height=480)
+    params = build_engine_params({}, runtime=rt)
+    assert params["DATASET_EXPORT_LEVELS"] == ["polygon", "obb", "aabb"]
+    assert params["DATASET_DEDUP_METHOD"] == "phash"
+    assert params["DATASET_DEDUP_THRESHOLD"] == 8
+    assert params["DATASET_DETECTKIT_PROJECT"] == ""
+
+
+def test_tracker_config_dataset_fields_round_trip():
+    from hydra_suite.trackerkit.config.schemas import TrackerConfig
+
+    cfg = TrackerConfig()
+    cfg.dataset_export_levels = ["obb"]
+    cfg.dataset_dedup_method = "dhash"
+    cfg.dataset_dedup_threshold = 4
+    cfg.dataset_class_names = "x,y"
+    cfg.dataset_detectkit_project = "proj1"
+
+    restored = TrackerConfig.from_dict(cfg.to_dict())
+    assert restored.dataset_export_levels == ["obb"]
+    assert restored.dataset_dedup_method == "dhash"
+    assert restored.dataset_dedup_threshold == 4
+    assert restored.dataset_class_names == "x,y"
+    assert restored.dataset_detectkit_project == "proj1"
+
+    # And a fresh default TrackerConfig round-trips the documented defaults.
+    default_restored = TrackerConfig.from_dict(TrackerConfig().to_dict())
+    assert default_restored.dataset_export_levels == ["polygon", "obb", "aabb"]
+    assert default_restored.dataset_dedup_method == "phash"
+    assert default_restored.dataset_dedup_threshold == 8
+    assert default_restored.dataset_class_names == ""
+    assert default_restored.dataset_detectkit_project == ""
+
+
 def test_engine_params_module_is_qt_free(monkeypatch):
     """engine_params.py must import cleanly with PySide6 unimportable."""
     monkeypatch.setitem(sys.modules, "PySide6", None)

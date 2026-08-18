@@ -55,6 +55,77 @@ def test_dataset_stage_skipped_when_disabled(tmp_path):
     assert svc._run_dataset_generation(str(tmp_path / "final.csv")) is None
 
 
+def test_dataset_stage_threads_export_levels_dedup_and_class_names(
+    monkeypatch, tmp_path
+):
+    """Task 15: all four export-related knobs reach generate_active_learning_dataset."""
+    svc = _make_service(
+        {"enable_dataset_generation": True, "dataset_class_name": "ant"},
+        {
+            "DETECTION_METHOD": "background_subtraction",  # native level = POLYGON
+            "DATASET_EXPORT_LEVELS": ["polygon", "obb"],
+            "DATASET_CLASS_NAMES": ["ant", "larva"],
+            "DATASET_DEDUP_METHOD": "dhash",
+            "DATASET_DEDUP_THRESHOLD": 12,
+        },
+        tmp_path,
+    )
+    final_csv = tmp_path / "final.csv"
+    final_csv.write_text("TrajectoryID,X,Y,Theta,FrameID\n0,1,2,0,0\n")
+    (tmp_path / "in.mp4").write_bytes(b"x")
+
+    captured = {}
+
+    def _fake_generate(**kwargs):
+        captured.update(kwargs)
+        return {"success": True, "num_frames": 1, "dir": "d"}
+
+    monkeypatch.setattr(
+        session_mod.dataset_export, "generate_active_learning_dataset", _fake_generate
+    )
+    svc._run_dataset_generation(str(final_csv))
+
+    from hydra_suite.utils.geometry_levels import GeometryLevel
+
+    assert captured["export_levels"] == [GeometryLevel.POLYGON, GeometryLevel.OBB]
+    assert captured["class_names"] == ["ant", "larva"]
+    assert captured["dedup_method"] == "dhash"
+    assert captured["dedup_threshold"] == 12
+
+
+def test_dataset_stage_clamps_stored_level_to_achievable(monkeypatch, tmp_path):
+    """A stale stored 'polygon' preference against an OBB-only detector is
+    clamped down to [obb, aabb] rather than raised or emptied."""
+    svc = _make_service(
+        {"enable_dataset_generation": True, "dataset_class_name": "ant"},
+        {
+            "DETECTION_METHOD": "yolo_obb",
+            "YOLO_OBB_MODE": "direct",
+            "YOLO_OBB_DIRECT_TASK": "obb",
+            "DATASET_EXPORT_LEVELS": ["polygon"],
+        },
+        tmp_path,
+    )
+    final_csv = tmp_path / "final.csv"
+    final_csv.write_text("TrajectoryID,X,Y,Theta,FrameID\n0,1,2,0,0\n")
+    (tmp_path / "in.mp4").write_bytes(b"x")
+
+    captured = {}
+
+    def _fake_generate(**kwargs):
+        captured.update(kwargs)
+        return {"success": True, "num_frames": 1, "dir": "d"}
+
+    monkeypatch.setattr(
+        session_mod.dataset_export, "generate_active_learning_dataset", _fake_generate
+    )
+    svc._run_dataset_generation(str(final_csv))
+
+    from hydra_suite.utils.geometry_levels import GeometryLevel
+
+    assert captured["export_levels"] == [GeometryLevel.OBB, GeometryLevel.AABB]
+
+
 def test_annotated_video_stage_returns_path(monkeypatch, tmp_path):
     svc = _make_service(
         {"video_output_enabled": True, "video_output_path": str(tmp_path / "out.mp4")},

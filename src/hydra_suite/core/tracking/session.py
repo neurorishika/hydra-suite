@@ -400,6 +400,26 @@ class TrackingSessionCore:
             str(self.config.get("dataset_class_name", "") or "").strip() or "object"
         )
 
+        from hydra_suite.data.al.escalation import achievable_levels
+        from hydra_suite.data.dataset_generation import resolve_native_level
+        from hydra_suite.utils.geometry_levels import GeometryLevel
+
+        levels = [
+            GeometryLevel.from_str(name)
+            for name in self.params.get(
+                "DATASET_EXPORT_LEVELS", ["polygon", "obb", "aabb"]
+            )
+        ]
+        # A stored level preference the current detector cannot achieve (e.g.
+        # "polygon" saved against a since-switched OBB model) is clamped down
+        # to what is achievable rather than raised -- a stale stored
+        # preference must never break a tracking run. If clamping leaves
+        # nothing, fall back to all achievable levels.
+        allowed = set(achievable_levels(resolve_native_level(self.params)))
+        levels = [lvl for lvl in levels if lvl in allowed] or sorted(
+            allowed, reverse=True
+        )
+
         self.callbacks.stage_changed("dataset_generation")
         return dataset_export.generate_active_learning_dataset(
             video_path=video_path,
@@ -415,6 +435,10 @@ class TrackingSessionCore:
             probabilistic=bool(self.config.get("dataset_probabilistic_sampling", True)),
             progress=self.callbacks.progress,
             should_stop=self.callbacks.should_stop,
+            export_levels=levels,
+            class_names=self.params.get("DATASET_CLASS_NAMES", [class_name]),
+            dedup_method=self.params.get("DATASET_DEDUP_METHOD", "phash"),
+            dedup_threshold=int(self.params.get("DATASET_DEDUP_THRESHOLD", 8)),
         )
 
     def _run_final_media_export(self, final_csv_path):

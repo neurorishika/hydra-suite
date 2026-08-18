@@ -32,6 +32,15 @@ class TrackerConfig:
     # --- Debug ---
     debug_mode: bool = False
 
+    # --- Active-learning dataset export ---
+    dataset_export_levels: list = field(
+        default_factory=lambda: ["polygon", "obb", "aabb"]
+    )
+    dataset_dedup_method: str = "phash"
+    dataset_dedup_threshold: int = 8
+    dataset_class_names: str = ""
+    dataset_detectkit_project: str = ""
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a JSON-compatible dict."""
         return {
@@ -42,6 +51,11 @@ class TrackerConfig:
             "roi_current_zone_type": self.roi_current_zone_type,
             "runtime_tier": self.runtime_tier,
             "debug_mode": self.debug_mode,
+            "dataset_export_levels": list(self.dataset_export_levels),
+            "dataset_dedup_method": self.dataset_dedup_method,
+            "dataset_dedup_threshold": self.dataset_dedup_threshold,
+            "dataset_class_names": self.dataset_class_names,
+            "dataset_detectkit_project": self.dataset_detectkit_project,
         }
 
     @classmethod
@@ -63,4 +77,11 @@ class TrackerConfig:
             roi_current_zone_type=data.get("roi_current_zone_type", "include"),
             runtime_tier=str(raw_tier),
             debug_mode=bool(data.get("debug_mode", False)),
+            dataset_export_levels=list(
+                data.get("dataset_export_levels", ["polygon", "obb", "aabb"])
+            ),
+            dataset_dedup_method=str(data.get("dataset_dedup_method", "phash")),
+            dataset_dedup_threshold=int(data.get("dataset_dedup_threshold", 8)),
+            dataset_class_names=str(data.get("dataset_class_names", "")),
+            dataset_detectkit_project=str(data.get("dataset_detectkit_project", "")),
         )
