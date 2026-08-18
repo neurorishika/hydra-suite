@@ -321,7 +321,21 @@ def _find_merge_candidates_python(
             bwd_frame_set = set(bwd_frames)
             common_frames = fwd_frame_set.intersection(bwd_frame_set)
 
-            if len(common_frames) < min_overlap:
+            pair_has_detection_id = (
+                "DetectionID" in fwd.columns and "DetectionID" in bwd.columns
+            )
+
+            # Cheap pre-gate: a pair can never beat the requirement its own
+            # branch will apply, so anything under that floor is discardable
+            # here. The floor is NOT min_overlap when DetectionIDs are present
+            # -- >=2 matching IDs relax the requirement to max(2,
+            # min_overlap // 2) below, and gating on min_overlap up here would
+            # drop identity-confirmed short overlaps before the relaxation was
+            # ever consulted, which is precisely what the Numba kernel accepts.
+            overlap_floor = (
+                max(2, min_overlap // 2) if pair_has_detection_id else min_overlap
+            )
+            if len(common_frames) < overlap_floor:
                 continue
 
             # Build index mappings for fast lookup
@@ -329,10 +343,6 @@ def _find_merge_candidates_python(
 
             bwd_x = bwd["X"].values
             bwd_y = bwd["Y"].values
-
-            pair_has_detection_id = (
-                "DetectionID" in fwd.columns and "DetectionID" in bwd.columns
-            )
 
             if pair_has_detection_id:
                 if fwd_lookup is None:
@@ -356,6 +366,12 @@ def _find_merge_candidates_python(
                     agreement_ratio = agreeing_frames / len(common_frames)
                     if agreement_ratio < 0.5:
                         continue
+                # This pair passed the requirement its own branch imposes
+                # (relaxed when identity evidence is strong). Re-checking
+                # min_overlap below would undo that relaxation, so the
+                # DetectionID branch commits its own candidates.
+                merge_candidates.append((fi, bi, agreeing_frames, len(common_frames)))
+                continue
             else:
                 detection_id_matches = 0
 
@@ -1056,7 +1072,22 @@ def _find_merge_candidates(forward_dfs, backward_dfs, agreement_distance, min_ov
                 candidates, forward_dfs, backward_dfs, agreement_distance
             )
         except Exception as e:
-            logger.warning(f"Numba acceleration failed, falling back to Python: {e}")
+            # Loud on purpose. These kernels are @jit(cache=True), so a stale or
+            # poisoned entry under core/post/__pycache__/*.nb[ic] makes every
+            # call raise (classically "No module named '<dynamic>'") and this
+            # except silently routes merging down the other implementation. The
+            # two now agree, so the cost is speed rather than a changed result,
+            # but a permanently-degraded merge stage should never be invisible:
+            # a run that logs this is recompiling nothing and paying the Python
+            # price on every pair, and deleting those cache files fixes it.
+            logger.warning(
+                "Numba merge-candidate kernel unavailable, falling back to the "
+                "Python implementation (same result, slower): %s. If this "
+                "repeats, delete the stale JIT cache: "
+                "rm src/hydra_suite/core/post/__pycache__/*.nb[ic]",
+                e,
+                exc_info=True,
+            )
     return _find_merge_candidates_python(
         forward_dfs, backward_dfs, agreement_distance, min_overlap
     )
