@@ -6800,6 +6800,7 @@ class MainWindow(QMainWindow):
         new_scheme = dlg.get_scheme_dict()
         flat_classes = dlg.flat_classes
         cleared_labels = 0
+        renamed_labels = 0
 
         # Persist to project
         if self.project_path:
@@ -6823,6 +6824,20 @@ class MainWindow(QMainWindow):
 
                 from ..config.schemas import LabelingScheme
 
+                # Renamed labels follow the scheme instead of being pruned as
+                # stale; migrate first, then prune whatever is genuinely gone.
+                old_scheme_dict = scheme_dict or (
+                    {
+                        "name": "class",
+                        "factors": [{"name": "class", "labels": list(self.classes)}],
+                        "training_modes": [],
+                    }
+                    if self.classes
+                    else None
+                )
+                renamed_labels = self._migrate_renamed_project_labels(
+                    old_scheme_dict, dlg.get_label_renames()
+                )
                 cleared_labels = self._prune_invalid_project_labels(
                     LabelingScheme.from_dict(new_scheme)
                 )
@@ -6830,15 +6845,15 @@ class MainWindow(QMainWindow):
         self.classes = flat_classes
         self.rebuild_label_buttons()
         self.setup_label_shortcuts()
-        if cleared_labels:
+        if cleared_labels or renamed_labels:
             self.update_explorer_plot()
         self.update_context_panel()
+        parts = [f"Classes updated ({len(self.classes)})"]
+        if renamed_labels:
+            parts.append(f"migrated {renamed_labels} renamed labels")
         if cleared_labels:
-            self.status.showMessage(
-                f"Classes updated ({len(self.classes)}); cleared {cleared_labels} stale labels"
-            )
-        else:
-            self.status.showMessage(f"Classes updated ({len(self.classes)})")
+            parts.append(f"cleared {cleared_labels} stale labels")
+        self.status.showMessage("; ".join(parts))
 
     # ── shortcut editor ──────────────────────────────────────────────────
 
@@ -7171,6 +7186,47 @@ class MainWindow(QMainWindow):
                 exc_info=True,
             )
         return None
+
+    def _migrate_renamed_project_labels(
+        self, old_scheme_dict, factor_renames, db=None
+    ) -> int:
+        """Rewrite stored labels for classes renamed in the scheme editor.
+
+        ``factor_renames`` is index-aligned with the factors of
+        *old_scheme_dict* (see ``ClassEditorDialog.get_label_renames``).
+        Returns the number of image rows migrated.
+        """
+        if not self.db_path or not old_scheme_dict:
+            return 0
+        if not any(factor_renames or []):
+            return 0
+
+        from ..config.schemas import LabelingScheme, build_composite_rename_map
+
+        try:
+            old_scheme = LabelingScheme.from_dict(old_scheme_dict)
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "Could not parse the previous scheme; skipping label migration",
+                exc_info=True,
+            )
+            return 0
+
+        mapping = build_composite_rename_map(old_scheme, factor_renames)
+        if not mapping:
+            return 0
+
+        if db is None:
+            from ..core.store.db import ClassKitDB
+
+            db = ClassKitDB(self.db_path)
+
+        renamed = db.rename_labels(mapping)
+        if renamed:
+            self._reload_label_state_from_db(db)
+        return renamed
 
     def _prune_invalid_project_labels(self, scheme=None, db=None) -> int:
         """Clear stored labels that no longer exist in the active scheme."""

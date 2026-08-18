@@ -84,8 +84,18 @@ class _KeyCapture(QLineEdit):
 class _LabelRow(QWidget):
     """A single label row: name QLineEdit + QKeySequenceEdit for shortcut."""
 
-    def __init__(self, label: str = "", shortcut: str = "", parent=None) -> None:
+    def __init__(
+        self,
+        label: str = "",
+        shortcut: str = "",
+        parent=None,
+        origin: str | None = None,
+    ) -> None:
         super().__init__(parent)
+        # Label this row carried when the dialog opened (None for a freshly
+        # added row). Editing the text is then a rename of *origin*, which lets
+        # stored labels be migrated instead of pruned.
+        self.origin = origin
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(6)

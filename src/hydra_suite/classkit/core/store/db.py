@@ -615,6 +615,42 @@ class ClassKitDB:
                 """)
             conn.commit()
 
+    def rename_labels(self, mapping: Dict[str, str]) -> int:
+        """Rewrite stored labels according to *mapping* (``{old: new}``).
+
+        Applied as a single ``CASE`` update so label swaps (``a -> b`` together
+        with ``b -> a``) resolve correctly. Label provenance (confidence,
+        source, verified state) is preserved - a rename is not a re-label.
+
+        Returns the number of rows affected.
+        """
+        pairs = [
+            (str(old), str(new))
+            for old, new in (mapping or {}).items()
+            if old and new and str(old) != str(new)
+        ]
+        if not pairs:
+            return 0
+
+        with sqlite3.connect(self.db_path) as conn:
+            c = conn.cursor()
+            whens = " ".join("WHEN label = ? THEN ?" for _ in pairs)
+            placeholders = ",".join("?" * len(pairs))
+            params: List[str] = []
+            for old, new in pairs:
+                params.extend((old, new))
+            params.extend(old for old, _ in pairs)
+            c.execute(
+                f"""
+                UPDATE images
+                SET label = CASE {whens} ELSE label END
+                WHERE label IN ({placeholders})
+                """,
+                params,
+            )
+            conn.commit()
+            return c.rowcount
+
     def clear_labels_not_in_set(self, valid_labels: set) -> int:
         """Null out labels whose value is not in *valid_labels*.
 
