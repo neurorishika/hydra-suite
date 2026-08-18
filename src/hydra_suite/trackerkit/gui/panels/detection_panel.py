@@ -1494,6 +1494,13 @@ class DetectionPanel(QWidget):
         self.stack_detection.setCurrentIndex(index)
         is_background_subtraction = index == 0
         self.g_img.setVisible(is_background_subtraction)
+        # Scale (RESIZE_FACTOR) is honored by bg-sub only; the engine clamps it
+        # to 1.0 for every other method, so the control follows the method.
+        _setup_panel = getattr(self._main_window, "_setup_panel", None)
+        if _setup_panel is not None:
+            _setup_panel.sync_scale_control_for_detection_method(
+                is_background_subtraction
+            )
         self._update_preview_display()
         self.on_detection_method_changed(index)
         self._main_window._on_runtime_context_changed()

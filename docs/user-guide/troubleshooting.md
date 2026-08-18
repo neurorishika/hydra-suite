@@ -16,7 +16,8 @@
 
 ## Runtime is too slow
 
-- Lower `resize_factor`.
+- Lower `resize_factor` (background subtraction only — it is clamped to `1.0`
+  for YOLO OBB, which letterboxes frames to its own input size regardless).
 - Disable non-essential real-time overlays/histograms.
 - Verify backend detection (`hydra_suite.utils.gpu_utils`).
 

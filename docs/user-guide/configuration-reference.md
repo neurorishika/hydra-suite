@@ -17,7 +17,7 @@ For a complete, control-by-control interface reference (question labels, value g
 | `video_output_enabled` | Render visualization video | `true` / `false` |
 | `video_output_path` | Output video path | valid file path |
 | `fps` | Acquisition FPS used for temporal scaling | `1.0 - 240.0` |
-| `resize_factor` | Processing downscale factor | `0.1 - 1.0` |
+| `resize_factor` | Processing downscale factor (background subtraction only; clamped to `1.0` for YOLO OBB) | `0.1 - 1.0` |
 
 ## Detection
 

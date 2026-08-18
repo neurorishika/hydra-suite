@@ -65,6 +65,7 @@ if [ "$FIXTURES" = "1" ]; then
     "ant_obb_sleap|$FX/clips/ant_obb_sleap.mp4|$FX/configs/ant_obb_sleap.json|$FX/ooceraea_biroi.json"
     "ant_obb_sequential|$FX/clips/ant_obb_sleap.mp4|$FX/configs/ant_obb_sequential.json|$FX/ooceraea_biroi.json"
     "worm_bgsub|$FX/clips/worm_bgsub.mp4|$FX/configs/worm_bgsub.json|"
+    "worm_bgsub_scaled|$FX/clips/worm_bgsub.mp4|$FX/configs/worm_bgsub_scaled.json|"
     "ant_cnn_identity|$FX/clips/ant_cnn_identity.mp4|$FX/configs/ant_cnn_identity.json|$FX/ooceraea_biroi.json"
     "fly_obb|$FX/clips/fly_obb.mp4|$FX/configs/fly_obb.json|"
   )
@@ -78,6 +79,8 @@ fi
 # Optionally restrict to specific clips, so you don't rerun the whole matrix.
 # Pass names as arguments or via ONLY="a b" (space- or comma-separated):
 #   bash tools/equivalence/run_matrix.sh ant_pose_headtail worm_bgsub
+# worm_bgsub_scaled is the only clip exercising RESIZE_FACTOR < 1.0 (Scale=0.5);
+# bg-sub is the sole method that honors it, so it is the sole scaled fixture.
 #   ONLY=ant_pose_headtail bash tools/equivalence/run_matrix.sh
 _only="${ONLY:-$*}"
 _only="${_only//,/ }"  # allow comma-separated too
