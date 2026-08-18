@@ -1215,6 +1215,9 @@ class ConfigOrchestrator:
         self._panels.identity.spin_apriltag_decimate.setValue(
             float(get_cfg("apriltag_decimate", default=1.0))
         )
+        self._panels.identity.spin_apriltag_crop_padding.setValue(
+            float(get_cfg("apriltag_crop_padding", default=0.0))
+        )
         self._panels.identity.line_color_tag_model.setText(
             str(get_cfg("color_tag_model_path", default=""))
         )
@@ -1917,6 +1920,7 @@ class ConfigOrchestrator:
             {
                 "apriltag_family": self._panels.identity.combo_apriltag_family.currentText(),
                 "apriltag_decimate": self._panels.identity.spin_apriltag_decimate.value(),
+                "apriltag_crop_padding": self._panels.identity.spin_apriltag_crop_padding.value(),
                 "color_tag_model_path": self._panels.identity.line_color_tag_model.text(),
                 "color_tag_confidence": self._panels.identity.spin_color_tag_conf.value(),
                 "enable_pose_extractor": self._panels.identity.chk_enable_pose_extractor.isChecked(),

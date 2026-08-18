@@ -1943,6 +1943,9 @@ class DetectionPanel(QWidget):
             "apriltag_decimate": (
                 ip.spin_apriltag_decimate.value() if ip is not None else 1.0
             ),
+            "apriltag_crop_padding": (
+                ip.spin_apriltag_crop_padding.value() if ip is not None else 0.0
+            ),
             "enable_pose_extractor": self._main_window._is_pose_inference_enabled(),
             "pose_model_type": pose_backend_family,
             "pose_model_dir": self._main_window._get_resolved_pose_model_dir(

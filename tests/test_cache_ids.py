@@ -19,7 +19,7 @@ def test_apriltag_cache_id_deterministic() -> None:
         "APRILTAG_MAX_HAMMING": 1,
         "APRILTAG_DECIMATE": 1.0,
         "APRILTAG_BLUR": 0.8,
-        "INDIVIDUAL_CROP_PADDING": 0.1,
+        "APRILTAG_CROP_PADDING": 0.0,
     }
     id1 = mod.compute_apriltag_cache_id(params, "model_a")
     id2 = mod.compute_apriltag_cache_id(params, "model_a")
@@ -58,8 +58,8 @@ def test_apriltag_cache_id_changes_with_inference_model() -> None:
 
 
 def test_apriltag_cache_id_changes_with_padding() -> None:
-    base = {"INDIVIDUAL_CROP_PADDING": 0.1}
-    alt = {"INDIVIDUAL_CROP_PADDING": 0.2}
+    base = {"APRILTAG_CROP_PADDING": 0.0}
+    alt = {"APRILTAG_CROP_PADDING": 0.2}
     assert mod.compute_apriltag_cache_id(base, "m") != mod.compute_apriltag_cache_id(
         alt, "m"
     )

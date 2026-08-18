@@ -711,7 +711,7 @@ def _detect_apriltags_in_frame(
     _tag_offsets = []
     _tag_det_indices = []
     _tag_tasks = []
-    _crop_padding = float(params.get("INDIVIDUAL_CROP_PADDING", 0.1))
+    _crop_padding = float(params.get("APRILTAG_CROP_PADDING", 0.0))
     _suppress_foreign = bool(params.get("SUPPRESS_FOREIGN_OBB_REGIONS", True))
     _bg_color = tuple(params.get("INDIVIDUAL_BACKGROUND_COLOR", (0, 0, 0)))
     for ti, task in enumerate(frame_tasks_f):

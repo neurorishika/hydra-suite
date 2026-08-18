@@ -405,7 +405,7 @@ class AprilTagConfig:
     unsharp_amount: float = 1.5
     contrast_factor: float = 1.5
     max_tag_id: int | None = None
-    crop_padding: float = 0.1
+    crop_padding: float = 0.0
 
 
 def _default_canonical_geometry() -> CanonicalGeometry:
@@ -1079,7 +1079,7 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
         max_hamming=int(params.get("APRILTAG_MAX_HAMMING", 1)),
         decimate=float(params.get("APRILTAG_DECIMATE", 1.0)),
         blur=float(params.get("APRILTAG_BLUR", 0.8)),
-        crop_padding=float(params.get("INDIVIDUAL_CROP_PADDING", 0.1)),
+        crop_padding=float(params.get("APRILTAG_CROP_PADDING", 0.0)),
     )
 
     batch_size = int(params.get("YOLO_BATCH_SIZE", params.get("BATCH_SIZE", 1)))

@@ -174,10 +174,23 @@ class IdentityPanel(QWidget):
         self.spin_apriltag_decimate.setToolTip(
             "Decimation factor for faster detection (higher = faster but less accurate)"
         )
+        self.spin_apriltag_crop_padding = QDoubleSpinBox()
+        self.spin_apriltag_crop_padding.setRange(-0.5, 2.0)
+        self.spin_apriltag_crop_padding.setValue(0.0)
+        self.spin_apriltag_crop_padding.setSingleStep(0.05)
+        self.spin_apriltag_crop_padding.setDecimals(2)
+        self.spin_apriltag_crop_padding.setToolTip(
+            "Padding around the detection's axis-aligned bounding box, as a\n"
+            "fraction of its size, for AprilTag crops only.\n"
+            "0.0 = the detection's exact extent (default). Negative tightens.\n"
+            "Tag crops are never rotated or rescaled -- an AprilTag is a rigid\n"
+            "printed square and any transform degrades decode."
+        )
         self.apriltag_row_widget = self._build_inline_fields_row(
             [
                 ("Family", self.combo_apriltag_family, 1),
                 ("Downsampling", self.spin_apriltag_decimate, 0),
+                ("Crop padding", self.spin_apriltag_crop_padding, 0),
             ]
         )
         fl_apriltags.addRow("AprilTag settings", self.apriltag_row_widget)

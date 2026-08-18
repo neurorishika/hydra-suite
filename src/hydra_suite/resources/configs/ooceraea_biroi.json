@@ -183,6 +183,7 @@
   "cnn_classifier_window": 10,
   "apriltag_family": "tag36h11",
   "apriltag_decimate": 1.0,
+  "apriltag_crop_padding": 0.0,
   "enable_pose_extractor": true,
   "pose_model_type": "sleap",
   "pose_model_dir": "pose/SLEAP/20260214-224154_unet_ant_single_instance",

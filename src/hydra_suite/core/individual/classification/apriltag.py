@@ -91,8 +91,10 @@ class AprilTagConfig:
 
     # Filtering
     max_tag_id: Optional[int] = None  # ignore IDs above this (None = no limit)
-    # Crop padding as a fraction of OBB size — reuses INDIVIDUAL_CROP_PADDING
-    padding_fraction: float = 0.1
+    # Crop padding as a fraction of the OBB bounding box. 0.0 = the detection's
+    # exact axis-aligned extent -- an AprilTag is a rigid printed square, so the
+    # crop is deliberately un-rotated, un-scaled, and un-padded by default.
+    padding_fraction: float = 0.0
 
     @classmethod
     def from_params(cls, params: Dict[str, Any]) -> "AprilTagConfig":
@@ -114,7 +116,7 @@ class AprilTagConfig:
                 if params.get("APRILTAG_MAX_TAG_ID") is not None
                 else None
             ),
-            padding_fraction=float(params.get("INDIVIDUAL_CROP_PADDING", 0.1)),
+            padding_fraction=float(params.get("APRILTAG_CROP_PADDING", 0.0)),
         )
 
 

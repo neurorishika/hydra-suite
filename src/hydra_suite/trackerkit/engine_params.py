@@ -1189,6 +1189,9 @@ def build_engine_params(
         ),
         "APRILTAG_FAMILY": str(_cfg_get(cfg, "apriltag_family", default="tag36h11")),
         "APRILTAG_DECIMATE": float(_cfg_get(cfg, "apriltag_decimate", default=1.0)),
+        "APRILTAG_CROP_PADDING": float(
+            _cfg_get(cfg, "apriltag_crop_padding", default=0.0)
+        ),
         "COLOR_TAG_MODEL_PATH": str(_cfg_get(cfg, "color_tag_model_path", default="")),
         "COLOR_TAG_CONFIDENCE": float(
             _cfg_get(cfg, "color_tag_confidence", default=0.5)

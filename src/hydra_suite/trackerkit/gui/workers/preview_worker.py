@@ -570,6 +570,7 @@ def _preview_build_inference_params_legacy(context, resize_f, use_detection_filt
     params["USE_APRILTAGS"] = bool(context.get("use_apriltags", False))
     params["APRILTAG_FAMILY"] = str(context.get("apriltag_family", "tag36h11"))
     params["APRILTAG_DECIMATE"] = float(context.get("apriltag_decimate", 1.0))
+    params["APRILTAG_CROP_PADDING"] = float(context.get("apriltag_crop_padding", 0.0))
 
     return params
 
