@@ -2653,7 +2653,7 @@ class MainWindow(QMainWindow):
     def _is_visualization_enabled(self) -> bool:
         # Preview should always render frames regardless of visualization-free toggle
         return (
-            not self._setup_panel.chk_visualization_free.isChecked()
+            not self._setup_panel.is_visualization_free()
             or self.btn_preview.isChecked()
         )
 

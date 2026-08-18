@@ -2319,18 +2319,11 @@ class SessionOrchestrator:
 
     def _on_visualization_mode_changed(self, state):
         """Handle visualization-free mode toggle."""
-        is_viz_free = self._panels.setup.chk_visualization_free.isChecked()
+        is_viz_free = self._panels.setup.is_visualization_free()
         is_preview_active = self._mw.btn_preview.isChecked()
         is_tracking_active = (
             self._mw.tracking_worker and self._mw.tracking_worker.isRunning()
         )
-
-        self._panels.setup.g_display.setVisible(True)
-        self._panels.setup.chk_show_circles.setEnabled(True)
-        self._panels.setup.chk_show_orientation.setEnabled(True)
-        self._panels.setup.chk_show_trajectories.setEnabled(True)
-        self._panels.setup.chk_show_labels.setEnabled(True)
-        self._panels.setup.chk_show_state.setEnabled(True)
 
         if is_tracking_active and is_viz_free and not is_preview_active:
             self._mw._stored_preview_text = (

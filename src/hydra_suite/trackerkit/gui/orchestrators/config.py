@@ -304,7 +304,7 @@ class ConfigOrchestrator:
         self._panels.setup.chk_use_cached_detections.setChecked(
             get_cfg("use_cached_detections", default=True)
         )
-        self._panels.setup.chk_visualization_free.setChecked(
+        self._panels.setup.set_visualization_free(
             get_cfg("visualization_free_mode", default=False)
         )
 
@@ -1586,7 +1586,7 @@ class ConfigOrchestrator:
                 # === SYSTEM PERFORMANCE ===
                 "resize_factor": self._panels.setup.spin_resize.value(),
                 "use_cached_detections": self._panels.setup.chk_use_cached_detections.isChecked(),
-                "visualization_free_mode": self._panels.setup.chk_visualization_free.isChecked(),
+                "visualization_free_mode": self._panels.setup.is_visualization_free(),
                 "prompt_open_refinekit_on_tracking_complete": self._panels.postprocess.chk_prompt_open_refinekit.isChecked(),
                 # === DETECTION STRATEGY ===
                 "detection_method": (
@@ -2139,9 +2139,7 @@ class ConfigOrchestrator:
             "SHOW_LABELS": self._panels.setup.chk_show_labels.isChecked(),
             "SHOW_STATE": self._panels.setup.chk_show_state.isChecked(),
             "SHOW_KALMAN_UNCERTAINTY": bool(self._mw.config.debug_mode),
-            "VISUALIZATION_FREE_MODE": (
-                self._panels.setup.chk_visualization_free.isChecked()
-            ),
+            "VISUALIZATION_FREE_MODE": self._panels.setup.is_visualization_free(),
             "TRACKING_REALTIME_MODE": self._mw._is_realtime_tracking_mode_enabled(),
             "TRACKING_WORKFLOW_MODE": self._mw._session_orch._workflow_mode_key(),
             "zoom_factor": self._mw.slider_zoom.value() / 100.0,

@@ -669,23 +669,9 @@ class SetupPanel(QWidget):
         )
         self.chk_realtime_mode.stateChanged.connect(self._sync_realtime_cache_controls)
 
-        # Visualization-Free Mode
-        self.chk_visualization_free = QCheckBox("Headless preview")
-        self.chk_visualization_free.setChecked(False)
-        self.chk_visualization_free.setToolTip(
-            "Skip all frame visualization and rendering.\n"
-            "Significantly faster processing (2-4× speedup).\n"
-            "Real-time FPS/ETA stats still shown in UI.\n"
-            "Recommended for large batch processing."
-        )
-        self.chk_visualization_free.stateChanged.connect(
-            self._main_window._on_visualization_mode_changed
-        )
-
         for perf_checkbox in (
             self.chk_use_cached_detections,
             self.chk_realtime_mode,
-            self.chk_visualization_free,
         ):
             perf_checkbox.setStyleSheet("font-size: 10px; spacing: 6px;")
             perf_checkbox.setMinimumHeight(26)
@@ -697,10 +683,8 @@ class SetupPanel(QWidget):
         perf_toggle_grid.setContentsMargins(0, 0, 0, 0)
         perf_toggle_grid.addWidget(self.chk_use_cached_detections, 0, 0)
         perf_toggle_grid.addWidget(self.chk_realtime_mode, 0, 1)
-        perf_toggle_grid.addWidget(self.chk_visualization_free, 0, 2)
         perf_toggle_grid.setColumnStretch(0, 1)
         perf_toggle_grid.setColumnStretch(1, 1)
-        perf_toggle_grid.setColumnStretch(2, 1)
         self._reflow_performance_controls()
         vl_sys.addLayout(self.performance_control_grid)
         vl_sys.addLayout(perf_toggle_grid)
@@ -726,9 +710,25 @@ class SetupPanel(QWidget):
         # ============================================================
         # Display Settings (moved from Visuals tab)
         # ============================================================
-        self.g_display = QGroupBox("Preview Overlays")
+        self.g_display = QGroupBox("Enable Preview")
+        self.g_display.setCheckable(True)
+        self.g_display.setChecked(True)
+        self.g_display.setToolTip(
+            "Render tracked frames in the live preview.\n"
+            "\n"
+            "Disable for maximum speed (2-4× faster): frame visualization and\n"
+            "rendering are skipped entirely while real-time FPS/ETA stats keep\n"
+            "updating. Recommended for large batch processing."
+        )
+        self.g_display.toggled.connect(self._on_preview_enabled_toggled)
         self._main_window._set_compact_section_widget(self.g_display)
-        vl_display = QVBoxLayout(self.g_display)
+        _vl_display_outer = QVBoxLayout(self.g_display)
+        self.display_content = QWidget()
+        self.display_content.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        _vl_display_outer.addWidget(self.display_content)
+        vl_display = QVBoxLayout(self.display_content)
+        vl_display.setContentsMargins(0, 0, 0, 0)
+        vl_display.setSpacing(8)
         vl_display.addWidget(
             self._main_window._create_help_label(
                 "Configure visual overlays shown during tracking. These settings affect "
@@ -792,6 +792,7 @@ class SetupPanel(QWidget):
         vl_display.addLayout(f_trail)
 
         form.addWidget(self.g_display)
+        self._sync_preview_overlay_ui()
 
         # Advanced / Debug group (moved from Visuals tab) removed: the
         # per-checkbox debug-logging/profiling toggles are superseded by the
@@ -799,6 +800,26 @@ class SetupPanel(QWidget):
 
         scroll.setWidget(content)
         layout.addWidget(scroll)
+
+    def _sync_preview_overlay_ui(self) -> None:
+        """Show the overlay controls only when preview rendering is enabled."""
+        preview_enabled = bool(self.g_display.isChecked())
+        self.display_content.setVisible(preview_enabled)
+        self.display_content.setEnabled(preview_enabled)
+
+    def _on_preview_enabled_toggled(self, checked: bool) -> None:
+        """Handle the "Enable Preview" section toggle."""
+        self._sync_preview_overlay_ui()
+        self._main_window._on_visualization_mode_changed(checked)
+
+    def is_visualization_free(self) -> bool:
+        """True when preview rendering is disabled (headless preview)."""
+        return not bool(self.g_display.isChecked())
+
+    def set_visualization_free(self, value: bool) -> None:
+        """Enable/disable preview rendering from the visualization-free flag."""
+        self.g_display.setChecked(not bool(value))
+        self._sync_preview_overlay_ui()
 
     def _sync_realtime_cache_controls(self, *_args) -> None:
         """Disable cache reuse whenever realtime workflow is enabled."""
