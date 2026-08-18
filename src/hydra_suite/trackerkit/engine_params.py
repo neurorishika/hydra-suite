@@ -143,6 +143,16 @@ def _coerce_int_list(raw_value: Any) -> list[int] | None:
         return None
 
 
+def _dataset_class_names(cfg) -> list[str]:
+    """Ordered class names (index = class id), falling back to the single name."""
+    raw = str(_cfg_get(cfg, "dataset_class_names", default="") or "")
+    names = [part.strip() for part in raw.split(",") if part.strip()]
+    if names:
+        return names
+    single = str(_cfg_get(cfg, "dataset_class_name", default="") or "").strip()
+    return [single or "object"]
+
+
 def _autopick_greedy(n_targets: int) -> bool:
     return int(n_targets) >= SOLVER_AUTOPICK_GREEDY_THRESHOLD
 
@@ -1231,6 +1241,16 @@ def build_engine_params(
         "DATASET_PROBABILISTIC_SAMPLING": bool(
             _cfg_get(cfg, "dataset_probabilistic_sampling", default=True)
         ),
+        "DATASET_EXPORT_LEVELS": list(
+            _cfg_get(cfg, "dataset_export_levels", default=["polygon", "obb", "aabb"])
+        ),
+        "DATASET_DEDUP_METHOD": str(
+            _cfg_get(cfg, "dataset_dedup_method", default="phash")
+        ),
+        "DATASET_DEDUP_THRESHOLD": int(
+            _cfg_get(cfg, "dataset_dedup_threshold", default=8)
+        ),
+        "DATASET_CLASS_NAMES": _dataset_class_names(cfg),
         # Active-learning metric selectors (bridge: config.py:2394-2399).
         "METRIC_LOW_CONFIDENCE": bool(
             _cfg_get(cfg, "metric_low_confidence", default=True)
@@ -1241,6 +1261,7 @@ def build_engine_params(
         "METRIC_FRAGMENTED_DETECTIONS": bool(
             _cfg_get(cfg, "metric_fragmented_detections", default=True)
         ),
+        "METRIC_CROWDING": bool(_cfg_get(cfg, "metric_crowding", default=True)),
         "METRIC_HIGH_ASSIGNMENT_COST": bool(
             _cfg_get(cfg, "metric_high_assignment_cost", default=True)
         ),

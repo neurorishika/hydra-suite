@@ -9,6 +9,7 @@ from typing import Callable, Sequence
 
 import numpy as np
 
+from hydra_suite.utils.geometry import clamp01 as _clamp01
 from hydra_suite.utils.geometry import (  # noqa: F401
     polygon_overlap_ratio as _polygon_overlap_ratio,
 )
@@ -16,15 +17,29 @@ from hydra_suite.utils.geometry import (  # noqa: F401
 
 @dataclass
 class ALSignals:
-    """Per-frame signal record consumed by the acquisition selector."""
+    """Per-frame signal record consumed by the acquisition selector.
+
+    `uncertainty_score` is NOT derived from `mean_confidence` automatically --
+    there is deliberately no `__post_init__` magic here. `mean_confidence`
+    alone cannot be turned into an absolute severity without knowing the
+    caller's confidence floor, and that floor varies per caller
+    (`al_worker.py`'s `base_conf` defaults to 0.25; `dataset_generation.py`'s
+    `conf_threshold` defaults to 0.5). A hardcoded fallback floor would
+    silently disagree with a live caller-configured floor. Every constructor
+    of `ALSignals` MUST compute `uncertainty_score` itself via
+    `score_uncertainty(confidences, conf_floor=<its own floor>)` and pass it
+    explicitly; the 0.0 default here is a genuine "no uncertainty signal"
+    value, not a stand-in for "compute it later".
+    """
 
     frame_id: int
     n_detections: int = 0
     mean_confidence: float = float("nan")
-    margin: float = 0.0
+    uncertainty_score: float = 0.0
     nms_instability: float = 0.0
     count_deviation: float = 0.0
     crowd_score: float = 0.0
+    fragmentation_score: float = 0.0
     edge_score: float = 0.0
     extras: dict[str, float] = field(default_factory=dict)
 
@@ -32,26 +47,39 @@ class ALSignals:
 def score_uncertainty(
     confidences: Sequence[float],
     conf_floor: float = 0.5,
-) -> tuple[float, float]:
-    """Return (mean_confidence, margin).
+) -> float:
+    """Return absolute detection-uncertainty severity in [0, 1].
 
-    `margin` is `min(c) - conf_floor` clipped to [0, 1]. A small/zero margin
-    indicates at least one detection sits at or below the floor.
+    Exactly 0 when the frame's mean confidence sits at or above `conf_floor` --
+    a confidently-detected frame is not an active-learning candidate. All-NaN
+    confidences (bg-sub, which has no confidence head) also score 0; treating
+    "no information" as "maximum uncertainty" would make every bg-sub frame a
+    candidate.
     """
     valid = [float(c) for c in confidences if c is not None and not math.isnan(c)]
     if not valid:
-        return float("nan"), 0.0
+        return 0.0
     mean_conf = float(np.mean(valid))
-    raw_margin = float(min(valid) - conf_floor)
-    margin = float(max(0.0, min(1.0, raw_margin)))
-    return mean_conf, margin
+    floor = max(float(conf_floor), 1e-6)
+    if mean_conf >= floor:
+        return 0.0
+    return float(min(1.0, (floor - mean_conf) / floor))
 
 
 def score_count_deviation(n: int, expected: int) -> float:
-    """Return |n - expected| / max(expected, 1), clipped to [0, 1]. 0 if expected<=0."""
+    """Return absolute count-mismatch severity in [0, 1]. 0 if expected <= 0.
+
+    Asymmetric by design, preserving the legacy scorer's judgement: a missed
+    animal is twice as bad as a spurious box, because a false negative removes
+    training signal while a false positive is easy to delete during review.
+    """
     if expected <= 0:
         return 0.0
-    return float(min(1.0, abs(n - expected) / float(expected)))
+    if n == expected:
+        return 0.0
+    if n < expected:
+        return float(min(1.0, (expected - n) / float(expected)))
+    return float(min(1.0, (n - expected) / float(expected)) * 0.5)
 
 
 def score_crowd(
@@ -85,6 +113,61 @@ def score_crowd(
         edge = max(edge, edge_norm)
 
     return float(crowd), float(edge)
+
+
+def score_fragmentation(
+    obb_corners: Sequence[np.ndarray],
+    reference_major_axis: float | None = None,
+) -> float:
+    """Return [0, 1] evidence that one object was split into several detections.
+
+    A suspicious pair is close together, overlapping, and *both* smaller than
+    the frame's typical detection -- the signature of a single animal broken
+    into fragments. This is distinct from `score_crowd`, which measures genuine
+    overlap between full-size neighbours.
+
+    Ported from the legacy FrameQualityScorer so the signal keeps its meaning;
+    the 0.45 suspicion gate and the pair weights are unchanged.
+    """
+    boxes = [
+        np.asarray(c, dtype=np.float32).reshape(-1, 2)
+        for c in obb_corners
+        if c is not None
+    ]
+    boxes = [b for b in boxes if b.shape[0] >= 3]
+    if len(boxes) < 2:
+        return 0.0
+
+    centers = [b.mean(axis=0) for b in boxes]
+    major_axes = [
+        float(
+            max(
+                np.linalg.norm(b[1] - b[0]),
+                np.linalg.norm(b[2] - b[1]),
+            )
+        )
+        for b in boxes
+    ]
+    typical = float(reference_major_axis or np.median(major_axes))
+    typical = max(typical, 1.0)
+
+    suspicious = 0
+    best = 0.0
+    for i, j in combinations(range(len(boxes)), 2):
+        distance = float(np.linalg.norm(centers[i] - centers[j]))
+        proximity = _clamp01(1.0 - distance / max(typical * 0.65, 1.0))
+        overlap = _polygon_overlap_ratio(boxes[i], boxes[j])
+        pair_major = (major_axes[i] + major_axes[j]) / 2.0
+        smallness = _clamp01(1.0 - pair_major / typical)
+
+        pair_score = _clamp01(0.5 * proximity + 0.3 * overlap + 0.2 * smallness)
+        if pair_score >= 0.45:
+            suspicious += 1
+        best = max(best, pair_score)
+
+    if best < 0.45:
+        return 0.0
+    return _clamp01(best + min(0.1 * max(suspicious - 1, 0), 0.2))
 
 
 Detection = tuple  # (cx, cy, w, h, theta, conf)

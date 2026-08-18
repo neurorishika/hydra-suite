@@ -352,3 +352,33 @@ def test_reference_body_px_sourced_and_resize_scaled():
     }
     cfg = build_inference_config_from_params(params)
     assert cfg.obb.direct.slice.reference_body_px == 60.0
+
+
+def test_build_obb_only_config_forwards_model_task_and_native_geometry():
+    from hydra_suite.core.inference.config import build_obb_only_config
+
+    cfg = build_obb_only_config(
+        "seg.pt",
+        runtime_tier="cpu",
+        model_task="segment",
+        emit_native_geometry=True,
+    )
+    assert cfg.obb.direct.model_task == "segment"
+    assert cfg.obb.emit_native_geometry is True
+
+
+def test_build_obb_only_config_defaults_are_unchanged():
+    from hydra_suite.core.inference.config import build_obb_only_config
+
+    cfg = build_obb_only_config("m.pt", runtime_tier="cpu")
+    assert cfg.obb.direct.model_task == "obb"
+    assert cfg.obb.emit_native_geometry is False
+
+
+def test_build_obb_only_config_rejects_unknown_task():
+    import pytest
+
+    from hydra_suite.core.inference.config import build_obb_only_config
+
+    with pytest.raises(ValueError, match="model_task"):
+        build_obb_only_config("m.pt", runtime_tier="cpu", model_task="pose")

@@ -271,6 +271,11 @@ class BgSubConfig:
     enable_size_filtering: bool = False
     min_object_size: float = 0.0
     max_object_size: float = float("inf")
+    # Export-only: when True, run_bgsub additionally populates
+    # OBBResult.polygons with native per-detection contours (frame pixel
+    # space). Default False keeps the hot tracking path byte-identical (no
+    # contours computed, no OBBResult field change).
+    emit_native_geometry: bool = False
     # The raw param dict, retained for BackgroundModel/BackgroundMeasurer,
     # which still read params by legacy UPPER_SNAKE key.
     params: dict = field(default_factory=dict)
@@ -1060,18 +1065,32 @@ def build_obb_only_config(
     iou_threshold: float = 0.7,
     max_targets: int = 8,
     mode: str = "direct",
+    model_task: str = "obb",
+    emit_native_geometry: bool = False,
+    extra_params: dict | None = None,
 ) -> InferenceConfig:
     """Detection-only InferenceConfig for one-shot / dataset OBB detection.
 
-    Thin wrapper over build_inference_config_from_params with every non-OBB
-    stage left disabled. Used by callers that have a model path + runtime but
-    no full tracking params dict. ``runtime_tier`` is the live runtime knob
-    (Runtime Gen-2); when omitted, the tier is migrated from ``compute_runtime``.
+    ``model_task`` selects the checkpoint's head ("obb", "detect", "segment");
+    it MUST match the checkpoint, which ``stages/obb.py`` verifies loudly.
+    ``emit_native_geometry`` is the export-only opt-in that populates
+    ``OBBResult.polygons`` with native contours (segment task only).
+
+    ``extra_params`` supplies additional raw params keys that this helper's
+    explicit arguments do not cover -- notably the ``YOLO_SEQ_*`` /
+    ``YOLO_DETECT_MODEL_PATH`` / ``YOLO_CROP_OBB_MODEL_PATH`` family a
+    ``mode="sequential"`` config needs. Keys set explicitly above always win.
     """
+    task = str(model_task).strip().lower()
+    if task not in {"obb", "detect", "segment"}:
+        raise ValueError(
+            f"model_task must be one of 'obb', 'detect', 'segment'; got {model_task!r}"
+        )
     params: dict = {
         "DETECTION_METHOD": "yolo_obb",
         "YOLO_OBB_MODE": mode,
         "YOLO_OBB_DIRECT_MODEL_PATH": model_path,
+        "YOLO_OBB_DIRECT_TASK": task,
         "COMPUTE_RUNTIME": compute_runtime,
         "YOLO_CONFIDENCE_THRESHOLD": confidence_threshold,
         "YOLO_IOU_THRESHOLD": iou_threshold,
@@ -1079,4 +1098,9 @@ def build_obb_only_config(
     }
     if runtime_tier:
         params["RUNTIME_TIER"] = runtime_tier
-    return build_inference_config_from_params(params)
+    for key, value in (extra_params or {}).items():
+        params.setdefault(key, value)
+    cfg = build_inference_config_from_params(params)
+    if emit_native_geometry:
+        cfg.obb.emit_native_geometry = True
+    return cfg

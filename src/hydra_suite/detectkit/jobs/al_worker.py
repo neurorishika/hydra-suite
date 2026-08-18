@@ -3,19 +3,22 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Literal, Sequence
 
-import cv2
 import numpy as np
 from PySide6.QtCore import Signal
 
 from hydra_suite.data.al.acquisition import PRESETS, AcquisitionWeights, select
 from hydra_suite.data.al.candidate_pool import CandidatePoolConfig, build_candidate_pool
+from hydra_suite.data.al.escalation import LabelRecord
+from hydra_suite.data.al.export import ExportedFrame, export_al_dataset
 from hydra_suite.data.al.frame_source import (
     DetectKitProjectSource,
+    FrameRef,
     FrameSource,
     ImageFolderFrameSource,
     VideoFrameSource,
@@ -24,11 +27,13 @@ from hydra_suite.data.al.signals import (
     ALSignals,
     score_count_deviation,
     score_crowd,
+    score_fragmentation,
     score_nms_instability,
     score_uncertainty,
 )
 from hydra_suite.detectkit.gui.models import DetectKitProject, OBBSource
 from hydra_suite.utils.geometry import obb_corners_from_dims as _detection_corners
+from hydra_suite.utils.geometry_levels import GeometryLevel
 from hydra_suite.widgets.workers import BaseWorker
 
 logger = logging.getLogger(__name__)
@@ -55,6 +60,16 @@ class ALRequest:
     base_conf: float = 0.25
     base_iou: float = 0.7
     export_level: str = "obb"
+    export_levels: list[str] = field(default_factory=lambda: ["obb"])
+    # The model's actual geometry ceiling (GeometryLevel.label string), set
+    # independently of what the caller *requests* -- this is the honesty
+    # guard's ground truth. It must never be derived from `export_levels`
+    # itself (that makes the "don't claim more than the model can produce"
+    # check tautological: a caller-chosen request can never exceed a limit
+    # computed from that same request). Mirrors `resolve_native_level` in
+    # `data/dataset_generation.py`, which derives from the actual configured
+    # detection method/task, independent of what any dialog selected.
+    native_level: str = "obb"
 
 
 @dataclass
@@ -64,6 +79,37 @@ class ALResult:
     source_path: str
     n_picked: int
     selected_frames: list[int]
+
+
+class _LazyALImages(Mapping):
+    """Picked-frame images, decoded from `source` on `__getitem__`.
+
+    `export_al_dataset`'s authoritative root reads each key exactly once, so
+    only the frame currently being written is ever resident -- there is no
+    eager dict of every picked frame's pixels.
+    """
+
+    def __init__(
+        self,
+        source: FrameSource,
+        frame_refs_by_id: dict[int, "FrameRef"],
+        frame_ids: Sequence[int],
+    ) -> None:
+        self._source = source
+        self._frame_refs_by_id = frame_refs_by_id
+        self._frame_ids = list(frame_ids)
+
+    def __getitem__(self, frame_id: int):
+        img = self._source.read(self._frame_refs_by_id[frame_id])
+        if img is None:
+            raise KeyError(frame_id)
+        return img
+
+    def __iter__(self):
+        return iter(self._frame_ids)
+
+    def __len__(self) -> int:
+        return len(self._frame_ids)
 
 
 def _build_frame_source(req: ALRequest) -> FrameSource:
@@ -89,7 +135,7 @@ def _frame_signals(
     # for both, so no branching is needed here.
     detections = list(detector_fn(frame, base_conf, base_iou))
     confidences = [d[5] for d in detections]
-    mean_conf, margin = score_uncertainty(confidences, conf_floor=base_conf)
+    uncertainty = score_uncertainty(confidences, conf_floor=base_conf)
     count_dev = score_count_deviation(len(detections), expected_count)
 
     h, w = frame.shape[:2]
@@ -103,46 +149,38 @@ def _frame_signals(
     signal = ALSignals(
         frame_id=frame_id,
         n_detections=len(detections),
-        mean_confidence=mean_conf,
-        margin=margin,
+        mean_confidence=float(np.mean(confidences)) if confidences else float("nan"),
+        uncertainty_score=uncertainty,
         nms_instability=nms,
         count_deviation=count_dev,
         crowd_score=crowd,
+        fragmentation_score=score_fragmentation(obb_corners),
         edge_score=edge,
     )
     return signal, detections
 
 
-def _write_geometry_label(
-    path: Path, records: list, frame_size: tuple[int, int]
-) -> None:
-    """Write YOLO labels: a native polygon when present, else OBB corners.
-
-    Each record is a 6-tuple ``(cx, cy, w, h, theta, conf)`` or a 7-tuple with
-    a trailing native polygon (an ``(P, 2)`` pixel-space array, or ``None``).
-    When the polygon is absent, output is byte-identical to the legacy
-    OBB-corner writer.
-    """
-    h, w = frame_size
-    with path.open("w") as fp:
-        for rec in records:
-            cx, cy, ww, hh, theta, _conf = rec[:6]
-            polygon = rec[6] if len(rec) > 6 else None
-            if polygon is not None:
-                pts = np.asarray(polygon, dtype=np.float32).reshape(-1, 2).copy()
-            else:
-                pts = _detection_corners(cx, cy, ww, hh, theta)
-            pts[:, 0] = np.clip(pts[:, 0] / w, 0.0, 1.0)
-            pts[:, 1] = np.clip(pts[:, 1] / h, 0.0, 1.0)
-            line = "0 " + " ".join(f"{v:.6f}" for v in pts.reshape(-1)) + "\n"
-            fp.write(line)
-
-
-def _write_yolo_obb_label(
-    path: Path, detections: list, frame_size: tuple[int, int]
-) -> None:
-    """Back-compat alias for :func:`_write_geometry_label`."""
-    _write_geometry_label(path, detections, frame_size)
+def _records_from_detections(detections: list) -> list[LabelRecord]:
+    """Convert detector tuples into LabelRecords, polygon-first."""
+    records: list[LabelRecord] = []
+    for rec in detections:
+        cx, cy, ww, hh, theta, conf = rec[:6]
+        polygon = rec[6] if len(rec) > 6 else None
+        if polygon is not None:
+            pts = np.asarray(polygon, dtype=np.float32).reshape(-1, 2)
+            level = GeometryLevel.POLYGON
+        else:
+            pts = _detection_corners(cx, cy, ww, hh, theta)
+            level = GeometryLevel.OBB
+        records.append(
+            LabelRecord(
+                class_id=0,
+                confidence=float(conf),
+                points=pts,
+                level=level,
+            )
+        )
+    return records
 
 
 def run_active_learning(
@@ -207,46 +245,100 @@ def run_active_learning(
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     proj_dir = Path(req.project.project_dir)
     source_root = proj_dir / "sources" / f"al_round_{timestamp}"
-    images_dir = source_root / "images"
-    labels_dir = source_root / "labels"
-    images_dir.mkdir(parents=True, exist_ok=True)
-    labels_dir.mkdir(parents=True, exist_ok=True)
 
+    # Readability is probed (and the frame discarded) up front, same as a
+    # picked frame that fails re-read did under the old hand-rolled writer:
+    # log-and-skip rather than aborting the whole round. Frames that pass the
+    # probe are read a second time by `export_al_dataset`'s lazy `images`
+    # mapping below -- an extra decode, but it keeps this function from
+    # holding every picked frame resident at once (see `_LazyALImages`).
     written_ids: list[int] = []
     for fid in picked_ids:
         ref = frame_refs_by_id[fid]
-        img = source.read(ref)
-        if img is None:
+        if source.read(ref) is None:
             logger.warning("Could not re-read picked frame %s; skipping.", fid)
             continue
-        dets = detections_by_id[fid]
-        img_path = images_dir / f"f_{fid:06d}.jpg"
-        cv2.imwrite(str(img_path), img)
-        _write_geometry_label(
-            labels_dir / f"f_{fid:06d}.txt",
-            dets,
-            frame_size=img.shape[:2],
-        )
         written_ids.append(fid)
 
-    (source_root / "classes.txt").write_text(req.project.class_name + "\n")
+    requested_levels = [
+        GeometryLevel.from_str(lbl) for lbl in (req.export_levels or [req.export_level])
+    ]
+    # `native_level` is the model's real ceiling, independent of what was
+    # requested -- `export_al_dataset` raises if any requested level exceeds
+    # it. Deriving this from `requested_levels` itself would make that guard
+    # tautological (a request can never exceed a limit computed from that
+    # same request), which is exactly the bug this task closes: a
+    # zero-detection round (every picked frame has 0 detections -- plausible
+    # for uncertainty-driven top-K picks) never reaches `derive_down`'s
+    # per-record check either, so this is the only real gate in that case.
+    native_level = GeometryLevel.from_str(req.native_level)
 
-    new_source = OBBSource(
-        path=str(source_root),
-        name=f"al_round_{timestamp}",
-        validated=False,
-        original_path=req.input_path,
-        source_kind="detectkit_al",
-        imported=True,
-        level=req.export_level,
+    exported = [
+        ExportedFrame(
+            frame_id=fid,
+            image_name=f"f_{fid:06d}.jpg",
+            records=_records_from_detections(detections_by_id[fid]),
+        )
+        for fid in written_ids
+    ]
+
+    provenance = {
+        "input_kind": req.input_kind,
+        "input_path": req.input_path,
+        "preset": req.preset,
+        "budget": req.budget,
+        "expected_count": req.expected_count,
+        "base_conf": req.base_conf,
+        "base_iou": req.base_iou,
+    }
+
+    manifest = export_al_dataset(
+        round_dir=source_root,
+        frames=exported,
+        images=_LazyALImages(source, frame_refs_by_id, written_ids),
+        native_level=native_level,
+        levels=requested_levels,
+        class_names=[req.project.class_name],
+        provenance=provenance,
     )
-    req.project.sources.append(new_source)
+
+    # One OBBSource per written level. The exporter's per-root `source.json`
+    # records `authoritative` (implied by `derived_from is None`) and
+    # `reviewed`; mirror those into the OBBSource fields. `source.json`'s own
+    # `derived_from` is a *geometry-level label* ("polygon") in that schema,
+    # but `OBBSource.derived_from` is documented and used elsewhere
+    # (`jobs/sam2_escalation.py`) as the *origin source name* -- a lookup key
+    # into `project.sources`. So it is set here to the authoritative
+    # sibling's own `OBBSource.name`, not copied verbatim from the manifest,
+    # so the authoritative root stays the single point of human review and
+    # is actually resolvable by name.
+    authoritative_name: str | None = None
+    for root_meta in manifest["roots"]:
+        name = f"al_round_{timestamp}_{root_meta['level']}"
+        is_derived = root_meta["derived_from"] is not None
+        req.project.sources.append(
+            OBBSource(
+                path=root_meta["path"],
+                name=name,
+                validated=False,
+                original_path=req.input_path,
+                source_kind="detectkit_al",
+                imported=True,
+                level=root_meta["level"],
+                reviewed=bool(root_meta["reviewed"]),
+                derived_from=authoritative_name if is_derived else None,
+            )
+        )
+        if not is_derived:
+            authoritative_name = name
+
+    source_path = manifest["roots"][0]["path"]
 
     if progress:
         progress(100, "Active learning complete")
 
     return ALResult(
-        source_path=str(source_root),
+        source_path=source_path,
         n_picked=len(written_ids),
         selected_frames=written_ids,
     )

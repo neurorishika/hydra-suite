@@ -3,22 +3,140 @@ Dataset generation utilities for active learning.
 Identifies challenging frames and exports them for annotation.
 """
 
-import json
 import logging
-from collections import defaultdict
-from itertools import combinations
+from collections.abc import Mapping
 from pathlib import Path
 
 import cv2
 import numpy as np
 
-from hydra_suite.utils.geometry import clamp01 as _clamp01
-from hydra_suite.utils.geometry import (
-    obb_corners_from_dims as _detection_corners_from_dims,
+from hydra_suite.data.al.escalation import (
+    LabelRecord,
+    achievable_levels,
+    records_from_obb_result,
 )
-from hydra_suite.utils.geometry import polygon_overlap_ratio as _polygon_overlap_ratio
+from hydra_suite.data.al.export import ExportedFrame, export_al_dataset
+from hydra_suite.utils.geometry_levels import GeometryLevel
 
 logger = logging.getLogger(__name__)
+
+_TASK_LEVELS = {
+    "segment": GeometryLevel.POLYGON,
+    "obb": GeometryLevel.OBB,
+    "detect": GeometryLevel.AABB,
+}
+
+
+def resolve_native_level(params) -> GeometryLevel:
+    """The geometry level the configured detection source can actually produce.
+
+    Never claims a level the model did not compute: a rotated quad is OBB, not
+    a polygon. bg-sub produces true foreground contours, so it reaches POLYGON.
+    """
+    method = str(params.get("DETECTION_METHOD", "background_subtraction")).lower()
+    if method == "background_subtraction":
+        return GeometryLevel.POLYGON
+    if method != "yolo_obb":
+        return GeometryLevel.OBB
+
+    return _TASK_LEVELS.get(resolve_detection_task(params), GeometryLevel.OBB)
+
+
+def resolve_detection_task(params) -> str:
+    """The YOLO head the export detection pass will actually run.
+
+    Single authority so `resolve_native_level`, `_init_detection_runner` and
+    the exported provenance can never disagree about which task ran. The
+    sequential stage-2 key is ``YOLO_SEQ_STAGE2_TASK`` -- the one
+    ``core/inference/config.build_inference_config_from_params`` reads;
+    ``YOLO_OBB_STAGE2_TASK`` was a key nothing ever wrote, so sequential rounds
+    silently resolved to the direct-mode default.
+    """
+    mode = str(params.get("YOLO_OBB_MODE", "direct")).strip().lower()
+    if mode == "sequential":
+        raw = params.get(
+            "YOLO_SEQ_STAGE2_TASK", params.get("YOLO_OBB_STAGE2_TASK", "obb")
+        )
+    else:
+        raw = params.get("YOLO_OBB_DIRECT_TASK", "obb")
+    task = str(raw or "obb").strip().lower()
+    return task if task in _TASK_LEVELS else "obb"
+
+
+def resolve_detection_model_path(params) -> str:
+    """The checkpoint the export detection pass will actually load.
+
+    Sequential mode runs the *crop* OBB model as its geometry stage, not the
+    direct model -- stamping the direct path into provenance made a sequential
+    round claim a model it never ran.
+    """
+    mode = str(params.get("YOLO_OBB_MODE", "direct")).strip().lower()
+    if mode == "sequential":
+        return str(
+            params.get("YOLO_CROP_OBB_MODEL_PATH", "")
+            or params.get("YOLO_MODEL_PATH", "")
+            or ""
+        )
+    return str(
+        params.get(
+            "YOLO_OBB_DIRECT_MODEL_PATH",
+            params.get("YOLO_MODEL_PATH", ""),
+        )
+        or ""
+    )
+
+
+def effective_acquisition_weights(params):
+    """The acquisition weights that actually rank frames for `params`.
+
+    The preset is only the starting point: every channel whose ``METRIC_*``
+    toggle is off is zeroed, the uncertainty channel is zeroed for bg-sub
+    (which reports NaN confidences), and the survivors are renormalized. This
+    is the single derivation -- `FrameQualityScorer` consumes it, and the
+    exporter stamps it into provenance, so a round's recorded weights are by
+    construction the ones that produced it.
+    """
+    from hydra_suite.data.al.acquisition import PRESETS, AcquisitionWeights
+
+    method = str(params.get("DETECTION_METHOD", "")).strip().lower()
+    confidence_available = method != "background_subtraction"
+
+    enabled = {
+        "uncertainty": bool(params.get("METRIC_LOW_CONFIDENCE", True))
+        and confidence_available,
+        "count": bool(params.get("METRIC_COUNT_MISMATCH", True)),
+        "assignment": bool(params.get("METRIC_HIGH_ASSIGNMENT_COST", True)),
+        "track_loss": bool(params.get("METRIC_TRACK_LOSS", True)),
+        "position_uncertainty": bool(params.get("METRIC_HIGH_UNCERTAINTY", False)),
+        "crowd": bool(params.get("METRIC_CROWDING", True)),
+        "fragmentation": bool(params.get("METRIC_FRAGMENTED_DETECTIONS", True)),
+    }
+
+    base = PRESETS.get(
+        params.get("DATASET_AL_PRESET", "tracker_default"), PRESETS["tracker_default"]
+    )
+    weights = AcquisitionWeights(
+        uncertainty=base.uncertainty if enabled["uncertainty"] else 0.0,
+        nms_instability=0.0,
+        count=base.count if enabled["count"] else 0.0,
+        crowd=base.crowd if enabled["crowd"] else 0.0,
+        edge=base.edge,
+        fragmentation=base.fragmentation if enabled["fragmentation"] else 0.0,
+        assignment=base.assignment if enabled["assignment"] else 0.0,
+        track_loss=base.track_loss if enabled["track_loss"] else 0.0,
+        position_uncertainty=(
+            base.position_uncertainty if enabled["position_uncertainty"] else 0.0
+        ),
+    ).normalized()
+    return weights, enabled
+
+
+def _effective_acquisition_weights(params) -> dict:
+    """`effective_acquisition_weights` as a JSON-serializable dict."""
+    from dataclasses import asdict
+
+    weights, _enabled = effective_acquisition_weights(params)
+    return {k: float(v) for k, v in asdict(weights).items()}
 
 
 class FrameQualityScorer:
@@ -28,15 +146,52 @@ class FrameQualityScorer:
     underlying ranking now lives in `hydra_suite.data.al.acquisition`.
     """
 
-    def __init__(self, params):
-        from hydra_suite.data.al.acquisition import PRESETS, AcquisitionWeights
-
+    def __init__(self, params, frame_shape: tuple[int, int] | None = None):
         self.params = params
         self.frame_signals: dict = {}
         self.max_targets = params.get("MAX_TARGETS", 4)
         self.conf_threshold = params.get("DATASET_CONF_THRESHOLD", 0.5)
+
+        # -------------------------------------------------------------------
+        # COORDINATE SPACE: this scorer operates entirely in RESIZE_FACTOR
+        # WORKING space, because that is the space `detection_data["obb_corners"]`
+        # arrives in -- the detection cache is written from the resized
+        # detection frame (see core/inference), never from the original frame.
+        #
+        # Callers hand us ORIGINAL-space quantities: `frame_shape` comes from
+        # cv2.CAP_PROP_FRAME_{WIDTH,HEIGHT}, and REFERENCE_BODY_SIZE is an
+        # original-space length (core/canonicalization/geometry.py:83,
+        # core/tracking/worker.py, core/assigners/hungarian.py all multiply it
+        # by RESIZE_FACTOR to reach working space). Both are converted ONCE
+        # here. Comparing an original-space reference length against
+        # working-space corners made `fragmentation` -- the largest weight in
+        # `tracker_default` -- a function of the resize knob rather than of the
+        # scene, and `edge` had the mirror defect. This is the second time this
+        # class of bug has appeared; do not "simplify" these two lines away.
+        # -------------------------------------------------------------------
+        resize_factor = float(params.get("RESIZE_FACTOR", 1.0) or 1.0)
+        if resize_factor <= 0:
+            resize_factor = 1.0
+        self.resize_factor = resize_factor
+
+        # Original-space value, kept under its historical public name.
         self.reference_body_size = max(
             float(params.get("REFERENCE_BODY_SIZE", 20.0)), 1.0
+        )
+        # Working-space value: what every signal below is actually scored with.
+        self.reference_body_size_working = max(
+            self.reference_body_size * resize_factor, 1.0
+        )
+        # (H, W) of the coordinate space `obb_corners` live in. Required for a
+        # meaningful edge score: passing (1, 1) with pixel-space corners made
+        # score_crowd return values in the hundreds.
+        self.frame_shape = (
+            (
+                max(int(round(float(frame_shape[0]) * resize_factor)), 1),
+                max(int(round(float(frame_shape[1]) * resize_factor)), 1),
+            )
+            if frame_shape
+            else None
         )
 
         # Public legacy boolean flags (kept for backward compat).
@@ -48,41 +203,25 @@ class FrameQualityScorer:
         self.use_fragmented_detections = bool(
             params.get("METRIC_FRAGMENTED_DETECTIONS", True)
         )
+        self.use_crowd = bool(params.get("METRIC_CROWDING", True))
 
-        self._enabled = {
-            "uncertainty": self.use_confidence,
-            "count": self.use_count_mismatch,
-            "assignment": self.use_assignment_cost,
-            "track_loss": self.use_track_loss,
-            "position_uncertainty": self.use_uncertainty,
-            "crowd": self.use_fragmented_detections,
-        }
+        # Background subtraction sets every detection confidence to NaN
+        # (core/background/measure.py), so score_uncertainty always returns
+        # 0.0 on that path. Its weight must be zeroed explicitly and the
+        # remaining weights renormalized -- otherwise the dead uncertainty
+        # weight still counts in the denominator and dilutes every other
+        # channel by its share for no reason.
+        method = str(params.get("DETECTION_METHOD", "")).strip().lower()
+        self._confidence_available = method != "background_subtraction"
 
-        preset_name = params.get("DATASET_AL_PRESET", "tracker_default")
-        base = PRESETS.get(preset_name, PRESETS["tracker_default"])
-        self._weights = AcquisitionWeights(
-            uncertainty=base.uncertainty if self._enabled["uncertainty"] else 0.0,
-            nms_instability=0.0,
-            count=base.count if self._enabled["count"] else 0.0,
-            crowd=base.crowd if self._enabled["crowd"] else 0.0,
-            edge=base.edge,
-            assignment=base.assignment if self._enabled["assignment"] else 0.0,
-            track_loss=base.track_loss if self._enabled["track_loss"] else 0.0,
-            position_uncertainty=(
-                base.position_uncertainty
-                if self._enabled["position_uncertainty"]
-                else 0.0
-            ),
-        )
-
-        # Backward-compat scalar map for legacy callers.
-        self.frame_scores = defaultdict(lambda: {"score": 0.0, "metrics": {}})
+        self._weights, self._enabled = effective_acquisition_weights(params)
 
     def score_frame(self, frame_id, detection_data=None, tracking_data=None):
         from hydra_suite.data.al.signals import (
             ALSignals,
             score_count_deviation,
             score_crowd,
+            score_fragmentation,
             score_uncertainty,
         )
 
@@ -93,18 +232,26 @@ class FrameQualityScorer:
         # New pipeline: build ALSignals and store for get_worst_frames.
         # ------------------------------------------------------------------
         confidences = detection_data.get("confidences") or []
-        mean_conf, margin = score_uncertainty(
-            confidences, conf_floor=self.conf_threshold
-        )
+        mean_conf = float(np.mean(confidences)) if confidences else float("nan")
+        uncertainty = score_uncertainty(confidences, conf_floor=self.conf_threshold)
 
         n_dets = int(detection_data.get("count", len(confidences)))
         count_dev = score_count_deviation(n_dets, self.max_targets)
 
         obb_corners = self._extract_obb_corners(detection_data)
-        if obb_corners:
-            crowd, edge = score_crowd(obb_corners, frame_shape=(1, 1))
+        if obb_corners and self.frame_shape is not None:
+            crowd, edge = score_crowd(obb_corners, frame_shape=self.frame_shape)
+        elif obb_corners:
+            # No frame shape available: crowd is shape-independent, edge is not
+            # -- computing it against a fake (1, 1) shape is the bug this fixes.
+            crowd, _ = score_crowd(obb_corners, frame_shape=(1, 1))
+            edge = 0.0
         else:
             crowd, edge = 0.0, 0.0
+        fragmentation = score_fragmentation(
+            obb_corners,
+            reference_major_axis=self.reference_body_size_working * 2.2,
+        )
 
         extras: dict[str, float] = {}
         ac = tracking_data.get("assignment_confidences") or []
@@ -126,237 +273,24 @@ class FrameQualityScorer:
             frame_id=int(frame_id),
             n_detections=n_dets,
             mean_confidence=mean_conf,
-            margin=margin,
+            uncertainty_score=uncertainty,
             count_deviation=count_dev,
             crowd_score=crowd,
+            fragmentation_score=fragmentation,
             edge_score=edge,
             extras=extras,
         )
         self.frame_signals[int(frame_id)] = signal
 
-        # ------------------------------------------------------------------
-        # Legacy pipeline: compute scalar score + structured metrics dict
-        # so that frame_scores[fid]["score"] and frame_scores[fid]["metrics"]
-        # match the pre-refactor API that the tests verify.
-        # ------------------------------------------------------------------
-        metrics: dict = {}
-        legacy_score = 0.0
-        legacy_score += self._score_confidence(detection_data, metrics)
-        legacy_score += self._score_count_mismatch(detection_data, metrics)
-        legacy_score += self._score_assignment_cost(tracking_data, metrics)
-        legacy_score += self._score_track_loss(tracking_data, metrics)
-        legacy_score += self._score_uncertainty(tracking_data, metrics)
-        legacy_score += self._score_fragmented_detections(detection_data, metrics)
+        from hydra_suite.data.al.acquisition import _composite_score
 
-        self.frame_scores[int(frame_id)] = {"score": legacy_score, "metrics": metrics}
-        return legacy_score
+        return float(_composite_score([signal], self._weights)[0])
 
-    # ------------------------------------------------------------------
-    # Legacy per-metric scorers (restored for backward compat)
-    # ------------------------------------------------------------------
+    def explain_scores(self) -> dict:
+        """Per-channel maxima, for reporting why a selection came back empty."""
+        from hydra_suite.data.al.acquisition import explain
 
-    def _score_confidence(self, detection_data, metrics):
-        """Score based on low detection confidence. Returns weighted score."""
-        if not (self.use_confidence and "confidences" in detection_data):
-            return 0.0
-        confidences = detection_data["confidences"]
-        if not confidences:
-            return 0.0
-        valid_confs = [c for c in confidences if not np.isnan(c)]
-        if not valid_confs:
-            return 0.0
-        avg_conf = np.mean(valid_confs)
-        if avg_conf >= self.conf_threshold:
-            return 0.0
-        denom = max(self.conf_threshold, 1e-6)
-        conf_score = (self.conf_threshold - avg_conf) / denom
-        metrics["low_confidence"] = {
-            "min": min(valid_confs),
-            "avg": avg_conf,
-            "score": conf_score,
-        }
-        return conf_score * 0.4
-
-    def _score_count_mismatch(self, detection_data, metrics):
-        """Score based on detection count mismatch. Returns weighted score."""
-        if not (self.use_count_mismatch and "count" in detection_data):
-            return 0.0
-        det_count = detection_data["count"]
-        if det_count == self.max_targets:
-            return 0.0
-        if det_count < self.max_targets:
-            count_score = (self.max_targets - det_count) / self.max_targets
-            weighted = count_score * 0.3
-        else:
-            count_score = (
-                min((det_count - self.max_targets) / self.max_targets, 1.0) * 0.5
-            )
-            weighted = count_score * 0.15
-        metrics["count_mismatch"] = {
-            "expected": self.max_targets,
-            "actual": det_count,
-            "score": count_score if det_count < self.max_targets else count_score * 0.5,
-        }
-        return weighted
-
-    def _score_assignment_cost(self, tracking_data, metrics):
-        """Score based on high assignment cost. Returns weighted score."""
-        if not self.use_assignment_cost:
-            return 0.0
-        costs = tracking_data.get("assignment_costs") or []
-        if costs:
-            avg_cost = np.mean(costs)
-            cost_score = min(avg_cost / 50.0, 1.0)
-            metrics["high_assignment_cost"] = {
-                "avg": avg_cost,
-                "max": max(costs),
-                "score": cost_score,
-                "source": "assignment_cost",
-            }
-            return cost_score * 0.15
-
-        confidences = tracking_data.get("assignment_confidences") or []
-        valid_confidences = [
-            float(confidence) for confidence in confidences if np.isfinite(confidence)
-        ]
-        if not valid_confidences:
-            return 0.0
-
-        avg_confidence = np.mean(valid_confidences)
-        difficulty_score = 1.0 - float(np.clip(avg_confidence, 0.0, 1.0))
-        metrics["high_assignment_cost"] = {
-            "avg_confidence": avg_confidence,
-            "score": difficulty_score,
-            "source": "assignment_confidence",
-        }
-        return difficulty_score * 0.15
-
-    def _score_track_loss(self, tracking_data, metrics):
-        """Score based on track losses. Returns weighted score."""
-        if not (self.use_track_loss and "lost_tracks" in tracking_data):
-            return 0.0
-        lost_count = tracking_data["lost_tracks"]
-        if lost_count <= 0:
-            return 0.0
-        loss_score = min(lost_count / self.max_targets, 1.0)
-        metrics["track_loss"] = {"count": lost_count, "score": loss_score}
-        return loss_score * 0.1
-
-    def _score_uncertainty(self, tracking_data, metrics):
-        """Score based on high position uncertainty. Returns weighted score."""
-        if not (self.use_uncertainty and "uncertainties" in tracking_data):
-            return 0.0
-        uncertainties = tracking_data["uncertainties"]
-        if not uncertainties:
-            return 0.0
-        avg_uncertainty = np.mean(uncertainties)
-        unc_score = min(avg_uncertainty / 50.0, 1.0)
-        metrics["high_uncertainty"] = {"avg": avg_uncertainty, "score": unc_score}
-        return unc_score * 0.05
-
-    def _score_fragmented_detections(self, detection_data, metrics):
-        """Score frames with suspiciously duplicated or fragmented detections."""
-        if not self.use_fragmented_detections:
-            return 0.0
-
-        measurements = detection_data.get("measurements") or []
-        if len(measurements) < 2:
-            return 0.0
-
-        shapes = detection_data.get("shapes") or []
-        obb_corners = detection_data.get("obb_corners") or []
-
-        geometries = []
-        major_axes = []
-        for det_idx, measurement in enumerate(measurements):
-            if measurement is None or len(measurement) < 3:
-                continue
-
-            cx = float(measurement[0])
-            cy = float(measurement[1])
-            theta = float(measurement[2])
-
-            corners = None
-            if det_idx < len(obb_corners) and obb_corners[det_idx] is not None:
-                corners_candidate = np.asarray(obb_corners[det_idx], dtype=np.float32)
-                if corners_candidate.size >= 8:
-                    corners = corners_candidate.reshape(4, 2)
-
-            if corners is not None:
-                width = float(np.linalg.norm(corners[1] - corners[0]))
-                height = float(np.linalg.norm(corners[2] - corners[1]))
-            elif det_idx < len(shapes) and len(shapes[det_idx]) >= 2:
-                area = max(float(shapes[det_idx][0]), 1.0)
-                aspect_ratio = float(shapes[det_idx][1])
-                width, height = _dims_from_shape(area, aspect_ratio)
-                corners = _detection_corners_from_dims(cx, cy, width, height, theta)
-            else:
-                width = self.reference_body_size * 2.2
-                height = self.reference_body_size * 0.8
-                corners = _detection_corners_from_dims(cx, cy, width, height, theta)
-
-            major_axis = max(width, height)
-            major_axes.append(major_axis)
-            geometries.append(
-                {
-                    "index": det_idx,
-                    "center": np.array([cx, cy], dtype=np.float32),
-                    "corners": corners,
-                    "major_axis": major_axis,
-                }
-            )
-
-        if len(geometries) < 2:
-            return 0.0
-
-        typical_major_axis = float(
-            np.median(major_axes) if major_axes else self.reference_body_size * 2.2
-        )
-        typical_major_axis = max(typical_major_axis, 1.0)
-
-        suspicious_pairs = []
-        best_pair = None
-        best_pair_score = 0.0
-
-        for left, right in combinations(geometries, 2):
-            center_distance = float(np.linalg.norm(left["center"] - right["center"]))
-            proximity_threshold = max(typical_major_axis * 0.65, 1.0)
-            proximity_score = _clamp01(1.0 - (center_distance / proximity_threshold))
-
-            overlap_score = _polygon_overlap_ratio(
-                left["corners"],
-                right["corners"],
-            )
-            pair_major_axis = (left["major_axis"] + right["major_axis"]) / 2.0
-            smallness_score = _clamp01(1.0 - (pair_major_axis / typical_major_axis))
-
-            pair_score = _clamp01(
-                0.5 * proximity_score + 0.3 * overlap_score + 0.2 * smallness_score
-            )
-            if pair_score >= 0.45:
-                suspicious_pairs.append(pair_score)
-            if pair_score > best_pair_score:
-                best_pair_score = pair_score
-                best_pair = {
-                    "pair": [left["index"], right["index"]],
-                    "distance": center_distance,
-                    "overlap": overlap_score,
-                    "smallness": smallness_score,
-                }
-
-        if best_pair is None or best_pair_score <= 0.0:
-            return 0.0
-
-        fragmentation_score = _clamp01(
-            best_pair_score + min(0.1 * max(len(suspicious_pairs) - 1, 0), 0.2)
-        )
-        metrics["fragmented_detections"] = {
-            **best_pair,
-            "score": fragmentation_score,
-            "suspicious_pairs": len(suspicious_pairs),
-            "typical_major_axis": typical_major_axis,
-        }
-        return fragmentation_score * 0.3
+        return explain(list(self.frame_signals.values()), self._weights)
 
     def get_worst_frames(self, max_frames, diversity_window=30, probabilistic=True):
         from hydra_suite.data.al.acquisition import select
@@ -385,69 +319,101 @@ class FrameQualityScorer:
         return out
 
 
-def _make_dataset_dir(output_dir, dataset_name):
-    """Create timestamped dataset directory structure and return paths."""
-    from datetime import datetime
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    if dataset_name and str(dataset_name).strip():
-        dataset_name_with_timestamp = f"{dataset_name}_{timestamp}"
-    else:
-        dataset_name_with_timestamp = timestamp
-
-    output_path = Path(output_dir).resolve()
-    if not output_path.exists():
-        try:
-            output_path.mkdir(parents=True, exist_ok=True)
-        except Exception as e:
-            raise OSError(f"Could not create output directory {output_path}: {e}")
-
-    dataset_dir = output_path / dataset_name_with_timestamp
-    images_dir = dataset_dir / "images"
-    labels_dir = dataset_dir / "labels"
-    images_dir.mkdir(parents=True, exist_ok=True)
-    labels_dir.mkdir(parents=True, exist_ok=True)
-    return dataset_dir, images_dir, labels_dir
-
-
 def _init_detection_runner(params):
-    """Build a detection-only InferenceRunner for dataset dimension extraction.
+    """Build a detection-only InferenceRunner for dataset label extraction.
 
-    Returns None for non-yolo_obb methods (dimension extraction then falls back
-    to reference-size approximation, as before).
+    Unlike the legacy version this supports every detection source, not just
+    `yolo_obb`: returning None for bg-sub meant every exported label was a
+    fabricated reference-size box.
     """
-    detection_method = params.get("DETECTION_METHOD", "background_subtraction")
-    if detection_method != "yolo_obb":
-        return None
+    method = str(params.get("DETECTION_METHOD", "background_subtraction")).lower()
+    native_level = resolve_native_level(params)
     try:
-        from ..core.inference.config import build_obb_only_config
         from ..core.inference.runner import InferenceRunner
 
-        model_path = str(
-            params.get(
-                "YOLO_OBB_DIRECT_MODEL_PATH",
-                params.get("YOLO_MODEL_PATH", "yolo26s-obb.pt"),
+        if method == "background_subtraction":
+            # build_inference_config_from_params never builds a BgSubConfig
+            # (it only ever wires up `obb=`), so a bgsub-backed InferenceConfig
+            # has to be constructed explicitly here, mirroring the live
+            # tracking path in core/tracking/worker.py (bgsub branch).
+            from ..core.inference.config import (
+                BgSubConfig,
+                InferenceConfig,
+                migrate_runtime_to_tier,
             )
-            or "yolo26s-obb.pt"
-        )
-        cfg = build_obb_only_config(
-            model_path,
-            runtime_tier=str(params.get("RUNTIME_TIER", "") or "") or None,
-            confidence_threshold=float(
-                params.get("DATASET_YOLO_CONFIDENCE_THRESHOLD", 0.05)
-            ),
-            iou_threshold=float(params.get("DATASET_YOLO_IOU_THRESHOLD", 0.5)),
-            max_targets=max(1, int(params.get("MAX_TARGETS", 8))),
-            mode=str(params.get("YOLO_OBB_MODE", "direct")).strip().lower(),
-        )
+
+            _compute_runtime = str(params.get("COMPUTE_RUNTIME", "cpu"))
+            _raw_tier = str(params.get("RUNTIME_TIER", "") or "").strip().lower()
+            _runtime_tier = (
+                _raw_tier
+                if _raw_tier in {"cpu", "gpu", "gpu_fast"}
+                else migrate_runtime_to_tier({_compute_runtime})
+            )
+            bgsub_cfg = BgSubConfig.from_params(params)
+            if native_level is GeometryLevel.POLYGON:
+                bgsub_cfg.emit_native_geometry = True
+            cfg = InferenceConfig(
+                obb=None,
+                bgsub=bgsub_cfg,
+                runtime_tier=_runtime_tier,
+                detection_batch_size=int(params.get("DETECTION_BATCH_SIZE", 1) or 1),
+            )
+        else:
+            from ..core.inference.config import build_obb_only_config
+
+            mode = str(params.get("YOLO_OBB_MODE", "direct")).strip().lower()
+            task = resolve_detection_task(params)
+            model_path = resolve_detection_model_path(params) or "yolo26s-obb.pt"
+            # Sequential mode's geometry stage is the CROP model, and its
+            # stage-1 detector plus every YOLO_SEQ_* knob live in keys
+            # `build_obb_only_config` does not take. Without these the export
+            # pass silently built a sequential config with an empty stage-1
+            # model path and dataclass-default stage-2 knobs -- a different
+            # detector from the one that produced the tracking being reviewed.
+            extra_params = None
+            if mode == "sequential":
+                extra_params = {
+                    k: v for k, v in params.items() if str(k).startswith("YOLO_SEQ_")
+                }
+                extra_params["YOLO_DETECT_MODEL_PATH"] = params.get(
+                    "YOLO_DETECT_MODEL_PATH", ""
+                )
+                extra_params["YOLO_CROP_OBB_MODEL_PATH"] = model_path
+                extra_params["YOLO_SEQ_STAGE2_TASK"] = task
+            cfg = build_obb_only_config(
+                model_path,
+                runtime_tier=str(params.get("RUNTIME_TIER", "") or "") or None,
+                confidence_threshold=float(
+                    params.get("DATASET_YOLO_CONFIDENCE_THRESHOLD", 0.05)
+                ),
+                iou_threshold=float(params.get("DATASET_YOLO_IOU_THRESHOLD", 0.5)),
+                max_targets=max(1, int(params.get("MAX_TARGETS", 8))),
+                mode=mode,
+                model_task=task,
+                emit_native_geometry=(native_level is GeometryLevel.POLYGON),
+                extra_params=extra_params,
+            )
+
         runner = InferenceRunner(cfg)
-        logger.info("Detection runner initialized for dimension extraction")
+        logger.info(
+            "Detection runner initialized for dataset export (method=%s, level=%s)",
+            method,
+            native_level.label,
+        )
         return runner
     except Exception as e:
-        logger.warning(
-            f"Could not initialize detection runner: {e}. Using reference size approximation."
-        )
-        return None
+        # Whole-run failure => loud. This used to return None and let the
+        # export continue, which was survivable only while a fabricated
+        # reference-size box existed as a fallback. That fallback is gone, so
+        # `None` now means "write an empty label file for every frame" --
+        # fabricated *negative* ground truth, strictly worse than the failure
+        # it was hiding.
+        raise RuntimeError(
+            "Could not initialize the export detection runner "
+            f"(method={method}, level={native_level.label}): {e}. "
+            "No labels can be produced without it; fix the detection "
+            "configuration (model path, runtime) and export again."
+        ) from e
 
 
 def _expand_frame_ids(frame_ids, include_context, total_frames):
@@ -505,131 +471,6 @@ def _read_and_resize_frame(cap, frame_id, params, first_frame_shape):
     return frame, frame_for_detection, first_frame_shape
 
 
-def _dims_from_shape(area, aspect_ratio, obb_corners=None, det_idx=None):
-    """Compute (w, h) from ellipse area and aspect ratio, with OBB fallback."""
-    if aspect_ratio > 0:
-        w_det = np.sqrt(area * aspect_ratio / np.pi) * 2
-        h_det = w_det / aspect_ratio
-    elif obb_corners is not None and det_idx is not None and det_idx < len(obb_corners):
-        corners = obb_corners[det_idx]
-        w_det = np.linalg.norm(corners[1] - corners[0])
-        h_det = np.linalg.norm(corners[2] - corners[1])
-    else:
-        w_det = h_det = np.sqrt(area / np.pi) * 2
-    return w_det, h_det
-
-
-def _measurements_to_detections(meas, shapes, resize_factor, obb_corners=None):
-    """Convert detector measurements+shapes into a {(cx,cy): (w,h,theta)} dict."""
-    scale_back = 1.0 / resize_factor
-    yolo_detections = {}
-    for det_idx, measurement in enumerate(meas):
-        cx_det, cy_det, angle_rad = measurement
-        area, aspect_ratio = shapes[det_idx]
-        w_det, h_det = _dims_from_shape(
-            area, aspect_ratio, obb_corners=obb_corners, det_idx=det_idx
-        )
-        cx_det *= scale_back
-        cy_det *= scale_back
-        w_det *= scale_back
-        h_det *= scale_back
-        corners_det = None
-        if obb_corners is not None and det_idx < len(obb_corners):
-            corners_det = np.asarray(obb_corners[det_idx], dtype=np.float32).copy()
-            corners_det[:, 0] *= scale_back
-            corners_det[:, 1] *= scale_back
-        yolo_detections[(cx_det, cy_det)] = {
-            "width": w_det,
-            "height": h_det,
-            "theta": angle_rad,
-            "corners": corners_det,
-        }
-    return yolo_detections
-
-
-def _detect_batch(runner, batch_frames, batch_frame_ids, valid_batch_indices, params):
-    """Run OBB detection on a batch via InferenceRunner, returning detection dicts."""
-    if runner is None or not batch_frames:
-        return [{}] * len(batch_frames)
-    resize_factor = params.get("RESIZE_FACTOR", 1.0)
-    try:
-        results = runner.detect_batch(batch_frames, frame_indices=list(batch_frame_ids))
-    except Exception as e:
-        logger.warning(f"Detection failed: {e}")
-        return [{}] * len(batch_frames)
-    out = []
-    for obb in results:
-        meas = np.concatenate([obb.centroids, obb.angles[:, None]], axis=1)
-        out.append(
-            _measurements_to_detections(meas, obb.shapes, resize_factor, obb.corners)
-        )
-    return out
-
-
-def _match_yolo_detection(cx, cy, yolo_detections, frame_id):
-    """Find closest YOLO detection and return matched geometry details."""
-    if not yolo_detections:
-        return None, None, None, "reference_size"
-
-    min_dist = float("inf")
-    matched_detection = None
-    for (cx_det, cy_det), detection in yolo_detections.items():
-        dist = np.sqrt((cx - cx_det) ** 2 + (cy - cy_det) ** 2)
-        if dist < min_dist:
-            min_dist = dist
-            matched_detection = detection
-
-    if min_dist < 50 and matched_detection is not None:
-        if isinstance(matched_detection, dict):
-            w = matched_detection.get("width")
-            h = matched_detection.get("height")
-            corners = matched_detection.get("corners")
-        else:
-            w, h, _theta = matched_detection
-            corners = None
-        logger.debug(
-            f"Frame {frame_id}: Matched tracking to YOLO detection (dist={min_dist:.1f})"
-        )
-        return w, h, corners, "yolo_match"
-    return None, None, None, "reference_size"
-
-
-def _format_obb_corners(corners, frame_width, frame_height):
-    """Format raw pixel-space OBB corners as a YOLO OBB annotation line."""
-    corners_arr = np.asarray(corners, dtype=np.float32).reshape(4, 2).copy()
-    corners_arr[:, 0] = np.clip(corners_arr[:, 0] / frame_width, 0.0, 1.0)
-    corners_arr[:, 1] = np.clip(corners_arr[:, 1] / frame_height, 0.0, 1.0)
-
-    return (
-        f"0 {corners_arr[0, 0]:.6f} {corners_arr[0, 1]:.6f} "
-        f"{corners_arr[1, 0]:.6f} {corners_arr[1, 1]:.6f} "
-        f"{corners_arr[2, 0]:.6f} {corners_arr[2, 1]:.6f} "
-        f"{corners_arr[3, 0]:.6f} {corners_arr[3, 1]:.6f}\n"
-    )
-
-
-def _compute_obb_corners(cx, cy, w, h, theta, frame_width, frame_height):
-    """Compute normalized OBB corners and return an OBB annotation line."""
-    cos_theta = np.cos(theta)
-    sin_theta = np.sin(theta)
-    hw, hh = w / 2.0, h / 2.0
-
-    corners_local = np.array([[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]])
-    rotation_matrix = np.array([[cos_theta, -sin_theta], [sin_theta, cos_theta]])
-    corners = corners_local @ rotation_matrix.T + np.array([cx, cy])
-
-    corners_norm = corners.copy()
-    corners_norm[:, 0] /= frame_width
-    corners_norm[:, 1] /= frame_height
-
-    return (
-        f"0 {corners_norm[0, 0]:.6f} {corners_norm[0, 1]:.6f} "
-        f"{corners_norm[1, 0]:.6f} {corners_norm[1, 1]:.6f} "
-        f"{corners_norm[2, 0]:.6f} {corners_norm[2, 1]:.6f} "
-        f"{corners_norm[3, 0]:.6f} {corners_norm[3, 1]:.6f}\n"
-    )
-
-
 def _csv_scale_back(df, resize_factor, frame_width, frame_height):
     """Determine scale factor to map CSV coordinates back to original space."""
     if not (resize_factor and resize_factor < 1.0):
@@ -647,251 +488,374 @@ def _csv_scale_back(df, resize_factor, frame_width, frame_height):
     return 1.0
 
 
-def _write_frame_annotations(
-    frame_id,
-    frame,
-    df,
-    yolo_detections,
-    params,
-    images_dir,
-    labels_dir,
-    frame_width,
-    frame_height,
-    scale_back,
-):
-    """Save one frame image and its YOLO OBB annotation file.
-
-    Returns (image_filename, label_filename, annotations_list).
-    """
-    import pandas as pd
-
-    image_filename = f"f{frame_id:06d}.jpg"
-    cv2.imwrite(str(images_dir / image_filename), frame)
-
-    label_filename = f"f{frame_id:06d}.txt"
-    label_path = labels_dir / label_filename
-
-    frame_detections = df[df["FrameID"] == frame_id]
-    annotations = []
-
-    with open(label_path, "w") as f:
-        for _, detection in frame_detections.iterrows():
-            if pd.isna(detection["X"]) or pd.isna(detection["Y"]):
-                continue
-
-            cx = detection["X"] * scale_back
-            cy = detection["Y"] * scale_back
-            theta = detection["Theta"]
-
-            w, h, matched_corners, dimension_source = _match_yolo_detection(
-                cx, cy, yolo_detections, frame_id
-            )
-            if w is None or h is None:
-                ref_size = params.get("REFERENCE_BODY_SIZE", 20.0)
-                w = ref_size * 2.2
-                h = ref_size * 0.8
-                logger.debug(f"Frame {frame_id}: Using reference size approximation")
-
-            if matched_corners is not None:
-                obb_line = _format_obb_corners(
-                    matched_corners,
-                    frame_width,
-                    frame_height,
-                )
-            else:
-                obb_line = _compute_obb_corners(
-                    cx, cy, w, h, theta, frame_width, frame_height
-                )
-            f.write(obb_line)
-
-            track_id = -1
-            if "TrackID" in detection:
-                track_id = int(detection["TrackID"])
-            elif "TrajectoryID" in detection:
-                track_id = int(detection["TrajectoryID"])
-
-            annotations.append(
-                {
-                    "track_id": track_id,
-                    "x": float(cx),
-                    "y": float(cy),
-                    "theta": float(theta),
-                    "dimension_source": dimension_source,
-                    "state": detection.get("State", "unknown"),
-                }
-            )
-
-    return image_filename, label_filename, annotations
-
-
-def _write_dataset_files(
-    dataset_dir, dataset_name, class_name, metadata, exported_count
-):
-    """Write classes.txt, metadata.json, and README.md for the dataset."""
-    classes_path = dataset_dir / "classes.txt"
-    with open(classes_path, "w") as f:
-        f.write(f"{class_name}\n")
-    logger.info(f"Created classes.txt with class: {class_name}")
-
-    metadata_path = dataset_dir / "metadata.json"
-    with open(metadata_path, "w") as f:
-        json.dump(metadata, f, indent=2)
-
-    readme_path = dataset_dir / "README.md"
-    with open(readme_path, "w") as f:
-        f.write(f"# {dataset_name}\n\n")
-        f.write("This dataset was automatically generated for active learning.\n\n")
-        f.write("## Contents\n\n")
-        f.write(f"- **images/**: {exported_count} exported frames\n")
-        f.write("- **labels/**: YOLO OBB format annotations (initial, needs review)\n")
-        f.write(f"- **classes.txt**: Object class definition ({class_name})\n")
-        f.write("- **metadata.json**: Detailed frame and annotation metadata\n\n")
-        f.write("## Next Steps\n\n")
-        f.write("1. **Review and correct annotations** using x-AnyLabeling:\n")
-        f.write("   - Use the 'Open in X-AnyLabeling' button in the tracker GUI\n")
-        f.write("   - Or manually run: xanylabeling --filename ./images\n")
-        f.write("   - Review and correct the OBB annotations\n\n")
-        f.write("2. **Train improved YOLO model**:\n")
-        f.write("   - Combine this dataset with your existing training data\n")
-        f.write("   - Use YOLO training scripts with the corrected annotations\n")
-        f.write("   - Update your model in the tracker configuration\n\n")
-        f.write("3. **Iterate**:\n")
-        f.write("   - Run tracking with the new model\n")
-        f.write("   - Generate another dataset if needed\n")
-        f.write("   - Repeat until performance is satisfactory\n")
-
-
-def export_dataset(
-    video_path: object,
-    csv_path: object,
-    frame_ids: object,
-    output_dir: object,
-    dataset_name: object,
-    class_name: object,
-    params: object,
-    include_context: object = True,
-    _yolo_results_dict: object = None,
-) -> object:
-    """
-    Export selected frames and annotations as a training dataset.
-
-    Args:
-        video_path: Path to source video
-        csv_path: Path to tracking CSV (for reading annotations)
-        frame_ids: List of frame IDs to export
-        output_dir: Directory to save dataset
-        dataset_name: Name for the dataset
-        class_name: Name of the object class (for classes.txt file)
-        params: Parameters dict (for accessing RESIZE_FACTOR and REFERENCE_BODY_SIZE)
-        include_context: Include ±1 frames around each selected frame
-        yolo_results_dict: Optional dict of {frame_id: yolo_detections} for YOLO format export
-
-    Returns:
-        zip_path: Path to created zip file
-    """
-    import pandas as pd
-
-    logger.info(f"Starting dataset export for {len(frame_ids)} frames")
-
-    dataset_dir, images_dir, labels_dir = _make_dataset_dir(output_dir, dataset_name)
-    runner = _init_detection_runner(params)
-
+def _open_video(video_path):
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         raise ValueError(f"Cannot open video: {video_path}")
+    return cap
 
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    df = pd.read_csv(csv_path)
-    frames_to_export = _expand_frame_ids(frame_ids, include_context, total_frames)
-    logger.info(f"Exporting {len(frames_to_export)} frames (including context)")
+def _frame_is_readable(cap, frame_id) -> bool:
+    """Cheap readability probe: seeks + reads, but never retains the frame."""
+    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_id)
+    ret, frame = cap.read()
+    return bool(ret and frame is not None and frame.size > 0)
 
-    exported_count = 0
-    metadata = {
-        "schema_version": 1,
-        "dataset_name": dataset_name,
-        "source_video": str(video_path),
-        "source_csv": str(csv_path),
-        "total_frames": len(frames_to_export),
-        "image_width": frame_width,
-        "image_height": frame_height,
-        "frames": [],
-    }
 
-    # Determine batch size for YOLO processing
+class _LazyFrameImages(Mapping):
+    """Original (full-resolution) frames, decoded from `cap` on `__getitem__`.
+
+    Only the frame currently being accessed is ever resident in memory.
+    `export_al_dataset`'s authoritative root reads each key exactly once
+    (derived roots hardlink instead), so this keeps the export's image
+    footprint at O(1) frames instead of O(frame count) -- at default panel
+    settings (100 frames x3 for context, on 4K video) the eager dict this
+    replaces was ~15 GB resident.
+    """
+
+    def __init__(self, cap, params, frame_ids):
+        self._cap = cap
+        self._params = params
+        self._frame_ids = list(frame_ids)
+
+    def __getitem__(self, frame_id):
+        read = _read_and_resize_frame(self._cap, frame_id, self._params, None)
+        if read is None:
+            raise KeyError(frame_id)
+        original, _for_detection, _shape = read
+        return original
+
+    def __iter__(self):
+        return iter(self._frame_ids)
+
+    def __len__(self):
+        return len(self._frame_ids)
+
+
+class _LazyDetectionFrames(Mapping):
+    """Detection-resized frames, decoded from `cap` on `__getitem__`.
+
+    `_detect_records_for_frames` reads one batch at a time and discards it
+    once detection on that batch completes, so nothing beyond the batch
+    currently in flight is resident.
+    """
+
+    def __init__(self, cap, params, frame_ids):
+        self._cap = cap
+        self._params = params
+        self._frame_ids = list(frame_ids)
+
+    def __getitem__(self, frame_id):
+        read = _read_and_resize_frame(self._cap, frame_id, self._params, None)
+        if read is None:
+            raise KeyError(frame_id)
+        _original, for_detection, _shape = read
+        return for_detection
+
+    def __iter__(self):
+        return iter(self._frame_ids)
+
+    def __len__(self):
+        return len(self._frame_ids)
+
+
+def _detect_records_for_frames(runner, frames, params, native_level):
+    """Run detection over `frames`.
+
+    Returns ``({frame_id: [LabelRecord]}, stats)`` where ``stats`` counts the
+    per-frame failures under named keys (currently ``detection_failed``).
+
+    `frames` is a Mapping[frame_id, image] consulted in batches -- only the
+    current batch's images are held in memory at once, whether `frames` is a
+    plain dict (tests) or a lazy, decode-on-access mapping (production).
+
+    Per-frame failure semantics: a frame whose detection (or whose geometry
+    extraction) raises is dropped and *counted*, never silently swallowed.
+    Swallowing it would have handed the exporter a frame with zero records,
+    which becomes an empty YOLO label file -- i.e. "I could not compute
+    geometry" written to disk as "there is no geometry here".
+    """
+    stats = {"detection_failed": 0}
+    if runner is None:
+        return {}, stats
     batch_size = _get_detector_batch_size(runner)
-
-    # Process frames in batches
-    frame_batches = [
-        frames_to_export[i : i + batch_size]
-        for i in range(0, len(frames_to_export), batch_size)
-    ]
-
+    # Detection runs on the RESIZE_FACTOR-scaled frame (`_LazyDetectionFrames`
+    # yields `frame_for_detection`, never the original), so raw obb corners
+    # come back in resized-frame space. Every downstream consumer -- the
+    # strict-label matcher against original-space CSV rows, and label
+    # normalization against the original frame's `.shape` -- needs original
+    # pixel space. Scale once, here, so nobody downstream has to remember to.
+    # Do not remove this: it replaces the scale-back the deleted legacy
+    # `_measurements_to_detections` used to do; dropping it silently
+    # re-introduces a coordinate-space mismatch whenever RESIZE_FACTOR < 1.
     resize_factor = params.get("RESIZE_FACTOR", 1.0)
-    scale_back = _csv_scale_back(df, resize_factor, frame_width, frame_height)
-
-    try:
-        for batch_idx, batch_frame_ids in enumerate(frame_batches):
-            batch_frames, batch_frames_original, valid_batch_indices = (
-                _read_batch_frames(cap, batch_frame_ids, params)
-            )
-            if not batch_frames:
-                continue
-
+    detection_scale_back = (
+        1.0 / resize_factor if resize_factor and resize_factor < 1.0 else 1.0
+    )
+    out: dict[int, list[LabelRecord]] = {}
+    frame_ids = sorted(frames)
+    for start in range(0, len(frame_ids), batch_size):
+        chunk = frame_ids[start : start + batch_size]
+        images = []
+        valid_chunk = []
+        for fid in chunk:
             try:
-                batch_yolo_detections = _detect_batch(
-                    runner, batch_frames, batch_frame_ids, valid_batch_indices, params
-                )
+                images.append(frames[fid])
+            except KeyError:
+                continue
+            valid_chunk.append(fid)
+        if not images:
+            continue
+        try:
+            results = runner.detect_batch(images, frame_indices=list(valid_chunk))
+        except Exception as e:
+            logger.warning(
+                "Detection failed for batch starting at %s: %s", valid_chunk[0], e
+            )
+            stats["detection_failed"] += len(valid_chunk)
+            continue
+        for fid, obb in zip(valid_chunk, results):
+            # Geometry extraction is inside the per-frame guard: a missing
+            # native contour on one frame must cost that frame, not the round.
+            try:
+                records = records_from_obb_result(obb, native_level)
             except Exception as e:
-                logger.error(f"YOLO detection failed for batch {batch_idx}: {e}")
-                batch_yolo_detections = [{}] * len(batch_frames)
+                logger.warning("Geometry extraction failed for frame %s: %s", fid, e)
+                stats["detection_failed"] += 1
+                continue
+            if detection_scale_back != 1.0:
+                for rec in records:
+                    rec.points = (rec.points * detection_scale_back).astype(np.float32)
+            out[fid] = records
+    return out, stats
 
-            for frame_idx, (frame_id, frame) in enumerate(batch_frames_original):
-                yolo_detections = batch_yolo_detections[frame_idx]
-                dataset_conf = params.get("DATASET_YOLO_CONFIDENCE_THRESHOLD", 0.05)
-                dataset_iou = params.get("DATASET_YOLO_IOU_THRESHOLD", 0.5)
-                logger.debug(
-                    f"Frame {frame_id}: Found {len(yolo_detections)} YOLO detections "
-                    f"(conf={dataset_conf:.2f}, iou={dataset_iou:.2f})"
-                )
 
-                image_filename, label_filename, annotations = _write_frame_annotations(
-                    frame_id,
-                    frame,
-                    df,
-                    yolo_detections,
-                    params,
-                    images_dir,
-                    labels_dir,
-                    frame_width,
-                    frame_height,
-                    scale_back,
-                )
+_LOST_STATES = {"lost", "interpolated", "predicted"}
 
-                metadata["frames"].append(
-                    {
-                        "frame_id": int(frame_id),
-                        "image_file": image_filename,
-                        "label_file": label_filename,
-                        "annotations": annotations,
-                    }
+
+def _select_records_for_frame(rows, frame_records, params, scale_back):
+    """Pair tracked CSV rows with detector geometry; export only real matches.
+
+    Strict by design. The legacy exporter wrote a fabricated
+    `ref*2.2 x ref*0.8` box whenever a row had no nearby detection, and wrote
+    labels for `lost`/interpolated rows the detector never saw. Since AL
+    selects frames precisely where tracking struggled, both behaviours injected
+    wrong boxes exactly where the model was weakest. Do not restore a
+    fabricated-geometry fallback here: a row with no real detection must be
+    dropped and counted, never invented.
+
+    Matching is mutual-exclusion (one row <-> one detection) via the Hungarian
+    algorithm, gated by a radius scaled to REFERENCE_BODY_SIZE rather than the
+    legacy hardcoded 50 px, so it neither reaches a neighbouring animal for
+    small species nor fails to reach the correct one for large species.
+    """
+    import pandas as pd
+    from scipy.optimize import linear_sum_assignment
+
+    drops = {"lost": 0, "unmatched": 0}
+    if rows is None or len(rows) == 0 or not frame_records:
+        if rows is not None:
+            for _, row in rows.iterrows():
+                state = str(row.get("State", "")).strip().lower()
+                if state in _LOST_STATES:
+                    drops["lost"] += 1
+                else:
+                    drops["unmatched"] += 1
+        return [], drops
+
+    live_rows = []
+    for _, row in rows.iterrows():
+        state = str(row.get("State", "")).strip().lower()
+        if state in _LOST_STATES:
+            drops["lost"] += 1
+            continue
+        if pd.isna(row["X"]) or pd.isna(row["Y"]):
+            drops["unmatched"] += 1
+            continue
+        live_rows.append((float(row["X"]) * scale_back, float(row["Y"]) * scale_back))
+
+    if not live_rows:
+        return [], drops
+
+    reference = max(float(params.get("REFERENCE_BODY_SIZE", 20.0)), 1.0)
+    max_distance = reference * 2.2
+
+    centers = np.array(
+        [rec.points.mean(axis=0) for rec in frame_records], dtype=np.float64
+    )
+    targets = np.array(live_rows, dtype=np.float64)
+    cost = np.linalg.norm(targets[:, None, :] - centers[None, :, :], axis=2)
+
+    # linear_sum_assignment minimizes TOTAL cost, not "prefer in-radius pairs".
+    # Solving on the raw distance matrix and filtering afterwards can leave a
+    # row unmatched even though a fully in-radius assignment existed, because
+    # the optimizer chose a globally-cheaper arrangement that used a different
+    # (also in-radius) detection for that row's rightful match, stranding it
+    # on an out-of-radius leftover. Penalize out-of-radius pairs with a large
+    # sentinel *before* solving so the optimizer maximizes in-radius pairings
+    # first, then apply the real `max_distance` gate against the ORIGINAL
+    # (unpenalized) cost matrix. Do not use np.inf: scipy raises on infeasible
+    # (all-inf-row/col) matrices.
+    solve_cost = np.where(cost <= max_distance, cost, max_distance * 1e6)
+    row_idx, col_idx = linear_sum_assignment(solve_cost)
+    matched_detections: list[int] = []
+    matched_rows = set()
+    for r, c in zip(row_idx, col_idx):
+        if cost[r, c] <= max_distance:
+            matched_detections.append(int(c))
+            matched_rows.add(int(r))
+
+    drops["unmatched"] += len(live_rows) - len(matched_rows)
+    return [frame_records[i] for i in sorted(matched_detections)], drops
+
+
+def export_dataset(
+    video_path,
+    csv_path,
+    frame_ids,
+    output_dir,
+    dataset_name,
+    class_name,
+    params,
+    include_context: bool = True,
+    export_levels=None,
+    class_names=None,
+):
+    """Export selected frames and labels as an escalated AL dataset.
+
+    Returns the manifest dict from `export_al_dataset` (previously a directory
+    path string).
+    """
+    from datetime import datetime
+
+    import pandas as pd
+
+    native_level = resolve_native_level(params)
+    allowed = achievable_levels(native_level)
+    levels = list(export_levels) if export_levels else list(allowed)
+    unsupported = [lvl for lvl in levels if lvl not in allowed]
+    if unsupported:
+        raise ValueError(
+            f"requested levels {[lvl.label for lvl in unsupported]} exceed the "
+            f"native level {native_level.label!r} of the configured detector"
+        )
+
+    resolved_class_names = (
+        list(class_names) if class_names else [class_name or "object"]
+    )
+
+    cap = _open_video(video_path)
+    runner = _init_detection_runner(params)
+    try:
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+        df = pd.read_csv(csv_path)
+        selected = {int(f) for f in frame_ids}
+        frames_to_export = _expand_frame_ids(frame_ids, include_context, total_frames)
+
+        # Readability is probed and immediately discarded -- no frame data is
+        # retained here. The two lazy mappings below re-decode each valid
+        # frame on demand, so at most one batch of detection frames (or one
+        # authoritative-root image) is ever resident at once, rather than
+        # every export frame at full resolution simultaneously.
+        valid_frame_ids = [
+            fid for fid in frames_to_export if _frame_is_readable(cap, fid)
+        ]
+
+        images = _LazyFrameImages(cap, params, valid_frame_ids)
+        detection_frames = _LazyDetectionFrames(cap, params, valid_frame_ids)
+
+        records_by_frame, detection_stats = _detect_records_for_frames(
+            runner, detection_frames, params, native_level
+        )
+
+        resize_factor = params.get("RESIZE_FACTOR", 1.0)
+        scale_back = _csv_scale_back(df, resize_factor, frame_width, frame_height)
+        rows_by_frame = {int(fid): sub for fid, sub in df.groupby("FrameID")}
+
+        exported: list[ExportedFrame] = []
+        for fid in valid_frame_ids:
+            records, drops = _select_records_for_frame(
+                rows_by_frame.get(fid),
+                records_by_frame.get(fid, []),
+                params,
+                scale_back,
+            )
+            exported.append(
+                ExportedFrame(
+                    frame_id=fid,
+                    image_name=f"f{fid:06d}.jpg",
+                    records=records,
+                    is_context=fid not in selected,
+                    drops=drops,
                 )
-                exported_count += 1
+            )
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        name = f"{dataset_name}_{timestamp}" if str(dataset_name).strip() else timestamp
+        round_dir = Path(output_dir).resolve() / name
+
+        provenance = {
+            "source_video": str(video_path),
+            "source_csv": str(csv_path),
+            "detection_method": params.get("DETECTION_METHOD"),
+            # The model/task actually run by the export pass. Sequential mode
+            # runs the crop-OBB checkpoint under its stage-2 task, so reading
+            # the direct-mode keys unconditionally made a sequential round
+            # claim a model and a task it never used.
+            "yolo_obb_mode": str(params.get("YOLO_OBB_MODE", "direct")).strip().lower(),
+            "model_path": resolve_detection_model_path(params) or None,
+            "model_task": resolve_detection_task(params),
+            "export_confidence_threshold": params.get(
+                "DATASET_YOLO_CONFIDENCE_THRESHOLD", 0.05
+            ),
+            "export_iou_threshold": params.get("DATASET_YOLO_IOU_THRESHOLD", 0.5),
+            "acquisition_preset": params.get("DATASET_AL_PRESET"),
+            # The preset NAME alone does not reproduce a round: presets change,
+            # and the scorer zeroes channels whose METRIC_* toggle is off and
+            # renormalizes. Record the effective weights that actually ranked
+            # these frames.
+            "acquisition_weights": _effective_acquisition_weights(params),
+            "resize_factor": float(params.get("RESIZE_FACTOR", 1.0) or 1.0),
+            "reference_body_size": float(params.get("REFERENCE_BODY_SIZE", 20.0)),
+            "image_width": frame_width,
+            "image_height": frame_height,
+            "note": (
+                "Labels come from a dedicated export detection pass at lower "
+                "confidence than tracking, so they may differ from the tracked "
+                "detections. Every exported label is a detection that bound "
+                "one-to-one to a tracked CSV row. KNOWN LIMITATION: a "
+                "detection that binds to no row is dropped silently and is "
+                "NOT counted anywhere (`dropped_unmatched` counts the mirror "
+                "case, rows with no detection), so an animal the tracker "
+                "missed can be visible in an exported image yet carry no "
+                "label -- review every image before training. Frames where no "
+                "detection survived are not exported at all, rather than "
+                "written as empty (background) labels."
+            ),
+        }
+
+        # `images` is only actually read here, while `cap` is still open --
+        # export_al_dataset's authoritative root decodes each frame lazily.
+        manifest = export_al_dataset(
+            round_dir=round_dir,
+            frames=exported,
+            images=images,
+            native_level=native_level,
+            levels=levels,
+            class_names=resolved_class_names,
+            provenance=provenance,
+            extra_totals=detection_stats,
+        )
     finally:
         cap.release()
         if runner is not None:
             runner.close()
 
-    _write_dataset_files(
-        dataset_dir, dataset_name, class_name, metadata, exported_count
-    )
-
-    logger.info(f"Dataset exported successfully to {dataset_dir}")
-    logger.info(f"Exported {exported_count} frames with annotations")
-
-    return str(dataset_dir)
+    logger.info("Dataset exported to %s (%d frames)", round_dir, len(exported))
+    return manifest
 
 
 def _get_detector_batch_size(runner):
@@ -899,25 +863,3 @@ def _get_detector_batch_size(runner):
     if runner is not None and getattr(runner, "config", None) is not None:
         return max(1, int(getattr(runner.config, "detection_batch_size", 1)))
     return 1
-
-
-def _read_batch_frames(cap, batch_frame_ids, params):
-    """Read and preprocess all frames in a batch for detection.
-
-    Returns (batch_frames, batch_frames_original, valid_batch_indices).
-    """
-    batch_frames = []
-    batch_frames_original = []
-    valid_batch_indices = []
-    first_frame_shape = None
-
-    for idx, frame_id in enumerate(batch_frame_ids):
-        result = _read_and_resize_frame(cap, frame_id, params, first_frame_shape)
-        if result is None:
-            continue
-        frame, frame_for_detection, first_frame_shape = result
-        batch_frames_original.append((frame_id, frame))
-        batch_frames.append(frame_for_detection)
-        valid_batch_indices.append(idx)
-
-    return batch_frames, batch_frames_original, valid_batch_indices

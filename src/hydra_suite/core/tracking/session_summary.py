@@ -58,10 +58,36 @@ def build_session_summary_lines(
     dataset = result.get("dataset")
     if dataset is not None:
         if dataset.get("success"):
-            lines.append(
+            manifest = dataset.get("manifest") or {}
+            totals = manifest.get("totals") or {}
+            roots = manifest.get("roots") or []
+            level_labels = ", ".join(str(r.get("level")) for r in roots)
+            summary = (
                 f"✓ Dataset generated: {dataset['num_frames']} frame(s)"
                 f"\n  Location: {dataset['dir']}"
             )
+            if level_labels:
+                summary += f"\n  Label levels: {level_labels}"
+            objects = totals.get("objects")
+            if objects is not None:
+                summary += f"\n  Objects labelled: {objects}"
+            dropped_lost = totals.get("dropped_lost")
+            dropped_unmatched = totals.get("dropped_unmatched")
+            if dropped_lost or dropped_unmatched:
+                summary += (
+                    f"\n  Dropped (lost/interpolated tracks): {dropped_lost or 0}"
+                    f"\n  Dropped (no matching detection): {dropped_unmatched or 0}"
+                )
+            skipped = totals.get("frames_skipped_no_records")
+            if skipped:
+                summary += (
+                    f"\n  Frames skipped (no detection survived): {skipped}"
+                    " — not exported as empty/background labels"
+                )
+            detection_failed = totals.get("detection_failed")
+            if detection_failed:
+                summary += f"\n  Frames dropped (detection failed): {detection_failed}"
+            lines.append(summary)
         else:
             lines.append(
                 f"✗ Dataset generation failed: {dataset.get('error', 'unknown error')}"

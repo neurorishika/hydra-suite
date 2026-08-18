@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Callable
 
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialogButtonBox,
     QFileDialog,
@@ -22,8 +23,34 @@ from PySide6.QtWidgets import (
 )
 
 from hydra_suite.data.al.acquisition import PRESETS
+from hydra_suite.data.al.escalation import achievable_levels
 from hydra_suite.detectkit.gui.models import DetectKitProject
+from hydra_suite.utils.geometry_levels import GeometryLevel
 from hydra_suite.widgets.dialogs import BaseDialog
+
+# Ultralytics model task -> the geometry level that task natively produces.
+# segment -> polygon masks, obb -> oriented boxes, detect -> axis-aligned boxes
+# only. This is DetectKit's own copy: the equivalent mapping lives in
+# TrackerKit's dataset panel, but detectkit and trackerkit are sibling app
+# packages and neither may import the other.
+_TASK_TO_LEVEL = {
+    "segment": GeometryLevel.POLYGON,
+    "obb": GeometryLevel.OBB,
+    "detect": GeometryLevel.AABB,
+}
+
+
+def _format_level_status(native_level: GeometryLevel) -> str:
+    """Human-readable summary of which label levels the active model can produce."""
+    labels = " + ".join(lvl.label for lvl in achievable_levels(native_level))
+    if native_level is GeometryLevel.POLYGON:
+        return f"Will export: {labels}"
+    if native_level is GeometryLevel.OBB:
+        return f"Will export: {labels} — polygon labels require a segmentation model"
+    return (
+        f"Will export: {labels} — oriented and polygon labels require an OBB or "
+        "segmentation model"
+    )
 
 
 class ActiveLearningDialog(BaseDialog):
@@ -42,8 +69,18 @@ class ActiveLearningDialog(BaseDialog):
         self._project = project
         self._run_handler: Callable[[], None] | None = None
         self._running = False
+        self._native_level = GeometryLevel.OBB
         self.resize(560, 540)
         self._build_content()
+        # Keep checkbox/enabled state self-consistent from construction
+        # onward -- `_build_levels_group` starts every checkbox checked and
+        # enabled, so a caller that builds a request before ever calling
+        # `set_model_task` must still see the default-level gate applied, not
+        # an ungated "everything checked" state. "obb" is the literal task
+        # this dialog defaults to (matches `_native_level`'s GeometryLevel.OBB
+        # default above), not derived from it, so this stays correct even if
+        # that default level ever changes independently.
+        self.set_model_task("obb")
         self._sync_run_enabled()
 
     # ------------------------------------------------------------------
@@ -54,6 +91,7 @@ class ActiveLearningDialog(BaseDialog):
         layout.setSpacing(10)
         layout.addWidget(self._build_input_group())
         layout.addWidget(self._build_acquisition_group())
+        layout.addWidget(self._build_levels_group())
         layout.addWidget(self._build_run_group())
         self.add_content(container)
 
@@ -105,6 +143,31 @@ class ActiveLearningDialog(BaseDialog):
         form.addRow("Budget (top-K)", self.budget_spin)
 
         return self.acquisition_group
+
+    def _build_levels_group(self) -> QGroupBox:
+        self.levels_group = QGroupBox("Export levels")
+        form = QFormLayout(self.levels_group)
+
+        self.lbl_export_level_status = QLabel(_format_level_status(self._native_level))
+        self.lbl_export_level_status.setWordWrap(True)
+        form.addRow("Label levels", self.lbl_export_level_status)
+
+        self.chk_level_polygon = QCheckBox("polygon (segmentation masks)")
+        self.chk_level_obb = QCheckBox("obb (oriented boxes)")
+        self.chk_level_aabb = QCheckBox("aabb (axis-aligned boxes)")
+        for chk in (self.chk_level_polygon, self.chk_level_obb, self.chk_level_aabb):
+            chk.setChecked(True)
+            chk.setToolTip(
+                "Each enabled level is written as its own DetectKit source. "
+                "Images are hardlinked, so extra levels cost almost no disk."
+            )
+        levels_row = QVBoxLayout()
+        levels_row.addWidget(self.chk_level_polygon)
+        levels_row.addWidget(self.chk_level_obb)
+        levels_row.addWidget(self.chk_level_aabb)
+        form.addRow("Export as", _wrap(levels_row))
+
+        return self.levels_group
 
     def _build_run_group(self) -> QGroupBox:
         box = QGroupBox("Run")
@@ -174,7 +237,71 @@ class ActiveLearningDialog(BaseDialog):
         self._running = bool(running)
         self.input_group.setEnabled(not self._running)
         self.acquisition_group.setEnabled(not self._running)
+        self.levels_group.setEnabled(not self._running)
         self._sync_run_enabled()
+
+    def set_model_task(self, task: str) -> None:
+        """Gate level checkboxes to what the active model's task can produce.
+
+        Never claim a geometry level the model did not produce: segment ->
+        polygon, obb -> obb, detect -> aabb. Unrecognized tasks leave the
+        current gate untouched. Checked state is fully re-derived from the
+        new gate on every call (available levels default to checked,
+        unavailable ones are force-unchecked) rather than only touching
+        boxes that become newly unavailable -- this is what makes the gate
+        self-consistent whether the dialog's model task changes once (at
+        open) or is called eagerly by `__init__` before any caller-driven
+        change, without depending on the checkbox's prior state.
+        """
+        native = _TASK_TO_LEVEL.get(str(task).strip().lower())
+        if native is None:
+            return
+        self._native_level = native
+        allowed = set(achievable_levels(native))
+        for level, chk in (
+            (GeometryLevel.POLYGON, self.chk_level_polygon),
+            (GeometryLevel.OBB, self.chk_level_obb),
+            (GeometryLevel.AABB, self.chk_level_aabb),
+        ):
+            available = level in allowed
+            chk.setEnabled(available)
+            chk.setChecked(available)
+        self.lbl_export_level_status.setText(_format_level_status(native))
+
+    def _checked_levels(self) -> list[GeometryLevel]:
+        """Checked levels, highest first."""
+        checked = [
+            level
+            for level, chk in (
+                (GeometryLevel.POLYGON, self.chk_level_polygon),
+                (GeometryLevel.OBB, self.chk_level_obb),
+                (GeometryLevel.AABB, self.chk_level_aabb),
+            )
+            if chk.isChecked()
+        ]
+        return sorted(checked, reverse=True)
+
+    def build_request(self, detector_fn=None):
+        """Construct an `ALRequest` from the dialog's current field values."""
+        from hydra_suite.detectkit.jobs.al_worker import ALRequest
+
+        levels = self._checked_levels() or [self._native_level]
+        return ALRequest(
+            input_kind=(
+                "video"
+                if self.rb_video.isChecked()
+                else "folder" if self.rb_folder.isChecked() else "project"
+            ),
+            input_path=self.input_path_edit.text(),
+            project=self._project,
+            budget=self.budget_spin.value(),
+            preset=self.preset_combo.currentText(),
+            expected_count=self.expected_count_spin.value(),
+            detector_fn=detector_fn,
+            export_level=levels[0].label,
+            export_levels=[lvl.label for lvl in levels],
+            native_level=self._native_level.label,
+        )
 
 
 def _wrap(layout) -> QWidget:
