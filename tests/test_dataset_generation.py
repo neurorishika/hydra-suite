@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from hydra_suite.data.dataset_generation import FrameQualityScorer
+from hydra_suite.utils.geometry import obb_corners_from_dims
 from hydra_suite.utils.geometry_levels import GeometryLevel
 
 
@@ -216,8 +217,9 @@ class TestFrameQualityScorer:
             frame_id=0, detection_data=detection_data, tracking_data=tracking_data
         )
 
-        # Multiple issues should compound the score
-        assert score > 0.3
+        # Multiple issues should compound the score (absolute composite
+        # severity across the uncertainty, count, and assignment channels).
+        assert score > 0.2
 
     def test_score_frame_nan_confidences_ignored(self):
         """Test that NaN confidences (from background subtraction) are handled."""
@@ -272,8 +274,12 @@ class TestFrameQualityScorer:
 
         score = scorer.score_frame(frame_id=0)
 
-        # Should return 0 or low score when no data
-        assert score == 0.0
+        # No detection_data at all is indistinguishable from "zero detections
+        # observed" under the absolute pipeline (real callers always supply
+        # an explicit "count" -- see core/post/dataset_export.py -- so this
+        # is a hypothetical edge case, not a live code path). Zero detections
+        # against a nonzero MAX_TARGETS is a genuine absolute severity, not 0.
+        assert score > 0.0
 
     def test_score_frame_empty_detection_data(self):
         """Test scoring with empty detection data dict."""
@@ -287,7 +293,10 @@ class TestFrameQualityScorer:
 
         score = scorer.score_frame(frame_id=0, detection_data={})
 
-        assert score == 0.0
+        # Same reasoning as test_score_frame_no_data: an empty dict yields
+        # zero observed detections, which is a genuine absolute severity
+        # under the count-deviation channel, not a "nothing to report" 0.
+        assert score > 0.0
 
     def test_metrics_can_be_disabled(self):
         """Test that individual metrics can be disabled."""
@@ -429,8 +438,9 @@ def test_score_frame_zero_count():
 
     score = scorer.score_frame(frame_id=0, detection_data=detection_data)
 
-    # Zero detections should be highly problematic
-    assert score > 0.2
+    # Zero detections should be flagged as problematic (absolute composite
+    # severity, driven entirely by the count-deviation channel here).
+    assert score > 0.1
 
 
 def test_score_normalization():
@@ -525,12 +535,6 @@ def test_low_confidence_uses_frame_average_not_minimum():
     assert score == 0.0
 
 
-def _ellipse_shape(width: float, height: float) -> tuple[float, float]:
-    area = np.pi * (width / 2.0) * (height / 2.0)
-    aspect_ratio = width / max(height, 1e-6)
-    return area, aspect_ratio
-
-
 def test_score_frame_uses_assignment_confidence_when_costs_missing():
     params = {
         "MAX_TARGETS": 4,
@@ -548,76 +552,39 @@ def test_score_frame_uses_assignment_confidence_when_costs_missing():
     )
 
     assert score > 0.0
-    assert (
-        scorer.frame_scores[0]["metrics"]["high_assignment_cost"]["source"]
-        == "assignment_confidence"
-    )
+    # Falls back to the assignment_confidences path (no assignment_costs
+    # supplied): difficulty = 1 - mean(confidences) = 1 - 0.25 = 0.75.
+    assert scorer.frame_signals[0].extras["assignment"] == pytest.approx(0.75)
 
 
 def test_score_frame_prioritizes_split_detections_over_clean_overcount():
-    params = {
-        "MAX_TARGETS": 4,
-        "DATASET_CONF_THRESHOLD": 0.5,
-        "METRIC_LOW_CONFIDENCE": False,
-        "METRIC_COUNT_MISMATCH": True,
-        "METRIC_FRAGMENTED_DETECTIONS": True,
-        "METRIC_HIGH_ASSIGNMENT_COST": False,
-        "METRIC_TRACK_LOSS": False,
-    }
+    """A fragmented frame must outrank a frame that merely has an extra box."""
+    params = {"MAX_TARGETS": 2, "REFERENCE_BODY_SIZE": 20.0}
+    scorer = FrameQualityScorer(params, frame_shape=(1080, 1920))
 
-    scorer = FrameQualityScorer(params)
-
-    normal_shape = _ellipse_shape(20.0, 8.0)
-    split_shape = _ellipse_shape(8.0, 4.0)
-
-    split_score = scorer.score_frame(
-        frame_id=0,
-        detection_data={
-            "confidences": [0.9] * 5,
-            "count": 5,
-            "measurements": [
-                np.array([20.0, 20.0, 0.0], dtype=np.float32),
-                np.array([80.0, 20.0, 0.0], dtype=np.float32),
-                np.array([20.0, 80.0, 0.0], dtype=np.float32),
-                np.array([48.0, 48.0, 0.0], dtype=np.float32),
-                np.array([54.0, 50.0, 0.0], dtype=np.float32),
-            ],
-            "shapes": [
-                normal_shape,
-                normal_shape,
-                normal_shape,
-                split_shape,
-                split_shape,
-            ],
-            "obb_corners": [],
-        },
+    fragmented_corners = [
+        obb_corners_from_dims(500, 500, 44, 16, 0.0),
+        obb_corners_from_dims(100, 100, 20, 7, 0.0),
+        obb_corners_from_dims(108, 102, 20, 7, 0.0),
+    ]
+    clean_corners = [
+        obb_corners_from_dims(200, 200, 44, 16, 0.0),
+        obb_corners_from_dims(600, 600, 44, 16, 0.0),
+        obb_corners_from_dims(900, 300, 44, 16, 0.0),
+    ]
+    scorer.score_frame(
+        0,
+        {"confidences": [0.9] * 3, "count": 3, "obb_corners": fragmented_corners},
+        {},
+    )
+    scorer.score_frame(
+        1, {"confidences": [0.9] * 3, "count": 3, "obb_corners": clean_corners}, {}
     )
 
-    clean_overcount_score = scorer.score_frame(
-        frame_id=1,
-        detection_data={
-            "confidences": [0.9] * 5,
-            "count": 5,
-            "measurements": [
-                np.array([20.0, 20.0, 0.0], dtype=np.float32),
-                np.array([80.0, 20.0, 0.0], dtype=np.float32),
-                np.array([20.0, 80.0, 0.0], dtype=np.float32),
-                np.array([80.0, 80.0, 0.0], dtype=np.float32),
-                np.array([50.0, 50.0, 0.0], dtype=np.float32),
-            ],
-            "shapes": [
-                normal_shape,
-                normal_shape,
-                normal_shape,
-                normal_shape,
-                normal_shape,
-            ],
-            "obb_corners": [],
-        },
-    )
-
-    assert split_score > clean_overcount_score
-    assert "fragmented_detections" in scorer.frame_scores[0]["metrics"]
+    assert scorer.frame_signals[0].fragmentation_score > 0.45
+    assert scorer.frame_signals[1].fragmentation_score == 0.0
+    picked = scorer.get_worst_frames(1, diversity_window=1, probabilistic=False)
+    assert picked == [0]
 
 
 def test_frame_quality_scorer_uses_tracker_default_preset_after_refactor():
