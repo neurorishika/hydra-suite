@@ -81,11 +81,14 @@ def main():
     m = _m_aligns(a.n, a.W, a.H, geo.canvas_w, geo.canvas_h, rng)
 
     got, ref = R.canonical_warp_batch(frame, m, geo), _ref(frame, m, geo)
+    max_abs_diff = (got - ref).abs().max().item()
     print(
-        "byte_identical:",
+        "bitwise_equal:",
         torch.equal(got, ref),
+        "within_1e-3:",
+        max_abs_diff < 1e-3,
         "max_abs_diff:",
-        (got - ref).abs().max().item(),
+        max_abs_diff,
     )
 
     def bench(fn):

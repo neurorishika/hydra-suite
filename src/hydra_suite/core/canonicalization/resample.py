@@ -143,10 +143,12 @@ def canonical_warp_batch(
 ) -> torch.Tensor:
     """Batch canonical warp via per-detection AABB pre-crop + one grid_sample.
 
-    Byte-identical to the previous full-frame ``expand(N).contiguous()`` path,
-    but samples only each detection's canvas footprint (a small frame region)
-    instead of replicating the whole frame N times. See
-    ``docs/superpowers/specs/2026-08-17-crop-warp-aabb-precrop-design.md``.
+    Numerically equivalent to the previous full-frame ``expand(N).contiguous()``
+    path within the float32 grid-normalization noise floor (~1e-4), NOT bitwise
+    ``torch.equal`` -- see
+    ``docs/superpowers/specs/2026-08-17-crop-warp-aabb-precrop-design.md``
+    (Acceptance bar). Samples only each detection's canvas footprint (a small
+    frame region) instead of replicating the whole frame N times.
     """
     canvas_w, canvas_h = geometry.canvas_w, geometry.canvas_h
     c, h_in, w_in = frame_chw.shape
