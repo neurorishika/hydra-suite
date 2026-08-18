@@ -43,11 +43,15 @@ def test_identity_postprocessing_follows_identity_classification(qapp, main_wind
     _settle(qapp)
     assert panel.g_identity_postprocess.isVisibleTo(panel) is False
 
+    # A source is required as well as the master toggle -- see
+    # test_identity_needs_a_configured_source below.
     identity.g_identity.setChecked(True)
+    identity.g_apriltags.setChecked(True)
     _settle(qapp)
     assert panel.g_identity_postprocess.isVisibleTo(panel) is True
 
     identity.g_identity.setChecked(False)
+    identity.g_apriltags.setChecked(False)
     _settle(qapp)
     assert panel.g_identity_postprocess.isVisibleTo(panel) is False
 
@@ -59,6 +63,7 @@ def test_identity_section_stays_hidden_when_cleaning_is_off(qapp, main_window):
     panel.clean_advanced.setExpanded(True)
 
     identity.g_identity.setChecked(True)
+    identity.g_apriltags.setChecked(True)
     panel.enable_postprocessing.setChecked(False)
     _settle(qapp)
     assert panel.g_identity_postprocess.isVisibleTo(panel) is False
@@ -68,6 +73,7 @@ def test_identity_section_stays_hidden_when_cleaning_is_off(qapp, main_window):
     assert panel.g_identity_postprocess.isVisibleTo(panel) is True
 
     identity.g_identity.setChecked(False)
+    identity.g_apriltags.setChecked(False)
     _settle(qapp)
 
 
@@ -142,3 +148,66 @@ def test_pose_overlay_section_hidden_entirely_without_pose(qapp, main_window):
         main_window._sync_video_pose_overlay_controls()
         panel.check_video_output.setChecked(False)
         _settle(qapp)
+
+
+def test_identity_needs_a_configured_source(qapp, main_window):
+    """Identity on with neither AprilTags nor a CNN classifier produces no
+    evidence at all -- `_selected_identity_method()` collapses to
+    "none_disabled" and the run does no identity work. The master toggle alone
+    must not reveal the post-processing section."""
+    panel = main_window._postprocess_panel
+    identity = main_window._identity_panel
+    panel.clean_advanced.setExpanded(True)
+    panel.enable_postprocessing.setChecked(True)
+
+    identity.g_identity.setChecked(True)
+    identity.g_apriltags.setChecked(False)
+    _settle(qapp)
+    assert main_window._has_identity_source() is False
+    assert main_window._selected_identity_method() == "none_disabled"
+    assert identity.lbl_no_identity_source.isVisibleTo(identity) is True
+    assert panel.g_identity_postprocess.isVisibleTo(panel) is False
+
+    identity.g_apriltags.setChecked(True)
+    _settle(qapp)
+    assert main_window._has_identity_source() is True
+    assert identity.lbl_no_identity_source.isVisibleTo(identity) is False
+    assert panel.g_identity_postprocess.isVisibleTo(panel) is True
+
+    identity.g_identity.setChecked(False)
+    identity.g_apriltags.setChecked(False)
+    _settle(qapp)
+
+
+def test_tracking_blocked_when_identity_has_no_source(qapp, main_window, monkeypatch):
+    """The run would otherwise complete having done no identity work while the
+    UI still claimed identity classification was on."""
+    from PySide6.QtWidgets import QMessageBox
+
+    identity = main_window._identity_panel
+    orch = main_window._tracking_orch
+    shown: list = []
+    monkeypatch.setattr(
+        QMessageBox, "warning", staticmethod(lambda *a, **k: shown.append(a[1]))
+    )
+
+    identity.g_identity.setChecked(False)
+    _settle(qapp)
+    assert orch._validate_identity_requirements("tracking") is True
+    assert shown == []
+
+    identity.g_identity.setChecked(True)
+    identity.g_apriltags.setChecked(False)
+    _settle(qapp)
+    assert orch._validate_identity_requirements("tracking") is False
+    assert shown == ["No Identity Source Configured"]
+
+    shown.clear()
+    identity.g_apriltags.setChecked(True)
+    _settle(qapp)
+    assert orch._validate_identity_requirements("tracking") is True
+    assert shown == []
+
+    identity.g_identity.setChecked(False)
+    identity.g_apriltags.setChecked(False)
+    _settle(qapp)

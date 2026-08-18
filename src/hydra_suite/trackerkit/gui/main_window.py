@@ -1445,6 +1445,20 @@ class MainWindow(QMainWindow):
             return {"use_apriltags": False, "cnn_classifiers": []}
         return self._detection_panel._identity_config()
 
+    def _has_identity_source(self) -> bool:
+        """True when identity is on AND at least one evidence source is usable.
+
+        Enabling identity classification without AprilTags or a CNN classifier
+        produces no evidence at all: ``_selected_identity_method()`` collapses
+        to ``none_disabled`` and the run silently does nothing identity-related.
+        A CNN row whose model is unset does not count -- ``to_config()`` returns
+        None for it, so it contributes nothing.
+        """
+        if not self._is_identity_analysis_enabled():
+            return False
+        cfg = self._identity_config()
+        return bool(cfg.get("use_apriltags") or cfg.get("cnn_classifiers"))
+
     def _is_individual_image_save_enabled(self) -> bool:
         """Return effective runtime state for final canonical still export."""
         if not hasattr(self, "_session_orch"):

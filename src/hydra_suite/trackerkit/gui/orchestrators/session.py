@@ -1190,10 +1190,10 @@ class SessionOrchestrator:
 
         # Hide tracking-side identity decoder when classification is OFF.
         if hasattr(self._mw, "_tracking_panel"):
-            identity_active = pipeline_enabled and bool(
-                getattr(self._mw, "_identity_panel", None)
-                and self._mw._identity_panel.g_identity.isChecked()
-            )
+            # The master toggle alone is not enough: identity with no AprilTags
+            # and no CNN classifier produces no evidence, so every downstream
+            # identity control would be inert.
+            identity_active = pipeline_enabled and self._mw._has_identity_source()
             self._mw._tracking_panel.set_identity_section_visible(identity_active)
             if hasattr(self._mw, "_postprocess_panel"):
                 self._mw._postprocess_panel.set_identity_section_visible(
