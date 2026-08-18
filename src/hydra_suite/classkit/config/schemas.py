@@ -156,6 +156,39 @@ class LabelingScheme:
         )
 
 
+def build_composite_rename_map(
+    old_scheme: "LabelingScheme",
+    factor_renames: List[Dict[str, str]],
+) -> Dict[str, str]:
+    """Map every stored label of *old_scheme* to its post-rename value.
+
+    ``factor_renames`` holds one ``{old_label: new_label}`` dict per factor of
+    *old_scheme* (index-aligned; use ``{}`` for factors with no renames). The
+    result maps composite (or, for a single-factor scheme, plain) encoded labels
+    to the value they must take once the rename is applied, so stored labels can
+    follow a scheme edit instead of being pruned as stale.
+    """
+    if not old_scheme.factors:
+        return {}
+
+    per_factor: List[Dict[str, str]] = [
+        dict(factor_renames[i]) if i < len(factor_renames) else {}
+        for i in range(len(old_scheme.factors))
+    ]
+    if not any(per_factor):
+        return {}
+
+    mapping: Dict[str, str] = {}
+    for values in product(*(factor.labels for factor in old_scheme.factors)):
+        old_encoded = MULTIHEAD_LABEL_SEPARATOR.join(values)
+        new_encoded = MULTIHEAD_LABEL_SEPARATOR.join(
+            per_factor[i].get(value, value) for i, value in enumerate(values)
+        )
+        if new_encoded and new_encoded != old_encoded:
+            mapping[old_encoded] = new_encoded
+    return mapping
+
+
 @dataclass
 class ProjectConfig:
     name: str

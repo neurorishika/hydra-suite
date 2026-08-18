@@ -70,17 +70,32 @@ class ClassEditorDialog(QDialog):
                     "name": f.get("name", f"factor_{i}"),
                     "labels": list(f.get("labels", [])),
                     "shortcuts": list(f.get("shortcut_keys", [])),
+                    "origins": list(f.get("labels", [])),
+                    "origin_index": i,
                 }
                 for i, f in enumerate(scheme_dict["factors"])
             ]
         elif classes:
             self._factors = [
-                {"name": "class", "labels": list(classes), "shortcuts": []}
+                {
+                    "name": "class",
+                    "labels": list(classes),
+                    "shortcuts": [],
+                    "origins": list(classes),
+                    "origin_index": 0,
+                }
             ]
         else:
             self._factors = [
-                {"name": "class", "labels": ["class_1", "class_2"], "shortcuts": []}
+                {
+                    "name": "class",
+                    "labels": ["class_1", "class_2"],
+                    "shortcuts": [],
+                    "origins": [None, None],
+                    "origin_index": None,
+                }
             ]
+        self._original_factor_count = len(self._factors)
 
         outer = QVBoxLayout(self)
         outer.setSpacing(8)
@@ -231,6 +246,9 @@ class ClassEditorDialog(QDialog):
         self._factors[idx]["shortcuts"] = [
             r.shortcut() for r in self._label_rows if r.label()
         ]
+        self._factors[idx]["origins"] = [
+            r.origin for r in self._label_rows if r.label()
+        ]
         item = self._factor_list.item(idx)
         if item:
             item.setText(self._factors[idx]["name"])
@@ -241,9 +259,11 @@ class ClassEditorDialog(QDialog):
         self._clear_label_rows()
         labels = factor.get("labels", [])
         shortcuts = factor.get("shortcuts", [])
+        origins = factor.get("origins", [])
         for i, lbl in enumerate(labels):
             key = shortcuts[i] if i < len(shortcuts) else ""
-            self._append_label_row(lbl, key)
+            origin = origins[i] if i < len(origins) else None
+            self._append_label_row(lbl, key, origin=origin)
         self._populating = False
 
     def _on_name_edited(self, text: str):
@@ -260,7 +280,13 @@ class ClassEditorDialog(QDialog):
         self._flush_current_factor()
         new_name = f"factor_{len(self._factors) + 1}"
         self._factors.append(
-            {"name": new_name, "labels": ["label_1"], "shortcuts": [""]}
+            {
+                "name": new_name,
+                "labels": ["label_1"],
+                "shortcuts": [""],
+                "origins": [None],
+                "origin_index": None,
+            }
         )
         self._populate_factor_list()
         self._factor_list.setCurrentRow(len(self._factors) - 1)
@@ -284,8 +310,10 @@ class ClassEditorDialog(QDialog):
             row.setParent(None)
         self._label_rows = []
 
-    def _append_label_row(self, label: str = "", shortcut: str = ""):
-        row = _LabelRow(label, shortcut, self._labels_container)
+    def _append_label_row(
+        self, label: str = "", shortcut: str = "", origin: str | None = None
+    ):
+        row = _LabelRow(label, shortcut, self._labels_container, origin=origin)
         insert_pos = max(0, self._labels_layout.count() - 1)
         self._labels_layout.insertWidget(insert_pos, row)
         self._label_rows.append(row)
@@ -322,6 +350,8 @@ class ClassEditorDialog(QDialog):
                 "name": factor.name,
                 "labels": list(factor.labels),
                 "shortcuts": list(factor.shortcut_keys),
+                "origins": [None] * len(factor.labels),
+                "origin_index": None,
             }
             for factor in preset.scheme.factors
         ]
@@ -420,6 +450,26 @@ class ClassEditorDialog(QDialog):
         if not self._factors:
             return ["class_1", "class_2"]
         return self._factors[0].get("labels", [])
+
+    def get_label_renames(self) -> List[dict]:
+        """Return ``{old_label: new_label}`` per factor of the *original* scheme.
+
+        The list is index-aligned with the factors the dialog was opened with
+        (``{}`` for a factor that was removed or gained no renames), so callers
+        can migrate labels that were stored under the pre-edit scheme.
+        """
+        renames: List[dict] = [{} for _ in range(self._original_factor_count)]
+        for factor in self._factors:
+            origin_index = factor.get("origin_index")
+            if origin_index is None or origin_index >= len(renames):
+                continue
+            origins = factor.get("origins", [])
+            labels = factor.get("labels", [])
+            for i, label in enumerate(labels):
+                origin = origins[i] if i < len(origins) else None
+                if origin and label and origin != label:
+                    renames[origin_index][origin] = label
+        return renames
 
     def get_scheme_dict(self) -> Optional[dict]:
         factors = self._factors
