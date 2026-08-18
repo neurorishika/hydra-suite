@@ -599,7 +599,7 @@ class ConfigOrchestrator:
             self._mw.config.runtime_tier = tier
         self._mw._on_runtime_context_changed()
 
-        # Live Detection Batching (drives InferenceConfig.detection_batch_size)
+        # Detection frame batching (drives InferenceConfig.detection_batch_size)
         self._panels.detection.spin_detection_batch_size.setValue(
             get_cfg("detection_batch_size", default=1)
         )
@@ -1701,7 +1701,7 @@ class ConfigOrchestrator:
 
         cfg.update(
             {
-                # Live Detection Batching (drives InferenceConfig.detection_batch_size)
+                # Detection frame batching (drives InferenceConfig.detection_batch_size)
                 "detection_batch_size": self._panels.detection.spin_detection_batch_size.value(),
                 # TensorRT: derived from the selected runtime, retained for
                 # legacy config round-tripping and the engine-cache key.
