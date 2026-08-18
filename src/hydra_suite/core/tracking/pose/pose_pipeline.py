@@ -67,19 +67,24 @@ def _expand_obb_to_aabb(
     frame_h: int,
     frame_w: int,
 ) -> Tuple[int, int, int, int]:
-    """Expand OBB corners and return axis-aligned bounding box ``(x0, y0, x1, y1)``."""
-    centroid = corners.mean(axis=0)
-    expanded = corners.copy()
-    for i in range(4):
-        direction = corners[i] - centroid
-        expanded[i] = centroid + direction * (1.0 + padding_fraction)
-    expanded[:, 0] = np.clip(expanded[:, 0], 0, frame_w - 1)
-    expanded[:, 1] = np.clip(expanded[:, 1], 0, frame_h - 1)
-    x0 = max(0, int(np.floor(expanded[:, 0].min())))
-    x1 = min(frame_w, int(np.ceil(expanded[:, 0].max())) + 1)
-    y0 = max(0, int(np.floor(expanded[:, 1].min())))
-    y1 = min(frame_h, int(np.ceil(expanded[:, 1].max())) + 1)
-    return x0, y0, x1, y1
+    """Axis-aligned bounding box of ``corners``, padded, as ``(x0, y0, x1, y1)``.
+
+    Deliberately identical to ``core.inference.stages.crops.extract_aabb_crops``:
+    the padding is a fraction of the AABB's larger side, applied to all four
+    sides. The two call sites (live inference and interpolated crops) feed the
+    same AprilTag decoder, so they must cut the same pixels -- previously they
+    disagreed by up to one pixel even at ``padding_fraction=0.0``.
+    """
+    x1 = float(corners[:, 0].min())
+    y1 = float(corners[:, 1].min())
+    x2 = float(corners[:, 0].max())
+    y2 = float(corners[:, 1].max())
+    pad = float(padding_fraction) * max(x2 - x1, y2 - y1)
+    x0 = max(0, int(x1 - pad))
+    y0 = max(0, int(y1 - pad))
+    x1i = min(frame_w, int(x2 + pad))
+    y1i = min(frame_h, int(y2 + pad))
+    return x0, y0, x1i, y1i
 
 
 def extract_one_crop(
