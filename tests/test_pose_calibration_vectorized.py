@@ -157,8 +157,15 @@ def _build_fixture_df() -> pd.DataFrame:
             "PoseKpt_leg1_X": base_x + 3.0,
             "PoseKpt_leg1_Y": base_y - 4.0,
             "PoseKpt_leg1_Conf": 0.5,
-            "PoseKpt_tail_X": base_x + 20.0,
-            "PoseKpt_tail_Y": base_y + 4.0,
+            # Head-tail OFFSET (not just base position) varies per row so
+            # the (0, 4) canonical edge key's samples are all distinct --
+            # this is required to give an order-sensitive equality
+            # assertion real power to distinguish row-major merge order
+            # from edge-major merge order for the duplicate (4,0)/(0,4)
+            # edge pair below. A constant offset would make every sample
+            # for this key identical, making any ordering bug invisible.
+            "PoseKpt_tail_X": base_x + 20.0 + i * 0.3,
+            "PoseKpt_tail_Y": base_y + 4.0 - i * 0.2,
             "PoseKpt_tail_Conf": 0.88,
             "PoseMeanConf": 0.8,
         }

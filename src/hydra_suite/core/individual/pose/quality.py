@@ -399,12 +399,22 @@ def _collect_body_lengths(
     dx = ax - px
     dy = ay - py
     coords_finite = np.isfinite(dx) & np.isfinite(dy)
+    candidate_mask = any_found & a_valid & p_valid & coords_finite
 
-    # math.hypot(dx, dy) per row, matching np.hypot's elementwise semantics
-    # exactly (both ultimately delegate to the platform libm hypot).
-    body_length = np.hypot(dx, dy)
+    # NOTE: original code computes body length via ``math.hypot(dx, dy)``
+    # (features.py), NOT ``sqrt(dx**2 + dy**2)``. ``np.hypot`` is NOT
+    # guaranteed bit-identical to ``math.hypot`` -- numpy's vectorized hypot
+    # ufunc can differ from the platform libm scalar ``hypot`` by up to 1
+    # ULP (empirically confirmed on this box), unlike ``sqrt`` which IEEE-754
+    # requires to be correctly rounded (and where numpy/libm therefore always
+    # agree). So body length is computed with ``math.hypot`` in a scalar loop
+    # restricted to candidate rows only, to guarantee exact equality with the
+    # original per-row computation.
+    body_length = np.zeros(dx.shape[0], dtype=np.float64)
+    for row_idx in np.nonzero(candidate_mask)[0]:
+        body_length[row_idx] = math.hypot(dx[row_idx], dy[row_idx])
 
-    mask = any_found & a_valid & p_valid & coords_finite & (body_length > 0.0)
+    mask = candidate_mask & (body_length > 0.0)
     return [float(v) for v in body_length[mask]]
 
 
@@ -504,13 +514,24 @@ def _accumulate_edge_samples(
 
     Vectorized equivalent of the historical ``iterrows()`` loop that called
     ``_extract_keypoints_from_row`` + ``_measure_edge_distance`` per row per
-    edge. The outer loop over rows is replaced by numpy operations across
-    all rows at once; the (small, fixed-size) loop over ``skeleton_edges``
-    is retained so that per-edge sample lists are appended in the exact row
-    order the ``iterrows()`` path produced -- this matters when multiple
-    edges canonicalize to the same ``(min_idx, max_idx)`` key (e.g. a
-    duplicate/reversed edge pair), since both edges' samples must interleave
-    the same way per row within that shared list.
+    edge, with a **row-major** outer loop and a ``skeleton_edges``-inner
+    loop -- i.e. for a fixed canonical key produced by two or more edges
+    (e.g. a duplicate/reversed edge pair), the merged sample sequence is
+    ``[row0_edgeA, row0_edgeB, row1_edgeA, row1_edgeB, ...]``, not
+    edge-major ``[row0_edgeA, row1_edgeA, ..., row0_edgeB, row1_edgeB,
+    ...]``.
+
+    The per-edge distance/validity computation is fully vectorized across
+    all rows at once (replacing the per-row column lookups and Python-level
+    keypoint extraction). Only the small, fixed-size loop over
+    ``skeleton_edges`` remains in Python. To reproduce the exact row-major
+    merge order for edges sharing a canonical key, each edge's valid samples
+    are first collected as ``(row_idx, edge_position, distance)`` triples;
+    once every edge has been processed, each key's triples are stably
+    sorted by ``(row_idx, edge_position)`` before flattening to the final
+    per-key sample list -- this reproduces the original nested loop's
+    interleaving (row outer, ``skeleton_edges`` order inner) regardless of
+    the order in which edges were vectorized.
     """
     edge_samples: Dict[Tuple[int, int], List[float]] = {}
     K = len(pose_labels)
@@ -521,7 +542,12 @@ def _accumulate_edge_samples(
     if K == 0 or not bool(any_found.any()):
         return edge_samples
 
-    for edge in skeleton_edges:
+    # Per canonical key: list of (row_idx, edge_position_in_skeleton_edges,
+    # distance) triples, merged and ordered row-major after all edges have
+    # been processed.
+    entries_by_key: Dict[Tuple[int, int], List[Tuple[int, int, float]]] = {}
+
+    for edge_pos, edge in enumerate(skeleton_edges):
         try:
             ei, ej = int(edge[0]), int(edge[1])
         except Exception:
@@ -544,12 +570,18 @@ def _accumulate_edge_samples(
 
         dist = np.sqrt((xi - xj) ** 2 + (yi - yj) ** 2)
         valid = any_found & conf_ok & coord_ok & (dist > 0.0)
-        if not np.any(valid):
+        row_indices = np.nonzero(valid)[0]
+        if row_indices.size == 0:
             continue
 
         key = (min(ei, ej), max(ei, ej))
-        samples = [float(v) for v in dist[valid]]
-        edge_samples.setdefault(key, []).extend(samples)
+        bucket = entries_by_key.setdefault(key, [])
+        for row_idx in row_indices:
+            bucket.append((int(row_idx), edge_pos, float(dist[row_idx])))
+
+    for key, entries in entries_by_key.items():
+        entries.sort(key=lambda t: (t[0], t[1]))
+        edge_samples[key] = [d for _, _, d in entries]
     return edge_samples
 
 
@@ -1096,7 +1128,14 @@ def _weighted_centroid_batch(
     order ``_weighted_centroid``'s python loop would use) with invalid
     entries contributing an exact ``+0.0`` -- mathematically a no-op under
     IEEE-754 addition, so the running sum for each row is bit-identical to
-    summing only the valid terms in the same order.
+    summing only the valid terms in the same order. Separately,
+    ``_weighted_centroid`` itself calls ``np.average``, whose internal
+    ``np.sum`` uses pairwise summation that only diverges from a plain
+    sequential sum once a reduction axis exceeds ~128 elements; real
+    anterior/posterior index sets are tiny (a handful of keypoints), so
+    numpy's pairwise reduction degenerates to the same sequential
+    accumulation this function performs, and exact equality is not solely
+    resting on the ``+0.0``-no-op argument above.
     """
     M, K, _ = kpts.shape
     sum_w = np.zeros(M, dtype=np.float64)
