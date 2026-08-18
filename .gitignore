@@ -431,3 +431,5 @@ test_classkit.db
 .worktrees/
 .worktree/
 headtail_batch25_bench.json
+
+.reasonix/
