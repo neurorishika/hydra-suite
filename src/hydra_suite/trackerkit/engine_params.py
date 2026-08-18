@@ -13,6 +13,7 @@ Nothing here may import ``hydra_suite.trackerkit.gui`` or PySide6.
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass
 from typing import Any, Mapping
@@ -30,6 +31,8 @@ from hydra_suite.runtime.resolver import (
     detect_platform,
 )
 from hydra_suite.trackerkit.config.identity_schema import IdentityConfig
+
+logger = logging.getLogger(__name__)
 
 
 def legacy_detection_runtime_fields(runtime: ResolvedBackend) -> dict:
@@ -374,6 +377,28 @@ def build_engine_params(
     max_targets = int(_cfg_get(cfg, "max_targets", default=4))
     reference_body_size = float(_cfg_get(cfg, "reference_body_size", default=20.0))
     resize_factor = float(_cfg_get(cfg, "resize_factor", default=1.0))
+    # RESIZE_FACTOR is a background-subtraction knob. The worker's frame
+    # downscale is method-agnostic, but only bg-sub is coherent under it: the
+    # bg-sub stage detects on the already-resized frame and keys its cache on
+    # the factor, while YOLO's batch pass decodes at NATIVE resolution
+    # (run_batch_pass -> make_frame_source never sees it) and the OBB cache key
+    # omits it. Left unclamped, batch YOLO returns native-space detections that
+    # rescale_coordinates then divides by the factor, and realtime YOLO -- which
+    # DOES detect on the downscaled frame -- silently disagrees with batch YOLO
+    # for one config. Downscaling before YOLO would save decode, not inference
+    # (the model letterboxes to imgsz regardless), so scoping the knob beats
+    # threading it through the OBB pipeline.
+    _detection_method = str(
+        _cfg_get(cfg, "detection_method", default="background_subtraction")
+    )
+    if _detection_method != "background_subtraction" and resize_factor != 1.0:
+        logger.warning(
+            "RESIZE_FACTOR=%.3f ignored for detection_method=%r -- Scale applies "
+            "to background subtraction only; using 1.0.",
+            resize_factor,
+            _detection_method,
+        )
+        resize_factor = 1.0
     scaled_body_size = reference_body_size * resize_factor
     reference_body_area = math.pi * (reference_body_size / 2.0) ** 2
     scaled_body_area = reference_body_area * (resize_factor**2)
@@ -734,9 +759,7 @@ def build_engine_params(
     params: dict[str, Any] = {
         "ADVANCED_CONFIG": advanced,
         "DEBUG_MODE": _debug_mode,
-        "DETECTION_METHOD": str(
-            _cfg_get(cfg, "detection_method", default="background_subtraction")
-        ),
+        "DETECTION_METHOD": _detection_method,
         "FPS": fps,
         "START_FRAME": start_frame,
         "END_FRAME": end_frame,

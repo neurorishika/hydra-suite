@@ -601,11 +601,7 @@ class SetupPanel(QWidget):
         self.spin_resize.setValue(1.0)
         self.spin_resize.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.spin_resize.setFixedHeight(30)
-        self.spin_resize.setToolTip(
-            "Downscale video frames for faster processing.\n"
-            "1.0 = full resolution, 0.5 = half resolution (4× faster).\n"
-            "All body-size-based parameters auto-scale with this value."
-        )
+        self.spin_resize.setToolTip(self._SCALE_TOOLTIP_ACTIVE)
         from hydra_suite.runtime.resolver import (
             available_tiers,
             detect_platform,
@@ -885,6 +881,37 @@ class SetupPanel(QWidget):
             self.performance_control_grid.addWidget(card, row, column)
         for column in range(column_count):
             self.performance_control_grid.setColumnStretch(column, 1)
+
+    _SCALE_TOOLTIP_ACTIVE = (
+        "Downscale video frames for faster processing.\n"
+        "1.0 = full resolution, 0.5 = half resolution (4× faster).\n"
+        "All body-size-based parameters auto-scale with this value."
+    )
+    _SCALE_TOOLTIP_INACTIVE = (
+        "Scale applies to background subtraction only.\n"
+        "\n"
+        "YOLO letterboxes every frame to its own input size, so pre-downscaling\n"
+        "would cost detection quality without saving inference time. The engine\n"
+        "clamps Scale to 1.0 for YOLO OBB (see engine_params.build_engine_params)."
+    )
+
+    def sync_scale_control_for_detection_method(
+        self,
+        is_background_subtraction: bool,
+    ) -> None:
+        """Enable Scale only for background subtraction, which is the sole honorer.
+
+        `build_engine_params` clamps RESIZE_FACTOR to 1.0 for every other method,
+        so leaving the spinbox live would let an operator set a value the run
+        silently discards.
+        """
+        enabled = bool(is_background_subtraction)
+        self.spin_resize.setEnabled(enabled)
+        self.spin_resize.setToolTip(
+            self._SCALE_TOOLTIP_ACTIVE if enabled else self._SCALE_TOOLTIP_INACTIVE
+        )
+        if not enabled:
+            self.spin_resize.setValue(1.0)
 
     def _sync_batch_policy_controls(self, *_args) -> None:
         """Notify dependent panels when realtime or animal-count policy changes."""

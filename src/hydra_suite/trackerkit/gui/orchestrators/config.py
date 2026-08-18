@@ -307,6 +307,11 @@ class ConfigOrchestrator:
         self._panels.detection.combo_detection_method.setCurrentIndex(
             0 if det_method == "background_subtraction" else 1
         )
+        # setCurrentIndex only emits when the index actually changes, so a config
+        # loaded onto an already-matching method would leave Scale out of sync.
+        self._panels.setup.sync_scale_control_for_detection_method(
+            det_method == "background_subtraction"
+        )
         self._panels.detection.chk_size_filtering.setChecked(
             get_cfg("enable_size_filtering", default=False)
         )
