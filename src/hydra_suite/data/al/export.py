@@ -68,6 +68,7 @@ def _write_root(
     provenance: dict,
     authoritative_root: Path | None,
     native_level: GeometryLevel,
+    autofilled: Sequence[str] = (),
 ) -> dict:
     images_dir = root / "images"
     labels_dir = root / "labels"
@@ -107,6 +108,7 @@ def _write_root(
         "reviewed": authoritative_root is None,
         "source_kind": SOURCE_KIND,
         "class_names": list(class_names),
+        "class_names_autofilled": list(autofilled),
         "provenance": dict(provenance),
     }
     (root / "source.json").write_text(json.dumps(meta, indent=2))
@@ -122,6 +124,7 @@ def export_al_dataset(
     levels: Sequence[GeometryLevel],
     class_names: Sequence[str],
     provenance: dict,
+    extra_totals: Mapping[str, int] | None = None,
 ) -> dict:
     """Write one AL round as up to three sibling source roots.
 
@@ -132,8 +135,13 @@ def export_al_dataset(
     resident in memory at once; derived roots hardlink images and read a
     cached (height, width) instead of touching `images` again.
 
+    `extra_totals` is merged into the manifest's `totals` block, so a caller
+    can surface its own per-frame failure counters (e.g. `detection_failed`)
+    in the same place as the exporter's own drop accounting.
+
     Returns a manifest dict describing every root written plus round-level
-    totals. Raises ValueError if any requested level exceeds `native_level`.
+    totals. Raises ValueError if any requested level exceeds `native_level`,
+    or if no frame carries any label geometry.
     """
     allowed = achievable_levels(native_level)
     for lvl in levels:
@@ -142,6 +150,48 @@ def export_al_dataset(
                 f"level {lvl.label!r} is not achievable from native level "
                 f"{native_level.label!r}: upward derivation is refused"
             )
+
+    # A frame with zero surviving records must NOT be exported. YOLO reads an
+    # empty .txt as "this image contains no objects" -- a background sample.
+    # For an AL round that is fabricated negative ground truth: the frame was
+    # picked *because* detection struggled there, so "I could not compute
+    # geometry" would be written to disk as "there is no geometry here". The
+    # frame is dropped and counted instead; nothing invented, nothing hidden.
+    exportable = [f for f in frames if f.records]
+    skipped_no_records = [f for f in frames if not f.records]
+    if not exportable:
+        raise ValueError(
+            f"no frame in this round carries any label geometry "
+            f"({len(skipped_no_records)} of {len(frames)} frames had zero "
+            "surviving detections). Exporting them would write empty label "
+            "files, which YOLO reads as 'these images contain no objects' -- "
+            "fabricated negative ground truth. Lower the export confidence "
+            "threshold, or check that the detection model matches this video."
+        )
+    frames = exportable
+
+    # Class ids come from the model; `class_names` comes from the project.
+    # A multi-class checkpoint emitting id 3 into a root whose classes.txt has
+    # one line produces an unreadable dataset, so reconcile the two here and
+    # record the reconciliation rather than letting them silently disagree.
+    max_class_id = max(
+        (int(rec.class_id) for f in frames for rec in f.records), default=-1
+    )
+    resolved_names = list(class_names)
+    autofilled: list[str] = []
+    while len(resolved_names) <= max_class_id:
+        placeholder = f"class_{len(resolved_names)}"
+        resolved_names.append(placeholder)
+        autofilled.append(placeholder)
+    if autofilled:
+        logger.warning(
+            "Detector emitted class ids up to %d but only %d class name(s) were "
+            "supplied; padded classes.txt with %s. Rename these in DetectKit.",
+            max_class_id,
+            len(class_names),
+            ", ".join(autofilled),
+        )
+    class_names = resolved_names
 
     round_path = Path(round_dir)
     staging = round_path.parent / (round_path.name + ".partial")
@@ -168,6 +218,7 @@ def export_al_dataset(
                 provenance,
                 authoritative_root,
                 native_level,
+                autofilled,
             )
             meta["path"] = str(round_path / lvl.label)
             roots.append(meta)
@@ -176,10 +227,17 @@ def export_al_dataset(
 
         totals = {
             "frames_exported": len(frames),
-            "dropped_lost": sum(int(f.drops.get("lost", 0)) for f in frames),
-            "dropped_unmatched": sum(int(f.drops.get("unmatched", 0)) for f in frames),
+            "frames_skipped_no_records": len(skipped_no_records),
+            "dropped_lost": sum(
+                int(f.drops.get("lost", 0)) for f in frames + skipped_no_records
+            ),
+            "dropped_unmatched": sum(
+                int(f.drops.get("unmatched", 0)) for f in frames + skipped_no_records
+            ),
             "objects": sum(len(f.records) for f in frames),
         }
+        if extra_totals:
+            totals.update({str(k): int(v) for k, v in extra_totals.items()})
         manifest = {
             "schema_version": MANIFEST_SCHEMA_VERSION,
             "round_dir": str(round_path),
@@ -188,6 +246,9 @@ def export_al_dataset(
             "totals": totals,
             "selected_frame_ids": [f.frame_id for f in frames if not f.is_context],
             "context_frame_ids": [f.frame_id for f in frames if f.is_context],
+            "skipped_frame_ids_no_records": [f.frame_id for f in skipped_no_records],
+            "class_names": list(class_names),
+            "class_names_autofilled": autofilled,
             "provenance": dict(provenance),
         }
         (staging / "manifest.json").write_text(json.dumps(manifest, indent=2))

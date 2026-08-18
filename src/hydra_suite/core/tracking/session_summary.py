@@ -78,6 +78,15 @@ def build_session_summary_lines(
                     f"\n  Dropped (lost/interpolated tracks): {dropped_lost or 0}"
                     f"\n  Dropped (no matching detection): {dropped_unmatched or 0}"
                 )
+            skipped = totals.get("frames_skipped_no_records")
+            if skipped:
+                summary += (
+                    f"\n  Frames skipped (no detection survived): {skipped}"
+                    " — not exported as empty/background labels"
+                )
+            detection_failed = totals.get("detection_failed")
+            if detection_failed:
+                summary += f"\n  Frames dropped (detection failed): {detection_failed}"
             lines.append(summary)
         else:
             lines.append(

@@ -110,3 +110,33 @@ def test_summary_dataset_success_no_drops_stays_quiet():
     )
     joined = "\n".join(lines)
     assert "Dropped" not in joined
+
+
+def test_summary_reports_skipped_and_failed_frames():
+    lines = build_session_summary_lines(
+        {"detection_method": "yolo_obb"},
+        {
+            "wall_seconds": 1.0,
+            "frames_processed": 1,
+            "fps_list": [1.0],
+            "video_path": "/data/clip.mp4",
+            "csv_path": "/out/clip.csv",
+            "trajectory_count": 1,
+            "dataset": {
+                "success": True,
+                "num_frames": 2,
+                "dir": "/tmp/round",
+                "manifest": {
+                    "roots": [{"level": "polygon"}],
+                    "totals": {
+                        "objects": 4,
+                        "frames_skipped_no_records": 3,
+                        "detection_failed": 1,
+                    },
+                },
+            },
+        },
+    )
+    text = "\n".join(lines)
+    assert "Frames skipped (no detection survived): 3" in text
+    assert "Frames dropped (detection failed): 1" in text

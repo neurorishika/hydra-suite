@@ -214,3 +214,144 @@ def test_images_mapping_is_read_at_most_once_per_frame_across_all_levels(tmp_pat
     for name in ("polygon", "obb", "aabb"):
         assert (tmp_path / "al_round" / name / "images" / "f000000.jpg").is_file()
         assert (tmp_path / "al_round" / name / "images" / "f000001.jpg").is_file()
+
+
+# =============================================================================
+# FINDING 3: class ids and classes.txt must be reconciled
+# =============================================================================
+
+
+def _multiclass_frame(class_ids, frame_id=0):
+    poly = np.array([[10, 20], [30, 20], [30, 40], [10, 45]], dtype=np.float32)
+    return ExportedFrame(
+        frame_id=frame_id,
+        image_name=f"f{frame_id:06d}.jpg",
+        records=[
+            LabelRecord(
+                class_id=cid,
+                confidence=0.9,
+                points=poly,
+                level=GeometryLevel.POLYGON,
+            )
+            for cid in class_ids
+        ],
+    )
+
+
+def test_classes_txt_is_padded_to_cover_every_emitted_class_id(tmp_path):
+    """A multi-class checkpoint used to write `3 ...` into a root whose
+    classes.txt had a single line, and `_write_root` validated nothing."""
+    frames = [_multiclass_frame([0, 3])]
+    manifest = export_al_dataset(
+        round_dir=tmp_path / "round",
+        frames=frames,
+        images=_images([0]),
+        native_level=GeometryLevel.POLYGON,
+        levels=[GeometryLevel.POLYGON],
+        class_names=["ant"],
+        provenance=_provenance(),
+    )
+
+    classes = (tmp_path / "round" / "polygon" / "classes.txt").read_text().split()
+    assert classes == ["ant", "class_1", "class_2", "class_3"]
+    assert manifest["class_names"] == classes
+    assert manifest["class_names_autofilled"] == ["class_1", "class_2", "class_3"]
+
+    meta = json.loads((tmp_path / "round" / "polygon" / "source.json").read_text())
+    assert meta["class_names"] == classes
+    assert meta["class_names_autofilled"] == ["class_1", "class_2", "class_3"]
+
+    # Every id in the labels indexes a real line of classes.txt.
+    ids = {
+        int(line.split()[0])
+        for line in (tmp_path / "round" / "polygon" / "labels" / "f000000.txt")
+        .read_text()
+        .splitlines()
+        if line.strip()
+    }
+    assert ids == {0, 3}
+    assert max(ids) < len(classes)
+
+
+def test_sufficient_class_names_are_left_alone(tmp_path):
+    manifest = export_al_dataset(
+        round_dir=tmp_path / "round",
+        frames=[_multiclass_frame([0, 1])],
+        images=_images([0]),
+        native_level=GeometryLevel.POLYGON,
+        levels=[GeometryLevel.POLYGON],
+        class_names=["ant", "larva", "queen"],
+        provenance=_provenance(),
+    )
+    assert manifest["class_names_autofilled"] == []
+    assert (tmp_path / "round" / "polygon" / "classes.txt").read_text().split() == [
+        "ant",
+        "larva",
+        "queen",
+    ]
+
+
+# =============================================================================
+# FINDING 4: zero-record frames are never written as background samples
+# =============================================================================
+
+
+def _empty_frame(frame_id, is_context=False, drops=None):
+    return ExportedFrame(
+        frame_id=frame_id,
+        image_name=f"f{frame_id:06d}.jpg",
+        records=[],
+        is_context=is_context,
+        drops=drops or {},
+    )
+
+
+def test_zero_record_frames_are_skipped_and_counted(tmp_path):
+    manifest = export_al_dataset(
+        round_dir=tmp_path / "round",
+        frames=[_frame(0), _empty_frame(1, drops={"unmatched": 2}), _frame(2)],
+        images=_images([0, 1, 2]),
+        native_level=GeometryLevel.POLYGON,
+        levels=[GeometryLevel.POLYGON],
+        class_names=["ant"],
+        provenance=_provenance(),
+    )
+    labels = tmp_path / "round" / "polygon" / "labels"
+    images = tmp_path / "round" / "polygon" / "images"
+    assert sorted(p.name for p in labels.iterdir()) == ["f000000.txt", "f000002.txt"]
+    assert sorted(p.name for p in images.iterdir()) == ["f000000.jpg", "f000002.jpg"]
+    assert manifest["totals"]["frames_exported"] == 2
+    assert manifest["totals"]["frames_skipped_no_records"] == 1
+    assert manifest["skipped_frame_ids_no_records"] == [1]
+    # The skipped frame's drop accounting is not lost.
+    assert manifest["totals"]["dropped_unmatched"] == 2
+    assert 1 not in manifest["selected_frame_ids"]
+
+
+def test_a_round_with_no_geometry_at_all_raises(tmp_path):
+    with pytest.raises(ValueError, match="no frame in this round"):
+        export_al_dataset(
+            round_dir=tmp_path / "round",
+            frames=[_empty_frame(0), _empty_frame(1)],
+            images=_images([0, 1]),
+            native_level=GeometryLevel.POLYGON,
+            levels=[GeometryLevel.POLYGON],
+            class_names=["ant"],
+            provenance=_provenance(),
+        )
+    assert not (tmp_path / "round").exists()
+    assert not (tmp_path / "round.partial").exists()
+
+
+def test_extra_totals_are_merged_into_the_manifest(tmp_path):
+    manifest = export_al_dataset(
+        round_dir=tmp_path / "round",
+        frames=[_frame(0)],
+        images=_images([0]),
+        native_level=GeometryLevel.POLYGON,
+        levels=[GeometryLevel.POLYGON],
+        class_names=["ant"],
+        provenance=_provenance(),
+        extra_totals={"detection_failed": 3},
+    )
+    assert manifest["totals"]["detection_failed"] == 3
