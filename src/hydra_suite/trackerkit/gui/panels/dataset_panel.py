@@ -47,6 +47,20 @@ def format_level_status(native_level: GeometryLevel) -> str:
     )
 
 
+def level_status_text(native_level: GeometryLevel, any_checked: bool) -> str:
+    """Status text for the "Label levels" row.
+
+    ``any_checked`` reflects the panel's own checkbox state, which is
+    independent of what the detector can achieve: a user can deliberately
+    uncheck every level, and that must read as "nothing will be exported"
+    rather than silently implying the capability-derived default combination
+    is still active.
+    """
+    if not any_checked:
+        return "No label levels selected — no dataset will be exported."
+    return format_level_status(native_level)
+
+
 class DatasetPanel(QWidget):
     """Active learning dataset generation: frame selection, export, and controls."""
 
@@ -595,7 +609,6 @@ class DatasetPanel(QWidget):
         params = self._main_window.get_parameters_dict()
         native = resolve_native_level(params)
         allowed = set(achievable_levels(native))
-        self.lbl_export_level_status.setText(format_level_status(native))
         for level, chk in (
             (GeometryLevel.POLYGON, self.chk_level_polygon),
             (GeometryLevel.OBB, self.chk_level_obb),
@@ -605,6 +618,17 @@ class DatasetPanel(QWidget):
             chk.setEnabled(available)
             if not available:
                 chk.setChecked(False)
+
+        # A deliberate all-unchecked panel means "export nothing" -- say so
+        # plainly rather than silently re-checking a box for the user (which
+        # would fight their input) or letting the status text imply a level
+        # combination that will not actually be exported.
+        any_checked = (
+            self.chk_level_polygon.isChecked()
+            or self.chk_level_obb.isChecked()
+            or self.chk_level_aabb.isChecked()
+        )
+        self.lbl_export_level_status.setText(level_status_text(native, any_checked))
 
         is_bgsub = (
             str(params.get("DETECTION_METHOD", "")).lower() == "background_subtraction"

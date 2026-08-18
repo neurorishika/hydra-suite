@@ -146,6 +146,7 @@ def test_dataset_export_knob_defaults():
     assert params["DATASET_EXPORT_LEVELS"] == ["polygon", "obb", "aabb"]
     assert params["DATASET_DEDUP_METHOD"] == "phash"
     assert params["DATASET_DEDUP_THRESHOLD"] == 8
+    assert params["METRIC_CROWDING"] is True
 
 
 def test_tracker_config_dataset_fields_round_trip():

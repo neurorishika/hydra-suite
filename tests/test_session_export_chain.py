@@ -126,6 +126,42 @@ def test_dataset_stage_clamps_stored_level_to_achievable(monkeypatch, tmp_path):
     assert captured["export_levels"] == [GeometryLevel.OBB, GeometryLevel.AABB]
 
 
+def test_dataset_stage_stored_empty_levels_skips_export_with_diagnostic(
+    monkeypatch, tmp_path
+):
+    """A deliberately all-unchecked level panel (stored DATASET_EXPORT_LEVELS
+    == []) must NOT silently fall back to exporting every achievable level --
+    that is the empty-vs-clamped-empty distinction this test guards."""
+    svc = _make_service(
+        {"enable_dataset_generation": True, "dataset_class_name": "ant"},
+        {
+            "DETECTION_METHOD": "yolo_obb",
+            "YOLO_OBB_MODE": "direct",
+            "YOLO_OBB_DIRECT_TASK": "obb",
+            "DATASET_EXPORT_LEVELS": [],
+        },
+        tmp_path,
+    )
+    final_csv = tmp_path / "final.csv"
+    final_csv.write_text("TrajectoryID,X,Y,Theta,FrameID\n0,1,2,0,0\n")
+    (tmp_path / "in.mp4").write_bytes(b"x")
+
+    called = {"n": 0}
+
+    def _fake_generate(**kwargs):
+        called["n"] += 1
+        return {"success": True, "num_frames": 1, "dir": "d"}
+
+    monkeypatch.setattr(
+        session_mod.dataset_export, "generate_active_learning_dataset", _fake_generate
+    )
+    result = svc._run_dataset_generation(str(final_csv))
+
+    assert called["n"] == 0
+    assert result["success"] is False
+    assert "no label levels" in result["error"].lower()
+
+
 def test_annotated_video_stage_returns_path(monkeypatch, tmp_path):
     svc = _make_service(
         {"video_output_enabled": True, "video_output_path": str(tmp_path / "out.mp4")},

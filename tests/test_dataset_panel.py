@@ -39,3 +39,20 @@ def test_level_status_text_names_the_missing_requirement():
     assert "segmentation" in text.lower()
 
     assert "polygon" in format_level_status(GeometryLevel.POLYGON)
+
+
+def test_level_status_text_no_levels_checked_says_nothing_will_export():
+    """A deliberately all-unchecked panel must say plainly that nothing will
+    be exported, not silently imply the capability-derived default is active."""
+    from hydra_suite.trackerkit.gui.panels.dataset_panel import (
+        format_level_status,
+        level_status_text,
+    )
+
+    text = level_status_text(GeometryLevel.OBB, any_checked=False)
+    assert "no" in text.lower()
+    assert "export" in text.lower()
+
+    # With at least one level checked, falls back to the normal capability text.
+    checked_text = level_status_text(GeometryLevel.OBB, any_checked=True)
+    assert checked_text == format_level_status(GeometryLevel.OBB)

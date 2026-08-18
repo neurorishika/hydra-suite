@@ -404,19 +404,32 @@ class TrackingSessionCore:
         from hydra_suite.data.dataset_generation import resolve_native_level
         from hydra_suite.utils.geometry_levels import GeometryLevel
 
-        levels = [
+        stored_levels = [
             GeometryLevel.from_str(name)
             for name in self.params.get(
                 "DATASET_EXPORT_LEVELS", ["polygon", "obb", "aabb"]
             )
         ]
+        # An empty stored list is a deliberate "export nothing" choice (every
+        # level checkbox unchecked in the GUI) -- honor it rather than
+        # silently exporting everything.
+        if not stored_levels:
+            return {
+                "success": False,
+                "error": (
+                    "No label levels were selected. Enable at least one "
+                    "export level (polygon/obb/aabb) to generate a dataset."
+                ),
+            }
         # A stored level preference the current detector cannot achieve (e.g.
         # "polygon" saved against a since-switched OBB model) is clamped down
         # to what is achievable rather than raised -- a stale stored
-        # preference must never break a tracking run. If clamping leaves
-        # nothing, fall back to all achievable levels.
+        # preference must never break a tracking run. If clamping a
+        # NON-EMPTY stored list leaves nothing achievable, fall back to all
+        # achievable levels (the stored preference is stale, not a
+        # deliberate "export nothing").
         allowed = set(achievable_levels(resolve_native_level(self.params)))
-        levels = [lvl for lvl in levels if lvl in allowed] or sorted(
+        levels = [lvl for lvl in stored_levels if lvl in allowed] or sorted(
             allowed, reverse=True
         )
 
