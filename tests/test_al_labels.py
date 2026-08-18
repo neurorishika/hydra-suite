@@ -96,3 +96,51 @@ def test_polygon_record_derived_to_obb_writes_nine_fields(tmp_path):
     fields = path.read_text().strip().split()
     assert len(fields) == 9
     assert classify_label_line(len(fields)) == "four_point"
+
+
+# =============================================================================
+# FINDING 7: level honesty on the ENCODING path, not just on records
+# =============================================================================
+
+
+def test_polygon_level_never_emits_a_nine_field_line(tmp_path):
+    """A native 4-point contour in a `level=polygon` root must not read as OBB.
+
+    `classify_label_line` treats ANY 9-field line as `four_point`, so a 4-point
+    polygon written verbatim would make `scan_source_levels` disagree with that
+    root's own `source.json`. bgsub is accidentally safe (its `len(c) < 5`
+    contour filter); YOLO's `masks.xy` and SAM2 carry no such guarantee.
+    """
+    path = tmp_path / "f.txt"
+    quad = [[10, 20], [30, 20], [30, 40], [10, 45]]
+    rec = _record(quad, GeometryLevel.POLYGON)
+    write_label_file(path, [rec], frame_size=(100, 200), level=GeometryLevel.POLYGON)
+    fields = path.read_text().split()
+    assert len(fields) == 11
+    assert classify_label_line(len(fields)) == "polygon"
+    # Geometry is unchanged: the padding repeats the final vertex.
+    coords = np.array([float(v) for v in fields[1:]]).reshape(-1, 2)
+    np.testing.assert_allclose(coords[-1], coords[-2])
+    np.testing.assert_allclose(
+        coords[:4], np.array(quad, dtype=np.float64) / [200.0, 100.0], atol=1e-6
+    )
+
+
+def test_polygon_level_refuses_a_degenerate_two_point_record(tmp_path):
+    import pytest
+
+    path = tmp_path / "f.txt"
+    rec = _record([[10, 20], [30, 40]], GeometryLevel.POLYGON)
+    with pytest.raises(ValueError, match="needs at least 3"):
+        write_label_file(
+            path, [rec], frame_size=(100, 200), level=GeometryLevel.POLYGON
+        )
+
+
+def test_five_point_polygon_is_untouched(tmp_path):
+    path = tmp_path / "f.txt"
+    rec = _record(
+        [[10, 20], [30, 20], [35, 30], [30, 40], [10, 45]], GeometryLevel.POLYGON
+    )
+    write_label_file(path, [rec], frame_size=(100, 200), level=GeometryLevel.POLYGON)
+    assert len(path.read_text().split()) == 11
