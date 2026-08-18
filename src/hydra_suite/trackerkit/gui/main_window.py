@@ -51,6 +51,7 @@ from hydra_suite.core.inference.model_paths import (
 from hydra_suite.trackerkit.config.schemas import TrackerConfig
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
 from hydra_suite.utils.geometry import wrap_angle_degs
+from hydra_suite.widgets.status_log import StatusLogTail
 
 from .widgets.collapsible import CollapsibleGroupBox
 from .widgets.help_label import CompactHelpLabel
@@ -420,6 +421,10 @@ class MainWindow(QMainWindow):
 
         # Cache preview-related controls for UI state transitions
         self._preview_controls = self._collect_preview_controls()
+
+        # Live log tail in the status bar: the newest log line is always
+        # visible, and transient showMessage() toasts still take priority.
+        self._status_log_tail = StatusLogTail(self)
 
         # Restore persisted layout preferences after widgets are fully built.
         QTimer.singleShot(0, self._restore_ui_state)
@@ -1527,6 +1532,9 @@ class MainWindow(QMainWindow):
                 QApplication.restoreOverrideCursor()
 
         self._save_ui_settings()
+        tail = getattr(self, "_status_log_tail", None)
+        if tail is not None:
+            tail.detach()
         super().closeEvent(event)
 
     def _has_active_tracking_workers(self) -> bool:

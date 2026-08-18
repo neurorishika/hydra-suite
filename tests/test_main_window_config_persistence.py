@@ -1505,3 +1505,50 @@ def test_slice_params_reach_upper_snake_dict(monkeypatch, qapp):
     assert params["SLICE_OVERLAP"] == 0.25
     assert params["SLICE_MERGE_BACKEND"] == "gpu"
     window.close()
+
+
+def test_saved_direct_obb_mode_survives_restore_with_sequential_models(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    """A restore must not flip a saved Direct config to Sequential.
+
+    Picking a sequential model by hand switches the mode to Sequential, which is
+    right for a user-driven pick. During a config restore the combos are
+    populated programmatically, and the saved ``yolo_obb_mode`` must win.
+    """
+    _seed_trackerkit_model_repository(tmp_path, monkeypatch)
+
+    window = _make_main_window(monkeypatch)
+    panel = window._detection_panel
+    window._detection_panel.combo_detection_method.setCurrentIndex(1)
+
+    # A user-driven sequential pick does switch the mode (the behaviour the
+    # restore path must not inherit).
+    _select_first_model_with_suffix(panel.combo_yolo_detect_model, "seq_detect_keep.pt")
+    _select_first_model_with_suffix(panel.combo_yolo_crop_obb_model, "seq_crop_keep.pt")
+    assert panel.combo_yolo_obb_mode.currentIndex() == 1
+
+    # The user then settles on Direct while those sequential models stay picked.
+    _select_first_model_with_suffix(panel.combo_yolo_model, "direct_keep.pt")
+    panel.combo_yolo_obb_mode.setCurrentIndex(0)
+
+    config_path = tmp_path / "direct_mode_with_sequential_models.json"
+    assert window.save_config(preset_mode=True, preset_path=str(config_path))
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["yolo_obb_mode"] == "direct"
+    assert saved["yolo_detect_model_path"]
+    assert saved["yolo_crop_obb_model_path"]
+    window.close()
+
+    reloaded = _make_main_window(monkeypatch)
+    reloaded._load_config_from_file(str(config_path), preset_mode=True)
+    assert reloaded._detection_panel.combo_yolo_obb_mode.currentIndex() == 0
+    # The guard is scoped to the restore: a later hand pick still switches.
+    assert reloaded._restoring_config is False
+    _select_first_model_with_suffix(
+        reloaded._detection_panel.combo_yolo_crop_obb_model, "seq_crop_remove.pt"
+    )
+    assert reloaded._detection_panel.combo_yolo_obb_mode.currentIndex() == 1
+    reloaded.close()
