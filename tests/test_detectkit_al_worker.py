@@ -6,6 +6,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 
 from hydra_suite.detectkit.gui.models import DetectKitProject
 
@@ -63,6 +64,49 @@ def test_al_worker_writes_seeded_labels_and_registers_source(tmp_path):
         assert len(lines) == 3  # all three model predictions seeded as YOLO OBB lines
 
     assert any(s.path == str(new_source_dir) for s in project.sources)
+
+
+def test_al_worker_refuses_polygon_export_when_no_frame_has_detections(tmp_path):
+    """Regression: `native_level` must gate independently of what LabelRecords
+    actually exist.
+
+    `derive_down`'s per-record check only fires if a record reaches it. If
+    every picked frame has zero detections (plausible for uncertainty-driven
+    top-K picks), no record is ever built, so `native_level` -- not record
+    inspection -- is the only thing that can refuse a request for a
+    geometry level an obb-only model cannot produce.
+    """
+    from hydra_suite.detectkit.jobs.al_worker import ALRequest, run_active_learning
+
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+    project = DetectKitProject(project_dir=project_dir, sources=[])
+
+    folder = _seed_image_folder(tmp_path, n=6)
+
+    def empty_detector(frame, conf, iou):
+        return []
+
+    request = ALRequest(
+        input_kind="folder",
+        input_path=str(folder),
+        project=project,
+        budget=3,
+        preset="balanced",
+        expected_count=0,
+        detector_fn=empty_detector,
+        diversity_window=0,
+        probabilistic=False,
+        export_level="polygon",
+        export_levels=["polygon"],
+        native_level="obb",
+    )
+
+    with pytest.raises(ValueError, match="polygon"):
+        run_active_learning(request)
+
+    # Nothing partial was registered on the project when the round refused.
+    assert project.sources == []
 
 
 def test_al_worker_drops_frames_that_fail_to_re_read(tmp_path):

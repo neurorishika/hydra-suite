@@ -72,6 +72,15 @@ class ActiveLearningDialog(BaseDialog):
         self._native_level = GeometryLevel.OBB
         self.resize(560, 540)
         self._build_content()
+        # Keep checkbox/enabled state self-consistent from construction
+        # onward -- `_build_levels_group` starts every checkbox checked and
+        # enabled, so a caller that builds a request before ever calling
+        # `set_model_task` must still see the default-level gate applied, not
+        # an ungated "everything checked" state. "obb" is the literal task
+        # this dialog defaults to (matches `_native_level`'s GeometryLevel.OBB
+        # default above), not derived from it, so this stays correct even if
+        # that default level ever changes independently.
+        self.set_model_task("obb")
         self._sync_run_enabled()
 
     # ------------------------------------------------------------------
@@ -236,7 +245,13 @@ class ActiveLearningDialog(BaseDialog):
 
         Never claim a geometry level the model did not produce: segment ->
         polygon, obb -> obb, detect -> aabb. Unrecognized tasks leave the
-        current gate untouched.
+        current gate untouched. Checked state is fully re-derived from the
+        new gate on every call (available levels default to checked,
+        unavailable ones are force-unchecked) rather than only touching
+        boxes that become newly unavailable -- this is what makes the gate
+        self-consistent whether the dialog's model task changes once (at
+        open) or is called eagerly by `__init__` before any caller-driven
+        change, without depending on the checkbox's prior state.
         """
         native = _TASK_TO_LEVEL.get(str(task).strip().lower())
         if native is None:
@@ -250,8 +265,7 @@ class ActiveLearningDialog(BaseDialog):
         ):
             available = level in allowed
             chk.setEnabled(available)
-            if not available:
-                chk.setChecked(False)
+            chk.setChecked(available)
         self.lbl_export_level_status.setText(_format_level_status(native))
 
     def _checked_levels(self) -> list[GeometryLevel]:
@@ -286,6 +300,7 @@ class ActiveLearningDialog(BaseDialog):
             detector_fn=detector_fn,
             export_level=levels[0].label,
             export_levels=[lvl.label for lvl in levels],
+            native_level=self._native_level.label,
         )
 
 

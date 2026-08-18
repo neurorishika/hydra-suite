@@ -61,6 +61,15 @@ class ALRequest:
     base_iou: float = 0.7
     export_level: str = "obb"
     export_levels: list[str] = field(default_factory=lambda: ["obb"])
+    # The model's actual geometry ceiling (GeometryLevel.label string), set
+    # independently of what the caller *requests* -- this is the honesty
+    # guard's ground truth. It must never be derived from `export_levels`
+    # itself (that makes the "don't claim more than the model can produce"
+    # check tautological: a caller-chosen request can never exceed a limit
+    # computed from that same request). Mirrors `resolve_native_level` in
+    # `data/dataset_generation.py`, which derives from the actual configured
+    # detection method/task, independent of what any dialog selected.
+    native_level: str = "obb"
 
 
 @dataclass
@@ -254,7 +263,15 @@ def run_active_learning(
     requested_levels = [
         GeometryLevel.from_str(lbl) for lbl in (req.export_levels or [req.export_level])
     ]
-    native_level = max(requested_levels)
+    # `native_level` is the model's real ceiling, independent of what was
+    # requested -- `export_al_dataset` raises if any requested level exceeds
+    # it. Deriving this from `requested_levels` itself would make that guard
+    # tautological (a request can never exceed a limit computed from that
+    # same request), which is exactly the bug this task closes: a
+    # zero-detection round (every picked frame has 0 detections -- plausible
+    # for uncertainty-driven top-K picks) never reaches `derive_down`'s
+    # per-record check either, so this is the only real gate in that case.
+    native_level = GeometryLevel.from_str(req.native_level)
 
     exported = [
         ExportedFrame(
@@ -286,24 +303,34 @@ def run_active_learning(
     )
 
     # One OBBSource per written level. The exporter's per-root `source.json`
-    # already records `authoritative` (implied by `derived_from is None`),
-    # `derived_from`, and `reviewed`; mirror those into the OBBSource fields
-    # rather than inventing new semantics, so the authoritative root stays
-    # the single point of human review.
+    # records `authoritative` (implied by `derived_from is None`) and
+    # `reviewed`; mirror those into the OBBSource fields. `source.json`'s own
+    # `derived_from` is a *geometry-level label* ("polygon") in that schema,
+    # but `OBBSource.derived_from` is documented and used elsewhere
+    # (`jobs/sam2_escalation.py`) as the *origin source name* -- a lookup key
+    # into `project.sources`. So it is set here to the authoritative
+    # sibling's own `OBBSource.name`, not copied verbatim from the manifest,
+    # so the authoritative root stays the single point of human review and
+    # is actually resolvable by name.
+    authoritative_name: str | None = None
     for root_meta in manifest["roots"]:
+        name = f"al_round_{timestamp}_{root_meta['level']}"
+        is_derived = root_meta["derived_from"] is not None
         req.project.sources.append(
             OBBSource(
                 path=root_meta["path"],
-                name=f"al_round_{timestamp}_{root_meta['level']}",
+                name=name,
                 validated=False,
                 original_path=req.input_path,
                 source_kind="detectkit_al",
                 imported=True,
                 level=root_meta["level"],
                 reviewed=bool(root_meta["reviewed"]),
-                derived_from=root_meta["derived_from"],
+                derived_from=authoritative_name if is_derived else None,
             )
         )
+        if not is_derived:
+            authoritative_name = name
 
     source_path = manifest["roots"][0]["path"]
 
