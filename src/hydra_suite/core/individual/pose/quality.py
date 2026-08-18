@@ -1134,6 +1134,26 @@ def _suppress_temporal_outliers(
             )
 
 
+def _notna_positive_mask(col: pd.Series) -> np.ndarray:
+    """Vectorized equivalent of ``col.apply(lambda v: pd.notna(v) and float(v) > 0.0)``.
+
+    For numeric dtypes this is a single vectorized comparison. For
+    object-dtype columns it falls back to an elementwise ``float(v)`` (only
+    for not-null cells, exactly mirroring the short-circuit ``and`` in the
+    original lambda), which -- like the original -- lets a non-numeric,
+    non-null cell raise instead of being silently swallowed.
+    """
+    raw = col.to_numpy()
+    notna = pd.notna(raw)
+    result = np.zeros(len(raw), dtype=bool)
+    if raw.dtype.kind in "fiub":
+        result[notna] = raw[notna].astype(np.float64) > 0.0
+    else:
+        for i in np.nonzero(notna)[0]:
+            result[i] = float(raw[i]) > 0.0
+    return result
+
+
 def _get_valid_label_indices(
     out: pd.DataFrame,
     c_col: str,
@@ -1141,10 +1161,10 @@ def _get_valid_label_indices(
 ) -> list:
     """Return row indices where quality state is acceptable and conf > 0."""
     if "PoseQualityState" in out.columns:
-        quality_ok = out["PoseQualityState"].isin(valid_states)
+        quality_ok = out["PoseQualityState"].isin(valid_states).to_numpy()
     else:
-        quality_ok = pd.Series([True] * len(out), index=out.index)
-    conf_ok = out[c_col].apply(lambda v: pd.notna(v) and float(v) > 0.0)
+        quality_ok = np.ones(len(out), dtype=bool)
+    conf_ok = _notna_positive_mask(out[c_col])
     return out.index[quality_ok & conf_ok].tolist()
 
 
@@ -1160,20 +1180,36 @@ def _flag_rolling_outliers(
     roll_mean = series.rolling(rolling_window, min_periods=3, center=True).mean()
     roll_std = series.rolling(rolling_window, min_periods=3, center=True).std()
 
-    for idx_val in valid_idx:
-        if idx_val not in roll_mean.index:
-            continue
-        mean_v = roll_mean.loc[idx_val]
-        if pd.isna(mean_v):
-            continue
-        std_v = (
-            float(roll_std.loc[idx_val]) if not pd.isna(roll_std.loc[idx_val]) else 0.0
-        )
-        z = abs(float(series.loc[idx_val]) - float(mean_v)) / max(std_v, 1e-6)
-        if z > float(z_score_threshold):
-            out.at[idx_val, c_col] = 0.0
-            _add_flag(out, idx_val, "temporal_outlier")
-            out.at[idx_val, "PoseWasCleaned"] = 1
+    mean_arr = roll_mean.to_numpy(dtype=np.float64)
+    std_arr = roll_std.to_numpy(dtype=np.float64)
+    series_arr = series.to_numpy(dtype=np.float64)
+
+    valid_mean = ~np.isnan(mean_arr)
+    std_eff = np.where(np.isnan(std_arr), 0.0, std_arr)
+    z = np.abs(series_arr - mean_arr) / np.maximum(std_eff, 1e-6)
+    outlier = valid_mean & (z > float(z_score_threshold))
+
+    if not np.any(outlier):
+        return
+
+    outlier_idx = series.index[outlier]
+
+    out.loc[outlier_idx, c_col] = 0.0
+    out.loc[outlier_idx, "PoseWasCleaned"] = 1
+
+    if "PoseQualityFlags" in out.columns:
+        current = out.loc[outlier_idx, "PoseQualityFlags"]
+        current_str = current.where(current.notna(), "").astype(str)
+        already = current_str.apply(lambda s: "temporal_outlier" in s.split("|"))
+        need_update = ~already
+        if bool(need_update.any()):
+            upd_idx = outlier_idx[need_update.to_numpy()]
+            upd_current = current_str[need_update].to_numpy()
+            new_vals = [
+                f"{c}|temporal_outlier" if c else "temporal_outlier"
+                for c in upd_current
+            ]
+            out.loc[upd_idx, "PoseQualityFlags"] = new_vals
 
 
 def _interpolate_gaps(
@@ -1181,7 +1217,16 @@ def _interpolate_gaps(
     pose_labels: List[str],
     max_gap: int,
 ) -> None:
-    """Linearly interpolate keypoint X/Y across short gaps (in-place)."""
+    """Linearly interpolate keypoint X/Y across short gaps (in-place).
+
+    Vectorized equivalent of the original per-pair Python loop (which called
+    ``_fill_single_gap`` for every consecutive pair of valid positions).
+    Fills are disjoint by construction -- each covers positions strictly
+    between two *consecutive* valid points -- so the fill order never
+    matters, and no fill position ever coincides with a "valid" endpoint
+    used to compute another gap's interpolation, making a single batched
+    computation over all qualifying gaps exact.
+    """
     for label in pose_labels:
         x_col = f"PoseKpt_{label}_X"
         y_col = f"PoseKpt_{label}_Y"
@@ -1190,49 +1235,53 @@ def _interpolate_gaps(
         if not all(c in out.columns for c in (x_col, y_col, c_col)):
             continue
 
-        valid_mask = out[c_col].apply(lambda v: pd.notna(v) and float(v) > 0.0)
-        valid_positions = out.index[valid_mask].tolist()
-        if len(valid_positions) < 2:
+        valid_mask = _notna_positive_mask(out[c_col])
+        valid_iloc = np.nonzero(valid_mask)[0]
+        if len(valid_iloc) < 2:
             continue
 
-        for seg_start_pos, seg_end_pos in zip(
-            valid_positions[:-1], valid_positions[1:]
-        ):
-            _fill_single_gap(
-                out, seg_start_pos, seg_end_pos, x_col, y_col, c_col, max_gap
-            )
+        starts = valid_iloc[:-1]
+        ends = valid_iloc[1:]
+        gap_lengths = ends - starts - 1
+        fillable = (gap_lengths > 0) & (gap_lengths <= max_gap)
+        if not np.any(fillable):
+            continue
 
+        starts_q = starts[fillable]
+        ends_q = ends[fillable]
+        lengths_q = gap_lengths[fillable]
 
-def _fill_single_gap(
-    out: pd.DataFrame,
-    seg_start_pos,
-    seg_end_pos,
-    x_col: str,
-    y_col: str,
-    c_col: str,
-    max_gap: int,
-) -> None:
-    """Linearly interpolate X/Y for a single gap between two valid positions."""
-    start_iloc = out.index.get_loc(seg_start_pos)
-    end_iloc = out.index.get_loc(seg_end_pos)
-    gap_length = end_iloc - start_iloc - 1
+        n_total = int(lengths_q.sum())
+        if n_total == 0:
+            continue
 
-    if gap_length <= 0 or gap_length > max_gap:
-        return
+        group_offsets = np.concatenate(([0], np.cumsum(lengths_q)[:-1]))
+        flat_pos = np.arange(n_total)
+        step = flat_pos - np.repeat(group_offsets, lengths_q) + 1  # 1-indexed
 
-    x_start = float(out.at[seg_start_pos, x_col])
-    x_end = float(out.at[seg_end_pos, x_col])
-    y_start = float(out.at[seg_start_pos, y_col])
-    y_end = float(out.at[seg_end_pos, y_col])
+        fill_iloc = np.repeat(starts_q, lengths_q) + step
 
-    gap_indices = out.index[start_iloc + 1 : end_iloc]
-    for step, gap_idx in enumerate(gap_indices, start=1):
-        t = float(step) / float(gap_length + 1)
-        out.at[gap_idx, x_col] = x_start + t * (x_end - x_start)
-        out.at[gap_idx, y_col] = y_start + t * (y_end - y_start)
-        out.at[gap_idx, c_col] = 0.3  # low-trust interpolated conf
-        out.at[gap_idx, "PoseSource"] = "cleaned"
-        out.at[gap_idx, "PoseWasCleaned"] = 1
+        x_arr = out[x_col].to_numpy(dtype=np.float64)
+        y_arr = out[y_col].to_numpy(dtype=np.float64)
+
+        x_start = np.repeat(x_arr[starts_q], lengths_q)
+        x_end = np.repeat(x_arr[ends_q], lengths_q)
+        y_start = np.repeat(y_arr[starts_q], lengths_q)
+        y_end = np.repeat(y_arr[ends_q], lengths_q)
+        lengths_rep = np.repeat(lengths_q, lengths_q).astype(np.float64)
+
+        t = step.astype(np.float64) / (lengths_rep + 1.0)
+
+        new_x = x_start + t * (x_end - x_start)
+        new_y = y_start + t * (y_end - y_start)
+
+        fill_labels = out.index[fill_iloc]
+
+        out.loc[fill_labels, x_col] = new_x
+        out.loc[fill_labels, y_col] = new_y
+        out.loc[fill_labels, c_col] = 0.3  # low-trust interpolated conf
+        out.loc[fill_labels, "PoseSource"] = "cleaned"
+        out.loc[fill_labels, "PoseWasCleaned"] = 1
 
 
 def apply_temporal_pose_postprocessing(
@@ -1474,7 +1523,21 @@ def _collect_row_conf_stats(
 
 
 def _recompute_pose_summary(df: pd.DataFrame, pose_labels: List[str]) -> None:
-    """Recompute PoseMeanConf and PoseValidFraction columns in-place."""
+    """Recompute PoseMeanConf and PoseValidFraction columns in-place.
+
+    Vectorized, with one deliberate exception: per-row ``PoseMeanConf`` is
+    ``float(np.mean(confs))`` over the *compacted* list of finite
+    confidences (non-finite/unparsable cells are dropped entirely, not
+    zero-padded). Padding a variable-length reduction with zeros to make it
+    rectangular changes numpy's pairwise-summation split points and can flip
+    the last bit of the result (verified empirically -- not a hypothetical),
+    so rows with 100% finite values use a single fully vectorized
+    ``.mean(axis=1)`` (proven bit-identical to the per-row reduction when
+    the compacted set equals the full row), and only rows with a partial
+    exclusion fall back to a per-row ``np.mean`` call -- still far fewer,
+    cheaper array-level operations than the original's per-cell
+    ``df.loc``/``df.at`` pandas indexing.
+    """
     if not pose_labels:
         return
     conf_cols = [f"PoseKpt_{label}_Conf" for label in pose_labels]
@@ -1485,13 +1548,34 @@ def _recompute_pose_summary(df: pd.DataFrame, pose_labels: List[str]) -> None:
     K = len(pose_labels)
     has_mean = "PoseMeanConf" in df.columns
     has_frac = "PoseValidFraction" in df.columns
+    if not (has_mean or has_frac):
+        return
 
-    if has_mean or has_frac:
-        for idx in df.index:
-            confs, valid_count = _collect_row_conf_stats(df.loc[idx], present_conf_cols)
-            if has_mean:
-                df.at[idx, "PoseMeanConf"] = float(np.mean(confs)) if confs else 0.0
-            if has_frac:
-                df.at[idx, "PoseValidFraction"] = (
-                    float(valid_count) / float(K) if K > 0 else 0.0
-                )
+    n = len(df)
+    c = len(present_conf_cols)
+    vals = np.empty((n, c), dtype=np.float64)
+    finite = np.empty((n, c), dtype=bool)
+    for j, col in enumerate(present_conf_cols):
+        v, ok = _to_float_array(df[col].to_numpy())
+        vals[:, j] = v
+        finite[:, j] = ok & np.isfinite(v)
+
+    if has_mean:
+        full_row = finite.all(axis=1)
+        mean_conf = np.zeros(n, dtype=np.float64)
+        if np.any(full_row):
+            mean_conf[full_row] = vals[full_row].mean(axis=1)
+        for r in np.nonzero(~full_row)[0]:
+            row_finite = finite[r]
+            if row_finite.any():
+                mean_conf[r] = float(np.mean(vals[r, row_finite].tolist()))
+        df["PoseMeanConf"] = mean_conf
+
+    if has_frac:
+        valid_count = (finite & (vals > 0.0)).sum(axis=1)
+        valid_fraction = (
+            valid_count.astype(np.float64) / float(K)
+            if K > 0
+            else np.zeros(n, dtype=np.float64)
+        )
+        df["PoseValidFraction"] = valid_fraction
