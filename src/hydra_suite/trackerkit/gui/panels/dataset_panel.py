@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 from hydra_suite.data.al.escalation import achievable_levels
 from hydra_suite.data.dataset_generation import resolve_native_level
 from hydra_suite.trackerkit.config.schemas import TrackerConfig
+from hydra_suite.trackerkit.gui.widgets.collapsible import CollapsibleGroupBox
 from hydra_suite.utils.geometry_levels import GeometryLevel
 
 if TYPE_CHECKING:
@@ -47,18 +48,30 @@ def format_level_status(native_level: GeometryLevel) -> str:
     )
 
 
-def level_status_text(native_level: GeometryLevel, any_checked: bool) -> str:
-    """Status text for the "Label levels" row.
+def level_status_text(native_level: GeometryLevel, selected) -> str:
+    """Status text for the export-level summary line.
 
-    ``any_checked`` reflects the panel's own checkbox state, which is
-    independent of what the detector can achieve: a user can deliberately
-    uncheck every level, and that must read as "nothing will be exported"
-    rather than silently implying the capability-derived default combination
-    is still active.
+    ``selected`` is the panel's own checkbox state, which is independent of
+    what the detector can achieve. In the simplified panel this one line is
+    the only export-level statement a typical user reads, so it must name the
+    levels that will ACTUALLY be written -- not the capability-derived default
+    -- and say plainly when an override has turned something off.
     """
-    if not any_checked:
+    available = list(achievable_levels(native_level))
+    chosen = [lvl for lvl in available if lvl in set(selected)]
+    if not chosen:
         return "No label levels selected — no dataset will be exported."
-    return format_level_status(native_level)
+
+    text = f"Will export: {' + '.join(lvl.label for lvl in chosen)}"
+    if native_level is GeometryLevel.OBB:
+        text += " — polygon labels require a segmentation model"
+    elif native_level is GeometryLevel.AABB:
+        text += " — oriented and polygon labels require an OBB or segmentation model"
+
+    dropped = [lvl.label for lvl in available if lvl not in set(chosen)]
+    if dropped:
+        text += f" (turned off in Advanced options: {', '.join(dropped)})"
+    return text
 
 
 class DatasetPanel(QWidget):
@@ -138,33 +151,17 @@ class DatasetPanel(QWidget):
         )
         f_config.addRow("Class label", self.line_dataset_class_name)
 
-        # Export levels -- what the detector can actually produce.
+        # Export levels -- what the detector can actually produce. Every level
+        # the model supports is exported by default; the per-level overrides
+        # live in Advanced options, so the typical user only reads this line.
         self.lbl_export_level_status = QLabel(format_level_status(GeometryLevel.OBB))
         self.lbl_export_level_status.setWordWrap(True)
-        f_config.addRow("Label levels", self.lbl_export_level_status)
-
-        self.chk_level_polygon = QCheckBox("polygon (segmentation masks)")
-        self.chk_level_obb = QCheckBox("obb (oriented boxes)")
-        self.chk_level_aabb = QCheckBox("aabb (axis-aligned boxes)")
-        for chk in (self.chk_level_polygon, self.chk_level_obb, self.chk_level_aabb):
-            chk.setChecked(True)
-            chk.setToolTip(
-                "Each enabled level is written as its own DetectKit source. "
-                "Images are hardlinked, so extra levels cost almost no disk."
-            )
-        _levels_row = QVBoxLayout()
-        _levels_row.addWidget(self.chk_level_polygon)
-        _levels_row.addWidget(self.chk_level_obb)
-        _levels_row.addWidget(self.chk_level_aabb)
-        f_config.addRow("Export as", _levels_row)
-
-        vl_content.addWidget(self.g_dataset_config)
-
-        # Frame selection parameters
-        self.g_frame_selection = QGroupBox("How should frames be selected?")
-        self._main_window._set_compact_section_widget(self.g_frame_selection)
-        f_selection = QFormLayout(self.g_frame_selection)
-        f_selection.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        self.lbl_export_level_status.setStyleSheet("color: #9cdcfe;")
+        self.lbl_export_level_status.setToolTip(
+            "Each exported level is written as its own DetectKit source. "
+            "Images are hardlinked, so extra levels cost almost no disk."
+        )
+        f_config.addRow(self.lbl_export_level_status)
 
         # Number of frames to export
         self.spin_dataset_max_frames = QSpinBox()
@@ -175,7 +172,66 @@ class DatasetPanel(QWidget):
             "Higher values provide more training data but increase annotation time.\n"
             "Recommended: 50-200 frames for initial improvement."
         )
-        f_selection.addRow("Maximum frames to export", self.spin_dataset_max_frames)
+        f_config.addRow("Maximum frames to export", self.spin_dataset_max_frames)
+
+        vl_content.addWidget(self.g_dataset_config)
+
+        # ============================================================
+        # Advanced options (collapsed by default)
+        # ============================================================
+        self.al_advanced = CollapsibleGroupBox("Advanced options")
+        # One help affordance for the whole advanced block. The nested group
+        # boxes below do not get their own: CompactHelpLabel only attaches to
+        # a section title reliably at the top level, so a per-group help label
+        # renders as a bare "?" floating in the body with nothing beside it.
+        self.al_advanced.setHelpToolTip(
+            "The defaults suit most users: every label level the detector "
+            "supports is exported, and frames are ranked by how much trouble "
+            "the tracker had with them. Open this only to override that.\n\n"
+            "LABEL LEVELS\n"
+            "Levels the detector cannot produce are greyed out. Each enabled "
+            "level becomes its own DetectKit source; images are hardlinked, so "
+            "extra levels cost almost no disk.\n\n"
+            "FRAME SELECTION\n"
+            "YOLO detection sensitivity for export (confidence=0.05, IOU=0.5) "
+            "can be customized in advanced_config.json. These are separate from "
+            "tracking parameters and optimized for annotation (detect "
+            "everything, manual review corrects errors)."
+        )
+
+        # Export level overrides
+        self.g_export_levels = QGroupBox("Which label levels should be exported?")
+        self._main_window._set_compact_section_widget(self.g_export_levels)
+        v_levels = QVBoxLayout(self.g_export_levels)
+        self.chk_level_polygon = QCheckBox("polygon (segmentation masks)")
+        self.chk_level_obb = QCheckBox("obb (oriented boxes)")
+        self.chk_level_aabb = QCheckBox("aabb (axis-aligned boxes)")
+        for chk in (self.chk_level_polygon, self.chk_level_obb, self.chk_level_aabb):
+            chk.setChecked(True)
+            chk.setToolTip(
+                "Each enabled level is written as its own DetectKit source. "
+                "Images are hardlinked, so extra levels cost almost no disk."
+            )
+            chk.toggled.connect(self._on_export_level_toggled)
+        _levels_row = QHBoxLayout()
+        _levels_row.addWidget(self.chk_level_polygon)
+        _levels_row.addWidget(self.chk_level_obb)
+        _levels_row.addWidget(self.chk_level_aabb)
+        v_levels.addLayout(_levels_row)
+        self.al_advanced.addWidget(self.g_export_levels)
+
+        # Frame selection parameters
+        self.g_frame_selection = QGroupBox("How should frames be selected?")
+        self._main_window._set_compact_section_widget(self.g_frame_selection)
+        v_selection = QVBoxLayout(self.g_frame_selection)
+        _sel_cols = QHBoxLayout()
+        f_selection = QFormLayout()
+        f_selection.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        f_selection_right = QFormLayout()
+        f_selection_right.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        _sel_cols.addLayout(f_selection, 1)
+        _sel_cols.addLayout(f_selection_right, 1)
+        v_selection.addLayout(_sel_cols)
 
         self.spin_dataset_min_selection_score = QDoubleSpinBox()
         self.spin_dataset_min_selection_score.setRange(0.0, 1.0)
@@ -213,7 +269,7 @@ class DatasetPanel(QWidget):
             "frames) after ranking. Removes near-identical picks that the "
             "diversity window cannot catch. 'none' disables it."
         )
-        f_selection.addRow("Duplicate filter", self.combo_dataset_dedup)
+        f_selection_right.addRow("Duplicate filter", self.combo_dataset_dedup)
 
         self.spin_dataset_dedup_threshold = QSpinBox()
         self.spin_dataset_dedup_threshold.setRange(0, 64)
@@ -222,16 +278,9 @@ class DatasetPanel(QWidget):
             "Hamming distance (hash methods) or bin distance (histogram) below "
             "which two frames count as duplicates. Higher = more aggressive."
         )
-        f_selection.addRow("Duplicate threshold", self.spin_dataset_dedup_threshold)
-
-        # Add help label explaining advanced options
-        advanced_help = self._main_window._create_help_label(
-            "Note: YOLO detection sensitivity for export (confidence=0.05, IOU=0.5) can be "
-            "customized in advanced_config.json. These are separate from tracking parameters and "
-            "optimized for annotation (detect everything, manual review corrects errors).",
-            attach_to_title=False,
+        f_selection_right.addRow(
+            "Duplicate threshold", self.spin_dataset_dedup_threshold
         )
-        f_selection.addRow(advanced_help)
 
         # Visual diversity window
         self.spin_dataset_diversity_window = QSpinBox()
@@ -243,7 +292,7 @@ class DatasetPanel(QWidget):
             "Higher = more spread out frames, more visual variety.\n"
             "Recommended: 20-50 frames (depends on video frame rate)."
         )
-        f_selection.addRow(
+        f_selection_right.addRow(
             "Diversity window (frames)",
             self.spin_dataset_diversity_window,
         )
@@ -269,9 +318,9 @@ class DatasetPanel(QWidget):
         _sel_chk_row = QHBoxLayout()
         _sel_chk_row.addWidget(self.chk_dataset_include_context)
         _sel_chk_row.addWidget(self.chk_dataset_probabilistic)
-        f_selection.addRow(_sel_chk_row)
+        v_selection.addLayout(_sel_chk_row)
 
-        vl_content.addWidget(self.g_frame_selection)
+        self.al_advanced.addWidget(self.g_frame_selection)
 
         # Quality metrics
         self.g_quality_metrics = QGroupBox("Which quality checks should be applied?")
@@ -333,14 +382,20 @@ class DatasetPanel(QWidget):
         v_metrics.addLayout(_m_row3)
         v_metrics.addWidget(self.chk_metric_high_uncertainty)
 
-        vl_content.addWidget(self.g_quality_metrics)
+        self.al_advanced.addWidget(self.g_quality_metrics)
 
-        self.lbl_bgsub_notice = self._main_window._create_help_label(
+        vl_content.addWidget(self.al_advanced)
+
+        # A conditional notice, shown only in background-subtraction mode. It
+        # has to read as a sentence: collapsed to a "?" icon it was a control
+        # that silently appeared and disappeared with no adjacent label.
+        self.lbl_bgsub_notice = QLabel(
             "Background subtraction produces no detection confidences, so the "
             "confidence signal is disabled and the remaining frame-selection "
-            "signals are reweighted to compensate.",
-            attach_to_title=False,
+            "signals are reweighted to compensate."
         )
+        self.lbl_bgsub_notice.setWordWrap(True)
+        self.lbl_bgsub_notice.setStyleSheet("color: #b8b8b8; font-size: 11px;")
         self.lbl_bgsub_notice.setVisible(False)
         vl_content.addWidget(self.lbl_bgsub_notice)
 
@@ -368,7 +423,11 @@ class DatasetPanel(QWidget):
                 "• Includes both detected frames and interpolated frames from the final trajectory set\n"
                 "• Intended for downstream labeling/training workflows that need stable head-tail direction\n"
                 "• Saved under individual_crops/<run_id>/images\n\n"
-                "Note: Available only in YOLO OBB mode."
+                "Note: Available only in YOLO OBB mode.\n\n"
+                "Final canonical images reuse detections already filtered by ROI and size\n"
+                "settings; no forward-pass media export is performed.\n\n"
+                "Padding, background, interpolation, and head-tail settings are configured in:\n"
+                "Analyze Individuals -> Individual Analysis Pipeline Settings"
             )
         )
 
@@ -410,13 +469,6 @@ class DatasetPanel(QWidget):
         _ind_fmt_row.addWidget(self.spin_individual_interval)
         ind_output_layout.addRow(_ind_fmt_row)
 
-        vl_ind_dataset.addWidget(
-            self._main_window._create_help_label(
-                "Padding, background, interpolation, and head-tail settings are configured in:\n"
-                "Analyze Individuals -> Individual Analysis Pipeline Settings"
-            )
-        )
-
         vl_ind_dataset.addWidget(self.ind_output_group)
 
         self.chk_suppress_foreign_obb_individual_dataset = QCheckBox(
@@ -432,14 +484,6 @@ class DatasetPanel(QWidget):
             "(no effect in background-subtraction mode)."
         )
         vl_ind_dataset.addWidget(self.chk_suppress_foreign_obb_individual_dataset)
-
-        # Info label about filtering
-        self.lbl_individual_info = self._main_window._create_help_label(
-            "Final canonical images reuse detections already filtered by ROI and size settings.\n"
-            "No forward-pass media export is performed.",
-            attach_to_title=False,
-        )
-        vl_ind_dataset.addWidget(self.lbl_individual_info)
 
         form.addWidget(self.g_individual_dataset)
 
@@ -458,7 +502,9 @@ class DatasetPanel(QWidget):
                 "• Uses the detection cache plus interpolated ROI geometry\n"
                 "• Can run without saving individual crop images\n"
                 "• Saved beside active_learning/ and individual_crops/ under oriented_videos/<run_id>\n\n"
-                "Requires head-tail orientation to be configured in Analyze Individuals."
+                "Requires head-tail orientation to be configured in Analyze Individuals.\n\n"
+                "Oriented videos reuse detections already filtered by ROI and size settings;\n"
+                "no separate crop-dataset save is required."
             )
         )
 
@@ -476,9 +522,20 @@ class DatasetPanel(QWidget):
         )
         vl_oriented.addWidget(self.chk_generate_individual_track_videos)
 
+        self.oriented_advanced = CollapsibleGroupBox("Advanced options")
+        self.oriented_advanced.setHelpToolTip(
+            "Direction fixing and affine stabilization are off by default; the "
+            "raw cleaned orientation is exported as-is."
+        )
+
         self.oriented_video_options = QGroupBox("Oriented Video Post-Processing")
-        oriented_options_layout = QFormLayout(self.oriented_video_options)
+        _oriented_cols = QHBoxLayout(self.oriented_video_options)
+        oriented_options_layout = QFormLayout()
         oriented_options_layout.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        oriented_options_right = QFormLayout()
+        oriented_options_right.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        _oriented_cols.addLayout(oriented_options_layout, 1)
+        _oriented_cols.addLayout(oriented_options_right, 1)
 
         self.chk_fix_oriented_video_direction_flips = QCheckBox(
             "Fix short head-tail direction flip bursts"
@@ -517,7 +574,7 @@ class DatasetPanel(QWidget):
         self.chk_enable_oriented_video_affine_stabilization.toggled.connect(
             self._sync_oriented_video_postprocess_controls
         )
-        oriented_options_layout.addRow(
+        oriented_options_right.addRow(
             "Affine stabilization",
             self.chk_enable_oriented_video_affine_stabilization,
         )
@@ -530,12 +587,12 @@ class DatasetPanel(QWidget):
             "Centered temporal smoothing window used for affine stabilization.\n"
             "Odd values work best; even values are rounded up internally."
         )
-        oriented_options_layout.addRow(
+        oriented_options_right.addRow(
             "Stabilization window (frames)",
             self.spin_oriented_video_stabilization_window,
         )
 
-        vl_oriented.addWidget(self.oriented_video_options)
+        self.oriented_advanced.addWidget(self.oriented_video_options)
 
         self.chk_suppress_foreign_obb_oriented_videos = QCheckBox(
             "Suppress foreign animal regions in oriented videos"
@@ -549,51 +606,19 @@ class DatasetPanel(QWidget):
             "which can confuse review and visualization.\n"
             "Only applies to YOLO OBB detections (no effect in background-subtraction mode)."
         )
-        vl_oriented.addWidget(self.chk_suppress_foreign_obb_oriented_videos)
+        self.oriented_advanced.addWidget(self.chk_suppress_foreign_obb_oriented_videos)
 
-        self.lbl_oriented_video_info = self._main_window._create_help_label(
-            "Oriented videos reuse detections already filtered by ROI and size settings.\n"
-            "No separate crop-dataset save is required.",
-            attach_to_title=False,
-        )
-        vl_oriented.addWidget(self.lbl_oriented_video_info)
+        vl_oriented.addWidget(self.oriented_advanced)
 
         form.addWidget(self.g_oriented_videos)
-
-        # ============================================================
-        # Next-step guidance
-        # ============================================================
-        self.g_downstream_tools = QGroupBox("What should you use next?")
-        self._main_window._set_compact_section_widget(self.g_downstream_tools)
-        vl_downstream = QVBoxLayout(self.g_downstream_tools)
-        vl_downstream.addWidget(
-            self._main_window._create_help_label(
-                "TrackerKit no longer launches annotation tools from this tab.\n\n"
-                "Each exported level folder is a DetectKit source (it carries its own "
-                "source.json) -- add it from DetectKit's import dialog; it is not "
-                "registered automatically.\n"
-                "Use DetectKit from the HYDRA Suite launcher to review and correct detection datasets.\n"
-                "Use PoseKit from the HYDRA Suite launcher to label pose datasets generated from individual crops."
-            )
-        )
-        guidance = QLabel(
-            "Detection review: open DetectKit from HYDRA Suite\n"
-            "Pose labeling: open PoseKit from HYDRA Suite"
-        )
-        guidance.setWordWrap(True)
-        guidance.setStyleSheet("color: #b8b8b8; font-size: 11px;")
-        vl_downstream.addWidget(guidance)
-
-        form.addWidget(self.g_downstream_tools)
 
         # Initially hide individual dataset widgets (checkbox starts unchecked)
         self.g_individual_dataset.setVisible(False)
         self.g_oriented_videos.setVisible(False)
         self.ind_output_group.setVisible(False)
         self.chk_suppress_foreign_obb_individual_dataset.setVisible(False)
-        self.lbl_individual_info.setVisible(False)
-        self.lbl_oriented_video_info.setVisible(False)
         self.oriented_video_options.setVisible(False)
+        self.oriented_advanced.setVisible(False)
         self._sync_oriented_video_postprocess_controls()
 
         scroll.setWidget(content)
@@ -658,17 +683,25 @@ class DatasetPanel(QWidget):
         # plainly rather than silently re-checking a box for the user (which
         # would fight their input) or letting the status text imply a level
         # combination that will not actually be exported.
-        any_checked = (
-            self.chk_level_polygon.isChecked()
-            or self.chk_level_obb.isChecked()
-            or self.chk_level_aabb.isChecked()
-        )
-        self.lbl_export_level_status.setText(level_status_text(native, any_checked))
+        self._refresh_level_status_text(native)
 
         is_bgsub = (
             str(params.get("DETECTION_METHOD", "")).lower() == "background_subtraction"
         )
         self.lbl_bgsub_notice.setVisible(is_bgsub)
+
+    def _refresh_level_status_text(self, native: GeometryLevel) -> None:
+        """Update the summary line from the live checkbox state."""
+        selected = {
+            level
+            for level, chk in (
+                (GeometryLevel.POLYGON, self.chk_level_polygon),
+                (GeometryLevel.OBB, self.chk_level_obb),
+                (GeometryLevel.AABB, self.chk_level_aabb),
+            )
+            if chk.isChecked()
+        }
+        self.lbl_export_level_status.setText(level_status_text(native, selected))
 
     # =========================================================================
     # Handler methods (moved from MainWindow)
@@ -686,7 +719,18 @@ class DatasetPanel(QWidget):
     def _on_oriented_video_toggled(self, enabled):
         """Show or hide oriented-video post-processing controls."""
         self.oriented_video_options.setVisible(bool(enabled))
+        self.oriented_advanced.setVisible(bool(enabled))
         self._sync_oriented_video_postprocess_controls()
+
+    def _on_export_level_toggled(self, _checked: bool) -> None:
+        """Keep the summary line honest when levels are overridden by hand.
+
+        Only the status text is recomputed: a full ``refresh_export_levels``
+        would write back to the very checkboxes that emitted this signal.
+        """
+        self._refresh_level_status_text(
+            resolve_native_level(self._detection_level_params())
+        )
 
     def _sync_oriented_video_postprocess_controls(self):
         """Enable dependent oriented-video controls only when their toggles are active."""

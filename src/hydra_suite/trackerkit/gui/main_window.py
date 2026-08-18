@@ -1445,6 +1445,20 @@ class MainWindow(QMainWindow):
             return {"use_apriltags": False, "cnn_classifiers": []}
         return self._detection_panel._identity_config()
 
+    def _has_identity_source(self) -> bool:
+        """True when identity is on AND at least one evidence source is usable.
+
+        Enabling identity classification without AprilTags or a CNN classifier
+        produces no evidence at all: ``_selected_identity_method()`` collapses
+        to ``none_disabled`` and the run silently does nothing identity-related.
+        A CNN row whose model is unset does not count -- ``to_config()`` returns
+        None for it, so it contributes nothing.
+        """
+        if not self._is_identity_analysis_enabled():
+            return False
+        cfg = self._identity_config()
+        return bool(cfg.get("use_apriltags") or cfg.get("cnn_classifiers"))
+
     def _is_individual_image_save_enabled(self) -> bool:
         """Return effective runtime state for final canonical still export."""
         if not hasattr(self, "_session_orch"):
@@ -2741,6 +2755,26 @@ class MainWindow(QMainWindow):
         return session_policy.is_pose_export_enabled(
             self._config_orch.build_config_dict()
         )
+
+    def _postprocess_ui_flags(self) -> dict:
+        """Policy flags the Clean Results panel gates its sections on.
+
+        Answers both questions from ONE ``build_config_dict()``: the panel
+        needs the pose flag and the interpolated-post-pass flag together, and
+        building the config twice per sync is pure waste.
+        """
+        if not hasattr(self, "_config_orch"):
+            # Panels can query this during init_ui(), before _config_orch exists.
+            return {"pose_export": False, "interpolated_postpass": False}
+        from hydra_suite.core.tracking import session_policy
+
+        config = self._config_orch.build_config_dict()
+        return {
+            "pose_export": session_policy.is_pose_export_enabled(config),
+            "interpolated_postpass": session_policy.should_run_interpolated_postpass(
+                config
+            ),
+        }
 
     def _finalize_tracking_session_ui(self):
         """Finalize session cleanup and return UI to idle state."""

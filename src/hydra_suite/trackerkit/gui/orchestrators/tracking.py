@@ -1097,6 +1097,8 @@ class TrackingOrchestrator:
             params, mode_label="tracking preview"
         ):
             return
+        if not self._validate_identity_requirements("tracking preview"):
+            return
 
         preview_fps = self._mw._resolve_source_video_fps()
         preview_start_frame = int(params.get("START_FRAME", 0))
@@ -1474,6 +1476,8 @@ class TrackingOrchestrator:
         use_cached_detections = self._panels.setup.chk_use_cached_detections.isChecked()
         if not self._validate_yolo_model_requirements(params, mode_label="tracking"):
             return
+        if not self._validate_identity_requirements("tracking"):
+            return
 
         csv_dir = (
             os.path.dirname(self._panels.setup.csv_line.text())
@@ -1575,6 +1579,30 @@ class TrackingOrchestrator:
             return
         self._cleanup_thread_reference("dataset_worker")
         self._mw._refresh_progress_visibility()
+
+    def _validate_identity_requirements(self, mode_label: str) -> bool:
+        """Refuse to start when identity is on but no evidence source exists.
+
+        ``_selected_identity_method()`` silently collapses to ``none_disabled``
+        in that state, so the run would complete having done no identity work
+        while the UI still claimed identity classification was enabled.
+        """
+        if not self._mw._is_identity_analysis_enabled():
+            return True
+        if self._mw._has_identity_source():
+            return True
+        QMessageBox.warning(
+            self._mw,
+            "No Identity Source Configured",
+            (
+                f"Identity classification is enabled, but {mode_label} has no "
+                "identity source to use.\n\n"
+                "Enable AprilTags, or add a CNN classifier and select a model "
+                "for it, in Analyze Individuals — or turn off Enable Identity "
+                "Classification."
+            ),
+        )
+        return False
 
     def _validate_yolo_model_requirements(self, params: dict, mode_label: str) -> bool:
         """Validate YOLO mode-specific model requirements before starting runs."""

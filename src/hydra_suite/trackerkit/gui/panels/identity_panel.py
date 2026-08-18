@@ -122,6 +122,21 @@ class IdentityPanel(QWidget):
         self.lbl_legacy_banner.setVisible(False)
         identity_content_layout.addWidget(self.lbl_legacy_banner)
 
+        # Identity on with no evidence source silently produces nothing: the
+        # method collapses to "none_disabled" and the run does no identity work
+        # at all. Say so here rather than only refusing at Start.
+        self.lbl_no_identity_source = QLabel(
+            "⚠ No identity source configured. Enable AprilTags or add a CNN "
+            "classifier with a model selected — otherwise identity "
+            "classification will not run and tracking cannot start."
+        )
+        self.lbl_no_identity_source.setWordWrap(True)
+        self.lbl_no_identity_source.setStyleSheet(
+            "color: #f48771; font-size: 11px; padding: 2px 0;"
+        )
+        self.lbl_no_identity_source.setVisible(False)
+        identity_content_layout.addWidget(self.lbl_no_identity_source)
+
         # Hidden legacy widgets (referenced by model-import dialog)
         self.line_color_tag_model = QLineEdit()
         self.line_color_tag_model.setPlaceholderText("path/to/color_tag_model.pt")
@@ -168,6 +183,11 @@ class IdentityPanel(QWidget):
         fl_apriltags.addRow("AprilTag settings", self.apriltag_row_widget)
         vl_apriltags_outer.addWidget(self.apriltag_settings_widget)
         self.g_apriltags.toggled.connect(self.apriltag_settings_widget.setVisible)
+        # Toggling AprilTags changes whether an identity source exists at all,
+        # which gates the Clean Results identity section and the start guard.
+        self.g_apriltags.toggled.connect(
+            lambda _checked: self._main_window._sync_individual_analysis_mode_ui()
+        )
         identity_content_layout.addWidget(self.g_apriltags)
 
         # --- CNN Classifiers group ---
@@ -923,6 +943,9 @@ class IdentityPanel(QWidget):
                 self._populate_model_combo()
                 return
             self._sync_model_ui()
+            # A row only counts as a source once a model is selected, so this
+            # can flip has_identity_source in either direction.
+            self._main_window._sync_individual_analysis_mode_ui()
 
         def _handle_remove_selected_model(self) -> None:
             """Remove the currently selected CNN identity model from the repository."""
@@ -1415,6 +1438,9 @@ class IdentityPanel(QWidget):
         identity_enabled = self._main_window._is_identity_analysis_enabled()
         self.identity_content.setVisible(identity_enabled)
         self.identity_content.setEnabled(identity_enabled)
+        self.lbl_no_identity_source.setVisible(
+            identity_enabled and not self._main_window._has_identity_source()
+        )
 
     def _sync_pose_analysis_ui(self):
         """Show pose controls only when pose extraction is enabled."""

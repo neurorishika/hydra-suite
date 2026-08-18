@@ -146,8 +146,20 @@ class CollapsibleGroupBox(QWidget):
         super().resizeEvent(event)
         self._position_help_button()
 
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        # The header's real width is only known once the widget is laid out.
+        # Without this, a collapsible whose help tooltip was set at
+        # construction time (while it was still hidden) keeps the button at
+        # its default top-left position, floating outside the header row.
+        self._position_help_button()
+
     def _position_help_button(self) -> None:
-        if not self._help_button.isVisible():
+        # Guard on the tooltip, NOT on ``isVisible()``: while the panel or the
+        # enclosing tab is still hidden the button reports invisible, so an
+        # isVisible() guard skipped every positioning pass that ran before the
+        # first user-visible paint -- which is all of them.
+        if not self._help_tooltip:
             return
         metrics = self._header_button.fontMetrics()
         title_width = metrics.horizontalAdvance(self._title)

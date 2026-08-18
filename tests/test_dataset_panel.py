@@ -49,13 +49,30 @@ def test_level_status_text_no_levels_checked_says_nothing_will_export():
         level_status_text,
     )
 
-    text = level_status_text(GeometryLevel.OBB, any_checked=False)
+    text = level_status_text(GeometryLevel.OBB, set())
     assert "no" in text.lower()
     assert "export" in text.lower()
 
-    # With at least one level checked, falls back to the normal capability text.
-    checked_text = level_status_text(GeometryLevel.OBB, any_checked=True)
-    assert checked_text == format_level_status(GeometryLevel.OBB)
+    # Every achievable level selected == the plain capability text.
+    all_checked = level_status_text(
+        GeometryLevel.OBB, {GeometryLevel.OBB, GeometryLevel.AABB}
+    )
+    assert all_checked == format_level_status(GeometryLevel.OBB)
+
+
+def test_level_status_text_reports_levels_actually_selected():
+    """The summary line is the only export-level statement the simplified
+    panel shows, so a level turned off in Advanced options must not still be
+    advertised as something that will be exported."""
+    from hydra_suite.trackerkit.gui.panels.dataset_panel import level_status_text
+
+    text = level_status_text(GeometryLevel.OBB, {GeometryLevel.AABB})
+    assert "aabb" in text
+    # "obb" is a substring of nothing else here once the capability clause is
+    # stripped, so check the claim itself rather than the explanatory suffix.
+    claim = text.split("—")[0]
+    assert "obb" not in claim.replace("aabb", "")
+    assert "turned off" in text.lower()
 
 
 # =============================================================================
@@ -122,6 +139,9 @@ def _fake_panel_self(method_index=1, mode_index=0, task_index=2):
         lbl_bgsub_notice=_Label(),
     )
     fake._detection_level_params = lambda: DatasetPanel._detection_level_params(fake)
+    fake._refresh_level_status_text = (
+        lambda native: DatasetPanel._refresh_level_status_text(fake, native)
+    )
     return fake
 
 

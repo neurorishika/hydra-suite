@@ -715,6 +715,10 @@ class SessionOrchestrator:
         pose_enabled = self._is_pose_inference_enabled()
         enabled = bool(video_visible and pose_enabled)
 
+        # Hide the whole subsection, not just its contents. With pose off it
+        # collapsed to a title, a dead checkbox and a line of explanation --
+        # a section that looked like a setting but could not be set.
+        self._mw._postprocess_panel.g_video_pose_overlay.setVisible(enabled)
         self._mw._postprocess_panel.check_video_show_pose.setEnabled(enabled)
         show_pose = bool(
             enabled and self._mw._postprocess_panel.check_video_show_pose.isChecked()
@@ -750,17 +754,13 @@ class SessionOrchestrator:
         self._mw._postprocess_panel.spin_video_pose_line_thickness.setEnabled(show_pose)
         self._mw._postprocess_panel.btn_video_pose_color.setEnabled(show_fixed_color)
 
-        self._mw._postprocess_panel.lbl_video_pose_disabled_hint.setVisible(
-            video_visible
+        # The "enable pose extraction" branch is gone with the section: nobody
+        # can read a hint inside a hidden group. That pointer now lives in the
+        # video section's help, which stays reachable.
+        self._mw._postprocess_panel.lbl_video_pose_disabled_hint.setVisible(enabled)
+        self._mw._postprocess_panel.lbl_video_pose_disabled_hint.setText(
+            "Pose overlay will use keypoints from pose-augmented tracking output."
         )
-        if enabled:
-            self._mw._postprocess_panel.lbl_video_pose_disabled_hint.setText(
-                "Pose overlay will use keypoints from pose-augmented tracking output."
-            )
-        else:
-            self._mw._postprocess_panel.lbl_video_pose_disabled_hint.setText(
-                "Enable Pose Extraction in Analyze Individuals to edit pose overlay settings."
-            )
 
     def _sync_pose_backend_ui(self):
         """Show/hide backend-specific pose controls."""
@@ -1190,11 +1190,15 @@ class SessionOrchestrator:
 
         # Hide tracking-side identity decoder when classification is OFF.
         if hasattr(self._mw, "_tracking_panel"):
-            identity_active = pipeline_enabled and bool(
-                getattr(self._mw, "_identity_panel", None)
-                and self._mw._identity_panel.g_identity.isChecked()
-            )
+            # The master toggle alone is not enough: identity with no AprilTags
+            # and no CNN classifier produces no evidence, so every downstream
+            # identity control would be inert.
+            identity_active = pipeline_enabled and self._mw._has_identity_source()
             self._mw._tracking_panel.set_identity_section_visible(identity_active)
+            if hasattr(self._mw, "_postprocess_panel"):
+                self._mw._postprocess_panel.set_identity_section_visible(
+                    identity_active
+                )
         if hasattr(self._mw, "_dataset_panel"):
             self._mw._dataset_panel.g_individual_dataset.setVisible(pipeline_enabled)
             self._mw._dataset_panel.g_individual_dataset.setEnabled(pipeline_enabled)
@@ -1217,8 +1221,6 @@ class SessionOrchestrator:
             self._mw._dataset_panel.chk_suppress_foreign_obb_individual_dataset.setEnabled(
                 save_enabled
             )
-            self._mw._dataset_panel.lbl_individual_info.setVisible(save_enabled)
-            self._mw._dataset_panel.lbl_oriented_video_info.setVisible(pipeline_enabled)
             has_headtail = bool(
                 str(
                     self._mw._identity_panel._get_selected_yolo_headtail_model_path()
