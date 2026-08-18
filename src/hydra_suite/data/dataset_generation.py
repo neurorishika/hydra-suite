@@ -488,10 +488,72 @@ def _detect_records_for_frames(runner, frames, params, native_level):
     return out
 
 
+_LOST_STATES = {"lost", "interpolated", "predicted"}
+
+
 def _select_records_for_frame(rows, frame_records, params, scale_back):
-    """Placeholder pairing: returns detector records unchanged. Task 13 replaces
-    this with mutual-exclusion matching and strict drops."""
-    return list(frame_records), {"lost": 0, "unmatched": 0}
+    """Pair tracked CSV rows with detector geometry; export only real matches.
+
+    Strict by design. The legacy exporter wrote a fabricated
+    `ref*2.2 x ref*0.8` box whenever a row had no nearby detection, and wrote
+    labels for `lost`/interpolated rows the detector never saw. Since AL
+    selects frames precisely where tracking struggled, both behaviours injected
+    wrong boxes exactly where the model was weakest. Do not restore a
+    fabricated-geometry fallback here: a row with no real detection must be
+    dropped and counted, never invented.
+
+    Matching is mutual-exclusion (one row <-> one detection) via the Hungarian
+    algorithm, gated by a radius scaled to REFERENCE_BODY_SIZE rather than the
+    legacy hardcoded 50 px, so it neither reaches a neighbouring animal for
+    small species nor fails to reach the correct one for large species.
+    """
+    import pandas as pd
+    from scipy.optimize import linear_sum_assignment
+
+    drops = {"lost": 0, "unmatched": 0}
+    if rows is None or len(rows) == 0 or not frame_records:
+        if rows is not None:
+            for _, row in rows.iterrows():
+                state = str(row.get("State", "")).strip().lower()
+                if state in _LOST_STATES:
+                    drops["lost"] += 1
+                else:
+                    drops["unmatched"] += 1
+        return [], drops
+
+    live_rows = []
+    for _, row in rows.iterrows():
+        state = str(row.get("State", "")).strip().lower()
+        if state in _LOST_STATES:
+            drops["lost"] += 1
+            continue
+        if pd.isna(row["X"]) or pd.isna(row["Y"]):
+            drops["unmatched"] += 1
+            continue
+        live_rows.append((float(row["X"]) * scale_back, float(row["Y"]) * scale_back))
+
+    if not live_rows:
+        return [], drops
+
+    reference = max(float(params.get("REFERENCE_BODY_SIZE", 20.0)), 1.0)
+    max_distance = reference * 2.2
+
+    centers = np.array(
+        [rec.points.mean(axis=0) for rec in frame_records], dtype=np.float64
+    )
+    targets = np.array(live_rows, dtype=np.float64)
+    cost = np.linalg.norm(targets[:, None, :] - centers[None, :, :], axis=2)
+
+    row_idx, col_idx = linear_sum_assignment(cost)
+    matched_detections: list[int] = []
+    matched_rows = set()
+    for r, c in zip(row_idx, col_idx):
+        if cost[r, c] <= max_distance:
+            matched_detections.append(int(c))
+            matched_rows.add(int(r))
+
+    drops["unmatched"] += len(live_rows) - len(matched_rows)
+    return [frame_records[i] for i in sorted(matched_detections)], drops
 
 
 def export_dataset(
