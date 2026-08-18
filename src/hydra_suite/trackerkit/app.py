@@ -250,7 +250,7 @@ def main(argv: list[str] | None = None) -> object:
     try:
         # Import Qt at runtime so package imports don't hard-fail on missing GUI deps.
         try:
-            from PySide6.QtWidgets import QApplication
+            from PySide6.QtWidgets import QApplication, QStyleFactory
         except ImportError:
             print("Error: PySide6 not found. Please install it with:")
             print("conda install -c conda-forge pyside6")
@@ -268,6 +268,10 @@ def main(argv: list[str] | None = None) -> object:
 
         # Create Qt application
         app = QApplication(sys.argv)
+        # Force Fusion so the custom dark QSS theme (button fills, borders,
+        # checkbox indicators, etc.) renders consistently instead of being
+        # partially overridden by the native macOS/Windows widget chrome.
+        app.setStyle(QStyleFactory.create("Fusion"))
         app.setApplicationName("TrackerKit")
         app.setApplicationDisplayName("TrackerKit")
         app.setApplicationVersion("1.0.0")

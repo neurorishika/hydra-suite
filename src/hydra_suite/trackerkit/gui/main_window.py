@@ -167,6 +167,13 @@ class MainWindow(QMainWindow):
             }
             QPushButton#SecondaryBtn:hover { background-color: #4a4a4a; }
 
+            /* Persistent action panel: a widget-local setStyleSheet() here
+               would create its own QSS scope and silently break the
+               QPushButton fill rules above for buttons nested inside it. */
+            QFrame#ActionFrame {
+                background-color: #1e1e1e; border-top: 1px solid #3e3e42; border-radius: 0px;
+            }
+
             /* Inputs */
             QSpinBox, QDoubleSpinBox, QLineEdit, QComboBox {
                 background-color: #3c3c3c; border: 1px solid #3e3e42; border-radius: 4px;
@@ -808,9 +815,7 @@ class MainWindow(QMainWindow):
 
         # Persistent Action Panel (Bottom Right)
         action_frame = QFrame()
-        action_frame.setStyleSheet(
-            "background-color: #1e1e1e; border-top: 1px solid #3e3e42; border-radius: 0px;"
-        )
+        action_frame.setObjectName("ActionFrame")
         action_layout = QVBoxLayout(action_frame)
         action_layout.setContentsMargins(6, 6, 6, 6)
         action_layout.setSpacing(4)
@@ -935,6 +940,11 @@ class MainWindow(QMainWindow):
         self._detection_panel._refresh_yolo_model_combo()
         self._detection_panel._refresh_yolo_detect_model_combo()
         self._detection_panel._refresh_yolo_crop_obb_model_combo()
+        # combo_detection_method starts on its default index, so its
+        # currentIndexChanged signal never fired — sync Scale's visibility here.
+        self._setup_panel.sync_scale_control_for_detection_method(
+            self._detection_panel.combo_detection_method.currentIndex() == 0
+        )
 
         # Identity panel bootstrap
         self._identity_panel._refresh_cnn_identity_model_combo()
