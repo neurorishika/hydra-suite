@@ -84,8 +84,9 @@ def test_the_clamp_warns_so_an_operator_learns_why(caplog):
 def test_the_scale_control_follows_the_detection_method():
     """The GUI must not offer a knob the engine will discard.
 
-    Switching to YOLO OBB disables Scale and resets it to 1.0; switching back to
-    background subtraction re-enables it.
+    Switching to YOLO OBB hides the Scale card and resets it to 1.0; switching
+    back to background subtraction brings it back. (The control is hidden rather
+    than merely disabled -- a knob the engine discards should not be on screen.)
     """
     import os
 
@@ -101,15 +102,17 @@ def test_the_scale_control_follows_the_detection_method():
         setup = mw._setup_panel
         combo = mw._detection_panel.combo_detection_method
 
+        card = setup._performance_optional_control_cards[setup.spin_resize]
+
         combo.setCurrentIndex(0)  # background subtraction
-        assert setup.spin_resize.isEnabled()
+        assert not card.isHidden(), "Scale card hidden for background subtraction"
         setup.spin_resize.setValue(0.5)
 
         combo.setCurrentIndex(1)  # YOLO OBB
-        assert not setup.spin_resize.isEnabled()
+        assert card.isHidden(), "Scale card still shown for YOLO OBB"
         assert setup.spin_resize.value() == pytest.approx(1.0)
 
         combo.setCurrentIndex(0)
-        assert setup.spin_resize.isEnabled()
+        assert not card.isHidden(), "Scale card did not come back for bg-sub"
     finally:
         mw.close()
