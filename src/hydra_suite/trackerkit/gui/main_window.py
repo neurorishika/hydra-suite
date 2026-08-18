@@ -2742,6 +2742,26 @@ class MainWindow(QMainWindow):
             self._config_orch.build_config_dict()
         )
 
+    def _postprocess_ui_flags(self) -> dict:
+        """Policy flags the Clean Results panel gates its sections on.
+
+        Answers both questions from ONE ``build_config_dict()``: the panel
+        needs the pose flag and the interpolated-post-pass flag together, and
+        building the config twice per sync is pure waste.
+        """
+        if not hasattr(self, "_config_orch"):
+            # Panels can query this during init_ui(), before _config_orch exists.
+            return {"pose_export": False, "interpolated_postpass": False}
+        from hydra_suite.core.tracking import session_policy
+
+        config = self._config_orch.build_config_dict()
+        return {
+            "pose_export": session_policy.is_pose_export_enabled(config),
+            "interpolated_postpass": session_policy.should_run_interpolated_postpass(
+                config
+            ),
+        }
+
     def _finalize_tracking_session_ui(self):
         """Finalize session cleanup and return UI to idle state."""
         self._tracking_orch._finalize_tracking_session_ui()

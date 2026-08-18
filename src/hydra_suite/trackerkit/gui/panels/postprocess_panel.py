@@ -100,7 +100,12 @@ class PostProcessPanel(QWidget):
 
         self.g_relinking, f_relinking = self._create_subsection_form(
             "Fragment Relinking",
-            "Reconnect fragments conservatively after interpolation when motion and pose remain consistent.",
+            "Reconnect fragments conservatively after the interpolated post-pass, when "
+            "motion (and pose, when available) remain consistent.\n\n"
+            "Only runs as part of that post-pass, which requires YOLO-OBB detection, "
+            "occlusion interpolation, and at least one of: canonical crop export, pose "
+            "extraction, or final media video export. Without those this section is "
+            "hidden, because the setting would have no effect.",
         )
 
         self.g_pose_quality, f_pose_quality = self._create_subsection_form(
@@ -174,15 +179,22 @@ class PostProcessPanel(QWidget):
             "Break trajectory above speed (body lengths/sec)"
         )
 
+        # Not "after pose interpolation": the pass this hooks into is the
+        # interpolated post-pass, which pose is only one trigger for.
         self.chk_enable_tracklet_relinking = QCheckBox(
-            "Relink fragments after pose interpolation"
+            "Relink fragments after interpolation"
         )
         self.chk_enable_tracklet_relinking.setChecked(False)
         self.chk_enable_tracklet_relinking.setToolTip(
             "\u26a0 USE WITH CAUTION \u2014 disabled by default.\n"
             "\n"
-            "Reconnect short trajectory fragments after pose/interpolation completes.\n"
-            "In dense multi-animal scenes this can cause identity swaps by incorrectly\n"
+            "Reconnect short trajectory fragments once the interpolated post-pass\n"
+            "completes. In dense multi-animal scenes this can cause identity swaps by\n"
+            "incorrectly joining fragments that belong to different animals.\n"
+            "\n"
+            "Scoring is motion-based (predicted position, jump limit, heading gate).\n"
+            "Pose similarity adds a further constraint when pose data is present; it\n"
+            "is not required.\n"
             "\n"
             "Bidirectional tracking (forward + backward pass) already handles most\n"
             "occlusion recovery. Enable relinking only if you see fragmented trajectories\n"
@@ -1318,7 +1330,8 @@ class PostProcessPanel(QWidget):
 
     def _set_cleaning_section_state(self, enabled: bool) -> None:
         """Show or hide post-processing subsections based on the cleaning toggle."""
-        pose_enabled = bool(enabled and self._main_window._is_pose_export_enabled())
+        flags = self._main_window._postprocess_ui_flags()
+        pose_enabled = bool(enabled and flags["pose_export"])
         identity_enabled = bool(enabled and getattr(self, "_identity_active", False))
         self.cleaning_sections_widget.setVisible(enabled)
         self.cleaning_sections_widget.setEnabled(enabled)
@@ -1330,11 +1343,14 @@ class PostProcessPanel(QWidget):
         self.clean_advanced.setEnabled(enabled)
         self.g_motion_breaks.setVisible(enabled)
         self.g_motion_breaks.setEnabled(enabled)
-        self.g_relinking.setVisible(enabled)
-        self.g_relinking.setEnabled(enabled)
-        # Both relink knobs score pose similarity; without pose, relinking
-        # falls back to motion-only and neither value is consulted. The
-        # toggle itself stays -- relinking still runs.
+        # Relinking has exactly one call site, inside the interpolated
+        # post-pass. Outside it the toggle is inert regardless of pose, so the
+        # section is gated on the pass actually running -- not on pose.
+        relink_enabled = bool(enabled and flags["interpolated_postpass"])
+        self.g_relinking.setVisible(relink_enabled)
+        self.g_relinking.setEnabled(relink_enabled)
+        # Within that, the two knobs only score pose similarity: without pose
+        # neither value is ever read, but relinking still runs motion-only.
         self.relink_quality_row_widget.setVisible(pose_enabled)
         self.g_interpolation_merge.setVisible(enabled)
         self.g_interpolation_merge.setEnabled(enabled)

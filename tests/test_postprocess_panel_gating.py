@@ -72,8 +72,10 @@ def test_identity_section_stays_hidden_when_cleaning_is_off(qapp, main_window):
 
 
 def test_pose_scored_relink_knobs_hidden_without_pose(qapp, main_window):
-    """Both relink knobs score pose similarity; with pose off they are dead
-    controls. The relinking toggle itself stays -- relinking still runs."""
+    """Both relink knobs only score pose similarity, so with pose off neither
+    value is ever read. The relinking toggle itself stays: scoring falls back
+    to motion-only (predicted position, jump limit, heading gate) and the
+    feature still runs."""
     panel = main_window._postprocess_panel
     panel.clean_advanced.setExpanded(True)
     panel.enable_postprocessing.setChecked(True)
@@ -82,3 +84,35 @@ def test_pose_scored_relink_knobs_hidden_without_pose(qapp, main_window):
     assert main_window._is_pose_export_enabled() is False
     assert panel.relink_quality_row_widget.isVisibleTo(panel) is False
     assert panel.chk_enable_tracklet_relinking.isVisibleTo(panel) is True
+
+
+def test_relinking_hidden_when_the_post_pass_that_runs_it_is_off(qapp, main_window):
+    """`relink_trajectories_with_pose` has exactly one call site, inside the
+    interpolated post-pass. With nothing to trigger that pass the toggle
+    cannot affect the run at all -- a dead control across far more configs
+    than "pose is off"."""
+    from hydra_suite.core.tracking import session_policy
+
+    panel = main_window._postprocess_panel
+    dataset = main_window._dataset_panel
+    panel.clean_advanced.setExpanded(True)
+    panel.enable_postprocessing.setChecked(True)
+
+    dataset.chk_enable_individual_dataset.setChecked(True)
+    panel._set_cleaning_section_state(True)
+    _settle(qapp)
+    config = main_window._config_orch.build_config_dict()
+    assert session_policy.should_run_interpolated_postpass(config) is True
+    assert panel.g_relinking.isVisibleTo(panel) is True
+
+    # Nothing consumes the post-pass -> it never runs -> relinking cannot fire.
+    dataset.chk_enable_individual_dataset.setChecked(False)
+    panel._set_cleaning_section_state(True)
+    _settle(qapp)
+    config = main_window._config_orch.build_config_dict()
+    assert session_policy.should_run_interpolated_postpass(config) is False
+    assert panel.g_relinking.isVisibleTo(panel) is False
+
+    dataset.chk_enable_individual_dataset.setChecked(True)
+    panel._set_cleaning_section_state(True)
+    _settle(qapp)
