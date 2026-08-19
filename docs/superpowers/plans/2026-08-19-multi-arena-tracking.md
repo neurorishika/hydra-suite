@@ -11,7 +11,9 @@
 ## Global Constraints
 
 - **Single-arena runs MUST be byte-identical to current `main`.** With one arena, `slot_arena` is uniform, no pair is arena-blocked, and there is one identity decoder — every new code path must degenerate to today's exactly. This is the primary regression gate.
-- **Arena gating conditions on `track_arena[i] != meas_arena[j]`, never on `cost >= 1e6`.** Gating on the sentinel value would also skip *distance*-gated cells that exist today, changing debug confidence metrics. Arena-mismatch is the only legal predicate.
+- **Arena gating conditions on `track_arena[i] != meas_arena[j]`, never on `cost >= 1e6`.** The sentinel value is also carried by *distance*-gated cells that exist today, so a sentinel-valued predicate would silently change existing behavior. Arena mismatch is the only legal predicate anywhere arena gating appears.
+- **`_apply_bayesian_identity_cost` is NOT arena-gated — do not touch it.** See the rebase note below: it is already vectorized, and cross-arena cells stay rejected without any gate because the addon is non-negative.
+- **The `arena_id` CSV column is emitted only when `n_arenas > 1`.** `tools/equivalence/compare.py:110` bails out entirely when `list(a.columns) != list(b.columns)`, and under the new `--strict-columns` mode that is a hard failure — an unconditional new column would break the byte-identity gate against `legacy/main` for schema reasons alone, and would change the CSV contract for every existing single-arena user.
 - **Animal count is one shared value across all arenas.** `MAX_TARGETS = n_arenas × animals_per_arena` is derived, never entered directly.
 - **Legacy `roi_shapes` without `arena_id` all map to arena 0.** Multi-arena is opt-in, never inferred from shape count.
 - **Track IDs and trajectory IDs stay globally unique** across arenas. Only the new `arena_id` CSV column distinguishes arenas.
@@ -24,6 +26,69 @@
 The spec's Touch point 1 put arena labeling inside `core/inference/stages/filtering.py` and flowed `arena_ids` through the detection cache. **This plan instead derives arena at the tracking layer** from measurement centroids and the static label image.
 
 Rationale discovered while reading the code: `OBBResult` (`core/inference/result.py:20`) is reconstructed field-by-field by `_select()`, and its arrays are serialized into the `.npz` detection cache. Adding a field means touching the result dataclass, `_select`, three filter paths including the CUDA tensor path, the cache writer/reader, and potentially cache keys — which would invalidate every existing user cache. Arena is a pure function of `(centroid, label_image)`, both of which the tracking layer already holds, so deriving it there is mathematically identical and costs one vectorized gather per frame. Everything downstream of this decision is unchanged.
+
+## Rebase note — the Bayesian assignment sweep and `feat/identity-heads`
+
+Two things landed between the spec and this plan's execution. Both were audited; the
+resulting changes are folded into the tasks below, but the reasoning lives here.
+
+**1. `perf(assigners): vectorize the Bayesian identity cost and rejoin scoring` (`2cdf6bb9`, already on `main`).**
+
+- The spec's Touch-point-2 performance argument — "`_apply_bayesian_identity_cost` is a
+  *Python* double loop, 160,000 iterations per frame at 100 arenas" — **is obsolete**.
+  Both that function and the identity-rejoin scoring in `_assign_respawn` now compute a
+  dense block through `_pairwise_log_compat` (`hungarian.py:108`), a vectorized
+  log-domain inner product.
+- Consequently **arena blocking is no longer needed in `_apply_bayesian_identity_cost`,
+  for perf or for correctness.** Correctness: the addon is `alpha * (-log_compat)` with
+  `log_compat = logsumexp(log_posterior + log_likelihood) <= 0` for normalized
+  distributions, so the addon is always `>= 0`; and the cap branch
+  (`np.where(block < max_dist, capped, summed)`) leaves any cell already at the `1e6`
+  sentinel at `1e6 + addon >= 1e6`, still hard-rejected post-solve. Perf: the block op is
+  `rows x cols x n_classes` NumPy work — sub-millisecond even at 400 slots.
+  `compute_assignment_confidence` (`hungarian.py:697`) reads only *matched* pairs, which
+  are never cross-arena, so leaving cross-arena cells un-skipped cannot perturb it.
+- **Net: Task 4 loses its identity-cost half entirely.** That is a simplification and
+  strictly reduces byte-identity risk. The respawn half remains — and is still real.
+- `_assign_respawn`'s identity-rejoin path was restructured by the same commit into
+  `cand_slots` / `cand_dets` + `np.flatnonzero(row > log_threshold)`. Task 4's snippets
+  already target that post-sweep shape; `_within_budget` still receives only a coordinate
+  pair and still must not be the gating site.
+
+**2. `feat/identity-heads` (worktree `.worktrees/identity-heads`, about to merge).**
+
+Neither `hungarian.py` nor `core/individual/identity/online.py` is touched by that
+branch, so Tasks 3 and 5 keep their shape. Four things do land on us:
+
+- **The equivalence gate got stronger.** `run_matrix.sh` now also compares
+  `<stem>_tracking_final_with_individual.csv` with `compare.py --strict-columns`, which
+  gates the identity columns (`IdentityEvidence*` / `IdentityFinal*` /
+  `UniqueIdentityKey`) instead of merely printing them. Task 10 adopts this — and it is
+  what forces the conditional `arena_id` column (see Global Constraints).
+- **The online catalog is now a cross-product catalog built from an
+  `IdentityCatalogSpec`**, with `_catalog_spec` and `_phase_label_maps` alongside
+  `_identity_catalog` in `worker.py`. All three are arena-invariant: one catalog, one
+  spec, one phase-map set, shared by every arena's decoder. Task 5's registry therefore
+  needs no per-arena duplication of any of them — but it must be written against the
+  post-merge construction site, not the pre-merge one.
+- **`run_fragment_solver` gained a `catalog_spec` keyword** (`offline.py:1275`). Task 7
+  groups at the `run_fragment_solver` call site, so the new keyword must be forwarded on
+  every per-arena call.
+- **Two cross-arena couplings the spec missed, both outside `core/post/processing.py`.**
+  With labels repeating per arena these are live defects, not hypotheticals:
+  - `core/individual/postprocess_df.py:559` `sort_trajectories_by_identity` renumbers
+    *every* TrajectoryID globally, sorted by `(consensus_identity_label, first_frame)`.
+    Arena 0's "ant A" and arena 7's "ant A" interleave into one block. It does not merge
+    data, but the renumbering is a global function of all arenas, so the Task 10 tiling
+    oracle fails on it.
+  - `core/post/rich_export.py:397` `relink_trajectories_with_pose` matches fragments via
+    `UniqueIdentityKey` (`processing.py:3722` `_fragment_unique_identity_sources`). This
+    is a genuine *merge* decision, and it is reached from `relink_and_export_rich_csv`,
+    **not** from `process_trajectories_from_csv` — so Task 7's original two grouping
+    points do not cover it. Two arenas each holding an "ant A" can relink across arenas.
+  - `UniqueIdentityKey` itself stays arena-blind. Scoping the key by arena would change
+    its value for single-arena runs and break the newly-strict identity-column gate;
+    grouping its *consumers* by arena is equivalent and free.
 
 ## File Structure
 
@@ -46,10 +111,12 @@ Rationale discovered while reading the code: `OBBResult` (`core/inference/result
 | File | Change |
 |---|---|
 | `src/hydra_suite/trackerkit/engine_params.py:193` | `build_arena_labels()` next to `build_roi_mask()`; emit `ARENA_LABELS`, `N_ARENAS`, `ANIMALS_PER_ARENA`; derive `MAX_TARGETS`. |
-| `src/hydra_suite/core/assigners/hungarian.py` | Arena arrays through `compute_cost_matrix`, the numba kernel, the Python fallback, `_apply_bayesian_identity_cost`, `_assign_respawn`. |
+| `src/hydra_suite/core/assigners/hungarian.py` | Arena arrays through `compute_cost_matrix`, the numba kernel, the Python fallback, and `_assign_respawn`. **Not** `_apply_bayesian_identity_cost` — see the rebase note. |
 | `src/hydra_suite/core/tracking/worker.py` | Build `ArenaLayout`; per-frame detection→arena gather; per-arena decoder registry; `arena_id` on emitted rows. |
 | `src/hydra_suite/core/post/processing.py` | `resolve_trajectories` / `process_trajectories_from_csv` arena grouping. |
-| `src/hydra_suite/core/individual/identity/offline.py` | Per-arena uniqueness solve. |
+| `src/hydra_suite/core/individual/identity/offline.py` | Per-arena uniqueness solve (`run_fragment_solver`, forwarding the post-merge `catalog_spec`). |
+| `src/hydra_suite/core/individual/postprocess_df.py:559` | Arena in the `sort_trajectories_by_identity` sort key. |
+| `src/hydra_suite/core/post/rich_export.py:397` | Per-arena `relink_trajectories_with_pose`. |
 | `src/hydra_suite/trackerkit/config/schemas.py:25` | `animals_per_arena` field. |
 | `src/hydra_suite/trackerkit/gui/orchestrators/session.py:2112` | Arena selector on shape creation. |
 
@@ -635,57 +702,38 @@ git commit -m "feat(arena): arena-blocked cost matrix in the assignment kernel"
 
 ---
 
-### Task 4: Arena gating in the identity-cost and respawn paths
+### Task 4: Arena gating in the respawn paths
 
 **Files:**
-- Modify: `src/hydra_suite/core/assigners/hungarian.py:266` (`_apply_bayesian_identity_cost`), `:811` (`_assign_respawn`), `:966` (`assign_tracks`)
+- Modify: `src/hydra_suite/core/assigners/hungarian.py:811` (`_assign_respawn`), `:966` (`assign_tracks`)
 - Test: `tests/test_arena_blocked_assignment.py` (extend)
 
 **Interfaces:**
 - Consumes: `self.track_arena` (Task 3), `meas_arena` per frame.
 - Produces: `assign_tracks(..., meas_arena=None)` — the respawn phases honour arena boundaries.
 
-**Why this task exists:** the cost matrix alone is not sufficient. `_assign_respawn` has two paths that bypass `cost` and compute distances directly from `meas`: the proximity respawn (`hungarian.py:952`, `np.linalg.norm(meas[c][:2] - last_pos)`) and the identity-rejoin budget check (`_within_budget`, `hungarian.py:877`). Without explicit gating, a lost track in arena 3 could respawn onto a detection in arena 7.
+**Why this task exists:** the cost matrix alone is not sufficient. `_assign_respawn` has
+two paths that bypass `cost` entirely and compute distances directly from `meas`: the
+proximity respawn (`hungarian.py:952`, `np.linalg.norm(meas[c][:2] - last_pos)`) and the
+identity-rejoin scoring block. Without explicit gating, a lost track in arena 3 could
+respawn onto a detection in arena 7.
 
-**Critical constraint:** in `_apply_bayesian_identity_cost` the skip predicate MUST be `track_arena[i] != meas_arena[j]`, **not** `cost[i, j] >= 1e6`. The latter would also skip distance-gated cells that exist on `main` today, changing the values feeding `compute_assignment_confidence` (`hungarian.py:697`) and breaking byte-identity of the debug confidence columns.
+**Scope reduction vs. the spec:** `_apply_bayesian_identity_cost` is deliberately left
+untouched. See the rebase note — after `2cdf6bb9` it is vectorized, and cross-arena cells
+remain hard-rejected without a gate because the addon is non-negative and the cap's
+`where(block < max_dist)` branch preserves the `1e6` sentinel. Adding a gate there would
+buy nothing and would risk the byte-identity gate.
+
+**Critical constraint:** gate on `track_arena[slot] != meas_arena[j]`, never on
+`cost >= 1e6`. Gate at the two loop sites where the detection *index* is in hand; do
+**not** gate inside `_within_budget` (`hungarian.py:877`), which receives only a
+coordinate pair and cannot recover the index.
 
 - [ ] **Step 1: Write the failing test (append to `tests/test_arena_blocked_assignment.py`)**
 
 ```python
-def test_bayesian_identity_cost_skips_only_cross_arena_pairs():
-    """Distance-gated within-arena cells must still receive the identity addon,
-    or debug confidence metrics drift from main."""
-    from hydra_suite.core.assigners.hungarian import TrackAssigner
-
-    params = {
-        "ENABLE_IDENTITY_ONLINE_DECODER": True,
-        "ASSOCIATION_IDENTITY_HINT_SCALE": 0.5,
-        "MAX_DISTANCE_THRESHOLD": 100.0,
-    }
-    assigner = TrackAssigner(params)
-    assigner.set_track_arena(np.array([0, 1], dtype=np.int32))
-
-    log_post = np.log(np.array([0.7, 0.3]))
-    log_like = np.log(np.array([0.6, 0.4]))
-    association = {
-        "identity_track_log_posteriors": {0: log_post, 1: log_post},
-        "identity_detection_log_likelihoods": [log_like, log_like],
-    }
-
-    # Detections: 0 and 1 in arena 0, detection 2 in arena 1.
-    # Cell (0,0) is distance-gated but WITHIN arena 0 -> must still get the addon.
-    # Cell (0,2) is cross-arena -> must be left untouched.
-    assigner.set_track_arena(np.array([0, 1], dtype=np.int32))
-    cost = np.array([[1e6, 5.0, 1e6], [5.0, 5.0, 5.0]], dtype=np.float32)
-    meas_arena = np.array([0, 0, 1], dtype=np.int32)
-    association["identity_detection_log_likelihoods"] = [log_like] * 3
-    assigner._apply_bayesian_identity_cost(cost, association, meas_arena=meas_arena)
-
-    assert cost[0, 0] > 1e6, "within-arena gated cell must still get the addon"
-    assert cost[0, 2] == pytest.approx(1e6), "cross-arena cell must be left alone"
-
-
 def test_respawn_never_crosses_arenas():
+    """Proximity respawn must not pull an arena-0 slot onto an arena-1 detection."""
     from hydra_suite.core.assigners.hungarian import TrackAssigner
 
     class _KF:
@@ -725,51 +773,80 @@ def test_respawn_never_crosses_arenas():
         meas_arena=np.array([1], dtype=np.int32),
     )
     assert 0 not in rows, "arena-0 slot must not respawn on an arena-1 detection"
+    assert list(zip(rows, cols)) == [(1, 0)], "arena-1 slot should take the detection"
+
+
+def test_identity_rejoin_never_crosses_arenas():
+    """The committed-lost identity rejoin scores a dense block; the arena test must
+    be applied where the detection index is known, not inside the budget check."""
+    from hydra_suite.core.assigners.hungarian import TrackAssigner
+
+    class _KF:
+        X = np.array([[10.0, 10.0, 0.0, 0.0, 0.0], [410.0, 10.0, 0.0, 0.0, 0.0]])
+
+    params = {
+        "MAX_DISTANCE_THRESHOLD": 1000.0,
+        "IDENTITY_REJOIN_THRESHOLD": 0.1,
+        "REFERENCE_BODY_SIZE": 20.0,
+        "RESIZE_FACTOR": 1.0,
+    }
+    assigner = TrackAssigner(params)
+    assigner.set_track_arena(np.array([0, 1], dtype=np.int32))
+
+    # Slot 0 (arena 0) is certain of label 0; the only detection is also label 0
+    # but sits in arena 1.  Without gating it would be rejoined across arenas.
+    certain = np.log(np.array([0.99, 0.01]))
+    association = {
+        "identity_track_log_posteriors": {0: certain},
+        "identity_detection_log_likelihoods": [certain],
+    }
+    cost = np.full((2, 1), 1e6, dtype=np.float32)
+    _rows, _cols, rejoin = assigner._assign_respawn(
+        cost=cost,
+        N=2,
+        meas=[np.array([400.0, 10.0, 0.0])],
+        track_states=["lost", "lost"],
+        tracking_continuity=[0, 0],
+        kf_manager=_KF(),
+        spatial_candidates=None,
+        association_data=association,
+        committed_slot_identities={0: "antA"},
+        missed_frames=None,
+        _lost=[0, 1],
+        _M=1,
+        _MAX_DIST=1000.0,
+        _assigned_dets=set(),
+        meas_arena=np.array([1], dtype=np.int32),
+    )
+    assert rejoin == [], "committed arena-0 slot must not rejoin an arena-1 detection"
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python -m pytest tests/test_arena_blocked_assignment.py -k "bayesian or respawn" -v`
-Expected: FAIL — `TypeError: _apply_bayesian_identity_cost() got an unexpected keyword argument 'meas_arena'`
+Run: `python -m pytest tests/test_arena_blocked_assignment.py -k respawn -v`
+Expected: FAIL — `TypeError: _assign_respawn() got an unexpected keyword argument 'meas_arena'`
 
 - [ ] **Step 3: Write minimal implementation**
 
-`_apply_bayesian_identity_cost` — add `meas_arena=None` and skip on arena mismatch only:
+Add `meas_arena: np.ndarray | None = None` to `_assign_respawn`'s signature and compute
+the gate once at the top of the body, right after `MAX_DIST` / `assigned_dets` are
+resolved:
 
 ```python
-    def _apply_bayesian_identity_cost(
-        self,
-        cost: np.ndarray,
-        association_data: Dict[str, Any] | None,
-        meas_arena: np.ndarray | None = None,
-    ) -> None:
-        ...
-        n_tracks, n_dets = cost.shape
         ta = self.track_arena
         gate = (
             ta is not None
             and meas_arena is not None
-            and len(ta) == n_tracks
-            and len(meas_arena) == n_dets
+            and len(ta) >= N
+            and len(meas_arena) >= M
         )
-        for i in range(n_tracks):
-            log_post_i = track_log_posts.get(i)
-            if log_post_i is None:
-                continue
-            arena_i = ta[i] if gate else None
-            for j in range(min(n_dets, len(det_log_likes))):
-                # Arena mismatch is the ONLY legal skip predicate here. Skipping
-                # on `cost >= 1e6` would also skip distance-gated cells that
-                # exist today and change compute_assignment_confidence output.
-                if gate and meas_arena[j] != arena_i:
-                    continue
-                ...  # rest UNCHANGED
 ```
 
-`_assign_respawn` — add `meas_arena=None` and gate both direct-distance paths. Gate at the two loop sites, where the detection *index* is in hand; do not try to gate inside `_within_budget`, which receives only a coordinate pair and cannot recover the index:
+Gate the identity-rejoin scoring loop, inside the `flatnonzero` walk where `j` exists:
 
 ```python
-        # identity-rejoin scoring loop
+                for si, slot in enumerate(cand_slots):
+                    row = scores[si]
                     for dj in np.flatnonzero(row > log_threshold):
                         j = cand_dets[dj]
                         if gate and meas_arena[j] != ta[slot]:
@@ -777,8 +854,9 @@ Expected: FAIL — `TypeError: _apply_bayesian_identity_cost() got an unexpected
                         det_xy = np.asarray(meas[j][:2], dtype=np.float64)
 ```
 
+Gate the proximity respawn loop:
+
 ```python
-        # proximity respawn loop
         for c in unassigned:
             if not remaining_uncommitted:
                 break
@@ -789,31 +867,25 @@ Expected: FAIL — `TypeError: _apply_bayesian_identity_cost() got an unexpected
                 last_pos = kf_manager.X[r, :2]
 ```
 
-with `gate` computed once at the top of `_assign_respawn`:
+Leave `_within_budget` exactly as it is.
 
-```python
-        ta = self.track_arena
-        gate = (
-            ta is not None
-            and meas_arena is not None
-            and len(ta) >= N
-            and len(meas_arena) >= _M
-        )
-```
-
-`assign_tracks` — accept `meas_arena=None` and thread it to `_apply_bayesian_identity_cost` and `_assign_respawn`. Also thread it from `compute_cost_matrix`'s caller.
+`assign_tracks` — accept `meas_arena: np.ndarray | None = None` and forward it to
+`_assign_respawn` only. Do **not** forward it to `_apply_bayesian_identity_cost`; that
+function keeps its current two-argument signature.
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `python -m pytest tests/test_arena_blocked_assignment.py tests/test_track_assigner.py tests/test_bayesian_identity_vectorization.py -v`
-Expected: all pass
+Expected: all pass. `test_bayesian_identity_vectorization.py` is the guard proving the
+vectorized identity cost is untouched — if it fails, the scope reduction above was
+violated.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 make format
 git add src/hydra_suite/core/assigners/hungarian.py tests/test_arena_blocked_assignment.py
-git commit -m "feat(arena): gate identity-cost and respawn paths by arena"
+git commit -m "feat(arena): gate the respawn paths by arena"
 ```
 
 ---
@@ -821,7 +893,7 @@ git commit -m "feat(arena): gate identity-cost and respawn paths by arena"
 ### Task 5: Per-arena online identity decoders
 
 **Files:**
-- Modify: `src/hydra_suite/core/tracking/worker.py:1849` (decoder construction) and its ~12 call sites
+- Modify: `src/hydra_suite/core/tracking/worker.py` (decoder construction, `~:1849` pre-merge / `~:1870` after `feat/identity-heads`) and its ~12 call sites
 - Create: `src/hydra_suite/core/tracking/identity/decoder_registry.py`
 - Test: `tests/test_arena_identity_decoders.py`
 
@@ -830,6 +902,8 @@ git commit -m "feat(arena): gate identity-cost and respawn paths by arena"
 - Produces: `ArenaDecoderRegistry(catalog, params, slot_arena)` with the *same* method surface the worker already calls on a bare decoder — `get_belief(slot)`, `clear_slot(...)`, `decay_absent_slot_beliefs(slots)`, `get_slot_log_posteriors(slots)`, `all_active_slots()`, `update_frame(...)` — each routing by `slot_arena[slot]`. This keeps `worker.py`'s ~12 call sites textually unchanged apart from the constructor.
 
 **Design note:** `OnlineIdentityDecoder` is already self-contained and slot-keyed, so per-arena isolation needs no change *inside* the decoder. One decoder per arena over the shared catalog is exactly the "labels repeat per arena" semantic: each enforces "one ant A in *this* arena".
+
+**Post-merge note (`feat/identity-heads`):** that branch does not touch `online.py`, so the decoder itself is unchanged. It does change what surrounds the construction site: the catalog is now a *cross-product* catalog built from an `IdentityCatalogSpec`, and `_catalog_spec` plus `_phase_label_maps` now sit beside `_identity_catalog`. All three are arena-invariant — build them exactly once, as today, and hand the same objects to every arena decoder. Do not attempt to construct a per-arena catalog or per-arena phase maps.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1145,11 +1219,20 @@ and for the empty-detection branches (lines 2180, 2352):
                     meas_arena = np.zeros(0, dtype=np.int32)
 ```
 
-Thread `meas_arena=meas_arena` into the `assign_tracks(...)` call. At row emission (near line 3533), add the arena of each track slot:
+Thread `meas_arena=meas_arena` into the `assign_tracks(...)` call. At row emission (near line 3533), add the arena of each track slot — **only when the
+run is genuinely multi-arena**:
 
 ```python
-                    "arena_id": int(self.arena_layout.slot_arena[track_idx]),
+                    # Emitted only when n_arenas > 1: `compare.py` bails out when the
+                    # column lists differ, so an unconditional column would break the
+                    # byte-identity gate on schema grounds alone, and would change the
+                    # CSV contract for every existing single-arena user.
+                    if not self.arena_layout.is_single_arena:
+                        row["arena_id"] = int(self.arena_layout.slot_arena[track_idx])
 ```
+
+Downstream code must therefore treat a *missing* `arena_id` column as "one arena",
+which is exactly what Task 7's `slot_arena=None` / column-absent dispatch already does.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -1170,14 +1253,25 @@ git commit -m "feat(arena): wire arena layout through the tracking worker"
 
 **Files:**
 - Modify: `src/hydra_suite/core/post/processing.py:1144` (`resolve_trajectories`), `:757` (`process_trajectories_from_csv`)
-- Modify: `src/hydra_suite/core/individual/identity/offline.py:397` (`_base_assignment_via_substrate`)
+- Modify: `src/hydra_suite/core/individual/postprocess_df.py:544` (`run_fragment_solver` call — the offline identity uniqueness solve) and `:559` (`sort_trajectories_by_identity`)
+- Modify: `src/hydra_suite/core/post/rich_export.py:397` (`relink_trajectories_with_pose` call)
 - Test: `tests/test_arena_postproc_grouping.py`
 
 **Interfaces:**
 - Consumes: `arena_id` column on trajectory DataFrames (Task 6).
 - Produces: `resolve_trajectories(forward_trajs, backward_trajs, params, *, should_stop=None, slot_arena=None)`. When `slot_arena` is `None` or uniform, behavior is unchanged. Otherwise the trajectory lists are partitioned by arena, resolved independently, concatenated, and renumbered globally.
 
-**Design note:** this wraps the existing 200-line function rather than editing its internals — merge candidates simply never span arenas because the partitions never meet.
+**Design note:** this wraps the existing 200-line function rather than editing its internals — merge candidates simply never span arenas because the partitions never meet. The same wrapping strategy applies at every site below: group, call the untouched function once per arena, concatenate.
+
+**Three sites beyond `processing.py` (found during the `feat/identity-heads` audit — do not skip them):**
+
+1. **Offline identity uniqueness — `postprocess_df.py:544`.** `run_fragment_solver` solves an injective fragment→label assignment (`offline.py:397` `_base_assignment_via_substrate`). With labels repeating per arena, a global solve forces arena 0's "ant A" and arena 7's "ant A" to compete for one catalog entry, so at most one of them can ever be labelled. Group `with_pose_df` by `arena_id` and call the solver once per arena, **forwarding the post-merge `catalog_spec` keyword on every call** — omitting it silently degrades a cross-product catalog to exact label matching.
+
+2. **Global trajectory renumbering — `postprocess_df.py:559`.** `sort_trajectories_by_identity` (`core/post/identity_postprocess.py:364`) replaces *every* `TrajectoryID` with a rank under `(consensus_identity_label, first_frame)`. It does not merge data, but the numbering becomes a global function of all arenas, so arena 0's ids depend on what arena 7 contains — and the Task 10 tiling oracle fails on it. Extend the sort key with arena so it reads `(arena, consensus_identity_label, first_frame)`; with one arena the key is constant and the ordering is bit-identical to today.
+
+3. **Pose-aware relink — `rich_export.py:397`.** `relink_trajectories_with_pose` matches fragments through `UniqueIdentityKey` (`processing.py:3722` `_fragment_unique_identity_sources`), which is a genuine *merge* decision — two arenas each holding an "ant A" can be relinked into one trajectory. This path is reached from `relink_and_export_rich_csv`, **not** from `process_trajectories_from_csv`, so grouping in `processing.py` does not cover it. Group `relink_input_df` by `arena_id` and relink per arena.
+
+`UniqueIdentityKey` itself stays arena-blind: scoping the key by arena would change its value on single-arena runs and break the now-strict identity-column comparison in the equivalence matrix. Grouping its consumers is equivalent and free.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1253,7 +1347,52 @@ def test_arena_column_survives_resolution():
         fwd, bwd, PARAMS, slot_arena=np.array([3], dtype=np.int32)
     )
     assert all("arena_id" in df.columns for df in out)
+
+
+def test_identity_sort_key_is_arena_scoped():
+    """`sort_trajectories_by_identity` renumbers globally; with labels repeating
+    per arena, arena 0's ids must not depend on arena 1's contents."""
+    from hydra_suite.core.post.identity_postprocess import sort_trajectories_by_identity
+
+    df = pd.DataFrame(
+        {
+            "FrameID": [0, 1, 0, 1, 0, 1],
+            "TrajectoryID": [10, 10, 20, 20, 30, 30],
+            "arena_id": [0, 0, 1, 1, 0, 0],
+            "IdentityFinalLabel": ["antA"] * 2 + ["antA"] * 2 + ["antB"] * 2,
+        }
+    )
+    out = sort_trajectories_by_identity(df)
+    per_arena = out.groupby("arena_id")["TrajectoryID"].apply(lambda s: sorted(set(s)))
+    # Every arena's ids form one contiguous run -> no interleaving across arenas.
+    for ids in per_arena:
+        assert ids == list(range(min(ids), min(ids) + len(ids)))
+
+
+def test_relink_never_joins_same_label_across_arenas():
+    """Relink matches on UniqueIdentityKey, which repeats across arenas."""
+    from hydra_suite.core.post.processing import relink_trajectories_with_pose
+
+    n = 10
+    df = pd.DataFrame(
+        {
+            "FrameID": list(range(n)) + list(range(n, 2 * n)),
+            "TrajectoryID": [0] * n + [1] * n,
+            "arena_id": [0] * n + [1] * n,
+            "UniqueIdentityKey": ["cnn=antA"] * (2 * n),
+            "X": [10.0] * n + [10.0] * n,
+            "Y": [10.0] * n + [10.0] * n,
+            "Theta": [0.0] * (2 * n),
+        }
+    )
+    out = relink_trajectories_with_pose(df, {"arena_id_column": "arena_id"})
+    assert out.groupby("TrajectoryID")["arena_id"].nunique().max() == 1
 ```
+
+Note on the last two tests: they exercise functions that today have no arena awareness
+at all, so both fail before the implementation step. Adjust the exact params dict passed
+to `relink_trajectories_with_pose` to whatever the surrounding call site supplies —
+what must hold is the assertion, not the argument spelling.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -1322,19 +1461,70 @@ In `process_trajectories_from_csv` (`processing.py:757`), when the CSV has an `a
         return _renumber_concatenated(parts)
 ```
 
-In `offline.py:397`, partition segments by `arena_id` before the uniqueness solve and merge the per-arena assignments, so "one antA" is enforced per arena.
+In `postprocess_df.py:544`, group before the offline identity solve, forwarding the
+post-merge `catalog_spec` on every per-arena call:
+
+```python
+        if "arena_id" in with_pose_df.columns and with_pose_df["arena_id"].nunique() > 1:
+            solved = [
+                run_fragment_solver(
+                    group, catalog, params=params, cache=cache, catalog_spec=catalog_spec
+                )
+                for _, group in with_pose_df.groupby("arena_id", sort=True)
+            ]
+            with_pose_df = pd.concat(solved, ignore_index=True)
+        else:
+            with_pose_df = run_fragment_solver(...)  # unchanged single-arena call
+```
+
+In `identity_postprocess.py:364` `sort_trajectories_by_identity`, put arena first in the
+sort key. With one arena (or no column) the key is constant and the ordering is
+bit-identical to today:
+
+```python
+    arena_col = "arena_id" if "arena_id" in df.columns else None
+    ...
+        arena = float(df.loc[mask, arena_col].iloc[0]) if arena_col else 0.0
+        traj_info.append((traj_id, arena, consensus, min_frame))
+
+    traj_info.sort(key=lambda x: (x[1], x[2], x[3]))
+    id_mapping = {old: new for new, (old, _, _, _) in enumerate(traj_info)}
+```
+
+In `rich_export.py:397`, relink per arena:
+
+```python
+    if "arena_id" in relink_input_df.columns and relink_input_df["arena_id"].nunique() > 1:
+        parts = [
+            relink_trajectories_with_pose(group, params)
+            for _, group in relink_input_df.groupby("arena_id", sort=True)
+        ]
+        relinked_with_pose = _renumber_concatenated(parts)
+    else:
+        relinked_with_pose = relink_trajectories_with_pose(relink_input_df, params)
+```
+
+`_renumber_concatenated(parts)` is the one shared helper used by all three concatenation
+points and by `process_trajectories_from_csv` above: it concatenates the parts in order
+and reassigns `TrajectoryID` (and `trajectory_id`, when present) to a dense global range
+so ids stay unique across arenas. Put it in `core/post/processing.py` and import it where
+needed.
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `python -m pytest tests/test_arena_postproc_grouping.py tests/test_postproc_equivalence.py tests/test_postproc_invariants.py tests/test_core_post_merge.py -v`
+Run: `python -m pytest tests/test_arena_postproc_grouping.py tests/test_postproc_equivalence.py tests/test_postproc_invariants.py tests/test_core_post_merge.py tests/test_core_identity_postprocess_df.py tests/identity -v`
 Expected: all pass
 
 - [ ] **Step 5: Commit**
 
 ```bash
 make format
-git add src/hydra_suite/core/post/processing.py src/hydra_suite/core/individual/identity/offline.py tests/test_arena_postproc_grouping.py
-git commit -m "feat(arena): group trajectory resolution and offline identity by arena"
+git add src/hydra_suite/core/post/processing.py \
+        src/hydra_suite/core/post/identity_postprocess.py \
+        src/hydra_suite/core/post/rich_export.py \
+        src/hydra_suite/core/individual/postprocess_df.py \
+        tests/test_arena_postproc_grouping.py
+git commit -m "feat(arena): group trajectory resolution, identity and relink by arena"
 ```
 
 ---
@@ -1763,7 +1953,25 @@ REPO=$PWD WT=$PWD \
   bash tools/equivalence/run_matrix.sh
 ```
 
-Expected: every clip EQUIVALENT at its determinism floor, for both `_forward.csv` and `_tracking_final.csv`. **Verify `wc -l` > 1 on the CSVs before trusting any EQUIVALENT** — empty CSVs compare equal and falsely pass. Known acceptable noise: bistable head/tail π-flips on head/tail clips.
+Expected: every clip EQUIVALENT at its determinism floor, for `_forward.csv`,
+`_tracking_final.csv`, **and** `_tracking_final_with_individual.csv`. **Verify `wc -l` > 1
+on the CSVs before trusting any EQUIVALENT** — empty CSVs compare equal and falsely pass.
+Known acceptable noise: bistable head/tail π-flips on head/tail clips.
+
+Post-`feat/identity-heads`, the matrix additionally compares the rich per-individual CSV
+with `compare.py --strict-columns`, which gates the identity columns
+(`IdentityEvidence*` / `IdentityFinal*` / `UniqueIdentityKey`) rather than merely printing
+them. Two consequences for this feature:
+
+- That comparison is the *only* thing in the matrix that proves Task 7's identity
+  grouping did not perturb single-arena identity output. Treat a `strict-columns`
+  failure as a hard stop, not a nuisance.
+- `compare.py:110` returns `None` when `list(a.columns) != list(b.columns)`, and under
+  `--strict-columns` that is a hard ❌. This is exactly why `arena_id` is emitted only
+  when `n_arenas > 1` (Global Constraints). If the gate reports
+  `strict-columns: no comparable keyed schema`, the most likely cause is an `arena_id`
+  column leaking into a single-arena run — fix the emission condition, never the
+  comparator.
 
 - [ ] **Step 5: Run the byte-identity gate on CUDA**
 
@@ -1782,7 +1990,16 @@ REPO=$PWD WT=$PWD MAIN_SRC=$PWD/.worktrees/equiv-legacy/src WT_SRC=$PWD/src \
 python -m pytest tests/test_arena_tiling_oracle.py -v --durations=10
 ```
 
-Then run a 100-arena synthetic (10×10 tiling, 1 animal each) and confirm wall-clock is within ~1.25× of the single-arena run. The likely regression sites are the Python-level per-frame loops — `_apply_bayesian_identity_cost` and `_get_spatial_candidates`. If either dominates, the fix is to iterate per-arena blocks rather than over the dense N×M range; do not raise the tolerance.
+Then run a 100-arena synthetic (10×10 tiling, 1 animal each) and confirm wall-clock is
+within ~1.25× of the single-arena run.
+
+Note that the spec's stated hotspot no longer exists: `2cdf6bb9` vectorized
+`_apply_bayesian_identity_cost` and the identity-rejoin scoring, so neither is a Python
+`N×M` loop any more (see the rebase note). Profile before optimizing anything. The
+remaining Python-level per-frame candidates at 400 slots are `_get_spatial_candidates`
+(`hungarian.py:168`), the proximity respawn double loop (`hungarian.py:940`), and the
+per-slot bookkeeping loops in `run_tracking` itself. If one dominates, the fix is to
+iterate per-arena blocks rather than the dense `N×M` range; do not raise the tolerance.
 
 - [ ] **Step 7: Commit**
 
@@ -1803,10 +2020,10 @@ git commit -m "test(arena): end-to-end tiling oracle proving per-arena independe
 | Data model (`arena_id`, `ARENA_LABELS`, union == `ROI_MASK`) | 1 |
 | Slot layout, contiguous blocks, derived `MAX_TARGETS` | 2, 6 |
 | Touch point 1 — detection labeling | 2, 6 *(relocated to the tracking layer — see "Deviation from the spec")* |
-| Touch point 2 — arena-blocked assignment | 3, 4 |
+| Touch point 2 — arena-blocked assignment | 3, 4 *(identity-cost half dropped — see the rebase note)* |
 | Touch point 3 — per-arena identity decoding | 5 |
-| Touch point 4 — post-processing grouping | 7 |
-| Touch point 5 — `arena_id` output column | 6 |
+| Touch point 4 — post-processing grouping | 7 *(widened: also `postprocess_df.py`, `identity_postprocess.py`, `rich_export.py`)* |
+| Touch point 5 — `arena_id` output column | 6 *(emitted only when `n_arenas > 1`)* |
 | GUI manual arena assignment | 8 |
 | GUI grid generator | 9 |
 | Config back-compat (no `arena_id` → arena 0) | 1, 8 |
@@ -1820,3 +2037,5 @@ No spec requirement is unassigned. Out-of-scope items (per-arena overrides, aren
 **Naming consistency check:** `build_arena_labels` (Tasks 1, 6), `ArenaLayout` with `.slot_arena`/`.max_targets`/`.arena_of_points`/`.is_single_arena`/`.label_image_for_size` (Tasks 2, 6), `set_track_arena` (Tasks 3, 4, 6), `meas_arena` (Tasks 3, 4, 6), `ArenaDecoderRegistry` (Task 5), `slot_arena=` keyword on `resolve_trajectories` (Task 7), `animals_per_arena` (Tasks 6, 8), `generate_grid_shapes` (Task 9) — each used identically wherever it appears.
 
 **Ordering note:** Tasks 3 and 4 both modify `hungarian.py` and 4 depends on 3's `set_track_arena`; run them in order. Task 6 depends on 1, 2, 3, 4, 5. Task 10 depends on everything.
+
+**Rebase ordering:** this plan is written against `main` **with `feat/identity-heads` merged**. Merge that branch first, then branch `feat/multi-arena-tracking` from the merge commit. Executing against pre-merge `main` will collide in `worker.py` (catalog construction, Task 5), `postprocess_df.py` / `rich_export.py` (Task 7), and `tools/equivalence/run_matrix.sh` (Task 10).
