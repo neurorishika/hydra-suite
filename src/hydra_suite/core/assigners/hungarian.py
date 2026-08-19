@@ -367,6 +367,7 @@ class TrackAssigner:
         self,
         cost: np.ndarray,
         association_data: Dict[str, Any] | None,
+        meas_arena: np.ndarray | None = None,
     ) -> None:
         """Add a soft Bayesian identity cost term to the assignment cost matrix.
 
@@ -405,6 +406,15 @@ class TrackAssigner:
         if not rows or not cols:
             return
 
+        ta = self.track_arena
+        if ta is not None and meas_arena is not None and len(ta) >= n_tracks:
+            # Arena mismatch is the ONLY legal predicate. Skipping on `cost >= 1e6`
+            # would also skip distance-gated cells that exist on main today and
+            # change compute_assignment_confidence's inputs.
+            blocked = ta[np.ix_(rows)][:, None] != meas_arena[np.ix_(cols)][None, :]
+        else:
+            blocked = None
+
         log_compat = _pairwise_log_compat(
             [track_log_posts[i] for i in rows], [det_log_likes[j] for j in cols]
         )
@@ -420,7 +430,10 @@ class TrackAssigner:
         # Cap: identity can reorder preferences but must never block a
         # geometrically-valid match by pushing cost above max_dist.
         capped = np.where(summed <= dt(max_dist - 1e-3), summed, dt(max_dist - 1e-3))
-        cost[np.ix_(rows, cols)] = np.where(block < dt(max_dist), capped, summed)
+        new_block = np.where(block < dt(max_dist), capped, summed)
+        if blocked is not None:
+            new_block = np.where(blocked, block, new_block)
+        cost[np.ix_(rows, cols)] = new_block
 
     @staticmethod
     def _apply_candidate_gate(
@@ -797,7 +810,12 @@ class TrackAssigner:
             )
 
         if association_data:
-            self._apply_bayesian_identity_cost(cost, association_data)
+            # Pass the raw `meas_arena` argument, not the numba-kernel-normalized
+            # `meas_arena_arr` -- the latter collapses to the `_NO_ARENA` empty
+            # sentinel (a real, non-None ndarray) on a length mismatch, which
+            # would masquerade as "gating requested but empty" to the overlay's
+            # `meas_arena is not None` check below and raise on indexing.
+            self._apply_bayesian_identity_cost(cost, association_data, meas_arena)
 
             if has_pose_data:
                 self._apply_candidate_gate(cost, pose_candidates)
@@ -941,6 +959,7 @@ class TrackAssigner:
         _M=None,
         _MAX_DIST=None,
         _assigned_dets=None,
+        meas_arena: np.ndarray | None = None,
     ) -> tuple:
         """Phase 3: respawn lost tracks with unassigned detections.
 
@@ -958,6 +977,14 @@ class TrackAssigner:
         M = _M if _M is not None else cost.shape[1]
         MAX_DIST = _MAX_DIST if _MAX_DIST is not None else p["MAX_DISTANCE_THRESHOLD"]
         assigned_dets: set = _assigned_dets if _assigned_dets is not None else set()
+
+        ta = self.track_arena
+        gate = (
+            ta is not None
+            and meas_arena is not None
+            and len(ta) >= N
+            and len(meas_arena) >= M
+        )
 
         # Split lost slots into committed vs. uncommitted
         if committed_slot_identities:
@@ -1025,6 +1052,8 @@ class TrackAssigner:
                     row = scores[si]
                     for dj in np.flatnonzero(row > log_threshold):
                         j = cand_dets[dj]
+                        if gate and meas_arena[j] != ta[slot]:
+                            continue
                         det_xy = np.asarray(meas[j][:2], dtype=np.float64)
                         if not _within_budget(slot, det_xy):
                             continue
@@ -1068,6 +1097,8 @@ class TrackAssigner:
                 break
             best_r, best_c_val = None, 1e6
             for r in remaining_uncommitted:
+                if gate and meas_arena[c] != ta[r]:
+                    continue
                 last_pos = kf_manager.X[r, :2]
                 dist = float(np.linalg.norm(meas[c][:2] - last_pos))
                 if dist < best_c_val:
@@ -1093,6 +1124,7 @@ class TrackAssigner:
         association_data: Dict[str, Any] | None = None,
         committed_slot_identities: Dict[int, str] | None = None,
         missed_frames: list | None = None,
+        meas_arena: np.ndarray | None = None,
     ) -> object:
         """
         Drop-in replacement for track assignment logic.
@@ -1189,6 +1221,7 @@ class TrackAssigner:
             _M=M,
             _MAX_DIST=MAX_DIST,
             _assigned_dets=assigned_dets,
+            meas_arena=meas_arena,
         )
         all_assignments.extend(zip(ph3_rows, ph3_cols))
 
