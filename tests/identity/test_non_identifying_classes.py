@@ -824,3 +824,31 @@ def test_a_real_composite_still_gets_its_relink_key():
     assert set(out[C.UNIQUE_IDENTITY_KEY]) == {
         "cnn:colortag:back=blue|cnn:colortag:front=red"
     }
+
+
+def test_marks_on_a_non_identity_classifier_warn(caplog):
+    """Reachable from the GUI: check "Unique identifier", set marks, uncheck
+    it. The marks are retained and still emitted, but feed nothing -- say so
+    rather than skipping them past every diagnostic."""
+    import logging
+
+    from hydra_suite.core.individual.identity.resolve import non_identifying_marks
+
+    cfg = dict(_tags(["notag"]), unique_identifier=False)
+    with caplog.at_level(logging.WARNING):
+        assert non_identifying_marks([cfg]) == {}
+    assert any(
+        "not marked as a unique identifier" in r.getMessage() for r in caplog.records
+    )
+
+
+def test_a_plain_non_identity_classifier_warns_about_nothing(caplog):
+    import logging
+
+    from hydra_suite.core.individual.identity.resolve import non_identifying_marks
+
+    cfg = dict(_tags(), unique_identifier=False)
+    cfg.pop("non_identifying_classes")
+    with caplog.at_level(logging.WARNING):
+        non_identifying_marks([cfg])
+    assert [r.getMessage() for r in caplog.records] == []

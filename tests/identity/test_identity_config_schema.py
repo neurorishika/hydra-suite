@@ -160,6 +160,14 @@ def test_posthoc_enabled_tracks_enable_postprocessing_only():
 
 
 def test_non_identifying_classes_round_trip():
+    """Guards the dataclass round-trip only -- NOT the live path.
+
+    ``IdentityConfig.from_engine_config`` never populates ``models``, so
+    ``IdentityModelConfig.non_identifying_classes`` is read by nothing at
+    runtime today; the marks reach the engine through the
+    ``cnn_classifiers`` passthrough instead (see the field's docstring).
+    This test keeps the serialization honest for a future loader.
+    """
     cfg = IdentityConfig(
         models=[
             IdentityModelConfig(

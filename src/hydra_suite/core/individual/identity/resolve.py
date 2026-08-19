@@ -116,6 +116,20 @@ def non_identifying_marks(
     out: dict[str, tuple[str, ...]] = {}
     for cfg in cnn_classifiers or []:
         if not bool(cfg.get("unique_identifier", False)):
+            # Reachable straight from the GUI: check "Unique identifier",
+            # declare marks, uncheck it again -- the marks are retained in
+            # the saved config and still emitted. Skipping silently here
+            # also skips them past the unmatched-mark warning below, so the
+            # user sees nothing at all.
+            if cfg.get("non_identifying_classes"):
+                logger.warning(
+                    "Classifier '%s' declares non-identifying classes (%s) "
+                    "but is not marked as a unique identifier, so it feeds "
+                    "no identity catalog and the marks are ignored. Enable "
+                    "'Unique identifier' on it, or clear the marks.",
+                    str(cfg.get("label", "") or "").strip() or "cnn",
+                    cfg.get("non_identifying_classes"),
+                )
             continue
         label = str(cfg.get("label", "") or "").strip() or "cnn"
         raw_marks = cfg.get("non_identifying_classes") or []

@@ -219,8 +219,18 @@ The mixed forms are deliberate: the user's cases are case-by-case. `notag` and
 **the engine only ever knows per-entry exclusion** — there is no second code path.
 
 Persisted on `IdentityModelConfig` (`trackerkit/config/identity_schema.py`) as
-`non_identifying_classes: tuple[str, ...] = ()`, threaded into the
-`CNN_CLASSIFIERS` engine-param dicts by `build_engine_params`.
+`non_identifying_classes: tuple[str, ...] = ()`.
+
+*As built (correction):* that dataclass field is **not** the live path, and
+`build_engine_params` threads nothing of its own. `IdentityConfig.from_engine_config`
+never populates `models`, so nothing reads `IdentityModelConfig.non_identifying_classes`
+at runtime. The marks travel with each classifier entry instead:
+`identity_panel.CNNClassifierRow.to_config` writes them into the saved config's
+`cnn_classifiers` list, and `build_engine_params` passes that list through verbatim
+into `CNN_CLASSIFIERS`, where `resolve.non_identifying_marks` reads them. The
+dataclass field is kept for serialization round-tripping only; a `models`-populating
+loader would have to be written for it to become live, and this program deliberately
+did not write one.
 
 **`resolve.py`.** After the cross-product, drop every entry that matches any
 declared form. The catalog shrinks; indices stay contiguous.
@@ -280,6 +290,13 @@ free-text row for whole composites. Persisted through `IdentityModelConfig`.
   anyone parsing that column downstream — call it out in the changelog.
 - Non-identity classifiers' `CNN_<label>_Class` / `_Conf` columns are unchanged
   and still fully exported. They are output, not identity.
+- The `IdentityFinalID == 0` pin protects consumers of the **rich** export
+  (`<video>_tracking_final_with_individual.csv`), which is the only export
+  carrying `IdentityFinalID`. `<video>_tracks.csv` carries `identity`,
+  `identity_confidence`, and `identity_source` only, so readers of that file
+  distinguish several untagged animals sharing one descriptive label by
+  `identity_source == nonidentifying` alone. The CSV schema is deliberately
+  unchanged.
 
 ## Testing and gates
 
@@ -312,6 +329,21 @@ effect is attributable.
 - `notag == notag` does not count as relink agreement.
 - Equivalence with `non_identifying_classes = []`: byte-identical (the feature is
   opt-in, so "off" is a provable no-op).
+
+## Known limitations
+
+- **The Hungarian Bayesian-cost CNN term ignores composite catalogs.**
+  `worker.py`'s per-frame identity-cost term exact-matches `class_names[0]`
+  against the catalog, so it contributes nothing whenever the catalog entry
+  is a composite rather than a bare class name. This is pre-existing (it was
+  already broken for a single multi-factor model), but Slice 2 makes
+  composite catalogs reachable from two *single-factor* models too, widening
+  the set of configurations in which the term silently contributes nothing.
+  Not fixed here: the term is an association hint, the identity decision
+  itself comes from the evidence path (which does remap correctly), and
+  changing it would perturb assignment on every existing config.
+- **`IdentityFinalID` is not exported to `<video>_tracks.csv`.** See the
+  Data contract section.
 
 ## Risks
 

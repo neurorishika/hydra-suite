@@ -81,6 +81,15 @@ class IdentityModelConfig:
     ``"front:notag"`` (that class in the named factor), ``"notag_notag"``
     (that whole composite display label). Excluded from the identity
     catalog entirely -- see the design doc.
+
+    NOT the live path. ``IdentityConfig.from_engine_config`` never populates
+    ``models``, so nothing reads this field at runtime today. The marks
+    actually reach the engine as part of each ``cnn_classifiers`` entry:
+    ``identity_panel.CNNClassifierRow.to_config`` -> saved config ->
+    ``engine_params.build_engine_params``'s verbatim ``cnn_classifiers``
+    passthrough -> ``CNN_CLASSIFIERS`` -> ``resolve.non_identifying_marks``.
+    This field exists so a future ``models``-populating loader round-trips
+    them; keep the two in sync if that loader is ever written.
     """
     # Reserved (Phase 2): fitted temperature + signature.
     calibration: dict[str, Any] | None = None

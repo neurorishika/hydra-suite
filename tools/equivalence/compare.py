@@ -119,15 +119,15 @@ def keyed(a: pd.DataFrame, b: pd.DataFrame, atol: float):
             continue
         cl, cr = a2[c], b2[c]
         if pd.api.types.is_numeric_dtype(cl):
-            l = cl.to_numpy(float)
-            r = cr.to_numpy(float)
-            both = ~np.isnan(l) & ~np.isnan(r)
+            lv = cl.to_numpy(float)
+            rv = cr.to_numpy(float)
+            both = ~np.isnan(lv) & ~np.isnan(rv)
             d = np.abs(
-                (ang_diff(l[both], r[both]) if c == "Theta" else l[both] - r[both])
+                (ang_diff(lv[both], rv[both]) if c == "Theta" else lv[both] - rv[both])
             )
             out["cols"][c] = {
                 "max": float(d.max()) if d.size else 0.0,
-                "nan_mismatch": int((np.isnan(l) != np.isnan(r)).sum()),
+                "nan_mismatch": int((np.isnan(lv) != np.isnan(rv)).sum()),
             }
         else:
             mism = int((cl.fillna("∅").astype(str) != cr.fillna("∅").astype(str)).sum())
@@ -150,6 +150,17 @@ def main() -> int:
         type=float,
         default=0.05,
         help="Pass if theta_mean <= this (rad).",
+    )
+    ap.add_argument(
+        "--strict-columns",
+        action="store_true",
+        help=(
+            "Also require every keyed column to match (no string mismatches, "
+            "no NaN-pattern mismatches, no numeric delta above --pos-atol). "
+            "Off by default so the geometry comparisons keep their existing "
+            "verdict; used for the rich per-individual CSV, whose identity "
+            "columns are otherwise reported but not gated."
+        ),
     )
     args = ap.parse_args()
 
@@ -209,10 +220,31 @@ def main() -> int:
         and p["theta_mean"] <= args.theta_atol
         and unmatched == 0
     )
-    print(
-        f"\nVERDICT: {'EQUIVALENT ✅' if ok else 'DIFFERENCES ❌'}"
-        f"  (pos_p99<={args.pos_atol}px, theta_mean<={args.theta_atol}rad, unmatched==0)"
+    criteria = (
+        f"pos_p99<={args.pos_atol}px, theta_mean<={args.theta_atol}rad, unmatched==0"
     )
+
+    if args.strict_columns:
+        criteria += ", every keyed column identical"
+        if k is None:
+            print("\n  ❌ strict-columns: no comparable keyed schema")
+            ok = False
+        elif not k["aligned"]:
+            print("\n  ❌ strict-columns: keyed rows are not aligned")
+            ok = False
+        else:
+            bad = [
+                c
+                for c, v in k["cols"].items()
+                if v.get("mismatch", 0)
+                or v.get("nan_mismatch", 0)
+                or v.get("max", 0.0) > args.pos_atol
+            ]
+            if bad:
+                print(f"\n  ❌ strict-columns: {len(bad)} column(s) differ: {bad}")
+                ok = False
+
+    print(f"\nVERDICT: {'EQUIVALENT ✅' if ok else 'DIFFERENCES ❌'}  ({criteria})")
     return 0 if ok else 1
 
 

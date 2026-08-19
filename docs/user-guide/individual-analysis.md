@@ -58,7 +58,14 @@ descriptive label instead of "unknown": `IdentityFinalLabel` is set to the
 observed composite (e.g. `notag_notag`), `IdentityFinalSource` is
 `nonidentifying`, and `IdentityFinalID` stays `0` -- the unknown slot -- so no
 downstream consumer keying on a resolved identity slot can mistake the shared
-label for a real identity. The honest limitation: these animals get no
+label for a real identity. Note that `IdentityFinalID` appears only in the
+rich export (`<video>_tracking_final_with_individual.csv`): the plain
+`<video>_tracks.csv` carries `identity`, `identity_confidence`, and
+`identity_source`, so a reader of that file has only
+`identity_source == nonidentifying` to tell that five rows sharing the label
+`notag_notag` are five different animals rather than one.
+
+The honest limitation: these animals get no
 identity resolution or identity-based fragment stitching across occlusions;
 relinking for them falls back to spatial and motion gates alone.
 
