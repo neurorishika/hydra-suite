@@ -432,4 +432,7 @@ test_classkit.db
 .worktree/
 headtail_batch25_bench.json
 
-.reasonix/
+# remove the .reasonix and .serena directories (only at the base)
+/.reasonix/
+/.serena/
+/.opencode/
