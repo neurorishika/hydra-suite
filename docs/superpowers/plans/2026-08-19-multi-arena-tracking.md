@@ -1192,7 +1192,7 @@ git commit -m "feat(arena): one online identity decoder per arena"
 ### Task 6: Worker wiring — layout, per-frame lookup, arena column
 
 **Files:**
-- Modify: `src/hydra_suite/core/tracking/worker.py:873` (kf construction), `:2134`/`:2210`/`:2270`/`:2308` (meas construction sites), `:3533` (row emission)
+- Modify: `src/hydra_suite/core/tracking/worker.py:877` (kf construction), `:1829` (identity-decoder construction), `:2156`/`:2232`/`:2292`/`:2330` (meas construction sites), `:3533` (row emission)
 - Modify: `src/hydra_suite/trackerkit/engine_params.py:1138` (params dict)
 - Test: `tests/test_arena_worker_wiring.py`
 
@@ -1310,6 +1310,30 @@ mis-assign arenas. Confirm which space `_obb.centroids` are actually in (resized
 native) before choosing what to pass, and add a test that pins it.
 
 Thread `meas_arena=meas_arena` into the `assign_tracks(...)` call.
+
+**Swap the identity decoder for the registry (Task 5's whole purpose).** At the decoder
+construction site (`worker.py:1829`, search `_identity_online_decoder = None`), replace the
+bare `OnlineIdentityDecoder(...)` with:
+
+```python
+                _identity_online_decoder = (
+                    OnlineIdentityDecoder(_identity_catalog, p)
+                    if self.arena_layout.is_single_arena
+                    else ArenaDecoderRegistry(
+                        _identity_catalog, p, self.arena_layout.slot_arena
+                    )
+                )
+```
+
+The single-arena branch keeps the *literal same object* rather than a one-decoder
+registry, so byte-identity is structural. `_identity_catalog`, `_catalog_spec` and
+`_phase_label_maps` are arena-invariant — build them once, exactly as today, and share
+them. `ArenaDecoderRegistry` exposes the same call surface, so none of the ~12 downstream
+call sites change.
+
+Without this swap the registry is dead code and multi-arena identity decoding never
+happens — the feature silently degrades to one global uniqueness constraint across all
+arenas, which is the exact failure the design exists to prevent.
 
 **Length and type contract (assert it here — the assigner deliberately does not).**
 `_arena_arrays` fails *open* on a length mismatch (silently disabling kernel gating),
