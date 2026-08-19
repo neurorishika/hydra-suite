@@ -1381,7 +1381,30 @@ git commit -m "feat(arena): wire arena layout through the tracking worker"
 
 **Files:**
 - Modify: `src/hydra_suite/core/post/processing.py:1144` (`resolve_trajectories`), `:757` (`process_trajectories_from_csv`)
-- Modify: `src/hydra_suite/core/post/merge.py:142` — the ONLY caller of `resolve_trajectories`. Adding the `slot_arena` parameter without wiring this call site leaves the whole grouping dead code. Derive the vector from the prepared trajectory frames themselves: each element of `forward_prepared` is one trajectory's DataFrame, so its arena is that frame's `arena_id` (they are constant within a trajectory — a trajectory never spans arenas). Column absent → pass `None` and take the untouched single-arena path.
+**CORRECTION — the `slot_arena` positional parameter is unsound; derive arena from the frames instead.**
+Found by the Task 7 review. Two independent reasons a single positional array cannot work at
+the only call site (`core/post/merge.py:142`):
+
+1. `merge.py:129-134` builds the forward and backward lists with **two separate**
+   `groupby("TrajectoryID")` calls on **two different** DataFrames. The passes have
+   independent id sets and counts, so index *i* is not the same trajectory in the two
+   lists — yet one `slot_arena` array would be applied to both.
+2. `ArenaLayout.slot_arena` is indexed by **Kalman slot**, but
+   `_clean_and_reassign_trajectories` has already renumbered ids by this point, so a
+   slot-indexed array is not a valid list-position array either.
+
+Additionally the positional form silently **drops** any trajectory at an index beyond
+`len(slot_arena)` — data loss where an error is wanted.
+
+**Do this instead:** `resolve_trajectories` derives each trajectory's arena from that
+trajectory's own `arena_id` column. This is sound because slot→arena is static (Tasks 1-6)
+so a trajectory's `arena_id` is constant and a trajectory can never span arenas here; it
+dissolves both the index-mismatch and the silent-drop problems; and it means
+**`merge.py` needs no change at all** — the grouping is reached automatically whenever the
+column is present. Frames without the column take the untouched single-arena path.
+
+Raise, rather than pick silently, if a trajectory's `arena_id` is ever non-constant — that
+would mean an upstream invariant has already been violated.
 - Modify: `src/hydra_suite/core/individual/postprocess_df.py:544` (`run_fragment_solver` call — the offline identity uniqueness solve) and `:559` (`sort_trajectories_by_identity`)
 - Modify: `src/hydra_suite/core/post/rich_export.py:398` (`relink_trajectories_with_pose` call)
 - Test: `tests/test_arena_postproc_grouping.py`
