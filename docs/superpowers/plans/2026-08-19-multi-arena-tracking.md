@@ -230,7 +230,11 @@ def build_arena_labels(
     if not roi_shapes or not width or not height:
         return None, 1
 
-    includes = [s for s in roi_shapes if s.get("mode", "include") != "exclude"]
+    # Mirror build_roi_mask EXACTLY: it partitions three ways, rendering a shape
+    # only on `== "include"` / `== "exclude"` and silently dropping any other
+    # mode string.  Selecting includes with `!= "exclude"` would render unknown
+    # modes here that the ROI mask drops, breaking the union invariant.
+    includes = [s for s in roi_shapes if s.get("mode", "include") == "include"]
     raw_ids = sorted({int(s.get("arena_id", 0)) for s in includes}) or [0]
     dense = {raw: i for i, raw in enumerate(raw_ids)}
 
@@ -1606,11 +1610,9 @@ In `session.py`, track the active arena and stamp it on every appended shape:
 ```python
     def start_new_arena(self) -> int:
         """Begin a new arena; subsequent include-shapes join it."""
-        used = [
-            int(s.get("arena_id", 0))
-            for s in self._mw.roi_shapes
-            if s.get("mode", "include") != "exclude"
-        ]
+        # Every shape carries an arena_id, excludes included -- an exclude hole
+        # belonging to arena 3 means 3 is in use.
+        used = [int(s.get("arena_id", 0)) for s in self._mw.roi_shapes]
         self.current_arena_id = (max(used) + 1) if used else 0
         return self.current_arena_id
 ```
