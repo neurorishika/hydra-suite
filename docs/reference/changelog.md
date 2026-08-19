@@ -33,3 +33,15 @@ For documentation-specific migrations in this branch:
   (byte-identical equivalence gate). See
   [Individual Analysis](../user-guide/individual-analysis.md#identity-classifiers-and-non-identifying-classes)
   for usage.
+- **New column:** the clean `<video>_tracks.csv` gains `identity_id`, the
+  resolved catalog slot that already existed in the rich export as
+  `IdentityFinalID` (`0` = unknown / non-identifying). The `identity` label
+  alone is not unique -- a non-identifying label is shared by every track
+  carrying it -- so group by `identity_id`, not by `identity`. Readers that
+  select columns by name are unaffected; readers that assume a fixed column
+  count must be updated.
+- **New warning:** two classifiers marked "Unique identifier" that predict the
+  same class vocabulary are now flagged at resolve time. They are multiplied
+  into composites (`ant1_ant1`), not fused into one axis -- redundant identity
+  voters remain unsupported -- and previously failed silently below the
+  256-entry catalog-size warning.

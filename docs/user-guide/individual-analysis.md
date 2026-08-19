@@ -49,21 +49,36 @@ classified `notag`, a smudged or ambiguous tag read. Declaring such a value
 as **non-identifying** (per classifier, in the identity panel) removes every
 composite it produces from the catalog entirely, so any number of tracks can
 carry that label at once without displacing a genuinely identified animal.
-Marks can be declared at three granularities: a bare class (`notag`, matches
-that value on any axis of that model), an axis-scoped class (`front:notag`,
-matches only that factor), or a whole composite (`notag_notag`).
+Marks can be declared at three granularities, and the choice matters more
+than it looks:
+
+| Mark | Matches | Use when |
+|---|---|---|
+| `notag` | that value on **any** axis of that model | the class carries no identity wherever it appears |
+| `front:notag` | that value on the named factor only | only one tag position is unreadable |
+| `notag_notag` | that whole composite label | only the *fully* unmarked animal is non-identifying |
+
+A bare mark is the aggressive form: marking `notag` on a two-tag scheme drops
+`red_notag` and `notag_blue` from the catalog too, so an animal with **one**
+readable tag also stops resolving to an identity. If a half-readable animal
+should still be identified, mark the whole composite (`notag_notag`) instead,
+which removes only the fully unmarked combination. (Per-axis evidence from the
+readable tag is retained for the relink veto either way -- it is catalog
+membership, not evidence, that the mark removes.)
 
 Tracks whose every axis reads a declared non-identifying value get a
 descriptive label instead of "unknown": `IdentityFinalLabel` is set to the
 observed composite (e.g. `notag_notag`), `IdentityFinalSource` is
 `nonidentifying`, and `IdentityFinalID` stays `0` -- the unknown slot -- so no
 downstream consumer keying on a resolved identity slot can mistake the shared
-label for a real identity. Note that `IdentityFinalID` appears only in the
-rich export (`<video>_tracking_final_with_individual.csv`): the plain
-`<video>_tracks.csv` carries `identity`, `identity_confidence`, and
-`identity_source`, so a reader of that file has only
-`identity_source == nonidentifying` to tell that five rows sharing the label
-`notag_notag` are five different animals rather than one.
+label for a real identity.
+
+The slot travels with the label into the plain `<video>_tracks.csv` as
+`identity_id` (alongside `identity`, `identity_confidence`, and
+`identity_source`). **Group by `identity_id`, not by `identity`**: five rows
+labelled `notag_notag` all carry `identity_id == 0` and are five different
+animals, distinguished by `id` (the trajectory), not one animal seen five
+times.
 
 The honest limitation: these animals get no
 identity resolution or identity-based fragment stitching across occlusions;

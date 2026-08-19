@@ -57,6 +57,17 @@ def project_user_tracks(
                 _is_empty_label(label), df[C.FINAL_SMOOTHED_LABEL].astype("string")
             )
         out["identity"] = label
+        # ``identity`` is a *display* label and is not unique on its own: a
+        # class declared non-identifying (an untagged animal, an unreadable
+        # tag) is deliberately shared by every track carrying it. The resolved
+        # identity *slot* is what disambiguates -- ``0`` is the unknown slot,
+        # never a real individual -- so it travels with the label instead of
+        # living only in the rich export. Without it, a reader who groups this
+        # file by ``identity`` silently merges every untagged animal into one.
+        if C.FINAL_ID in df.columns:
+            out["identity_id"] = pd.to_numeric(df[C.FINAL_ID], errors="coerce").astype(
+                "Int64"
+            )
         if C.FINAL_CONFIDENCE in df.columns:
             out["identity_confidence"] = df[C.FINAL_CONFIDENCE]
         if C.FINAL_SOURCE in df.columns:

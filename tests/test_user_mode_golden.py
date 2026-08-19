@@ -32,7 +32,15 @@ CORE_COLUMNS = [
     "detection_confidence",
 ]
 
-IDENTITY_COLUMNS = ["identity", "identity_confidence", "identity_source"]
+# ``identity_id`` is the resolved catalog slot (0 = unknown). It travels with
+# the label because the label alone is not unique: a class declared
+# non-identifying is deliberately shared by every track carrying it.
+IDENTITY_COLUMNS = [
+    "identity",
+    "identity_id",
+    "identity_confidence",
+    "identity_source",
+]
 
 POSE_TRIPLE_COLUMNS = [
     "left_antenna_tip_x",
@@ -108,6 +116,10 @@ def test_ant_cnn_identity_has_real_identity_values():
     # Real CNN identities resolved: non-empty and not the "unknown" placeholder.
     assert golden["identity"].notna().all()
     assert (golden["identity"] != "unknown").any()
+    # Resolved slots, not just labels: every row carries an integer slot and
+    # the real identities are not all pinned to the unknown slot.
+    assert golden["identity_id"].notna().all()
+    assert (golden["identity_id"] > 0).any()
     assert (golden["identity"].astype(str).str.strip() != "").all()
 
 
