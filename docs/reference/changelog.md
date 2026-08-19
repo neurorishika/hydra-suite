@@ -13,6 +13,21 @@ For documentation-specific migrations in this branch:
 
 ## Identity heads, composite catalogs, non-identifying classes (unreleased)
 
+- **Fixed (data loss):** the rich export's per-detection CNN columns
+  (`CNN_<label>[_<factor>]_Class` / `_Conf`) had been silently absent since the
+  Gen-2 inference migration. They were merged from a V3 `CNNIdentityCache`
+  whose writer was replaced by the CNN stage's own cache; the reader was
+  `os.path.exists`-guarded, so it degraded to a no-op instead of failing. Any
+  run with a CNN classifier therefore produced a rich CSV with no CNN columns,
+  no `IdentityEvidenceTopLabel` / `IdentityEvidenceConfidence`, and no
+  `UniqueIdentityKey`. All are restored. On the identity fixture this adds 7
+  columns to `<video>_tracking_final_with_individual.csv` and populates them on
+  7,475 of 8,099 rows (the rest are interpolated rows with no detection);
+  `IdentityEvidenceSources` and `IdentityEvidenceConflictFlag` now report the
+  CNN source. Positions, `TrajectoryID`, and the `IdentityFinal*` family are
+  unchanged. **Anyone who built analyses on the post-migration rich CSV was
+  working without identity evidence columns and should re-export.**
+
 - **Breaking:** `UniqueIdentityKey` now contains identity-head sources only.
   Non-identity classifiers (behavior, sex, caste, ...) no longer appear in
   this column. Downstream parsers of `UniqueIdentityKey` will see fewer
