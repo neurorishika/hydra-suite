@@ -364,9 +364,17 @@ def fill_identity_nans_with_consensus(df: pd.DataFrame) -> pd.DataFrame:
 def sort_trajectories_by_identity(df: pd.DataFrame) -> pd.DataFrame:
     """Renumber TrajectoryIDs so same-identity fragments are consecutive.
 
-    Fragments are ordered by (consensus_identity_label, first_frame) so all
-    trajectories belonging to the same animal get adjacent IDs.  New IDs start
-    at 0 and are strictly sequential; existing values are fully replaced.
+    Fragments are ordered by (arena, consensus_identity_label, first_frame) so
+    all trajectories belonging to the same animal get adjacent IDs.  New IDs
+    start at 0 and are strictly sequential; existing values are fully
+    replaced.
+
+    The arena id leads the sort key so identity labels that repeat across
+    arenas (e.g. arena 0's "ant A" and arena 7's "ant A") never interleave --
+    each arena's trajectories form one contiguous run of new ids, and arena
+    0's numbering never depends on what arena 7 contains. With no
+    ``arena_id`` column (or a single arena), the key's leading component is
+    constant and the ordering is bit-identical to before arena support.
     """
     if df is None or df.empty or "TrajectoryID" not in df.columns:
         return df
@@ -376,6 +384,7 @@ def sort_trajectories_by_identity(df: pd.DataFrame) -> pd.DataFrame:
         None,
     )
     frame_col = "FrameID" if "FrameID" in df.columns else None
+    arena_col = "arena_id" if "arena_id" in df.columns else None
 
     traj_info: list[tuple] = []
     for traj_id in df["TrajectoryID"].unique():
@@ -387,10 +396,11 @@ def sort_trajectories_by_identity(df: pd.DataFrame) -> pd.DataFrame:
             if not vals.empty:
                 consensus = str(vals.mode().iloc[0])
         min_frame = float(df.loc[mask, frame_col].min()) if frame_col else 0.0
-        traj_info.append((traj_id, consensus, min_frame))
+        arena = float(df.loc[mask, arena_col].iloc[0]) if arena_col else 0.0
+        traj_info.append((traj_id, arena, consensus, min_frame))
 
-    traj_info.sort(key=lambda x: (x[1], x[2]))
-    id_mapping = {old: new for new, (old, _, _) in enumerate(traj_info)}
+    traj_info.sort(key=lambda x: (x[1], x[2], x[3]))
+    id_mapping = {old: new for new, (old, _, _, _) in enumerate(traj_info)}
 
     df = df.copy()
     df["TrajectoryID"] = df["TrajectoryID"].map(id_mapping)

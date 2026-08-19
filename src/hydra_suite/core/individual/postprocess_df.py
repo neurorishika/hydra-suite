@@ -541,13 +541,38 @@ def apply_identity_postprocessing_to_df(
             try:
                 catalog = IdentityCatalog.from_spec(catalog_spec)
                 cache = _open_identity_evidence_cache(identity_evidence_cache_path)
-                with_pose_df = run_fragment_solver(
-                    with_pose_df,
-                    catalog,
-                    params,
-                    cache=cache,
-                    catalog_spec=catalog_spec,
-                )
+                # The fragment solver performs an injective fragment->label
+                # assignment: globally, arena 0's "ant A" and arena 7's
+                # "ant A" would be forced to compete for one catalog entry,
+                # so at most one could ever be labelled. Solve each arena
+                # independently -- the untouched solver, called once per
+                # arena, then concatenated -- so labels only compete within
+                # their own arena. With no arena_id column (or a single
+                # arena) this is a single unchanged call, byte-identical to
+                # before arena support.
+                if (
+                    "arena_id" in with_pose_df.columns
+                    and with_pose_df["arena_id"].nunique() > 1
+                ):
+                    solved_parts = [
+                        run_fragment_solver(
+                            group,
+                            catalog,
+                            params,
+                            cache=cache,
+                            catalog_spec=catalog_spec,
+                        )
+                        for _, group in with_pose_df.groupby("arena_id", sort=True)
+                    ]
+                    with_pose_df = pd.concat(solved_parts, ignore_index=True)
+                else:
+                    with_pose_df = run_fragment_solver(
+                        with_pose_df,
+                        catalog,
+                        params,
+                        cache=cache,
+                        catalog_spec=catalog_spec,
+                    )
                 with_pose_df = _annotate_identity_summary_columns(with_pose_df)
                 logger.info("Fragment solver complete.")
             except Exception:
