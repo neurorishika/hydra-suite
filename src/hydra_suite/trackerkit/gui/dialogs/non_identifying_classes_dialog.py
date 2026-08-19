@@ -65,6 +65,13 @@ class NonIdentifyingClassesDialog(BaseDialog):
         layout.addWidget(
             QLabel("Whole composites (comma-separated, e.g. notag_notag):")
         )
+        # Note: this filter can't distinguish a bare single-word composite
+        # label (e.g. "notag" as a whole display label, single-factor case)
+        # from a bare any-axis class mark (e.g. "notag" meaning "this class
+        # in any factor") -- both are unprefixed and underscore-free. Either
+        # reading is a valid, harmless pre-population; this is a display-only
+        # ambiguity, not a data-loss risk, since `selected` itself is
+        # unaffected and is what actually round-trips.
         self._composites = QLineEdit(
             ", ".join(s for s in selected if "_" in s and ":" not in s)
         )
