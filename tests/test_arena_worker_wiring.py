@@ -145,14 +145,18 @@ class _FakeProfiler:
 
 
 class _FakeVideoCapture:
-    """Two 100x100 BGR frames -- big enough to carry a real left/right split."""
+    """Three 100x100 BGR frames -- a left/right split, plus a third frame to
+    reach the "no detection this frame" bulk-NaN-row CSV branch after
+    `detection_initialized` has already gone True."""
 
     WIDTH = 100
     HEIGHT = 100
+    NUM_FRAMES = 3
 
     def __init__(self, *_args, **_kwargs):
         self._frames = [
-            np.zeros((self.HEIGHT, self.WIDTH, 3), dtype=np.uint8) for _ in range(2)
+            np.zeros((self.HEIGHT, self.WIDTH, 3), dtype=np.uint8)
+            for _ in range(self.NUM_FRAMES)
         ]
         self._idx = 0
         self._opened = True
@@ -206,9 +210,11 @@ class _FakeBgsubResult:
 
 
 class _FakeBgsubRunner:
-    """Frame 0: warmup (no background model yet). Frame 1: one detection at
-    resized-frame coordinate (40, 25) -- i.e. RIGHT of the resized frame's
-    midpoint (25 = 50/2), which must resolve to arena 1."""
+    """Call 1 (frame 0): warmup (no background model yet). Call 2 (frame 1):
+    one detection at resized-frame coordinate (40, 25) -- i.e. RIGHT of the
+    resized frame's midpoint (25 = 50/2), which must resolve to arena 1.
+    Call 3 (frame 2): no detections -- reaches the "no detection this frame"
+    bulk-NaN-row CSV branch (the third `csv_writer_thread.enqueue` site)."""
 
     DETECTION_XY_RESIZED = (40.0, 25.0)
 
@@ -223,6 +229,22 @@ class _FakeBgsubRunner:
         h, w = frame.shape[0], frame.shape[1]
         if self._call == 1:
             return _FakeBgsubResult(fg_mask=None, bg_u8=None, obb=None)
+        if self._call == 3:
+            obb = OBBResult(
+                frame_idx=frame_idx,
+                centroids=np.zeros((0, 2), dtype=np.float32),
+                angles=np.zeros(0, dtype=np.float32),
+                sizes=np.zeros(0, dtype=np.float32),
+                shapes=np.zeros((0, 2), dtype=np.float32),
+                confidences=np.zeros(0, dtype=np.float32),
+                corners=np.zeros((0, 4, 2), dtype=np.float32),
+                detection_ids=OBBResult.make_detection_ids(frame_idx, 0),
+            )
+            return _FakeBgsubResult(
+                fg_mask=np.zeros((h, w), dtype=np.uint8),
+                bg_u8=np.zeros((h, w), dtype=np.uint8),
+                obb=obb,
+            )
         cx, cy = self.DETECTION_XY_RESIZED
         obb = OBBResult(
             frame_idx=frame_idx,
@@ -290,7 +312,7 @@ def _bgsub_arena_params(*, single_arena: bool = False, **overrides):
     params.update(
         {
             "START_FRAME": 0,
-            "END_FRAME": 1,
+            "END_FRAME": 2,
             "MIN_DETECTIONS_TO_START": 1,
             "MIN_DETECTION_COUNTS": 2,
             "LOST_THRESHOLD_FRAMES": 1,
@@ -361,8 +383,21 @@ def test_worker_wires_arena_layout_and_gates_assignment_by_arena(monkeypatch, tm
     assignment entirely, and BOTH slots become eligible -- Hungarian/respawn
     tie-breaking would then pick slot 0 first (lowest index), which also fails
     this assertion.
+
+    Also asserts `arena_id` is present on EVERY captured row -- matched
+    (frame 1's respawned track), unmatched (frame 1's still-lost track), AND
+    the bulk "no detection this frame" rows (frame 2, all N tracks) -- the
+    three separate `csv_writer_thread.enqueue` call sites in worker.py. A
+    regression at any ONE of those sites produces a ragged row (one column
+    short of the other two), caught by the uniform-length assertion below.
     """
     rows = _run_bgsub_arena_case(monkeypatch, tmp_path)
+    assert len(rows) >= 4, f"expected rows from >=2 frames (2 tracks each), got {rows}"
+    row_lengths = {len(r) for r in rows}
+    assert len(row_lengths) == 1, (
+        f"ragged CSV rows -- every row must have the same column count "
+        f"regardless of which enqueue site wrote it; lengths seen: {row_lengths}"
+    )
     matched = _matched_rows(rows)
     assert matched, "expected at least one row with a real detection"
     track_ids = {int(r[0]) for r in matched}
@@ -370,8 +405,10 @@ def test_worker_wires_arena_layout_and_gates_assignment_by_arena(monkeypatch, tm
         f"expected the detection to initialize arena-1's slot (TrackID 1), "
         f"got TrackID(s) {track_ids} -- coordinate space or arena gating regressed"
     )
-    # arena_id is the last column (n_arenas=2 > 1 -> column emitted).
-    assert all(int(r[-1]) == 1 for r in matched)
+    # arena_id is the last column (n_arenas=2 > 1 -> column emitted) on EVERY
+    # row, not just the matched ones.
+    for r in rows:
+        assert int(r[-1]) in (0, 1), f"row missing/invalid arena_id: {r}"
 
 
 def test_single_arena_run_never_touches_arena_gating(monkeypatch, tmp_path):
@@ -379,12 +416,401 @@ def test_single_arena_run_never_touches_arena_gating(monkeypatch, tmp_path):
     identity contract) and the sole track slot must be free to take the
     detection regardless of its position -- there is no arena to gate on."""
     rows = _run_bgsub_arena_case(monkeypatch, tmp_path, single_arena=True)
+    assert len(rows) >= 2
     matched = _matched_rows(rows)
     assert matched, "expected at least one row with a real detection"
     assert all(int(r[0]) == 0 for r in matched)
-    # Header-column contract: no arena_id column, so the last column here is
-    # whatever the identity/tag block ends with -- not an int arena id. The
-    # row length for a single-arena run must equal exactly the multi-arena
-    # row length minus one (the arena_id column dropped).
+    # Header-column contract: no arena_id column on ANY row (matched,
+    # unmatched, or bulk no-detection) -- the row length for a single-arena
+    # run must equal exactly the multi-arena row length minus one (the
+    # arena_id column dropped), uniformly across every row, not just row 0.
+    single_lengths = {len(r) for r in rows}
+    assert len(single_lengths) == 1, f"ragged single-arena rows: {single_lengths}"
     multi_rows = _run_bgsub_arena_case(monkeypatch, tmp_path)
-    assert len(rows[0]) == len(multi_rows[0]) - 1
+    multi_lengths = {len(r) for r in multi_rows}
+    assert len(multi_lengths) == 1, f"ragged multi-arena rows: {multi_lengths}"
+    assert single_lengths == {next(iter(multi_lengths)) - 1}
+
+
+# ---------------------------------------------------------------------------
+# Coordinate-space pin for the OTHER three `arena_of_points` call sites
+# (cached YOLO OBB, cached bg-sub replay [backward], realtime YOLO OBB) --
+# the end-to-end test above only exercises the realtime bg-sub site. These
+# use a spy on `ArenaLayout.arena_of_points` that records BOTH the
+# `frame_size` argument and the RETURNED arena id, so a wrong `frame_size`
+# (e.g. reverted to `None`) is caught by the returned value diverging, not
+# merely by an argument being present. This sidesteps needing
+# Hungarian/respawn assignment to succeed (unlike the end-to-end test above),
+# so it is deliberately independent of `MAX_DISTANCE_THRESHOLD` tuning.
+#
+# The mismatch trick: `ARENA_LABELS` is rasterized at 200x100 (the
+# "configured" resolution `roi_shapes` were authored against), but the video
+# actually being tracked is 100x100 (`_FakeVideoCapture`) -- HALF that width.
+# `RESIZE_FACTOR` is irrelevant here (forced to 1.0 for every non-bg-sub
+# method, and the cached paths don't even see a live frame), so this
+# discriminates purely on whether the label image gets resized to the
+# CURRENT frame's dimensions before lookup:
+#   - correct:  200x100 label resized to 100x100 -> boundary shifts 100->50;
+#               MISMATCH_XY=(60, 25) is right of 50 -> arena 1.
+#   - wrong:    raw 200-wide label indexed directly at x=60 -> still left of
+#               its own boundary at 100 -> arena 0. MISMATCH.
+# ---------------------------------------------------------------------------
+
+_LABEL_WIDTH = 200
+_LABEL_HEIGHT = 100
+_MISMATCH_DETECTION_XY = (60.0, 25.0)
+
+
+def _spy_arena_of_points(monkeypatch):
+    """Wrap `ArenaLayout.arena_of_points` to record (frame_size, xy, result)
+    for every call, while still running the real implementation."""
+    import hydra_suite.core.tracking.arenas as arenas_mod
+
+    original = arenas_mod.ArenaLayout.arena_of_points
+    calls: list[dict] = []
+
+    def _wrapper(self, xy, frame_size=None):
+        result = original(self, xy, frame_size=frame_size)
+        calls.append(
+            {
+                "frame_size": frame_size,
+                "xy": np.asarray(xy).tolist(),
+                "result": np.asarray(result).tolist(),
+            }
+        )
+        return result
+
+    monkeypatch.setattr(arenas_mod.ArenaLayout, "arena_of_points", _wrapper)
+    return calls
+
+
+def _arena_mismatch_params(
+    *, detection_method: str, workflow_mode: str = "non_realtime"
+):
+    """Engine params with `ARENA_LABELS` rasterized at 200x100 against a
+    100x100 video -- see module-level comment above for why this
+    discriminates the `frame_size=` wiring regardless of `RESIZE_FACTOR`."""
+    cfg = {
+        "frame_width": _LABEL_WIDTH,
+        "frame_height": _LABEL_HEIGHT,
+        "detection_method": detection_method,
+        "animals_per_arena": 1,
+        "roi_shapes": [
+            {
+                "type": "polygon",
+                "mode": "include",
+                "arena_id": 0,
+                "params": [
+                    [0, 0],
+                    [_LABEL_WIDTH // 2, 0],
+                    [_LABEL_WIDTH // 2, _LABEL_HEIGHT],
+                    [0, _LABEL_HEIGHT],
+                ],
+            },
+            {
+                "type": "polygon",
+                "mode": "include",
+                "arena_id": 1,
+                "params": [
+                    [_LABEL_WIDTH // 2, 0],
+                    [_LABEL_WIDTH, 0],
+                    [_LABEL_WIDTH, _LABEL_HEIGHT],
+                    [_LABEL_WIDTH // 2, _LABEL_HEIGHT],
+                ],
+            },
+        ],
+    }
+    params = build_engine_params(cfg, runtime=_runtime(_LABEL_WIDTH, _LABEL_HEIGHT))
+    params.update(
+        {
+            "START_FRAME": 0,
+            "END_FRAME": 1,
+            "TRACKING_WORKFLOW_MODE": workflow_mode,
+            "MIN_DETECTIONS_TO_START": 1,
+            "MIN_DETECTION_COUNTS": 2,
+            "LOST_THRESHOLD_FRAMES": 1,
+            "ENABLE_POSE_EXTRACTOR": False,
+            "USE_APRILTAGS": False,
+            "CNN_CLASSIFIERS": [],
+            "ENABLE_CONFIDENCE_DENSITY_MAP": False,
+            "ENABLE_FRAME_PREFETCH": False,
+            "COMPUTE_RUNTIME": "cpu",
+        }
+    )
+    return params
+
+
+def _make_mismatch_frame_result(frame_idx: int):
+    from hydra_suite.core.inference.result import FrameResult, OBBResult
+
+    cx, cy = _MISMATCH_DETECTION_XY
+    obb = OBBResult(
+        frame_idx=frame_idx,
+        centroids=np.array([[cx, cy]], dtype=np.float32),
+        angles=np.array([0.0], dtype=np.float32),
+        sizes=np.array([50.0], dtype=np.float32),
+        shapes=np.array([[10.0, 1.2]], dtype=np.float32),
+        confidences=np.array([0.9], dtype=np.float32),
+        corners=np.zeros((1, 4, 2), dtype=np.float32),
+        detection_ids=OBBResult.make_detection_ids(frame_idx, 1),
+    )
+    return FrameResult(
+        frame_idx=frame_idx,
+        obb=obb,
+        filtered_indices=[0],
+        headtail=None,
+        cnn=[],
+        pose=None,
+        apriltag=None,
+        resolved_headings=np.array([0.0], dtype=np.float32),
+    )
+
+
+class _FakeYoloRunner:
+    """Serves both `inference_runner` (yolo_obb) and `bgsub_runner`
+    (background_subtraction, via `.load_frame` only) call surfaces used by
+    worker.py's cached-replay and realtime-YOLO dispatch branches."""
+
+    def __init__(self, *_a, **_k):
+        self.clipping_stats = _ClippingStatsStub()
+
+    def caches_all_valid(self):
+        return True
+
+    def detection_cache_covers_range(self, *_a, **_k):
+        return True
+
+    def detection_cache_missing_frames(self, *_a, **_k):
+        return []
+
+    def run_batch_pass(self, *_a, **_k):
+        pass
+
+    def run_realtime(self, frame, frame_idx):
+        return _make_mismatch_frame_result(frame_idx)
+
+    def load_frame(self, frame_idx):
+        return _make_mismatch_frame_result(frame_idx)
+
+    def close(self):
+        pass
+
+
+def _assert_mismatch_calls_resolve_arena_one(calls):
+    """At least one recorded `arena_of_points` call must have used the
+    CURRENT (100x100) frame size -- not `None`/the label image's own 200x100
+    native shape -- to correctly resolve `_MISMATCH_DETECTION_XY` to arena 1.
+    """
+    hits = [c for c in calls if c["xy"] and len(c["xy"]) == 1]
+    assert hits, f"arena_of_points was never called with a real detection: {calls}"
+    resolved = [c["result"][0] for c in hits]
+    assert 1 in resolved, (
+        f"expected at least one call to resolve arena 1 (i.e. frame_size was "
+        f"the CURRENT 100x100 frame, not None/the label's native 200x100); "
+        f"got {calls}"
+    )
+
+
+def test_cached_yolo_replay_meas_arena_uses_current_frame_size(monkeypatch, tmp_path):
+    """Backward-mode cached YOLO OBB replay (`inference_runner.load_frame`):
+    `frame` is always `None` here, so this also pins the `frame is None`
+    fallback (`target_w = cap.get(CAP_PROP_FRAME_WIDTH) * resize_f`) that
+    only cached-detection modes exercise.
+    """
+    import hydra_suite.core.tracking.worker as worker_mod
+
+    monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
+    monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _FakeVideoCapture)
+    monkeypatch.setattr(worker_mod, "InferenceRunner", _FakeYoloRunner)
+    calls = _spy_arena_of_points(monkeypatch)
+
+    captured = {}
+    worker = worker_mod.TrackingEngineCore(
+        str(tmp_path / "video.mp4"),
+        on_finished=lambda success, _fps, _traj: captured.__setitem__(
+            "success", success
+        ),
+        backward_mode=True,
+        detection_cache_path=str(tmp_path / "fwd_cache"),
+        preview_mode=True,
+    )
+    worker.set_parameters(_arena_mismatch_params(detection_method="yolo_obb"))
+    worker.run_tracking()
+    assert captured.get("success") is not False
+    _assert_mismatch_calls_resolve_arena_one(calls)
+
+
+def test_cached_bgsub_replay_meas_arena_uses_current_frame_size(monkeypatch, tmp_path):
+    """Backward-mode cached bg-sub replay (`bgsub_runner.load_frame`) -- the
+    SECOND path (besides realtime bg-sub) where `RESIZE_FACTOR != 1` is
+    possible in real usage, and the one the brief specifically called out as
+    unpinned. `frame` is always `None` here too (frame-is-None fallback)."""
+    import hydra_suite.core.tracking.worker as worker_mod
+
+    monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
+    monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _FakeVideoCapture)
+    monkeypatch.setattr(worker_mod, "InferenceRunner", _FakeYoloRunner)
+    calls = _spy_arena_of_points(monkeypatch)
+
+    captured = {}
+    worker = worker_mod.TrackingEngineCore(
+        str(tmp_path / "video.mp4"),
+        on_finished=lambda success, _fps, _traj: captured.__setitem__(
+            "success", success
+        ),
+        backward_mode=True,
+        detection_cache_path=str(tmp_path / "fwd_cache"),
+        preview_mode=True,
+    )
+    worker.set_parameters(
+        _arena_mismatch_params(detection_method="background_subtraction")
+    )
+    worker.run_tracking()
+    assert captured.get("success") is not False
+    _assert_mismatch_calls_resolve_arena_one(calls)
+
+
+def test_realtime_yolo_meas_arena_uses_current_frame_size(monkeypatch, tmp_path):
+    """Forward realtime YOLO OBB (`inference_runner.run_realtime`) -- `frame`
+    IS populated here (unlike the cached sites above)."""
+    import hydra_suite.core.tracking.worker as worker_mod
+
+    monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
+    monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _FakeVideoCapture)
+    monkeypatch.setattr(worker_mod, "InferenceRunner", _FakeYoloRunner)
+    calls = _spy_arena_of_points(monkeypatch)
+
+    captured = {}
+    worker = worker_mod.TrackingEngineCore(
+        str(tmp_path / "video.mp4"),
+        on_finished=lambda success, _fps, _traj: captured.__setitem__(
+            "success", success
+        ),
+        preview_mode=True,
+    )
+    worker.set_parameters(
+        _arena_mismatch_params(detection_method="yolo_obb", workflow_mode="realtime")
+    )
+    worker.run_tracking()
+    assert captured.get("success") is not False
+    _assert_mismatch_calls_resolve_arena_one(calls)
+
+
+# ---------------------------------------------------------------------------
+# ArenaDecoderRegistry wiring: multi-arena runs must construct the registry
+# (one OnlineIdentityDecoder per arena, uniqueness scoped per arena);
+# single-arena runs must construct the literal bare OnlineIdentityDecoder
+# (not a one-decoder registry), so single-arena byte-identity stays
+# structural. Without this wiring the registry is dead code and multi-arena
+# identity decoding degrades to one global uniqueness constraint across every
+# arena -- the exact failure the registry exists to prevent.
+# ---------------------------------------------------------------------------
+
+
+def _identity_decoder_wiring_params(*, n_arenas: int):
+    """Engine params that make `individual_pipeline_enabled` and a non-empty
+    identity catalog both true, via `TAG_IDENTITY_LABELS` (no CNN model file
+    needed to resolve a catalog)."""
+    cfg = {
+        "frame_width": 100,
+        "frame_height": 100,
+        "detection_method": "yolo_obb",
+        "animals_per_arena": 2,
+    }
+    if n_arenas > 1:
+        cfg["roi_shapes"] = [
+            {
+                "type": "polygon",
+                "mode": "include",
+                "arena_id": arena_id,
+                "params": [[0, 0], [100, 0], [100, 100], [0, 100]],
+            }
+            for arena_id in range(n_arenas)
+        ]
+    params = build_engine_params(cfg, runtime=_runtime(100, 100))
+    params.update(
+        {
+            "START_FRAME": 0,
+            "END_FRAME": 1,
+            "TRACKING_WORKFLOW_MODE": "realtime",
+            "ENABLE_INDIVIDUAL_PIPELINE": True,
+            "TAG_IDENTITY_LABELS": ["antA", "antB"],
+            "CNN_CLASSIFIERS": [],
+            "USE_APRILTAGS": False,
+            "ENABLE_POSE_EXTRACTOR": False,
+            "MIN_DETECTIONS_TO_START": 1,
+            "MIN_DETECTION_COUNTS": 2,
+            "LOST_THRESHOLD_FRAMES": 1,
+            "ENABLE_CONFIDENCE_DENSITY_MAP": False,
+            "ENABLE_FRAME_PREFETCH": False,
+            "COMPUTE_RUNTIME": "cpu",
+        }
+    )
+    return params
+
+
+def _run_identity_decoder_wiring_case(monkeypatch, tmp_path, *, n_arenas: int):
+    import hydra_suite.core.individual.identity.online as online_mod
+    import hydra_suite.core.tracking.identity.decoder_registry as registry_mod
+    import hydra_suite.core.tracking.worker as worker_mod
+
+    constructed = {"online": 0, "registry": 0, "registry_slot_arena": None}
+
+    orig_online_init = online_mod.OnlineIdentityDecoder.__init__
+
+    def _spy_online_init(self, *a, **k):
+        constructed["online"] += 1
+        return orig_online_init(self, *a, **k)
+
+    orig_registry_init = registry_mod.ArenaDecoderRegistry.__init__
+
+    def _spy_registry_init(self, catalog, params, slot_arena, *a, **k):
+        constructed["registry"] += 1
+        constructed["registry_slot_arena"] = np.asarray(slot_arena).tolist()
+        return orig_registry_init(self, catalog, params, slot_arena, *a, **k)
+
+    monkeypatch.setattr(online_mod.OnlineIdentityDecoder, "__init__", _spy_online_init)
+    monkeypatch.setattr(
+        registry_mod.ArenaDecoderRegistry, "__init__", _spy_registry_init
+    )
+    monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
+    monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _FakeVideoCapture)
+    monkeypatch.setattr(worker_mod, "InferenceRunner", _FakeYoloRunner)
+
+    captured = {}
+    worker = worker_mod.TrackingEngineCore(
+        str(tmp_path / "video.mp4"),
+        on_finished=lambda success, _fps, _traj: captured.__setitem__(
+            "success", success
+        ),
+        preview_mode=True,
+    )
+    worker.set_parameters(_identity_decoder_wiring_params(n_arenas=n_arenas))
+    worker.run_tracking()
+    assert captured.get("success") is not False
+    return constructed
+
+
+def test_multi_arena_run_constructs_arena_decoder_registry(monkeypatch, tmp_path):
+    constructed = _run_identity_decoder_wiring_case(monkeypatch, tmp_path, n_arenas=3)
+    assert constructed["registry"] == 1, "expected exactly one ArenaDecoderRegistry"
+    # `ArenaDecoderRegistry.__init__` itself constructs one bare
+    # `OnlineIdentityDecoder` per arena internally (that IS the mechanism --
+    # per-arena uniqueness), so `online` > 0 here is expected and correct.
+    # 3 arenas -> exactly 3 internal decoders, one per arena.
+    assert constructed["online"] == 3, (
+        f"expected the registry to construct one internal decoder per arena "
+        f"(3), got {constructed['online']}"
+    )
+    # animals_per_arena=2, 3 arenas -> slot_arena = [0,0,1,1,2,2].
+    assert constructed["registry_slot_arena"] == [0, 0, 1, 1, 2, 2]
+
+
+def test_single_arena_run_constructs_bare_online_decoder(monkeypatch, tmp_path):
+    constructed = _run_identity_decoder_wiring_case(monkeypatch, tmp_path, n_arenas=1)
+    assert constructed["online"] == 1, "expected exactly one bare OnlineIdentityDecoder"
+    assert constructed["registry"] == 0, (
+        "single-arena must keep the literal bare decoder object (not a "
+        "one-decoder registry), so single-arena byte-identity stays "
+        "structural, not arithmetic"
+    )
