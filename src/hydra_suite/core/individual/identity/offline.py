@@ -1272,6 +1272,7 @@ def run_fragment_solver(
     catalog: IdentityCatalog,
     params: dict[str, Any] | None = None,
     cache: Any = None,
+    catalog_spec: Any = None,
 ) -> pd.DataFrame:
     """End-to-end fragment solver: cache evidence → forward-backward smoothing
     → (optional PELT split on the smoothed posterior) → iterative assign.
@@ -1354,6 +1355,15 @@ def run_fragment_solver(
     cache : an open (mode="r") IdentityEvidenceCache, or None. Required for
         the self-sufficient/cache-sourced path; when omitted the solver
         produces the no-sidecar degrade (empty evidence, no reconstruction).
+    catalog_spec : the ``IdentityCatalogSpec`` ``catalog`` was built from, or
+        None. Required to remap each identity model's phase-local evidence
+        onto a *cross-product* catalog (two or more identity models): the
+        spec carries the per-entry factor structure the phase maps are built
+        from. Omitted/None falls back to exact label matching, which is
+        correct for a single identity model (its phase basis IS the global
+        catalog) but would floor every phase label -- and, after
+        renormalization, fabricate certainty on ``unknown`` -- on a
+        composite catalog.
     """
     params = params or {}
 
@@ -1364,10 +1374,22 @@ def run_fragment_solver(
     if not known_labels:
         return trajectories_df
 
+    phase_label_maps: dict[str, dict[str, list[int]]] = {}
+    if catalog_spec is not None:
+        from hydra_suite.core.individual.identity.phase_remap import (
+            build_phase_label_maps,
+        )
+
+        phase_label_maps = build_phase_label_maps(
+            catalog_spec, catalog, params.get("CNN_CLASSIFIERS") or []
+        )
+
     smoothed_by_traj: dict[Any, list[tuple[int, np.ndarray]]] | None = None
     if cache is not None:
         try:
-            raw_evidence = load_trajectory_evidence(trajectories_df, cache, catalog)
+            raw_evidence = load_trajectory_evidence(
+                trajectories_df, cache, catalog, phase_label_maps
+            )
         except Exception:
             log.exception(
                 "fragment_solver: failed to load evidence from the identity "

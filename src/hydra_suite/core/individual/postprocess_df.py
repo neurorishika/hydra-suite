@@ -467,7 +467,11 @@ def apply_identity_postprocessing_to_df(
                 catalog = IdentityCatalog.from_spec(catalog_spec)
                 cache = _open_identity_evidence_cache(identity_evidence_cache_path)
                 with_pose_df = run_fragment_solver(
-                    with_pose_df, catalog, params, cache=cache
+                    with_pose_df,
+                    catalog,
+                    params,
+                    cache=cache,
+                    catalog_spec=catalog_spec,
                 )
                 with_pose_df = _annotate_identity_summary_columns(with_pose_df)
                 logger.info("Fragment solver complete.")

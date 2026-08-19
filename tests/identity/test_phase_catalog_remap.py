@@ -174,3 +174,65 @@ def test_missing_label_falls_back_to_cnn_default_and_is_not_floored():
     probs = np.exp(got)
     red_idxs = [catalog.index_of("red_square"), catalog.index_of("red_circle")]
     assert probs[red_idxs].sum() > 0.5
+
+
+# --- build-time diagnostics (final-fix wave, Important 6) -----------------
+
+import logging
+
+from hydra_suite.core.individual.identity.phase_remap import build_phase_label_maps
+
+
+def test_empty_map_warns(caplog):
+    """The pre-existing diagnostic: a classifier that reaches zero catalog
+    entries at all."""
+    spec = resolve_catalog_spec([THORAX], [])
+    catalog = IdentityCatalog.from_spec(spec)
+    ghost = dict(ABDOMEN, label="ghost")
+    with caplog.at_level(logging.WARNING):
+        maps = build_phase_label_maps(spec, catalog, [THORAX, ghost])
+    assert maps["ghost"] == {}
+    assert any(
+        "maps to ZERO entries" in r.getMessage() and "ghost" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_non_empty_map_with_zero_label_overlap_warns(caplog):
+    """The gap an empty-map check cannot see: the map is non-empty, but none
+    of its keys is one of this classifier's own phase labels, so every
+    lookup misses and the evidence floors just as completely."""
+    spec = resolve_catalog_spec([THORAX, ABDOMEN], [])
+    catalog = IdentityCatalog.from_spec(spec)
+    # A classifier whose evidence is written against a phase basis that does
+    # not equal its axis join (a stale/mismatched class vocabulary).
+    stale = dict(THORAX, class_names_per_factor=[["crimson", "azure"]])
+    with caplog.at_level(logging.WARNING):
+        maps = build_phase_label_maps(spec, catalog, [stale, ABDOMEN])
+    assert maps["thorax"]  # non-empty -- the empty-map check would not fire
+    msgs = [r.getMessage() for r in caplog.records]
+    assert any("share NOTHING" in m and "thorax" in m for m in msgs)
+    assert not any("maps to ZERO entries" in m for m in msgs)
+
+
+def test_labels_colliding_after_strip_warn(caplog):
+    """Two identity models whose labels differ only in whitespace collapse
+    to one axis prefix; the resulting map's keys are joins across both
+    models' axes, so no phase label ever hits."""
+    padded = dict(ABDOMEN, label=" thorax ")
+    spec = resolve_catalog_spec([THORAX, padded], [])
+    catalog = IdentityCatalog.from_spec(spec)
+    with caplog.at_level(logging.WARNING):
+        build_phase_label_maps(spec, catalog, [THORAX, padded])
+    assert any(
+        "normalize to the axis prefix" in r.getMessage() and "thorax" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_healthy_two_model_config_warns_about_nothing(caplog):
+    spec = resolve_catalog_spec([THORAX, ABDOMEN], [])
+    catalog = IdentityCatalog.from_spec(spec)
+    with caplog.at_level(logging.WARNING):
+        build_phase_label_maps(spec, catalog, [THORAX, ABDOMEN])
+    assert [r.getMessage() for r in caplog.records] == []
