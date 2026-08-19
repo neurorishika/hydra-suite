@@ -90,8 +90,12 @@ class IndividualDatasetGenerator:
 
         # Crop extraction goes through the project-wide Layer 1
         # CanonicalGeometry (one fixed canvas shared by every crop-consuming
-        # stage). There is no second framing knob and no non-canonical
-        # fallback (spec 2026-08-18).
+        # stage). At this identity/dataset layer there is no second framing
+        # knob and no non-canonical fallback (spec 2026-08-18); this does NOT
+        # hold repo-wide -- ``seg_pad_ratio``/``YOLO_OBB_SEG_PAD_RATIO``
+        # (core/inference/config.py, stages/obb.py) still frames
+        # sequential-segment crops, and the ROI padding knob is an explicit
+        # non-goal of this retirement.
         _adv = params.get("ADVANCED_CONFIG", {})
         self._canonical_ref_ar = float(_adv.get("reference_aspect_ratio", 2.0))
         if self._canonical_ref_ar <= 0:
@@ -99,7 +103,8 @@ class IndividualDatasetGenerator:
                 "ADVANCED_CONFIG.reference_aspect_ratio must be > 0: the crop "
                 "dataset is extracted through the project-wide canonical canvas, "
                 "the same one inference, head-tail, and the classifiers use. There "
-                "is no non-canonical fallback (spec 2026-08-18)."
+                "is no non-canonical fallback for this identity/dataset layer "
+                "(spec 2026-08-18)."
             )
         self._geometry: CanonicalGeometry = CanonicalGeometry.from_reference(
             reference_body_px=float(params.get("REFERENCE_BODY_SIZE", 20.0))

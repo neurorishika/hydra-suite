@@ -7,11 +7,19 @@ Shared helpers used by the crops worker's pose-precompute path
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
+
+logger = logging.getLogger(__name__)
+
+# Warn once per process: a degenerate (zero-area) padded AABB silently drops
+# every crop it touches. Flooding the log per detection per frame would be
+# useless, so this module-level guard fires the explanation exactly once.
+_warned_degenerate_padding = False
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -110,6 +118,16 @@ def extract_one_crop(
     frame_h, frame_w = frame.shape[:2]
     x0, y0, x1, y1 = _expand_obb_to_aabb(corners, padding_fraction, frame_h, frame_w)
     if x1 <= x0 or y1 <= y0:
+        global _warned_degenerate_padding
+        if padding_fraction < 0 and not _warned_degenerate_padding:
+            _warned_degenerate_padding = True
+            logger.warning(
+                "AprilTag crop padding (apriltag_crop_padding=%s) is negative "
+                "enough to collapse the padded crop to zero area, so this and "
+                "any further such detections are dropped with no tag decode. "
+                "Raise apriltag_crop_padding to stop losing crops this way.",
+                padding_fraction,
+            )
         return None
 
     crop = frame[y0:y1, x0:x1].copy()

@@ -24,7 +24,10 @@ Individual analysis tools extract per-track crops and metadata for identity-focu
   neighbors; a smaller margin is efficient but risks truncation near boundaries.
 - AprilTag crops are the one exception: they are plain axis-aligned patches (a tag is
   a rigid printed square that any rotation or rescale degrades), controlled by
-  `apriltag_crop_padding` (default `0.0` = the detection's exact axis-aligned extent).
+  `apriltag_crop_padding` (default `0.0` = the detection's exact axis-aligned extent;
+  range `-0.5` to `2.0`). Sufficiently negative values can shrink the padded box to
+  zero area and empty the crop entirely -- this now logs a one-time warning telling
+  you to raise the value.
 - Method choice should reflect your marker protocol (none/color/apriltag/custom).
 
 ## Typical Uses

@@ -151,12 +151,17 @@ class ClippingStats:
     def record_degenerate(self) -> None:
         """Tally one detection SKIPPED because its OBB was degenerate.
 
-        ``canonical_affine`` raises on a zero-length edge, and there is no
-        non-canonical fallback crop any more (spec 2026-08-18) -- such a
-        detection produces no crop at all. Dropping it is correct (a zero-edge
-        OBB canonicalizes to garbage), but it must not be invisible: this is
-        the counter that makes the drop show up in the run summary next to the
-        clipping stats, instead of a silently shorter dataset.
+        ``canonical_affine`` raises on a zero-length edge. The call sites that
+        feed this counter (dataset/interpolated-crop generation, spec
+        2026-08-18) drop the detection instead of falling back to a
+        non-canonical crop, so it produces no crop at all there. Dropping is
+        correct (a zero-edge OBB canonicalizes to garbage), but it must not be
+        invisible: this is the counter that makes the drop show up in the run
+        summary next to the clipping stats, instead of a silently shorter
+        dataset. Other paths (notably live inference, ``core/inference/stages/
+        crops.py``) still fabricate an identity affine and emit a crop instead
+        of dropping -- unifying that behavior is future work, not something
+        this counter reflects.
         """
         self.degenerate_skipped_count += 1
 

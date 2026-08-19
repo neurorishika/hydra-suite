@@ -756,14 +756,21 @@ def build_engine_params(
     _debug_present = "debug_mode" in cfg
     _debug_mode = bool(_cfg_get(cfg, "debug_mode", default=True))
 
-    if _cfg_get(cfg, "individual_crop_padding", default=None) is not None:
+    _retired_padding = _cfg_get(cfg, "individual_crop_padding", default=None)
+    if _retired_padding is not None:
         logger.warning(
-            "Config key 'individual_crop_padding' is retired and ignored. Crop "
-            "framing for every model- and dataset-facing crop now comes from "
-            "ADVANCED_CONFIG.canonical_margin; AprilTag crops have their own "
-            "'apriltag_crop_padding' (default 0.0 = the detection's exact "
-            "extent). See docs/superpowers/specs/2026-08-18-crop-padding-"
-            "retirement-design.md."
+            "Config key 'individual_crop_padding' (=%s) is retired and ignored. "
+            "Crop framing for every model- and dataset-facing crop now comes "
+            "from ADVANCED_CONFIG.canonical_margin. Before this change, "
+            "AprilTag crops used this same '%s' value as their padding; "
+            "AprilTag crops now default to 'apriltag_crop_padding' = 0.0 "
+            "(the detection's exact extent), so your tag decode may change. "
+            "To preserve previous AprilTag crops, set 'apriltag_crop_padding' "
+            "to %s. See docs/superpowers/specs/2026-08-18-crop-padding-"
+            "retirement-design.md.",
+            _retired_padding,
+            _retired_padding,
+            _retired_padding,
         )
 
     params: dict[str, Any] = {

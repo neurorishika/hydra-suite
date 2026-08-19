@@ -62,15 +62,29 @@ def test_engine_params_no_longer_emit_individual_crop_padding():
 
 
 def test_legacy_individual_crop_padding_warns_once(caplog):
-    """A config still carrying the retired key loads, warns, and ignores it."""
+    """A config still carrying the retired key loads, warns, and ignores it.
+
+    The warning must be honest about the upgrade impact on AprilTag: before
+    this branch, ``individual_crop_padding`` WAS AprilTag's live padding, so
+    a config that had it set to a non-zero value silently gets 0.0 padding
+    (the detection's exact extent) after upgrade unless the user opts in to
+    ``apriltag_crop_padding``.
+    """
     with caplog.at_level("WARNING"):
         _params({"individual_crop_padding": 0.5})
     messages = [
         r.message for r in caplog.records if "individual_crop_padding" in r.message
     ]
     assert len(messages) == 1
-    assert "canonical_margin" in messages[0]
-    assert "apriltag_crop_padding" in messages[0]
+    message = messages[0]
+    # The user's actual retired value is echoed back, not just named in the abstract.
+    assert "0.5" in message
+    # States plainly that AprilTag crops previously used this value.
+    assert "AprilTag" in message
+    # Names the one-line restore path.
+    assert "apriltag_crop_padding" in message
+    # Names where crop framing now comes from.
+    assert "canonical_margin" in message
 
 
 def test_zero_padding_is_the_exact_obb_extent():
@@ -88,6 +102,36 @@ def test_negative_padding_shrinks_symmetrically():
     x0, y0, x1, y1 = _expand_obb_to_aabb(corners, -0.25, 480, 640)
     # pad = -0.25 * max(40, 20) = -10 on every side
     assert (x0, y0, x1, y1) == (90, 80, 110, 80)
+
+
+def test_degenerate_padding_drops_crop_and_warns_once(caplog):
+    """A negative padding that collapses the AABB returns None and warns once.
+
+    Uses the same -0.25 on a 40x20 OBB as test_negative_padding_shrinks_symmetrically,
+    which is pinned there to produce a zero-height box.
+    """
+    import hydra_suite.core.tracking.pose.pose_pipeline as pose_pipeline
+    from hydra_suite.core.tracking.pose.pose_pipeline import extract_one_crop
+
+    pose_pipeline._warned_degenerate_padding = False
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    corners = _corners(100.0, 80.0, 40.0, 20.0)
+
+    with caplog.at_level("WARNING"):
+        result1 = extract_one_crop(
+            frame, corners, 0, -0.25, [corners], False, (0, 0, 0)
+        )
+        result2 = extract_one_crop(
+            frame, corners, 0, -0.25, [corners], False, (0, 0, 0)
+        )
+
+    assert result1 is None
+    assert result2 is None
+    warnings = [
+        r for r in caplog.records if "apriltag_crop_padding" in r.message.lower()
+    ]
+    assert len(warnings) == 1
+    assert "-0.25" in warnings[0].message
 
 
 def test_aabb_helpers_agree_with_the_live_path():

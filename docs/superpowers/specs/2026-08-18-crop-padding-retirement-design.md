@@ -148,8 +148,13 @@ Deletions, by layer:
   `core/canonicalization/crop.py` already uses for the same quantity. With a
   project geometry passed (the live path) that is `0.3` where it was
   `individual_crop_padding`, so **the exported oriented-video mask changes for
-  runs that had `individual_crop_padding != 0.3`** — a visual-export-only
-  difference, not a tracking one.
+  runs that had `individual_crop_padding != 0.3`** — not a tracking-CSV
+  difference (positions/angles/IDs are untouched), but a pixel difference in
+  **every** exported oriented crop/video, since `expanded_corners` feeds the
+  keep-mask applied to every rendered task (`_render_task`,
+  `oriented_video.py:~1238-1262`), not just the foreign-suppression fill.
+  Exported oriented images/videos can themselves feed a training set, so this
+  is not purely cosmetic.
 - `core/post/media_export.py:846,904` and `core/tracking/session.py:480` stop
   threading `padding_fraction`; the `geometry=` they already pass is the whole
   story.
@@ -212,7 +217,8 @@ cheaply before implementation.
 | Pose detection cache | Invalidated once (cache-key hash loses a term); recomputes, same results. |
 | AprilTag cache | Invalidated once (payload key renamed and re-sourced); recomputes. |
 | Crop-dataset `metadata.json` | Loses `padding_fraction` and `expansion_factor`; `canonical` block unchanged. |
-| Oriented-video foreign-OBB mask | Self-polygon expansion becomes `canonical_margin - 1.0` (0.3 by default) instead of `individual_crop_padding` (0.1 by default). Export visuals only. |
+| Oriented-video keep-mask | Self-polygon expansion (`expanded_corners`, `oriented_video.py:989`) becomes `canonical_margin - 1.0` (0.3 by default) instead of `individual_crop_padding` (0.1 by default). This mask is applied in `_render_task` (`oriented_video.py:~1238-1262`) to **every** exported task, not just when foreign-OBB suppression is on — that flag only gates the separate foreign-fill step. So this changes pixels in every exported oriented crop/video, not just visuals gated behind suppression, and exported images can feed a training set. |
+| `canonicalization/crop.py` bare-canvas geometry (reporting only) | Synthesized geometry for callers that pass bare `canvas_w`/`canvas_h` (`crop.py:381-384`) now uses `margin=1.0` instead of `1.0 + padding` (1.1 previously). `margin` feeds only `overflow_ratio`/`clipped` reporting, never the affine, so pixels are byte-identical — but such callers now report fewer clipped detections than before. |
 | `reference_aspect_ratio <= 0` | Was a warning + non-canonical fallback; now a `ValueError`. |
 | Configs with `individual_crop_padding` | Load fine, one warning, key ignored. |
 
