@@ -94,6 +94,49 @@ def test_clipping_is_reported_not_absorbed():
     assert overflow_ratio(fits, g) <= 1.0
 
 
+def test_overflow_ratio_and_clipped_are_not_margin_invariant():
+    """Regression guard: overflow_ratio/clipped must report ACTUAL containment.
+
+    Before the fix, ``margin`` appeared in both the numerator (major/minor *
+    margin) and the canvas denominator (canvas_w/h already baked in margin),
+    so it cancelled and the reported ratio barely moved across margins even
+    though the animal genuinely fit at some margins and not others. Pin the
+    corrected behaviour: same detection, larger margin -> larger canvas ->
+    strictly lower overflow_ratio, and clipped flips True -> False once the
+    canvas is big enough.
+    """
+    # major=45, minor=22 fixed detection extent.
+    small_margin = CanonicalGeometry.from_reference(
+        reference_body_px=20.0, aspect_ratio=2.0, margin=1.3
+    )
+    large_margin = CanonicalGeometry.from_reference(
+        reference_body_px=20.0, aspect_ratio=2.0, margin=2.0
+    )
+    # canvas_w/h: margin=1.3 -> (38, 20); margin=2.0 -> (58, 30).
+    assert small_margin.canvas_wh == (38, 20)
+    assert large_margin.canvas_wh == (58, 30)
+
+    corners = obb(80.0, 80.0, 45.0, 22.0, 0.0)
+
+    ratio_small_margin = overflow_ratio(corners, small_margin)
+    ratio_large_margin = overflow_ratio(corners, large_margin)
+
+    # The core property the old formula got wrong: raising the margin must
+    # visibly LOWER the reported ratio for the same detection.
+    assert ratio_large_margin < ratio_small_margin
+    # Sanity on the actual numbers (hand-computed from the new formula:
+    # max(major/canvas_w, minor/canvas_h), no margin factor).
+    assert ratio_small_margin == pytest.approx(max(45.0 / 38.0, 22.0 / 20.0))
+    assert ratio_large_margin == pytest.approx(max(45.0 / 58.0, 22.0 / 30.0))
+
+    _, _, clipped_small_margin = canonical_affine(corners, small_margin)
+    _, _, clipped_large_margin = canonical_affine(corners, large_margin)
+    assert clipped_small_margin is True
+    assert ratio_small_margin > 1.0
+    assert clipped_large_margin is False
+    assert ratio_large_margin <= 1.0
+
+
 def test_degenerate_obb_raises():
     g = CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
     degenerate = np.zeros((4, 2), dtype=np.float32)

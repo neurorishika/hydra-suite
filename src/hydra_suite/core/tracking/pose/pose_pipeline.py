@@ -16,10 +16,29 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# Warn once per process: a degenerate (zero-area) padded AABB silently drops
+# Warn once per RUN: a degenerate (zero-area) padded AABB silently drops
 # every crop it touches. Flooding the log per detection per frame would be
-# useless, so this module-level guard fires the explanation exactly once.
+# useless, so this module-level guard fires the explanation exactly once per
+# run. It is a module global (not run-scoped state threaded through the call
+# chain), so entry points that start a new run MUST call
+# ``reset_degenerate_padding_warning()`` -- otherwise, in a long-lived process
+# (e.g. the GUI) that runs tracking/interpolation repeatedly, only the very
+# first run's first occurrence would ever log and every later run would drop
+# crops silently.
 _warned_degenerate_padding = False
+
+
+def reset_degenerate_padding_warning() -> None:
+    """Re-arm the once-per-run degenerate-padding warning for a new run.
+
+    Call this at the start of any entry point that reaches
+    :func:`extract_one_crop` (directly or indirectly), so the warning can
+    fire again in later runs within the same long-lived process instead of
+    silently staying suppressed after the first run ever logged it.
+    """
+    global _warned_degenerate_padding
+    _warned_degenerate_padding = False
+
 
 # ---------------------------------------------------------------------------
 # Data structures

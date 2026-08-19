@@ -111,11 +111,19 @@ def _axes(corners: np.ndarray) -> tuple[np.ndarray, float, float, float, float]:
 
 
 def overflow_ratio(corners: np.ndarray, geometry: CanonicalGeometry) -> float:
-    """How far the padded OBB exceeds the canvas; <= 1.0 means it fits."""
+    """Fraction of the canvas the OBB's extent occupies; <= 1.0 means it fits.
+
+    This is ACTUAL containment against the fixed canvas -- no ``margin``
+    factor. ``margin`` is already baked into ``geometry.canvas_w``/``canvas_h``
+    (see ``CanonicalGeometry.from_reference``), so multiplying the numerator
+    by ``margin`` again would cancel it out of the ratio entirely, making the
+    reported number roughly constant regardless of margin. A value > 1.0 means
+    real data is lost at the crop edge for this detection.
+    """
     _, major, minor, _, _ = _axes(corners)
     return max(
-        major * geometry.margin / geometry.canvas_w,
-        minor * geometry.margin / geometry.canvas_h,
+        major / geometry.canvas_w,
+        minor / geometry.canvas_h,
     )
 
 
@@ -123,14 +131,16 @@ def overflow_ratio(corners: np.ndarray, geometry: CanonicalGeometry) -> float:
 class ClippingStats:
     """Run-scoped accumulator for canonical-crop overflow (Layer 1 §6 guard).
 
-    ``canonical_affine`` computes a per-detection ``clipped`` bool (padded OBB
-    exceeds the canvas), but every inference/tracking call site historically
-    discarded it. This is the counterpart the tracking path is missing: one
-    instance lives for the life of an ``InferenceRunner`` (one tracking pass);
-    ``record`` is called once per detection that goes through canonicalization,
-    and the run summary reports ``clipped_count``/``worst_overflow_ratio`` so a
-    too-small margin produces a visible signal instead of a silently truncated
-    animal.
+    ``canonical_affine`` computes a per-detection ``clipped`` bool (the OBB's
+    extent exceeds the canvas -- ACTUAL containment, not a margin-invariant
+    proxy), but every inference/tracking call site historically discarded it.
+    This is the counterpart the tracking path is missing: one instance lives
+    for the life of an ``InferenceRunner`` (one tracking pass); ``record`` is
+    called once per detection that goes through canonicalization, and the run
+    summary reports ``clipped_count``/``worst_overflow_ratio`` so a too-small
+    margin produces a visible signal instead of a silently truncated animal --
+    and raising ``canonical_margin`` now visibly lowers both numbers, because
+    the ratio is no longer margin-invariant.
     """
 
     clipped_count: int = 0
@@ -172,9 +182,13 @@ class ClippingStats:
             parts.append(
                 f"{self.clipped_count}/{self.total_count} canonicalized detections "
                 f"were CLIPPED by the fixed canvas (worst overflow_ratio="
-                f"{self.worst_overflow_ratio:.3f}). Increase the canonical margin or "
-                "canvas size if this is unexpected -- clipped detections lose data at "
-                "the crop edge for every downstream consumer (pose, classifiers)."
+                f"{self.worst_overflow_ratio:.3f}, i.e. the detection's extent occupies "
+                f"{self.worst_overflow_ratio:.1%} of the canvas). Increase "
+                "canonical_margin (or the reference body size) if this is unexpected -- "
+                "doing so shrinks this ratio directly, since it now reports actual "
+                "containment rather than a margin-invariant proxy. Clipped detections "
+                "lose data at the crop edge for every downstream consumer (pose, "
+                "classifiers)."
             )
         if self.degenerate_skipped_count:
             parts.append(
@@ -198,6 +212,12 @@ def canonical_affine(
     rotation that puts the major axis horizontal, then a translation that puts
     the centroid at the canvas centre.  Its linear part is orthonormal by
     construction -- there is no scale term.
+
+    ``clipped`` reports ACTUAL containment: True when the OBB's major or minor
+    axis extent does not fit inside the fixed canvas, i.e. real data is lost
+    at the crop edge. It does not depend on ``margin`` beyond ``margin``'s
+    already-baked-in effect on the canvas size, so raising ``canonical_margin``
+    genuinely shrinks/clears this flag instead of leaving it unchanged.
     """
     c, major, minor, angle, _ = _axes(corners)
     cx = float(np.mean(c[:, 0]))
@@ -216,10 +236,10 @@ def canonical_affine(
         dtype=np.float64,
     )
 
-    clipped = (
-        major * geometry.margin > geometry.canvas_w
-        or minor * geometry.margin > geometry.canvas_h
-    )
+    # ACTUAL containment against the fixed canvas -- no ``margin`` factor here
+    # either; see ``overflow_ratio`` for why re-applying margin would cancel
+    # out of the comparison (it is already baked into canvas_w/canvas_h).
+    clipped = major > geometry.canvas_w or minor > geometry.canvas_h
     return m_align, angle, bool(clipped)
 
 
