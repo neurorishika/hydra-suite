@@ -1,7 +1,19 @@
 # Identity heads, cross-product catalogs, and non-identifying classes
 
 **Date:** 2026-08-18
-**Status:** Design approved, pending implementation plan
+**Status:** Shipped — merged to main.
+
+> **Post-implementation note.** Slices 1-3 shipped as designed. Verifying them
+> on real video surfaced a defect this spec did not anticipate and could not
+> have been satisfied without: the rich export's per-detection
+> `CNN_<label>[_<factor>]_Class`/`_Conf` columns had been silently absent since
+> the Gen-2 inference migration, so `IdentityEvidenceTopLabel`,
+> `UniqueIdentityKey`, and this design's non-identifying-class report were all
+> reading columns that no longer existed. Slice 1's scoping was correct but
+> inert, and Slice 3's reporting half never fired. The export was restored in
+> the same branch (see the changelog); the checkboxes in the paired plan were
+> never ticked during subagent execution and should not be read as a coverage
+> record — the gates are.
 **Scope:** `core/individual/identity/`, `core/individual/postprocess_df.py`,
 `core/post/identity_postprocess.py`, `core/tracking/worker.py` (remap only),
 `trackerkit/config/identity_schema.py`, `trackerkit/gui/panels/identity_panel.py`
