@@ -74,8 +74,21 @@ class IdentityModelConfig:
     path: str | None = None
     unique_identifier: bool = False
     factors: tuple[str, ...] = ()
+    non_identifying_classes: tuple[str, ...] = ()
+    """Classes/composites this model declares non-identifying.
+
+    Forms: ``"notag"`` (that class in any of this model's axes),
+    ``"front:notag"`` (that class in the named factor), ``"notag_notag"``
+    (that whole composite display label). Excluded from the identity
+    catalog entirely -- see the design doc.
+    """
     # Reserved (Phase 2): fitted temperature + signature.
     calibration: dict[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        self.non_identifying_classes = tuple(
+            str(c) for c in (self.non_identifying_classes or ())
+        )
 
 
 @dataclass
