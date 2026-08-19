@@ -133,8 +133,8 @@ def _arena_arrays(track_arena, meas_arena, N, M):
     """
     if track_arena is None or meas_arena is None:
         return _NO_ARENA, _NO_ARENA
-    ta = np.asarray(track_arena, dtype=np.int32)
-    ma = np.asarray(meas_arena, dtype=np.int32)
+    ta = np.ascontiguousarray(track_arena, dtype=np.int32)
+    ma = np.ascontiguousarray(meas_arena, dtype=np.int32)
     if ta.shape[0] != N or ma.shape[0] != M:
         return _NO_ARENA, _NO_ARENA
     return ta, ma
@@ -251,7 +251,9 @@ class TrackAssigner:
     def set_track_arena(self, track_arena) -> None:
         """Install the static per-slot arena mapping (None disables gating)."""
         self.track_arena = (
-            None if track_arena is None else np.asarray(track_arena, dtype=np.int32)
+            None
+            if track_arena is None
+            else np.ascontiguousarray(track_arena, dtype=np.int32)
         )
 
     def _spatial_optimization_enabled(self) -> bool:
