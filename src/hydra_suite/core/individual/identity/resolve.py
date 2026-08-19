@@ -274,45 +274,6 @@ def whole_composite_excluded_labels(
     return frozenset(out)
 
 
-def _warn_on_redundant_voters(axes: Sequence[IdentityAxis]) -> None:
-    """Warn when two identity models share one axis's class vocabulary.
-
-    Axes multiply -- that is the whole point of the cross-product. Two models
-    predicting the SAME vocabulary are almost never two axes of one identity;
-    they are two independent votes on one axis, which this design explicitly
-    does not support (see the design doc's Non-goals). Multiplied instead of
-    fused they yield nonsense composites (``ant1_ant1``, ``ant1_ant2``) and a
-    domain that is quadratically too large, with every real animal's evidence
-    split across a diagonal. The failure is silent otherwise: the catalog-size
-    warning only fires above 256 entries, so the small, likely case -- two
-    8-class models -- produces 64 wrong identities and says nothing.
-    """
-    by_vocab: dict[tuple[str, ...], list[str]] = {}
-    for axis in axes:
-        if not axis.classes:
-            continue
-        by_vocab.setdefault(tuple(sorted(str(c) for c in axis.classes)), []).append(
-            axis.qualified_name
-        )
-    for vocab, names in by_vocab.items():
-        if len({n.split(":", 1)[0] for n in names}) < 2:
-            # Repeated vocabulary WITHIN one model is a legitimate scheme (a
-            # two-tag colour code drawn from one palette): those really are
-            # independent axes of one identity.
-            continue
-        logger.warning(
-            "Identity axes %s share an identical class vocabulary (%s) across "
-            "different classifiers. They will be MULTIPLIED into composites "
-            "like '%s_%s', not fused into one axis -- redundant identity "
-            "voters are not supported. Mark all but one of these classifiers "
-            "as not a unique identifier, or give them distinct vocabularies.",
-            ", ".join(names),
-            ", ".join(vocab),
-            vocab[0],
-            vocab[0],
-        )
-
-
 def resolve_catalog_spec(
     cnn_classifiers: Sequence[Mapping[str, object]],
     tag_identity_labels: Sequence[object],
@@ -331,7 +292,6 @@ def resolve_catalog_spec(
     axes = identity_axes(cnn_classifiers)
     marks_by_model = non_identifying_marks(cnn_classifiers)
     if axes:
-        _warn_on_redundant_voters(axes)
         projected = 1
         for a in axes:
             projected *= max(1, len(a.classes))
