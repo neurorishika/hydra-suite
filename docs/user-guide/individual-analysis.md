@@ -12,13 +12,19 @@ Individual analysis tools extract per-track crops and metadata for identity-focu
 
 - `ENABLE_IDENTITY_ANALYSIS`
 - `IDENTITY_METHOD`
-- Crop size/padding constraints
+- Crop framing (`canonical_margin`, `apriltag_crop_padding` for AprilTag)
 - Output format and destination options
 
 ## Feature Meaning
 
-- Larger crop padding improves context but increases storage and may include neighbors.
-- Smaller crops are efficient but risk truncation near boundaries.
+- Crop framing for every model- and dataset-facing crop is driven by one dial,
+  `canonical_margin` (in `ADVANCED_CONFIG`, default `1.3`), together with
+  `REFERENCE_BODY_SIZE` and `reference_aspect_ratio`, which define a fixed canonical
+  canvas. A larger margin improves context but increases storage and may include
+  neighbors; a smaller margin is efficient but risks truncation near boundaries.
+- AprilTag crops are the one exception: they are plain axis-aligned patches (a tag is
+  a rigid printed square that any rotation or rescale degrades), controlled by
+  `apriltag_crop_padding` (default `0.0` = the detection's exact axis-aligned extent).
 - Method choice should reflect your marker protocol (none/color/apriltag/custom).
 
 ## Typical Uses
