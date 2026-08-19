@@ -48,3 +48,35 @@ def test_resolve_identity_heads_distinguishes_absent_from_empty():
     assert resolve_identity_heads(
         {"CNN_CLASSIFIERS": [{"label": "x", "unique_identifier": True}]}
     ) == ("x",)
+
+
+def test_identity_class_columns_rejects_non_identity_prefix_collision_with_all_labels():
+    # tag_v2 is a different, non-identity classifier whose CNN_tag_v2_Class
+    # column should not match when only "tag" is an identity head.
+    columns = ["CNN_tag_Class", "CNN_tag_v2_Class"]
+    got = identity_class_columns(columns, ("tag",), all_labels=("tag", "tag_v2"))
+    assert got == ["CNN_tag_Class"]
+
+
+def test_identity_class_columns_default_path_unchanged_without_all_labels():
+    # Default behavior (all_labels empty) must return both columns to maintain
+    # byte-identity equivalence with existing gates.
+    columns = ["CNN_tag_Class", "CNN_tag_v2_Class"]
+    got = identity_class_columns(columns, ("tag",))
+    assert got == ["CNN_tag_Class", "CNN_tag_v2_Class"]
+
+
+def test_identity_class_columns_longest_match_among_heads():
+    # When multiple head labels match a column, the longest one wins.
+    # Both "tag" and "tag_v2" are identity heads; CNN_tag_v2_Class matches
+    # the longer label and belongs to tag_v2, not tag.
+    columns = ["CNN_tag_Class", "CNN_tag_v2_Class"]
+    got = identity_class_columns(columns, ("tag", "tag_v2"), all_labels=())
+    assert got == ["CNN_tag_Class", "CNN_tag_v2_Class"]
+
+
+def test_identity_class_columns_ignores_conf_columns():
+    # Confidence columns (non-Class suffix) are never returned.
+    columns = ["CNN_tag_Class", "CNN_tag_Conf"]
+    got = identity_class_columns(columns, ("tag",), all_labels=())
+    assert got == ["CNN_tag_Class"]

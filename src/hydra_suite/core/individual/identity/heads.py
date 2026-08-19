@@ -51,22 +51,60 @@ def resolve_identity_heads(params: Mapping):
     return identity_head_labels(params.get("CNN_CLASSIFIERS") or [])
 
 
-def identity_class_columns(columns: Iterable, head_labels: Sequence[str]) -> list[str]:
+def identity_class_columns(
+    columns: Iterable, head_labels: Sequence[str], all_labels=()
+) -> list[str]:
     """The ``CNN_<head>[_<factor>]_Class`` columns belonging to identity heads.
 
     Matched against the *known* head labels rather than by regex capture:
     ``^CNN_(.+)_Class$`` cannot distinguish a head label containing "_"
     from a ``<label>_<factor>`` pair, and guessing wrong silently drops or
     admits the wrong classifier.
+
+    When ``all_labels`` is supplied (identity + non-identity classifier roster),
+    uses longest-match to disambiguate: a column is an identity column only if
+    the longest label in ``all_labels | head_labels`` that underscore-boundary-
+    prefixes it is itself an identity head. When ``all_labels`` is empty (the
+    default), uses the legacy behavior for byte-identity with equivalence gates.
     """
     heads = [str(h) for h in head_labels if str(h).strip()]
     out: list[str] = []
+
+    # If all_labels not provided, use legacy behavior
+    if not all_labels:
+        for col in columns:
+            name = str(col)
+            if not name.endswith("_Class"):
+                continue
+            for head in heads:
+                if name == f"CNN_{head}_Class" or name.startswith(f"CNN_{head}_"):
+                    out.append(name)
+                    break
+        return out
+
+    # New behavior: longest-match against full roster
+    all_labels_list = [str(l) for l in all_labels if str(l).strip()]
+    all_possible_labels = list(set(heads) | set(all_labels_list))
+
     for col in columns:
         name = str(col)
         if not name.endswith("_Class"):
             continue
-        for head in heads:
-            if name == f"CNN_{head}_Class" or name.startswith(f"CNN_{head}_"):
-                out.append(name)
-                break
+
+        # Find longest label that matches at underscore boundary
+        longest_match = None
+        for label in all_possible_labels:
+            # Match 1: exact CNN_<label>_Class
+            if name == f"CNN_{label}_Class":
+                if longest_match is None or len(label) > len(longest_match):
+                    longest_match = label
+            # Match 2: CNN_<label>_<something> where <something> is not empty
+            elif name.startswith(f"CNN_{label}_"):
+                if longest_match is None or len(label) > len(longest_match):
+                    longest_match = label
+
+        # Include if longest match is an identity head
+        if longest_match and longest_match in heads:
+            out.append(name)
+
     return out
