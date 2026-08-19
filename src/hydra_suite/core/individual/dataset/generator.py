@@ -364,7 +364,13 @@ class IndividualDatasetGenerator:
                 try:
                     M_can, _axis_theta, _ = canonical_affine(corners, self._geometry)
                 except ValueError:
+                    # Degenerate OBB (zero-length edge): it cannot be
+                    # canonicalized and there is no non-canonical fallback
+                    # crop any more, so this detection is dropped. Counted so
+                    # the drop is visible in the run summary rather than
+                    # showing up only as a shorter dataset.
                     M_can = None
+                    self._clipping_stats.record_degenerate()
 
             if M_can is not None:
                 _cw, _ch = self._geometry.canvas_w, self._geometry.canvas_h
@@ -537,7 +543,9 @@ class IndividualDatasetGenerator:
             try:
                 M_can, _axis_theta, _ = _canonical_affine_fn(corners, self._geometry)
             except ValueError:
+                # See process_frame: degenerate OBBs are dropped, not faked.
                 M_can = None
+                self._clipping_stats.record_degenerate()
 
         if M_can is not None:
             _cw, _ch = self._geometry.canvas_w, self._geometry.canvas_h
@@ -717,6 +725,9 @@ class IndividualDatasetGenerator:
                     **self._geometry.to_dict(),
                     "clipped_count": self._clipping_stats.clipped_count,
                     "worst_overflow_ratio": self._clipping_stats.worst_overflow_ratio,
+                    "degenerate_skipped_count": (
+                        self._clipping_stats.degenerate_skipped_count
+                    ),
                 },
             },
             "images": self.metadata,
@@ -725,7 +736,7 @@ class IndividualDatasetGenerator:
 
         _clip_summary = self._clipping_stats.summary()
         if _clip_summary:
-            logger.warning("Canonicalization clipping summary: %s", _clip_summary)
+            logger.warning("Canonicalization summary: %s", _clip_summary)
         dataset_info["clipping_summary"] = _clip_summary
 
         try:

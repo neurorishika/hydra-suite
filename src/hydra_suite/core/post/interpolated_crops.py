@@ -1089,19 +1089,20 @@ def _extract_pose_crop(
     ``_aff`` is None exactly when ``canonical_affine`` raised
     (``core/canonicalization/geometry.py::_axes`` -- a degenerate OBB with a
     zero-length edge). There is no rigid Layer 1 transform for a degenerate
-    box, and the un-canonicalized ``_extract_obb_masked_crop`` fallback this
-    used to feed the backend produces an arbitrary axis-aligned aspect ratio
-    for which Layer 2's ``fit_to_model_input`` cannot honestly be computed (it
-    assumes the source is the fixed canonical canvas) -- feeding it anyway
-    would hand the backend a wrongly-scaled crop, exactly the defect class
-    this work removes. A genuinely degenerate OBB has no salvageable animal
-    geometry to recover either way, so this loudly skips the detection.
+    box. The un-canonicalized masked-crop fallback this used to feed the
+    backend (retired with the crop-padding knob, spec 2026-08-18) produced an
+    arbitrary axis-aligned aspect ratio for which Layer 2's
+    ``fit_to_model_input`` cannot honestly be computed (it assumes the source
+    is the fixed canonical canvas) -- feeding it anyway would hand the backend
+    a wrongly-scaled crop, exactly the defect class this work removes. A
+    genuinely degenerate OBB has no salvageable animal geometry to recover
+    either way, so this loudly skips the detection.
     """
     if _aff is None:
         logger.warning(
             "Interp pose/CNN: skipping task_idx=%s -- degenerate OBB has no "
-            "Layer 1 canonical transform (canonical_affine raised); the old "
-            "masked-crop fallback fed the backend an un-canonicalized, "
+            "Layer 1 canonical transform (canonical_affine raised); the "
+            "retired masked-crop fallback fed the backend an un-canonicalized, "
             "wrongly-scaled crop instead of skipping.",
             task_idx,
         )

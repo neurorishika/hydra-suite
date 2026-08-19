@@ -165,3 +165,91 @@ def test_export_final_media_rejects_padding_fraction():
 
     sig = inspect.signature(media_export.export_final_media)
     assert "padding_fraction" not in sig.parameters
+
+
+def _degenerate_generator(tmp_path):
+    from hydra_suite.core.individual.dataset.generator import IndividualDatasetGenerator
+
+    return IndividualDatasetGenerator(
+        params={
+            "ENABLE_INDIVIDUAL_DATASET": True,
+            "ENABLE_INDIVIDUAL_IMAGE_SAVE": True,
+            "INDIVIDUAL_DATASET_RUN_ID": "run1",
+            "REFERENCE_BODY_SIZE": 20.0,
+            "RESIZE_FACTOR": 1.0,
+            "ADVANCED_CONFIG": {
+                "reference_aspect_ratio": 2.0,
+                "canonical_margin": 1.3,
+            },
+        },
+        output_dir=str(tmp_path),
+        video_name="test_video",
+        dataset_name="ds",
+    )
+
+
+def test_degenerate_obb_is_skipped_and_counted(tmp_path, caplog):
+    """A zero-length-edge OBB has no canonical transform and no fallback crop.
+
+    Dropping it is correct (spec 2026-08-18: no non-canonical fallback), but
+    the drop must be COUNTED and surfaced next to the clipping stats -- not a
+    silently shorter dataset.
+    """
+    import json
+    import logging
+
+    gen = _degenerate_generator(tmp_path)
+    assert gen.enabled and gen.crops_dir is not None
+
+    frame = np.zeros((200, 200, 3), dtype=np.uint8)
+    # Every corner coincides -> both edges zero-length -> canonical_affine raises.
+    degenerate = np.zeros((4, 2), dtype=np.float32)
+
+    with caplog.at_level(logging.WARNING):
+        num_saved = gen.process_frame(
+            frame,
+            frame_id=0,
+            meas=[[100.0, 100.0, 0.0]],
+            obb_corners=[degenerate],
+            track_ids=[1],
+            trajectory_ids=[1],
+        )
+        # (a) nothing is emitted for it, and nothing is logged PER DETECTION
+        assert num_saved == 0
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+        result_path = gen.finalize()
+
+    # (b) the counter reports exactly one skipped degenerate detection
+    assert gen._clipping_stats.degenerate_skipped_count == 1
+    assert gen._clipping_stats.clipped_count == 0
+
+    # ... surfaced once per run in the summary log ...
+    warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert len(warnings) == 1, warnings
+    assert "DEGENERATE" in warnings[0]
+
+    # ... and in the same metadata block the clipping stats use.
+    assert result_path is not None
+    meta = json.loads(Path(gen.metadata_path).read_text(encoding="utf-8"))
+    assert meta["parameters"]["canonical"]["degenerate_skipped_count"] == 1
+    assert meta["clipping_summary"] and "DEGENERATE" in meta["clipping_summary"]
+
+
+def test_interpolated_degenerate_obb_is_skipped_and_counted(tmp_path):
+    gen = _degenerate_generator(tmp_path)
+    saved = gen.save_interpolated_crop(
+        frame=np.zeros((200, 200, 3), dtype=np.uint8),
+        frame_id=0,
+        cx=100.0,
+        cy=100.0,
+        w=0.0,
+        h=0.0,
+        theta=0.0,
+        traj_id=1,
+        interp_from=(0, 2),
+        interp_index=0,
+        interp_total=1,
+    )
+    assert saved is None
+    assert gen._clipping_stats.degenerate_skipped_count == 1

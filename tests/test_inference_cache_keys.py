@@ -446,6 +446,18 @@ def test_pose_key_changes_with_canonical_geometry():
     assert k1.config_hash != k2.config_hash
 
 
+def test_pose_key_changes_with_canonical_margin_alone():
+    """``margin`` is THE surviving framing term (it replaced crop_padding), so
+    changing it alone -- same body size, same aspect ratio -- must move the key.
+    """
+    g_narrow = CanonicalGeometry.from_reference(80.0, 2.0, 1.3)
+    g_wide = CanonicalGeometry.from_reference(80.0, 2.0, 1.6)
+    assert g_narrow.aspect_ratio == g_wide.aspect_ratio
+    k1 = pose_cache_key(_pose_config(), g_narrow)
+    k2 = pose_cache_key(_pose_config(), g_wide)
+    assert k1.config_hash != k2.config_hash
+
+
 # ---- canonical_geometry_key ----
 
 

@@ -377,6 +377,9 @@ class OrientedTrackVideoExporter:
                 **self._geometry.to_dict(),
                 "clipped_count": self._clipping_stats.clipped_count,
                 "worst_overflow_ratio": self._clipping_stats.worst_overflow_ratio,
+                "degenerate_skipped_count": (
+                    self._clipping_stats.degenerate_skipped_count
+                ),
             }
             existing["parameters"] = parameters
             metadata_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")

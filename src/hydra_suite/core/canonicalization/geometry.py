@@ -136,6 +136,7 @@ class ClippingStats:
     clipped_count: int = 0
     total_count: int = 0
     worst_overflow_ratio: float = 0.0
+    degenerate_skipped_count: int = 0
 
     def record(self, corners: np.ndarray, geometry: CanonicalGeometry) -> float:
         """Update the running tally for one detection; returns its overflow_ratio."""
@@ -147,17 +148,39 @@ class ClippingStats:
             self.clipped_count += 1
         return ratio
 
+    def record_degenerate(self) -> None:
+        """Tally one detection SKIPPED because its OBB was degenerate.
+
+        ``canonical_affine`` raises on a zero-length edge, and there is no
+        non-canonical fallback crop any more (spec 2026-08-18) -- such a
+        detection produces no crop at all. Dropping it is correct (a zero-edge
+        OBB canonicalizes to garbage), but it must not be invisible: this is
+        the counter that makes the drop show up in the run summary next to the
+        clipping stats, instead of a silently shorter dataset.
+        """
+        self.degenerate_skipped_count += 1
+
     def summary(self) -> "str | None":
-        """One-line human-readable summary, or None when nothing was clipped."""
-        if self.clipped_count == 0:
+        """One-line human-readable summary, or None when nothing was flagged."""
+        parts: list[str] = []
+        if self.clipped_count:
+            parts.append(
+                f"{self.clipped_count}/{self.total_count} canonicalized detections "
+                f"were CLIPPED by the fixed canvas (worst overflow_ratio="
+                f"{self.worst_overflow_ratio:.3f}). Increase the canonical margin or "
+                "canvas size if this is unexpected -- clipped detections lose data at "
+                "the crop edge for every downstream consumer (pose, classifiers)."
+            )
+        if self.degenerate_skipped_count:
+            parts.append(
+                f"{self.degenerate_skipped_count} detection(s) were SKIPPED as "
+                "DEGENERATE (zero-length OBB edge): they cannot be canonicalized "
+                "and no crop was emitted for them, so the exported dataset is "
+                "correspondingly shorter."
+            )
+        if not parts:
             return None
-        return (
-            f"{self.clipped_count}/{self.total_count} canonicalized detections "
-            f"were CLIPPED by the fixed canvas (worst overflow_ratio="
-            f"{self.worst_overflow_ratio:.3f}). Increase the canonical margin or "
-            "canvas size if this is unexpected -- clipped detections lose data at "
-            "the crop edge for every downstream consumer (pose, classifiers)."
-        )
+        return " ".join(parts)
 
 
 def canonical_affine(
