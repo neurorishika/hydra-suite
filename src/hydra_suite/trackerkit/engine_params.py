@@ -257,7 +257,11 @@ def build_arena_labels(
     if not roi_shapes or not width or not height:
         return None, 1
 
-    includes = [s for s in roi_shapes if s.get("mode", "include") != "exclude"]
+    # Mirror build_roi_mask EXACTLY: it partitions three ways, rendering a shape
+    # only on `== "include"` / `== "exclude"` and silently dropping any other
+    # mode string.  Selecting includes with `!= "exclude"` would render unknown
+    # modes here that the ROI mask drops, breaking the union invariant.
+    includes = [s for s in roi_shapes if s.get("mode", "include") == "include"]
     raw_ids = sorted({int(s.get("arena_id", 0)) for s in includes}) or [0]
     dense = {raw: i for i, raw in enumerate(raw_ids)}
 

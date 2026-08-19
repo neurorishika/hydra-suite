@@ -10,6 +10,13 @@ def _circle(cx, cy, r, arena_id=None, mode="include"):
     return shape
 
 
+def _polygon(points, arena_id=None, mode="include"):
+    shape = {"type": "polygon", "params": points, "mode": mode}
+    if arena_id is not None:
+        shape["arena_id"] = arena_id
+    return shape
+
+
 def test_legacy_shapes_without_arena_id_collapse_to_one_arena():
     """Back-compat: three shapes, no arena_id -> a single arena 0."""
     shapes = [_circle(20, 20, 10), _circle(60, 20, 10), _circle(20, 60, 10)]
@@ -35,15 +42,42 @@ def test_exclusion_hole_is_outside_every_arena():
 
 
 def test_label_union_matches_roi_mask_exactly():
-    """Invariant: (labels > 0) is pixel-identical to the existing ROI mask."""
+    """Invariant: (labels > 0) is pixel-identical to the existing ROI mask.
+
+    Covers both shape types (circle + polygon), two distinct arenas, and an
+    exclusion hole punched into one of them -- not just circles.
+    """
     shapes = [
-        _circle(30, 30, 15, arena_id=0),
+        _polygon([[10, 10], [50, 10], [50, 50], [10, 50]], arena_id=0),
         _circle(70, 70, 15, arena_id=1),
         _circle(30, 30, 5, mode="exclude"),
     ]
     labels, _ = build_arena_labels(shapes, 100, 100)
     roi = build_roi_mask(shapes, 100, 100)
     np.testing.assert_array_equal(labels > 0, roi > 0)
+
+
+def test_unrecognized_mode_contributes_no_pixels_to_either_function():
+    """A shape with an unknown `mode` string is dropped by BOTH functions.
+
+    `build_roi_mask` only renders on `mode == "include"` / `== "exclude"`,
+    silently dropping any other mode string. `build_arena_labels` must mirror
+    that partition exactly, not treat "not exclude" as "include".
+    """
+    shapes = [
+        _circle(50, 50, 20, arena_id=0),
+        _circle(50, 50, 40, arena_id=1, mode="zone"),
+    ]
+    labels, n_arenas = build_arena_labels(shapes, 100, 100)
+    roi = build_roi_mask(shapes, 100, 100)
+    # The "zone" shape must not appear in either the labels or the ROI mask,
+    # and must not introduce a second arena.
+    assert n_arenas == 1
+    np.testing.assert_array_equal(labels > 0, roi > 0)
+    # A point that only the dropped "zone" circle would have covered (outside
+    # the arena_id=0 circle, inside the radius-40 "zone" circle) stays 0.
+    assert labels[50, 85] == 0
+    assert roi[50, 85] == 0
 
 
 def test_no_shapes_returns_none():
