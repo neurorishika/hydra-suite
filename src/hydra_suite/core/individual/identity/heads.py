@@ -113,29 +113,33 @@ def identity_class_columns(
 def identity_axis_columns(columns, cnn_classifiers) -> list:
     """Ordered ``(class_col, conf_col)`` pairs, one per identity axis.
 
-    Mirrors ``properties.export.build_cnn_output_columns``' naming: a
-    single-factor model writes flat ``CNN_<label>_Class`` columns, a
-    multi-factor model writes ``CNN_<label>_<factor>_Class``. Falls back to
-    the flat name when the per-factor column is absent from `columns`, so a
-    config/model factor-name mismatch degrades to "no axis" rather than a
-    KeyError.
+    Delegates naming to ``properties.export.build_cnn_output_columns`` --
+    the same function the writer uses -- rather than re-deriving the
+    flat-vs-per-factor switch and the factor-name sanitization rule here.
+    Re-deriving them invites silent divergence: the writer switches to
+    per-factor columns on ``len(factor_names) > 1`` and sanitizes each
+    factor name (``re.sub(r"[^0-9A-Za-z]+", "_", name).strip("_").lower()``,
+    with a ``factor{idx:02d}`` fallback for a name that sanitizes to
+    nothing); matching that by hand here would silently drift the moment
+    either side changes.
+
+    A classifier whose derived columns are not present in ``columns`` (a
+    config/model mismatch) contributes no axis rather than raising --
+    ``columns`` is the ground truth for what a given dataframe actually
+    carries.
     """
-    from hydra_suite.core.individual.identity.resolve import identity_axes
+    from hydra_suite.core.individual.properties.export import build_cnn_output_columns
 
     present = {str(c) for c in columns}
-    axes = identity_axes(cnn_classifiers)
-    per_model = {}
-    for axis in axes:
-        per_model[axis.model_label] = per_model.get(axis.model_label, 0) + 1
-
     out = []
-    for axis in axes:
-        candidates = []
-        if per_model[axis.model_label] > 1:
-            candidates.append(f"CNN_{axis.model_label}_{axis.factor_name}")
-        candidates.append(f"CNN_{axis.model_label}")
-        for base in candidates:
-            if f"{base}_Class" in present:
-                out.append((f"{base}_Class", f"{base}_Conf"))
-                break
+    for cfg in cnn_classifiers or []:
+        if not bool(cfg.get("unique_identifier", False)):
+            continue
+        label = str(cfg.get("label", "") or "").strip() or "cnn"
+        factor_names = list(cfg.get("factor_names") or [])
+        for _factor, class_col, conf_col in build_cnn_output_columns(
+            label, factor_names
+        ):
+            if class_col in present:
+                out.append((class_col, conf_col))
     return out

@@ -58,7 +58,12 @@ def _stamp_non_identifying_labels(df, params):
     to the unknown slot, so the label is descriptive and no consumer keying
     on a resolved identity slot can mistake it for one.
 
-    Only trajectories with no already-resolved identity are touched.
+    Only trajectories with no already-resolved identity are touched. Every
+    qualifying trajectory is found BEFORE any column is created or the frame
+    is copied: declaring marks that match no observed track must leave the
+    dataframe byte-identical (no invented ``IdentityFinal*`` family), the
+    same "no Final family without evidence" invariant
+    ``_mirror_realtime_and_tag_into_final`` documents.
     """
     from hydra_suite.core.individual.identity.heads import identity_axis_columns
     from hydra_suite.core.individual.identity.resolve import excluded_display_labels
@@ -72,6 +77,53 @@ def _stamp_non_identifying_labels(df, params):
     if not axis_cols:
         return df
 
+    class_cols = [c for c, _ in axis_cols]
+    conf_cols = [c for _, c in axis_cols if c in df.columns]
+
+    # A row missing any axis value contributes no vote: astype(str) alone
+    # would turn a missing value into the literal string "nan", which then
+    # silently fails the `in excluded` check instead of being ignored.
+    valid_row = df[class_cols].notna().all(axis=1)
+    composite = df[class_cols[0]].astype(str)
+    for col in class_cols[1:]:
+        composite = composite + "_" + df[col].astype(str)
+    composite = composite.where(valid_row)
+
+    if C.FINAL_LABEL in df.columns:
+        final_label = df[C.FINAL_LABEL]
+        unresolved = final_label.isna() | (final_label.astype(str).str.strip() == "")
+    else:
+        unresolved = pd.Series(True, index=df.index)
+
+    # Phase 1: decide which trajectories qualify, touching nothing.
+    stamps: dict = {}
+    for traj_id, group in df.groupby("TrajectoryID", sort=False):
+        if not unresolved.loc[group.index].all():
+            continue  # partially or fully resolved: leave it alone
+        observed = composite.loc[group.index].dropna()
+        observed = observed[observed != ""]
+        if observed.empty:
+            continue
+        modal = str(observed.mode().iloc[0])
+        if modal not in excluded:
+            continue
+        conf = 0.0
+        if conf_cols:
+            per_frame = df.loc[group.index, conf_cols].apply(
+                pd.to_numeric, errors="coerce"
+            )
+            # Weakest axis per frame: a composite is only as trustworthy as
+            # its least confident tag call.
+            mean_conf = per_frame.min(axis=1).mean()
+            if pd.notna(mean_conf):
+                conf = float(mean_conf)
+        stamps[traj_id] = (group.index, modal, conf)
+
+    if not stamps:
+        return df
+
+    # Phase 2: at least one trajectory qualifies -- now create the Final
+    # family scaffolding and write only the qualifying rows.
     out = df.copy()
     if C.FINAL_LABEL not in out.columns:
         out[C.FINAL_LABEL] = pd.Series(
@@ -88,39 +140,11 @@ def _stamp_non_identifying_labels(df, params):
     if C.FINAL_CONFIDENCE not in out.columns:
         out[C.FINAL_CONFIDENCE] = np.nan
 
-    class_cols = [c for c, _ in axis_cols]
-    conf_cols = [c for _, c in axis_cols if c in out.columns]
-
-    composite = out[class_cols[0]].astype(str)
-    for col in class_cols[1:]:
-        composite = composite + "_" + out[col].astype(str)
-
-    unresolved = out[C.FINAL_LABEL].isna() | (
-        out[C.FINAL_LABEL].astype(str).str.strip() == ""
-    )
-
-    for traj_id, group in out.groupby("TrajectoryID", sort=False):
-        if not unresolved.loc[group.index].all():
-            continue  # partially or fully resolved: leave it alone
-        observed = composite.loc[group.index]
-        observed = observed[observed.notna() & (observed != "")]
-        if observed.empty:
-            continue
-        modal = str(observed.mode().iloc[0])
-        if modal not in excluded:
-            continue
-        conf = 0.0
-        if conf_cols:
-            per_frame = out.loc[group.index, conf_cols].apply(
-                pd.to_numeric, errors="coerce"
-            )
-            # Weakest axis per frame: a composite is only as trustworthy as
-            # its least confident tag call.
-            conf = float(per_frame.min(axis=1).mean())
-        out.loc[group.index, C.FINAL_LABEL] = modal
-        out.loc[group.index, C.FINAL_ID] = 0
-        out.loc[group.index, C.FINAL_SOURCE] = C.IdentityFinalSource.NON_IDENTIFYING
-        out.loc[group.index, C.FINAL_CONFIDENCE] = conf
+    for _traj_id, (idx, modal, conf) in stamps.items():
+        out.loc[idx, C.FINAL_LABEL] = modal
+        out.loc[idx, C.FINAL_ID] = 0
+        out.loc[idx, C.FINAL_SOURCE] = C.IdentityFinalSource.NON_IDENTIFYING
+        out.loc[idx, C.FINAL_CONFIDENCE] = conf
 
     return out
 

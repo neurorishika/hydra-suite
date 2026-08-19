@@ -191,3 +191,88 @@ def test_feature_off_stamp_is_a_no_op():
     df = _three_untagged_tracks()
     out = _stamp_non_identifying_labels(df, params)
     assert out is df
+
+
+def test_no_matching_track_leaves_no_final_family():
+    """Declared marks with no track that ever matches them must be a
+    complete no-op: no ``IdentityFinal*`` family invented from nothing."""
+    from hydra_suite.core.individual.postprocess_df import _stamp_non_identifying_labels
+
+    df = _three_untagged_tracks()
+    df["CNN_colortag_front_Class"] = "red"
+    df["CNN_colortag_back_Class"] = "blue"
+    out = _stamp_non_identifying_labels(df, _PARAMS)
+    assert out is df
+    assert not any(str(c).startswith("IdentityFinal") for c in out.columns)
+
+
+def test_capitalized_factor_names_still_resolve_axis_columns():
+    """The axis-column resolver must delegate to the same sanitization the
+    writer uses (``build_cnn_output_columns``), not re-derive it -- a
+    capitalized/punctuated ``factor_names`` entry must still match the
+    columns the writer actually produced."""
+    params = {
+        "CNN_CLASSIFIERS": [
+            {
+                "label": "colortag",
+                "unique_identifier": True,
+                "class_names_per_factor": [["red", "notag"], ["blue", "notag"]],
+                "factor_names": ["Front Tag", "Back-Tag"],
+                "non_identifying_classes": ["notag_notag"],
+            }
+        ],
+        "IDENTITY_POSTHOC_ENABLED": False,
+        "ENABLE_IDENTITY_FRAGMENT_SOLVER": False,
+    }
+    rows = []
+    for frame in (0, 1):
+        rows.append(
+            {
+                "TrajectoryID": 0,
+                "FrameID": frame,
+                "CNN_colortag_front_tag_Class": "notag",
+                "CNN_colortag_front_tag_Conf": 0.9,
+                "CNN_colortag_back_tag_Class": "notag",
+                "CNN_colortag_back_tag_Conf": 0.7,
+            }
+        )
+    df = pd.DataFrame(rows)
+    out = apply_identity_postprocessing_to_df(df, params)
+    assert set(out[C.FINAL_LABEL]) == {"notag_notag"}
+    assert set(out[C.FINAL_SOURCE]) == {"nonidentifying"}
+
+
+def test_axis_scoped_mark_stamps_only_the_marked_axis_value():
+    """A factor-scoped mark ('back:notag') excludes only composites
+    carrying that axis value, not every composite touching that model --
+    proving the stamp doesn't collapse to whole-model exclusion."""
+    params = {
+        "CNN_CLASSIFIERS": [
+            {
+                "label": "colortag",
+                "unique_identifier": True,
+                "class_names_per_factor": [["red", "notag"], ["blue", "notag"]],
+                "factor_names": ["front", "back"],
+                "non_identifying_classes": ["back:notag"],
+            }
+        ],
+        "IDENTITY_POSTHOC_ENABLED": False,
+        "ENABLE_IDENTITY_FRAGMENT_SOLVER": False,
+    }
+    rows = []
+    for frame in (0, 1):
+        rows.append(
+            {
+                "TrajectoryID": 0,
+                "FrameID": frame,
+                "CNN_colortag_front_Class": "red",
+                "CNN_colortag_front_Conf": 0.9,
+                "CNN_colortag_back_Class": "notag",
+                "CNN_colortag_back_Conf": 0.6,
+            }
+        )
+    df = pd.DataFrame(rows)
+    out = apply_identity_postprocessing_to_df(df, params)
+    assert set(out[C.FINAL_LABEL]) == {"red_notag"}
+    assert set(out[C.FINAL_SOURCE]) == {"nonidentifying"}
+    assert set(out[C.FINAL_ID]) == {0}
