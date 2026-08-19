@@ -1214,7 +1214,9 @@ Passing `None` for the single-arena case is deliberate: it takes the exact ungat
 At each of the four `meas = frame_result_to_meas(...)` sites (lines 2156, 2232, 2292, 2330), derive the per-frame arena vector immediately after:
 
 ```python
-                    meas_arena = self.arena_layout.arena_of_points(_obb.centroids)
+                    meas_arena = self.arena_layout.arena_of_points(
+                        _obb.centroids, frame_size=(frame.shape[1], frame.shape[0])
+                    )
 ```
 
 and for the empty-detection branches (lines 2201, 2373):
@@ -1222,6 +1224,15 @@ and for the empty-detection branches (lines 2201, 2373):
 ```python
                     meas_arena = np.zeros(0, dtype=np.int32)
 ```
+
+**Coordinate space — verify before wiring.** `worker.py:2062` resizes the tracking frame
+by `RESIZE_FACTOR`, and `worker.py:2076` resizes `ROI_MASK` to match the *current* frame
+(`target_w, target_h = frame.shape[1], frame.shape[0]`). The arena label image must follow
+the same rule, which is why `arena_of_points` takes `frame_size`. `RESIZE_FACTOR` is
+clamped to 1.0 on the YOLO path, so this only bites on bgsub clips (the `worm_bgsub`
+fixture) — where it would systematically pull every centroid toward the top-left and
+mis-assign arenas. Confirm which space `_obb.centroids` are actually in (resized vs.
+native) before choosing what to pass, and add a test that pins it.
 
 Thread `meas_arena=meas_arena` into the `assign_tracks(...)` call. At row emission (near line 3533), add the arena of each track slot — **only when the
 run is genuinely multi-arena**:
