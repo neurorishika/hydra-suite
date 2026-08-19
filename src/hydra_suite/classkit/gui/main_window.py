@@ -7491,32 +7491,6 @@ class MainWindow(QMainWindow):
         artifact = results[0].get("artifact_path", "")
         if not artifact or not Path(artifact).exists():
             return
-        # Shared-trunk multi-head: the .pth carries factor_names + per-factor
-        # heads, but the existing torchvision in-dialog inference path expects
-        # a single flat class list. Skip the auto-preview here; the artifact
-        # publishes normally and TrackerKit / ClassKit "Previously Trained
-        # Models" consume it correctly via ClassifierBackend.
-        try:
-            import torch as _torch_probe
-
-            _probe_ckpt = _torch_probe.load(
-                str(artifact), map_location="cpu", weights_only=False
-            )
-            if (
-                isinstance(_probe_ckpt, dict)
-                and str(_probe_ckpt.get("head_kind") or "flat")
-                == "multihead_shared_trunk"
-            ):
-                dialog.append_log(
-                    "Shared-trunk multi-head: skipping in-dialog preview "
-                    "(artifact publishes normally; load via Previously "
-                    "Trained Models or TrackerKit for inference)."
-                )
-                if on_done:
-                    on_done({})
-                return
-        except Exception:
-            pass
         prediction_confidence_threshold = (
             self._normalize_prediction_confidence_threshold(
                 (self._last_training_settings or {}).get(
@@ -7524,6 +7498,29 @@ class MainWindow(QMainWindow):
                 )
             )
         )
+
+        # Shared-trunk multi-head: one .pth holding every factor head. It is
+        # neither flat nor an N-artifact bundle, so it gets its own preview
+        # path, which reads the head layout off the checkpoint.
+        try:
+            import torch as _torch_probe
+
+            _probe_ckpt = _torch_probe.load(
+                str(artifact), map_location="cpu", weights_only=False
+            )
+        except Exception:
+            _probe_ckpt = None
+        if self.is_shared_trunk_checkpoint(_probe_ckpt):
+            dialog.append_log(
+                f"Running shared-trunk multi-head inference: {Path(artifact).name}..."
+            )
+            self._active_model_mode = "custom_cnn_multihead"
+            self._run_shared_trunk_inference(
+                Path(artifact),
+                on_success=on_done,
+                prediction_confidence_threshold=prediction_confidence_threshold,
+            )
+            return
 
         if is_yolo:
             if multi_head:
@@ -8670,6 +8667,37 @@ class MainWindow(QMainWindow):
                 prefix="Checkpoint held-out validation accuracy",
             )
         )
+        prediction_confidence_threshold = (
+            self._resolve_prediction_confidence_threshold_for_path(path)
+        )
+
+        def _after_shared_trunk(_result):
+            self._evaluate_model_on_labeled()
+            QTimer.singleShot(100, self._replot_umap_model_space)
+            if show_message_box:
+                QMessageBox.information(
+                    self,
+                    "Shared-trunk Model Loaded",
+                    f"Loaded: {path.name}\n"
+                    f"Inference on {len(self.image_paths):,} images complete.\n"
+                    "Metrics tab updated. Model UMAP computing...",
+                )
+            if on_success is not None:
+                on_success()
+
+        # A shared-trunk .pth holds every factor head and deliberately carries no
+        # top-level class_names; treating it as flat would fall back to
+        # self.classes (factor 0 only) and mislabel every other head's columns.
+        if self.is_shared_trunk_checkpoint(ckpt):
+            self._active_model_mode = "custom_cnn_multihead"
+            self.status.showMessage(f"Loading shared-trunk model: {path.name}...")
+            self._run_shared_trunk_inference(
+                path,
+                on_success=_after_shared_trunk,
+                prediction_confidence_threshold=prediction_confidence_threshold,
+            )
+            return
+
         ckpt_names = ckpt.get("class_names")
         input_size = ckpt.get("input_size", (224, 224))
         size = (
@@ -8685,9 +8713,6 @@ class MainWindow(QMainWindow):
         resolved = ckpt_names or list(self.classes)
         self._active_model_mode = "custom_cnn"
         self.status.showMessage(f"Loading Custom CNN ({arch}): {path.name}...")
-        prediction_confidence_threshold = (
-            self._resolve_prediction_confidence_threshold_for_path(path)
-        )
 
         def _after_load(_result):
             self._evaluate_model_on_labeled()
@@ -9536,6 +9561,95 @@ class MainWindow(QMainWindow):
         worker.signals.finished.connect(lambda: self.progress_bar.setVisible(False))
         self._threadpool_start(worker)
 
+    @staticmethod
+    def is_shared_trunk_checkpoint(ckpt) -> bool:
+        """True when a loaded checkpoint dict is a shared-trunk multi-head model.
+
+        Shared trunk is one ``.pth`` holding every factor head, so it must never
+        be routed through either the flat path (which would fall back to
+        ``self.classes``) or the N-artifact multi-head path (which assumes one
+        ``.pth`` per head).
+        """
+        return (
+            isinstance(ckpt, dict)
+            and str(ckpt.get("head_kind") or "flat") == "multihead_shared_trunk"
+        )
+
+    def _run_shared_trunk_inference(
+        self,
+        model_path,
+        on_success=None,
+        prediction_confidence_threshold: float | None = None,
+    ):
+        """Run shared-trunk multi-head inference and apply it as multi-head state.
+
+        The artifact carries ``factor_names`` + ``class_names_per_factor``, so the
+        head layout comes off the checkpoint itself rather than from the project's
+        flat class list. State is published under the same
+        ``custom_cnn_multihead`` contract the N-artifact path uses, which is what
+        every downstream consumer already understands.
+        """
+        if not self.image_paths:
+            return
+
+        from ..jobs.task_workers import SharedTrunkInferenceWorker
+
+        model_path = Path(model_path)
+        device = self._resolve_classifier_device(model_path)
+        worker = SharedTrunkInferenceWorker(
+            model_path,
+            self.image_paths,
+            device=device,
+            batch_size=64,
+        )
+
+        def _shared_trunk_success(result):
+            probs = result["probs"]
+            class_names = list(result.get("class_names") or [])
+            prediction_heads = list(result.get("prediction_heads") or [])
+            self._set_model_prediction_state(
+                probs,
+                class_names,
+                active_model_mode="custom_cnn_multihead",
+                prediction_heads=prediction_heads,
+                prediction_confidence_threshold=prediction_confidence_threshold,
+            )
+            self.umap_model_coords = None
+            self.pca_model_coords = None
+            self._show_model_umap = False
+            self._show_model_pca = False
+            self.btn_umap_embedding.setChecked(True)
+            self.btn_umap_model.setChecked(False)
+            if hasattr(self, "btn_pca_model"):
+                self.btn_pca_model.setChecked(False)
+            self._set_model_projection_buttons_enabled(True)
+            self._update_al_status()
+            self.update_explorer_plot()
+            self.status.showMessage(
+                f"Shared-trunk inference done: {len(self.image_paths):,} images, "
+                f"{len(prediction_heads)} factors"
+            )
+            self._persist_prediction_cache(
+                probs,
+                class_names,
+                "custom_cnn_multihead",
+                prediction_heads=prediction_heads,
+            )
+            if on_success:
+                on_success(result)
+
+        worker.signals.success.connect(_shared_trunk_success)
+        worker.signals.error.connect(
+            lambda e: self.status.showMessage(f"Shared-trunk inference error: {e}")
+        )
+        worker.signals.progress.connect(
+            lambda p, m: (self.status.showMessage(f"[Shared trunk] {m}") if m else None)
+        )
+        self.progress_bar.setValue(0)
+        self.progress_bar.setVisible(True)
+        worker.signals.finished.connect(lambda: self.progress_bar.setVisible(False))
+        self._threadpool_start(worker)
+
     def _run_multihead_custom_inference(
         self,
         model_paths: list,
@@ -9913,6 +10027,23 @@ class MainWindow(QMainWindow):
                     ),
                 )
         else:
+            # Shared trunk is a single .pth carrying every head, so it must not
+            # go through the N-artifact multi-head path (one .pth per head).
+            if mode == "multihead_custom_shared":
+                self._active_model_mode = "custom_cnn_multihead"
+                self._run_shared_trunk_inference(
+                    Path(paths[0]),
+                    on_success=_after,
+                    prediction_confidence_threshold=(
+                        cached_threshold
+                        if cached_threshold is not None
+                        else self._resolve_prediction_confidence_threshold_for_path(
+                            Path(paths[0])
+                        )
+                    ),
+                )
+                return
+
             if mode.startswith("multihead"):
                 all_paths = [Path(p) for p in paths if Path(p).exists()]
                 self._active_model_mode = "custom_cnn_multihead"
@@ -9930,6 +10061,22 @@ class MainWindow(QMainWindow):
                 return
 
             ckpt = torch.load(str(paths[0]), map_location="cpu", weights_only=False)
+            # Second line of defence: a shared-trunk artifact recorded under a
+            # stale or missing mode must still never reach the flat path.
+            if self.is_shared_trunk_checkpoint(ckpt):
+                self._active_model_mode = "custom_cnn_multihead"
+                self._run_shared_trunk_inference(
+                    Path(paths[0]),
+                    on_success=_after,
+                    prediction_confidence_threshold=(
+                        cached_threshold
+                        if cached_threshold is not None
+                        else self._resolve_prediction_confidence_threshold_for_path(
+                            Path(paths[0])
+                        )
+                    ),
+                )
+                return
             arch = (
                 ckpt.get("arch", "tinyclassifier")
                 if isinstance(ckpt, dict)
@@ -11140,22 +11287,19 @@ class MainWindow(QMainWindow):
             )
             if source == "active":
                 reason = self._prepared_candidate_reason_map.get(idx, "selected")
-                conf = (
-                    float(self._model_probs[idx].max())
-                    if self._model_probs is not None and idx < len(self._model_probs)
-                    else 0.0
-                )
-                pred_col = (
-                    int(self._model_probs[idx].argmax())
-                    if self._model_probs is not None and idx < len(self._model_probs)
-                    else 0
-                )
-                pred_class = (
-                    self._model_class_names[pred_col]
-                    if self._model_class_names
-                    and pred_col < len(self._model_class_names)
-                    else f"cls_{pred_col}"
-                )
+                # Use the head-aware summary: a global argmax over the
+                # concatenated columns of a multi-head model would report a
+                # single factor's label instead of the composite prediction.
+                summary = self._prediction_summary_for_index(idx, top_k=1)
+                if summary is not None:
+                    pred_class = str(summary.get("predicted_label") or "")
+                    raw_conf = summary.get("confidence")
+                    conf = float(raw_conf) if raw_conf is not None else 0.0
+                else:
+                    pred_class = ""
+                    conf = 0.0
+                if not pred_class:
+                    pred_class = "n/a"
                 detail = f"pred={pred_class} · conf={conf:.3f} · label={current_label} · {reason}"
             else:
                 cluster = (

@@ -1428,6 +1428,152 @@ class ALBatchWorker(QRunnable):
             self.signals.finished.emit()
 
 
+def shared_trunk_prediction_heads(
+    factor_names: List[str], class_names_per_factor: List[List[str]]
+) -> List[dict]:
+    """Build ClassKit ``prediction_heads`` slices for a shared-trunk model.
+
+    A shared-trunk model emits the per-factor logits *concatenated*, so head
+    ``k`` occupies columns ``[start, end)`` where the widths come from
+    ``class_names_per_factor``. This is the same metadata shape the N-artifact
+    multi-head path produces, so every downstream ClassKit consumer (explorer
+    colors, prediction summaries, AL candidates, the DB cache) works unchanged.
+    """
+    heads: List[dict] = []
+    offset = 0
+    for index, names in enumerate(class_names_per_factor):
+        head_names = [str(n) for n in names]
+        factor = (
+            str(factor_names[index]).strip()
+            if index < len(factor_names) and str(factor_names[index]).strip()
+            else f"factor_{index + 1}"
+        )
+        heads.append(
+            {
+                "factor": factor,
+                "class_names": head_names,
+                "start": offset,
+                "end": offset + len(head_names),
+            }
+        )
+        offset += len(head_names)
+    return heads
+
+
+class SharedTrunkInferenceWorker(QRunnable):
+    """Run shared-trunk multi-head classifier inference on all project images.
+
+    A shared-trunk artifact is ONE ``.pth`` whose forward emits the concatenated
+    per-factor logits. Rather than re-deriving the head layout here, this worker
+    runs the model through :class:`ClassifierBackend` -- the same component
+    TrackerKit uses -- which splits the concatenated logits per factor and
+    softmaxes **each head independently**. ClassKit previews therefore agree
+    with TrackerKit inference by construction.
+
+    Extends the flat workers' contract with the multi-head metadata:
+    ``{"probs": ndarray(N, sum_widths), "class_names": flattened per-factor
+    names, "prediction_heads": [...], "factor_names": [...]}``.
+    """
+
+    def __init__(
+        self,
+        model_path: Path,
+        image_paths: List[Path],
+        device: str = "cpu",
+        batch_size: int = 64,
+    ):
+        super().__init__()
+        self.setAutoDelete(False)  # prevent Qt from freeing C++ side before Python GC
+        self.model_path = Path(model_path)
+        self.image_paths = list(image_paths)
+        self.device = _resolve_classkit_torch_device(device)
+        self.batch_size = batch_size
+        self.signals = TaskSignals()
+
+    def _load_batch(self, batch_paths, input_hw, monochrome: bool):
+        """Load images as canonically-fitted uint8 RGB crops at the model input size.
+
+        Fitting here (rather than letting the backend resize) matches the other
+        ClassKit inference workers and means the backend sees a same-size crop,
+        for which its resize is the exact identity.
+        """
+        import numpy as np
+        from PIL import Image
+
+        from ...training.canonical_transform import CanonicalFitTransform
+
+        input_h, input_w = input_hw
+        fit_transform = CanonicalFitTransform((input_h, input_w))
+        crops = []
+        for path in batch_paths:
+            try:
+                img = Image.open(str(path)).convert("RGB")
+                if monochrome:
+                    img = img.convert("L").convert("RGB")
+                crops.append(fit_transform(np.asarray(img, dtype=np.uint8)))
+            except Exception:
+                crops.append(np.zeros((input_h, input_w, 3), dtype=np.uint8))
+        return crops
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            self.signals.started.emit()
+
+            import numpy as np
+
+            from ...core.individual.classification.backend import ClassifierBackend
+            from ...runtime.resolver import ResolvedBackend
+
+            backend = ClassifierBackend(
+                str(self.model_path), ResolvedBackend("torch", self.device, False)
+            )
+            try:
+                meta = backend.metadata
+                factor_names = list(meta.factor_names)
+                cnpf = [list(names) for names in meta.class_names_per_factor]
+                input_hw = (int(meta.input_size[0]), int(meta.input_size[1]))
+                monochrome = bool(meta.monochrome)
+
+                total = len(self.image_paths)
+                rows: List["np.ndarray"] = []
+                for start in range(0, total, self.batch_size):
+                    batch_paths = self.image_paths[start : start + self.batch_size]
+                    crops = self._load_batch(batch_paths, input_hw, monochrome)
+                    # Crops are RGB (PIL), not the cv2 BGR the backend defaults to.
+                    per_crop = backend.predict_batch(crops, input_is_bgr=False)
+                    for per_factor in per_crop:
+                        rows.append(np.concatenate([np.asarray(p) for p in per_factor]))
+                    done = min(start + self.batch_size, total)
+                    pct = int(done * 100 / total) if total else 100
+                    self.signals.progress.emit(pct, f"Inferring {done}/{total}")
+            finally:
+                backend.close()
+
+            width = sum(len(names) for names in cnpf)
+            probs = (
+                np.stack(rows).astype(np.float32)
+                if rows
+                else np.zeros((0, width), dtype=np.float32)
+            )
+            self.signals.success.emit(
+                {
+                    "probs": probs,
+                    "class_names": [str(n) for names in cnpf for n in names],
+                    "prediction_heads": shared_trunk_prediction_heads(
+                        factor_names, cnpf
+                    ),
+                    "factor_names": factor_names,
+                }
+            )
+
+        except Exception as exc:
+            traceback.print_exc()
+            self.signals.error.emit(str(exc))
+        finally:
+            self.signals.finished.emit()
+
+
 class TinyCNNInferenceWorker(QRunnable):
     """Run tiny CNN classification inference on all project images via PyTorch.
 
