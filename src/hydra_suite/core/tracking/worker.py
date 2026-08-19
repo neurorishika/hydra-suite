@@ -2111,6 +2111,13 @@ class TrackingEngineCore:
             ROI_mask = params.get("ROI_MASK", None)
             ROI_mask_current = None
 
+            # Profiler boundary preserved at its original (pre-arena) spot:
+            # `main`'s "roi_prepare" sample included the target_w/target_h
+            # probe (it lived inside this same block), so keep it timed here
+            # rather than only around the ROI-mask-specific work below --
+            # this key stays comparable to `main`'s baseline.
+            roi_prepare_started = time.perf_counter()
+
             # `target_w`/`target_h` is the current tracking frame's resolution --
             # after RESIZE_FACTOR has scaled it (worker._resize_tracking_frame,
             # above) -- needed so both the ROI mask resize (below) and the
@@ -2139,7 +2146,6 @@ class TrackingEngineCore:
                     target_w = max(1, int(base_w * resize_f))
                     target_h = max(1, int(base_h * resize_f))
 
-            roi_prepare_started = time.perf_counter()
             if ROI_mask is not None:
                 (
                     ROI_mask_current,

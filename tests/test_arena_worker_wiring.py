@@ -596,6 +596,34 @@ class _FakeYoloRunner:
         pass
 
 
+def _make_traced_yolo_runner_cls():
+    """A fresh `_FakeYoloRunner` subclass with its own `call_log` (a class
+    attribute, so it survives across the single instance worker.py
+    constructs) recording which dispatch methods actually fired. Existing to
+    catch exactly the failure mode a review found: a test asserting on
+    `arena_of_points` output without ever confirming which worker.py BRANCH
+    produced it -- `run_realtime`/`load_frame`/`run_batch_pass` are
+    dispatch-exclusive in every scenario these tests drive, so asserting the
+    log names the intended site (and only that site) fired."""
+
+    class _TracedYoloRunner(_FakeYoloRunner):
+        call_log: list[str] = []
+
+        def run_realtime(self, frame, frame_idx):
+            self.call_log.append("run_realtime")
+            return super().run_realtime(frame, frame_idx)
+
+        def load_frame(self, frame_idx):
+            self.call_log.append("load_frame")
+            return super().load_frame(frame_idx)
+
+        def run_batch_pass(self, *_a, **_k):
+            self.call_log.append("run_batch_pass")
+            return super().run_batch_pass(*_a, **_k)
+
+    return _TracedYoloRunner
+
+
 def _assert_mismatch_calls_resolve_arena_one(calls):
     """At least one recorded `arena_of_points` call must have used the
     CURRENT (100x100) frame size -- not `None`/the label image's own 200x100
@@ -621,7 +649,8 @@ def test_cached_yolo_replay_meas_arena_uses_current_frame_size(monkeypatch, tmp_
 
     monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
     monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _FakeVideoCapture)
-    monkeypatch.setattr(worker_mod, "InferenceRunner", _FakeYoloRunner)
+    traced_cls = _make_traced_yolo_runner_cls()
+    monkeypatch.setattr(worker_mod, "InferenceRunner", traced_cls)
     calls = _spy_arena_of_points(monkeypatch)
 
     captured = {}
@@ -637,6 +666,12 @@ def test_cached_yolo_replay_meas_arena_uses_current_frame_size(monkeypatch, tmp_
     worker.set_parameters(_arena_mismatch_params(detection_method="yolo_obb"))
     worker.run_tracking()
     assert captured.get("success") is not False
+    assert (
+        "load_frame" in traced_cls.call_log
+    ), f"expected the cached-replay dispatch (load_frame); call_log={traced_cls.call_log}"
+    assert (
+        "run_realtime" not in traced_cls.call_log
+    ), f"backward-mode replay must never call run_realtime; call_log={traced_cls.call_log}"
     _assert_mismatch_calls_resolve_arena_one(calls)
 
 
@@ -649,7 +684,8 @@ def test_cached_bgsub_replay_meas_arena_uses_current_frame_size(monkeypatch, tmp
 
     monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
     monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _FakeVideoCapture)
-    monkeypatch.setattr(worker_mod, "InferenceRunner", _FakeYoloRunner)
+    traced_cls = _make_traced_yolo_runner_cls()
+    monkeypatch.setattr(worker_mod, "InferenceRunner", traced_cls)
     calls = _spy_arena_of_points(monkeypatch)
 
     captured = {}
@@ -667,17 +703,38 @@ def test_cached_bgsub_replay_meas_arena_uses_current_frame_size(monkeypatch, tmp
     )
     worker.run_tracking()
     assert captured.get("success") is not False
+    assert (
+        "load_frame" in traced_cls.call_log
+    ), f"expected the cached-replay dispatch (load_frame); call_log={traced_cls.call_log}"
+    assert (
+        "run_realtime" not in traced_cls.call_log
+    ), f"backward-mode replay must never call run_realtime; call_log={traced_cls.call_log}"
     _assert_mismatch_calls_resolve_arena_one(calls)
 
 
 def test_realtime_yolo_meas_arena_uses_current_frame_size(monkeypatch, tmp_path):
     """Forward realtime YOLO OBB (`inference_runner.run_realtime`) -- `frame`
-    IS populated here (unlike the cached sites above)."""
+    IS populated here (unlike the cached sites above).
+
+    Regression note: an earlier version of this test set `preview_mode=True`
+    and only `TRACKING_WORKFLOW_MODE="realtime"`. Neither is sufficient --
+    `effective_realtime_tracking_mode` (worker.py) additionally requires
+    `TRACKING_REALTIME_MODE=True` (the key `build_engine_params` ALWAYS
+    emits, hardcoded `False`, so the workflow-mode fallback that reads it
+    never fires once the key already exists in `p`) AND `not preview_mode`.
+    Missing either silently routed the whole run through
+    `run_batch_pass` + cached `load_frame` instead -- an exact duplicate of
+    the cached-YOLO test above, never touching `run_realtime` at all, and
+    the `arena_of_points` assertion below passed anyway (same underlying
+    dispatch site, coincidentally). The `call_log` assertions make that
+    silent-wrong-branch failure mode impossible to reintroduce.
+    """
     import hydra_suite.core.tracking.worker as worker_mod
 
     monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
     monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _FakeVideoCapture)
-    monkeypatch.setattr(worker_mod, "InferenceRunner", _FakeYoloRunner)
+    traced_cls = _make_traced_yolo_runner_cls()
+    monkeypatch.setattr(worker_mod, "InferenceRunner", traced_cls)
     calls = _spy_arena_of_points(monkeypatch)
 
     captured = {}
@@ -686,13 +743,22 @@ def test_realtime_yolo_meas_arena_uses_current_frame_size(monkeypatch, tmp_path)
         on_finished=lambda success, _fps, _traj: captured.__setitem__(
             "success", success
         ),
-        preview_mode=True,
+        preview_mode=False,
     )
-    worker.set_parameters(
-        _arena_mismatch_params(detection_method="yolo_obb", workflow_mode="realtime")
+    params = _arena_mismatch_params(
+        detection_method="yolo_obb", workflow_mode="realtime"
     )
+    params["TRACKING_REALTIME_MODE"] = True
+    worker.set_parameters(params)
     worker.run_tracking()
     assert captured.get("success") is not False
+    assert (
+        "run_realtime" in traced_cls.call_log
+    ), f"expected the realtime dispatch (run_realtime); call_log={traced_cls.call_log}"
+    assert not {"load_frame", "run_batch_pass"} & set(traced_cls.call_log), (
+        f"expected a pure realtime run (no cached/batch dispatch); "
+        f"call_log={traced_cls.call_log}"
+    )
     _assert_mismatch_calls_resolve_arena_one(calls)
 
 
@@ -813,4 +879,94 @@ def test_single_arena_run_constructs_bare_online_decoder(monkeypatch, tmp_path):
         "single-arena must keep the literal bare decoder object (not a "
         "one-decoder registry), so single-arena byte-identity stays "
         "structural, not arithmetic"
+    )
+
+
+# ---------------------------------------------------------------------------
+# ArenaDecoderRegistry method routing, built the way worker.py builds it.
+#
+# `get_belief`/`clear_slot`/`decay_absent_slot_beliefs` are called from
+# worker.py ONLY inside the `try:` block at the per-frame identity-decoder
+# update site (guarded by a bare `except Exception: logger.debug(...)`) --
+# so a routing bug in any of the three would degrade the identity path
+# silently, with nothing reported. Driving all three through a genuine
+# run_tracking() pass would require synthesizing real per-detection identity
+# EVIDENCE (tag or CNN posteriors) across several frames with a specific
+# track-state sequence (commit -> respawn -> still-absent-while-committed)
+# to reach every method naturally -- disproportionate for this follow-up.
+# Per the review's explicit fallback, this instead builds the registry via
+# the EXACT construction worker.py:1886-1892 uses (the real
+# `resolve_catalog_spec` -> `IdentityCatalog.from_spec` catalog, and a real
+# `ArenaLayout.slot_arena`, not the simplified `IdentityCatalog.from_labels`
+# + hand-rolled array the registry's own unit tests
+# (`tests/test_arena_identity_decoders.py`) already use) and calls each
+# method directly, asserting routing to the decoder OWNING the slot.
+# ---------------------------------------------------------------------------
+
+
+def test_registry_methods_route_correctly_when_built_the_way_worker_builds_it():
+    from hydra_suite.core.individual.identity.catalog import IdentityCatalog
+    from hydra_suite.core.individual.identity.resolve import resolve_catalog_spec
+    from hydra_suite.core.tracking.arenas import ArenaLayout
+    from hydra_suite.core.tracking.identity.decoder_registry import ArenaDecoderRegistry
+
+    # Exactly worker.py's catalog construction (resolve_catalog_spec ->
+    # IdentityCatalog.from_spec), driven off TAG_IDENTITY_LABELS the same way
+    # `_identity_decoder_wiring_params` above does.
+    catalog_spec = resolve_catalog_spec([], ["antA", "antB"])
+    catalog = IdentityCatalog.from_spec(catalog_spec)
+    # Exactly worker.py's slot_arena source: ArenaLayout.slot_arena, not a
+    # hand-rolled array. 2 arenas x 2 animals -> slot_arena = [0, 0, 1, 1].
+    layout = ArenaLayout(n_arenas=2, animals_per_arena=2)
+    params = {"IDENTITY_ONLINE_COMMIT_THRESHOLD": 0.9}
+    reg = ArenaDecoderRegistry(catalog, params, layout.slot_arena)
+    dec0, dec1 = reg.decoders[0], reg.decoders[1]
+    assert dec0 is not dec1
+
+    # get_belief: slot 1 belongs to arena 0 (dec0); slot 2 belongs to arena 1
+    # (dec1). Stamp a sentinel belief directly on ONE decoder's internal
+    # state and confirm the registry reads it back only through the correct
+    # decoder.
+    from hydra_suite.core.individual.identity.online import TrackIdentityBelief
+
+    sentinel_belief = TrackIdentityBelief(
+        slot_index=1,
+        log_posterior=np.zeros(catalog.size, dtype=np.float64),
+    )
+    # `_beliefs` is OnlineIdentityDecoder's private internal state -- poked
+    # directly here (rather than routed through the real evidence-fusion
+    # pipeline) is exactly what makes this a routing test: it isolates
+    # ArenaDecoderRegistry's slot->decoder dispatch from decoder-internal
+    # belief-update logic (already covered elsewhere).
+    dec0._beliefs[1] = sentinel_belief
+    assert reg.get_belief(1) is sentinel_belief
+    assert reg.get_belief(2) is None, "slot 2 (arena 1) must not see arena 0's belief"
+
+    # clear_slot: must clear the OWNING decoder's belief, not the other
+    # arena's.
+    dec1._beliefs[2] = TrackIdentityBelief(
+        slot_index=2,
+        log_posterior=np.zeros(catalog.size, dtype=np.float64),
+    )
+    reg.clear_slot(2, reason="respawn at frame 5", respawn_frame_idx=5)
+    assert 2 not in dec1._beliefs, "clear_slot must remove the owning decoder's belief"
+    assert 1 in dec0._beliefs, "clear_slot(2, ...) must not touch arena 0's slot 1"
+
+    # decay_absent_slot_beliefs: mixed-arena input must be partitioned and
+    # each sub-list routed to its own decoder (not one decoder seeing both
+    # arenas' slots).
+    seen: dict[int, list[int]] = {}
+
+    def _make_decay_spy(arena_id):
+        def _spy(slots):
+            seen[arena_id] = list(slots)
+
+        return _spy
+
+    dec0.decay_absent_slot_beliefs = _make_decay_spy(0)
+    dec1.decay_absent_slot_beliefs = _make_decay_spy(1)
+    reg.decay_absent_slot_beliefs([0, 1, 2, 3])
+    assert seen == {0: [0, 1], 1: [2, 3]}, (
+        f"decay_absent_slot_beliefs must partition by arena and route each "
+        f"partition to its owning decoder; got {seen}"
     )
