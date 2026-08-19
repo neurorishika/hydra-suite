@@ -155,6 +155,10 @@ class TrackingEngineCore:
         # Stats tracking for FPS/ETA
         self.start_time = None
         self.frame_times = deque(maxlen=30)  # Keep last 30 frames for FPS calculation
+
+        # Stats tracking for the InferenceRunner batch-pass phase (precompute)
+        self._inference_progress_start_time = None
+        self._inference_progress_times = deque(maxlen=30)
         self._stop_requested = False
 
         # Internal state variables that helper methods depend on
@@ -4173,7 +4177,37 @@ class TrackingEngineCore:
 
     def _emit_inference_progress(self, done: int, total: int) -> None:
         """Translate batch-pass progress to the progress callback (surfaced as
-        the wrapper's ``progress_signal``)."""
+        the wrapper's ``progress_signal``), plus a rate/elapsed/ETA stats
+        update mirroring the main tracking loop's real-time stats."""
         if total > 0:
             pct = int(done * 100 / total)
             self._emit_progress(pct, f"Inference pass: {done}/{total} frames")
+
+        current_time = time.time()
+        self._inference_progress_times.append((current_time, done))
+
+        if self._inference_progress_start_time is None:
+            self._inference_progress_start_time = current_time
+        elapsed = current_time - self._inference_progress_start_time
+
+        if len(self._inference_progress_times) >= 2:
+            t0, d0 = self._inference_progress_times[0]
+            span = current_time - t0
+            rate = (done - d0) / span if span > 0 else 0
+        else:
+            rate = 0
+
+        if total > 0 and done > 0:
+            remaining = total - done
+            eta = (remaining / done) * elapsed
+        else:
+            eta = 0
+
+        self._emit_stats(
+            {
+                "phase": "individual_precompute",
+                "fps": rate,
+                "elapsed": elapsed,
+                "eta": eta,
+            }
+        )
