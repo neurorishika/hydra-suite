@@ -215,7 +215,6 @@
   "individual_output_format": "png",
   "individual_save_interval": 1,
   "individual_interpolate_occlusions": true,
-  "individual_crop_padding": 0.5,
   "individual_background_color": [
     233,
     232,

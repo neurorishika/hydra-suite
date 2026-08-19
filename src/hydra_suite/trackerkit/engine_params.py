@@ -756,6 +756,16 @@ def build_engine_params(
     _debug_present = "debug_mode" in cfg
     _debug_mode = bool(_cfg_get(cfg, "debug_mode", default=True))
 
+    if _cfg_get(cfg, "individual_crop_padding", default=None) is not None:
+        logger.warning(
+            "Config key 'individual_crop_padding' is retired and ignored. Crop "
+            "framing for every model- and dataset-facing crop now comes from "
+            "ADVANCED_CONFIG.canonical_margin; AprilTag crops have their own "
+            "'apriltag_crop_padding' (default 0.0 = the detection's exact "
+            "extent). See docs/superpowers/specs/2026-08-18-crop-padding-"
+            "retirement-design.md."
+        )
+
     params: dict[str, Any] = {
         "ADVANCED_CONFIG": advanced,
         "DEBUG_MODE": _debug_mode,
@@ -1331,9 +1341,6 @@ def build_engine_params(
         ),
         "INDIVIDUAL_INTERPOLATE_OCCLUSIONS": bool(
             _cfg_get(cfg, "individual_interpolate_occlusions", default=True)
-        ),
-        "INDIVIDUAL_CROP_PADDING": float(
-            _cfg_get(cfg, "individual_crop_padding", default=0.1)
         ),
         "INDIVIDUAL_BACKGROUND_COLOR": [
             int(component)

@@ -46,7 +46,7 @@ def test_preview_build_inference_params_maps_overlay_and_runtime_keys() -> None:
             "pose_model_dir": "/models/sleap",
             "use_apriltags": True,
             "apriltag_family": "tag25h9",
-            "individual_crop_padding": 0.2,
+            "apriltag_crop_padding": 0.2,
         },
         1.0,
         False,
@@ -62,7 +62,7 @@ def test_preview_build_inference_params_maps_overlay_and_runtime_keys() -> None:
     assert params["POSE_MODEL_TYPE"] == "sleap"
     assert params["USE_APRILTAGS"] is True
     assert params["APRILTAG_FAMILY"] == "tag25h9"
-    assert params["INDIVIDUAL_CROP_PADDING"] == 0.2
+    assert params["APRILTAG_CROP_PADDING"] == 0.2
 
 
 def _authoritative_params(**overrides) -> dict:
@@ -508,7 +508,7 @@ def test_preview_run_apriltag_overlay_offsets_corners_to_frame_space(
     test_frame = np.zeros((200, 200, 3), dtype=np.uint8)
     label_stacks: list[list[str]] = [[]]
     preview_worker._preview_run_apriltag_overlay(
-        apriltag, obb, {"individual_crop_padding": 0.0}, label_stacks, test_frame
+        apriltag, obb, {"apriltag_crop_padding": 0.0}, label_stacks, test_frame
     )
 
     # crop-local (2,2) + origin (100,100) -> frame-space (102,102)

@@ -270,20 +270,6 @@ class IdentityPanel(QWidget):
         )
         fl_common.addRow("Interpolate occluded frames", self.chk_individual_interpolate)
 
-        self.spin_individual_padding = QDoubleSpinBox()
-        self.spin_individual_padding.setRange(0.0, 5.0)
-        self.spin_individual_padding.setValue(0.1)
-        self.spin_individual_padding.setSingleStep(0.05)
-        self.spin_individual_padding.setDecimals(2)
-        self.spin_individual_padding.setToolTip(
-            "Padding around OBB bounding box as fraction of size.\n"
-            "0.1 = 10% padding on each side.\n"
-            "Applies to all precompute phases: pose, AprilTag, and CNN identity."
-        )
-        fl_common.addRow(
-            "Crop padding fraction (all phases)", self.spin_individual_padding
-        )
-
         bg_color_layout = QHBoxLayout()
         self.btn_background_color = QPushButton()
         self.btn_background_color.setMaximumWidth(60)

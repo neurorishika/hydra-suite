@@ -1225,16 +1225,6 @@ class ConfigOrchestrator:
             float(get_cfg("color_tag_confidence", default=0.5))
         )
 
-        # Warn users who had a non-default cnn_classifier_crop_padding in their config
-        _legacy_crop_padding = get_cfg("cnn_classifier_crop_padding", default=None)
-        if _legacy_crop_padding is not None and float(_legacy_crop_padding) != 0.1:
-            logger.warning(
-                "Config key 'cnn_classifier_crop_padding' (value=%.2f) is no longer used. "
-                "All precompute phases now use 'individual_crop_padding'. "
-                "Update your crop padding setting in the Individual Analysis panel.",
-                float(_legacy_crop_padding),
-            )
-
         self._panels.identity.chk_enable_pose_extractor.setChecked(
             get_cfg("enable_pose_extractor", default=False)
         )
@@ -1391,9 +1381,6 @@ class ConfigOrchestrator:
         )
         self._panels.identity.chk_individual_interpolate.setChecked(
             get_cfg("individual_interpolate_occlusions", default=True)
-        )
-        self._panels.identity.spin_individual_padding.setValue(
-            get_cfg("individual_crop_padding", default=0.1)
         )
         # Load background color
         bg_color = get_cfg("individual_background_color", default=[0, 0, 0])
@@ -1979,7 +1966,6 @@ class ConfigOrchestrator:
             {
                 "individual_save_interval": self._panels.dataset.spin_individual_interval.value(),
                 "individual_interpolate_occlusions": self._panels.identity.chk_individual_interpolate.isChecked(),
-                "individual_crop_padding": self._panels.identity.spin_individual_padding.value(),
                 "individual_background_color": [
                     int(c) for c in self._panels.identity._background_color
                 ],  # Ensure JSON serializable

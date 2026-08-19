@@ -57,6 +57,22 @@ def test_engine_params_emit_apriltag_crop_padding():
     assert _params({"apriltag_crop_padding": 0.2})["APRILTAG_CROP_PADDING"] == 0.2
 
 
+def test_engine_params_no_longer_emit_individual_crop_padding():
+    assert "INDIVIDUAL_CROP_PADDING" not in _params({"individual_crop_padding": 0.5})
+
+
+def test_legacy_individual_crop_padding_warns_once(caplog):
+    """A config still carrying the retired key loads, warns, and ignores it."""
+    with caplog.at_level("WARNING"):
+        _params({"individual_crop_padding": 0.5})
+    messages = [
+        r.message for r in caplog.records if "individual_crop_padding" in r.message
+    ]
+    assert len(messages) == 1
+    assert "canonical_margin" in messages[0]
+    assert "apriltag_crop_padding" in messages[0]
+
+
 def test_zero_padding_is_the_exact_obb_extent():
     from hydra_suite.core.tracking.pose.pose_pipeline import _expand_obb_to_aabb
 

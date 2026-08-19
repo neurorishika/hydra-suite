@@ -1962,9 +1962,6 @@ class DetectionPanel(QWidget):
             "pose_direction_posterior_keypoints": self._main_window._parse_pose_direction_posterior_keypoints(),
             "pose_batch_size": ip.spin_pose_batch.value() if ip is not None else 1,
             "pose_sleap_env": self._main_window._selected_pose_sleap_env(),
-            "individual_crop_padding": (
-                ip.spin_individual_padding.value() if ip is not None else 0.1
-            ),
             "individual_background_color": (
                 [int(c) for c in ip._background_color] if ip is not None else [0, 0, 0]
             ),

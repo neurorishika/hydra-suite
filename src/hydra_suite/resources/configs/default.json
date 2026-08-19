@@ -136,7 +136,6 @@
   "individual_dataset_name": "individual_dataset",
   "individual_output_format": "png",
   "individual_save_interval": 1,
-  "individual_crop_padding": 0.1,
   "pose_export_min_valid_fraction": 0.5,
   "pose_export_min_valid_keypoints": 3,
   "suppress_foreign_obb_regions": true,
