@@ -701,8 +701,8 @@ class SetupPanel(QWidget):
         )
         _perf_actions_row = QHBoxLayout()
         _perf_actions_row.setContentsMargins(0, 0, 0, 0)
-        _perf_actions_row.addWidget(self.chk_use_cached_detections)
         _perf_actions_row.addStretch(1)
+        _perf_actions_row.addWidget(self.chk_use_cached_detections)
         _perf_actions_row.addWidget(self.btn_clear_detection_caches)
         vl_sys.addLayout(_perf_actions_row)
 
@@ -897,10 +897,15 @@ class SetupPanel(QWidget):
             if card not in self._performance_base_control_cards and not card.isHidden()
         )
         column_count = 2
+        last_index = len(visible_cards) - 1
         for index, card in enumerate(visible_cards):
             row = index // column_count
             column = index % column_count
-            self.performance_control_grid.addWidget(card, row, column)
+            if index == last_index and column == 0:
+                # Odd one out (or the sole card) fills the row.
+                self.performance_control_grid.addWidget(card, row, column, 1, 2)
+            else:
+                self.performance_control_grid.addWidget(card, row, column)
         for column in range(column_count):
             self.performance_control_grid.setColumnStretch(column, 1)
 
