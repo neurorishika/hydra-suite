@@ -407,7 +407,12 @@ class TrackAssigner:
             return
 
         ta = self.track_arena
-        if ta is not None and meas_arena is not None and len(ta) >= n_tracks:
+        if (
+            ta is not None
+            and meas_arena is not None
+            and len(ta) >= n_tracks
+            and len(meas_arena) >= n_dets
+        ):
             # Arena mismatch is the ONLY legal predicate. Skipping on `cost >= 1e6`
             # would also skip distance-gated cells that exist on main today and
             # change compute_assignment_confidence's inputs.

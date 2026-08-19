@@ -303,8 +303,12 @@ def test_respawn_never_crosses_arenas():
     from hydra_suite.core.assigners.hungarian import TrackAssigner
 
     class _KF:
-        # slot 0 in arena 0 at (10,10); slot 1 in arena 1 at (410,10)
-        X = np.array([[10.0, 10.0, 0.0, 0.0, 0.0], [410.0, 10.0, 0.0, 0.0, 0.0]])
+        # slot 0 in arena 0 at (390,10) -- nearest to the detection; slot 1 in
+        # arena 1 at (410,10). Slot 0 must win on pure distance (5px vs 15px)
+        # unless the arena gate blocks it -- so this fixture can actually
+        # distinguish "gated" from "ungated" behaviourally, not just via a
+        # TypeError on a missing kwarg.
+        X = np.array([[390.0, 10.0, 0.0, 0.0, 0.0], [410.0, 10.0, 0.0, 0.0, 0.0]])
 
     params = {
         "MAX_DISTANCE_THRESHOLD": 1000.0,
@@ -318,8 +322,10 @@ def test_respawn_never_crosses_arenas():
     assigner = TrackAssigner(params)
     assigner.set_track_arena(np.array([0, 1], dtype=np.int32))
 
-    # One detection, sitting in arena 1, near slot 1 but within MAX_DIST of slot 0.
-    meas = [np.array([400.0, 10.0, 0.0])]
+    # One detection, sitting in arena 1, 5px from slot 0 (arena 0, nearer) and
+    # 15px from slot 1 (arena 1, farther) -- only the arena gate can produce
+    # (1, 0); an ungated nearest-neighbour loop would produce (0, 0).
+    meas = [np.array([395.0, 10.0, 0.0])]
     cost = np.full((2, 1), 1e6, dtype=np.float32)
     rows, cols, _ = assigner._assign_respawn(
         cost=cost,
