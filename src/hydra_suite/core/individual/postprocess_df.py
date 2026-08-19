@@ -8,6 +8,21 @@ from hydra_suite.core.individual.identity import columns as C
 logger = logging.getLogger(__name__)
 
 
+def _classifier_label_roster(params) -> tuple:
+    """Normalized ``CNN_CLASSIFIERS`` label roster (identity + non-identity).
+
+    Shared by every call site that needs ``identity_class_columns``'s
+    ``all_labels`` argument or ``derive_unique_identity_key_series``'s
+    ``all_classifier_labels`` argument -- one place owns the
+    whitespace-stripping / falsy-label normalization rule so it cannot drift
+    between call sites.
+    """
+    return tuple(
+        str(cfg.get("label", "") or "").strip()
+        for cfg in (params.get("CNN_CLASSIFIERS") or [])
+    )
+
+
 def _open_identity_evidence_cache(identity_evidence_cache_path):
     """Open the Phase-3 evidence sidecar for reading, or return ``None``.
 
@@ -82,12 +97,8 @@ def apply_identity_postprocessing_to_df(
                 if str(col).startswith("CNN_") and str(col).endswith("_Class")
             ]
         else:
-            _all_labels = tuple(
-                str(cfg.get("label", "") or "").strip()
-                for cfg in (params.get("CNN_CLASSIFIERS") or [])
-            )
             cnn_class_columns = identity_class_columns(
-                out.columns, _heads, all_labels=_all_labels
+                out.columns, _heads, all_labels=_classifier_label_roster(params)
             )
         cnn_conf_columns = {
             col: f"{str(col)[: -len('_Class')]}_Conf" for col in cnn_class_columns
@@ -379,14 +390,10 @@ def apply_identity_postprocessing_to_df(
         )
 
         _heads = resolve_identity_heads(params)
-        _all_labels = tuple(
-            str(cfg.get("label", "") or "").strip()
-            for cfg in (params.get("CNN_CLASSIFIERS") or [])
-        )
         with_pose_df[C.UNIQUE_IDENTITY_KEY] = derive_unique_identity_key_series(
             with_pose_df,
             identity_heads=None if _heads is HEADS_UNKNOWN else _heads,
-            all_classifier_labels=_all_labels,
+            all_classifier_labels=_classifier_label_roster(params),
         )
     except Exception:
         logger.exception("UniqueIdentityKey derivation failed; column left unset.")

@@ -206,3 +206,20 @@ def test_absent_classifier_config_keeps_legacy_all_columns_behavior():
         {"IDENTITY_POSTHOC_ENABLED": False, "ENABLE_IDENTITY_FRAGMENT_SOLVER": False},
     )
     assert out[C.EVIDENCE_TOPLABEL].tolist() == ["walking", "walking"]
+
+
+def test_zero_identity_heads_leaves_evidence_toplabel_nan():
+    # CNN_CLASSIFIERS present, but no entry has unique_identifier=True ->
+    # heads = (), not HEADS_UNKNOWN -> scoped scan finds no identity columns.
+    params = {
+        "CNN_CLASSIFIERS": [
+            {"label": "colortag", "unique_identifier": False},
+            {"label": "behavior", "unique_identifier": False},
+        ],
+        "IDENTITY_POSTHOC_ENABLED": False,
+        "ENABLE_IDENTITY_FRAGMENT_SOLVER": False,
+    }
+    out = apply_identity_postprocessing_to_df(
+        _df_with_confident_behavior_head(), params
+    )
+    assert out[C.EVIDENCE_TOPLABEL].isna().all()
