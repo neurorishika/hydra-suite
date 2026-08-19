@@ -1937,7 +1937,7 @@ class TrackingEngineCore:
         #     model_label normalization (`str(cfg.get("label", "") or
         #     "").strip() or "cnn"`), because that is the axis-prefix this
         #     classifier's catalog entries were actually built with.
-        _phase_label_maps: dict[str, list[int]] = {}
+        _phase_label_maps: dict[str, dict[str, list[int]]] = {}
         if _identity_catalog is not None and _catalog_spec is not None:
             from hydra_suite.core.individual.identity.phase_remap import (
                 build_phase_label_map,
