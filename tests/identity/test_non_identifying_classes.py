@@ -406,6 +406,12 @@ def test_many_untagged_slots_coexist_in_one_hungarian_solve():
     sits on unknown and the solver assigns none of them a known identity --
     rather than handing one of them 'notag_notag' and pushing the rest onto
     wrong real identities.
+
+    The solver half proves no slot gets a known-identity column. The second
+    half closes the loop end-to-end (Task 8): those same five slots, run
+    through the actual reporting stage, must each surface the descriptive
+    composite label while staying five distinct, unresolved trajectories --
+    not just an unassigned Hungarian column.
     """
     spec = resolve_catalog_spec([_tags(["notag"])], [])
     catalog = IdentityCatalog.from_spec(spec)
@@ -417,6 +423,40 @@ def test_many_untagged_slots_coexist_in_one_hungarian_solve():
         posteriors, catalog.num_known, display_threshold=0.6
     )
     assert assignment == [None] * 5
+
+    # Task 8: the same five untagged slots, reported end-to-end.
+    params = {
+        "CNN_CLASSIFIERS": [
+            {
+                "label": "colortag",
+                "unique_identifier": True,
+                "class_names_per_factor": [["red", "notag"], ["blue", "notag"]],
+                "factor_names": ["front", "back"],
+                "non_identifying_classes": ["notag"],
+            }
+        ],
+        "IDENTITY_POSTHOC_ENABLED": False,
+        "ENABLE_IDENTITY_FRAGMENT_SOLVER": False,
+    }
+    rows = []
+    for traj in range(5):
+        for frame in (0, 1):
+            rows.append(
+                {
+                    "TrajectoryID": traj,
+                    "FrameID": frame,
+                    "CNN_colortag_front_Class": "notag",
+                    "CNN_colortag_front_Conf": 0.9,
+                    "CNN_colortag_back_Class": "notag",
+                    "CNN_colortag_back_Conf": 0.7,
+                }
+            )
+    df = pd.DataFrame(rows)
+    out = apply_identity_postprocessing_to_df(df, params)
+    assert set(out[C.FINAL_LABEL]) == {"notag_notag"}
+    assert set(out[C.FINAL_SOURCE]) == {"nonidentifying"}
+    assert set(out[C.FINAL_ID]) == {0}
+    assert out["TrajectoryID"].nunique() == 5
 
 
 def test_untagged_slots_do_not_displace_a_real_identity():
@@ -431,3 +471,39 @@ def test_untagged_slots_do_not_displace_a_real_identity():
         posteriors, catalog.num_known, display_threshold=0.6
     )
     assert assignment == [1, None, None]
+
+
+def test_without_exclusion_untagged_slots_do_contend_for_one_column():
+    """Behavioral contrast for the two tests above: this is the bug the user
+    reported, reproduced directly. With no mark declared, 'notag_notag' is an
+    ordinary catalog column like any other, so three untagged slots that all
+    concentrate mass on it are NOT all free to coexist -- the Hungarian
+    solver hands the column to exactly one of them and displaces the other
+    two (to unassigned here; in the full pipeline that displacement is what
+    forces them onto wrong real identities or 'unknown'). This is the
+    before-picture; ``test_many_untagged_slots_coexist_in_one_hungarian_solve``
+    is the after-picture with the same mechanism and the mark applied.
+    """
+    spec = resolve_catalog_spec([_tags()], [])  # no marks declared
+    catalog = IdentityCatalog.from_spec(spec)
+    assert catalog.labels == (
+        "unknown",
+        "red_blue",
+        "red_notag",
+        "notag_blue",
+        "notag_notag",
+    )
+    notag_notag_index = catalog.labels.index("notag_notag")
+
+    posteriors = []
+    for _ in range(3):
+        probs = np.full(len(catalog.labels), 0.01)
+        probs[notag_notag_index] = 1.0 - 0.01 * (len(catalog.labels) - 1)
+        posteriors.append(probs)
+    assignment = substrate.solve_unique_assignment(
+        posteriors, catalog.num_known, display_threshold=0.6
+    )
+    winners = [a for a in assignment if a == notag_notag_index]
+    losers = [a for a in assignment if a is None]
+    assert len(winners) == 1, "exactly one slot should win the shared column"
+    assert len(losers) == 2, "the other two should be displaced, not coexisting"
