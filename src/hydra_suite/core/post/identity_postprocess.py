@@ -152,7 +152,9 @@ def format_identity_key(sources: dict[str, str]) -> str:
 _CNN_CLASS_COLUMN_RE = re.compile(r"^CNN_(.+)_Class$")
 
 
-def _cnn_identity_sources_for_row(row: "pd.Series", cnn_class_columns: list) -> dict:
+def _cnn_identity_sources_for_row(
+    row: "pd.Series", cnn_class_columns: list, non_identifying_values=()
+) -> dict:
     """Build ``cnn:<head>``/``cnn:<head>:<factor>`` tokens from CNN_* columns.
 
     A column is a CNN class column iff it matches ``^CNN_(.+)_Class$``.
@@ -160,6 +162,10 @@ def _cnn_identity_sources_for_row(row: "pd.Series", cnn_class_columns: list) -> 
     (``cnn:<head>``); otherwise split on the FIRST ``_`` -> 3-part factor
     source (``cnn:<head>:<factor>``), matching the old serializer's
     convention. ``CNN_<head>_Conf`` sibling columns are never class columns.
+
+    ``non_identifying_values`` are declared non-identifying class values
+    (e.g. ``"notag"``); a column whose value matches one is skipped exactly
+    like a missing value, so it contributes no identity evidence.
     """
     sources: dict[str, str] = {}
     for col in cnn_class_columns:
@@ -167,7 +173,11 @@ def _cnn_identity_sources_for_row(row: "pd.Series", cnn_class_columns: list) -> 
         if not match:
             continue
         value = _normalize_string(row.get(col))
-        if not value:
+        if not value or value in non_identifying_values:
+            # A non-identifying class carries no identity information. Left in,
+            # `notag == notag` would count as AGREEMENT in
+            # `_compare_identity_sources`' grouped tally and could out-vote a
+            # genuine conflict on another axis.
             continue
         middle = match.group(1)
         if "_" in middle:
@@ -180,7 +190,10 @@ def _cnn_identity_sources_for_row(row: "pd.Series", cnn_class_columns: list) -> 
 
 
 def derive_unique_identity_key_series(
-    df: pd.DataFrame, identity_heads=None, all_classifier_labels=()
+    df: pd.DataFrame,
+    identity_heads=None,
+    all_classifier_labels=(),
+    non_identifying_values=(),
 ) -> pd.Series:
     """Re-derive the ``UniqueIdentityKey`` column from per-row evidence columns.
 
@@ -205,6 +218,12 @@ def derive_unique_identity_key_series(
     ``identity_class_columns`` to disambiguate prefix collisions between an
     identity head and a differently-named non-identity classifier (e.g.
     head ``tag`` vs. classifier ``tag_v2``).
+
+    ``non_identifying_values`` are declared non-identifying class values
+    (e.g. ``"notag"``); a CNN column carrying one of these values
+    contributes no identity evidence, exactly as if the value were missing.
+    Empty by default, which reproduces the legacy every-value-counts
+    behavior byte-for-bit.
     """
     if df is None or df.empty:
         return pd.Series([], index=getattr(df, "index", None), dtype=object)
@@ -231,7 +250,11 @@ def derive_unique_identity_key_series(
             tag_value = _normalize_string(row.get("DetectedTagID"))
         if tag_value:
             sources["apriltag"] = tag_value
-        sources.update(_cnn_identity_sources_for_row(row, cnn_class_columns))
+        sources.update(
+            _cnn_identity_sources_for_row(
+                row, cnn_class_columns, frozenset(non_identifying_values)
+            )
+        )
         key = format_identity_key(sources)
         return key if key else np.nan
 

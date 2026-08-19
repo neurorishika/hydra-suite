@@ -276,3 +276,50 @@ def test_axis_scoped_mark_stamps_only_the_marked_axis_value():
     assert set(out[C.FINAL_LABEL]) == {"red_notag"}
     assert set(out[C.FINAL_SOURCE]) == {"nonidentifying"}
     assert set(out[C.FINAL_ID]) == {0}
+
+
+from hydra_suite.core.post.identity_postprocess import (
+    derive_unique_identity_key_series,
+    identity_sources_conflict,
+    parse_identity_key,
+)
+
+
+def test_notag_is_not_evidence_of_agreement():
+    df = pd.DataFrame(
+        {
+            "CNN_colortag_front_Class": ["notag", "notag"],
+            "CNN_colortag_front_Conf": [0.9, 0.9],
+            "CNN_colortag_back_Class": ["notag", "notag"],
+            "CNN_colortag_back_Conf": [0.9, 0.9],
+        }
+    )
+    keys = derive_unique_identity_key_series(
+        df, identity_heads=("colortag",), non_identifying_values=("notag",)
+    )
+    # No evidence at all -> NaN, so two untagged fragments neither agree nor
+    # conflict; the spatial gates alone decide whether they relink.
+    assert keys.isna().all()
+
+
+def test_real_class_survives_alongside_a_notag_axis():
+    df = pd.DataFrame(
+        {
+            "CNN_colortag_front_Class": ["red"],
+            "CNN_colortag_front_Conf": [0.9],
+            "CNN_colortag_back_Class": ["notag"],
+            "CNN_colortag_back_Conf": [0.9],
+        }
+    )
+    keys = derive_unique_identity_key_series(
+        df, identity_heads=("colortag",), non_identifying_values=("notag",)
+    )
+    assert parse_identity_key(keys.iloc[0]) == {"cnn:colortag:front": "red"}
+
+
+def test_two_untagged_fragments_do_not_conflict():
+    lhs = {"cnn:colortag:front": "notag"}
+    rhs = {"cnn:colortag:front": "notag"}
+    # Sanity: with the values present they'd count as agreement; the fix is
+    # that they never reach the comparison at all.
+    assert not identity_sources_conflict(lhs, rhs)

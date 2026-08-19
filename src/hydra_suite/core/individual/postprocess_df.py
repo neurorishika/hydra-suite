@@ -488,15 +488,24 @@ def apply_identity_postprocessing_to_df(
             HEADS_UNKNOWN,
             resolve_identity_heads,
         )
+        from hydra_suite.core.individual.identity.resolve import non_identifying_marks
         from hydra_suite.core.post.identity_postprocess import (
             derive_unique_identity_key_series,
         )
 
         _heads = resolve_identity_heads(params)
+        _marks = non_identifying_marks(params.get("CNN_CLASSIFIERS") or [])
+        _bare_marks = frozenset(
+            m.partition(":")[2] or m
+            for marks in _marks.values()
+            for m in marks
+            if "_" not in m or ":" in m
+        )
         with_pose_df[C.UNIQUE_IDENTITY_KEY] = derive_unique_identity_key_series(
             with_pose_df,
             identity_heads=None if _heads is HEADS_UNKNOWN else _heads,
             all_classifier_labels=_classifier_label_roster(params),
+            non_identifying_values=_bare_marks,
         )
     except Exception:
         logger.exception("UniqueIdentityKey derivation failed; column left unset.")
