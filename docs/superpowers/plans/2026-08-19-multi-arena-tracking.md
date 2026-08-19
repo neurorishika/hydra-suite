@@ -1381,6 +1381,7 @@ git commit -m "feat(arena): wire arena layout through the tracking worker"
 
 **Files:**
 - Modify: `src/hydra_suite/core/post/processing.py:1144` (`resolve_trajectories`), `:757` (`process_trajectories_from_csv`)
+- Modify: `src/hydra_suite/core/post/merge.py:142` — the ONLY caller of `resolve_trajectories`. Adding the `slot_arena` parameter without wiring this call site leaves the whole grouping dead code. Derive the vector from the prepared trajectory frames themselves: each element of `forward_prepared` is one trajectory's DataFrame, so its arena is that frame's `arena_id` (they are constant within a trajectory — a trajectory never spans arenas). Column absent → pass `None` and take the untouched single-arena path.
 - Modify: `src/hydra_suite/core/individual/postprocess_df.py:544` (`run_fragment_solver` call — the offline identity uniqueness solve) and `:559` (`sort_trajectories_by_identity`)
 - Modify: `src/hydra_suite/core/post/rich_export.py:398` (`relink_trajectories_with_pose` call)
 - Test: `tests/test_arena_postproc_grouping.py`
