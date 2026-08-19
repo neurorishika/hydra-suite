@@ -41,6 +41,7 @@ from hydra_suite.core.individual.pose.features import (
 from hydra_suite.core.individual.pose.features import (
     resolve_pose_group_indices as _pf_resolve_indices,
 )
+from hydra_suite.core.tracking.arenas import ArenaLayout
 from hydra_suite.core.tracking.confidence.density import get_density_region_flags
 from hydra_suite.core.tracking.features.live_features import (
     LiveCNNIdentityStore,
@@ -874,10 +875,28 @@ class TrackingEngineCore:
         # backward tracking and post-processing complete.
         individual_generator = None
 
+        self.arena_layout = ArenaLayout(
+            n_arenas=int(p.get("N_ARENAS", 1)),
+            animals_per_arena=int(p.get("ANIMALS_PER_ARENA", p["MAX_TARGETS"])),
+            label_image=p.get("ARENA_LABELS"),
+        )
         self.kf_manager = KalmanFilterManager(p["MAX_TARGETS"], p)
         assigner = TrackAssigner(p, worker=self)
+        # `None` for the single-arena case takes the assigner's ungated path
+        # STRUCTURALLY (see `TrackAssigner.set_track_arena`/`_arena_arrays`),
+        # not merely arithmetically -- this is what keeps single-arena runs
+        # byte-identical to `main`.
+        assigner.set_track_arena(
+            None if self.arena_layout.is_single_arena else self.arena_layout.slot_arena
+        )
 
         N = p["MAX_TARGETS"]
+        assert len(self.arena_layout.slot_arena) == self.kf_manager.X.shape[0], (
+            "arena_layout.slot_arena must have exactly one entry per Kalman "
+            "track slot (N == n_arenas * animals_per_arena) -- a mismatch here "
+            "would leave the numba cost kernel ungated while the identity "
+            "overlay/respawn gates stay active (half-gated cost matrix)."
+        )
         # Start all tracks as "lost" so the free_dets loop bootstraps each slot
         # from the first frame's real detections via initialize_filter.  Starting
         # as "active" with a zero-initialised KF state causes every track to sit
@@ -2071,16 +2090,25 @@ class TrackingEngineCore:
             ROI_mask = params.get("ROI_MASK", None)
             ROI_mask_current = None
 
+            # `target_w`/`target_h` is the current tracking frame's resolution --
+            # after RESIZE_FACTOR has scaled it (worker._resize_tracking_frame,
+            # above) -- computed unconditionally so both the ROI mask resize
+            # (below) and the per-frame arena lookup (at each meas construction
+            # site) resolve coordinates in the SAME space as the detections.
+            # Cached-detection modes never populate `frame`, so we fall back to
+            # the capture's native size scaled by RESIZE_FACTOR, mirroring the
+            # resized-frame space bg-sub detects in (frame_result_to_meas
+            # centroids are in this same space; see worker.py detection sites).
+            if frame is not None:
+                target_w, target_h = frame.shape[1], frame.shape[0]
+            else:
+                base_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                base_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                target_w = max(1, int(base_w * resize_f))
+                target_h = max(1, int(base_h * resize_f))
+
             roi_prepare_started = time.perf_counter()
             if ROI_mask is not None:
-                if frame is not None:
-                    target_w, target_h = frame.shape[1], frame.shape[0]
-                else:
-                    base_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                    base_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                    target_w = max(1, int(base_w * resize_f))
-                    target_h = max(1, int(base_h * resize_f))
-
                 (
                     ROI_mask_current,
                     _roi_mask_cache_key,
@@ -2154,6 +2182,12 @@ class TrackingEngineCore:
                     # downstream resolve_tracking_theta picks between theta and
                     # theta+pi using motion history + headtail heading_hints.
                     meas = frame_result_to_meas(_obb.centroids, _obb.angles)
+                    meas_arena = self.arena_layout.arena_of_points(
+                        _obb.centroids, frame_size=(target_w, target_h)
+                    )
+                    assert isinstance(meas_arena, np.ndarray) and len(
+                        meas_arena
+                    ) == len(meas)
                     sizes = [float(_obb.sizes[i]) for i in range(_obb.num_detections)]
                     shapes = [
                         (float(_obb.shapes[i, 0]), float(_obb.shapes[i, 1]))
@@ -2200,6 +2234,7 @@ class TrackingEngineCore:
                 else:
                     # Empty frame — no detections this frame
                     meas = []
+                    meas_arena = np.zeros(0, dtype=np.int32)
                     sizes = []
                     shapes = []
                     detection_confidences = []
@@ -2230,6 +2265,12 @@ class TrackingEngineCore:
                 _obb = _fr.obb if _fr is not None else None
                 if _obb is not None and _obb.num_detections > 0:
                     meas = frame_result_to_meas(_obb.centroids, _obb.angles)
+                    meas_arena = self.arena_layout.arena_of_points(
+                        _obb.centroids, frame_size=(target_w, target_h)
+                    )
+                    assert isinstance(meas_arena, np.ndarray) and len(
+                        meas_arena
+                    ) == len(meas)
                     sizes = [float(_obb.sizes[i]) for i in range(_obb.num_detections)]
                     shapes = [
                         (float(_obb.shapes[i, 0]), float(_obb.shapes[i, 1]))
@@ -2249,6 +2290,7 @@ class TrackingEngineCore:
                         [],
                         [],
                     )
+                    meas_arena = np.zeros(0, dtype=np.int32)
                 filtered_obb_corners = []
                 raw_meas = meas
                 raw_sizes = sizes
@@ -2290,6 +2332,12 @@ class TrackingEngineCore:
                 # meas carries the OBB axis angle in [0, pi); downstream
                 # resolve_tracking_theta disambiguates theta vs theta+pi.
                 meas = frame_result_to_meas(_obb.centroids, _obb.angles)
+                meas_arena = self.arena_layout.arena_of_points(
+                    _obb.centroids, frame_size=(target_w, target_h)
+                )
+                assert isinstance(meas_arena, np.ndarray) and len(meas_arena) == len(
+                    meas
+                )
                 sizes = [float(_obb.sizes[i]) for i in range(_obb.num_detections)]
                 shapes = [
                     (float(_obb.shapes[i, 0]), float(_obb.shapes[i, 1]))
@@ -2328,6 +2376,12 @@ class TrackingEngineCore:
                     _obb = _frame_result.obb
                     # meas carries the OBB axis angle (see cached path above).
                     meas = frame_result_to_meas(_obb.centroids, _obb.angles)
+                    meas_arena = self.arena_layout.arena_of_points(
+                        _obb.centroids, frame_size=(target_w, target_h)
+                    )
+                    assert isinstance(meas_arena, np.ndarray) and len(
+                        meas_arena
+                    ) == len(meas)
                     sizes = [float(_obb.sizes[i]) for i in range(_obb.num_detections)]
                     shapes = [
                         (float(_obb.shapes[i, 0]), float(_obb.shapes[i, 1]))
@@ -2372,6 +2426,7 @@ class TrackingEngineCore:
                 else:
                     # Empty frame — no detections this frame
                     meas = []
+                    meas_arena = np.zeros(0, dtype=np.int32)
                     sizes = []
                     shapes = []
                     detection_confidences = []
@@ -2821,6 +2876,7 @@ class TrackingEngineCore:
                         else None
                     ),
                     association_data=association_data,
+                    meas_arena=meas_arena,
                 )
 
                 # Tighter distance gate for density-region detections.
@@ -2888,6 +2944,7 @@ class TrackingEngineCore:
                     association_data=association_data,
                     committed_slot_identities=_committed_slot_identities,
                     missed_frames=missed_frames,
+                    meas_arena=meas_arena,
                 )
                 respawned_matches = {r for r in rows if track_states[r] == "lost"}
                 _identity_rejoin_slots = {s for s, _ in identity_rejoin_pairs}
@@ -3359,6 +3416,14 @@ class TrackingEngineCore:
                                 )
                             )
 
+                        # Emitted only when n_arenas > 1: `compare.py` bails out
+                        # when the column lists differ, so an unconditional
+                        # column would break the byte-identity gate on schema
+                        # grounds alone, and would change the CSV contract for
+                        # every existing single-arena user.
+                        if not self.arena_layout.is_single_arena:
+                            row_data.append(int(self.arena_layout.slot_arena[r]))
+
                         self.csv_writer_thread.enqueue(row_data)
                         local_counts[r] += 1
 
@@ -3397,6 +3462,10 @@ class TrackingEngineCore:
                         # Add detection-level AprilTag columns (NaN — no detection)
                         if tag_obs_cache is not None:
                             row_data.extend([float("nan")] * 4)
+
+                        # Emitted only when n_arenas > 1 (see matched-row comment above).
+                        if not self.arena_layout.is_single_arena:
+                            row_data.append(int(self.arena_layout.slot_arena[r]))
 
                         self.csv_writer_thread.enqueue(row_data)
                         local_counts[r] += 1
@@ -3549,6 +3618,9 @@ class TrackingEngineCore:
                         # Add detection-level AprilTag columns (NaN — no detection)
                         if tag_obs_cache is not None:
                             row_data.extend([float("nan")] * 4)
+                        # Emitted only when n_arenas > 1 (see matched-row comment above).
+                        if not self.arena_layout.is_single_arena:
+                            row_data.append(int(self.arena_layout.slot_arena[r]))
                         self.csv_writer_thread.enqueue(row_data)
                         local_counts[r] += 1
 

@@ -422,6 +422,16 @@ def build_engine_params(
 
     fps = float(_cfg_get(cfg, "fps", default=runtime.fps) or runtime.fps or 30.0)
     max_targets = int(_cfg_get(cfg, "max_targets", default=4))
+    # Multi-arena: MAX_TARGETS becomes a derived value (n_arenas * animals_per_arena)
+    # rather than a directly-configured knob. `animals_per_arena` defaults to the
+    # legacy `max_targets` value, so a legacy config with no `roi_shapes`/arena_id
+    # (n_arenas == 1) reproduces today's MAX_TARGETS exactly -- byte-identical
+    # single-arena behavior.
+    arena_labels, n_arenas = build_arena_labels(
+        cfg.get("roi_shapes"), runtime.frame_width, runtime.frame_height
+    )
+    animals_per_arena = int(_cfg_get(cfg, "animals_per_arena", default=max_targets))
+    max_targets = n_arenas * animals_per_arena
     reference_body_size = float(_cfg_get(cfg, "reference_body_size", default=20.0))
     resize_factor = float(_cfg_get(cfg, "resize_factor", default=1.0))
     # RESIZE_FACTOR is a background-subtraction knob. The worker's frame
@@ -1200,6 +1210,9 @@ def build_engine_params(
         "TRACKING_WORKFLOW_MODE": "non_realtime",
         "zoom_factor": 1.0,
         "ROI_MASK": roi_mask,
+        "ARENA_LABELS": arena_labels,
+        "N_ARENAS": n_arenas,
+        "ANIMALS_PER_ARENA": animals_per_arena,
         "REFERENCE_BODY_SIZE": reference_body_size,
         "AGREEMENT_DISTANCE": float(
             _cfg_get(cfg, "merge_agreement_distance_multiplier", default=0.5)

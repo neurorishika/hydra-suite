@@ -1414,7 +1414,8 @@ class TrackingOrchestrator:
         if not self._panels.setup.csv_line.text():
             return
         hdr = build_tracking_csv_header(
-            identity_method=self._mw._selected_identity_method()
+            identity_method=self._mw._selected_identity_method(),
+            n_arenas=int(self._mw.get_parameters_dict().get("N_ARENAS", 1)),
         )
         csv_path = self._panels.setup.csv_line.text()
         base, ext = os.path.splitext(csv_path)

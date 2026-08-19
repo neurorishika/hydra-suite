@@ -78,6 +78,16 @@ DISPLAY_ONLY_KEYS = {
 # are therefore treated as runtime overlay, not compared here.
 RUNTIME_OVERLAY_KEYS = {
     "ROI_MASK",
+    # ARENA_LABELS/N_ARENAS are rasterized/derived from `roi_shapes` +
+    # runtime.frame_width/frame_height, exactly like ROI_MASK above -- the
+    # GUI's `_gui_runtime_context` always passes frame_width=frame_height=None
+    # (no live video in this oracle), while the CLI-side synthetic runtime
+    # below uses a real 640x480. `build_arena_labels` short-circuits to
+    # `(None, 1)` whenever width/height is falsy, so both would only agree by
+    # coincidence (today's fixture configs carry no `roi_shapes` with real
+    # `arena_id`s). Same runtime-overlay bucket as ROI_MASK, same reason.
+    "ARENA_LABELS",
+    "N_ARENAS",
     "INDIVIDUAL_PROPERTIES_CACHE_PATH",
     "INDIVIDUAL_DATASET_RUN_ID",
     "DATASET_OUTPUT_DIR",
