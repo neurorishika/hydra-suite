@@ -804,8 +804,11 @@ def test_respawn_never_crosses_arenas():
     from hydra_suite.core.assigners.hungarian import TrackAssigner
 
     class _KF:
-        # slot 0 in arena 0 at (10,10); slot 1 in arena 1 at (410,10)
-        X = np.array([[10.0, 10.0, 0.0, 0.0, 0.0], [410.0, 10.0, 0.0, 0.0, 0.0]])
+        # Geometry matters: the arena-0 slot must be the NEAREST one, otherwise
+        # the nearest-neighbour loop picks the arena-1 slot anyway and the test
+        # passes with the gate deleted.  slot 0 (arena 0) at x=390 is 5px from
+        # the detection; slot 1 (arena 1) at x=410 is 15px away.
+        X = np.array([[390.0, 10.0, 0.0, 0.0, 0.0], [410.0, 10.0, 0.0, 0.0, 0.0]])
 
     params = {
         "MAX_DISTANCE_THRESHOLD": 1000.0,
@@ -819,8 +822,9 @@ def test_respawn_never_crosses_arenas():
     assigner = TrackAssigner(params)
     assigner.set_track_arena(np.array([0, 1], dtype=np.int32))
 
-    # One detection, sitting in arena 1, near slot 1 but within MAX_DIST of slot 0.
-    meas = [np.array([400.0, 10.0, 0.0])]
+    # One detection in arena 1 at x=395 -- CLOSER to the arena-0 slot than to
+    # the arena-1 slot, so only the arena gate can produce the right answer.
+    meas = [np.array([395.0, 10.0, 0.0])]
     cost = np.full((2, 1), 1e6, dtype=np.float32)
     rows, cols, _ = assigner._assign_respawn(
         cost=cost,
@@ -841,6 +845,9 @@ def test_respawn_never_crosses_arenas():
     )
     assert 0 not in rows, "arena-0 slot must not respawn on an arena-1 detection"
     assert list(zip(rows, cols)) == [(1, 0)], "arena-1 slot should take the detection"
+    # Mutation check this test must survive: deleting the proximity-loop gate
+    # makes it return [(0, 0)].  If it still passes with the gate removed, the
+    # geometry has drifted back to trivially-separable and the test is worthless.
 
 
 def test_identity_rejoin_never_crosses_arenas():
@@ -1297,7 +1304,21 @@ fixture) — where it would systematically pull every centroid toward the top-le
 mis-assign arenas. Confirm which space `_obb.centroids` are actually in (resized vs.
 native) before choosing what to pass, and add a test that pins it.
 
-Thread `meas_arena=meas_arena` into the `assign_tracks(...)` call. At row emission (near line 3533), add the arena of each track slot — **only when the
+Thread `meas_arena=meas_arena` into the `assign_tracks(...)` call.
+
+**Length and type contract (assert it here — the assigner deliberately does not).**
+`_arena_arrays` fails *open* on a length mismatch (silently disabling kernel gating),
+while `_apply_bayesian_identity_cost` and `_assign_respawn` gate on `>=`. A `track_arena`
+longer than `N` would therefore leave the kernel ungated while the overlay and respawn
+gates stay active — a half-gated cost matrix, which is worse than either extreme because
+it is silent. Task 6 owns the invariant:
+
+```python
+        assert len(slot_arena) == self.kf_manager.X.shape[0]
+        assert isinstance(meas_arena, np.ndarray) and len(meas_arena) == len(meas)
+```
+
+`meas_arena` must be an `ndarray`, not a list — the overlay indexes it with `np.ix_`. At row emission (near line 3533), add the arena of each track slot — **only when the
 run is genuinely multi-arena**:
 
 ```python
