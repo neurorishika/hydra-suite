@@ -81,7 +81,7 @@ branch, so Tasks 3 and 5 keep their shape. Four things do land on us:
     Arena 0's "ant A" and arena 7's "ant A" interleave into one block. It does not merge
     data, but the renumbering is a global function of all arenas, so the Task 10 tiling
     oracle fails on it.
-  - `core/post/rich_export.py:397` `relink_trajectories_with_pose` matches fragments via
+  - `core/post/rich_export.py:398` `relink_trajectories_with_pose` matches fragments via
     `UniqueIdentityKey` (`processing.py:3722` `_fragment_unique_identity_sources`). This
     is a genuine *merge* decision, and it is reached from `relink_and_export_rich_csv`,
     **not** from `process_trajectories_from_csv` — so Task 7's original two grouping
@@ -116,7 +116,7 @@ branch, so Tasks 3 and 5 keep their shape. Four things do land on us:
 | `src/hydra_suite/core/post/processing.py` | `resolve_trajectories` / `process_trajectories_from_csv` arena grouping. |
 | `src/hydra_suite/core/individual/identity/offline.py` | Per-arena uniqueness solve (`run_fragment_solver`, forwarding the post-merge `catalog_spec`). |
 | `src/hydra_suite/core/individual/postprocess_df.py:559` | Arena in the `sort_trajectories_by_identity` sort key. |
-| `src/hydra_suite/core/post/rich_export.py:397` | Per-arena `relink_trajectories_with_pose`. |
+| `src/hydra_suite/core/post/rich_export.py:398` | Per-arena `relink_trajectories_with_pose`. |
 | `src/hydra_suite/trackerkit/config/schemas.py:25` | `animals_per_arena` field. |
 | `src/hydra_suite/trackerkit/gui/orchestrators/session.py:2112` | Arena selector on shape creation. |
 
@@ -893,7 +893,7 @@ git commit -m "feat(arena): gate the respawn paths by arena"
 ### Task 5: Per-arena online identity decoders
 
 **Files:**
-- Modify: `src/hydra_suite/core/tracking/worker.py` (decoder construction, `~:1849` pre-merge / `~:1870` after `feat/identity-heads`) and its ~12 call sites
+- Modify: `src/hydra_suite/core/tracking/worker.py` (decoder construction, `:1829`) and its ~12 call sites
 - Create: `src/hydra_suite/core/tracking/identity/decoder_registry.py`
 - Test: `tests/test_arena_identity_decoders.py`
 
@@ -1176,7 +1176,7 @@ Expected: FAIL — `KeyError: 'N_ARENAS'`
 
 - [ ] **Step 3: Write minimal implementation**
 
-In `engine_params.py`, next to the existing `"ROI_MASK": roi_mask` entry (line 1138):
+In `engine_params.py`, next to the existing `"ROI_MASK": roi_mask` entry (line 1155):
 
 ```python
     arena_labels, n_arenas = build_arena_labels(cfg.get("roi_shapes"), width, height)
@@ -1191,7 +1191,7 @@ In `engine_params.py`, next to the existing `"ROI_MASK": roi_mask` entry (line 1
         "MAX_TARGETS": n_arenas * animals_per_arena,
 ```
 
-In `worker.py`, build the layout beside the Kalman manager (line 873):
+In `worker.py`, build the layout beside the Kalman manager (line 877):
 
 ```python
         self.arena_layout = ArenaLayout(
@@ -1207,13 +1207,13 @@ In `worker.py`, build the layout beside the Kalman manager (line 873):
 
 Passing `None` for the single-arena case is deliberate: it takes the exact ungated path, protecting byte-identity.
 
-At each of the four `meas = frame_result_to_meas(...)` sites (lines 2134, 2210, 2270, 2308), derive the per-frame arena vector immediately after:
+At each of the four `meas = frame_result_to_meas(...)` sites (lines 2156, 2232, 2292, 2330), derive the per-frame arena vector immediately after:
 
 ```python
                     meas_arena = self.arena_layout.arena_of_points(_obb.centroids)
 ```
 
-and for the empty-detection branches (lines 2180, 2352):
+and for the empty-detection branches (lines 2201, 2373):
 
 ```python
                     meas_arena = np.zeros(0, dtype=np.int32)
@@ -1254,7 +1254,7 @@ git commit -m "feat(arena): wire arena layout through the tracking worker"
 **Files:**
 - Modify: `src/hydra_suite/core/post/processing.py:1144` (`resolve_trajectories`), `:757` (`process_trajectories_from_csv`)
 - Modify: `src/hydra_suite/core/individual/postprocess_df.py:544` (`run_fragment_solver` call — the offline identity uniqueness solve) and `:559` (`sort_trajectories_by_identity`)
-- Modify: `src/hydra_suite/core/post/rich_export.py:397` (`relink_trajectories_with_pose` call)
+- Modify: `src/hydra_suite/core/post/rich_export.py:398` (`relink_trajectories_with_pose` call)
 - Test: `tests/test_arena_postproc_grouping.py`
 
 **Interfaces:**
@@ -1269,7 +1269,7 @@ git commit -m "feat(arena): wire arena layout through the tracking worker"
 
 2. **Global trajectory renumbering — `postprocess_df.py:559`.** `sort_trajectories_by_identity` (`core/post/identity_postprocess.py:364`) replaces *every* `TrajectoryID` with a rank under `(consensus_identity_label, first_frame)`. It does not merge data, but the numbering becomes a global function of all arenas, so arena 0's ids depend on what arena 7 contains — and the Task 10 tiling oracle fails on it. Extend the sort key with arena so it reads `(arena, consensus_identity_label, first_frame)`; with one arena the key is constant and the ordering is bit-identical to today.
 
-3. **Pose-aware relink — `rich_export.py:397`.** `relink_trajectories_with_pose` matches fragments through `UniqueIdentityKey` (`processing.py:3722` `_fragment_unique_identity_sources`), which is a genuine *merge* decision — two arenas each holding an "ant A" can be relinked into one trajectory. This path is reached from `relink_and_export_rich_csv`, **not** from `process_trajectories_from_csv`, so grouping in `processing.py` does not cover it. Group `relink_input_df` by `arena_id` and relink per arena.
+3. **Pose-aware relink — `rich_export.py:398`.** `relink_trajectories_with_pose` matches fragments through `UniqueIdentityKey` (`processing.py:3722` `_fragment_unique_identity_sources`), which is a genuine *merge* decision — two arenas each holding an "ant A" can be relinked into one trajectory. This path is reached from `relink_and_export_rich_csv`, **not** from `process_trajectories_from_csv`, so grouping in `processing.py` does not cover it. Group `relink_input_df` by `arena_id` and relink per arena.
 
 `UniqueIdentityKey` itself stays arena-blind: scoping the key by arena would change its value on single-arena runs and break the now-strict identity-column comparison in the equivalence matrix. Grouping its consumers is equivalent and free.
 
@@ -1491,7 +1491,7 @@ bit-identical to today:
     id_mapping = {old: new for new, (old, _, _, _) in enumerate(traj_info)}
 ```
 
-In `rich_export.py:397`, relink per arena:
+In `rich_export.py:398`, relink per arena:
 
 ```python
     if "arena_id" in relink_input_df.columns and relink_input_df["arena_id"].nunique() > 1:
@@ -2038,4 +2038,4 @@ No spec requirement is unassigned. Out-of-scope items (per-arena overrides, aren
 
 **Ordering note:** Tasks 3 and 4 both modify `hungarian.py` and 4 depends on 3's `set_track_arena`; run them in order. Task 6 depends on 1, 2, 3, 4, 5. Task 10 depends on everything.
 
-**Rebase ordering:** this plan is written against `main` **with `feat/identity-heads` merged**. Merge that branch first, then branch `feat/multi-arena-tracking` from the merge commit. Executing against pre-merge `main` will collide in `worker.py` (catalog construction, Task 5), `postprocess_df.py` / `rich_export.py` (Task 7), and `tools/equivalence/run_matrix.sh` (Task 10).
+**Rebase ordering:** this plan is written against `main` **with `feat/identity-heads` merged** (merge `807c4e1e`); all line numbers were re-verified against `7c5d54e6`. Executing against pre-merge `main` will collide in `worker.py` (catalog construction, Task 5), `postprocess_df.py` / `rich_export.py` (Task 7), and `tools/equivalence/run_matrix.sh` (Task 10).
