@@ -26,6 +26,11 @@ class TrackerConfig:
     roi_current_mode: str = "circle"  # 'circle' or 'polygon'
     roi_current_zone_type: str = "include"  # 'include' or 'exclude'
 
+    # --- Arenas ---
+    # One shared animal count per arena; MAX_TARGETS is derived
+    # (n_arenas * animals_per_arena), never entered directly.
+    animals_per_arena: int = 1
+
     # --- Runtime ---
     runtime_tier: str = "gpu"
 
@@ -48,6 +53,7 @@ class TrackerConfig:
             "roi_shapes": list(self.roi_shapes),
             "roi_current_mode": self.roi_current_mode,
             "roi_current_zone_type": self.roi_current_zone_type,
+            "animals_per_arena": int(self.animals_per_arena),
             "runtime_tier": self.runtime_tier,
             "debug_mode": self.debug_mode,
             "dataset_export_levels": list(self.dataset_export_levels),
@@ -73,6 +79,7 @@ class TrackerConfig:
             roi_shapes=list(data.get("roi_shapes", [])),
             roi_current_mode=data.get("roi_current_mode", "circle"),
             roi_current_zone_type=data.get("roi_current_zone_type", "include"),
+            animals_per_arena=int(data.get("animals_per_arena", 1)),
             runtime_tier=str(raw_tier),
             debug_mode=bool(data.get("debug_mode", False)),
             dataset_export_levels=list(

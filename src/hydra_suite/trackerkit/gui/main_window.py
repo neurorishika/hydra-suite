@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSlider,
+    QSpinBox,
     QSplitter,
     QStackedWidget,
     QTabWidget,
@@ -408,6 +409,12 @@ class MainWindow(QMainWindow):
         # Video player state
         self.video_cap = None  # cv2.VideoCapture for video playback
         self.video_total_frames = 0
+        # Native frame dimensions (CAP_PROP_FRAME_WIDTH/HEIGHT), set once the
+        # video is opened. This is the coordinate space ROI shapes are drawn
+        # in, and the live source RuntimeContext uses for arena-label
+        # rasterization (see gui/orchestrators/config.py _gui_runtime_context).
+        self.video_width = None
+        self.video_height = None
         self.video_current_frame_idx = 0
         self.last_read_frame_idx = (
             -1
@@ -608,6 +615,31 @@ class MainWindow(QMainWindow):
         self.btn_undo_roi.setEnabled(False)
         self.btn_undo_roi.setToolTip("Remove last added shape")
 
+        # A new shape joins the CURRENT arena by default -- one arena is
+        # often several shapes (an include circle plus an exclude hole
+        # punched in it), so shape count is not arena count. "New Arena"
+        # is the only thing that advances current_arena_id.
+        self.btn_new_arena = QPushButton("New Arena")
+        self.btn_new_arena.clicked.connect(self._on_new_arena_clicked)
+        self.btn_new_arena.setToolTip(
+            "Start a new arena: shapes added after this join a fresh arena.\n"
+            "Use this only when moving on to a physically separate arena --\n"
+            "an include zone plus its exclude hole belong in the SAME arena."
+        )
+
+        self.spin_animals_per_arena = QSpinBox()
+        self.spin_animals_per_arena.setRange(1, 1000)
+        self.spin_animals_per_arena.setValue(self.config.animals_per_arena)
+        self.spin_animals_per_arena.setPrefix("Animals/arena: ")
+        self.spin_animals_per_arena.setToolTip(
+            "Animal count is shared across every arena; the total slot\n"
+            "count (MAX_TARGETS) is derived as n_arenas * animals_per_arena,\n"
+            "never entered directly."
+        )
+        self.spin_animals_per_arena.valueChanged.connect(
+            self._on_animals_per_arena_changed
+        )
+
         self.btn_clear_roi = QPushButton("Clear All")
         self.btn_clear_roi.clicked.connect(self.clear_roi)
         self.btn_clear_roi.setShortcut("Ctrl+C")
@@ -635,6 +667,8 @@ class MainWindow(QMainWindow):
         roi_layout.addWidget(self.btn_start_roi)
         roi_layout.addWidget(self.btn_finish_roi)
         roi_layout.addWidget(self.btn_undo_roi)
+        roi_layout.addWidget(self.btn_new_arena)
+        roi_layout.addWidget(self.spin_animals_per_arena)
         roi_layout.addWidget(self.btn_clear_roi)
         roi_layout.addWidget(self.btn_crop_video)
         roi_layout.addStretch()
@@ -2051,6 +2085,18 @@ class MainWindow(QMainWindow):
     def _on_roi_zone_changed(self, index):
         """Handle ROI zone type selection change."""
         self._session_orch._on_roi_zone_changed(index)
+
+    def _on_new_arena_clicked(self):
+        """Advance to a new arena; subsequent shapes join it."""
+        new_id = self._session_orch.start_new_arena()
+        self.roi_status_label.setText(
+            f"Started arena {new_id + 1} -- new shapes join it until "
+            "'New Arena' is pressed again."
+        )
+
+    def _on_animals_per_arena_changed(self, value):
+        """Handle the shared per-arena animal-count spinbox."""
+        self.config.animals_per_arena = int(value)
 
     def _handle_video_mouse_press(self, evt):
         """Handle mouse press on video - either ROI selection or pan/zoom."""

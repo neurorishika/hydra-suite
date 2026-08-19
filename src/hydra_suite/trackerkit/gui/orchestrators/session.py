@@ -48,6 +48,22 @@ class SessionOrchestrator:
         self._mw = main_window
         self._config = config
         self._panels = panels
+        # Active arena new ROI shapes join. One arena is often several shapes
+        # (an include circle plus an exclude hole punched in it), so a shape
+        # only starts a new arena when the user explicitly presses "New
+        # Arena" (start_new_arena()) -- shape count is never arena count.
+        self.current_arena_id = 0
+
+    def start_new_arena(self) -> int:
+        """Begin a new arena; subsequent shapes join it until called again.
+
+        Every shape carries an ``arena_id`` -- excludes included, since an
+        exclude hole belonging to arena 3 means arena 3 is in use -- so the
+        next free id is computed over ALL shapes, not just includes.
+        """
+        used = [int(s.get("arena_id", 0)) for s in self._mw.roi_shapes]
+        self.current_arena_id = (max(used) + 1) if used else 0
+        return self.current_arena_id
 
     # =========================================================================
     # UI STATE MACHINE
@@ -1421,6 +1437,8 @@ class SessionOrchestrator:
 
         self._mw.video_cap = cap
         self._mw.video_total_frames = total_frames
+        self._mw.video_width = width
+        self._mw.video_height = height
 
         self._panels.setup.lbl_video_info.setText(
             f"Video: {total_frames} frames, {width}x{height}, {fps:.2f} FPS"
@@ -2114,6 +2132,7 @@ class SessionOrchestrator:
                     "type": "circle",
                     "params": (cx, cy, radius),
                     "mode": self._mw.roi_current_zone_type,
+                    "arena_id": self.current_arena_id,
                 }
             )
             zone_type = (
@@ -2135,6 +2154,7 @@ class SessionOrchestrator:
                     "type": "polygon",
                     "params": list(self._mw.roi_points),
                     "mode": self._mw.roi_current_zone_type,
+                    "arena_id": self.current_arena_id,
                 }
             )
             zone_type = (
@@ -2169,8 +2189,15 @@ class SessionOrchestrator:
         exclude_count = sum(
             1 for s in self._mw.roi_shapes if s.get("mode", "include") == "exclude"
         )
+        arena_count = len({int(s.get("arena_id", 0)) for s in self._mw.roi_shapes})
+        arena_note = (
+            f", arena {self.current_arena_id + 1} ({arena_count} arena(s) total)"
+            if arena_count > 1
+            else ""
+        )
         self._mw.roi_status_label.setText(
             f"Active ROI: {include_count} inclusion, {exclude_count} exclusion zone(s)"
+            f"{arena_note}"
         )
         self._mw.btn_crop_video.setEnabled(True)
         self._mw._update_roi_optimization_info()
@@ -2242,6 +2269,7 @@ class SessionOrchestrator:
         self._mw.roi_shapes = []
         self._mw.roi_selection_active = False
         self._mw.roi_base_frame = None
+        self.current_arena_id = 0
         self._mw.btn_start_roi.setEnabled(True)
         self._mw.btn_finish_roi.setEnabled(False)
         self._mw.btn_undo_roi.setEnabled(False)

@@ -42,6 +42,7 @@ from hydra_suite.trackerkit.engine_params import (
     RuntimeContext,
     build_engine_params,
     build_roi_mask,
+    n_arenas_from_shapes,
 )
 from hydra_suite.trackerkit.gui.panels.tracking_panel import (
     DENSITY_BINARIZE_THRESHOLD_CONST,
@@ -1393,7 +1394,18 @@ class ConfigOrchestrator:
         self._mw._sync_individual_analysis_mode_ui()
 
         # === ROI ===
+        self._mw.config.animals_per_arena = int(cfg.get("animals_per_arena", 1))
+        self._mw.spin_animals_per_arena.blockSignals(True)
+        self._mw.spin_animals_per_arena.setValue(self._mw.config.animals_per_arena)
+        self._mw.spin_animals_per_arena.blockSignals(False)
         self._mw.roi_shapes = cfg.get("roi_shapes", [])
+        # Resume arena assignment from the highest id already used (excludes
+        # included), so newly drawn shapes on a reloaded multi-arena project
+        # join a fresh arena instead of collapsing back into arena 0.
+        used_arena_ids = [int(s.get("arena_id", 0)) for s in self._mw.roi_shapes]
+        self._mw._session_orch.current_arena_id = (
+            max(used_arena_ids) if used_arena_ids else 0
+        )
         if self._mw.roi_shapes:
             # Regenerate the combined mask from loaded shapes
             # Need to get video frame dimensions first
@@ -1840,6 +1852,15 @@ class ConfigOrchestrator:
         # Skip ROI when saving as preset
         if not preset_mode:
             cfg["roi_shapes"] = self._mw.roi_shapes
+            # Only emit an explicit override once more than one arena is
+            # actually in use -- build_engine_params falls back to the
+            # legacy `max_targets` spinner when this key is absent, so a
+            # single-arena user who never presses "New Arena" gets EXACTLY
+            # today's MAX_TARGETS. Writing this key unconditionally would
+            # silently collapse MAX_TARGETS to animals_per_arena's default
+            # of 1 for every existing user.
+            if n_arenas_from_shapes(self._mw.roi_shapes) > 1:
+                cfg["animals_per_arena"] = int(self._mw.config.animals_per_arena)
 
         cfg.update(
             {
@@ -2073,10 +2094,17 @@ class ConfigOrchestrator:
         ROI mask from the live ``self._mw.roi_mask`` (a shared
         ``build_roi_mask`` fallback rasterizes ``config["roi_shapes"]`` if no
         live mask is cached -- the two rasterizations are byte-identical, see
-        ``tests/test_get_parameters_dict_characterization.py``); START/END frame
-        straight off the setup spin boxes (kept stable even while the controls
-        are disabled during a tracking/backward pass); the video-derived output
-        dirs; and the individual-properties cache path / dataset run id.
+        ``tests/test_get_parameters_dict_characterization.py``); frame_width /
+        frame_height from ``self._mw.video_width`` / ``.video_height`` (set in
+        ``SessionOrchestrator._init_video_player`` off ``CAP_PROP_FRAME_WIDTH``
+        / ``_HEIGHT`` -- the exact pixel coordinate space ROI shapes are drawn
+        in, and what ``build_arena_labels`` needs to rasterize
+        ``ARENA_LABELS``; ``None`` before any video is loaded, which keeps
+        ``build_arena_labels`` on its ``(None, 1)`` short-circuit); START/END
+        frame straight off the setup spin boxes (kept stable even while the
+        controls are disabled during a tracking/backward pass); the
+        video-derived output dirs; and the individual-properties cache path /
+        dataset run id.
         """
         fps = float(config.get("fps", 30.0) or 30.0)
         total_frames = int(getattr(self._mw, "video_total_frames", 0) or 0)
@@ -2091,8 +2119,8 @@ class ConfigOrchestrator:
         return RuntimeContext(
             fps=fps,
             total_frames=total_frames,
-            frame_width=None,
-            frame_height=None,
+            frame_width=getattr(self._mw, "video_width", None),
+            frame_height=getattr(self._mw, "video_height", None),
             roi_mask=roi_mask,
             start_frame=self._panels.setup.spin_start_frame.value(),
             end_frame=self._panels.setup.spin_end_frame.value(),

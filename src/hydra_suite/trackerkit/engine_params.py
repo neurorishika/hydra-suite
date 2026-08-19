@@ -239,6 +239,30 @@ def build_roi_mask(
     return combined_mask
 
 
+def n_arenas_from_shapes(roi_shapes: list[dict[str, Any]] | None) -> int:
+    """Count the distinct arenas an ``roi_shapes`` list actually encodes.
+
+    Pure and dimension-free -- unlike ``build_arena_labels`` this needs no
+    frame width/height, since arena membership lives entirely in the shapes'
+    ``arena_id`` keys. Counts distinct arena ids among ``include`` shapes only
+    (an ``exclude``-only "arena" renders nothing, so it isn't one); mirrors
+    ``build_arena_labels``'s own ``raw_ids`` computation exactly so the two
+    never disagree on "how many arenas are really in use". Shapes with no
+    ``arena_id`` key all count as arena 0, so an empty or legacy list -> 1.
+
+    Used by the GUI (``ConfigOrchestrator.build_config_dict``) to decide
+    whether to emit an explicit ``animals_per_arena`` override at all: a
+    single-arena project must never do so, or it would silently defeat
+    ``build_engine_params``'s fallback-to-``max_targets`` safety net that
+    keeps single-arena ``MAX_TARGETS`` byte-identical to legacy behavior.
+    """
+    if not roi_shapes:
+        return 1
+    includes = [s for s in roi_shapes if s.get("mode", "include") == "include"]
+    raw_ids = {int(s.get("arena_id", 0)) for s in includes} or {0}
+    return len(raw_ids)
+
+
 def build_arena_labels(
     roi_shapes: list[dict[str, Any]] | None,
     width: int | None,
