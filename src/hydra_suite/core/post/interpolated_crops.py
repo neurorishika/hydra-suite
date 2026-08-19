@@ -1569,7 +1569,16 @@ def run_interpolated_crops(
     from hydra_suite.core.canonicalization.crop import (
         extract_canonical_crop as _extract_canonical,
     )
+    from hydra_suite.core.tracking.pose.pose_pipeline import (
+        reset_degenerate_padding_warning,
+    )
     from hydra_suite.core.tracking.profiler import TrackingProfiler
+
+    # Re-arm the once-per-run degenerate-padding warning: this is the entry
+    # point that reaches ``extract_one_crop``, and the guard it fires is a
+    # module global that otherwise stays suppressed after the first run in a
+    # long-lived (GUI) process ever logs it.
+    reset_degenerate_padding_warning()
 
     def _stop():
         return bool(should_stop()) if should_stop is not None else False

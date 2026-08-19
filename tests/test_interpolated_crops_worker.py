@@ -363,6 +363,125 @@ def test_compute_frame_corners_and_affines_counts_degenerate_drops() -> None:
     assert summary is not None and "DEGENERATE" in summary
 
 
+def _run_with_no_eligible_gaps(monkeypatch) -> None:
+    """Drive ``run_interpolated_crops`` through the early-return
+    ("no eligible gaps") path used by
+    ``test_interpolated_worker_skips_backend_init_when_no_eligible_gaps``
+    above. The reset of the degenerate-padding warning happens before that
+    early return, so this still exercises the real reset call inside the
+    real entry point without needing a full pipeline run."""
+
+    class FakeCap:
+        def release(self) -> None:
+            return None
+
+    class FakeGenerator:
+        def finalize(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        ic,
+        "_validate_and_setup",
+        lambda csv_path, video_path, cache_path, params, profiler, should_stop: (
+            pd.DataFrame(
+                [
+                    {
+                        "TrajectoryID": 1,
+                        "FrameID": 0,
+                        "State": "active",
+                        "X": 0.0,
+                        "Y": 0.0,
+                        "Theta": 0.0,
+                    }
+                ]
+            ),
+            FakeCap(),
+            None,
+            FakeGenerator(),
+            "unused-output-dir",
+            False,
+            True,
+            1.0,
+            1.0,
+            CanonicalGeometry.from_reference(20.0, 2.0, 1.3),
+        ),
+    )
+    monkeypatch.setattr(
+        ic,
+        "_detect_interpolation_gaps",
+        lambda params, should_stop, df, detection_cache, position_scale, size_scale: (
+            {},
+            4,
+            0,
+            0,
+        ),
+    )
+    monkeypatch.setattr(
+        ic,
+        "_init_interpolation_backends",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("backend initialization should be skipped")
+        ),
+    )
+    monkeypatch.setattr(ic, "_cleanup_backends", lambda *args, **kwargs: None)
+
+    ic.run_interpolated_crops("tracks.csv", "source.mp4", "cache.npz", {})
+
+
+def test_run_interpolated_crops_rearms_degenerate_padding_warning_each_run(
+    monkeypatch, caplog
+) -> None:
+    """The decisive regression test for the once-per-process -> once-per-run
+    fix: in a long-lived process that calls ``run_interpolated_crops``
+    repeatedly (e.g. the GUI running tracking/interpolation more than once),
+    the degenerate-padding warning must be able to fire again on EVERY run,
+    not just the first one ever. Driven entirely through the real entry
+    point -- never resets the module flag by hand."""
+    from hydra_suite.core.tracking.pose import pose_pipeline as pp
+
+    frame = np.zeros((10, 10, 3), dtype=np.uint8)
+    degenerate_corners = np.array(
+        [[5.0, 5.0], [5.0, 5.0], [5.0, 5.0], [5.0, 5.0]], dtype=np.float32
+    )
+
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger=pp.logger.name):
+        # Run 1: real entry point resets the guard, then a degenerate crop
+        # attempt fires the warning.
+        _run_with_no_eligible_gaps(monkeypatch)
+        result1 = pp.extract_one_crop(
+            frame, degenerate_corners, 0, -0.9, [degenerate_corners], False, (0, 0, 0)
+        )
+        assert result1 is None
+        warnings_after_run1 = [
+            r for r in caplog.records if "AprilTag crop padding" in r.message
+        ]
+        assert len(warnings_after_run1) == 1
+
+        # Same run, another degenerate detection: must NOT warn again.
+        result1b = pp.extract_one_crop(
+            frame, degenerate_corners, 1, -0.9, [degenerate_corners], False, (0, 0, 0)
+        )
+        assert result1b is None
+        assert (
+            len([r for r in caplog.records if "AprilTag crop padding" in r.message])
+            == 1
+        )
+
+        # Run 2 (same process): the real entry point must re-arm the guard so
+        # the warning can fire again -- this is the behavior that was broken.
+        _run_with_no_eligible_gaps(monkeypatch)
+        result2 = pp.extract_one_crop(
+            frame, degenerate_corners, 0, -0.9, [degenerate_corners], False, (0, 0, 0)
+        )
+        assert result2 is None
+        warnings_after_run2 = [
+            r for r in caplog.records if "AprilTag crop padding" in r.message
+        ]
+        assert len(warnings_after_run2) == 2
+
+
 def test_compute_frame_corners_and_affines_tolerates_no_stats() -> None:
     """The accumulator is optional; a degenerate task must not blow up when
     the caller passed no ClippingStats."""

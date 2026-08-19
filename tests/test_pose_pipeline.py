@@ -119,6 +119,63 @@ class TestExtractOneCrop:
             assert r is not None
 
 
+class TestDegeneratePaddingWarning:
+    """core/tracking/pose/pose_pipeline._warned_degenerate_padding guard."""
+
+    def _degenerate_crop(self, frame, corners, det_idx=0):
+        # padding_fraction negative enough to collapse the padded AABB to
+        # zero area -> the branch that fires the once-per-run warning.
+        return extract_one_crop(
+            frame, corners, det_idx, -0.9, [corners], False, (0, 0, 0)
+        )
+
+    def test_n_degenerate_detections_in_one_run_warn_exactly_once(self, caplog):
+        import logging
+
+        from hydra_suite.core.tracking.pose import pose_pipeline as pp
+
+        pp.reset_degenerate_padding_warning()
+        frame = _dummy_frame(10, 10)
+        corners = _square_corners(5, 5, 0.1)
+
+        with caplog.at_level(logging.WARNING, logger=pp.logger.name):
+            for det_idx in range(5):
+                result = self._degenerate_crop(frame, corners, det_idx)
+                assert result is None
+
+        matches = [r for r in caplog.records if "AprilTag crop padding" in r.message]
+        assert len(matches) == 1
+
+    def test_reset_rearms_the_warning_for_a_new_run(self, caplog):
+        """A bare-reset test proves nothing about the real fix on its own, but
+        pinned here alongside the entry-point-driven test in
+        ``test_interpolated_crops_worker.py`` it documents the unit contract
+        ``reset_degenerate_padding_warning`` must satisfy for that entry
+        point's reset call to work at all."""
+        import logging
+
+        from hydra_suite.core.tracking.pose import pose_pipeline as pp
+
+        pp.reset_degenerate_padding_warning()
+        frame = _dummy_frame(10, 10)
+        corners = _square_corners(5, 5, 0.1)
+
+        with caplog.at_level(logging.WARNING, logger=pp.logger.name):
+            assert self._degenerate_crop(frame, corners, 0) is None
+            assert self._degenerate_crop(frame, corners, 1) is None  # suppressed
+            first_run_matches = [
+                r for r in caplog.records if "AprilTag crop padding" in r.message
+            ]
+            assert len(first_run_matches) == 1
+
+            pp.reset_degenerate_padding_warning()
+            assert self._degenerate_crop(frame, corners, 0) is None
+            second_run_matches = [
+                r for r in caplog.records if "AprilTag crop padding" in r.message
+            ]
+            assert len(second_run_matches) == 2
+
+
 # ---------------------------------------------------------------------------
 # Tests: letterbox_crop / invert_letterbox_keypoints
 # ---------------------------------------------------------------------------
