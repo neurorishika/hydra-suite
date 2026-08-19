@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from hydra_suite.core.individual.identity import columns as C
 from hydra_suite.core.post.processing import resolve_trajectories
@@ -29,14 +30,16 @@ PARAMS = {
 }
 
 
-def test_uniform_slot_arena_matches_ungrouped_result():
+def test_uniform_arena_id_matches_ungrouped_result():
     """Single-arena parity: grouping must be a no-op when there is one arena."""
     fwd = [_traj(0, 10.0), _traj(1, 200.0)]
     bwd = [_traj(0, 10.0), _traj(1, 200.0)]
     ungrouped = resolve_trajectories(fwd, bwd, PARAMS)
-    grouped = resolve_trajectories(
-        fwd, bwd, PARAMS, slot_arena=np.zeros(2, dtype=np.int32)
-    )
+    # Every trajectory already carries arena_id=0 (the ``_traj`` default) --
+    # arena is derived from each trajectory's own column now, not a
+    # separate index-aligned array, so this exercises the exact same
+    # dispatch path as a real single-arena run.
+    grouped = resolve_trajectories(fwd, bwd, PARAMS)
     assert len(ungrouped) == len(grouped)
     for a, b in zip(ungrouped, grouped):
         pd.testing.assert_frame_equal(
@@ -52,9 +55,7 @@ def test_spatially_coincident_trajectories_in_different_arenas_never_merge():
     """
     fwd = [_traj(0, 50.0, arena_id=0), _traj(1, 50.0, arena_id=1)]
     bwd = [_traj(0, 50.0, arena_id=0), _traj(1, 50.0, arena_id=1)]
-    out = resolve_trajectories(
-        fwd, bwd, PARAMS, slot_arena=np.array([0, 1], dtype=np.int32)
-    )
+    out = resolve_trajectories(fwd, bwd, PARAMS)
     arenas = [int(df["arena_id"].iloc[0]) for df in out]
     assert sorted(arenas) == [0, 1], "each arena must retain its own trajectory"
 
@@ -62,9 +63,7 @@ def test_spatially_coincident_trajectories_in_different_arenas_never_merge():
 def test_trajectory_ids_are_globally_unique_after_grouping():
     fwd = [_traj(0, 10.0, arena_id=0), _traj(1, 10.0, arena_id=1)]
     bwd = [_traj(0, 10.0, arena_id=0), _traj(1, 10.0, arena_id=1)]
-    out = resolve_trajectories(
-        fwd, bwd, PARAMS, slot_arena=np.array([0, 1], dtype=np.int32)
-    )
+    out = resolve_trajectories(fwd, bwd, PARAMS)
     ids = [int(df["TrajectoryID"].iloc[0]) for df in out]
     assert len(ids) == len(set(ids))
 
@@ -72,10 +71,49 @@ def test_trajectory_ids_are_globally_unique_after_grouping():
 def test_arena_column_survives_resolution():
     fwd = [_traj(0, 10.0, arena_id=3)]
     bwd = [_traj(0, 10.0, arena_id=3)]
-    out = resolve_trajectories(
-        fwd, bwd, PARAMS, slot_arena=np.array([3], dtype=np.int32)
-    )
+    out = resolve_trajectories(fwd, bwd, PARAMS)
     assert all("arena_id" in df.columns for df in out)
+
+
+def test_forward_and_backward_lists_may_have_different_lengths_and_id_sets():
+    """The real call site (core/post/merge.py) builds the forward and
+    backward lists from two INDEPENDENT groupby("TrajectoryID") passes over
+    two different DataFrames -- different lengths, different id sets. Arena
+    must be read off each trajectory's own column, never off a shared
+    index-aligned array (the design this replaced), or this would either
+    crash or silently misassign as soon as the lists diverge in length.
+    """
+    # Forward: 3 fragments (2 in arena 0, 1 in arena 1).
+    fwd = [
+        _traj(0, 10.0, arena_id=0),
+        _traj(1, 20.0, arena_id=0),
+        _traj(2, 500.0, arena_id=1),
+    ]
+    # Backward: only 1 fragment, arena 1 -- different length AND different
+    # id set from forward.
+    bwd = [_traj(0, 500.0, arena_id=1)]
+    out = resolve_trajectories(fwd, bwd, PARAMS)
+    arenas = sorted(int(df["arena_id"].iloc[0]) for df in out)
+    # Both arenas must be represented -- neither the length mismatch nor the
+    # disjoint id sets may crash resolution or silently drop an arena.
+    assert set(arenas) == {0, 1}, f"expected both arenas represented, got {arenas}"
+    # Arena 0 (fwd-only, no backward counterpart) must survive intact --
+    # 30 rows per fragment, 2 fragments, none dropped.
+    arena0_rows = sum(len(df) for df in out if int(df["arena_id"].iloc[0]) == 0)
+    assert arena0_rows == 60, f"expected 60 arena-0 rows preserved, got {arena0_rows}"
+
+
+def test_non_constant_arena_id_within_one_trajectory_raises():
+    """A trajectory cannot legitimately span arenas (slot -> arena is
+    static, Tasks 1-6). A non-constant arena_id within one trajectory means
+    an upstream invariant is already broken; this must raise rather than
+    silently pick one arena and hide it."""
+    bad = _traj(0, 10.0, n=10, arena_id=0)
+    bad.loc[5:, "arena_id"] = 1  # same TrajectoryID, split across arenas
+    fwd = [bad, _traj(1, 200.0, arena_id=2)]
+    bwd = [_traj(0, 10.0, arena_id=0), _traj(1, 200.0, arena_id=2)]
+    with pytest.raises(ValueError, match="non-constant arena_id"):
+        resolve_trajectories(fwd, bwd, PARAMS)
 
 
 def test_identity_sort_key_is_arena_scoped():
@@ -442,3 +480,121 @@ def test_process_trajectories_from_csv_keeps_arenas_with_colliding_raw_ids_separ
     assert len(result) == 40
     assert set(result["arena_id"].unique()) == {0, 1}
     assert result.groupby("TrajectoryID")["arena_id"].nunique().max() == 1
+
+
+# ---------------------------------------------------------------------------
+# _renumber_concatenated -- direct unit tests for the hardening findings
+# ---------------------------------------------------------------------------
+
+
+def test_renumber_concatenated_nan_ids_do_not_collide_across_parts():
+    """pd.factorize maps every NaN to code -1; naively adding a per-part
+    offset to a bare -1 lands on the PREVIOUS part's last id, silently
+    merging across arenas. NaN rows must get their own dedicated id instead.
+    """
+    from hydra_suite.core.post.processing import _renumber_concatenated
+
+    part0 = pd.DataFrame({"TrajectoryID": [0, 1], "arena_id": [0, 0]})
+    part1 = pd.DataFrame({"TrajectoryID": [np.nan, np.nan], "arena_id": [1, 1]})
+    out = _renumber_concatenated([part0, part1])
+    ids = out["TrajectoryID"].tolist()
+    # part0's rows must keep two distinct ids; part1's (formerly-NaN) rows
+    # must NOT collide with part0's last id (1).
+    assert ids[0] != ids[1]
+    assert ids[2] == ids[3], "both NaN rows in part1 share one in-part id"
+    assert ids[2] not in ids[:2], f"NaN rows collided with a previous part's id: {ids}"
+
+
+def test_renumber_concatenated_raises_on_heterogeneous_parts():
+    """If an id column is present in some parts but not all, silently
+    renumbering only the parts that have it would leave the others' raw ids
+    free to collide with the renumbered range -- refuse instead."""
+    from hydra_suite.core.post.processing import _renumber_concatenated
+
+    part0 = pd.DataFrame({"TrajectoryID": [0, 1]})
+    part1 = pd.DataFrame({"X": [1.0, 2.0]})  # no TrajectoryID column at all
+    with pytest.raises(ValueError):
+        _renumber_concatenated([part0, part1])
+
+
+def test_renumber_concatenated_empty_result_preserves_schema():
+    """An all-empty (but schema-bearing) multi-arena result must keep its
+    columns, matching what the single-arena path would return for the same
+    input shape -- not silently degrade to a bare, columnless DataFrame."""
+    from hydra_suite.core.post.processing import _renumber_concatenated
+
+    empty0 = pd.DataFrame(
+        {
+            "TrajectoryID": pd.Series([], dtype="int64"),
+            "X": pd.Series([], dtype="float64"),
+        }
+    )
+    empty1 = pd.DataFrame(
+        {
+            "TrajectoryID": pd.Series([], dtype="int64"),
+            "X": pd.Series([], dtype="float64"),
+        }
+    )
+    out = _renumber_concatenated([empty0, empty1])
+    assert list(out.columns) == ["TrajectoryID", "X"]
+    assert out.empty
+
+
+# ---------------------------------------------------------------------------
+# sort_trajectories_by_identity -- arena sort-key coercion (Finding 4)
+# ---------------------------------------------------------------------------
+
+
+def test_sort_by_identity_non_constant_arena_within_trajectory_raises():
+    from hydra_suite.core.post.identity_postprocess import sort_trajectories_by_identity
+
+    df = pd.DataFrame(
+        {
+            "FrameID": [0, 1, 2, 3],
+            "TrajectoryID": [10, 10, 10, 10],
+            "arena_id": [0, 0, 1, 1],  # same trajectory, two arenas
+            "IdentityFinalLabel": ["antA"] * 4,
+        }
+    )
+    with pytest.raises(ValueError, match="non-constant arena_id"):
+        sort_trajectories_by_identity(df)
+
+
+def test_sort_by_identity_nan_arena_sorts_deterministically_not_arbitrarily():
+    """A NaN arena_id must not produce a NaN sort key (Python's sort with a
+    NaN component is order-dependent / effectively arbitrary, since
+    ``nan < nan`` and ``nan > nan`` are both False). Missing arena info
+    sorts before any real arena, deterministically, run to run."""
+    from hydra_suite.core.post.identity_postprocess import sort_trajectories_by_identity
+
+    df = pd.DataFrame(
+        {
+            "FrameID": [0, 1, 0, 1],
+            "TrajectoryID": [10, 10, 20, 20],
+            "arena_id": [np.nan, np.nan, 1, 1],
+            "IdentityFinalLabel": ["antA"] * 2 + ["antB"] * 2,
+        }
+    )
+    out1 = sort_trajectories_by_identity(df.copy())
+    out2 = sort_trajectories_by_identity(df.copy())
+    pd.testing.assert_frame_equal(out1, out2)
+    # The NaN-arena trajectory (identity antA) sorts before the real-arena
+    # one (antB): deterministic ordering, not merely reproducible.
+    id_a = out1.loc[out1["IdentityFinalLabel"] == "antA", "TrajectoryID"].iloc[0]
+    id_b = out1.loc[out1["IdentityFinalLabel"] == "antB", "TrajectoryID"].iloc[0]
+    assert id_a < id_b
+
+
+def test_sort_by_identity_non_numeric_arena_raises():
+    from hydra_suite.core.post.identity_postprocess import sort_trajectories_by_identity
+
+    df = pd.DataFrame(
+        {
+            "FrameID": [0, 1],
+            "TrajectoryID": [10, 10],
+            "arena_id": ["north", "north"],
+            "IdentityFinalLabel": ["antA", "antA"],
+        }
+    )
+    with pytest.raises(ValueError, match="arena_id must be numeric"):
+        sort_trajectories_by_identity(df)

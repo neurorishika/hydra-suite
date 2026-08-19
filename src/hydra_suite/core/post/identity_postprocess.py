@@ -361,6 +361,36 @@ def fill_identity_nans_with_consensus(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _trajectory_arena_sort_key(values) -> tuple:
+    """Return a stable, orderable sort key for one trajectory's ``arena_id`` values.
+
+    A trajectory cannot legitimately span arenas (slot -> arena is a static,
+    per-track-slot property, Tasks 1-6): raises if this trajectory's
+    non-null ``arena_id`` values disagree, consistent with
+    ``processing._trajectory_arena``'s handling of the same invariant.
+
+    Missing/NaN arena info sorts deterministically before any real arena
+    (rather than via a raw NaN, whose comparisons are unstable -- ``nan <
+    nan`` is always False -- which would make Python's sort silently
+    arbitrary instead of merely surprising). Raises on a non-numeric
+    ``arena_id`` rather than propagating a NaN sort key.
+    """
+    unique = pd.unique(pd.Series(values).dropna())
+    if len(unique) > 1:
+        raise ValueError(
+            f"Trajectory has a non-constant arena_id ({sorted(unique.tolist())}); "
+            "arena assignment must be static per slot (Tasks 1-6)."
+        )
+    if len(unique) == 0:
+        return (0, 0.0)
+    raw = unique[0]
+    try:
+        numeric = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"arena_id must be numeric, got {raw!r}") from exc
+    return (1, numeric)
+
+
 def sort_trajectories_by_identity(df: pd.DataFrame) -> pd.DataFrame:
     """Renumber TrajectoryIDs so same-identity fragments are consecutive.
 
@@ -396,8 +426,12 @@ def sort_trajectories_by_identity(df: pd.DataFrame) -> pd.DataFrame:
             if not vals.empty:
                 consensus = str(vals.mode().iloc[0])
         min_frame = float(df.loc[mask, frame_col].min()) if frame_col else 0.0
-        arena = float(df.loc[mask, arena_col].iloc[0]) if arena_col else 0.0
-        traj_info.append((traj_id, arena, consensus, min_frame))
+        arena_key = (
+            _trajectory_arena_sort_key(df.loc[mask, arena_col])
+            if arena_col
+            else (0, 0.0)
+        )
+        traj_info.append((traj_id, arena_key, consensus, min_frame))
 
     traj_info.sort(key=lambda x: (x[1], x[2], x[3]))
     id_mapping = {old: new for new, (old, _, _, _) in enumerate(traj_info)}

@@ -1382,40 +1382,74 @@ def _resolve_trajectories_single_arena(
     return result_trajectories
 
 
+def _trajectory_arena(traj) -> object:
+    """Return a trajectory's constant arena id, or ``None`` if it carries none.
+
+    Only DataFrames can carry an ``arena_id`` column (the legacy
+    list-of-tuples format predates arena support and never will). Slot ->
+    arena is a static, per-track-slot property (Tasks 1-6), so every row of
+    a single trajectory must agree on ``arena_id`` -- a trajectory cannot
+    legitimately span arenas. A non-constant ``arena_id`` within one
+    trajectory means an upstream invariant is already broken; raise rather
+    than silently picking one arena and hiding it.
+    """
+    if not isinstance(traj, pd.DataFrame) or "arena_id" not in traj.columns:
+        return None
+    if traj.empty:
+        return None
+    values = pd.unique(traj["arena_id"].dropna())
+    if len(values) == 0:
+        return None
+    if len(values) > 1:
+        raise ValueError(
+            f"Trajectory has a non-constant arena_id ({sorted(values.tolist())}); "
+            "arena assignment must be static per slot (Tasks 1-6)."
+        )
+    return int(values[0])
+
+
 def resolve_trajectories(
     forward_trajs: object,
     backward_trajs: object,
     params: object = None,
     *,
     should_stop=None,
-    slot_arena=None,
 ) -> object:
     """Resolve forward/backward trajectories, independently per arena.
 
-    ``slot_arena`` maps trajectory-list index -> arena id. When it is None or
-    names a single arena, this delegates straight to the single-arena
-    implementation, so existing behavior is bit-for-bit preserved.
+    Each trajectory's arena is read directly off its own ``arena_id`` column
+    (see :func:`_trajectory_arena`) -- there is no separate index-aligned
+    array to keep in sync, so this is sound regardless of how the forward
+    and backward lists were built (they commonly have different lengths and
+    id sets; see ``core/post/merge.py``). When every trajectory names the
+    same arena (or none does -- the legacy/no-arena case), this delegates
+    straight to the single-arena implementation, so existing behavior is
+    bit-for-bit preserved.
 
     Otherwise each arena's trajectories are resolved in isolation: merge
     candidates can never span arenas because the partitions never meet. Results
     are concatenated and trajectory ids renumbered so they stay globally unique.
     """
-    if slot_arena is None:
-        return _resolve_trajectories_single_arena(
-            forward_trajs, backward_trajs, params, should_stop=should_stop
-        )
-    slot_arena = np.asarray(slot_arena, dtype=np.int32)
-    arenas = np.unique(slot_arena)
-    if len(arenas) <= 1:
+    fwd_arenas = [_trajectory_arena(t) for t in forward_trajs]
+    bwd_arenas = [_trajectory_arena(t) for t in backward_trajs]
+    distinct_arenas = {a for a in fwd_arenas + bwd_arenas if a is not None}
+
+    if len(distinct_arenas) <= 1:
         return _resolve_trajectories_single_arena(
             forward_trajs, backward_trajs, params, should_stop=should_stop
         )
 
+    # Group by arena; trajectories with no arena info (arena is None) sit in
+    # their own group, so nothing is silently dropped even in a partial-info
+    # edge case.
+    all_arenas = sorted(distinct_arenas) + (
+        [None] if None in fwd_arenas or None in bwd_arenas else []
+    )
+
     resolved: list = []
-    for arena in arenas:
-        idx = np.flatnonzero(slot_arena == arena)
-        fwd = [forward_trajs[i] for i in idx if i < len(forward_trajs)]
-        bwd = [backward_trajs[i] for i in idx if i < len(backward_trajs)]
+    for arena in all_arenas:
+        fwd = [t for t, a in zip(forward_trajs, fwd_arenas) if a == arena]
+        bwd = [t for t, a in zip(backward_trajs, bwd_arenas) if a == arena]
         if not fwd and not bwd:
             continue
         resolved.extend(
@@ -1447,23 +1481,56 @@ def _renumber_concatenated(parts: object) -> object:
     exactly one surviving trajectory, both locally numbered 0). Factorizing
     globally would treat that coincidence as one shared id and silently
     re-merge the two arenas' trajectories under a single TrajectoryID.
+
+    Two hardening details this depends on:
+    - NaN ids: ``pd.factorize`` maps every NaN to code ``-1``; adding a
+      per-part ``offset`` to a bare ``-1`` lands on the *previous* part's
+      last id, silently merging across arenas. NaN rows are remapped to a
+      dedicated in-part code before the offset is applied, so they can never
+      collide with a neighboring part's ids.
+    - Heterogeneous parts: if an id column is present in some parts but not
+      all, renumbering only the parts that have it would leave the others'
+      raw ids untouched and free to collide with the renumbered range. This
+      is a malformed input for this helper (every part is supposed to be a
+      same-schema post-processing output), so it raises rather than risk a
+      silent collision.
     """
-    parts = [p for p in parts if p is not None and len(p) > 0]
+    parts = [p for p in parts if p is not None]
     if not parts:
         return pd.DataFrame()
 
-    renumbered_parts = []
     for id_col in ("TrajectoryID", "trajectory_id"):
-        if id_col in parts[0].columns:
-            offset = 0
-            renumbered_parts = []
-            for part in parts:
-                part = part.copy()
-                codes, uniques = pd.factorize(part[id_col], sort=False)
-                part[id_col] = codes + offset
-                offset += len(uniques)
-                renumbered_parts.append(part)
-            parts = renumbered_parts
+        present_flags = [id_col in p.columns for p in parts]
+        if not any(present_flags):
+            continue
+        if not all(present_flags):
+            raise ValueError(
+                f"_renumber_concatenated: {id_col!r} present in some parts "
+                "but not all; refusing to renumber (would silently leave "
+                "some parts' raw ids free to collide with the renumbered "
+                "range)."
+            )
+        offset = 0
+        renumbered_parts = []
+        for part in parts:
+            part = part.copy()
+            codes, uniques = pd.factorize(part[id_col], sort=False)
+            n_real = len(uniques)
+            is_nan = codes == -1
+            if is_nan.any():
+                # Give every NaN row in this part one dedicated in-part code
+                # (the next id after the real, non-NaN ones) instead of the
+                # bare factorize sentinel -1, which would otherwise land on
+                # the previous part's last id once `offset` is added.
+                codes = np.where(is_nan, n_real, codes)
+                n_used = n_real + 1
+            else:
+                n_used = n_real
+            part[id_col] = codes + offset
+            offset += n_used
+            renumbered_parts.append(part)
+        parts = renumbered_parts
+
     combined = pd.concat(parts, ignore_index=True)
     return combined
 
