@@ -159,3 +159,50 @@ def test_evidence_summary_does_not_write_realtime_or_final_columns():
     )
     assert C.REALTIME_LABEL not in out.columns
     assert C.FINAL_LABEL not in out.columns
+
+
+def _df_with_confident_behavior_head():
+    return pd.DataFrame(
+        {
+            "TrajectoryID": [0, 0],
+            "FrameID": [0, 1],
+            "CNN_colortag_Class": ["red_blue", "red_blue"],
+            "CNN_colortag_Conf": [0.80, 0.80],
+            "CNN_behavior_Class": ["walking", "walking"],
+            "CNN_behavior_Conf": [0.98, 0.98],
+        }
+    )
+
+
+_PARAMS = {
+    "CNN_CLASSIFIERS": [
+        {"label": "colortag", "unique_identifier": True},
+        {"label": "behavior", "unique_identifier": False},
+    ],
+    "IDENTITY_POSTHOC_ENABLED": False,
+    "ENABLE_IDENTITY_FRAGMENT_SOLVER": False,
+}
+
+
+def test_top_evidence_label_ignores_more_confident_non_identity_head():
+    out = apply_identity_postprocessing_to_df(
+        _df_with_confident_behavior_head(), _PARAMS
+    )
+    assert out[C.EVIDENCE_TOPLABEL].tolist() == ["red_blue", "red_blue"]
+    assert out[C.EVIDENCE_CONFIDENCE].tolist() == [0.80, 0.80]
+
+
+def test_non_identity_head_columns_are_still_exported():
+    out = apply_identity_postprocessing_to_df(
+        _df_with_confident_behavior_head(), _PARAMS
+    )
+    assert out["CNN_behavior_Class"].tolist() == ["walking", "walking"]
+
+
+def test_absent_classifier_config_keeps_legacy_all_columns_behavior():
+    # No CNN_CLASSIFIERS key at all -> legacy fallback, behavior head wins.
+    out = apply_identity_postprocessing_to_df(
+        _df_with_confident_behavior_head(),
+        {"IDENTITY_POSTHOC_ENABLED": False, "ENABLE_IDENTITY_FRAGMENT_SOLVER": False},
+    )
+    assert out[C.EVIDENCE_TOPLABEL].tolist() == ["walking", "walking"]

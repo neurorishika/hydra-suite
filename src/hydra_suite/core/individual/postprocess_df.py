@@ -64,11 +64,31 @@ def apply_identity_postprocessing_to_df(
         function only summarizes evidence already present on the row.
         """
         out = df.copy()
-        cnn_class_columns = [
-            col
-            for col in out.columns
-            if str(col).startswith("CNN_") and str(col).endswith("_Class")
-        ]
+        from hydra_suite.core.individual.identity.heads import (
+            HEADS_UNKNOWN,
+            identity_class_columns,
+            resolve_identity_heads,
+        )
+
+        # Only identity heads (`unique_identifier=True`) may feed the identity
+        # evidence summary. A behavior/sex/caste classifier is output, not
+        # identity: unscoped, its class wins IdentityEvidenceTopLabel whenever
+        # it is more confident than the identity classifier.
+        _heads = resolve_identity_heads(params)
+        if _heads is HEADS_UNKNOWN:
+            cnn_class_columns = [
+                col
+                for col in out.columns
+                if str(col).startswith("CNN_") and str(col).endswith("_Class")
+            ]
+        else:
+            _all_labels = tuple(
+                str(cfg.get("label", "") or "").strip()
+                for cfg in (params.get("CNN_CLASSIFIERS") or [])
+            )
+            cnn_class_columns = identity_class_columns(
+                out.columns, _heads, all_labels=_all_labels
+            )
         cnn_conf_columns = {
             col: f"{str(col)[: -len('_Class')]}_Conf" for col in cnn_class_columns
         }
