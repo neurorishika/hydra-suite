@@ -83,7 +83,7 @@ def identity_class_columns(
         return out
 
     # New behavior: longest-match against full roster
-    all_labels_list = [str(l) for l in all_labels if str(l).strip()]
+    all_labels_list = [str(lbl) for lbl in all_labels if str(lbl).strip()]
     all_possible_labels = list(set(heads) | set(all_labels_list))
 
     for col in columns:

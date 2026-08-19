@@ -171,6 +171,44 @@ def is_non_identifying(
     return _find_matching_mark(combo, axes, marks_by_model, display_label) is not None
 
 
+def non_identifying_axis_values(
+    cnn_classifiers: Sequence[Mapping],
+) -> dict[str, frozenset[str]]:
+    """``qualified_axis_name -> class values that carry no identity there``.
+
+    The per-axis half of the mark semantics, resolved here so no call site
+    re-parses a mark:
+
+    - a bare mark (``"notag"``) applies to every axis of the declaring model
+      whose class vocabulary actually contains it -- which is also what
+      keeps a bare class containing an underscore (``"no_tag"``) from being
+      mistaken for a whole-composite mark;
+    - a scoped mark (``"front:notag"``) applies to that model's named factor
+      axis only;
+    - a whole-composite mark (``"notag_notag"``) names no class value on any
+      axis and contributes nothing here -- it is a row-level exclusion, see
+      :func:`excluded_display_labels`.
+    """
+    axes = identity_axes(cnn_classifiers)
+    marks_by_model = non_identifying_marks(cnn_classifiers)
+    out: dict[str, set[str]] = {}
+    for model_label, marks in marks_by_model.items():
+        for mark in marks:
+            scoped_factor, _, scoped_class = mark.partition(":")
+            for axis in axes:
+                if axis.model_label != model_label:
+                    continue
+                if scoped_class:
+                    if (
+                        axis.factor_name == scoped_factor
+                        and scoped_class in axis.classes
+                    ):
+                        out.setdefault(axis.qualified_name, set()).add(scoped_class)
+                elif mark in axis.classes:
+                    out.setdefault(axis.qualified_name, set()).add(mark)
+    return {k: frozenset(v) for k, v in out.items()}
+
+
 def excluded_display_labels(
     cnn_classifiers: Sequence[Mapping],
 ) -> frozenset[str]:

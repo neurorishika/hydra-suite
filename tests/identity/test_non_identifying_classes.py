@@ -94,6 +94,7 @@ def test_excluding_a_middle_combination_preserves_survivor_order():
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from hydra_suite.core.individual.identity import columns as C
 from hydra_suite.core.individual.postprocess_df import (
@@ -295,7 +296,12 @@ def test_notag_is_not_evidence_of_agreement():
         }
     )
     keys = derive_unique_identity_key_series(
-        df, identity_heads=("colortag",), non_identifying_values=("notag",)
+        df,
+        identity_heads=("colortag",),
+        non_identifying_values_by_column={
+            "CNN_colortag_front_Class": frozenset({"notag"}),
+            "CNN_colortag_back_Class": frozenset({"notag"}),
+        },
     )
     # No evidence at all -> NaN, so two untagged fragments neither agree nor
     # conflict; the spatial gates alone decide whether they relink.
@@ -312,7 +318,12 @@ def test_real_class_survives_alongside_a_notag_axis():
         }
     )
     keys = derive_unique_identity_key_series(
-        df, identity_heads=("colortag",), non_identifying_values=("notag",)
+        df,
+        identity_heads=("colortag",),
+        non_identifying_values_by_column={
+            "CNN_colortag_front_Class": frozenset({"notag"}),
+            "CNN_colortag_back_Class": frozenset({"notag"}),
+        },
     )
     assert parse_identity_key(keys.iloc[0]) == {"cnn:colortag:front": "red"}
 
@@ -350,7 +361,12 @@ def test_relink_consumer_treats_notag_as_no_evidence_not_agreement():
         }
     )
     keys = derive_unique_identity_key_series(
-        df, identity_heads=("colortag",), non_identifying_values=("notag",)
+        df,
+        identity_heads=("colortag",),
+        non_identifying_values_by_column={
+            "CNN_colortag_front_Class": frozenset({"notag"}),
+            "CNN_colortag_back_Class": frozenset({"notag"}),
+        },
     )
     src_sources = parse_identity_key(keys.iloc[0])
     dst_sources = parse_identity_key(keys.iloc[1])
@@ -660,3 +676,151 @@ def test_feature_off_stamp_is_a_no_op_in_the_default_configuration():
     df[C.FINAL_LABEL] = "unknown"
     df[C.FINAL_SOURCE] = C.IdentityFinalSource.NONE
     assert _stamp_non_identifying_labels(df, params) is df
+
+
+# --- axis-derivation mismatch diagnostic (final-fix wave, Important 3) -------
+
+
+def test_axis_derivation_mismatch_warns_naming_both_derivations(caplog):
+    """``ant_cnn_identity.json``'s shape: two factors' classes declared but
+    no ``factor_names``, so the catalog is a cross-product while the export
+    is one flat column. The stamp cannot match anything; that must be said
+    out loud, naming both derivations."""
+    import logging
+
+    from hydra_suite.core.individual.postprocess_df import _stamp_non_identifying_labels
+
+    params = {
+        "CNN_CLASSIFIERS": [
+            {
+                "label": "colortag",
+                "unique_identifier": True,
+                "class_names_per_factor": [["red", "notag"], ["blue", "notag"]],
+                # no factor_names -> the writer emits a single flat column
+                "non_identifying_classes": ["notag_notag"],
+            }
+        ]
+    }
+    df = pd.DataFrame(
+        {
+            "TrajectoryID": [0, 0],
+            "FrameID": [0, 1],
+            "CNN_colortag_Class": ["notag_notag", "notag_notag"],
+            "CNN_colortag_Conf": [0.9, 0.9],
+        }
+    )
+    with caplog.at_level(logging.WARNING):
+        out = _stamp_non_identifying_labels(df, params)
+    msgs = [r.getMessage() for r in caplog.records]
+    assert any(
+        "identity axis" in m and "factor_names" in m and "class_names_per_factor" in m
+        for m in msgs
+    ), msgs
+    # Behavior is unchanged -- the point is that the silence is broken.
+    assert out is not None
+
+
+def test_matching_axis_derivations_warn_about_nothing(caplog):
+    import logging
+
+    from hydra_suite.core.individual.postprocess_df import _stamp_non_identifying_labels
+
+    with caplog.at_level(logging.WARNING):
+        _stamp_non_identifying_labels(_three_untagged_tracks(), _PARAMS)
+    assert [r.getMessage() for r in caplog.records] == []
+
+
+# --- provenance columns (final-fix wave, Important 4) -----------------------
+
+
+def test_non_identifying_rows_do_not_advertise_offline_evidence():
+    """A track this branch declares un-resolved must not report offline
+    identity evidence. ``nonidentifying`` is the absence of a resolution,
+    not an evidence source, so it contributes no token of its own either --
+    the classifier's own ``cnn`` token is all that remains."""
+    out = apply_identity_postprocessing_to_df(_three_untagged_tracks(), _PARAMS)
+    assert set(out[C.FINAL_SOURCE]) == {C.IdentityFinalSource.NON_IDENTIFYING}
+    assert set(out[C.EVIDENCE_SOURCES]) == {"cnn"}
+
+
+def test_a_real_offline_resolution_still_reports_offline():
+    df = _three_untagged_tracks()
+    df.loc[df["TrajectoryID"] == 0, "CNN_colortag_front_Class"] = "red"
+    df.loc[df["TrajectoryID"] == 0, "CNN_colortag_back_Class"] = "blue"
+    df[C.FINAL_LABEL] = ["red_blue"] * 2 + [np.nan] * 4
+    df[C.FINAL_SOURCE] = [C.IdentityFinalSource.OFFLINE] * 2 + [""] * 4
+    out = apply_identity_postprocessing_to_df(df, _PARAMS)
+    real = out[out[C.FINAL_SOURCE] == C.IdentityFinalSource.OFFLINE]
+    assert set(real[C.EVIDENCE_SOURCES]) == {"cnn,offline"}
+
+
+# --- relink key covers all three mark forms (final-fix wave, Important 5) ----
+
+
+def _key_params(marks, classes=(("red", "notag"), ("blue", "notag"))):
+    return {
+        "CNN_CLASSIFIERS": [
+            {
+                "label": "colortag",
+                "unique_identifier": True,
+                "class_names_per_factor": [list(c) for c in classes],
+                "factor_names": ["front", "back"],
+                "non_identifying_classes": list(marks),
+            }
+        ],
+        "IDENTITY_POSTHOC_ENABLED": False,
+        "ENABLE_IDENTITY_FRAGMENT_SOLVER": False,
+    }
+
+
+def _two_untagged_rows(value="notag"):
+    return pd.DataFrame(
+        {
+            "TrajectoryID": [0, 1],
+            "FrameID": [0, 0],
+            "CNN_colortag_front_Class": [value, value],
+            "CNN_colortag_front_Conf": [0.9, 0.9],
+            "CNN_colortag_back_Class": [value, value],
+            "CNN_colortag_back_Conf": [0.9, 0.9],
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "marks",
+    [
+        pytest.param(["notag"], id="bare-class"),
+        pytest.param(["front:notag", "back:notag"], id="scoped-factor"),
+        pytest.param(["notag_notag"], id="whole-composite"),
+    ],
+)
+def test_untagged_rows_get_no_relink_key_for_every_mark_form(marks):
+    """All three documented mark forms must leave two untagged fragments
+    with NO identity key. Left in, the two produce identical keys and
+    register as *agreement* in ``_compare_identity_sources`` -- exactly the
+    relink-veto failure the exclusion exists to prevent. The whole-composite
+    form used to slip through the key filter entirely."""
+    out = apply_identity_postprocessing_to_df(_two_untagged_rows(), _key_params(marks))
+    assert out[C.UNIQUE_IDENTITY_KEY].isna().all(), list(out[C.UNIQUE_IDENTITY_KEY])
+
+
+def test_bare_class_containing_an_underscore_is_not_mistaken_for_a_composite():
+    """``no_tag`` is a bare CLASS that happens to contain an underscore. It
+    is excluded from the catalog, so it must also be excluded from the
+    relink key -- the old ``"_" not in m`` heuristic retained it."""
+    params = _key_params(["no_tag"], classes=(("red", "no_tag"), ("blue", "no_tag")))
+    spec = resolve_catalog_spec(params["CNN_CLASSIFIERS"], [])
+    assert spec.labels == ("red_blue",)  # the class really is excluded
+    out = apply_identity_postprocessing_to_df(_two_untagged_rows("no_tag"), params)
+    assert out[C.UNIQUE_IDENTITY_KEY].isna().all(), list(out[C.UNIQUE_IDENTITY_KEY])
+
+
+def test_a_real_composite_still_gets_its_relink_key():
+    """The filter must not swallow genuine identity evidence."""
+    df = _two_untagged_rows()
+    df["CNN_colortag_front_Class"] = ["red", "red"]
+    df["CNN_colortag_back_Class"] = ["blue", "blue"]
+    out = apply_identity_postprocessing_to_df(df, _key_params(["notag_notag"]))
+    assert set(out[C.UNIQUE_IDENTITY_KEY]) == {
+        "cnn:colortag:back=blue|cnn:colortag:front=red"
+    }

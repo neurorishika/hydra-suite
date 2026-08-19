@@ -153,7 +153,7 @@ _CNN_CLASS_COLUMN_RE = re.compile(r"^CNN_(.+)_Class$")
 
 
 def _cnn_identity_sources_for_row(
-    row: "pd.Series", cnn_class_columns: list, non_identifying_values=()
+    row: "pd.Series", cnn_class_columns: list, non_identifying_values_by_column=None
 ) -> dict:
     """Build ``cnn:<head>``/``cnn:<head>:<factor>`` tokens from CNN_* columns.
 
@@ -163,9 +163,13 @@ def _cnn_identity_sources_for_row(
     source (``cnn:<head>:<factor>``), matching the old serializer's
     convention. ``CNN_<head>_Conf`` sibling columns are never class columns.
 
-    ``non_identifying_values`` are declared non-identifying class values
-    (e.g. ``"notag"``); a column whose value matches one is skipped exactly
-    like a missing value, so it contributes no identity evidence.
+    ``non_identifying_values_by_column`` (``{class_column: {values}}``, as
+    resolved by ``resolve.non_identifying_axis_values``) drops a column
+    whose value is declared non-identifying on that axis, exactly like a
+    missing value. Whether a row contributes identity evidence at ALL is a
+    separate, caller-owned decision (see
+    ``derive_unique_identity_key_series``'s ``non_identifying_rows``); no
+    mark semantics are re-derived here.
     """
     sources: dict[str, str] = {}
     for col in cnn_class_columns:
@@ -173,11 +177,13 @@ def _cnn_identity_sources_for_row(
         if not match:
             continue
         value = _normalize_string(row.get(col))
-        if not value or value in non_identifying_values:
-            # A non-identifying class carries no identity information. Left in,
-            # `notag == notag` would count as AGREEMENT in
-            # `_compare_identity_sources`' grouped tally and could out-vote a
-            # genuine conflict on another axis.
+        if not value:
+            continue
+        if value in (non_identifying_values_by_column or {}).get(str(col), ()):
+            # A non-identifying class carries no identity information. Left
+            # in, `notag == notag` would count as AGREEMENT in
+            # `_compare_identity_sources`' grouped tally and could out-vote
+            # a genuine conflict on another axis.
             continue
         middle = match.group(1)
         if "_" in middle:
@@ -193,7 +199,8 @@ def derive_unique_identity_key_series(
     df: pd.DataFrame,
     identity_heads=None,
     all_classifier_labels=(),
-    non_identifying_values=(),
+    non_identifying_rows=None,
+    non_identifying_values_by_column=None,
 ) -> pd.Series:
     """Re-derive the ``UniqueIdentityKey`` column from per-row evidence columns.
 
@@ -219,11 +226,28 @@ def derive_unique_identity_key_series(
     identity head and a differently-named non-identity classifier (e.g.
     head ``tag`` vs. classifier ``tag_v2``).
 
-    ``non_identifying_values`` are declared non-identifying class values
-    (e.g. ``"notag"``); a CNN column carrying one of these values
-    contributes no identity evidence, exactly as if the value were missing.
-    Empty by default, which reproduces the legacy every-value-counts
-    behavior byte-for-bit.
+    ``non_identifying_rows`` is an optional boolean mask (aligned to
+    ``df.index``) marking rows whose observed identity composite was
+    declared non-identifying -- i.e. is absent from the identity catalog.
+    Those rows contribute no CNN identity evidence at all, exactly as if
+    every identity-head column were missing: two untagged fragments would
+    otherwise produce identical keys and register as *agreement* in
+    ``_compare_identity_sources``, which is precisely the relink-veto
+    failure the exclusion exists to prevent. The caller owns recognizing
+    the composite (``resolve.excluded_display_labels``), so no mark
+    semantics are re-derived here. A non-CNN source (a detected AprilTag)
+    is a genuinely different identity source and is NOT dropped. ``None``
+    by default, which reproduces the legacy every-row-counts behavior
+    byte-for-bit.
+
+    ``non_identifying_values_by_column`` is the per-axis half of the same
+    exclusion: ``{class_column: {declared non-identifying class values}}``
+    (as resolved by ``resolve.non_identifying_axis_values``). A column
+    carrying one of its own axis's values contributes nothing, exactly as
+    if it were missing, so a shared ``notag`` on one axis cannot register
+    as agreement and out-vote a genuine conflict on another. ``None`` by
+    default, which reproduces the legacy every-value-counts behavior
+    byte-for-bit.
     """
     if df is None or df.empty:
         return pd.Series([], index=getattr(df, "index", None), dtype=object)
@@ -240,6 +264,11 @@ def derive_unique_identity_key_series(
         )
     has_tag_label = "DetectedTagLabel" in df.columns
     has_tag_id = "DetectedTagID" in df.columns
+    if non_identifying_rows is None:
+        drop_cnn_index = frozenset()
+    else:
+        mask = pd.Series(non_identifying_rows, index=df.index).fillna(False)
+        drop_cnn_index = frozenset(df.index[mask.astype(bool)])
 
     def _row_key(row: "pd.Series") -> Any:
         sources: dict[str, str] = {}
@@ -250,11 +279,12 @@ def derive_unique_identity_key_series(
             tag_value = _normalize_string(row.get("DetectedTagID"))
         if tag_value:
             sources["apriltag"] = tag_value
-        sources.update(
-            _cnn_identity_sources_for_row(
-                row, cnn_class_columns, frozenset(non_identifying_values)
+        if row.name not in drop_cnn_index:
+            sources.update(
+                _cnn_identity_sources_for_row(
+                    row, cnn_class_columns, non_identifying_values_by_column or {}
+                )
             )
-        )
         key = format_identity_key(sources)
         return key if key else np.nan
 
