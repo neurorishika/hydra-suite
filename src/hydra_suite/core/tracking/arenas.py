@@ -25,7 +25,7 @@ class ArenaLayout:
 
     n_arenas: int
     animals_per_arena: int
-    label_image: np.ndarray | None = None
+    label_image: np.ndarray | None = field(default=None, repr=False, compare=False)
     _resize_cache: dict = field(default_factory=dict, repr=False, compare=False)
 
     @property
@@ -62,19 +62,32 @@ class ArenaLayout:
             self._resize_cache[key] = cached
         return cached
 
-    def arena_of_points(self, xy: np.ndarray) -> np.ndarray:
+    def arena_of_points(
+        self, xy: np.ndarray, frame_size: tuple[int, int] | None = None
+    ) -> np.ndarray:
         """Arena id per point; -1 for points outside every arena.
 
         Without a label image every point is arena 0, so single-arena runs take
         an identical path to today's.
+
+        `frame_size`, if given, is `(width, height)` of the frame `xy` is
+        expressed in -- e.g. after `RESIZE_FACTOR` has scaled the tracking
+        frame relative to the label image's native resolution. The label
+        image is resized (nearest-neighbour, cached) to match before lookup.
+        When omitted, `xy` is assumed to already be in the label image's
+        native resolution (today's behaviour, unchanged).
         """
         xy = np.asarray(xy, dtype=np.float32).reshape(-1, 2)
         if xy.shape[0] == 0:
             return np.zeros(0, dtype=np.int32)
         if self.label_image is None:
             return np.zeros(xy.shape[0], dtype=np.int32)
-        h, w = self.label_image.shape[:2]
-        labels = self.label_image_for_size(w, h)
+        if frame_size is not None:
+            w, h = frame_size
+            labels = self.label_image_for_size(w, h)
+        else:
+            h, w = self.label_image.shape[:2]
+            labels = self.label_image
         cx = np.clip(xy[:, 0].astype(np.int32), 0, w - 1)
         cy = np.clip(xy[:, 1].astype(np.int32), 0, h - 1)
         return labels[cy, cx].astype(np.int32) - 1
