@@ -373,13 +373,17 @@ class OrientedTrackVideoExporter:
                 except Exception:
                     existing = {}
             parameters = dict(existing.get("parameters") or {})
+            # No "degenerate_skipped_count" here, unlike the crop-dataset
+            # generator's block: this exporter does not DROP a degenerate OBB
+            # (``_canonical_affine_for_task`` fabricates an identity-centred
+            # placement and still emits a crop), so it never calls
+            # ``record_degenerate`` and the field could only ever read 0. An
+            # always-zero counter would read as evidence of "no degenerates"
+            # when it is evidence of nothing, so it is omitted outright.
             parameters["canonical"] = {
                 **self._geometry.to_dict(),
                 "clipped_count": self._clipping_stats.clipped_count,
                 "worst_overflow_ratio": self._clipping_stats.worst_overflow_ratio,
-                "degenerate_skipped_count": (
-                    self._clipping_stats.degenerate_skipped_count
-                ),
             }
             existing["parameters"] = parameters
             metadata_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")

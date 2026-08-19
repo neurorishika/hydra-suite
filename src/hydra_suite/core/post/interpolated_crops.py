@@ -967,7 +967,11 @@ def _compute_frame_corners_and_affines(tasks, geometry, clipping_stats):
     ``clipping_stats`` accumulates the per-detection overflow so a too-small
     ``canonical_margin`` produces a visible end-of-run signal instead of
     silently truncated animals -- the same guard the core tracking loop
-    applies (``core/tracking/worker.py``).
+    applies (``core/tracking/worker.py``). It also tallies the tasks DROPPED
+    here for a degenerate OBB (``canonical_affine`` raises on a zero-length
+    edge): those store ``None`` and are skipped downstream by
+    ``_extract_pose_crop``, so without the counter the run would just be
+    quietly shorter.
     """
     from hydra_suite.core.canonicalization.geometry import canonical_affine
     from hydra_suite.core.individual.geometry import ellipse_to_obb_corners as _e2obb
@@ -978,6 +982,11 @@ def _compute_frame_corners_and_affines(tasks, geometry, clipping_stats):
         try:
             _M, _theta, _clipped = canonical_affine(_c, geometry)
         except ValueError:
+            # Degenerate OBB (zero-length edge): no rigid Layer 1 transform
+            # exists and there is no non-canonical fallback, so this task is
+            # dropped -- counted so the drop is visible in the run summary.
+            if clipping_stats is not None:
+                clipping_stats.record_degenerate()
             affines.append(None)
             continue
         if clipping_stats is not None:
