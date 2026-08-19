@@ -1140,7 +1140,12 @@ class ArenaDecoderRegistry:
     def all_active_slots(self) -> list[int]:
         return sorted(s for d in self.decoders.values() for s in d.all_active_slots())
 
-    def update_frame(self, frame_idx, slot_evidence, *args, **kwargs) -> dict:
+    # NOTE: the real signature is
+    #   update_frame(frame_idx, visible_slots, slot_evidences) -> list[IdentityAssignment]
+    # (core/individual/identity/online.py:382).  Partition BOTH visible_slots and
+    # slot_evidences by arena, call each decoder with only its own slots, and
+    # concatenate the returned assignment lists.
+    def update_frame(self, frame_idx, visible_slots, slot_evidences) -> list:
         """Run each arena's decoder over only that arena's slots.
 
         ``slot_evidence`` is the worker's {slot_index: evidence} mapping; each
