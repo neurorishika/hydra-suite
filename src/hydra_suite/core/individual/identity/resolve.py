@@ -12,10 +12,21 @@ from __future__ import annotations
 
 import itertools
 import json
+import logging
 import os
 from typing import Mapping, NamedTuple, Sequence
 
 from hydra_suite.core.individual.identity.spec import CatalogEntry, IdentityCatalogSpec
+
+logger = logging.getLogger(__name__)
+
+CATALOG_SIZE_WARN_THRESHOLD = 256
+"""Entry count above which the cross-product catalog is flagged as suspicious.
+
+The Hungarian assignment cost matrix is N x (K + N) in the catalog size K, so
+a runaway product is a real cost. This is a warning, not a cap: naming the
+contributing axes is more useful than refusing to run.
+"""
 
 
 class IdentityAxis(NamedTuple):
@@ -115,6 +126,20 @@ def resolve_catalog_spec(
 
     axes = identity_axes(cnn_classifiers)
     if axes:
+        projected = 1
+        for a in axes:
+            projected *= max(1, len(a.classes))
+        if projected > CATALOG_SIZE_WARN_THRESHOLD:
+            logger.warning(
+                "Identity catalog is the cross-product of %d axes and has %d "
+                "entries (> %d). Contributing axes: %s. Check that every "
+                "classifier marked 'unique identifier' really is one, and "
+                "consider marking non-identifying classes.",
+                len(axes),
+                projected,
+                CATALOG_SIZE_WARN_THRESHOLD,
+                ", ".join(f"{a.qualified_name}({len(a.classes)})" for a in axes),
+            )
         for combo in itertools.product(*[a.classes for a in axes]):
             pairs = tuple(
                 (axes[i].qualified_name, str(c)) for i, c in enumerate(combo) if c

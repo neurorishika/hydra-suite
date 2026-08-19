@@ -1,3 +1,5 @@
+import logging
+
 from hydra_suite.core.individual.identity.resolve import (
     identity_axes,
     resolve_catalog_spec,
@@ -77,3 +79,25 @@ def test_missing_factor_names_fall_back_to_positional():
     }
     spec = resolve_catalog_spec([cfg], [])
     assert spec.entries[0].factors == (("colortag:factor0", "red"),)
+
+
+def _big_model(i):
+    return {
+        "label": f"m{i}",
+        "unique_identifier": True,
+        "class_names_per_factor": [[f"c{j}" for j in range(8)]],
+        "factor_names": [f"f{i}"],
+    }
+
+
+def test_large_catalog_warns_and_names_axes(caplog):
+    with caplog.at_level(logging.WARNING):
+        spec = resolve_catalog_spec([_big_model(i) for i in range(4)], [])
+    assert len(spec.entries) == 8**4
+    assert any("m0:f0" in r.getMessage() for r in caplog.records)
+
+
+def test_small_catalog_does_not_warn(caplog):
+    with caplog.at_level(logging.WARNING):
+        resolve_catalog_spec([_thorax(), _abdomen()], [])
+    assert not caplog.records
