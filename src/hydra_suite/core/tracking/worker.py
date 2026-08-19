@@ -1925,7 +1925,19 @@ class TrackingEngineCore:
                 slot_lock_label,
             ]
 
-        _phase_label_maps: dict[str, dict] = {}
+        # Two DIFFERENT normalizations of the same "label" config field are
+        # in play here and must each match their own counterpart exactly, or
+        # this map silently misses and every phase's evidence re-floors
+        # (Task 6 fix round 1):
+        #   - _map_key must match worker.py's `_cnn_phase_states` label
+        #     expression (~line 1572, `str(cnn_cfg_dict.get("label",
+        #     "cnn_identity"))`), because that is the `source_name` this map
+        #     is looked up by at the evidence-consumption call site.
+        #   - _axis_model_label must match resolve.py's `identity_axes()`
+        #     model_label normalization (`str(cfg.get("label", "") or
+        #     "").strip() or "cnn"`), because that is the axis-prefix this
+        #     classifier's catalog entries were actually built with.
+        _phase_label_maps: dict[str, list[int]] = {}
         if _identity_catalog is not None and _catalog_spec is not None:
             from hydra_suite.core.individual.identity.phase_remap import (
                 build_phase_label_map,
@@ -1934,11 +1946,22 @@ class TrackingEngineCore:
             for _cfg in p.get("CNN_CLASSIFIERS", []) or []:
                 if not bool(_cfg.get("unique_identifier", False)):
                     continue
-                _ml = str(_cfg.get("label", "") or "").strip()
-                if _ml:
-                    _phase_label_maps[_ml] = build_phase_label_map(
-                        _catalog_spec, _identity_catalog, _ml
+                _map_key = str(_cfg.get("label", "cnn_identity"))
+                _axis_model_label = str(_cfg.get("label", "") or "").strip() or "cnn"
+                _pmap = build_phase_label_map(
+                    _catalog_spec, _identity_catalog, _axis_model_label
+                )
+                if not _pmap:
+                    logger.warning(
+                        "Identity classifier '%s' (unique_identifier=True) "
+                        "maps to ZERO entries in the resolved identity "
+                        "catalog -- its evidence will be entirely floored "
+                        "and effectively discarded. Check this classifier's "
+                        "'label' and 'class_names_per_factor' configuration "
+                        "against the other configured identity classifiers.",
+                        _map_key,
                     )
+                _phase_label_maps[_map_key] = _pmap
 
         def _remap_source_log_probs_to_catalog(
             log_probs: np.ndarray,

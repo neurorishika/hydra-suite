@@ -85,3 +85,92 @@ def test_phase_label_map_covers_every_phase_label():
     pmap = build_phase_label_map(spec, catalog, "thorax")
     assert sorted(pmap) == ["blue", "red"]
     assert len(pmap["red"]) == 2
+
+
+def test_unmapped_phase_label_within_otherwise_working_map_is_dropped():
+    """A single phase label with no catalog match (e.g. a classifier
+    reporting an out-of-vocabulary class) is silently skipped -- distinct
+    from the map-key-mismatch cases below, whose failure mode is the WHOLE
+    map being empty. Here the map is healthy; only one label has zero
+    targets, and the other labels' evidence must still come through intact."""
+    spec = resolve_catalog_spec([THORAX, ABDOMEN], [])
+    catalog = IdentityCatalog.from_spec(spec)
+    pmap = build_phase_label_map(spec, catalog, "thorax")
+    assert "green" not in pmap
+
+    log_probs = np.log(np.array([0.05, 0.05, 0.85, 0.05]))
+    got = remap_phase_log_probs(
+        log_probs, ("unknown", "blue", "red", "green"), catalog, pmap
+    )
+    probs = np.exp(got)
+    red_idxs = [catalog.index_of("red_square"), catalog.index_of("red_circle")]
+    # "green"'s mass is dropped, not crashed on and not smeared uniformly --
+    # red (the actual majority label) still dominates the posterior.
+    assert probs[red_idxs].sum() > 0.5
+
+
+def _cnn_label_map_key(cfg: dict) -> str:
+    """Matches worker.py's `_cnn_phase_states` label expression (~line 1572,
+    also the `_phase_label_maps` build-loop's `_map_key`, ~line 1936): the
+    `source_name` this map is looked up by at the evidence-consumption call
+    site."""
+    return str(cfg.get("label", "cnn_identity"))
+
+
+def _cnn_axis_model_label(cfg: dict) -> str:
+    """Matches resolve.py's `identity_axes()` model_label normalization
+    (also the `_phase_label_maps` build-loop's `_axis_model_label`, ~line
+    1938): the axis-prefix this classifier's catalog entries were actually
+    built with."""
+    return str(cfg.get("label", "") or "").strip() or "cnn"
+
+
+def test_whitespace_padded_label_is_not_floored():
+    """Task 6 fix round 1, Important-1: a label the worker's phase-state
+    loop and the map-key loop each normalize DIFFERENTLY (one strips, one
+    doesn't) must still route to a non-empty map when the two normalizations
+    disagree in their raw form -- guarding the fix, not just the bug."""
+    thorax_padded = dict(THORAX, label=" thorax ")
+    spec = resolve_catalog_spec([thorax_padded, ABDOMEN], [])
+    catalog = IdentityCatalog.from_spec(spec)
+
+    map_key = _cnn_label_map_key(thorax_padded)
+    axis_label = _cnn_axis_model_label(thorax_padded)
+    assert map_key == " thorax "
+    assert axis_label == "thorax"
+    assert map_key != axis_label  # the whitespace IS the mismatch trap
+
+    phase_label_maps = {
+        map_key: build_phase_label_map(spec, catalog, axis_label),
+    }
+    log_probs = np.log(np.array([0.05, 0.9, 0.05]))
+    got = remap_phase_log_probs(
+        log_probs, ("unknown", "red", "blue"), catalog, phase_label_maps[map_key]
+    )
+    probs = np.exp(got)
+    red_idxs = [catalog.index_of("red_square"), catalog.index_of("red_circle")]
+    assert probs[red_idxs].sum() > 0.5  # not floored to near-zero
+
+
+def test_missing_label_falls_back_to_cnn_default_and_is_not_floored():
+    """Task 6 fix round 1, Important-1: a classifier config with no 'label'
+    key at all must still route to a non-empty map -- both normalizations
+    fall back to their own default ('cnn_identity' vs 'cnn'), and the fix
+    must keep them paired up even in the all-defaults case."""
+    thorax_nolabel = {k: v for k, v in THORAX.items() if k != "label"}
+    spec = resolve_catalog_spec([thorax_nolabel, ABDOMEN], [])
+    catalog = IdentityCatalog.from_spec(spec)
+
+    map_key = _cnn_label_map_key(thorax_nolabel)
+    axis_label = _cnn_axis_model_label(thorax_nolabel)
+    assert map_key == "cnn_identity"
+    assert axis_label == "cnn"
+
+    pmap = build_phase_label_map(spec, catalog, axis_label)
+    assert pmap  # must not be empty
+
+    log_probs = np.log(np.array([0.05, 0.9, 0.05]))
+    got = remap_phase_log_probs(log_probs, ("unknown", "red", "blue"), catalog, pmap)
+    probs = np.exp(got)
+    red_idxs = [catalog.index_of("red_square"), catalog.index_of("red_circle")]
+    assert probs[red_idxs].sum() > 0.5

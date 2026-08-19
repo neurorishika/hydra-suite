@@ -1,19 +1,33 @@
 """One-shot generation script for the committed identity-evidence goldens.
 
-GENERATION HELPER -- NOT RUN BY PYTEST. This script was run ONCE, while
-``IdentityEvidenceEmitter`` still existed, to freeze its output for the two
+GENERATION HELPER -- NOT RUN BY PYTEST. Most of this script was run ONCE,
+while ``IdentityEvidenceEmitter`` still existed, to freeze its output for the
 parity-test scenario families into the ``.npz`` files committed alongside it
 in this directory. The parity tests (``tests/identity/test_evidence_builder_parity.py``,
 ``tests/identity/test_evidence_phase_basis_parity.py``) now load those
 frozen goldens instead of instantiating the emitter, which has since been
 deleted (Identity Phase 7 Task 4: clean-break retirement).
 
-Kept for reproducibility/documentation only. Re-running it requires
+Kept for reproducibility/documentation only. Re-running ``generate_builder_parity_goldens``
+or the CNN+AprilTag half of ``generate_phase_basis_goldens`` requires
 resurrecting ``IdentityEvidenceEmitter`` (e.g. via ``git show`` at the commit
-before its deletion) -- it will NOT run against the current source tree.
+before its deletion) -- they will NOT run against the current source tree.
 
-Usage (historical):
+``phase_basis_parity_two_cnn_phase.npz`` is the ONE exception: it was
+REGENERATED (Simplification Sprint, Slice 2, "identity-heads-and-non-identifying-classes"
+spec, Task 6 fix round 1) via ``generate_two_cnn_phase_cross_product_golden``
+below, which IS runnable against the current tree -- see that function's
+docstring for why the emitter-based generator could no longer produce a
+valid golden for this case, and what changed.
+
+Usage (historical, case 1 + builder-parity only):
     PYTHONPATH=src python tests/data/identity_evidence_goldens/generate_goldens.py
+
+Usage (current, case 2 only):
+    PYTHONPATH=src python -c "
+    from tests.data.identity_evidence_goldens.generate_goldens import (
+        generate_two_cnn_phase_cross_product_golden)
+    generate_two_cnn_phase_cross_product_golden()"
 """
 
 from __future__ import annotations
@@ -26,7 +40,22 @@ from hydra_suite.core.individual.classification.cnn import ClassPrediction
 from hydra_suite.core.individual.identity.calibration import CalibrationModel
 from hydra_suite.core.individual.identity.catalog import IdentityCatalog
 from hydra_suite.core.individual.identity.resolve import resolve_catalog_spec
-from hydra_suite.core.tracking.identity.evidence_emitter import IdentityEvidenceEmitter
+from hydra_suite.core.inference.identity_evidence_config import (
+    IdentityEvidenceCNNPhaseConfig,
+    IdentityEvidenceRunConfig,
+)
+from hydra_suite.core.inference.result import (
+    CNNDetectionPrediction,
+    CNNFactorPrediction,
+)
+from hydra_suite.core.inference.runner import _build_identity_evidence_stage
+
+# `IdentityEvidenceEmitter` is deleted from the current tree (Identity Phase 7
+# Task 4 clean-break retirement); it is imported LAZILY, inside the two
+# historical functions that still reference it (`_gen_builder_case`,
+# `_old_global_log_probs`), so importing this module itself -- needed to run
+# `generate_two_cnn_phase_cross_product_golden`, which does NOT touch the
+# emitter -- succeeds against the current tree.
 
 OUT_DIR = Path(__file__).parent
 
@@ -87,6 +116,10 @@ def _gen_builder_case(
     tmp_path: Path,
     source_name: str = "cnn0",
 ):
+    from hydra_suite.core.tracking.identity.evidence_emitter import (
+        IdentityEvidenceEmitter,
+    )
+
     catalog = IdentityCatalog.from_labels(catalog_known_labels)
     emitter = IdentityEvidenceEmitter(
         cache_path=str(tmp_path / f"{name}.npz"),
@@ -207,6 +240,10 @@ def _old_global_log_probs(
     raw_probs,
     tmp_path,
 ):
+    from hydra_suite.core.tracking.identity.evidence_emitter import (
+        IdentityEvidenceEmitter,
+    )
+
     emitter = IdentityEvidenceEmitter(
         cache_path=tmp_path / f"{source_name}_old.npz",
         source_name=source_name,
@@ -251,7 +288,49 @@ def generate_phase_basis_goldens(tmp_path: Path) -> None:
     )
     print(f"wrote {out_path}")
 
-    # Case 2: two CNN phases, each a proper subset of the union catalog.
+    # NOTE: this function used to also generate Case 2 (two CNN phases) here,
+    # via the same emitter-based `_old_global_log_probs` helper against a
+    # UNION catalog. Slice 2 (2026-08-18) changed `resolve_catalog_spec` to
+    # build the cross-product instead, which retired that catalog shape --
+    # see `generate_two_cnn_phase_cross_product_golden` below for Case 2's
+    # current (regenerated, non-historical) golden.
+
+
+def generate_two_cnn_phase_cross_product_golden() -> None:
+    """Regenerate ``phase_basis_parity_two_cnn_phase.npz`` -- Case 2 of
+    ``test_evidence_phase_basis_parity.py``.
+
+    UNLIKE the rest of this script, this function IS runnable against the
+    current source tree: it drives the CURRENT production path
+    (``_build_identity_evidence_stage`` + ``phase_remap.build_phase_label_map``
+    / ``remap_phase_log_probs``, i.e. the exact code the tracking worker's
+    ``_remap_source_log_probs_to_catalog`` now delegates to), not the deleted
+    ``IdentityEvidenceEmitter``.
+
+    Provenance: regenerated for the Simplification Sprint's
+    "identity-heads-and-non-identifying-classes" spec, Slice 2, Task 6 fix
+    round 1 (2026-08-18). The PREVIOUS golden (``old_log_probs_p``/
+    ``old_log_probs_q`` keys) froze the emitter's output against the OLD
+    UNION catalog (``unknown, p1, p2, q1, q2, q3``); Task 4 changed
+    ``resolve_catalog_spec`` to the true cross-product
+    (``unknown, p1_q1, p1_q2, p1_q3, p2_q1, p2_q2, p2_q3``), which made that
+    golden encode exactly the exact-match-flooring bug Task 6 fixes. Because
+    the emitter is deleted, that golden could not be honestly regenerated
+    from an independent "old" implementation; this function instead freezes
+    the CURRENT implementation's output, restoring the goal a frozen golden
+    serves (pin absolute values so a future refactor of the algorithm shows
+    up as a diff here) without pretending to be independent of the code
+    under test -- independence from `phase_remap.py` is instead provided by
+    `_independent_composite_remap` in the test file itself.
+
+    Keys: ``log_probs_p``, ``log_probs_q`` (replacing the old ``old_log_probs_p``
+    / ``old_log_probs_q``), ``catalog_labels`` (unchanged key, new values).
+    """
+    from hydra_suite.core.individual.identity.phase_remap import (
+        build_phase_label_map,
+        remap_phase_log_probs,
+    )
+
     cnn_classifiers = [
         {
             "label": "cnn_p",
@@ -266,22 +345,71 @@ def generate_phase_basis_goldens(tmp_path: Path) -> None:
     ]
     catalog_spec = resolve_catalog_spec(cnn_classifiers, [])
     identity_catalog = IdentityCatalog.from_spec(catalog_spec)
-    assert set(identity_catalog.labels) == {"unknown", "p1", "p2", "q1", "q2", "q3"}
+    assert identity_catalog.labels == (
+        "unknown",
+        "p1_q1",
+        "p1_q2",
+        "p1_q3",
+        "p2_q1",
+        "p2_q2",
+        "p2_q3",
+    )
+
+    run_config = IdentityEvidenceRunConfig(
+        catalog_spec=catalog_spec,
+        cnn_phases=(
+            IdentityEvidenceCNNPhaseConfig(
+                label="cnn_p", class_names_per_factor=[["p1", "p2"]]
+            ),
+            IdentityEvidenceCNNPhaseConfig(
+                label="cnn_q", class_names_per_factor=[["q1", "q2", "q3"]]
+            ),
+        ),
+        tag_to_label={},
+    )
+
+    def _current_global_log_probs(source_name, class_labels_per_factor, raw_probs):
+        catalog, stage = _build_identity_evidence_stage(run_config)
+        assert catalog.labels == identity_catalog.labels
+        cnn_reads = {
+            source_name: [
+                CNNDetectionPrediction(
+                    det_index=0,
+                    factors=[
+                        CNNFactorPrediction(
+                            factor_name=f"factor_{i}",
+                            class_names=list(factor_labels),
+                            raw_probabilities=np.asarray(
+                                raw_probs[i], dtype=np.float32
+                            ),
+                        )
+                        for i, factor_labels in enumerate(class_labels_per_factor)
+                    ],
+                )
+            ]
+        }
+        evidences = stage.evidences_for_frame(0, [0], cnn_reads, None)
+        matching = [e for e in evidences if e.source_name == source_name]
+        assert len(matching) == 1
+        source_labels = stage.catalog_labels_by_source[source_name]
+        phase_label_map = build_phase_label_map(
+            catalog_spec, identity_catalog, source_name
+        )
+        return remap_phase_log_probs(
+            matching[0].log_probs, source_labels, identity_catalog, phase_label_map
+        )
 
     raw_probs_p = [np.array([0.6, 0.4], dtype=np.float32)]
     raw_probs_q = [np.array([0.5, 0.3, 0.2], dtype=np.float32)]
 
-    old_p = _old_global_log_probs(
-        identity_catalog, "cnn_p", [["p1", "p2"]], raw_probs_p, tmp_path
-    )
-    old_q = _old_global_log_probs(
-        identity_catalog, "cnn_q", [["q1", "q2", "q3"]], raw_probs_q, tmp_path
-    )
+    log_probs_p = _current_global_log_probs("cnn_p", [["p1", "p2"]], raw_probs_p)
+    log_probs_q = _current_global_log_probs("cnn_q", [["q1", "q2", "q3"]], raw_probs_q)
+
     out_path = OUT_DIR / "phase_basis_parity_two_cnn_phase.npz"
     np.savez(
         out_path,
-        old_log_probs_p=old_p,
-        old_log_probs_q=old_q,
+        log_probs_p=log_probs_p,
+        log_probs_q=log_probs_q,
         catalog_labels=np.array(identity_catalog.labels),
     )
     print(f"wrote {out_path}")
@@ -290,7 +418,18 @@ def generate_phase_basis_goldens(tmp_path: Path) -> None:
 if __name__ == "__main__":
     import tempfile
 
-    with tempfile.TemporaryDirectory() as td:
-        tmp_path = Path(td)
-        generate_builder_parity_goldens(tmp_path)
-        generate_phase_basis_goldens(tmp_path)
+    # The emitter-based generators below require resurrecting the deleted
+    # `IdentityEvidenceEmitter` (see module docstring) and will raise on the
+    # current tree; only `generate_two_cnn_phase_cross_product_golden` is
+    # expected to succeed here.
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            tmp_path = Path(td)
+            generate_builder_parity_goldens(tmp_path)
+            generate_phase_basis_goldens(tmp_path)
+    except ImportError as exc:
+        print(
+            f"Skipping emitter-based (historical) goldens on the current "
+            f"tree: {exc}"
+        )
+    generate_two_cnn_phase_cross_product_golden()

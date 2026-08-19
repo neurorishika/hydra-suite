@@ -269,14 +269,28 @@ def test_two_cnn_phase_catalog_phase_basis_parity():
     q1/q2/q3 -- so each phase's own label set now maps onto a SLICE of
     composite global entries, not a same-named subset).
 
-    This case no longer has a valid ``old emitter`` npz golden: that golden
-    froze the pre-Slice-2 UNION catalog (``p1, p2, q1, q2, q3``), which is
-    exactly the catalog shape the cross-product change retired. Regenerating
-    it from the deleted emitter is impossible, and reusing it would silently
-    re-assert the union-catalog bug this slice fixes. Instead this pins the
-    production remap's output against ``_independent_composite_remap``, an
-    oracle implemented from scratch (not a call into ``phase_remap.py``)
-    directly off ``catalog_spec.entries`` -- see that function's docstring.
+    This case's original ``old emitter`` npz golden froze the pre-Slice-2
+    UNION catalog (``p1, p2, q1, q2, q3``), which is exactly the catalog
+    shape the cross-product change retired; regenerating it from the deleted
+    emitter is impossible, and reusing it would silently re-assert the
+    union-catalog bug this slice fixes. This test now pins the production
+    remap's output TWO ways:
+
+    1. Against ``_independent_composite_remap``, an oracle implemented from
+       scratch (not a call into ``phase_remap.py``) directly off
+       ``catalog_spec.entries`` -- see that function's docstring. This
+       catches mechanical bugs (wrong index, missing renormalize, wrong
+       floor) but, being structurally parallel to the production algorithm,
+       would not catch a mistaken *shared convention* between the two.
+    2. Against a committed, REGENERATED ``.npz`` golden
+       (``phase_basis_parity_two_cnn_phase.npz``, keys ``log_probs_p`` /
+       ``log_probs_q``) that freezes the CURRENT cross-product output
+       (generated via ``generate_two_cnn_phase_cross_product_golden`` in
+       ``tests/data/identity_evidence_goldens/generate_goldens.py``, at the
+       Task 6 fix-round-1 cutover). This restores the absolute-value-pinning
+       strength the original emitter golden had -- a future refactor that
+       silently changes the algorithm's output shows up as a diff against
+       this file, not just against the (also-refactorable) oracle above.
     """
     cnn_classifiers = [
         {
@@ -318,6 +332,9 @@ def test_two_cnn_phase_catalog_phase_basis_parity():
     raw_probs_p = [np.array([0.6, 0.4], dtype=np.float32)]
     raw_probs_q = [np.array([0.5, 0.3, 0.2], dtype=np.float32)]
 
+    golden = np.load(GOLDEN_DIR / "phase_basis_parity_two_cnn_phase.npz")
+    assert tuple(golden["catalog_labels"]) == identity_catalog.labels
+
     new_p, phase_lp_p, phase_labels_p = _new_global_log_probs(
         identity_catalog, run_config, "cnn_p", [["p1", "p2"]], raw_probs_p
     )
@@ -327,6 +344,10 @@ def test_two_cnn_phase_catalog_phase_basis_parity():
     assert np.array_equal(
         expected_p, new_p
     ), f"phase cnn_p diverged from oracle: expected={expected_p!r} new={new_p!r}"
+    frozen_p = golden["log_probs_p"]
+    assert np.array_equal(
+        frozen_p, new_p
+    ), f"phase cnn_p diverged from frozen golden: frozen={frozen_p!r} new={new_p!r}"
     # Non-degeneracy: evidence for p1 must actually favor the p1_* slice, not
     # be flattened to (near-)uniform by a silent all-labels-dropped failure.
     probs_p = np.exp(new_p)
@@ -343,6 +364,10 @@ def test_two_cnn_phase_catalog_phase_basis_parity():
     assert np.array_equal(
         expected_q, new_q
     ), f"phase cnn_q diverged from oracle: expected={expected_q!r} new={new_q!r}"
+    frozen_q = golden["log_probs_q"]
+    assert np.array_equal(
+        frozen_q, new_q
+    ), f"phase cnn_q diverged from frozen golden: frozen={frozen_q!r} new={new_q!r}"
     probs_q = np.exp(new_q)
     q1_idxs = [identity_catalog.index_of(lbl) for lbl in ("p1_q1", "p2_q1")]
     q3_idxs = [identity_catalog.index_of(lbl) for lbl in ("p1_q3", "p2_q3")]
