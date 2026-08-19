@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 @njit(cache=True, fastmath=True)
-def _compute_cost_matrix_numba(
+def _compute_cost_matrix_numba_core(
     N,
     M,
     meas_pos,
@@ -48,6 +48,8 @@ def _compute_cost_matrix_numba(
     Wasp,
     per_track_gates,
     meas_ori_directed,
+    track_arena,
+    meas_arena,
 ):
     """Numba kernel using pre-calculated batch Inverse Covariances.
 
@@ -55,16 +57,31 @@ def _compute_cost_matrix_numba(
     track's individual spatial cull distance.  This replaces the former
     scalar ``cull_threshold`` so that young/uncertain tracks get an
     appropriately expanded gate while established tracks keep a tight one.
+
+    ``track_arena``/``meas_arena`` are int32 arrays of length N and M. When
+    both are length-0 sentinels (or otherwise mismatched in length), no arena
+    gating is applied and the result is bit-identical to the
+    pre-multi-arena kernel. Cross-arena pairs get the same ``1e6``
+    hard-reject sentinel used for distance-gated pairs, which makes the
+    downstream Hungarian solve decompose exactly into per-arena problems.
     """
     cost = np.zeros((N, M), dtype=np.float32)
+    gate_arenas = track_arena.shape[0] == N and meas_arena.shape[0] == M
 
     for i in range(N):
         # Extract pre-calculated 2x2 inverse position covariance from the 3x3 S_inv
         # (This avoids N*M matrix inversions inside the loop)
         inv_S_pos = S_inv_batch[i, :2, :2]
         gate_i = per_track_gates[i]
+        arena_i = track_arena[i] if gate_arenas else 0
 
         for j in range(M):
+            # Arena gating first: skips all downstream work for blocked pairs,
+            # which is what keeps 100 arenas tractable.
+            if gate_arenas and meas_arena[j] != arena_i:
+                cost[i, j] = 1e6
+                continue
+
             diff = meas_pos[j] - pred_pos[i]
 
             # 1. Position Cost
@@ -103,6 +120,80 @@ def _compute_cost_matrix_numba(
             cost[i, j] = Wp * pos_dist + Wo * odiff + Wa * area_diff + Wasp * asp_diff
 
     return cost
+
+
+_NO_ARENA = np.zeros(0, dtype=np.int32)
+
+
+def _arena_arrays(track_arena, meas_arena, N, M):
+    """Normalize optional arena arrays to numba-safe int32 arrays.
+
+    Returns the length-0 sentinel pair when gating is off, which the kernel
+    detects by shape and skips entirely.
+    """
+    if track_arena is None or meas_arena is None:
+        return _NO_ARENA, _NO_ARENA
+    ta = np.asarray(track_arena, dtype=np.int32)
+    ma = np.asarray(meas_arena, dtype=np.int32)
+    if ta.shape[0] != N or ma.shape[0] != M:
+        return _NO_ARENA, _NO_ARENA
+    return ta, ma
+
+
+def _compute_cost_matrix_numba(
+    N,
+    M,
+    meas_pos,
+    meas_ori,
+    pred_pos,
+    pred_ori,
+    shapes_area,
+    shapes_asp,
+    prev_areas,
+    prev_asps,
+    S_inv_batch,
+    use_maha,
+    Wp,
+    Wo,
+    Wa,
+    Wasp,
+    per_track_gates,
+    meas_ori_directed,
+    track_arena=None,
+    meas_arena=None,
+):
+    """Thin, non-jitted dispatch wrapper around ``_compute_cost_matrix_numba_core``.
+
+    Normalizes ``track_arena``/``meas_arena`` (``None`` or mismatched-length
+    inputs both mean "no gating") to the ``_NO_ARENA`` sentinel via
+    ``_arena_arrays`` before calling the cached numba kernel, so the compiled
+    kernel itself never has to type-infer over an ``Optional`` argument --
+    it always sees concrete int32 arrays. ``None``/``None`` (the default)
+    reproduces the pre-multi-arena kernel bit-for-bit.
+    """
+    ta, ma = _arena_arrays(track_arena, meas_arena, N, M)
+    return _compute_cost_matrix_numba_core(
+        N,
+        M,
+        meas_pos,
+        meas_ori,
+        pred_pos,
+        pred_ori,
+        shapes_area,
+        shapes_asp,
+        prev_areas,
+        prev_asps,
+        S_inv_batch,
+        use_maha,
+        Wp,
+        Wo,
+        Wa,
+        Wasp,
+        per_track_gates,
+        meas_ori_directed,
+        ta,
+        ma,
+    )
 
 
 def _pairwise_log_compat(posts, likes):
@@ -155,6 +246,13 @@ class TrackAssigner:
         self.params = params
         self.worker = worker
         self._large_n_warning_shown = False  # Track if we've shown the warning
+        self.track_arena = None  # set by the worker via set_track_arena()
+
+    def set_track_arena(self, track_arena) -> None:
+        """Install the static per-slot arena mapping (None disables gating)."""
+        self.track_arena = (
+            None if track_arena is None else np.asarray(track_arena, dtype=np.int32)
+        )
 
     def _spatial_optimization_enabled(self) -> bool:
         """Support both the current flag and the legacy alias."""
@@ -469,9 +567,16 @@ class TrackAssigner:
         last_shape_info: List[Any],
         meas_ori_directed: np.ndarray | None = None,
         association_data: Dict[str, Any] | None = None,
+        meas_arena: np.ndarray | None = None,
     ) -> Tuple[np.ndarray, Dict[int, List[int]]]:
         """
         Computes cost matrix. Compatible with Vectorized Kalman Filter.
+
+        ``meas_arena`` (optional) is paired with ``self.track_arena`` (set via
+        ``set_track_arena``) to block cross-arena track/detection pairs with
+        the same ``1e6`` hard-reject sentinel used for distance gating. Both
+        default to ``None``, which reproduces the pre-multi-arena, ungated
+        behaviour exactly.
         """
         p = self.params
         M = len(measurements)
@@ -616,6 +721,10 @@ class TrackAssigner:
                 local_gates=local_gates,
             )
 
+        track_arena_arr, meas_arena_arr = _arena_arrays(
+            self.track_arena, meas_arena, N, M
+        )
+
         spatial_candidates = {}
         if has_pose_data and self._spatial_optimization_enabled() and N > 50:
             spatial_candidates = pose_candidates
@@ -635,6 +744,8 @@ class TrackAssigner:
                 p,
                 spatial_candidates,
                 meas_ori_directed_arr,
+                track_arena_arr,
+                meas_arena_arr,
             )
         elif self._spatial_optimization_enabled() and N > 50:
             spatial_candidates = self._get_spatial_candidates(
@@ -656,6 +767,8 @@ class TrackAssigner:
                 p,
                 spatial_candidates,
                 meas_ori_directed_arr,
+                track_arena_arr,
+                meas_arena_arr,
             )
         else:
             cost = _compute_cost_matrix_numba(
@@ -677,6 +790,8 @@ class TrackAssigner:
                 p["W_ASPECT"],
                 local_gates,
                 meas_ori_directed_arr,
+                track_arena_arr,
+                meas_arena_arr,
             )
 
         if association_data:
@@ -1098,6 +1213,8 @@ class TrackAssigner:
         p,
         candidates,
         meas_ori_directed,
+        track_arena=_NO_ARENA,
+        meas_arena=_NO_ARENA,
     ):
         """Python fallback for spatial optimization."""
         cost = np.full((N, M), 1e6, dtype=np.float32)
@@ -1107,10 +1224,15 @@ class TrackAssigner:
             p["W_AREA"],
             p["W_ASPECT"],
         )
+        ta, ma = track_arena, meas_arena
+        gate_arenas = ta.shape[0] == N and ma.shape[0] == M
 
         for r, det_indices in candidates.items():
             inv_S = S_inv[r, :2, :2]
+            arena_r = ta[r] if gate_arenas else None
             for c in det_indices:
+                if arena_r is not None and ma[c] != arena_r:
+                    continue  # stays at the 1e6 initialization value
                 diff = meas_pos[c] - pred_pos[r]
                 if p["USE_MAHALANOBIS"]:
                     maha_sq = float(diff @ inv_S @ diff)
