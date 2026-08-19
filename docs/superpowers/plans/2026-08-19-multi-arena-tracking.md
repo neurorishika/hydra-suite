@@ -1659,6 +1659,22 @@ git commit -m "feat(arena): group trajectory resolution, identity and relink by 
 
 ### Task 8: GUI — arena assignment on ROI shapes
 
+> **Blocker discovered in Task 6 — fix this FIRST, the rest of the task is
+> pointless without it.** `gui/orchestrators/config.py:2097-2098` hardcodes
+> `frame_width=None, frame_height=None`, and `build_arena_labels`
+> (`engine_params.py:257`) short-circuits to `(None, 1)` on falsy dimensions.
+> So **every GUI run currently gets `N_ARENAS=1`, `ARENA_LABELS=None`, and
+> `MAX_TARGETS = animals_per_arena`** — no arena gating, no `arena_id` column,
+> and once this task adds an animals-per-arena control, a silently *undersized*
+> slot count. `ROI_MASK` escapes this only because the GUI substitutes a live
+> cached mask; there is no equivalent path for arena labels.
+>
+> Multi-arena is therefore inert from the primary UI until the GUI supplies real
+> frame dimensions (or an equivalently live-rasterized label image) at that call
+> site. There is no single-arena regression today, because `animals_per_arena`
+> defaults to the legacy `max_targets` — which is exactly why this fails silently
+> rather than loudly.
+
 **Files:**
 - Modify: `src/hydra_suite/trackerkit/config/schemas.py:25`
 - Modify: `src/hydra_suite/trackerkit/gui/orchestrators/session.py:2112` and `:2133` (shape append), `:2167` (status label)
