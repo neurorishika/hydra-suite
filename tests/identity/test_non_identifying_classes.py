@@ -90,3 +90,104 @@ def test_excluding_a_middle_combination_preserves_survivor_order():
     # "b_z" is the middle entry of the a_z/b_z/c_z product; the survivors on
     # either side must keep their original relative order.
     assert spec.labels == ("a_z", "c_z")
+
+
+import numpy as np
+import pandas as pd
+
+from hydra_suite.core.individual.identity import columns as C
+from hydra_suite.core.individual.postprocess_df import (
+    apply_identity_postprocessing_to_df,
+)
+
+_PARAMS = {
+    "CNN_CLASSIFIERS": [
+        {
+            "label": "colortag",
+            "unique_identifier": True,
+            "class_names_per_factor": [["red", "notag"], ["blue", "notag"]],
+            "factor_names": ["front", "back"],
+            "non_identifying_classes": ["notag_notag"],
+        }
+    ],
+    "IDENTITY_POSTHOC_ENABLED": False,
+    "ENABLE_IDENTITY_FRAGMENT_SOLVER": False,
+}
+
+
+def _three_untagged_tracks():
+    rows = []
+    for traj in (0, 1, 2):
+        for frame in (0, 1):
+            rows.append(
+                {
+                    "TrajectoryID": traj,
+                    "FrameID": frame,
+                    "CNN_colortag_front_Class": "notag",
+                    "CNN_colortag_front_Conf": 0.9,
+                    "CNN_colortag_back_Class": "notag",
+                    "CNN_colortag_back_Conf": 0.7,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def test_untagged_tracks_are_labelled_not_unknown():
+    out = apply_identity_postprocessing_to_df(_three_untagged_tracks(), _PARAMS)
+    assert set(out[C.FINAL_LABEL]) == {"notag_notag"}
+    assert set(out[C.FINAL_SOURCE]) == {"nonidentifying"}
+
+
+def test_untagged_tracks_keep_the_unknown_slot_id():
+    out = apply_identity_postprocessing_to_df(_three_untagged_tracks(), _PARAMS)
+    assert set(out[C.FINAL_ID]) == {0}
+
+
+def test_untagged_tracks_are_never_merged():
+    out = apply_identity_postprocessing_to_df(_three_untagged_tracks(), _PARAMS)
+    assert out["TrajectoryID"].nunique() == 3
+
+
+def test_confidence_is_the_weakest_axis():
+    out = apply_identity_postprocessing_to_df(_three_untagged_tracks(), _PARAMS)
+    assert np.allclose(out[C.FINAL_CONFIDENCE], 0.7)
+
+
+def test_a_real_identity_is_not_overwritten():
+    df = _three_untagged_tracks()
+    df.loc[df["TrajectoryID"] == 0, "CNN_colortag_front_Class"] = "red"
+    df.loc[df["TrajectoryID"] == 0, "CNN_colortag_back_Class"] = "blue"
+    df[C.FINAL_LABEL] = ["red_blue"] * 2 + [np.nan] * 4
+    df[C.FINAL_SOURCE] = ["offline"] * 2 + [""] * 4
+    out = apply_identity_postprocessing_to_df(df, _PARAMS)
+    # NOTE: TrajectoryIDs are renumbered downstream by
+    # sort_trajectories_by_identity (alphabetical by consensus label, a
+    # preexisting and documented behavior out of this task's scope), so the
+    # already-resolved track is identified by its untouched FINAL_SOURCE
+    # rather than by its original TrajectoryID value.
+    real = out[out[C.FINAL_SOURCE] == "offline"]
+    assert set(real[C.FINAL_LABEL]) == {"red_blue"}
+    assert len(real) == 2
+
+
+def test_feature_off_stamp_is_a_no_op():
+    """No declared non_identifying_classes -> _stamp_non_identifying_labels
+    must not touch the dataframe at all (identity via `is`, not just equal
+    values) -- the byte-identical equivalence gate for fixtures with no
+    marks declared depends on this."""
+    from hydra_suite.core.individual.postprocess_df import _stamp_non_identifying_labels
+
+    params = {
+        "CNN_CLASSIFIERS": [
+            {
+                "label": "colortag",
+                "unique_identifier": True,
+                "class_names_per_factor": [["red", "notag"], ["blue", "notag"]],
+                "factor_names": ["front", "back"],
+                # no non_identifying_classes declared
+            }
+        ],
+    }
+    df = _three_untagged_tracks()
+    out = _stamp_non_identifying_labels(df, params)
+    assert out is df

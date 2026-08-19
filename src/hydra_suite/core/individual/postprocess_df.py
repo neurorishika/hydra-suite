@@ -47,6 +47,84 @@ def _open_identity_evidence_cache(identity_evidence_cache_path):
         return None
 
 
+def _stamp_non_identifying_labels(df, params):
+    """Give trajectories whose observed composite is non-identifying a name.
+
+    Excluded classes are absent from the identity catalog (by design -- that
+    is what frees them from exclusivity), so those tracks resolve to unknown.
+    "Unknown" is the wrong report: "the classifier saw no tag" and "the
+    classifier could not tell" are different findings. This stamps the
+    observed composite as the final label while pinning ``IdentityFinalID``
+    to the unknown slot, so the label is descriptive and no consumer keying
+    on a resolved identity slot can mistake it for one.
+
+    Only trajectories with no already-resolved identity are touched.
+    """
+    from hydra_suite.core.individual.identity.heads import identity_axis_columns
+    from hydra_suite.core.individual.identity.resolve import excluded_display_labels
+
+    classifiers = params.get("CNN_CLASSIFIERS") or []
+    excluded = excluded_display_labels(classifiers)
+    if df is None or df.empty or not excluded or "TrajectoryID" not in df.columns:
+        return df
+
+    axis_cols = identity_axis_columns(df.columns, classifiers)
+    if not axis_cols:
+        return df
+
+    out = df.copy()
+    if C.FINAL_LABEL not in out.columns:
+        out[C.FINAL_LABEL] = pd.Series(
+            [np.nan] * len(out), index=out.index, dtype=object
+        )
+    else:
+        out[C.FINAL_LABEL] = out[C.FINAL_LABEL].astype(object)
+    if C.FINAL_SOURCE not in out.columns:
+        out[C.FINAL_SOURCE] = pd.Series(
+            [C.IdentityFinalSource.NONE] * len(out), index=out.index, dtype=object
+        )
+    if C.FINAL_ID not in out.columns:
+        out[C.FINAL_ID] = np.nan
+    if C.FINAL_CONFIDENCE not in out.columns:
+        out[C.FINAL_CONFIDENCE] = np.nan
+
+    class_cols = [c for c, _ in axis_cols]
+    conf_cols = [c for _, c in axis_cols if c in out.columns]
+
+    composite = out[class_cols[0]].astype(str)
+    for col in class_cols[1:]:
+        composite = composite + "_" + out[col].astype(str)
+
+    unresolved = out[C.FINAL_LABEL].isna() | (
+        out[C.FINAL_LABEL].astype(str).str.strip() == ""
+    )
+
+    for traj_id, group in out.groupby("TrajectoryID", sort=False):
+        if not unresolved.loc[group.index].all():
+            continue  # partially or fully resolved: leave it alone
+        observed = composite.loc[group.index]
+        observed = observed[observed.notna() & (observed != "")]
+        if observed.empty:
+            continue
+        modal = str(observed.mode().iloc[0])
+        if modal not in excluded:
+            continue
+        conf = 0.0
+        if conf_cols:
+            per_frame = out.loc[group.index, conf_cols].apply(
+                pd.to_numeric, errors="coerce"
+            )
+            # Weakest axis per frame: a composite is only as trustworthy as
+            # its least confident tag call.
+            conf = float(per_frame.min(axis=1).mean())
+        out.loc[group.index, C.FINAL_LABEL] = modal
+        out.loc[group.index, C.FINAL_ID] = 0
+        out.loc[group.index, C.FINAL_SOURCE] = C.IdentityFinalSource.NON_IDENTIFYING
+        out.loc[group.index, C.FINAL_CONFIDENCE] = conf
+
+    return out
+
+
 def apply_identity_postprocessing_to_df(
     with_pose_df, params, identity_evidence_cache_path=None
 ):
@@ -372,6 +450,7 @@ def apply_identity_postprocessing_to_df(
             except Exception:
                 logger.exception("Fragment solver failed; results unchanged.")
 
+        with_pose_df = _stamp_non_identifying_labels(with_pose_df, params)
         with_pose_df = _mirror_realtime_and_tag_into_final(with_pose_df)
         with_pose_df = fill_identity_nans_with_consensus(with_pose_df)
         with_pose_df = sort_trajectories_by_identity(with_pose_df)

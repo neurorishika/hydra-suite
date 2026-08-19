@@ -108,3 +108,34 @@ def identity_class_columns(
             out.append(name)
 
     return out
+
+
+def identity_axis_columns(columns, cnn_classifiers) -> list:
+    """Ordered ``(class_col, conf_col)`` pairs, one per identity axis.
+
+    Mirrors ``properties.export.build_cnn_output_columns``' naming: a
+    single-factor model writes flat ``CNN_<label>_Class`` columns, a
+    multi-factor model writes ``CNN_<label>_<factor>_Class``. Falls back to
+    the flat name when the per-factor column is absent from `columns`, so a
+    config/model factor-name mismatch degrades to "no axis" rather than a
+    KeyError.
+    """
+    from hydra_suite.core.individual.identity.resolve import identity_axes
+
+    present = {str(c) for c in columns}
+    axes = identity_axes(cnn_classifiers)
+    per_model = {}
+    for axis in axes:
+        per_model[axis.model_label] = per_model.get(axis.model_label, 0) + 1
+
+    out = []
+    for axis in axes:
+        candidates = []
+        if per_model[axis.model_label] > 1:
+            candidates.append(f"CNN_{axis.model_label}_{axis.factor_name}")
+        candidates.append(f"CNN_{axis.model_label}")
+        for base in candidates:
+            if f"{base}_Class" in present:
+                out.append((f"{base}_Class", f"{base}_Conf"))
+                break
+    return out

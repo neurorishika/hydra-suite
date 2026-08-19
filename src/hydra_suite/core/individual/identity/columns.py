@@ -51,6 +51,12 @@ class IdentityFinalSource:
     REALTIME = "realtime"
     OFFLINE = "offline"
     TAG = "tag"
+    NON_IDENTIFYING = "nonidentifying"
+    """A declared non-identifying composite (e.g. an untagged animal).
+
+    The label is descriptive only -- ``IdentityFinalID`` stays at the unknown
+    slot (0), so nothing downstream can mistake it for a resolved identity.
+    """
     NONE = ""
 
 
