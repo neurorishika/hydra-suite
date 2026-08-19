@@ -113,33 +113,28 @@ def identity_class_columns(
 def identity_axis_columns(columns, cnn_classifiers) -> list:
     """Ordered ``(class_col, conf_col)`` pairs, one per identity axis.
 
-    Delegates naming to ``properties.export.build_cnn_output_columns`` --
-    the same function the writer uses -- rather than re-deriving the
-    flat-vs-per-factor switch and the factor-name sanitization rule here.
-    Re-deriving them invites silent divergence: the writer switches to
-    per-factor columns on ``len(factor_names) > 1`` and sanitizes each
-    factor name (``re.sub(r"[^0-9A-Za-z]+", "_", name).strip("_").lower()``,
-    with a ``factor{idx:02d}`` fallback for a name that sanitizes to
-    nothing); matching that by hand here would silently drift the moment
-    either side changes.
+    Discovered from the dataframe's own columns, NOT re-derived from config.
+    Column names come from the MODEL's factor names (the CNN cache writes
+    them, and ``build_cnn_output_columns`` sanitizes them), while the config's
+    ``factor_names`` is an independent, user-facing list used only to address
+    axis-scoped marks. The two need not agree, and when they disagreed this
+    function silently returned no axes: every composite then failed to match
+    any declared non-identifying class and nothing was ever stamped.
 
-    A classifier whose derived columns are not present in ``columns`` (a
-    config/model mismatch) contributes no axis rather than raising --
-    ``columns`` is the ground truth for what a given dataframe actually
-    carries.
+    Reading the data removes that coupling entirely. Order is dataframe column
+    order, which is writer order, which is model factor order -- the same
+    order ``resolve.identity_axes`` walks ``class_names_per_factor`` in, so
+    axis *i* here is axis *i* there. The caller still compares counts and warns
+    when they disagree.
     """
-    from hydra_suite.core.individual.properties.export import build_cnn_output_columns
-
-    present = {str(c) for c in columns}
+    head_labels = identity_head_labels(cnn_classifiers)
+    if not head_labels:
+        return []
+    all_labels = tuple(
+        str(cfg.get("label", "") or "").strip() or "cnn"
+        for cfg in (cnn_classifiers or [])
+    )
     out = []
-    for cfg in cnn_classifiers or []:
-        if not bool(cfg.get("unique_identifier", False)):
-            continue
-        label = str(cfg.get("label", "") or "").strip() or "cnn"
-        factor_names = list(cfg.get("factor_names") or [])
-        for _factor, class_col, conf_col in build_cnn_output_columns(
-            label, factor_names
-        ):
-            if class_col in present:
-                out.append((class_col, conf_col))
+    for class_col in identity_class_columns(columns, head_labels, all_labels):
+        out.append((class_col, f"{class_col[: -len('_Class')]}_Conf"))
     return out

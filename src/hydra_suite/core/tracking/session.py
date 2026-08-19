@@ -38,6 +38,7 @@ from hydra_suite.core.tracking.session_policy import (
     should_run_interpolated_postpass,
 )
 from hydra_suite.core.tracking.session_summary import build_session_summary_lines
+from hydra_suite.utils.video_artifacts import build_inference_cache_dir
 
 logger = logging.getLogger(__name__)
 
@@ -166,6 +167,7 @@ class TrackingSessionCore:
             detected_properties_cache_path=self.paths.get(
                 "detected_properties_cache_path"
             ),
+            inference_cache_dir=str(build_inference_cache_dir(video_path)),
         )
 
     def _stopped_result(self) -> SessionResult:
