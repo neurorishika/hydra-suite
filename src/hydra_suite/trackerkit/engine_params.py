@@ -756,6 +756,23 @@ def build_engine_params(
     _debug_present = "debug_mode" in cfg
     _debug_mode = bool(_cfg_get(cfg, "debug_mode", default=True))
 
+    _retired_padding = _cfg_get(cfg, "individual_crop_padding", default=None)
+    if _retired_padding is not None:
+        logger.warning(
+            "Config key 'individual_crop_padding' (=%s) is retired and ignored. "
+            "Crop framing for every model- and dataset-facing crop now comes "
+            "from ADVANCED_CONFIG.canonical_margin. Before this change, "
+            "AprilTag crops used this same '%s' value as their padding; "
+            "AprilTag crops now default to 'apriltag_crop_padding' = 0.0 "
+            "(the detection's exact extent), so your tag decode may change. "
+            "To preserve previous AprilTag crops, set 'apriltag_crop_padding' "
+            "to %s. See docs/superpowers/specs/2026-08-18-crop-padding-"
+            "retirement-design.md.",
+            _retired_padding,
+            _retired_padding,
+            _retired_padding,
+        )
+
     params: dict[str, Any] = {
         "ADVANCED_CONFIG": advanced,
         "DEBUG_MODE": _debug_mode,
@@ -1189,6 +1206,9 @@ def build_engine_params(
         ),
         "APRILTAG_FAMILY": str(_cfg_get(cfg, "apriltag_family", default="tag36h11")),
         "APRILTAG_DECIMATE": float(_cfg_get(cfg, "apriltag_decimate", default=1.0)),
+        "APRILTAG_CROP_PADDING": float(
+            _cfg_get(cfg, "apriltag_crop_padding", default=0.0)
+        ),
         "COLOR_TAG_MODEL_PATH": str(_cfg_get(cfg, "color_tag_model_path", default="")),
         "COLOR_TAG_CONFIDENCE": float(
             _cfg_get(cfg, "color_tag_confidence", default=0.5)
@@ -1328,9 +1348,6 @@ def build_engine_params(
         ),
         "INDIVIDUAL_INTERPOLATE_OCCLUSIONS": bool(
             _cfg_get(cfg, "individual_interpolate_occlusions", default=True)
-        ),
-        "INDIVIDUAL_CROP_PADDING": float(
-            _cfg_get(cfg, "individual_crop_padding", default=0.1)
         ),
         "INDIVIDUAL_BACKGROUND_COLOR": [
             int(component)

@@ -45,23 +45,28 @@ def _dummy_frame(h=200, w=300, channels=3):
 
 class TestExpandObbToAabb:
     def test_basic_square(self):
+        # x_min=y_min=40, x_max=y_max=60 (exclusive upper bound, matching
+        # numpy slicing / the live extract_aabb_crops path); padding=0 → no pad.
         corners = _square_corners(50, 50, 10)
         x0, y0, x1, y1 = _expand_obb_to_aabb(corners, 0.0, 200, 300)
         assert x0 == 40
         assert y0 == 40
-        assert x1 == 61
-        assert y1 == 61
+        assert x1 == 60
+        assert y1 == 60
 
     def test_with_padding(self):
         corners = _square_corners(50, 50, 10)
         x0, y0, x1, y1 = _expand_obb_to_aabb(corners, 0.5, 200, 300)
-        # 10 * 1.5 = 15 → 50-15=35, 50+15=65
-        assert x0 == 35
-        assert y0 == 35
-        assert x1 == 66
-        assert y1 == 66
+        # padding is a fraction of the AABB's side (20), not the half-width:
+        # pad = 0.5 * 20 = 10 → 40-10=30, 60+10=70
+        assert x0 == 30
+        assert y0 == 30
+        assert x1 == 70
+        assert y1 == 70
 
     def test_clipping(self):
+        # x_min=y_min=-5, clamped to 0 by both the old and new formulas
+        # (this case's expected values are unaffected by the rewrite).
         corners = _square_corners(5, 5, 10)
         x0, y0, x1, y1 = _expand_obb_to_aabb(corners, 0.0, 200, 300)
         assert x0 == 0

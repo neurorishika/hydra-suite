@@ -7,11 +7,19 @@ Shared helpers used by the crops worker's pose-precompute path
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
+
+logger = logging.getLogger(__name__)
+
+# Warn once per process: a degenerate (zero-area) padded AABB silently drops
+# every crop it touches. Flooding the log per detection per frame would be
+# useless, so this module-level guard fires the explanation exactly once.
+_warned_degenerate_padding = False
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -67,19 +75,24 @@ def _expand_obb_to_aabb(
     frame_h: int,
     frame_w: int,
 ) -> Tuple[int, int, int, int]:
-    """Expand OBB corners and return axis-aligned bounding box ``(x0, y0, x1, y1)``."""
-    centroid = corners.mean(axis=0)
-    expanded = corners.copy()
-    for i in range(4):
-        direction = corners[i] - centroid
-        expanded[i] = centroid + direction * (1.0 + padding_fraction)
-    expanded[:, 0] = np.clip(expanded[:, 0], 0, frame_w - 1)
-    expanded[:, 1] = np.clip(expanded[:, 1], 0, frame_h - 1)
-    x0 = max(0, int(np.floor(expanded[:, 0].min())))
-    x1 = min(frame_w, int(np.ceil(expanded[:, 0].max())) + 1)
-    y0 = max(0, int(np.floor(expanded[:, 1].min())))
-    y1 = min(frame_h, int(np.ceil(expanded[:, 1].max())) + 1)
-    return x0, y0, x1, y1
+    """Axis-aligned bounding box of ``corners``, padded, as ``(x0, y0, x1, y1)``.
+
+    Deliberately identical to ``core.inference.stages.crops.extract_aabb_crops``:
+    the padding is a fraction of the AABB's larger side, applied to all four
+    sides. The two call sites (live inference and interpolated crops) feed the
+    same AprilTag decoder, so they must cut the same pixels -- previously they
+    disagreed by up to one pixel even at ``padding_fraction=0.0``.
+    """
+    x1 = float(corners[:, 0].min())
+    y1 = float(corners[:, 1].min())
+    x2 = float(corners[:, 0].max())
+    y2 = float(corners[:, 1].max())
+    pad = float(padding_fraction) * max(x2 - x1, y2 - y1)
+    x0 = max(0, int(x1 - pad))
+    y0 = max(0, int(y1 - pad))
+    x1i = min(frame_w, int(x2 + pad))
+    y1i = min(frame_h, int(y2 + pad))
+    return x0, y0, x1i, y1i
 
 
 def extract_one_crop(
@@ -105,6 +118,16 @@ def extract_one_crop(
     frame_h, frame_w = frame.shape[:2]
     x0, y0, x1, y1 = _expand_obb_to_aabb(corners, padding_fraction, frame_h, frame_w)
     if x1 <= x0 or y1 <= y0:
+        global _warned_degenerate_padding
+        if padding_fraction < 0 and not _warned_degenerate_padding:
+            _warned_degenerate_padding = True
+            logger.warning(
+                "AprilTag crop padding (apriltag_crop_padding=%s) is negative "
+                "enough to collapse the padded crop to zero area, so this and "
+                "any further such detections are dropped with no tag decode. "
+                "Raise apriltag_crop_padding to stop losing crops this way.",
+                padding_fraction,
+            )
         return None
 
     crop = frame[y0:y1, x0:x1].copy()

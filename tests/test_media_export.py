@@ -264,7 +264,6 @@ def test_export_final_media_returns_none_when_nothing_requested(tmp_path):
         video_root=None,
         export_images=False,
         export_videos=False,
-        padding_fraction=0.1,
         background_color=(0, 0, 0),
     )
     assert result is None
@@ -305,7 +304,6 @@ def test_export_final_media_delegates_to_exporter(tmp_path, monkeypatch):
         video_root=tmp_path / "vroot",
         export_images=False,
         export_videos=True,
-        padding_fraction=0.1,
         background_color=(0, 0, 0),
     )
     assert result == {"exported_videos": 2, "exported_images": 0, "output_dir": "vids"}

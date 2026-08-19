@@ -1079,17 +1079,19 @@ class DetectionPanel(QWidget):
         l_yolo.addWidget(self.yolo_group)
 
         # ============================================================
-        # Live Detection Batching (drives the real InferenceRunner pipeline)
+        # Detection Frame Batching (stage-1 detector input batch)
         # ============================================================
-        self.g_live_batching = QGroupBox("Live Detection Batching")
+        self.g_live_batching = QGroupBox("Detection Frame Batching")
         self._main_window._set_compact_section_widget(self.g_live_batching)
         vl_live_batch = QVBoxLayout(self.g_live_batching)
         vl_live_batch.setSpacing(6)
         vl_live_batch.addWidget(
             self._main_window._create_help_label(
-                "Controls how many frames the detector processes per GPU call during an actual "
-                "tracking run. Higher batches are faster on TensorRT/CUDA/MPS; some runtimes are "
-                "locked to 1 (see notice below)."
+                "How many video frames the DETECTOR (stage 1: YOLO OBB / background "
+                "subtraction) processes per GPU call during a tracking run. This is not "
+                "the crop batching used by head-tail, identity, pose, and AprilTag -- "
+                "those always run once over every crop in the chunk. Higher batches are "
+                "faster on TensorRT/CUDA/MPS; some runtimes are locked to 1 (see below)."
             )
         )
         self.spin_detection_batch_size = QSpinBox()
@@ -1099,8 +1101,9 @@ class DetectionPanel(QWidget):
         )
         self.spin_detection_batch_size.setFixedHeight(30)
         self.spin_detection_batch_size.setToolTip(
-            "Number of frames the detector processes per GPU call during live tracking.\n"
+            "Video frames per detector (stage-1) GPU call during a tracking run.\n"
             "Feeds InferenceConfig.detection_batch_size directly.\n"
+            "Does NOT affect stage-2 crop batching (head-tail / identity / pose / AprilTag).\n"
             "Higher = faster on TensorRT/CUDA/MPS, more GPU memory used.\n"
             "Typical values: 4-16 depending on GPU."
         )
@@ -1108,7 +1111,7 @@ class DetectionPanel(QWidget):
             self._on_detection_batch_size_changed
         )
         _live_batch_row = QHBoxLayout()
-        _live_batch_row.addWidget(QLabel("Frame batch size"))
+        _live_batch_row.addWidget(QLabel("Frames per detector call"))
         _live_batch_row.addWidget(self.spin_detection_batch_size, 1)
         vl_live_batch.addLayout(_live_batch_row)
 
@@ -1422,7 +1425,7 @@ class DetectionPanel(QWidget):
         self._sync_live_detection_batch_controls()
 
     def _sync_live_detection_batch_controls(self) -> None:
-        """Keep the Frame batch size control aligned with runtime policy.
+        """Keep the Frames per detector call control aligned with runtime policy.
 
         This is the control that actually reaches InferenceConfig.detection_batch_size
         for live tracking runs.
@@ -1447,9 +1450,9 @@ class DetectionPanel(QWidget):
             self.spin_detection_batch_size.blockSignals(False)
             self.spin_detection_batch_size.setEnabled(False)
             if sequential:
-                message = "Realtime tracking fixes the frame batch to 1. Sequential stage-2 crop batching still uses the Stage-2 crop batch setting."
+                message = "Realtime tracking fixes the detector to one frame per call. Sequential stage-2 crop batching still uses the Stage-2 crop batch setting."
             else:
-                message = "Realtime tracking processes detection one frame at a time; frame batch size is fixed to 1."
+                message = "Realtime tracking processes detection one frame at a time; frames per detector call is fixed to 1."
             self.lbl_batch_policy_notice.setText(message)
             self.lbl_batch_policy_notice.setVisible(True)
             return
@@ -1461,10 +1464,10 @@ class DetectionPanel(QWidget):
             self.spin_detection_batch_size.setEnabled(False)
             message = (
                 "On this platform, gpu_fast detection (OBB) runs on "
-                "CoreML, which supports only batch size 1 — one frame "
-                "at a time, regardless of this setting. CoreML "
-                "classification (identity/head-tail/CNN) is unaffected "
-                "and still batches normally."
+                "CoreML, which supports only one frame per call, "
+                "regardless of this setting. CoreML classification "
+                "(identity/head-tail/CNN) is unaffected and still "
+                "batches normally."
             )
             self.lbl_batch_policy_notice.setText(message)
             self.lbl_batch_policy_notice.setVisible(True)
@@ -1940,6 +1943,9 @@ class DetectionPanel(QWidget):
             "apriltag_decimate": (
                 ip.spin_apriltag_decimate.value() if ip is not None else 1.0
             ),
+            "apriltag_crop_padding": (
+                ip.spin_apriltag_crop_padding.value() if ip is not None else 0.0
+            ),
             "enable_pose_extractor": self._main_window._is_pose_inference_enabled(),
             "pose_model_type": pose_backend_family,
             "pose_model_dir": self._main_window._get_resolved_pose_model_dir(
@@ -1956,9 +1962,6 @@ class DetectionPanel(QWidget):
             "pose_direction_posterior_keypoints": self._main_window._parse_pose_direction_posterior_keypoints(),
             "pose_batch_size": ip.spin_pose_batch.value() if ip is not None else 1,
             "pose_sleap_env": self._main_window._selected_pose_sleap_env(),
-            "individual_crop_padding": (
-                ip.spin_individual_padding.value() if ip is not None else 0.1
-            ),
             "individual_background_color": (
                 [int(c) for c in ip._background_color] if ip is not None else [0, 0, 0]
             ),

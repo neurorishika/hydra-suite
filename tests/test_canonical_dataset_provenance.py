@@ -28,6 +28,9 @@ def test_missing_provenance_is_none_not_a_guess(tmp_path):
 
 
 def test_legacy_metadata_without_the_block_is_none(tmp_path):
+    # "padding_fraction" is a RETIRED key that only survives inside metadata.json
+    # files written before the canonical block existed (spec 2026-08-18). Nothing
+    # writes it any more; provenance must report None rather than guess.
     (tmp_path / "metadata.json").write_text(
         json.dumps({"parameters": {"padding_fraction": 0.1}}), encoding="utf-8"
     )

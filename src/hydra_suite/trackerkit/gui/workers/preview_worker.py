@@ -558,10 +558,7 @@ def _preview_build_inference_params_legacy(context, resize_f, use_detection_filt
         context.get("pose_direction_posterior_keypoints", []) or []
     )
 
-    # Shared crop geometry (pose + AprilTag).
-    params["INDIVIDUAL_CROP_PADDING"] = float(
-        context.get("individual_crop_padding", 0.1)
-    )
+    # Foreign-OBB suppression (shared by every crop stage).
     params["SUPPRESS_FOREIGN_OBB_REGIONS"] = bool(
         context.get("suppress_foreign_obb_regions", True)
     )
@@ -570,6 +567,7 @@ def _preview_build_inference_params_legacy(context, resize_f, use_detection_filt
     params["USE_APRILTAGS"] = bool(context.get("use_apriltags", False))
     params["APRILTAG_FAMILY"] = str(context.get("apriltag_family", "tag36h11"))
     params["APRILTAG_DECIMATE"] = float(context.get("apriltag_decimate", 1.0))
+    params["APRILTAG_CROP_PADDING"] = float(context.get("apriltag_crop_padding", 0.0))
 
     return params
 
@@ -699,7 +697,7 @@ def _preview_run_apriltag_overlay(
         dtype=np.float32,
     )
     apriltag_color = (0, 165, 255)
-    crop_padding = float(context.get("individual_crop_padding", 0.1))
+    crop_padding = float(context.get("apriltag_crop_padding", 0.0))
     tags_by_det = defaultdict(list)
     for t, tag_id in enumerate(tag_ids):
         det_idx = int(det_indices[t]) if t < len(det_indices) else -1

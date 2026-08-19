@@ -242,7 +242,6 @@ def test_oriented_track_video_export_streams_from_source_video_and_caches(
         detection_cache_path=cache_path,
         interpolated_roi_npz_path=interp_npz_path,
         fps=5.0,
-        padding_fraction=0.0,
     )
     result = exporter.export()
 
@@ -373,7 +372,6 @@ def test_final_canonical_media_export_writes_images_and_videos(tmp_path: Path):
         detection_cache_path=cache_path,
         interpolated_roi_npz_path=interp_npz_path,
         fps=5.0,
-        padding_fraction=0.0,
         export_images=True,
         image_output_dir=image_output_dir,
         export_videos=True,
@@ -471,7 +469,6 @@ def test_oriented_track_video_preserves_branch_across_interpolated_rows(
         detection_cache_path=cache_path,
         interpolated_roi_npz_path=interp_npz_path,
         fps=5.0,
-        padding_fraction=0.0,
     )
 
     trajectories_df = exporter._load_final_dataframe()
@@ -579,7 +576,6 @@ def test_oriented_track_video_can_fix_short_heading_flip_bursts(tmp_path: Path):
         video_path=video_path,
         detection_cache_path=cache_path,
         fps=5.0,
-        padding_fraction=0.0,
         fix_direction_flips=True,
         heading_flip_max_burst=1,
     )
@@ -675,7 +671,6 @@ def test_oriented_track_video_affine_stabilization_smooths_jitter(tmp_path: Path
         video_path=video_path,
         detection_cache_path=cache_path,
         fps=5.0,
-        padding_fraction=0.0,
         enable_affine_stabilization=True,
         stabilization_window=3,
     )
@@ -787,7 +782,6 @@ def test_final_media_export_reports_missing_geometry_breakdown(tmp_path: Path):
         detection_cache_path=cache_path,
         interpolated_roi_npz_path=interp_npz_path,
         fps=5.0,
-        padding_fraction=0.0,
     )
 
     result = exporter.export()
@@ -802,8 +796,8 @@ def test_final_media_export_reports_missing_geometry_breakdown(tmp_path: Path):
 
 def test_exporter_uses_supplied_geometry_not_the_fallback(tmp_path: Path):
     """A caller-supplied geometry must drive the canvas and the stamped
-    provenance -- not the padding-driven fallback default. This is the
-    wired path from trackerkit.canonical_geometry via video_worker.py."""
+    provenance -- not the fallback default. This is the wired path from
+    trackerkit.canonical_geometry via media_export.export_final_media()."""
     dataset_dir = tmp_path / "individual_crops" / "run_20260311"
     supplied_geometry = CanonicalGeometry.from_reference(40.0, 3.0, 1.5)
 
@@ -813,7 +807,6 @@ def test_exporter_uses_supplied_geometry_not_the_fallback(tmp_path: Path):
         video_path=tmp_path / "source.mp4",
         detection_cache_path=tmp_path / "detections.npz",
         fps=5.0,
-        padding_fraction=0.1,
         geometry=supplied_geometry,
     )
 
@@ -823,7 +816,7 @@ def test_exporter_uses_supplied_geometry_not_the_fallback(tmp_path: Path):
         50.0, 50.0, 40.0, 20.0, 0.0
     )
     assert (out_w, out_h) == supplied_geometry.canvas_wh
-    assert (out_w, out_h) != CanonicalGeometry.from_reference(20.0, 2.0, 1.1).canvas_wh
+    assert (out_w, out_h) != CanonicalGeometry.from_reference(20.0, 2.0, 1.3).canvas_wh
 
     exporter._write_canonical_metadata()
     stamped = json.loads((dataset_dir / "metadata.json").read_text(encoding="utf-8"))
@@ -834,8 +827,8 @@ def test_exporter_uses_supplied_geometry_not_the_fallback(tmp_path: Path):
 
 
 def test_exporter_without_geometry_falls_back_and_warns(tmp_path, caplog):
-    """No geometry supplied -> padding-driven fallback, but it must announce
-    itself instead of silently diverging from the project's real geometry."""
+    """No geometry supplied -> project-wide default fallback, but it must
+    announce itself instead of silently diverging from the real geometry."""
     dataset_dir = tmp_path / "individual_crops" / "run_20260311"
 
     with caplog.at_level("WARNING"):
@@ -845,10 +838,9 @@ def test_exporter_without_geometry_falls_back_and_warns(tmp_path, caplog):
             video_path=tmp_path / "source.mp4",
             detection_cache_path=tmp_path / "detections.npz",
             fps=5.0,
-            padding_fraction=0.1,
         )
 
-    assert exporter._geometry == CanonicalGeometry.from_reference(20.0, 2.0, 1.1)
+    assert exporter._geometry == CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
     assert any(
         "no project geometry supplied" in record.getMessage()
         for record in caplog.records

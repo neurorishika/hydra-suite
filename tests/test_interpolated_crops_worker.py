@@ -337,6 +337,42 @@ def test_compute_frame_corners_and_affines_accumulates_clipping_stats() -> None:
     assert "1/2" in summary
 
 
+def test_compute_frame_corners_and_affines_counts_degenerate_drops() -> None:
+    """A degenerate OBB is DROPPED here (affine None, skipped downstream by
+    ``_extract_pose_crop``), so it must be counted on the shared ClippingStats
+    rather than making the run quietly shorter (spec 2026-08-18).
+    """
+    geometry = CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
+    clipping_stats = ClippingStats()
+
+    # w=h=0 -> every OBB corner coincides -> canonical_affine raises.
+    degenerate_task = {"cx": 5.0, "cy": 5.0, "w": 0.0, "h": 0.0, "theta": 0.0}
+    fitting_task = {"cx": 0.0, "cy": 0.0, "w": 20.0, "h": 10.0, "theta": 0.0}
+
+    _corners, affines = ic._compute_frame_corners_and_affines(
+        [degenerate_task, fitting_task], geometry, clipping_stats
+    )
+
+    assert affines[0] is None and affines[1] is not None
+    assert clipping_stats.degenerate_skipped_count == 1
+    # The dropped task is not recorded as a normal (clipped/total) detection.
+    assert clipping_stats.total_count == 1
+    assert clipping_stats.clipped_count == 0
+
+    summary = clipping_stats.summary()
+    assert summary is not None and "DEGENERATE" in summary
+
+
+def test_compute_frame_corners_and_affines_tolerates_no_stats() -> None:
+    """The accumulator is optional; a degenerate task must not blow up when
+    the caller passed no ClippingStats."""
+    geometry = CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
+    _corners, affines = ic._compute_frame_corners_and_affines(
+        [{"cx": 0.0, "cy": 0.0, "w": 0.0, "h": 0.0, "theta": 0.0}], geometry, None
+    )
+    assert affines == [None]
+
+
 def test_pose_fit_failure_skips_detection(monkeypatch) -> None:
     """F6: an ``apply_fit`` failure on a canonical crop must drop the
     detection, not fall back to feeding the backend a raw canvas crop while

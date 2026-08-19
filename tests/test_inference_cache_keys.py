@@ -65,11 +65,10 @@ def _cnn_config(path="/cnn.pt", label="id", temperature=1.0) -> CNNConfig:
     )
 
 
-def _pose_config(path="/pose.pt", padding=0.1) -> PoseConfig:
+def _pose_config(path="/pose.pt") -> PoseConfig:
     return PoseConfig(
         backend="yolo",
         yolo=PoseYOLOConfig(model_path=path),
-        crop_padding=padding,
     )
 
 
@@ -441,15 +440,21 @@ def test_cnn_key_changes_with_canonical_geometry():
 # ---- pose_cache_key ----
 
 
-def test_pose_key_changes_with_crop_padding():
-    k1 = pose_cache_key(_pose_config(padding=0.1), _GEOM_A)
-    k2 = pose_cache_key(_pose_config(padding=0.3), _GEOM_A)
-    assert k1.config_hash != k2.config_hash
-
-
 def test_pose_key_changes_with_canonical_geometry():
     k1 = pose_cache_key(_pose_config(), _GEOM_A)
     k2 = pose_cache_key(_pose_config(), _GEOM_B)
+    assert k1.config_hash != k2.config_hash
+
+
+def test_pose_key_changes_with_canonical_margin_alone():
+    """``margin`` is THE surviving framing term (it replaced crop_padding), so
+    changing it alone -- same body size, same aspect ratio -- must move the key.
+    """
+    g_narrow = CanonicalGeometry.from_reference(80.0, 2.0, 1.3)
+    g_wide = CanonicalGeometry.from_reference(80.0, 2.0, 1.6)
+    assert g_narrow.aspect_ratio == g_wide.aspect_ratio
+    k1 = pose_cache_key(_pose_config(), g_narrow)
+    k2 = pose_cache_key(_pose_config(), g_wide)
     assert k1.config_hash != k2.config_hash
 
 

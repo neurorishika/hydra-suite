@@ -477,7 +477,6 @@ class TrackingSessionCore:
             video_root=video_root,
             export_images=export_images,
             export_videos=export_videos,
-            padding_fraction=float(self.config.get("individual_crop_padding", 0.1)),
             background_color=tuple(
                 self.config.get("individual_background_color", [0, 0, 0])
             ),

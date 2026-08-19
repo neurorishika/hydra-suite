@@ -288,7 +288,7 @@ def compute_apriltag_cache_id(
             if params.get("APRILTAG_MAX_TAG_ID") is not None
             else None
         ),
-        "padding_fraction": float(params.get("INDIVIDUAL_CROP_PADDING", 0.1)),
+        "apriltag_crop_padding": float(params.get("APRILTAG_CROP_PADDING", 0.0)),
     }
     return _hash_payload(payload)
 

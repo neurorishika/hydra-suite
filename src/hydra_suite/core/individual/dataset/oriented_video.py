@@ -33,11 +33,12 @@ logger = logging.getLogger(__name__)
 # Fallback canonical geometry for callers that construct an exporter without
 # an explicit ``geometry`` (mirrors core.inference.config's
 # _default_canonical_geometry / headtail.py's _DEFAULT_CANONICAL_GEOMETRY --
-# the project-wide default reference body size and aspect ratio). The margin
-# still honours the caller's ``padding_fraction`` (1 + padding), the one knob
-# this exporter has always exposed.
+# the project-wide default reference body size, aspect ratio and margin. The
+# margin IS the framing: this exporter has no separate padding knob any more
+# (spec 2026-08-18).
 _DEFAULT_REFERENCE_BODY_PX = 20.0
 _DEFAULT_REFERENCE_ASPECT_RATIO = 2.0
+_DEFAULT_CANONICAL_MARGIN = 1.3
 
 
 @dataclass
@@ -163,7 +164,6 @@ class OrientedTrackVideoExporter:
         detection_cache_path: str | Path,
         interpolated_roi_npz_path: str | Path | None = None,
         fps: float,
-        padding_fraction: float = 0.1,
         geometry: CanonicalGeometry | None = None,
         background_color: tuple[int, int, int] = (0, 0, 0),
         suppress_foreign_obb: bool = False,
@@ -191,21 +191,18 @@ class OrientedTrackVideoExporter:
             else None
         )
         self.fps = max(0.1, float(fps or 0.0))
-        self.padding_fraction = max(0.0, float(padding_fraction or 0.0))
         # Layer 1 canonical crop geometry (one fixed canvas for every task in
-        # this run). Callers that already resolved a project-wide geometry
-        # should pass it explicitly; otherwise this falls back to the same
-        # project-wide default every other consumer uses, with the margin
-        # driven by this exporter's own ``padding_fraction`` knob (1 +
-        # padding) -- the closest equivalent of the retired per-detection
-        # "own aspect" canvas this class used to compute.
+        # this run) -- the ONLY crop-framing input this exporter has. Callers
+        # that already resolved a project-wide geometry should pass it
+        # explicitly; otherwise this falls back to the same project-wide
+        # default every other consumer uses.
         if geometry is not None:
             self._geometry: CanonicalGeometry = geometry
         else:
             self._geometry = CanonicalGeometry.from_reference(
                 reference_body_px=_DEFAULT_REFERENCE_BODY_PX,
                 aspect_ratio=_DEFAULT_REFERENCE_ASPECT_RATIO,
-                margin=1.0 + self.padding_fraction,
+                margin=_DEFAULT_CANONICAL_MARGIN,
             )
             # No caller-supplied geometry: this canvas is NOT guaranteed to
             # match the project's actual REFERENCE_BODY_SIZE/ADVANCED_CONFIG
@@ -376,6 +373,13 @@ class OrientedTrackVideoExporter:
                 except Exception:
                     existing = {}
             parameters = dict(existing.get("parameters") or {})
+            # No "degenerate_skipped_count" here, unlike the crop-dataset
+            # generator's block: this exporter does not DROP a degenerate OBB
+            # (``_canonical_affine_for_task`` fabricates an identity-centred
+            # placement and still emits a crop), so it never calls
+            # ``record_degenerate`` and the field could only ever read 0. An
+            # always-zero counter would read as evidence of "no degenerates"
+            # when it is evidence of nothing, so it is omitted outright.
             parameters["canonical"] = {
                 **self._geometry.to_dict(),
                 "clipped_count": self._clipping_stats.clipped_count,
@@ -982,7 +986,7 @@ class OrientedTrackVideoExporter:
             height=float(box_h),
             theta=self._normalize_theta(float(theta)),
             corners=np.asarray(corners, dtype=np.float32),
-            expanded_corners=self._expand_corners(corners, self.padding_fraction),
+            expanded_corners=self._expand_corners(corners, self._geometry.margin - 1.0),
             polygon_index=int(polygon_index),
             detection_id=(int(detection_id) if detection_id is not None else None),
             interpolated=bool(interpolated),
@@ -1291,7 +1295,7 @@ class OrientedTrackVideoExporter:
     ) -> tuple[np.ndarray, int, int]:
         """Layer 1 canonical affine for one task, against the session geometry.
 
-        Replaces the retired per-task "own aspect at 1 + padding_fraction"
+        Replaces the retired per-task "own aspect at 1 + padding"
         canvas: every task now maps onto the one fixed canvas (self._geometry)
         that every other canonical-crop consumer shares, and clipping against
         that fixed canvas is counted rather than compensated.

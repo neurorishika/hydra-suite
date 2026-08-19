@@ -24,7 +24,6 @@ class FinalMediaExportWorker(BaseWorker):
         detection_cache_path,
         interpolated_roi_npz_path,
         fps,
-        padding_fraction,
         background_color,
         suppress_foreign_obb,
         suppress_foreign_obb_images=None,
@@ -48,7 +47,6 @@ class FinalMediaExportWorker(BaseWorker):
         self.detection_cache_path = detection_cache_path
         self.interpolated_roi_npz_path = interpolated_roi_npz_path
         self.fps = fps
-        self.padding_fraction = padding_fraction
         self.background_color = background_color
         self.suppress_foreign_obb = suppress_foreign_obb
         self.suppress_foreign_obb_images = suppress_foreign_obb_images
@@ -82,7 +80,6 @@ class FinalMediaExportWorker(BaseWorker):
                 detection_cache_path=self.detection_cache_path,
                 interpolated_roi_npz_path=self.interpolated_roi_npz_path,
                 fps=self.fps,
-                padding_fraction=self.padding_fraction,
                 background_color=self.background_color,
                 suppress_foreign_obb=self.suppress_foreign_obb,
                 suppress_foreign_obb_images=self.suppress_foreign_obb_images,

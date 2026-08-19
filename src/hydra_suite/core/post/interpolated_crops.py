@@ -711,7 +711,7 @@ def _detect_apriltags_in_frame(
     _tag_offsets = []
     _tag_det_indices = []
     _tag_tasks = []
-    _crop_padding = float(params.get("INDIVIDUAL_CROP_PADDING", 0.1))
+    _crop_padding = float(params.get("APRILTAG_CROP_PADDING", 0.0))
     _suppress_foreign = bool(params.get("SUPPRESS_FOREIGN_OBB_REGIONS", True))
     _bg_color = tuple(params.get("INDIVIDUAL_BACKGROUND_COLOR", (0, 0, 0)))
     for ti, task in enumerate(frame_tasks_f):
@@ -967,7 +967,11 @@ def _compute_frame_corners_and_affines(tasks, geometry, clipping_stats):
     ``clipping_stats`` accumulates the per-detection overflow so a too-small
     ``canonical_margin`` produces a visible end-of-run signal instead of
     silently truncated animals -- the same guard the core tracking loop
-    applies (``core/tracking/worker.py``).
+    applies (``core/tracking/worker.py``). It also tallies the tasks DROPPED
+    here for a degenerate OBB (``canonical_affine`` raises on a zero-length
+    edge): those store ``None`` and are skipped downstream by
+    ``_extract_pose_crop``, so without the counter the run would just be
+    quietly shorter.
     """
     from hydra_suite.core.canonicalization.geometry import canonical_affine
     from hydra_suite.core.individual.geometry import ellipse_to_obb_corners as _e2obb
@@ -978,6 +982,11 @@ def _compute_frame_corners_and_affines(tasks, geometry, clipping_stats):
         try:
             _M, _theta, _clipped = canonical_affine(_c, geometry)
         except ValueError:
+            # Degenerate OBB (zero-length edge): no rigid Layer 1 transform
+            # exists and there is no non-canonical fallback, so this task is
+            # dropped -- counted so the drop is visible in the run summary.
+            if clipping_stats is not None:
+                clipping_stats.record_degenerate()
             affines.append(None)
             continue
         if clipping_stats is not None:
@@ -1089,19 +1098,20 @@ def _extract_pose_crop(
     ``_aff`` is None exactly when ``canonical_affine`` raised
     (``core/canonicalization/geometry.py::_axes`` -- a degenerate OBB with a
     zero-length edge). There is no rigid Layer 1 transform for a degenerate
-    box, and the un-canonicalized ``_extract_obb_masked_crop`` fallback this
-    used to feed the backend produces an arbitrary axis-aligned aspect ratio
-    for which Layer 2's ``fit_to_model_input`` cannot honestly be computed (it
-    assumes the source is the fixed canonical canvas) -- feeding it anyway
-    would hand the backend a wrongly-scaled crop, exactly the defect class
-    this work removes. A genuinely degenerate OBB has no salvageable animal
-    geometry to recover either way, so this loudly skips the detection.
+    box. The un-canonicalized masked-crop fallback this used to feed the
+    backend (retired with the crop-padding knob, spec 2026-08-18) produced an
+    arbitrary axis-aligned aspect ratio for which Layer 2's
+    ``fit_to_model_input`` cannot honestly be computed (it assumes the source
+    is the fixed canonical canvas) -- feeding it anyway would hand the backend
+    a wrongly-scaled crop, exactly the defect class this work removes. A
+    genuinely degenerate OBB has no salvageable animal geometry to recover
+    either way, so this loudly skips the detection.
     """
     if _aff is None:
         logger.warning(
             "Interp pose/CNN: skipping task_idx=%s -- degenerate OBB has no "
-            "Layer 1 canonical transform (canonical_affine raised); the old "
-            "masked-crop fallback fed the backend an un-canonicalized, "
+            "Layer 1 canonical transform (canonical_affine raised); the "
+            "retired masked-crop fallback fed the backend an un-canonicalized, "
             "wrongly-scaled crop instead of skipping.",
             task_idx,
         )

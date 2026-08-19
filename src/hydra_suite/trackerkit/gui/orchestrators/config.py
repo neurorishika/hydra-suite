@@ -599,7 +599,7 @@ class ConfigOrchestrator:
             self._mw.config.runtime_tier = tier
         self._mw._on_runtime_context_changed()
 
-        # Live Detection Batching (drives InferenceConfig.detection_batch_size)
+        # Detection frame batching (drives InferenceConfig.detection_batch_size)
         self._panels.detection.spin_detection_batch_size.setValue(
             get_cfg("detection_batch_size", default=1)
         )
@@ -1215,22 +1215,15 @@ class ConfigOrchestrator:
         self._panels.identity.spin_apriltag_decimate.setValue(
             float(get_cfg("apriltag_decimate", default=1.0))
         )
+        self._panels.identity.spin_apriltag_crop_padding.setValue(
+            float(get_cfg("apriltag_crop_padding", default=0.0))
+        )
         self._panels.identity.line_color_tag_model.setText(
             str(get_cfg("color_tag_model_path", default=""))
         )
         self._panels.identity.spin_color_tag_conf.setValue(
             float(get_cfg("color_tag_confidence", default=0.5))
         )
-
-        # Warn users who had a non-default cnn_classifier_crop_padding in their config
-        _legacy_crop_padding = get_cfg("cnn_classifier_crop_padding", default=None)
-        if _legacy_crop_padding is not None and float(_legacy_crop_padding) != 0.1:
-            logger.warning(
-                "Config key 'cnn_classifier_crop_padding' (value=%.2f) is no longer used. "
-                "All precompute phases now use 'individual_crop_padding'. "
-                "Update your crop padding setting in the Individual Analysis panel.",
-                float(_legacy_crop_padding),
-            )
 
         self._panels.identity.chk_enable_pose_extractor.setChecked(
             get_cfg("enable_pose_extractor", default=False)
@@ -1388,9 +1381,6 @@ class ConfigOrchestrator:
         )
         self._panels.identity.chk_individual_interpolate.setChecked(
             get_cfg("individual_interpolate_occlusions", default=True)
-        )
-        self._panels.identity.spin_individual_padding.setValue(
-            get_cfg("individual_crop_padding", default=0.1)
         )
         # Load background color
         bg_color = get_cfg("individual_background_color", default=[0, 0, 0])
@@ -1701,7 +1691,7 @@ class ConfigOrchestrator:
 
         cfg.update(
             {
-                # Live Detection Batching (drives InferenceConfig.detection_batch_size)
+                # Detection frame batching (drives InferenceConfig.detection_batch_size)
                 "detection_batch_size": self._panels.detection.spin_detection_batch_size.value(),
                 # TensorRT: derived from the selected runtime, retained for
                 # legacy config round-tripping and the engine-cache key.
@@ -1917,6 +1907,7 @@ class ConfigOrchestrator:
             {
                 "apriltag_family": self._panels.identity.combo_apriltag_family.currentText(),
                 "apriltag_decimate": self._panels.identity.spin_apriltag_decimate.value(),
+                "apriltag_crop_padding": self._panels.identity.spin_apriltag_crop_padding.value(),
                 "color_tag_model_path": self._panels.identity.line_color_tag_model.text(),
                 "color_tag_confidence": self._panels.identity.spin_color_tag_conf.value(),
                 "enable_pose_extractor": self._panels.identity.chk_enable_pose_extractor.isChecked(),
@@ -1975,7 +1966,6 @@ class ConfigOrchestrator:
             {
                 "individual_save_interval": self._panels.dataset.spin_individual_interval.value(),
                 "individual_interpolate_occlusions": self._panels.identity.chk_individual_interpolate.isChecked(),
-                "individual_crop_padding": self._panels.identity.spin_individual_padding.value(),
                 "individual_background_color": [
                     int(c) for c in self._panels.identity._background_color
                 ],  # Ensure JSON serializable

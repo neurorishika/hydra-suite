@@ -252,8 +252,7 @@ def pose_cache_key(config: PoseConfig, geometry: CanonicalGeometry) -> CacheKey:
     # (never populated by from_parameters), so removing it does not change
     # any hash produced by any existing config in practice.
     config_hash = _sha(
-        f"{config.crop_padding}|{config.suppress_foreign_regions}"
-        f"|{canonical_geometry_key(geometry)}"
+        f"{config.suppress_foreign_regions}|{canonical_geometry_key(geometry)}"
     )
     return CacheKey(
         schema_version=CACHE_SCHEMA_VERSION,
