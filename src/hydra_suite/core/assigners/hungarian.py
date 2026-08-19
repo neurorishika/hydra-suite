@@ -105,6 +105,49 @@ def _compute_cost_matrix_numba(
     return cost
 
 
+def _pairwise_log_compat(posts, likes):
+    """Log-compatibility matrix between track posteriors and detection likelihoods.
+
+    Element ``[i, j]`` equals ``np.logaddexp.reduce(posts[i] + likes[j])`` --
+    the log-domain inner product of a track's identity belief with a
+    detection's identity evidence.  The reduction is accumulated with the same
+    sequential ``logaddexp`` order as the per-pair scalar form, so the result is
+    bit-identical to computing each pair on its own.
+
+    Falls back to the per-pair loop when the inputs are ragged or of mixed
+    dtype, where stacking would change the arithmetic.
+    """
+    post_arrs = [np.asarray(a) for a in posts]
+    like_arrs = [np.asarray(a) for a in likes]
+    if not post_arrs or not like_arrs:
+        return np.zeros((len(post_arrs), len(like_arrs)), dtype=np.float64)
+
+    def _uniform(arrs):
+        first = arrs[0]
+        return first.ndim == 1 and all(
+            a.shape == first.shape and a.dtype == first.dtype for a in arrs
+        )
+
+    def _per_pair():
+        return np.array(
+            [[float(np.logaddexp.reduce(a + b)) for b in like_arrs] for a in post_arrs],
+            dtype=np.float64,
+        )
+
+    n_classes = post_arrs[0].shape[0] if post_arrs[0].ndim == 1 else 0
+    if not (_uniform(post_arrs) and _uniform(like_arrs)) or n_classes == 0:
+        return _per_pair()
+
+    P = np.stack(post_arrs)
+    L = np.stack(like_arrs)
+    if L.shape[1] != n_classes:
+        return _per_pair()
+    acc = P[:, None, 0] + L[None, :, 0]
+    for k in range(1, n_classes):
+        acc = np.logaddexp(acc, P[:, None, k] + L[None, :, k])
+    return acc.astype(np.float64, copy=False)
+
+
 class TrackAssigner:
     """Handles assignment of detections to tracks with optimizations."""
 
@@ -253,22 +296,31 @@ class TrackAssigner:
 
         max_dist = float(self.params.get("MAX_DISTANCE_THRESHOLD", 1000.0))
         n_tracks, n_dets = cost.shape
-        for i in range(n_tracks):
-            log_post_i = track_log_posts.get(i)
-            if log_post_i is None:
-                continue
-            for j in range(min(n_dets, len(det_log_likes))):
-                log_like_j = det_log_likes[j]
-                if log_like_j is None:
-                    continue
-                log_compat = float(np.logaddexp.reduce(log_post_i + log_like_j))
-                addon = alpha * (-log_compat)
-                # Cap: identity can reorder preferences but must never block a
-                # geometrically-valid match by pushing cost above max_dist.
-                if cost[i, j] < max_dist:
-                    cost[i, j] = min(cost[i, j] + addon, max_dist - 1e-3)
-                else:
-                    cost[i, j] += addon
+        rows = [i for i in range(n_tracks) if track_log_posts.get(i) is not None]
+        cols = [
+            j
+            for j in range(min(n_dets, len(det_log_likes)))
+            if det_log_likes[j] is not None
+        ]
+        if not rows or not cols:
+            return
+
+        log_compat = _pairwise_log_compat(
+            [track_log_posts[i] for i in rows], [det_log_likes[j] for j in cols]
+        )
+        # Every step below is done in the cost matrix's own dtype, because the
+        # scalar path it replaces added a Python float to a float32 element and
+        # compared float32 against float64 thresholds -- NumPy's weak scalar
+        # promotion means both happened in float32.  Widening here would change
+        # results by an ulp at the cap boundary.
+        dt = cost.dtype.type
+        addon = (alpha * (-log_compat)).astype(cost.dtype)
+        block = cost[np.ix_(rows, cols)]
+        summed = block + addon
+        # Cap: identity can reorder preferences but must never block a
+        # geometrically-valid match by pushing cost above max_dist.
+        capped = np.where(summed <= dt(max_dist - 1e-3), summed, dt(max_dist - 1e-3))
+        cost[np.ix_(rows, cols)] = np.where(block < dt(max_dist), capped, summed)
 
     @staticmethod
     def _apply_candidate_gate(
@@ -831,22 +883,35 @@ class TrackAssigner:
                 budget = max(budget_floor, lost_n * v_max_per_frame * budget_safety)
                 return dist <= budget
 
-            # Build best (score, det_idx) for each committed slot
+            # Build best (score, det_idx) for each committed slot.  The score is
+            # a pure function of (slot, det), so the whole candidate block is
+            # scored at once; the per-pair motion-budget gate is applied after,
+            # only to pairs that clear the threshold.
             slot_best: dict = {}
-            for slot in committed_lost:
-                log_post = track_log_posts.get(slot)
-                if log_post is None:
-                    continue
-                log_post_arr = np.asarray(log_post, dtype=np.float64)
-                for j, log_like in enumerate(det_log_likes):
-                    if j in assigned_dets or log_like is None:
-                        continue
-                    det_xy = np.asarray(meas[j][:2], dtype=np.float64)
-                    if not _within_budget(slot, det_xy):
-                        continue
-                    log_like_arr = np.asarray(log_like, dtype=np.float64)
-                    score = float(np.logaddexp.reduce(log_post_arr + log_like_arr))
-                    if score > log_threshold:
+            cand_slots = [
+                s for s in committed_lost if track_log_posts.get(s) is not None
+            ]
+            cand_dets = [
+                j
+                for j, log_like in enumerate(det_log_likes)
+                if j not in assigned_dets and log_like is not None
+            ]
+            if cand_slots and cand_dets:
+                scores = _pairwise_log_compat(
+                    [
+                        np.asarray(track_log_posts[s], dtype=np.float64)
+                        for s in cand_slots
+                    ],
+                    [np.asarray(det_log_likes[j], dtype=np.float64) for j in cand_dets],
+                )
+                for si, slot in enumerate(cand_slots):
+                    row = scores[si]
+                    for dj in np.flatnonzero(row > log_threshold):
+                        j = cand_dets[dj]
+                        det_xy = np.asarray(meas[j][:2], dtype=np.float64)
+                        if not _within_budget(slot, det_xy):
+                            continue
+                        score = float(row[dj])
                         if slot not in slot_best or score > slot_best[slot][0]:
                             slot_best[slot] = (score, j)
 
