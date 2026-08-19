@@ -76,8 +76,6 @@ class IndividualDatasetGenerator:
             else dataset_name
         )
 
-        # Crop parameters - only padding (crop size is determined by OBB)
-        self.padding_fraction = params.get("INDIVIDUAL_CROP_PADDING", 0.1)
         # Background color as BGR tuple (default: black)
         bg_color = params.get("INDIVIDUAL_BACKGROUND_COLOR", (0, 0, 0))
         if isinstance(bg_color, (list, tuple)) and len(bg_color) == 3:
@@ -90,30 +88,18 @@ class IndividualDatasetGenerator:
             params.get("SUPPRESS_FOREIGN_OBB_DATASET", False)
         )
 
-        # Canonical crop configuration.  When enabled, process_frame extracts
-        # crops through the project-wide Layer 1 CanonicalGeometry (one fixed
-        # canvas shared by every crop-consuming stage) instead of the legacy
-        # AABB extraction.
+        # Crop extraction goes through the project-wide Layer 1
+        # CanonicalGeometry (one fixed canvas shared by every crop-consuming
+        # stage). There is no second framing knob and no non-canonical
+        # fallback (spec 2026-08-18).
         _adv = params.get("ADVANCED_CONFIG", {})
         self._canonical_ref_ar = float(_adv.get("reference_aspect_ratio", 2.0))
-        self._canonical_padding = float(params.get("INDIVIDUAL_CROP_PADDING", 0.1))
-        self._canonical_enabled = self._canonical_ref_ar > 0
-        if not self._canonical_enabled:
-            # A zero (or negative) reference_aspect_ratio silently disables the
-            # project-wide Layer 1 canonical crop and falls back to the legacy
-            # per-detection AABB path below (see process_frame), producing
-            # non-canonical training crops. That fallback must never be quiet:
-            # an operator who didn't intend to disable canonicalization needs
-            # to see why their exported crops don't match every other
-            # consumer's canvas.
-            logger.warning(
-                "IndividualDatasetGenerator: ADVANCED_CONFIG.reference_aspect_ratio="
-                "%s (<= 0) -- canonical crop extraction is DISABLED for this "
-                "export. Falling back to the legacy per-detection AABB crop path, "
-                "which does NOT share the project-wide canonical canvas used by "
-                "every other crop consumer (pose, classifiers, tracking). Set "
-                "reference_aspect_ratio > 0 if this was not intentional.",
-                self._canonical_ref_ar,
+        if self._canonical_ref_ar <= 0:
+            raise ValueError(
+                "ADVANCED_CONFIG.reference_aspect_ratio must be > 0: the crop "
+                "dataset is extracted through the project-wide canonical canvas, "
+                "the same one inference, head-tail, and the classifiers use. There "
+                "is no non-canonical fallback (spec 2026-08-18)."
             )
         self._geometry: CanonicalGeometry = CanonicalGeometry.from_reference(
             reference_body_px=float(params.get("REFERENCE_BODY_SIZE", 20.0))
@@ -355,96 +341,83 @@ class IndividualDatasetGenerator:
                 ]
                 other_corners = scaled_all if scaled_all else None
 
-            # --- Extract crop: session Layer 1 CanonicalGeometry when enabled ---
+            # --- Extract crop through the session Layer 1 CanonicalGeometry ---
             # An externally supplied M_canonical (upstream already computed the
             # affine) is honoured verbatim when given; otherwise this recomputes
             # it from the OBB corners against the one project-wide geometry --
-            # there is no per-caller canvas any more.
-            use_canonical_crop = self._canonical_enabled
-
+            # there is no per-caller canvas and no non-canonical fallback.
             crop = None
             crop_info = None
             M_canonical_i = None
             M_inverse_i = None
 
-            if use_canonical_crop:
-                from hydra_suite.core.canonicalization.crop import (
-                    extract_canonical_crop,
+            from hydra_suite.core.canonicalization.crop import extract_canonical_crop
+
+            _pre_affine = (
+                canonical_affines[i]
+                if (canonical_affines is not None and i < len(canonical_affines))
+                else None
+            )
+            if _pre_affine is not None:
+                M_can = np.asarray(_pre_affine, dtype=np.float64)
+            else:
+                try:
+                    M_can, _axis_theta, _ = canonical_affine(corners, self._geometry)
+                except ValueError:
+                    M_can = None
+
+            if M_can is not None:
+                _cw, _ch = self._geometry.canvas_w, self._geometry.canvas_h
+
+                self._clipping_stats.record(corners, self._geometry)
+
+                M_canonical_i = M_can
+                crop = extract_canonical_crop(
+                    frame,
+                    M_can,
+                    geometry=self._geometry,
+                    bg_color=self.background_color,
                 )
 
-                _pre_affine = (
-                    canonical_affines[i]
-                    if (canonical_affines is not None and i < len(canonical_affines))
+                # Use pre-computed M_inverse when available, else compute
+                _pre_inv = (
+                    canonical_M_inverse[i]
+                    if (
+                        canonical_M_inverse is not None
+                        and i < len(canonical_M_inverse)
+                        and canonical_M_inverse[i] is not None
+                    )
                     else None
                 )
-                if _pre_affine is not None:
-                    M_can = np.asarray(_pre_affine, dtype=np.float64)
-                else:
-                    try:
-                        M_can, _axis_theta, _ = canonical_affine(
-                            corners, self._geometry
-                        )
-                    except ValueError:
-                        M_can = None
-
-                if M_can is not None:
-                    _cw, _ch = self._geometry.canvas_w, self._geometry.canvas_h
-
-                    self._clipping_stats.record(corners, self._geometry)
-
-                    M_canonical_i = M_can
-                    crop = extract_canonical_crop(
-                        frame,
-                        M_can,
-                        geometry=self._geometry,
-                        bg_color=self.background_color,
-                    )
-
-                    # Use pre-computed M_inverse when available, else compute
-                    _pre_inv = (
-                        canonical_M_inverse[i]
-                        if (
-                            canonical_M_inverse is not None
-                            and i < len(canonical_M_inverse)
-                            and canonical_M_inverse[i] is not None
-                        )
-                        else None
-                    )
-                    M_inverse_i = (
-                        _pre_inv
-                        if _pre_inv is not None
-                        else cv2.invertAffineTransform(M_can).astype(np.float32)
-                    )
-
-                    # Foreign OBB suppression in canonical space
-                    if other_corners and self.suppress_foreign_obb:
-                        for oc in other_corners:
-                            # Transform foreign corners into canonical crop space
-                            oc_h = np.hstack([oc, np.ones((4, 1))]).T  # 3 x 4
-                            oc_canon = (M_can @ oc_h).T.astype(np.int32)  # 4 x 2
-                            cv2.fillPoly(crop, [oc_canon], self.background_color)
-
-                    crop_info = {
-                        "crop_size": (_cw, _ch),
-                        "crop_bbox": None,  # not applicable for canonical crops
-                        "obb_corners_local": None,
-                        "obb_corners_expanded_local": None,
-                        "canonical_center_px": [
-                            _cw / 2.0,
-                            _ch / 2.0,
-                        ],
-                        "canonical_size_px": [
-                            float(_cw),
-                            float(_ch),
-                        ],
-                        "expansion_factor": None,
-                    }
-
-            if crop is None:
-                # Legacy AABB path (canonical disabled, or a degenerate OBB)
-                crop, crop_info = self._extract_obb_masked_crop(
-                    frame, corners, h, w, other_corners_list=other_corners
+                M_inverse_i = (
+                    _pre_inv
+                    if _pre_inv is not None
+                    else cv2.invertAffineTransform(M_can).astype(np.float32)
                 )
+
+                # Foreign OBB suppression in canonical space
+                if other_corners and self.suppress_foreign_obb:
+                    for oc in other_corners:
+                        # Transform foreign corners into canonical crop space
+                        oc_h = np.hstack([oc, np.ones((4, 1))]).T  # 3 x 4
+                        oc_canon = (M_can @ oc_h).T.astype(np.int32)  # 4 x 2
+                        cv2.fillPoly(crop, [oc_canon], self.background_color)
+
+                crop_info = {
+                    "crop_size": (_cw, _ch),
+                    "crop_bbox": None,  # not applicable for canonical crops
+                    "obb_corners_local": None,
+                    "obb_corners_expanded_local": None,
+                    "canonical_center_px": [
+                        _cw / 2.0,
+                        _ch / 2.0,
+                    ],
+                    "canonical_size_px": [
+                        float(_cw),
+                        float(_ch),
+                    ],
+                    "expansion_factor": None,
+                }
 
             if crop is not None:
                 # Build metadata for this crop
@@ -490,13 +463,10 @@ class IndividualDatasetGenerator:
                     "minor_axis_theta_rad": float(theta + (np.pi / 2.0)),
                     "directed": bool(canon_directed),
                     "orientation_source": canon_source,
+                    "M_canonical": M_canonical_i.tolist(),
+                    "M_inverse": M_inverse_i.tolist(),
+                    "crop_type": "canonical",
                 }
-                if M_inverse_i is not None:
-                    _canon_block["M_canonical"] = M_canonical_i.tolist()
-                    _canon_block["M_inverse"] = M_inverse_i.tolist()
-                    _canon_block["crop_type"] = "canonical"
-                else:
-                    _canon_block["crop_type"] = "aabb"
 
                 crop_metadata = {
                     "frame_id": int(frame_id),
@@ -556,47 +526,40 @@ class IndividualDatasetGenerator:
         M_can_used = None
         crop = None
         crop_info = None
-        if self._canonical_enabled:
-            from hydra_suite.core.canonicalization.crop import extract_canonical_crop
-            from hydra_suite.core.canonicalization.geometry import (
-                canonical_affine as _canonical_affine_fn,
+        from hydra_suite.core.canonicalization.crop import extract_canonical_crop
+        from hydra_suite.core.canonicalization.geometry import (
+            canonical_affine as _canonical_affine_fn,
+        )
+
+        if canonical_affine is not None:
+            M_can = np.asarray(canonical_affine, dtype=np.float64)
+        else:
+            try:
+                M_can, _axis_theta, _ = _canonical_affine_fn(corners, self._geometry)
+            except ValueError:
+                M_can = None
+
+        if M_can is not None:
+            _cw, _ch = self._geometry.canvas_w, self._geometry.canvas_h
+
+            self._clipping_stats.record(corners, self._geometry)
+
+            crop = extract_canonical_crop(
+                frame,
+                M_can,
+                geometry=self._geometry,
+                bg_color=self.background_color,
             )
+            M_inv = cv2.invertAffineTransform(M_can).astype(np.float32)
+            M_can_used = M_can
+            crop_info = {
+                "crop_size": (_cw, _ch),
+                "obb_corners_local": None,
+                "obb_corners_expanded_local": None,
+                "canonical_center_px": [_cw / 2.0, _ch / 2.0],
+                "canonical_size_px": [float(_cw), float(_ch)],
+            }
 
-            if canonical_affine is not None:
-                M_can = np.asarray(canonical_affine, dtype=np.float64)
-            else:
-                try:
-                    M_can, _axis_theta, _ = _canonical_affine_fn(
-                        corners, self._geometry
-                    )
-                except ValueError:
-                    M_can = None
-
-            if M_can is not None:
-                _cw, _ch = self._geometry.canvas_w, self._geometry.canvas_h
-
-                self._clipping_stats.record(corners, self._geometry)
-
-                crop = extract_canonical_crop(
-                    frame,
-                    M_can,
-                    geometry=self._geometry,
-                    bg_color=self.background_color,
-                )
-                M_inv = cv2.invertAffineTransform(M_can).astype(np.float32)
-                M_can_used = M_can
-                crop_info = {
-                    "crop_size": (_cw, _ch),
-                    "obb_corners_local": None,
-                    "obb_corners_expanded_local": None,
-                    "canonical_center_px": [_cw / 2.0, _ch / 2.0],
-                    "canonical_size_px": [float(_cw), float(_ch)],
-                }
-
-        if crop is None:
-            crop, crop_info = self._extract_obb_masked_crop(
-                frame, corners, frame.shape[0], frame.shape[1]
-            )
         if crop is None:
             return None
 
@@ -620,13 +583,10 @@ class IndividualDatasetGenerator:
             "minor_axis_theta_rad": float(theta + (np.pi / 2.0)),
             "directed": bool(interp_canon_directed),
             "orientation_source": interp_canon_source,
+            "M_canonical": np.asarray(M_can_used).tolist(),
+            "M_inverse": M_inv.tolist(),
+            "crop_type": "canonical",
         }
-        if M_inv is not None:
-            _interp_canon_block["M_canonical"] = np.asarray(M_can_used).tolist()
-            _interp_canon_block["M_inverse"] = M_inv.tolist()
-            _interp_canon_block["crop_type"] = "canonical"
-        else:
-            _interp_canon_block["crop_type"] = "aabb"
 
         metadata = {
             "frame_id": int(frame_id),
@@ -659,100 +619,6 @@ class IndividualDatasetGenerator:
             name_prefix="interp_",
             filename_override=filename,
         )
-
-    def _extract_obb_masked_crop(
-        self, frame, corners, frame_h, frame_w, other_corners_list=None
-    ):
-        """
-        Extract a crop with only the OBB region visible.
-
-        Expands OBB corners outward from centroid by padding_fraction to
-        capture more of the animal in case detection clips edges.
-
-        Args:
-            frame: Input frame (BGR)
-            corners: OBB corner points (4, 2)
-            frame_h, frame_w: Frame dimensions
-
-        Returns:
-            crop: Masked crop image
-            crop_info: Crop metadata dict
-        """
-        # Expand OBB corners outward from centroid
-        # This preserves the OBB shape while making it larger
-        centroid = corners.mean(axis=0)  # Center of the OBB
-
-        # Expand each corner away from centroid by padding_fraction
-        expanded_corners = corners.copy()
-        for i in range(4):
-            direction = corners[i] - centroid
-            expanded_corners[i] = centroid + direction * (1.0 + self.padding_fraction)
-
-        # Clip expanded corners to frame bounds
-        expanded_corners[:, 0] = np.clip(expanded_corners[:, 0], 0, frame_w - 1)
-        expanded_corners[:, 1] = np.clip(expanded_corners[:, 1], 0, frame_h - 1)
-
-        # Calculate bounding box of the expanded OBB (axis-aligned)
-        x_min = max(0, int(expanded_corners[:, 0].min()))
-        x_max = min(frame_w, int(expanded_corners[:, 0].max()) + 1)
-        y_min = max(0, int(expanded_corners[:, 1].min()))
-        y_max = min(frame_h, int(expanded_corners[:, 1].max()) + 1)
-
-        crop_w = x_max - x_min
-        crop_h = y_max - y_min
-
-        # Skip if crop would be empty
-        if crop_w <= 0 or crop_h <= 0:
-            return None, None
-
-        # Extract crop region
-        crop = frame[y_min:y_max, x_min:x_max].copy()
-
-        # Create mask for expanded OBB region (shift corners to crop coordinates)
-        shifted_corners = corners.copy()
-        shifted_corners[:, 0] -= x_min
-        shifted_corners[:, 1] -= y_min
-        shifted_expanded_corners = expanded_corners.copy()
-        shifted_expanded_corners[:, 0] -= x_min
-        shifted_expanded_corners[:, 1] -= y_min
-
-        # Create OBB polygon mask
-        mask = np.zeros((crop_h, crop_w), dtype=np.uint8)
-        cv2.fillPoly(mask, [shifted_expanded_corners.astype(np.int32)], 255)
-
-        # Apply mask in-place: fill outside-OBB pixels with background color
-        crop[mask == 0] = self.background_color
-        masked_crop = crop
-
-        # Option 1: suppress other animals' OBB regions before pose inference
-        if other_corners_list:
-            from hydra_suite.utils.geometry import apply_foreign_obb_mask
-
-            masked_crop = apply_foreign_obb_mask(
-                masked_crop,
-                x_min,
-                y_min,
-                other_corners_list,
-                background_color=self.background_color,
-            )
-
-        crop_info = {
-            "crop_size": (crop_w, crop_h),
-            "crop_bbox": (x_min, y_min, x_max, y_max),
-            "obb_corners_local": shifted_corners.tolist(),
-            "obb_corners_expanded_local": shifted_expanded_corners.tolist(),
-            "canonical_center_px": [
-                float(shifted_corners[:, 0].mean()),
-                float(shifted_corners[:, 1].mean()),
-            ],
-            "canonical_size_px": [
-                float(np.linalg.norm(shifted_corners[1] - shifted_corners[0])),
-                float(np.linalg.norm(shifted_corners[2] - shifted_corners[1])),
-            ],
-            "expansion_factor": 1.0 + self.padding_fraction,
-        }
-
-        return masked_crop, crop_info
 
     def _save_crop(
         self,
@@ -845,7 +711,6 @@ class IndividualDatasetGenerator:
             "video_name": self.video_name,
             "total_crops": self.total_saved,
             "parameters": {
-                "padding_fraction": self.padding_fraction,
                 "save_interval": self.save_every_n_frames,
                 "output_format": self.output_format,
                 "canonical": {

@@ -380,7 +380,6 @@ class PoseConfig:
     yolo: PoseYOLOConfig | None = None
     sleap: PoseSLEAPConfig | None = None
     vitpose: PoseViTPoseConfig | None = None
-    crop_padding: float = 0.1
     suppress_foreign_regions: bool = True
     anterior_keypoints: list[str] = field(default_factory=list)
     posterior_keypoints: list[str] = field(default_factory=list)
@@ -981,7 +980,6 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
         pose_model_type = str(params.get("POSE_MODEL_TYPE", "")).strip().lower()
         common_pose_kwargs = dict(
             skeleton_file=str(params.get("POSE_SKELETON_FILE", "") or "").strip(),
-            crop_padding=float(params.get("INDIVIDUAL_CROP_PADDING", 0.1)),
             suppress_foreign_regions=bool(
                 params.get("SUPPRESS_FOREIGN_OBB_REGIONS", True)
             ),

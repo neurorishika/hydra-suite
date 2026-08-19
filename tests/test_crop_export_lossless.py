@@ -16,7 +16,6 @@ def _base_params(**overrides):
     params = {
         "ENABLE_INDIVIDUAL_DATASET": True,
         "ENABLE_INDIVIDUAL_IMAGE_SAVE": True,
-        "INDIVIDUAL_CROP_PADDING": 0.1,
         "INDIVIDUAL_DATASET_RUN_ID": "run1",
         "REFERENCE_BODY_SIZE": 20.0,
         "RESIZE_FACTOR": 1.0,

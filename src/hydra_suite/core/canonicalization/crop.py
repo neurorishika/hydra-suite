@@ -336,7 +336,6 @@ def extract_and_classify_batch(
     per_frame_corners: List[List[np.ndarray]],
     canvas_w: Optional[int] = None,
     canvas_h: Optional[int] = None,
-    padding_fraction: Optional[float] = None,
     bg_color: Tuple[int, int, int] = (0, 0, 0),
     suppress_foreign: bool = True,
     per_frame_all_corners: Optional[List[List[np.ndarray]]] = None,
@@ -355,9 +354,6 @@ def extract_and_classify_batch(
         per_frame_corners: Per-frame list of OBB corner arrays.
         canvas_w: Canonical crop width.
         canvas_h: Canonical crop height.
-        padding_fraction: OBB expansion factor. Ignored when ``geometry`` is
-            given — the geometry's own ``margin`` is used instead so the
-            transform stays rigid (Layer 1 contract).
         bg_color: Background fill colour.
         suppress_foreign: Whether to mask foreign OBB regions.
         per_frame_all_corners: Per-frame list of *all* OBB corners for
@@ -370,21 +366,6 @@ def extract_and_classify_batch(
         Nested list ``[frame][detection]`` of ``CanonicalCropResult | None``.
     """
     canvas_w, canvas_h = _resolve_canvas(canvas_w, canvas_h, geometry)
-    # A geometry already carries the margin. Accepting a padding_fraction
-    # alongside it would let a caller believe they had set a padding that the
-    # geometry path silently ignores -- the same silent-mismatch class this
-    # module exists to remove, so it is an error rather than a preference.
-    if geometry is not None:
-        implied = geometry.margin - 1.0
-        if padding_fraction is not None and abs(padding_fraction - implied) > 1e-9:
-            raise ValueError(
-                f"padding_fraction={padding_fraction} disagrees with "
-                f"geometry.margin={geometry.margin} (implies {implied}). "
-                "Pass the geometry alone."
-            )
-        padding_fraction = implied
-    elif padding_fraction is None:
-        padding_fraction = 0.1
 
     results: List[List[Optional[CanonicalCropResult]]] = []
 
@@ -396,10 +377,11 @@ def extract_and_classify_batch(
         frame_results: List[Optional[CanonicalCropResult]] = []
 
         # One code path: a caller that passed bare canvas dimensions gets a
-        # geometry synthesised from them, rather than a second affine builder.
+        # geometry synthesised from them. There is no separate padding knob --
+        # the canvas IS the framing (spec 2026-08-18).
         effective_geometry = geometry or CanonicalGeometry(
             canvas_wh=(int(canvas_w), int(canvas_h)),
-            margin=1.0 + float(padding_fraction),
+            margin=1.0,
             aspect_ratio=max(1.0, float(canvas_w) / max(1.0, float(canvas_h))),
         )
 

@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from hydra_suite.core.individual.classification.apriltag import AprilTagConfig
 
@@ -88,3 +89,79 @@ def test_aabb_helpers_agree_with_the_live_path():
             _StubOBB.corners[0], pad, frame.shape[0], frame.shape[1]
         )
         assert live.shape[:2] == (y1 - y0, x1 - x0), f"mismatch at padding={pad}"
+
+
+# ---- core crop / dataset / export APIs: no padding knob at all ----
+
+
+def test_extract_and_classify_batch_rejects_padding_fraction():
+    from hydra_suite.core.canonicalization.crop import extract_and_classify_batch
+
+    frame = np.zeros((200, 200, 3), dtype=np.uint8)
+    with pytest.raises(TypeError):
+        extract_and_classify_batch(
+            [frame],
+            [[_corners(100.0, 100.0, 40.0, 20.0)]],
+            128,
+            64,
+            padding_fraction=0.1,
+        )
+
+
+def test_dataset_generator_rejects_non_positive_aspect_ratio():
+    from hydra_suite.core.individual.dataset.generator import IndividualDatasetGenerator
+
+    params = {
+        "REFERENCE_BODY_SIZE": 20.0,
+        "RESIZE_FACTOR": 1.0,
+        "ADVANCED_CONFIG": {"reference_aspect_ratio": 0.0, "canonical_margin": 1.3},
+    }
+    with pytest.raises(ValueError, match="reference_aspect_ratio"):
+        IndividualDatasetGenerator(params, None, "v")
+
+
+def test_dataset_generator_has_no_padding_fields():
+    from hydra_suite.core.individual.dataset.generator import IndividualDatasetGenerator
+
+    gen = IndividualDatasetGenerator(
+        {
+            "REFERENCE_BODY_SIZE": 20.0,
+            "RESIZE_FACTOR": 1.0,
+            "INDIVIDUAL_CROP_PADDING": 0.5,
+            "ADVANCED_CONFIG": {
+                "reference_aspect_ratio": 2.0,
+                "canonical_margin": 1.3,
+            },
+        },
+        None,
+        "v",
+    )
+    assert not hasattr(gen, "padding_fraction")
+    assert not hasattr(gen, "_canonical_padding")
+    assert not hasattr(gen, "_extract_obb_masked_crop")
+
+
+def test_pose_config_has_no_crop_padding():
+    from hydra_suite.core.inference.config import PoseConfig
+
+    assert not hasattr(PoseConfig(), "crop_padding")
+
+
+def test_oriented_exporter_rejects_padding_fraction():
+    import inspect
+
+    from hydra_suite.core.individual.dataset.oriented_video import (
+        OrientedTrackVideoExporter,
+    )
+
+    sig = inspect.signature(OrientedTrackVideoExporter.__init__)
+    assert "padding_fraction" not in sig.parameters
+
+
+def test_export_final_media_rejects_padding_fraction():
+    import inspect
+
+    from hydra_suite.core.post import media_export
+
+    sig = inspect.signature(media_export.export_final_media)
+    assert "padding_fraction" not in sig.parameters

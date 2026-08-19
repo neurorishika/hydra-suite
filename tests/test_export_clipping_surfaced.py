@@ -21,7 +21,6 @@ def _make_generator(tmp_path):
     params = {
         "ENABLE_INDIVIDUAL_DATASET": True,
         "ENABLE_INDIVIDUAL_IMAGE_SAVE": True,
-        "INDIVIDUAL_CROP_PADDING": 0.1,
         "INDIVIDUAL_DATASET_RUN_ID": "run1",
         # Tiny reference body size -> tiny canonical canvas, so a
         # normal-sized OBB below will badly overflow it.
@@ -89,7 +88,6 @@ def _make_oriented_exporter(tmp_path, **kwargs):
         video_path=tmp_path / "source.mp4",
         detection_cache_path=tmp_path / "detections.npz",
         fps=5.0,
-        padding_fraction=0.0,
         **kwargs,
     )
     return exporter, dataset_dir

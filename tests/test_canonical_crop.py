@@ -230,9 +230,7 @@ class TestExtractAndClassifyBatch:
     def test_single_frame_single_det(self):
         frame = np.random.randint(0, 255, (300, 400, 3), dtype=np.uint8)
         corners = _make_obb(200, 150, 80, 40, 15)
-        results = extract_and_classify_batch(
-            [frame], [[corners]], 128, 64, padding_fraction=0.1
-        )
+        results = extract_and_classify_batch([frame], [[corners]], 128, 64)
         assert len(results) == 1
         assert len(results[0]) == 1
         r = results[0][0]
@@ -330,35 +328,3 @@ class TestGeometryPaths:
         r = results[0][0]
         assert isinstance(r, CanonicalCropResult)
         assert r.crop.shape == (g.canvas_h, g.canvas_w, 3)
-
-
-class TestPaddingGeometryConflict:
-    """A geometry carries the margin; a conflicting padding must not pass silently."""
-
-    def test_conflicting_padding_raises(self):
-        from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
-
-        g = CanonicalGeometry.from_reference(20.0, 2.0, 1.5)
-        frame = np.zeros((200, 200, 3), dtype=np.uint8)
-        corners = np.array(
-            [[90.0, 95.0], [110.0, 95.0], [110.0, 105.0], [90.0, 105.0]],
-            dtype=np.float32,
-        )
-        with pytest.raises(ValueError, match="disagrees with geometry.margin"):
-            extract_and_classify_batch(
-                [frame], [[corners]], padding_fraction=0.1, geometry=g
-            )
-
-    def test_matching_padding_is_accepted(self):
-        from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
-
-        g = CanonicalGeometry.from_reference(20.0, 2.0, 1.5)
-        frame = np.zeros((200, 200, 3), dtype=np.uint8)
-        corners = np.array(
-            [[90.0, 95.0], [110.0, 95.0], [110.0, 105.0], [90.0, 105.0]],
-            dtype=np.float32,
-        )
-        results = extract_and_classify_batch(
-            [frame], [[corners]], padding_fraction=0.5, geometry=g
-        )
-        assert results[0][0] is not None

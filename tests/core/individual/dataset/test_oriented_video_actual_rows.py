@@ -56,7 +56,6 @@ def _make_exporter(
         video_path=tmp_path / "source.mp4",
         detection_cache_path=detection_cache_path,
         fps=5.0,
-        padding_fraction=0.0,
     )
 
 
