@@ -239,6 +239,49 @@ def build_roi_mask(
     return combined_mask
 
 
+def build_arena_labels(
+    roi_shapes: list[dict[str, Any]] | None,
+    width: int | None,
+    height: int | None,
+) -> tuple[np.ndarray | None, int]:
+    """Rasterize ROI shapes into a uint16 arena-label image.
+
+    Pixel value is ``arena_id + 1``; 0 means outside every arena. The set
+    ``labels > 0`` is pixel-identical to ``build_roi_mask`` on the same shapes,
+    so detection gating semantics are unchanged.
+
+    Shapes without an ``arena_id`` key map to arena 0 -- a legacy project that
+    drew several shapes as one region keeps single-arena behavior exactly.
+    Sparse ids are densified to a contiguous 0..n-1 range.
+    """
+    if not roi_shapes or not width or not height:
+        return None, 1
+
+    includes = [s for s in roi_shapes if s.get("mode", "include") != "exclude"]
+    raw_ids = sorted({int(s.get("arena_id", 0)) for s in includes}) or [0]
+    dense = {raw: i for i, raw in enumerate(raw_ids)}
+
+    labels = np.zeros((height, width), np.uint16)
+    for shape in includes:
+        value = dense[int(shape.get("arena_id", 0))] + 1
+        _fill_shape(labels, shape, value)
+    for shape in roi_shapes:
+        if shape.get("mode", "include") == "exclude":
+            _fill_shape(labels, shape, 0)
+    return labels, len(raw_ids)
+
+
+def _fill_shape(canvas: np.ndarray, shape: dict[str, Any], value: int) -> None:
+    """Rasterize one ROI shape onto *canvas* with the given fill value."""
+    if shape.get("type") == "circle":
+        center_x, center_y, radius = shape.get("params", [0, 0, 0])
+        cv2.circle(canvas, (int(center_x), int(center_y)), int(radius), value, -1)
+    elif shape.get("type") == "polygon":
+        points = np.array(shape.get("params", []), dtype=np.int32)
+        if len(points) > 0:
+            cv2.fillPoly(canvas, [points], value)
+
+
 def _seconds_to_frames(seconds: float, fps: float, min_frames: int = 1) -> int:
     return max(min_frames, round(seconds * max(fps, 1e-6)))
 
