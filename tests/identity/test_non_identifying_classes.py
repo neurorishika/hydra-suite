@@ -507,3 +507,156 @@ def test_without_exclusion_untagged_slots_do_contend_for_one_column():
     losers = [a for a in assignment if a is None]
     assert len(winners) == 1, "exactly one slot should win the shared column"
     assert len(losers) == 2, "the other two should be displaced, not coexisting"
+
+
+# --- the DEFAULT post-processing configuration (final-fix wave, Critical 2) --
+#
+# Every end-to-end test above disables both the fragment solver and post-hoc
+# identity. That is the feature-friendly configuration, not the shipped one:
+# `identity_postprocess_mode` defaults to "Fragment Solver" with post-hoc
+# identity enabled, and the solver writes the literal string "unknown" (with
+# no attributable source) into `IdentityFinalLabel` for every fragment it did
+# not resolve. Read as "resolved", those rows are skipped by the stamp and
+# the feature never fires for the users who asked for it.
+
+_DEFAULT_PARAMS = {
+    # The GUI defaults: post-hoc identity on, mode "Fragment Solver".
+    "CNN_CLASSIFIERS": [
+        {
+            "label": "colortag",
+            "unique_identifier": True,
+            "class_names_per_factor": [["red", "notag"], ["blue", "notag"]],
+            "factor_names": ["front", "back"],
+            "non_identifying_classes": ["notag"],
+        }
+    ],
+    "IDENTITY_POSTHOC_ENABLED": True,
+    "ENABLE_IDENTITY_FRAGMENT_SOLVER": True,
+}
+
+
+def _untagged_run_with_evidence_cache(tmp_path, n_tracks=3):
+    """A realistic default-configuration run: N spatially separated untagged
+    tracks plus the always-written Phase-3 evidence sidecar, whose evidence
+    concentrates on the excluded ``notag_notag`` composite (absent from the
+    catalog, so what actually reaches the solver is "unknown")."""
+    from hydra_suite.core.individual.identity.cache import IdentityEvidenceCache
+    from hydra_suite.core.individual.identity.catalog import IdentityCatalog
+    from hydra_suite.core.individual.identity.evidence import IdentityEvidence
+
+    cfg = _DEFAULT_PARAMS["CNN_CLASSIFIERS"][0]
+    catalog = IdentityCatalog.from_spec(resolve_catalog_spec([cfg], []))
+    phase_labels = ("unknown", "red_blue", "red_notag", "notag_blue", "notag_notag")
+    log_probs = np.log(np.array([0.02, 0.01, 0.01, 0.01, 0.95]))
+
+    path = tmp_path / "detection_identity_evidence_batch_test.npz"
+    frames: dict = {}
+    rows = []
+    for traj in range(n_tracks):
+        for frame in (0, 1):
+            det = traj * 10 + frame
+            frames.setdefault(frame, []).append(
+                IdentityEvidence.from_cnn(frame, det, "colortag", log_probs)
+            )
+            rows.append(
+                {
+                    "TrajectoryID": traj,
+                    "FrameID": frame,
+                    "DetectionID": det,
+                    "X": float(traj * 500),
+                    "Y": 0.0,
+                    "CNN_colortag_front_Class": "notag",
+                    "CNN_colortag_front_Conf": 0.9,
+                    "CNN_colortag_back_Class": "notag",
+                    "CNN_colortag_back_Conf": 0.7,
+                }
+            )
+    cache = IdentityEvidenceCache(
+        path,
+        catalog_labels=catalog.labels,
+        mode="w",
+        catalog_labels_by_source={"colortag": phase_labels},
+    )
+    for frame_idx, evidences in frames.items():
+        cache.save_frame(frame_idx, evidences)
+    cache.flush()
+    return pd.DataFrame(rows), path
+
+
+def test_stamp_fires_in_the_default_fragment_solver_configuration(tmp_path):
+    """The configuration users actually ship. The solver writes the literal
+    "unknown" (with no source) for every fragment it left unresolved; those
+    rows must still be recognized as unresolved and stamped."""
+    df, cache_path = _untagged_run_with_evidence_cache(tmp_path)
+    out = apply_identity_postprocessing_to_df(
+        df, _DEFAULT_PARAMS, identity_evidence_cache_path=str(cache_path)
+    )
+    stamped = out[out[C.FINAL_SOURCE] == C.IdentityFinalSource.NON_IDENTIFYING]
+    assert not stamped.empty, "the stamp never ran in the default configuration"
+    assert set(stamped[C.FINAL_LABEL]) == {"notag_notag"}
+    assert set(stamped[C.FINAL_ID]) == {0}
+    # Nothing was left reading as the solver's bare "unknown" sentinel.
+    assert "unknown" not in set(out[C.FINAL_LABEL])
+
+
+def test_untagged_tracks_coexist_with_the_fragment_solver_enabled(tmp_path):
+    """The coexistence guarantee, in the shipped configuration: the untagged
+    animals stay distinct trajectories, descriptively labelled, with the
+    unknown slot id -- rather than being collapsed or left as "unknown"."""
+    df, cache_path = _untagged_run_with_evidence_cache(tmp_path, n_tracks=3)
+    out = apply_identity_postprocessing_to_df(
+        df, _DEFAULT_PARAMS, identity_evidence_cache_path=str(cache_path)
+    )
+    assert out["TrajectoryID"].nunique() == 3
+    stamped = out[out[C.FINAL_SOURCE] == C.IdentityFinalSource.NON_IDENTIFYING]
+    # The catalog holds exactly one real identity (red_blue); every track the
+    # solver could not place on it is stamped rather than left "unknown".
+    assert stamped["TrajectoryID"].nunique() == 2
+
+
+def test_solver_unknown_sentinel_is_treated_as_unresolved():
+    """Direct on the seam: the solver's own sentinel (label "unknown" with
+    ``IdentityFinalSource`` empty) must read as unresolved."""
+    from hydra_suite.core.individual.postprocess_df import _stamp_non_identifying_labels
+
+    df = _three_untagged_tracks()
+    df[C.FINAL_LABEL] = "unknown"
+    df[C.FINAL_SOURCE] = C.IdentityFinalSource.NONE
+    df[C.FINAL_ID] = 0.0
+    out = _stamp_non_identifying_labels(df, _PARAMS)
+    assert set(out[C.FINAL_LABEL]) == {"notag_notag"}
+    assert set(out[C.FINAL_SOURCE]) == {"nonidentifying"}
+
+
+def test_a_resolved_identity_labelled_unknown_by_a_real_source_is_protected():
+    """The sentinel is only a sentinel when it carries no source. A row with
+    an attributable source is a real finding and must not be restamped."""
+    from hydra_suite.core.individual.postprocess_df import _stamp_non_identifying_labels
+
+    df = _three_untagged_tracks()
+    df[C.FINAL_LABEL] = "unknown"
+    df[C.FINAL_SOURCE] = C.IdentityFinalSource.OFFLINE
+    out = _stamp_non_identifying_labels(df, _PARAMS)
+    assert out is df
+
+
+def test_feature_off_stamp_is_a_no_op_in_the_default_configuration():
+    """The equivalence-gate invariant, re-pinned in the shipped
+    configuration: no declared marks -> the stamp must not touch anything,
+    even when the solver has already written its "unknown" sentinel."""
+    from hydra_suite.core.individual.postprocess_df import _stamp_non_identifying_labels
+
+    params = {
+        "CNN_CLASSIFIERS": [
+            {
+                "label": "colortag",
+                "unique_identifier": True,
+                "class_names_per_factor": [["red", "notag"], ["blue", "notag"]],
+                "factor_names": ["front", "back"],
+            }
+        ],
+    }
+    df = _three_untagged_tracks()
+    df[C.FINAL_LABEL] = "unknown"
+    df[C.FINAL_SOURCE] = C.IdentityFinalSource.NONE
+    assert _stamp_non_identifying_labels(df, params) is df

@@ -66,6 +66,7 @@ def _stamp_non_identifying_labels(df, params):
     ``_mirror_realtime_and_tag_into_final`` documents.
     """
     from hydra_suite.core.individual.identity.heads import identity_axis_columns
+    from hydra_suite.core.individual.identity.offline import _UNKNOWN_VALUES
     from hydra_suite.core.individual.identity.resolve import excluded_display_labels
 
     classifiers = params.get("CNN_CLASSIFIERS") or []
@@ -91,7 +92,24 @@ def _stamp_non_identifying_labels(df, params):
 
     if C.FINAL_LABEL in df.columns:
         final_label = df[C.FINAL_LABEL]
-        unresolved = final_label.isna() | (final_label.astype(str).str.strip() == "")
+        label_token = final_label.astype(str).str.strip()
+        unresolved = final_label.isna() | (label_token == "")
+        # The fragment solver (the DEFAULT identity_postprocess_mode) writes
+        # its own unresolved sentinel -- the literal string "unknown" with
+        # no attributable source (``offline.py``'s ``_UNKNOWN_VALUES`` /
+        # ``IdentityFinalSource.NONE``) -- for every fragment it did not
+        # resolve. Read as "resolved", those rows would be skipped here and
+        # the stamp would never run in the configuration users actually
+        # ship. A row carrying a real source (offline/realtime/tag) is
+        # genuinely resolved and stays protected.
+        if C.FINAL_SOURCE in df.columns:
+            source_token = df[C.FINAL_SOURCE].fillna("").astype(str).str.strip()
+        else:
+            source_token = pd.Series("", index=df.index)
+        unresolved = unresolved | (
+            label_token.isin(_UNKNOWN_VALUES)
+            & (source_token == C.IdentityFinalSource.NONE)
+        )
     else:
         unresolved = pd.Series(True, index=df.index)
 
