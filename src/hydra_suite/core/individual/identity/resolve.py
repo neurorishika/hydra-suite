@@ -243,6 +243,37 @@ def excluded_display_labels(
     return frozenset(out)
 
 
+def whole_composite_excluded_labels(
+    cnn_classifiers: Sequence[Mapping],
+) -> frozenset[str]:
+    """Composites excluded by a WHOLE-COMPOSITE mark (``"notag_notag"``) only.
+
+    The narrow counterpart to :func:`excluded_display_labels`, which reports
+    every composite any mark form excludes -- including the ones a *bare* or
+    *scoped* mark excludes because ONE axis reads a marked value.
+
+    The distinction matters for the relink key. A whole-composite mark names
+    an entire observation as carrying no identity, so such a row must
+    contribute nothing at all. A bare/scoped mark names one axis's value; a
+    row matching it on that axis may still carry a genuine tag on ANOTHER
+    axis, and that evidence must survive -- dropping the whole row would turn
+    a real conflict (front=red vs front=blue) into "no evidence" and stop the
+    relink identity veto from firing. Those forms are handled per axis by
+    :func:`non_identifying_axis_values` instead.
+    """
+    axes = identity_axes(cnn_classifiers)
+    marks_by_model = non_identifying_marks(cnn_classifiers)
+    if not axes or not marks_by_model:
+        return frozenset()
+    all_marks = {m for marks in marks_by_model.values() for m in marks}
+    out = set()
+    for combo in itertools.product(*[a.classes for a in axes]):
+        display = "_".join(str(c) for c in combo if c)
+        if display and display in all_marks:
+            out.add(display)
+    return frozenset(out)
+
+
 def resolve_catalog_spec(
     cnn_classifiers: Sequence[Mapping[str, object]],
     tag_identity_labels: Sequence[object],

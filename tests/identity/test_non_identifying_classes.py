@@ -852,3 +852,102 @@ def test_a_plain_non_identity_classifier_warns_about_nothing(caplog):
     with caplog.at_level(logging.WARNING):
         non_identifying_marks([cfg])
     assert [r.getMessage() for r in caplog.records] == []
+
+
+# --- partial tags keep their real evidence (re-review of Important 5) --------
+#
+# The row-level drop must cover the WHOLE-COMPOSITE mark form only. Widened to
+# every composite `excluded_display_labels` reports, it also swallows rows that
+# merely read a marked value on ONE axis -- discarding a genuine tag on another
+# axis and turning a real conflict into "no evidence", which is the mirror
+# image of the false-agreement failure this filter exists to prevent.
+#
+# These drive the real wiring (`apply_identity_postprocessing_to_df`), not
+# `derive_unique_identity_key_series` with hand-built arguments: the wiring is
+# where the regression lived, and a direct call cannot see it.
+
+_PARTIAL_TAG_PARAMS = {
+    "CNN_CLASSIFIERS": [
+        {
+            "label": "colortag",
+            "unique_identifier": True,
+            "class_names_per_factor": [["red", "blue"], ["tagged", "notag"]],
+            "factor_names": ["front", "back"],
+            "non_identifying_classes": ["notag"],
+        }
+    ],
+    "IDENTITY_POSTHOC_ENABLED": False,
+    "ENABLE_IDENTITY_FRAGMENT_SOLVER": False,
+}
+
+
+def _partially_tagged_rows():
+    """Two tracks distinguishable by a real FRONT tag, both untagged at back."""
+    return pd.DataFrame(
+        {
+            "TrajectoryID": [0, 1],
+            "FrameID": [0, 0],
+            "CNN_colortag_front_Class": ["red", "blue"],
+            "CNN_colortag_front_Conf": [0.9, 0.9],
+            "CNN_colortag_back_Class": ["notag", "notag"],
+            "CNN_colortag_back_Conf": [0.9, 0.9],
+        }
+    )
+
+
+def test_partially_tagged_rows_keep_their_real_axis_evidence():
+    """A bare ``notag`` mark excludes ``red_notag``/``blue_notag`` from the
+    catalog, but the FRONT axis still carries a genuine tag. That evidence
+    must reach the key: two different animals must come back with distinct
+    front-tag keys, not NaN."""
+    out = apply_identity_postprocessing_to_df(
+        _partially_tagged_rows(), _PARTIAL_TAG_PARAMS
+    )
+    keys = set(out[C.UNIQUE_IDENTITY_KEY])
+    assert keys == {"cnn:colortag:front=red", "cnn:colortag:front=blue"}, keys
+
+
+def test_partially_tagged_rows_still_conflict_so_the_relink_veto_fires():
+    """The consequence that matters: the two tracks register as a CONFLICT,
+    so the relink identity veto still blocks stitching them together."""
+    out = apply_identity_postprocessing_to_df(
+        _partially_tagged_rows(), _PARTIAL_TAG_PARAMS
+    )
+    lhs, rhs = (parse_identity_key(k) for k in out[C.UNIQUE_IDENTITY_KEY])
+    assert lhs and rhs, (lhs, rhs)
+    assert identity_sources_conflict(lhs, rhs)
+
+
+def test_the_notag_axis_is_still_stripped_from_a_partially_tagged_key():
+    """The per-axis filter must still be applied through the wiring: the
+    marked ``back=notag`` value carries no identity and must not appear in
+    the key. This is the test that fails if
+    ``non_identifying_values_by_column`` stops being passed -- the key would
+    then also carry ``cnn:colortag:back=notag``, and two untagged-at-back
+    tracks would register that shared value as agreement."""
+    out = apply_identity_postprocessing_to_df(
+        _partially_tagged_rows(), _PARTIAL_TAG_PARAMS
+    )
+    for key in out[C.UNIQUE_IDENTITY_KEY]:
+        parsed = parse_identity_key(key)
+        assert "cnn:colortag:back" not in parsed, parsed
+        assert set(parsed) == {"cnn:colortag:front"}, parsed
+
+
+def test_a_fully_untagged_row_still_yields_no_key_under_a_bare_mark():
+    """The narrowed row mask must not weaken the untagged case: with every
+    axis reading a marked value, the per-axis filter alone already strips
+    every source, so the key is still NaN."""
+    df = _partially_tagged_rows()
+    df["CNN_colortag_front_Class"] = ["notag", "notag"]
+    params = {
+        **_PARTIAL_TAG_PARAMS,
+        "CNN_CLASSIFIERS": [
+            {
+                **_PARTIAL_TAG_PARAMS["CNN_CLASSIFIERS"][0],
+                "class_names_per_factor": [["red", "notag"], ["tagged", "notag"]],
+            }
+        ],
+    }
+    out = apply_identity_postprocessing_to_df(df, params)
+    assert out[C.UNIQUE_IDENTITY_KEY].isna().all(), list(out[C.UNIQUE_IDENTITY_KEY])

@@ -572,22 +572,29 @@ def apply_identity_postprocessing_to_df(
             excluded_display_labels,
             identity_axes,
             non_identifying_axis_values,
+            whole_composite_excluded_labels,
         )
         from hydra_suite.core.post.identity_postprocess import (
             derive_unique_identity_key_series,
         )
 
         _heads = resolve_identity_heads(params)
-        # A row whose OBSERVED composite is one the declared marks excluded
-        # carries no identity evidence at all: it is absent from the
-        # identity domain, so a key built from it could only manufacture
-        # false agreement between two un-identified tracks (exactly the
-        # relink veto failure this filter exists to prevent). Recognizing it
-        # by the composite -- the same string the catalog names entries with
-        # -- handles all three documented mark forms (bare class, scoped
-        # ``factor:class``, whole composite) uniformly, and re-derives no
-        # mark semantics here: ``resolve.excluded_display_labels`` is the
-        # single owner of that parsing.
+        # Declared marks strip identity evidence from the relink key at TWO
+        # different granularities, and conflating them loses real evidence:
+        #
+        #   whole-composite mark ("notag_notag") -> the ENTIRE observation
+        #     carries no identity, so the row contributes nothing at all.
+        #   bare/scoped mark ("notag", "front:notag") -> ONE axis's value
+        #     carries no identity. The row's OTHER axes may still hold a
+        #     genuine tag, and that evidence must survive: dropping the whole
+        #     row would turn a real conflict (front=red vs front=blue, both
+        #     back=notag) into "no evidence" and stop the relink identity
+        #     veto from firing -- the mirror image of the false-agreement
+        #     failure this filter exists to prevent.
+        #
+        # ``resolve`` owns both derivations (``whole_composite_excluded_labels``
+        # and ``non_identifying_axis_values``); no mark semantics are
+        # re-derived here.
         _classifiers = params.get("CNN_CLASSIFIERS") or []
         _excluded = excluded_display_labels(_classifiers)
         _non_identifying_rows = None
@@ -595,8 +602,10 @@ def apply_identity_postprocessing_to_df(
         if _excluded:
             _axis_cols = identity_axis_columns(with_pose_df.columns, _classifiers)
             if _axis_cols:
-                _composite = _observed_composite_series(with_pose_df, _axis_cols)
-                _non_identifying_rows = _composite.isin(_excluded)
+                _whole = whole_composite_excluded_labels(_classifiers)
+                if _whole:
+                    _composite = _observed_composite_series(with_pose_df, _axis_cols)
+                    _non_identifying_rows = _composite.isin(_whole)
                 # Per-axis values, mapped onto the columns those axes were
                 # exported as. The two derivations are ordered the same way
                 # (both iterate the classifier roster, then its factors), so

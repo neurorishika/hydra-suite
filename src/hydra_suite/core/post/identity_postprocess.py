@@ -227,18 +227,23 @@ def derive_unique_identity_key_series(
     head ``tag`` vs. classifier ``tag_v2``).
 
     ``non_identifying_rows`` is an optional boolean mask (aligned to
-    ``df.index``) marking rows whose observed identity composite was
-    declared non-identifying -- i.e. is absent from the identity catalog.
-    Those rows contribute no CNN identity evidence at all, exactly as if
-    every identity-head column were missing: two untagged fragments would
-    otherwise produce identical keys and register as *agreement* in
-    ``_compare_identity_sources``, which is precisely the relink-veto
-    failure the exclusion exists to prevent. The caller owns recognizing
-    the composite (``resolve.excluded_display_labels``), so no mark
-    semantics are re-derived here. A non-CNN source (a detected AprilTag)
-    is a genuinely different identity source and is NOT dropped. ``None``
-    by default, which reproduces the legacy every-row-counts behavior
-    byte-for-bit.
+    ``df.index``) marking rows whose observed composite was declared
+    non-identifying *as a whole* (``resolve.whole_composite_excluded_labels``
+    -- the ``"notag_notag"`` mark form). Those rows contribute no CNN
+    identity evidence at all, exactly as if every identity-head column were
+    missing: two untagged fragments would otherwise produce identical keys
+    and register as *agreement* in ``_compare_identity_sources``, which is
+    precisely the relink-veto failure the exclusion exists to prevent.
+
+    It must NOT be widened to every composite any mark excludes: a bare or
+    scoped mark excludes composites in which only ONE axis reads the marked
+    value, and such a row can still carry a genuine tag on another axis.
+    Dropping it whole would turn a real conflict into "no evidence" and stop
+    the veto from firing -- see ``non_identifying_values_by_column``, which
+    is the right granularity for those forms. A non-CNN source (a detected
+    AprilTag) is a genuinely different identity source and is NOT dropped.
+    ``None`` by default, which reproduces the legacy every-row-counts
+    behavior byte-for-bit.
 
     ``non_identifying_values_by_column`` is the per-axis half of the same
     exclusion: ``{class_column: {declared non-identifying class values}}``
