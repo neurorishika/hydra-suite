@@ -848,6 +848,20 @@ class IdentityPanel(QWidget):
                 lambda _checked: self._sync_calibration_status()
             )
 
+            self._non_identifying_classes: list[str] = []
+            self.btn_non_identifying = QPushButton("Non-identifying classes…")
+            self.btn_non_identifying.setToolTip(
+                "Classes that do not identify an individual (e.g. 'notag').\n"
+                "Excluded from the identity catalog: any number of animals may\n"
+                "carry them at once without competing for one identity slot."
+            )
+            self.btn_non_identifying.setEnabled(self.chk_unique_identifier.isChecked())
+            self.btn_non_identifying.clicked.connect(self._edit_non_identifying)
+            form.addRow("", self.btn_non_identifying)
+            self.chk_unique_identifier.toggled.connect(
+                self.btn_non_identifying.setEnabled
+            )
+
             # Calibration status/affordance — surfaces whether this classifier's
             # posterior has a fitted temperature-scaling calibration, and a
             # (currently stub) hook to fit one (Phase 6 Task 6).
@@ -978,6 +992,25 @@ class IdentityPanel(QWidget):
             if recommended is not None:
                 self.spin_confidence.setValue(recommended)
 
+        def _edit_non_identifying(self) -> None:
+            """Open the class-marking dialog for the currently selected model."""
+            from hydra_suite.trackerkit.gui.dialogs.non_identifying_classes_dialog import (
+                NonIdentifyingClassesDialog,
+            )
+
+            rel_path = self.combo_model.currentData()
+            if not self._has_selected_model(rel_path):
+                return
+            meta = self._main_window._identity_panel._cnn_registry_entry(rel_path)
+            dlg = NonIdentifyingClassesDialog(
+                self,
+                meta.get("factor_names") or [],
+                meta.get("class_names_per_factor") or [],
+                self._non_identifying_classes,
+            )
+            if dlg.exec():
+                self._non_identifying_classes = dlg.selected_marks()
+
         def to_config(self):
             """Return config dict or None if no model selected."""
             from hydra_suite.trackerkit.gui.main_window import get_models_root_directory
@@ -1004,6 +1037,8 @@ class IdentityPanel(QWidget):
                 "window": self.spin_window.value(),
                 "batch_size": self.spin_batch.value(),
                 "unique_identifier": self.chk_unique_identifier.isChecked(),
+                "factor_names": [str(f) for f in (meta.get("factor_names") or [])],
+                "non_identifying_classes": list(self._non_identifying_classes),
                 "scoring_mode": str(meta.get("scoring_mode", "atomic")),
                 "rel_path": rel_path,
             }
@@ -1045,6 +1080,9 @@ class IdentityPanel(QWidget):
             self.chk_unique_identifier.setChecked(
                 bool(cfg.get("unique_identifier", False))
             )
+            self._non_identifying_classes = [
+                str(c) for c in (cfg.get("non_identifying_classes") or [])
+            ]
 
         def set_realtime_batch_cap(self, max_animals: int, realtime_enabled: bool):
             """Apply realtime batch caps for this classifier row."""

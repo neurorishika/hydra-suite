@@ -8,27 +8,25 @@ from hydra_suite.core.individual.identity.resolve import (
 
 
 def _legacy_labels(cnn_classifiers, tag_labels):
-    """Verbatim port of worker.py:1844-1905 — the oracle we must match."""
+    """Cross-product oracle over ``class_names_per_factor`` axes.
+
+    Ported from ``worker.py:1844-1905`` and updated for the cross-product
+    catalog resolver (Task 4): the flat ``labels`` fallback field is no
+    longer read here -- ``identity_axes`` only derives axes from
+    ``class_names_per_factor`` (or the model-file fallback), so a classifier
+    exposing only a bare ``labels`` list now contributes no axis at all.
+    """
     known: list[str] = []
     for cfg in cnn_classifiers:
         if not bool(cfg.get("unique_identifier", False)):
             continue
         cnpf = cfg.get("class_names_per_factor") or []
         non_empty = [fl for fl in cnpf if fl]
-        if len(non_empty) > 1:
+        if non_empty:
             for combo in itertools.product(*non_empty):
                 comp = "_".join(str(c) for c in combo if c)
                 if comp and comp not in known:
                     known.append(comp)
-        else:
-            flat: list[str] = []
-            for fl in non_empty:
-                flat.extend([str(x) for x in fl if x])
-            if not flat:
-                flat = [str(x) for x in (cfg.get("labels", []) or []) if x]
-            for lbl in flat:
-                if lbl and lbl not in known:
-                    known.append(lbl)
     cnn_derived = set(known)
     for lbl in tag_labels:
         s = str(lbl).strip() if lbl else ""
@@ -54,7 +52,7 @@ CASES = [
     ),
     # single factor
     ([{"unique_identifier": True, "class_names_per_factor": [["a", "b", "c"]]}], []),
-    # flat labels fallback
+    # flat labels field is not a supported axis source: contributes nothing
     ([{"unique_identifier": True, "labels": ["x", "y"]}], []),
     # non-unique classifier ignored
     ([{"unique_identifier": False, "class_names_per_factor": [["p", "q"]]}], []),
@@ -85,7 +83,7 @@ def test_structured_factors_captured_for_composite():
         [],
     )
     first = next(e for e in spec.entries if e.display_label == "red_big")
-    assert first.factors == (("factor0", "red"), ("factor1", "big"))
+    assert first.factors == (("cnn:factor0", "red"), ("cnn:factor1", "big"))
     assert first.source == "cnn"
 
 
@@ -117,7 +115,7 @@ def test_model_file_fallback_used_when_class_names_per_factor_absent(tmp_path):
     )
     assert list(spec.labels) == ["red_big", "red_small", "blue_big", "blue_small"]
     first = next(e for e in spec.entries if e.display_label == "red_big")
-    assert first.factors == (("factor0", "red"), ("factor1", "big"))
+    assert first.factors == (("cnn:factor0", "red"), ("cnn:factor1", "big"))
     assert first.source == "cnn"
 
 
@@ -130,7 +128,7 @@ def test_model_file_fallback_flat_class_names_tier2(tmp_path):
     )
     assert list(spec.labels) == ["x", "y", "z"]
     for entry in spec.entries:
-        assert entry.factors == (("factor0", entry.display_label),)
+        assert entry.factors == (("cnn:factor0", entry.display_label),)
         assert entry.source == "cnn"
 
 

@@ -1,4 +1,7 @@
-from hydra_suite.trackerkit.config.identity_schema import IdentityConfig
+from hydra_suite.trackerkit.config.identity_schema import (
+    IdentityConfig,
+    IdentityModelConfig,
+)
 
 
 def _get(cfg, key, default=None):
@@ -154,3 +157,30 @@ def test_posthoc_enabled_tracks_enable_postprocessing_only():
     cfg = {"enable_postprocessing": False}
     ic = IdentityConfig.from_engine_config(cfg, {}, cfg_get=_get)
     assert ic.posthoc.enabled is False
+
+
+def test_non_identifying_classes_round_trip():
+    """Guards the dataclass round-trip only -- NOT the live path.
+
+    ``IdentityConfig.from_engine_config`` never populates ``models``, so
+    ``IdentityModelConfig.non_identifying_classes`` is read by nothing at
+    runtime today; the marks reach the engine through the
+    ``cnn_classifiers`` passthrough instead (see the field's docstring).
+    This test keeps the serialization honest for a future loader.
+    """
+    cfg = IdentityConfig(
+        models=[
+            IdentityModelConfig(
+                kind="cnn",
+                name="colortag",
+                unique_identifier=True,
+                non_identifying_classes=("notag", "front:notag"),
+            )
+        ]
+    )
+    restored = IdentityConfig.from_dict(cfg.to_dict())
+    assert restored.models[0].non_identifying_classes == ("notag", "front:notag")
+
+
+def test_non_identifying_classes_defaults_empty():
+    assert IdentityModelConfig().non_identifying_classes == ()

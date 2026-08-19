@@ -103,3 +103,43 @@ def test_identity_columns_present_when_identity_ran_true():
     assert out["identity"].tolist() == ["antA", "antB"]
     assert out["identity_confidence"].tolist() == [0.7, 0.6]
     assert out["identity_source"].tolist() == ["realtime", "offline"]
+
+
+def test_identity_id_travels_with_the_label():
+    """The clean CSV must carry the resolved *slot*, not only the label.
+
+    A non-identifying label (an untagged animal) is deliberately shared by
+    several tracks; only ``IdentityFinalID == 0`` distinguishes "this label
+    names no individual" from a resolved identity. Without the slot in this
+    file, grouping by ``identity`` merges every untagged animal into one.
+    """
+    df = _base_df()
+    df[C.FINAL_LABEL] = ["notag_notag", "antA"]
+    df[C.FINAL_ID] = [0, 4]
+    df[C.FINAL_CONFIDENCE] = [0.3, 0.9]
+    df[C.FINAL_SOURCE] = ["nonidentifying", "offline"]
+    out = project_user_tracks(df, fps=10.0)
+    assert list(out.columns)[8:12] == [
+        "identity",
+        "identity_id",
+        "identity_confidence",
+        "identity_source",
+    ]
+    assert out["identity_id"].tolist() == [0, 4]
+    assert str(out["identity_id"].dtype) == "Int64"
+
+
+def test_identity_id_absent_when_identity_did_not_run():
+    df = _base_df()
+    df[C.FINAL_LABEL] = ["antA", "antA"]
+    df[C.FINAL_ID] = [1, 1]
+    out = project_user_tracks(df, fps=10.0, identity_ran=False)
+    assert "identity_id" not in out.columns
+
+
+def test_identity_id_omitted_when_the_column_was_never_written():
+    df = _base_df()
+    df[C.FINAL_LABEL] = ["antA", "antA"]
+    out = project_user_tracks(df, fps=10.0)
+    assert "identity" in out.columns
+    assert "identity_id" not in out.columns

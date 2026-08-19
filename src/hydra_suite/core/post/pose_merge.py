@@ -30,6 +30,11 @@ class PoseSourceState:
     interpolated_cnn_dfs: dict | None = None
     interpolated_headtail_csv_path: str | None = None
     interpolated_headtail_df: object | None = None
+    inference_cache_dir: str | None = None
+    """Directory holding the InferenceRunner caches (``.inference_cache_<stem>/``).
+
+    Source of the detection-keyed CNN predictions merged below. Unset means no
+    detection-keyed CNN merge -- the pre-restoration behavior."""
 
 
 def check_pose_export_sources(state):
@@ -168,6 +173,33 @@ def merge_pose_sources_into_df(
             with_pose_df = merge_interpolated_apriltag_df(with_pose_df, _interp_tag_df)
     except Exception:
         logger.debug("Interpolated AprilTag merge skipped.", exc_info=True)
+
+    # Detection-keyed CNN predictions, mirroring the detected-properties and
+    # detected-AprilTag merges above. These columns went missing when the
+    # Gen-2 inference migration replaced the V3 CNNIdentityCache (whose reader
+    # was os.path.exists-guarded, so its loss was silent) with the CNN stage's
+    # own per-detection cache. Everything downstream that reads
+    # `CNN_<label>_Class` -- the identity evidence summary, UniqueIdentityKey,
+    # and the non-identifying-class report -- was starved by that gap.
+    _inference_cache_dir = str(state.inference_cache_dir or "").strip()
+    if _inference_cache_dir and os.path.isdir(_inference_cache_dir):
+        try:
+            from hydra_suite.core.individual.properties.export import (
+                augment_trajectories_with_detected_cnn_cache,
+            )
+
+            for _cfg in params.get("CNN_CLASSIFIERS", []) or []:
+                _label = str(_cfg.get("label", "") or "").strip()
+                if not _label:
+                    continue
+                _cnn_cache = os.path.join(_inference_cache_dir, f"cnn_{_label}.npz")
+                if not os.path.exists(_cnn_cache):
+                    continue
+                with_pose_df = augment_trajectories_with_detected_cnn_cache(
+                    with_pose_df, _cnn_cache, _label
+                )
+        except Exception:
+            logger.debug("Detection-level CNN augmentation skipped.", exc_info=True)
 
     _interp_cnn_paths = state.interpolated_cnn_csv_paths or {}
     _interp_cnn_dfs = state.interpolated_cnn_dfs or {}

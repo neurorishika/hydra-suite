@@ -8,6 +8,21 @@ from hydra_suite.core.individual.identity import columns as C
 logger = logging.getLogger(__name__)
 
 
+def _classifier_label_roster(params) -> tuple:
+    """Normalized ``CNN_CLASSIFIERS`` label roster (identity + non-identity).
+
+    Shared by every call site that needs ``identity_class_columns``'s
+    ``all_labels`` argument or ``derive_unique_identity_key_series``'s
+    ``all_classifier_labels`` argument -- one place owns the
+    whitespace-stripping / falsy-label normalization rule so it cannot drift
+    between call sites.
+    """
+    return tuple(
+        str(cfg.get("label", "") or "").strip()
+        for cfg in (params.get("CNN_CLASSIFIERS") or [])
+    )
+
+
 def _open_identity_evidence_cache(identity_evidence_cache_path):
     """Open the Phase-3 evidence sidecar for reading, or return ``None``.
 
@@ -30,6 +45,166 @@ def _open_identity_evidence_cache(identity_evidence_cache_path):
             exc_info=True,
         )
         return None
+
+
+def _observed_composite_series(df, axis_cols):
+    """The per-row observed identity composite (``"_"``-joined axis classes).
+
+    The same join ``resolve.resolve_catalog_spec`` names catalog entries
+    with, so an observed composite can be compared directly against
+    ``resolve.excluded_display_labels``. Shared by the stamp and the
+    relink-key filter so the two cannot derive it differently.
+
+    A row missing any axis value contributes no composite (``NaN``):
+    ``astype(str)`` alone would turn a missing value into the literal
+    string ``"nan"``, which then silently fails an ``in excluded`` check
+    instead of being ignored.
+    """
+    class_cols = [c for c, _ in axis_cols]
+    valid_row = df[class_cols].notna().all(axis=1)
+    composite = df[class_cols[0]].astype(str)
+    for col in class_cols[1:]:
+        composite = composite + "_" + df[col].astype(str)
+    return composite.where(valid_row)
+
+
+def _stamp_non_identifying_labels(df, params):
+    """Give trajectories whose observed composite is non-identifying a name.
+
+    Excluded classes are absent from the identity catalog (by design -- that
+    is what frees them from exclusivity), so those tracks resolve to unknown.
+    "Unknown" is the wrong report: "the classifier saw no tag" and "the
+    classifier could not tell" are different findings. This stamps the
+    observed composite as the final label while pinning ``IdentityFinalID``
+    to the unknown slot, so the label is descriptive and no consumer keying
+    on a resolved identity slot can mistake it for one.
+
+    Only trajectories with no already-resolved identity are touched. Every
+    qualifying trajectory is found BEFORE any column is created or the frame
+    is copied: declaring marks that match no observed track must leave the
+    dataframe byte-identical (no invented ``IdentityFinal*`` family), the
+    same "no Final family without evidence" invariant
+    ``_mirror_realtime_and_tag_into_final`` documents.
+    """
+    from hydra_suite.core.individual.identity.heads import identity_axis_columns
+    from hydra_suite.core.individual.identity.offline import _UNKNOWN_VALUES
+    from hydra_suite.core.individual.identity.resolve import (
+        excluded_display_labels,
+        identity_axes,
+    )
+
+    classifiers = params.get("CNN_CLASSIFIERS") or []
+    excluded = excluded_display_labels(classifiers)
+    if df is None or df.empty or not excluded or "TrajectoryID" not in df.columns:
+        return df
+
+    axis_cols = identity_axis_columns(df.columns, classifiers)
+    # Two independent derivations of "the identity axes" meet here and can
+    # silently disagree: the reporting/export side (identity_axis_columns ->
+    # build_cnn_output_columns) keys off `factor_names` and goes FLAT when a
+    # classifier declares one or none, while the catalog side
+    # (resolve.identity_axes) keys off `class_names_per_factor`. A config
+    # with two factors' classes but no factor_names therefore yields a
+    # cross-product catalog and a single flat export column, so the observed
+    # composite can never match an excluded label and the stamp silently
+    # produces nothing. Config-time, and only when marks are declared.
+    axes = identity_axes(classifiers)
+    if len(axis_cols) != len(axes):
+        logger.warning(
+            "Non-identifying classes are declared, but the identity axis "
+            "COLUMNS present in the data (%d: %s -- derived from "
+            "'factor_names' via build_cnn_output_columns) do not match the "
+            "identity AXES in the catalog (%d: %s -- derived from "
+            "'class_names_per_factor' via resolve.identity_axes). No "
+            "composite can match a declared non-identifying class, so "
+            "nothing will be stamped. Declare one 'factor_names' entry per "
+            "'class_names_per_factor' entry on each identity classifier.",
+            len(axis_cols),
+            ", ".join(c for c, _ in axis_cols) or "none",
+            len(axes),
+            ", ".join(a.qualified_name for a in axes) or "none",
+        )
+    if not axis_cols:
+        return df
+
+    conf_cols = [c for _, c in axis_cols if c in df.columns]
+    composite = _observed_composite_series(df, axis_cols)
+
+    if C.FINAL_LABEL in df.columns:
+        final_label = df[C.FINAL_LABEL]
+        label_token = final_label.astype(str).str.strip()
+        unresolved = final_label.isna() | (label_token == "")
+        # The fragment solver (the DEFAULT identity_postprocess_mode) writes
+        # its own unresolved sentinel -- the literal string "unknown" with
+        # no attributable source (``offline.py``'s ``_UNKNOWN_VALUES`` /
+        # ``IdentityFinalSource.NONE``) -- for every fragment it did not
+        # resolve. Read as "resolved", those rows would be skipped here and
+        # the stamp would never run in the configuration users actually
+        # ship. A row carrying a real source (offline/realtime/tag) is
+        # genuinely resolved and stays protected.
+        if C.FINAL_SOURCE in df.columns:
+            source_token = df[C.FINAL_SOURCE].fillna("").astype(str).str.strip()
+        else:
+            source_token = pd.Series("", index=df.index)
+        unresolved = unresolved | (
+            label_token.isin(_UNKNOWN_VALUES)
+            & (source_token == C.IdentityFinalSource.NONE)
+        )
+    else:
+        unresolved = pd.Series(True, index=df.index)
+
+    # Phase 1: decide which trajectories qualify, touching nothing.
+    stamps: dict = {}
+    for traj_id, group in df.groupby("TrajectoryID", sort=False):
+        if not unresolved.loc[group.index].all():
+            continue  # partially or fully resolved: leave it alone
+        observed = composite.loc[group.index].dropna()
+        observed = observed[observed != ""]
+        if observed.empty:
+            continue
+        modal = str(observed.mode().iloc[0])
+        if modal not in excluded:
+            continue
+        conf = 0.0
+        if conf_cols:
+            per_frame = df.loc[group.index, conf_cols].apply(
+                pd.to_numeric, errors="coerce"
+            )
+            # Weakest axis per frame: a composite is only as trustworthy as
+            # its least confident tag call.
+            mean_conf = per_frame.min(axis=1).mean()
+            if pd.notna(mean_conf):
+                conf = float(mean_conf)
+        stamps[traj_id] = (group.index, modal, conf)
+
+    if not stamps:
+        return df
+
+    # Phase 2: at least one trajectory qualifies -- now create the Final
+    # family scaffolding and write only the qualifying rows.
+    out = df.copy()
+    if C.FINAL_LABEL not in out.columns:
+        out[C.FINAL_LABEL] = pd.Series(
+            [np.nan] * len(out), index=out.index, dtype=object
+        )
+    else:
+        out[C.FINAL_LABEL] = out[C.FINAL_LABEL].astype(object)
+    if C.FINAL_SOURCE not in out.columns:
+        out[C.FINAL_SOURCE] = pd.Series(
+            [C.IdentityFinalSource.NONE] * len(out), index=out.index, dtype=object
+        )
+    if C.FINAL_ID not in out.columns:
+        out[C.FINAL_ID] = np.nan
+    if C.FINAL_CONFIDENCE not in out.columns:
+        out[C.FINAL_CONFIDENCE] = np.nan
+
+    for _traj_id, (idx, modal, conf) in stamps.items():
+        out.loc[idx, C.FINAL_LABEL] = modal
+        out.loc[idx, C.FINAL_ID] = 0
+        out.loc[idx, C.FINAL_SOURCE] = C.IdentityFinalSource.NON_IDENTIFYING
+        out.loc[idx, C.FINAL_CONFIDENCE] = conf
+
+    return out
 
 
 def apply_identity_postprocessing_to_df(
@@ -64,11 +239,27 @@ def apply_identity_postprocessing_to_df(
         function only summarizes evidence already present on the row.
         """
         out = df.copy()
-        cnn_class_columns = [
-            col
-            for col in out.columns
-            if str(col).startswith("CNN_") and str(col).endswith("_Class")
-        ]
+        from hydra_suite.core.individual.identity.heads import (
+            HEADS_UNKNOWN,
+            identity_class_columns,
+            resolve_identity_heads,
+        )
+
+        # Only identity heads (`unique_identifier=True`) may feed the identity
+        # evidence summary. A behavior/sex/caste classifier is output, not
+        # identity: unscoped, its class wins IdentityEvidenceTopLabel whenever
+        # it is more confident than the identity classifier.
+        _heads = resolve_identity_heads(params)
+        if _heads is HEADS_UNKNOWN:
+            cnn_class_columns = [
+                col
+                for col in out.columns
+                if str(col).startswith("CNN_") and str(col).endswith("_Class")
+            ]
+        else:
+            cnn_class_columns = identity_class_columns(
+                out.columns, _heads, all_labels=_classifier_label_roster(params)
+            )
         cnn_conf_columns = {
             col: f"{str(col)[: -len('_Class')]}_Conf" for col in cnn_class_columns
         }
@@ -119,7 +310,24 @@ def apply_identity_postprocessing_to_df(
             is_tag_source = final_label_present & (
                 final_source_token == C.IdentityFinalSource.TAG
             )
-            offline_flag = final_label_present & ~is_realtime_source & ~is_tag_source
+            # A ``nonidentifying`` Final label is a declared NON-resolution:
+            # the track was excluded from the identity domain, not resolved
+            # by the offline solver. Left in the fall-through it would
+            # advertise "offline" evidence for a track this branch
+            # explicitly declares un-resolved. It contributes no token of
+            # its own either -- ``IdentityEvidenceSources`` lists the
+            # evidence SOURCES that spoke (apriltag/cnn/offline/realtime),
+            # and "nonidentifying" is the absence of a resolution, not a
+            # source. The classifier's own ``cnn`` token still appears.
+            is_non_identifying_source = final_label_present & (
+                final_source_token == C.IdentityFinalSource.NON_IDENTIFYING
+            )
+            offline_flag = (
+                final_label_present
+                & ~is_realtime_source
+                & ~is_tag_source
+                & ~is_non_identifying_source
+            )
 
             # The tag/apriltag precedence: a tag-sourced Final label folds
             # into "apriltag" (matching the original's
@@ -334,13 +542,18 @@ def apply_identity_postprocessing_to_df(
                 catalog = IdentityCatalog.from_spec(catalog_spec)
                 cache = _open_identity_evidence_cache(identity_evidence_cache_path)
                 with_pose_df = run_fragment_solver(
-                    with_pose_df, catalog, params, cache=cache
+                    with_pose_df,
+                    catalog,
+                    params,
+                    cache=cache,
+                    catalog_spec=catalog_spec,
                 )
                 with_pose_df = _annotate_identity_summary_columns(with_pose_df)
                 logger.info("Fragment solver complete.")
             except Exception:
                 logger.exception("Fragment solver failed; results unchanged.")
 
+        with_pose_df = _stamp_non_identifying_labels(with_pose_df, params)
         with_pose_df = _mirror_realtime_and_tag_into_final(with_pose_df)
         with_pose_df = fill_identity_nans_with_consensus(with_pose_df)
         with_pose_df = sort_trajectories_by_identity(with_pose_df)
@@ -350,12 +563,67 @@ def apply_identity_postprocessing_to_df(
         )
     with_pose_df = _annotate_identity_summary_columns(with_pose_df)
     try:
+        from hydra_suite.core.individual.identity.heads import (
+            HEADS_UNKNOWN,
+            identity_axis_columns,
+            resolve_identity_heads,
+        )
+        from hydra_suite.core.individual.identity.resolve import (
+            excluded_display_labels,
+            identity_axes,
+            non_identifying_axis_values,
+            whole_composite_excluded_labels,
+        )
         from hydra_suite.core.post.identity_postprocess import (
             derive_unique_identity_key_series,
         )
 
+        _heads = resolve_identity_heads(params)
+        # Declared marks strip identity evidence from the relink key at TWO
+        # different granularities, and conflating them loses real evidence:
+        #
+        #   whole-composite mark ("notag_notag") -> the ENTIRE observation
+        #     carries no identity, so the row contributes nothing at all.
+        #   bare/scoped mark ("notag", "front:notag") -> ONE axis's value
+        #     carries no identity. The row's OTHER axes may still hold a
+        #     genuine tag, and that evidence must survive: dropping the whole
+        #     row would turn a real conflict (front=red vs front=blue, both
+        #     back=notag) into "no evidence" and stop the relink identity
+        #     veto from firing -- the mirror image of the false-agreement
+        #     failure this filter exists to prevent.
+        #
+        # ``resolve`` owns both derivations (``whole_composite_excluded_labels``
+        # and ``non_identifying_axis_values``); no mark semantics are
+        # re-derived here.
+        _classifiers = params.get("CNN_CLASSIFIERS") or []
+        _excluded = excluded_display_labels(_classifiers)
+        _non_identifying_rows = None
+        _non_identifying_by_column = None
+        if _excluded:
+            _axis_cols = identity_axis_columns(with_pose_df.columns, _classifiers)
+            if _axis_cols:
+                _whole = whole_composite_excluded_labels(_classifiers)
+                if _whole:
+                    _composite = _observed_composite_series(with_pose_df, _axis_cols)
+                    _non_identifying_rows = _composite.isin(_whole)
+                # Per-axis values, mapped onto the columns those axes were
+                # exported as. The two derivations are ordered the same way
+                # (both iterate the classifier roster, then its factors), so
+                # they zip -- and when their lengths disagree the stamp
+                # above has already warned about exactly that.
+                _axes = identity_axes(_classifiers)
+                _values_by_axis = non_identifying_axis_values(_classifiers)
+                if len(_axes) == len(_axis_cols):
+                    _non_identifying_by_column = {
+                        class_col: _values_by_axis.get(axis.qualified_name, frozenset())
+                        for axis, (class_col, _) in zip(_axes, _axis_cols)
+                    }
         with_pose_df[C.UNIQUE_IDENTITY_KEY] = derive_unique_identity_key_series(
-            with_pose_df
+            with_pose_df,
+            identity_heads=None if _heads is HEADS_UNKNOWN else _heads,
+            all_classifier_labels=_classifier_label_roster(params),
+            non_identifying_rows=_non_identifying_rows,
+            non_identifying_values_by_column=_non_identifying_by_column,
         )
     except Exception:
         logger.exception("UniqueIdentityKey derivation failed; column left unset.")

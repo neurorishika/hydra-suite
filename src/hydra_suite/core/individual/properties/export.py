@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import re
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
@@ -10,6 +12,8 @@ import pandas as pd
 
 from .cache import IndividualPropertiesCache
 from .detected_cache import DetectedPropertiesCache
+
+logger = logging.getLogger(__name__)
 
 # DetectedPropertiesCache and IndividualPropertiesCache are legacy
 # combined-schema caches that aggregate detection + head-tail + pose results
@@ -706,6 +710,99 @@ def augment_trajectories_with_detected_cnn_df(
         errors="ignore",
     )
     return _ensure_interp_columns(merged, output_cols)
+
+
+def build_detected_cnn_lookup_dataframe_from_cache(
+    cache_path: str,
+    label: str,
+) -> pd.DataFrame:
+    """Flatten the InferenceRunner CNN cache into frame+detection keyed rows.
+
+    The cache (``<inference cache dir>/cnn_<label>.npz``, written by
+    ``core.inference.cache.store``) holds one row per canonicalized detection:
+    ``frame_indices``, ``det_indices`` and a ragged-padded
+    ``probabilities`` array of shape ``(N, factors, max_classes)``. Per factor,
+    the argmax over that factor's own class count gives the predicted class and
+    its probability gives the confidence -- the same values
+    ``flatten_cnn_prediction_row`` writes for interpolated rows, so detection-
+    keyed and interpolated predictions land in identical columns.
+
+    Returns a frame ``_cnn_frame_id`` / ``_cnn_detection_id`` keyed frame ready
+    for :func:`augment_trajectories_with_detected_cnn_df`. ``_cnn_detection_id``
+    uses the global detection-id encoding (``frame * DETECTION_ID_STRIDE +
+    local detection index``) that ``DetectionID`` carries in the trajectory CSV.
+    """
+    from hydra_suite.core.inference.result import DETECTION_ID_STRIDE
+
+    try:
+        data = np.load(cache_path, allow_pickle=False)
+    except Exception:
+        logger.debug("Detected CNN cache unreadable: %s", cache_path, exc_info=True)
+        return pd.DataFrame()
+
+    frame_indices = np.asarray(data.get("frame_indices", np.zeros(0, np.int32)))
+    det_indices = np.asarray(data.get("det_indices", np.zeros(0, np.int32)))
+    if frame_indices.size == 0 or det_indices.size == 0:
+        return pd.DataFrame()
+
+    try:
+        factor_names = json.loads(str(data["factor_names_json"][0]))
+        class_names = json.loads(str(data["class_names_json"][0]))
+    except Exception:
+        logger.debug("Detected CNN cache metadata unreadable: %s", cache_path)
+        return pd.DataFrame()
+    if not factor_names or not class_names:
+        return pd.DataFrame()
+
+    class_counts = np.asarray(data["class_counts"]).astype(int)
+    probs = np.asarray(data["probabilities"])
+    specs = build_cnn_output_columns(label, factor_names)
+
+    out: Dict[str, Any] = {
+        "_cnn_frame_id": frame_indices.astype(np.int64),
+        "_cnn_detection_id": frame_indices.astype(np.int64) * DETECTION_ID_STRIDE
+        + det_indices.astype(np.int64),
+    }
+    for f_idx, (_factor, class_col, conf_col) in enumerate(specs):
+        if f_idx >= probs.shape[1] or f_idx >= len(class_names):
+            continue
+        n_cls = int(class_counts[f_idx]) if f_idx < len(class_counts) else 0
+        block = probs[:, f_idx, :n_cls] if n_cls else probs[:, f_idx, :0]
+        if block.size == 0:
+            continue
+        # A detection with no prediction for this factor is stored as all-NaN
+        # padding; it must stay unlabelled rather than argmax to class 0.
+        valid = np.isfinite(block).any(axis=1)
+        best = np.zeros(block.shape[0], dtype=np.int64)
+        best[valid] = np.nanargmax(block[valid], axis=1)
+        vocab = [str(c) for c in class_names[f_idx]]
+        out[class_col] = np.where(
+            valid,
+            np.array([vocab[i] if i < len(vocab) else "" for i in best], dtype=object),
+            np.nan,
+        )
+        conf = np.full(block.shape[0], np.nan, dtype=np.float64)
+        conf[valid] = np.nanmax(block[valid], axis=1)
+        out[conf_col] = conf
+
+    return pd.DataFrame(out)
+
+
+def augment_trajectories_with_detected_cnn_cache(
+    trajectories_df: pd.DataFrame,
+    cache_path: str,
+    label: str,
+) -> pd.DataFrame:
+    """Merge one classifier's detection-keyed CNN predictions into trajectories.
+
+    Restores the ``CNN_<label>[_<factor>]_Class`` / ``_Conf`` export that the
+    Gen-2 inference migration silently dropped: the columns used to come from a
+    V3 ``CNNIdentityCache`` whose writer disappeared, leaving an
+    ``os.path.exists``-guarded read that quietly did nothing. The predictions
+    now come from the cache the CNN stage actually writes.
+    """
+    lookup = build_detected_cnn_lookup_dataframe_from_cache(cache_path, label)
+    return augment_trajectories_with_detected_cnn_df(trajectories_df, lookup, label)
 
 
 # ---------------------------------------------------------------------------

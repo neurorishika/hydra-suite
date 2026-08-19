@@ -1823,10 +1823,11 @@ class TrackingEngineCore:
         # The decoder runs after each frame's geometric assignment to maintain
         # per-slot probabilistic identity beliefs and enforce the uniqueness
         # constraint across visible tracks.  The catalog is built from the
-        # union of all configured CNN classifier label sets.
+        # cross-product of all configured CNN classifiers' factor axes.
         _identity_online_decoder = None
         _identity_online_assignments = {}  # slot_index → IdentityAssignment
         _identity_catalog = None
+        _catalog_spec = None
         _identity_in_tracking_enabled = bool(p.get("ENABLE_IDENTITY_IN_TRACKING", True))
         if individual_pipeline_enabled and _identity_in_tracking_enabled:
             try:
@@ -1928,9 +1929,29 @@ class TrackingEngineCore:
                 slot_lock_label,
             ]
 
+        # `phase_remap.build_phase_label_maps` owns the map construction and
+        # its build-time diagnostics (empty map / zero label overlap /
+        # colliding model labels), and is shared verbatim with the offline
+        # fragment solver's `load_trajectory_evidence` so the live and
+        # post-hoc paths cannot drift. In particular it owns pairing the two
+        # DIFFERENT normalizations of the same "label" config field:
+        # `phase_map_key` (the `source_name` evidence is stamped with) and
+        # `phase_axis_model_label` (the axis prefix catalog entries were
+        # built with).
+        _phase_label_maps: dict[str, dict[str, list[int]]] = {}
+        if _identity_catalog is not None and _catalog_spec is not None:
+            from hydra_suite.core.individual.identity.phase_remap import (
+                build_phase_label_maps,
+            )
+
+            _phase_label_maps = build_phase_label_maps(
+                _catalog_spec, _identity_catalog, p.get("CNN_CLASSIFIERS", []) or []
+            )
+
         def _remap_source_log_probs_to_catalog(
             log_probs: np.ndarray,
             source_labels: list[str] | tuple[str, ...] | None,
+            source_name: str = "",
         ) -> np.ndarray:
             if _identity_catalog is None:
                 return np.asarray(log_probs, dtype=np.float64)
@@ -1946,15 +1967,16 @@ class TrackingEngineCore:
             if len(labels) != len(arr):
                 return _identity_catalog.known_uniform_log_prior()
 
-            probs = np.exp(arr - np.max(arr))
-            probs /= np.clip(probs.sum(), 1e-300, None)
-            remapped = np.full(_identity_catalog.size, 1e-300, dtype=np.float64)
-            for src_idx, label in enumerate(labels):
-                if not _identity_catalog.contains(label):
-                    continue
-                remapped[_identity_catalog.index_of(label)] += float(probs[src_idx])
-            remapped /= np.clip(remapped.sum(), 1e-300, None)
-            return np.log(np.clip(remapped, 1e-300, None))
+            from hydra_suite.core.individual.identity.phase_remap import (
+                remap_phase_log_probs,
+            )
+
+            return remap_phase_log_probs(
+                arr,
+                labels,
+                _identity_catalog,
+                _phase_label_maps.get(str(source_name), {}),
+            )
 
         def _decoder_track_label(
             track_idx: int,
@@ -3058,6 +3080,7 @@ class TrackingEngineCore:
                                     _mapped_lp = _remap_source_log_probs_to_catalog(
                                         _cached_ev.log_probs,
                                         _source_labels,
+                                        _label,
                                     )
                                     _slot_evs.setdefault(_r, []).append(
                                         IdentityEvidence.from_cnn(

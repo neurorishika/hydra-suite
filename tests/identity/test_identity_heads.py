@@ -1,0 +1,82 @@
+from hydra_suite.core.individual.identity.heads import (
+    HEADS_UNKNOWN,
+    identity_class_columns,
+    identity_head_labels,
+    resolve_identity_heads,
+)
+
+
+def test_only_unique_identifier_entries_are_identity_heads():
+    cfgs = [
+        {"label": "colortag", "unique_identifier": True},
+        {"label": "behavior", "unique_identifier": False},
+        {"label": "caste"},  # missing key == not an identity head
+    ]
+    assert identity_head_labels(cfgs) == ("colortag",)
+
+
+def test_identity_class_columns_matches_flat_and_multifactor():
+    columns = [
+        "CNN_colortag_Class",
+        "CNN_colortag_thorax_Class",
+        "CNN_colortag_thorax_Conf",
+        "CNN_behavior_Class",
+        "TrajectoryID",
+    ]
+    got = identity_class_columns(columns, ("colortag",))
+    assert got == ["CNN_colortag_Class", "CNN_colortag_thorax_Class"]
+
+
+def test_identity_class_columns_handles_underscore_in_head_label():
+    # "^CNN_(.+)_Class$" cannot tell "colour_tag" (flat) from "colour"+"tag"
+    # (factor). Matching against known head labels can.
+    columns = ["CNN_colour_tag_Class", "CNN_colour_tag_left_Class"]
+    got = identity_class_columns(columns, ("colour_tag",))
+    assert got == ["CNN_colour_tag_Class", "CNN_colour_tag_left_Class"]
+
+
+def test_no_identity_heads_yields_no_columns():
+    cfgs = [{"label": "behavior", "unique_identifier": False}]
+    assert identity_head_labels(cfgs) == ()
+    assert identity_class_columns(["CNN_behavior_Class"], ()) == []
+
+
+def test_resolve_identity_heads_distinguishes_absent_from_empty():
+    # Absent key -> legacy fallback sentinel; present-but-none -> empty tuple.
+    assert resolve_identity_heads({}) is HEADS_UNKNOWN
+    assert resolve_identity_heads({"CNN_CLASSIFIERS": []}) == ()
+    assert resolve_identity_heads(
+        {"CNN_CLASSIFIERS": [{"label": "x", "unique_identifier": True}]}
+    ) == ("x",)
+
+
+def test_identity_class_columns_rejects_non_identity_prefix_collision_with_all_labels():
+    # tag_v2 is a different, non-identity classifier whose CNN_tag_v2_Class
+    # column should not match when only "tag" is an identity head.
+    columns = ["CNN_tag_Class", "CNN_tag_v2_Class"]
+    got = identity_class_columns(columns, ("tag",), all_labels=("tag", "tag_v2"))
+    assert got == ["CNN_tag_Class"]
+
+
+def test_identity_class_columns_default_path_unchanged_without_all_labels():
+    # Default behavior (all_labels empty) must return both columns to maintain
+    # byte-identity equivalence with existing gates.
+    columns = ["CNN_tag_Class", "CNN_tag_v2_Class"]
+    got = identity_class_columns(columns, ("tag",))
+    assert got == ["CNN_tag_Class", "CNN_tag_v2_Class"]
+
+
+def test_identity_class_columns_longest_match_among_heads():
+    # When multiple head labels match a column, the longest one wins.
+    # Both "tag" and "tag_v2" are identity heads; CNN_tag_v2_Class matches
+    # the longer label and belongs to tag_v2, not tag.
+    columns = ["CNN_tag_Class", "CNN_tag_v2_Class"]
+    got = identity_class_columns(columns, ("tag", "tag_v2"), all_labels=())
+    assert got == ["CNN_tag_Class", "CNN_tag_v2_Class"]
+
+
+def test_identity_class_columns_ignores_conf_columns():
+    # Confidence columns (non-Class suffix) are never returned.
+    columns = ["CNN_tag_Class", "CNN_tag_Conf"]
+    got = identity_class_columns(columns, ("tag",), all_labels=())
+    assert got == ["CNN_tag_Class"]

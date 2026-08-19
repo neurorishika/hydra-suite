@@ -75,9 +75,16 @@ def _remap_verbatim(
     source_labels,
     identity_catalog: IdentityCatalog,
 ) -> np.ndarray:
-    """Verbatim copy of `TrackingWorker`'s `_remap_source_log_probs_to_catalog`
-    nested closure (`core/tracking/worker.py`), matching the copy already kept
-    in sync by `test_evidence_phase_basis_parity.py`."""
+    """Legacy-semantics exact-match remap oracle -- no longer a verbatim copy
+    of the real `_remap_source_log_probs_to_catalog` closure, which as of
+    Task 6 (Slice 2) delegates to `core.individual.identity.phase_remap` to
+    handle cross-product catalogs. This copy stays valid here because this
+    test only ever drives it with a SINGLE identity classifier, for which
+    the new closure is required to be bit-identical to this exact-match
+    implementation (see `test_phase_catalog_remap.py::
+    test_single_model_remap_matches_legacy_exactly`). It is intentionally
+    NOT kept in sync with the real closure's cross-product handling; for
+    that, see `test_evidence_phase_basis_parity.py`."""
     if identity_catalog is None:
         return np.asarray(log_probs, dtype=np.float64)
     arr = np.asarray(log_probs, dtype=np.float64)

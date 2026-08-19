@@ -81,6 +81,33 @@ ONLY=ant_pose_headtail bash tools/equivalence/run_matrix.sh
 Clip names: `emi_obb_identity`, `ant_pose_headtail`, `ant_obb_sleap`, `ant_obb_sequential`,
 `worm_bgsub`, `ant_cnn_identity`, `fly_obb`.
 
+### ON-path clips (`ONPATH=1`)
+
+The default matrix proves that a change did **not** perturb existing configs.
+By construction it says nothing about a feature that no fixture turns on: a
+new opt-in flag is byte-identical precisely because nothing exercises it. ON-
+path clips close that hole — configs that deliberately enable a feature, kept
+out of the default set because their legacy-vs-new `EQUIVALENCE` line is
+*expected* to differ and would otherwise poison a green gate.
+
+| Clip | Turns on |
+|---|---|
+| `ant_cnn_identity_marked` | `non_identifying_classes` on the colortag identity model, using all three mark forms (`blue` bare, `back:green` axis-scoped, `pink_pink` whole composite) — 14 of 25 composites leave the catalog |
+
+Run them with all three passes on the *new* tree, so every printed comparison
+is a determinism check on the ON path:
+
+```bash
+ONPATH=1 REPO=$PWD WT=$PWD MAIN_SRC=$PWD/src WT_SRC=$PWD/src \
+  OUT=/tmp/equiv_onpath RUNTIME=mps \
+  bash tools/equivalence/run_matrix.sh ant_cnn_identity_marked
+```
+
+Read: `DETERMINISM` must be clean on every file (the feature is deterministic
+on real video), and the identity section of the rich CSV should show the
+excluded composites gone and `IdentityFinalSource == nonidentifying` rows
+present with `IdentityFinalID == 0`.
+
 To regenerate/refresh the fixtures (on a machine with the full data):
 ```bash
 python tools/equivalence/fixtures/generate_clips.py

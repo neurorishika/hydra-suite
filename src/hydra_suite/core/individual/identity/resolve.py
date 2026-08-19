@@ -12,10 +12,74 @@ from __future__ import annotations
 
 import itertools
 import json
+import logging
 import os
-from typing import Mapping, Sequence
+from typing import Mapping, NamedTuple, Sequence
 
 from hydra_suite.core.individual.identity.spec import CatalogEntry, IdentityCatalogSpec
+
+logger = logging.getLogger(__name__)
+
+CATALOG_SIZE_WARN_THRESHOLD = 256
+"""Entry count above which the cross-product catalog is flagged as suspicious.
+
+The Hungarian assignment cost matrix is N x (K + N) in the catalog size K, so
+a runaway product is a real cost. This is a warning, not a cap: naming the
+contributing axes is more useful than refusing to run.
+"""
+
+
+class IdentityAxis(NamedTuple):
+    """One factor axis of the identity domain.
+
+    ``model_label`` is the owning classifier's label, ``factor_name`` its
+    factor's name (positional ``factor<i>`` fallback when the config carries
+    no ``factor_names``), and ``classes`` that factor's class vocabulary.
+    """
+
+    model_label: str
+    factor_name: str
+    classes: tuple[str, ...]
+
+    @property
+    def qualified_name(self) -> str:
+        return f"{self.model_label}:{self.factor_name}"
+
+
+def identity_axes(cnn_classifiers: Sequence[Mapping]) -> list[IdentityAxis]:
+    """The identity domain's factor axes, in model-config then factor order.
+
+    Every identity-providing model contributes each of its non-empty factors
+    as one axis. The catalog is the cartesian product over ALL axes -- two
+    complementary tag models (thorax colour + abdomen shape) describe one
+    animal jointly, so their classes multiply rather than compete.
+
+    Redundant voters (two models over the same class vocabulary) are not
+    supported and would produce nonsensical ``ant1_ant1`` composites; see the
+    Non-goals section of the design doc.
+    """
+    axes: list[IdentityAxis] = []
+    for cfg in cnn_classifiers or []:
+        if not bool(cfg.get("unique_identifier", False)):
+            continue
+        model_label = str(cfg.get("label", "") or "").strip() or "cnn"
+        cnpf = list(cfg.get("class_names_per_factor") or [])
+        if not cnpf:
+            cnpf = _read_factors_from_model_file(str(cfg.get("model_path", "")))
+        factor_names = list(cfg.get("factor_names") or [])
+        non_empty_index = 0
+        for i, factor_labels in enumerate(cnpf):
+            classes = tuple(str(c) for c in (factor_labels or []) if c)
+            if not classes:
+                continue
+            name = (
+                str(factor_names[i])
+                if i < len(factor_names) and str(factor_names[i]).strip()
+                else f"factor{non_empty_index}"
+            )
+            non_empty_index += 1
+            axes.append(IdentityAxis(model_label, name, classes))
+    return axes
 
 
 def _read_factors_from_model_file(model_path: str) -> list[list[str]]:
@@ -45,6 +109,171 @@ def _read_factors_from_model_file(model_path: str) -> list[list[str]]:
     return out
 
 
+def non_identifying_marks(
+    cnn_classifiers: Sequence[Mapping],
+) -> dict[str, tuple[str, ...]]:
+    """``model_label -> declared non-identifying marks`` for identity models."""
+    out: dict[str, tuple[str, ...]] = {}
+    for cfg in cnn_classifiers or []:
+        if not bool(cfg.get("unique_identifier", False)):
+            # Reachable straight from the GUI: check "Unique identifier",
+            # declare marks, uncheck it again -- the marks are retained in
+            # the saved config and still emitted. Skipping silently here
+            # also skips them past the unmatched-mark warning below, so the
+            # user sees nothing at all.
+            if cfg.get("non_identifying_classes"):
+                logger.warning(
+                    "Classifier '%s' declares non-identifying classes (%s) "
+                    "but is not marked as a unique identifier, so it feeds "
+                    "no identity catalog and the marks are ignored. Enable "
+                    "'Unique identifier' on it, or clear the marks.",
+                    str(cfg.get("label", "") or "").strip() or "cnn",
+                    cfg.get("non_identifying_classes"),
+                )
+            continue
+        label = str(cfg.get("label", "") or "").strip() or "cnn"
+        raw_marks = cfg.get("non_identifying_classes") or []
+        if isinstance(raw_marks, str):
+            # A bare string ("notag" instead of ["notag"]) would otherwise
+            # iterate character-by-character below -- treat it as one mark.
+            raw_marks = [raw_marks]
+        marks = tuple(str(m).strip() for m in raw_marks if str(m).strip())
+        if marks:
+            out[label] = marks
+    return out
+
+
+def _find_matching_mark(
+    combo: Sequence[str],
+    axes: Sequence[IdentityAxis],
+    marks_by_model: Mapping[str, Sequence[str]],
+    display_label: str,
+) -> tuple[str, str] | None:
+    """The ``(model_label, mark)`` that excludes this composite, if any.
+
+    Three accepted mark forms, all resolved here so the rest of the system
+    only ever sees per-entry exclusion:
+
+    - ``"notag"``       -- that class in any axis of the declaring model
+    - ``"front:notag"`` -- that class in the named factor of that model
+    - ``"notag_notag"`` -- that whole global composite display label
+    """
+    for model_label, marks in marks_by_model.items():
+        for mark in marks:
+            if mark == display_label:
+                return (model_label, mark)
+            scoped_factor, _, scoped_class = mark.partition(":")
+            for i, axis in enumerate(axes):
+                if axis.model_label != model_label or i >= len(combo):
+                    continue
+                cls = str(combo[i])
+                if scoped_class:
+                    if axis.factor_name == scoped_factor and cls == scoped_class:
+                        return (model_label, mark)
+                elif cls == mark:
+                    return (model_label, mark)
+    return None
+
+
+def is_non_identifying(
+    combo: Sequence[str],
+    axes: Sequence[IdentityAxis],
+    marks_by_model: Mapping[str, Sequence[str]],
+    display_label: str,
+) -> bool:
+    """True if this composite is excluded by any declared mark."""
+    return _find_matching_mark(combo, axes, marks_by_model, display_label) is not None
+
+
+def non_identifying_axis_values(
+    cnn_classifiers: Sequence[Mapping],
+) -> dict[str, frozenset[str]]:
+    """``qualified_axis_name -> class values that carry no identity there``.
+
+    The per-axis half of the mark semantics, resolved here so no call site
+    re-parses a mark:
+
+    - a bare mark (``"notag"``) applies to every axis of the declaring model
+      whose class vocabulary actually contains it -- which is also what
+      keeps a bare class containing an underscore (``"no_tag"``) from being
+      mistaken for a whole-composite mark;
+    - a scoped mark (``"front:notag"``) applies to that model's named factor
+      axis only;
+    - a whole-composite mark (``"notag_notag"``) names no class value on any
+      axis and contributes nothing here -- it is a row-level exclusion, see
+      :func:`excluded_display_labels`.
+    """
+    axes = identity_axes(cnn_classifiers)
+    marks_by_model = non_identifying_marks(cnn_classifiers)
+    out: dict[str, set[str]] = {}
+    for model_label, marks in marks_by_model.items():
+        for mark in marks:
+            scoped_factor, _, scoped_class = mark.partition(":")
+            for axis in axes:
+                if axis.model_label != model_label:
+                    continue
+                if scoped_class:
+                    if (
+                        axis.factor_name == scoped_factor
+                        and scoped_class in axis.classes
+                    ):
+                        out.setdefault(axis.qualified_name, set()).add(scoped_class)
+                elif mark in axis.classes:
+                    out.setdefault(axis.qualified_name, set()).add(mark)
+    return {k: frozenset(v) for k, v in out.items()}
+
+
+def excluded_display_labels(
+    cnn_classifiers: Sequence[Mapping],
+) -> frozenset[str]:
+    """Every composite display label the declared marks exclude.
+
+    The reporting layer uses this to recognize an observed composite as
+    non-identifying without re-deriving the mark semantics.
+    """
+    axes = identity_axes(cnn_classifiers)
+    marks = non_identifying_marks(cnn_classifiers)
+    if not axes or not marks:
+        return frozenset()
+    out = set()
+    for combo in itertools.product(*[a.classes for a in axes]):
+        display = "_".join(str(c) for c in combo if c)
+        if display and is_non_identifying(combo, axes, marks, display):
+            out.add(display)
+    return frozenset(out)
+
+
+def whole_composite_excluded_labels(
+    cnn_classifiers: Sequence[Mapping],
+) -> frozenset[str]:
+    """Composites excluded by a WHOLE-COMPOSITE mark (``"notag_notag"``) only.
+
+    The narrow counterpart to :func:`excluded_display_labels`, which reports
+    every composite any mark form excludes -- including the ones a *bare* or
+    *scoped* mark excludes because ONE axis reads a marked value.
+
+    The distinction matters for the relink key. A whole-composite mark names
+    an entire observation as carrying no identity, so such a row must
+    contribute nothing at all. A bare/scoped mark names one axis's value; a
+    row matching it on that axis may still carry a genuine tag on ANOTHER
+    axis, and that evidence must survive -- dropping the whole row would turn
+    a real conflict (front=red vs front=blue) into "no evidence" and stop the
+    relink identity veto from firing. Those forms are handled per axis by
+    :func:`non_identifying_axis_values` instead.
+    """
+    axes = identity_axes(cnn_classifiers)
+    marks_by_model = non_identifying_marks(cnn_classifiers)
+    if not axes or not marks_by_model:
+        return frozenset()
+    all_marks = {m for marks in marks_by_model.values() for m in marks}
+    out = set()
+    for combo in itertools.product(*[a.classes for a in axes]):
+        display = "_".join(str(c) for c in combo if c)
+        if display and display in all_marks:
+            out.add(display)
+    return frozenset(out)
+
+
 def resolve_catalog_spec(
     cnn_classifiers: Sequence[Mapping[str, object]],
     tag_identity_labels: Sequence[object],
@@ -60,33 +289,65 @@ def resolve_catalog_spec(
                 CatalogEntry(display_label=display, factors=factors, source=source)
             )
 
-    for cfg in cnn_classifiers or []:
-        if not bool(cfg.get("unique_identifier", False)):
-            continue
-        cnpf = list(cfg.get("class_names_per_factor") or [])
-        if not cnpf:
-            cnpf = _read_factors_from_model_file(str(cfg.get("model_path", "")))
-        factor_names = list(cfg.get("factor_names") or [])
-        non_empty = [fl for fl in cnpf if fl]
+    axes = identity_axes(cnn_classifiers)
+    marks_by_model = non_identifying_marks(cnn_classifiers)
+    if axes:
+        projected = 1
+        for a in axes:
+            projected *= max(1, len(a.classes))
+        if projected > CATALOG_SIZE_WARN_THRESHOLD:
+            logger.warning(
+                "Identity catalog is the cross-product of %d axes and has %d "
+                "entries (> %d). Contributing axes: %s. Check that every "
+                "classifier marked 'unique identifier' really is one, and "
+                "consider marking non-identifying classes.",
+                len(axes),
+                projected,
+                CATALOG_SIZE_WARN_THRESHOLD,
+                ", ".join(f"{a.qualified_name}({len(a.classes)})" for a in axes),
+            )
+        matched_marks: set[tuple[str, str]] = set()
+        for combo in itertools.product(*[a.classes for a in axes]):
+            display = "_".join(str(c) for c in combo if c)
+            if marks_by_model:
+                hit = _find_matching_mark(combo, axes, marks_by_model, display)
+                if hit is not None:
+                    matched_marks.add(hit)
+                    # Excluded from the identity domain entirely: no Hungarian
+                    # column, no blocked_labels entry, no commit-blocking, no
+                    # swap candidacy, no offline collision veto. Any number of
+                    # tracks may carry this class, and none is ever merged
+                    # onto another because of it.
+                    continue
+            pairs = tuple(
+                (axes[i].qualified_name, str(c)) for i, c in enumerate(combo) if c
+            )
+            _add(display, pairs, "cnn")
 
-        if len(non_empty) > 1:
-            for combo in itertools.product(*non_empty):
-                pairs = tuple(
-                    (factor_names[i] if i < len(factor_names) else f"factor{i}", str(c))
-                    for i, c in enumerate(combo)
-                    if c
+        if marks_by_model:
+            unmatched = [
+                f"{model_label}:{mark}"
+                for model_label, marks in sorted(marks_by_model.items())
+                for mark in marks
+                if (model_label, mark) not in matched_marks
+            ]
+            if unmatched:
+                logger.warning(
+                    "Declared non-identifying classes matched nothing in the "
+                    "catalog and had no effect: %s. Check for typos or a "
+                    "factor name that does not exist.",
+                    ", ".join(unmatched),
                 )
-                display = "_".join(str(c) for c in combo if c)
-                _add(display, pairs, "cnn")
-        else:
-            flat: list[str] = []
-            for fl in non_empty:
-                flat.extend([str(x) for x in fl if x])
-            if not flat:
-                flat = [str(x) for x in (cfg.get("labels", []) or []) if x]
-            fname = factor_names[0] if factor_names else "factor0"
-            for lbl in flat:
-                _add(lbl, ((fname, lbl),), "cnn")
+
+        if marks_by_model and not seen:
+            logger.warning(
+                "Every identity in the catalog was excluded by the declared "
+                "non-identifying classes (%s). Identity resolution will not "
+                "run for this session.",
+                ", ".join(
+                    f"{m}: {', '.join(v)}" for m, v in sorted(marks_by_model.items())
+                ),
+            )
 
     cnn_derived = set(seen)
     for lbl in tag_identity_labels or []:

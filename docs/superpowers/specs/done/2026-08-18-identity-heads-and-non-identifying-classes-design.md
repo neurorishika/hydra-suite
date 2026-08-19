@@ -1,7 +1,19 @@
 # Identity heads, cross-product catalogs, and non-identifying classes
 
 **Date:** 2026-08-18
-**Status:** Design approved, pending implementation plan
+**Status:** Shipped — merged to main.
+
+> **Post-implementation note.** Slices 1-3 shipped as designed. Verifying them
+> on real video surfaced a defect this spec did not anticipate and could not
+> have been satisfied without: the rich export's per-detection
+> `CNN_<label>[_<factor>]_Class`/`_Conf` columns had been silently absent since
+> the Gen-2 inference migration, so `IdentityEvidenceTopLabel`,
+> `UniqueIdentityKey`, and this design's non-identifying-class report were all
+> reading columns that no longer existed. Slice 1's scoping was correct but
+> inert, and Slice 3's reporting half never fired. The export was restored in
+> the same branch (see the changelog); the checkboxes in the paired plan were
+> never ticked during subagent execution and should not be read as a coverage
+> record — the gates are.
 **Scope:** `core/individual/identity/`, `core/individual/postprocess_df.py`,
 `core/post/identity_postprocess.py`, `core/tracking/worker.py` (remap only),
 `trackerkit/config/identity_schema.py`, `trackerkit/gui/panels/identity_panel.py`
@@ -219,8 +231,18 @@ The mixed forms are deliberate: the user's cases are case-by-case. `notag` and
 **the engine only ever knows per-entry exclusion** — there is no second code path.
 
 Persisted on `IdentityModelConfig` (`trackerkit/config/identity_schema.py`) as
-`non_identifying_classes: tuple[str, ...] = ()`, threaded into the
-`CNN_CLASSIFIERS` engine-param dicts by `build_engine_params`.
+`non_identifying_classes: tuple[str, ...] = ()`.
+
+*As built (correction):* that dataclass field is **not** the live path, and
+`build_engine_params` threads nothing of its own. `IdentityConfig.from_engine_config`
+never populates `models`, so nothing reads `IdentityModelConfig.non_identifying_classes`
+at runtime. The marks travel with each classifier entry instead:
+`identity_panel.CNNClassifierRow.to_config` writes them into the saved config's
+`cnn_classifiers` list, and `build_engine_params` passes that list through verbatim
+into `CNN_CLASSIFIERS`, where `resolve.non_identifying_marks` reads them. The
+dataclass field is kept for serialization round-tripping only; a `models`-populating
+loader would have to be written for it to become live, and this program deliberately
+did not write one.
 
 **`resolve.py`.** After the cross-product, drop every entry that matches any
 declared form. The catalog shrinks; indices stay contiguous.
@@ -280,6 +302,13 @@ free-text row for whole composites. Persisted through `IdentityModelConfig`.
   anyone parsing that column downstream — call it out in the changelog.
 - Non-identity classifiers' `CNN_<label>_Class` / `_Conf` columns are unchanged
   and still fully exported. They are output, not identity.
+- The `IdentityFinalID == 0` pin protects consumers of the **rich** export
+  (`<video>_tracking_final_with_individual.csv`), which is the only export
+  carrying `IdentityFinalID`. `<video>_tracks.csv` carries `identity`,
+  `identity_confidence`, and `identity_source` only, so readers of that file
+  distinguish several untagged animals sharing one descriptive label by
+  `identity_source == nonidentifying` alone. The CSV schema is deliberately
+  unchanged.
 
 ## Testing and gates
 
@@ -313,6 +342,21 @@ effect is attributable.
 - Equivalence with `non_identifying_classes = []`: byte-identical (the feature is
   opt-in, so "off" is a provable no-op).
 
+## Known limitations
+
+- **The Hungarian Bayesian-cost CNN term ignores composite catalogs.**
+  `worker.py`'s per-frame identity-cost term exact-matches `class_names[0]`
+  against the catalog, so it contributes nothing whenever the catalog entry
+  is a composite rather than a bare class name. This is pre-existing (it was
+  already broken for a single multi-factor model), but Slice 2 makes
+  composite catalogs reachable from two *single-factor* models too, widening
+  the set of configurations in which the term silently contributes nothing.
+  Not fixed here: the term is an association hint, the identity decision
+  itself comes from the evidence path (which does remap correctly), and
+  changing it would perturb assignment on every existing config.
+- **`IdentityFinalID` is not exported to `<video>_tracks.csv`.** See the
+  Data contract section.
+
 ## Risks
 
 | Risk | Mitigation |
@@ -322,3 +366,28 @@ effect is attributable.
 | `UniqueIdentityKey` narrowing breaks downstream parsers | Changelog; the column is derived, not authored, so it can be rebuilt |
 | Catalog explosion with many axes | Warning above 256 entries naming the contributing axes |
 | Untagged animals lose identity-based fragment stitching | Accepted trade, stated in Non-goals; they never had correct stitching anyway |
+
+## Changelog
+
+No root `CHANGELOG.md` exists in this repository; these notes record the
+breaking changes shipped by this program (Tasks 1-11) for whoever writes the
+release notes.
+
+- **Breaking:** `UniqueIdentityKey` now contains identity-head sources only.
+  Non-identity classifiers (behavior, sex, caste, ...) no longer appear in
+  this column. Downstream parsers of `UniqueIdentityKey` will see fewer
+  sources per row than before.
+- **Breaking:** configurations with two or more classifiers marked "Unique
+  identifier" now produce a cross-product catalog (one composite identity per
+  axis combination) instead of a union of separate catalogs. Prior results
+  for such multi-identity-model configurations were incorrect (each model
+  competed for the same Hungarian columns); the new cross-product behavior is
+  the correct one and results will differ.
+- **New, opt-in:** identity classifiers can declare `non_identifying_classes`
+  (bare class, `factor:class`, or whole composite label) to exclude those
+  composites from the catalog. Tracks that only ever show non-identifying
+  evidence are labelled with the composite (e.g. `notag_notag`) but keep
+  `IdentityFinalID == 0` and `IdentityFinalSource == "nonidentifying"` — they
+  are tracked and labelled, never identity-resolved. No fixture declares this
+  option, so it is a provable no-op for all existing configurations
+  (byte-identical equivalence gate).

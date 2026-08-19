@@ -69,6 +69,21 @@ if [ "$FIXTURES" = "1" ]; then
     "ant_cnn_identity|$FX/clips/ant_cnn_identity.mp4|$FX/configs/ant_cnn_identity.json|$FX/ooceraea_biroi.json"
     "fly_obb|$FX/clips/fly_obb.mp4|$FX/configs/fly_obb.json|"
   )
+  # ON-path clips: configs that deliberately turn a feature ON, so their
+  # legacy-vs-new EQUIVALENCE line is EXPECTED to differ and means nothing.
+  # They are excluded from the default matrix for exactly that reason -- a
+  # red line here would poison an otherwise-green gate. What they DO prove is
+  # what the default matrix cannot: that the feature runs on real video and
+  # is deterministic. Run with ONPATH=1 and read only the DETERMINISM line
+  # (new_a vs new_b), which must be clean, plus the identity section.
+  #   ONPATH=1 MAIN_SRC=$WT_SRC ... bash run_matrix.sh ant_cnn_identity_marked
+  # Setting MAIN_SRC=WT_SRC makes all three runs the new code, so every
+  # printed comparison becomes a determinism check.
+  if [ "${ONPATH:-0}" = "1" ]; then
+    VIDEOS+=(
+      "ant_cnn_identity_marked|$FX/clips/ant_cnn_identity.mp4|$FX/configs/ant_cnn_identity_marked.json|$FX/ooceraea_biroi.json"
+    )
+  fi
 else
   VIDEOS=(
     "emi_short|$DATA/ant/emi_short.mp4|$DATA/ant/emi_short_config.json|"
@@ -130,7 +145,7 @@ has_rows() {  # path
   [ "$(wc -l < "$1")" -gt 1 ] || return 1
 }
 
-cmp() {  # a b title clip
+cmp() {  # a b title clip [extra compare.py args...]
   echo "--- $3 ---"
   # Not every clip config produces every CSV kind: a clip with streaming
   # individual analysis (e.g. ant_pose_headtail) writes only *_final.csv and
@@ -153,7 +168,7 @@ cmp() {  # a b title clip
     note_failure "${4:-?}" "$3 -- empty CSV (header only)"
     return
   fi
-  python "$WT/tools/equivalence/compare.py" "$1" "$2"
+  python "$WT/tools/equivalence/compare.py" "$1" "$2" "${@:5}"
   rc=$?
   # compare.py: 0 = equivalent, 1 = real differences, 2 = no data
   if [ "$rc" = "2" ]; then
@@ -208,6 +223,23 @@ for entry in "${VIDEOS[@]}"; do
         "$base/new_a/${stem}_tracking_${kind}.csv" \
         "EQUIVALENCE  legacy vs new_a" "$name"
   done
+
+  # The rich per-individual CSV is the ONLY export carrying the identity
+  # columns (IdentityEvidence*/IdentityFinal*/UniqueIdentityKey), pose, and the
+  # per-classifier CNN columns. Without it this matrix proves geometry and
+  # tracking were not perturbed and nothing at all about identity. Compared
+  # with --strict-columns so those (mostly non-numeric) columns are gated
+  # rather than merely printed. Clips with no individual-analysis stage
+  # produce no such file; `cmp` reports "not produced by either tree" for
+  # that -- absence on BOTH sides is a config property, absence on ONE side
+  # is still a failure.
+  echo; echo ">>> $name : final_with_individual (identity columns)"
+  cmp "$base/new_a/${stem}_tracking_final_with_individual.csv" \
+      "$base/new_b/${stem}_tracking_final_with_individual.csv" \
+      "DETERMINISM  new_a vs new_b" "$name" --strict-columns
+  cmp "$base/legacy/${stem}_tracking_final_with_individual.csv" \
+      "$base/new_a/${stem}_tracking_final_with_individual.csv" \
+      "EQUIVALENCE  legacy vs new_a" "$name" --strict-columns
 
   echo; echo ">>> $name : performance"
   perfcmp "$base/legacy/meta.json" "$base/new_a/meta.json"

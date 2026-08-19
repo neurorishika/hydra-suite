@@ -20,6 +20,7 @@ import pandas as pd
 
 from hydra_suite.core.individual.identity.cache import IdentityEvidenceCache
 from hydra_suite.core.individual.identity.catalog import IdentityCatalog
+from hydra_suite.core.individual.identity.phase_remap import remap_phase_log_probs
 from hydra_suite.core.individual.identity.substrate import fuse_log_evidence
 
 _TRAJECTORY_COL = "TrajectoryID"
@@ -31,19 +32,29 @@ def _remap_source_log_probs_to_catalog(
     log_probs: np.ndarray,
     source_labels: tuple[str, ...] | None,
     catalog: IdentityCatalog,
+    phase_label_map: dict[str, list[int]] | None = None,
 ) -> np.ndarray:
-    """Remap one evidence item's log-probs from its source's own catalog
-    basis into ``catalog``'s basis.
+    """Remap one evidence item's log-probs from its source's own phase
+    catalog basis into ``catalog``'s basis.
 
-    Mirrors the tracking worker's ``_remap_source_log_probs_to_catalog``
-    nested closure (``core/tracking/worker.py``): when the source's basis is
-    unknown/absent and already the right size, treat it as already on the
-    global basis (renormalized in place); otherwise probability-mass-sum
-    each source label into its matching global catalog slot (labels the
-    global catalog does not contain are dropped), then renormalize and
-    return to log-space. A size-mismatched, unlabeled source with no way to
-    align falls back to a flat known-uniform prior (uninformative, not
-    fabricated certainty).
+    The offline twin of the tracking worker's
+    ``_remap_source_log_probs_to_catalog`` nested closure
+    (``core/tracking/worker.py``), and delegating to the same
+    ``phase_remap.remap_phase_log_probs`` so the two cannot diverge: when
+    the source's basis is unknown/absent and already the right size, treat
+    it as already on the global basis (renormalized in place); otherwise
+    distribute each phase label's probability mass across every global
+    catalog entry it names (via ``phase_label_map``; a label with no map
+    entry still resolves by direct lookup, and one the global catalog does
+    not contain at all is dropped), then renormalize and return to
+    log-space. A size-mismatched, unlabeled source with no way to align
+    falls back to a flat known-uniform prior (uninformative, not fabricated
+    certainty).
+
+    An empty/absent ``phase_label_map`` reduces ``remap_phase_log_probs``
+    exactly to the historical exact-label-match implementation, so a single
+    identity model (whose phase basis *is* the global catalog) is
+    bit-identical either way.
     """
     arr = np.asarray(log_probs, dtype=np.float64)
 
@@ -58,21 +69,14 @@ def _remap_source_log_probs_to_catalog(
     if len(labels) != len(arr):
         return catalog.known_uniform_log_prior()
 
-    probs = np.exp(arr - np.max(arr))
-    probs /= np.clip(probs.sum(), 1e-300, None)
-    remapped = np.full(catalog.size, 1e-300, dtype=np.float64)
-    for src_idx, label in enumerate(labels):
-        if not catalog.contains(label):
-            continue
-        remapped[catalog.index_of(label)] += float(probs[src_idx])
-    remapped /= np.clip(remapped.sum(), 1e-300, None)
-    return np.log(np.clip(remapped, 1e-300, None))
+    return remap_phase_log_probs(arr, labels, catalog, phase_label_map or {})
 
 
 def load_trajectory_evidence(
     df: pd.DataFrame,
     cache: IdentityEvidenceCache,
     catalog: IdentityCatalog,
+    phase_label_maps: dict[str, dict[str, list[int]]] | None = None,
 ) -> dict[int, list[tuple[int, np.ndarray]]]:
     """Per-``TrajectoryID`` ordered ``[(FrameID, catalog_log_probs)]`` pulled
     straight from the evidence cache.
@@ -83,8 +87,9 @@ def load_trajectory_evidence(
     matching evidence in the cache, are omitted. When a detection has
     evidence from multiple sources in the same frame (e.g. a CNN phase plus
     AprilTag), each source's evidence is first remapped to ``catalog``'s
-    basis (via ``cache.catalog_labels_for_source``, mirroring the tracking
-    worker's ``_remap_source_log_probs_to_catalog``), then fused into one
+    basis (via ``cache.catalog_labels_for_source`` plus this source's entry
+    in ``phase_label_maps``, mirroring the tracking worker's
+    ``_remap_source_log_probs_to_catalog``), then fused into one
     catalog log-vector for that frame via
     ``substrate.fuse_log_evidence`` (starting from a flat log-prior so the
     result is the sources' evidence alone, not a Bayesian update against an
@@ -96,6 +101,15 @@ def load_trajectory_evidence(
             detection id the tracking worker writes to CSV).
         cache: an open (``mode="r"``) ``IdentityEvidenceCache``.
         catalog: the target (global) identity catalog to remap/fuse onto.
+        phase_label_maps: ``source_name -> phase label map`` as built by
+            ``phase_remap.build_phase_label_maps`` (the same maps the
+            tracking worker builds for the live path). Required whenever
+            the global catalog is a cross-product of more than one identity
+            model: without them every phase label misses, all evidence
+            floors, and renormalization then fabricates certainty on
+            ``unknown``. ``None``/empty is exact-label matching, which is
+            correct (and bit-identical to the historical behavior) for a
+            single identity model.
 
     Returns:
         ``{TrajectoryID: [(FrameID, log_probs), ...]}``, frame-ordered.
@@ -122,7 +136,10 @@ def load_trajectory_evidence(
             for ev in cache.load_frame(frame_idx):
                 source_labels = cache.catalog_labels_for_source(ev.source_name)
                 remapped = _remap_source_log_probs_to_catalog(
-                    ev.log_probs, source_labels, catalog
+                    ev.log_probs,
+                    source_labels,
+                    catalog,
+                    (phase_label_maps or {}).get(str(ev.source_name)),
                 )
                 per_detection.setdefault(ev.detection_id, []).append(remapped)
 

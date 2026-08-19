@@ -152,7 +152,9 @@ def format_identity_key(sources: dict[str, str]) -> str:
 _CNN_CLASS_COLUMN_RE = re.compile(r"^CNN_(.+)_Class$")
 
 
-def _cnn_identity_sources_for_row(row: "pd.Series", cnn_class_columns: list) -> dict:
+def _cnn_identity_sources_for_row(
+    row: "pd.Series", cnn_class_columns: list, non_identifying_values_by_column=None
+) -> dict:
     """Build ``cnn:<head>``/``cnn:<head>:<factor>`` tokens from CNN_* columns.
 
     A column is a CNN class column iff it matches ``^CNN_(.+)_Class$``.
@@ -160,6 +162,14 @@ def _cnn_identity_sources_for_row(row: "pd.Series", cnn_class_columns: list) -> 
     (``cnn:<head>``); otherwise split on the FIRST ``_`` -> 3-part factor
     source (``cnn:<head>:<factor>``), matching the old serializer's
     convention. ``CNN_<head>_Conf`` sibling columns are never class columns.
+
+    ``non_identifying_values_by_column`` (``{class_column: {values}}``, as
+    resolved by ``resolve.non_identifying_axis_values``) drops a column
+    whose value is declared non-identifying on that axis, exactly like a
+    missing value. Whether a row contributes identity evidence at ALL is a
+    separate, caller-owned decision (see
+    ``derive_unique_identity_key_series``'s ``non_identifying_rows``); no
+    mark semantics are re-derived here.
     """
     sources: dict[str, str] = {}
     for col in cnn_class_columns:
@@ -168,6 +178,12 @@ def _cnn_identity_sources_for_row(row: "pd.Series", cnn_class_columns: list) -> 
             continue
         value = _normalize_string(row.get(col))
         if not value:
+            continue
+        if value in (non_identifying_values_by_column or {}).get(str(col), ()):
+            # A non-identifying class carries no identity information. Left
+            # in, `notag == notag` would count as AGREEMENT in
+            # `_compare_identity_sources`' grouped tally and could out-vote
+            # a genuine conflict on another axis.
             continue
         middle = match.group(1)
         if "_" in middle:
@@ -179,23 +195,85 @@ def _cnn_identity_sources_for_row(row: "pd.Series", cnn_class_columns: list) -> 
     return sources
 
 
-def derive_unique_identity_key_series(df: pd.DataFrame) -> pd.Series:
+def derive_unique_identity_key_series(
+    df: pd.DataFrame,
+    identity_heads=None,
+    all_classifier_labels=(),
+    non_identifying_rows=None,
+    non_identifying_values_by_column=None,
+) -> pd.Series:
     """Re-derive the ``UniqueIdentityKey`` column from per-row evidence columns.
 
     Builds, per row, a ``source -> value`` dict from ``DetectedTagLabel``
-    (preferred) / ``DetectedTagID`` for the ``apriltag`` source and every
-    ``CNN_<head>_Class`` / ``CNN_<head>_<factor>_Class`` column for the CNN
-    sources, then serializes it with :func:`format_identity_key`. Rows with
-    no evidence get ``np.nan`` (never an empty string or a bare label).
+    (preferred) / ``DetectedTagID`` for the ``apriltag`` source and the
+    ``CNN_<head>_Class`` / ``CNN_<head>_<factor>_Class`` columns of the
+    *identity heads* for the CNN sources, then serializes it with
+    :func:`format_identity_key`. Rows with no evidence get ``np.nan``
+    (never an empty string or a bare label).
+
+    ``identity_heads`` is the tuple of classifier labels marked
+    ``unique_identifier`` (see ``identity.heads.identity_head_labels``).
+    Classifiers that are not identity heads -- behavior, sex, caste -- must
+    never enter this key: it feeds the relink identity veto
+    (``processing.py:_score_relink_candidate``), where a mere behavior change
+    across an occlusion gap would otherwise read as an identity conflict and
+    refuse a legitimate relink. ``None`` preserves the legacy
+    every-CNN-column behavior for callers with no classifier config.
+
+    ``all_classifier_labels`` is the full classifier roster's labels
+    (identity and non-identity alike); it is passed straight through to
+    ``identity_class_columns`` to disambiguate prefix collisions between an
+    identity head and a differently-named non-identity classifier (e.g.
+    head ``tag`` vs. classifier ``tag_v2``).
+
+    ``non_identifying_rows`` is an optional boolean mask (aligned to
+    ``df.index``) marking rows whose observed composite was declared
+    non-identifying *as a whole* (``resolve.whole_composite_excluded_labels``
+    -- the ``"notag_notag"`` mark form). Those rows contribute no CNN
+    identity evidence at all, exactly as if every identity-head column were
+    missing: two untagged fragments would otherwise produce identical keys
+    and register as *agreement* in ``_compare_identity_sources``, which is
+    precisely the relink-veto failure the exclusion exists to prevent.
+
+    It must NOT be widened to every composite any mark excludes: a bare or
+    scoped mark excludes composites in which only ONE axis reads the marked
+    value, and such a row can still carry a genuine tag on another axis.
+    Dropping it whole would turn a real conflict into "no evidence" and stop
+    the veto from firing -- see ``non_identifying_values_by_column``, which
+    is the right granularity for those forms. A non-CNN source (a detected
+    AprilTag) is a genuinely different identity source and is NOT dropped.
+    ``None`` by default, which reproduces the legacy every-row-counts
+    behavior byte-for-bit.
+
+    ``non_identifying_values_by_column`` is the per-axis half of the same
+    exclusion: ``{class_column: {declared non-identifying class values}}``
+    (as resolved by ``resolve.non_identifying_axis_values``). A column
+    carrying one of its own axis's values contributes nothing, exactly as
+    if it were missing, so a shared ``notag`` on one axis cannot register
+    as agreement and out-vote a genuine conflict on another. ``None`` by
+    default, which reproduces the legacy every-value-counts behavior
+    byte-for-bit.
     """
     if df is None or df.empty:
         return pd.Series([], index=getattr(df, "index", None), dtype=object)
 
-    cnn_class_columns = [
-        col for col in df.columns if _CNN_CLASS_COLUMN_RE.match(str(col))
-    ]
+    if identity_heads is None:
+        cnn_class_columns = [
+            col for col in df.columns if _CNN_CLASS_COLUMN_RE.match(str(col))
+        ]
+    else:
+        from hydra_suite.core.individual.identity.heads import identity_class_columns
+
+        cnn_class_columns = identity_class_columns(
+            df.columns, identity_heads, all_classifier_labels
+        )
     has_tag_label = "DetectedTagLabel" in df.columns
     has_tag_id = "DetectedTagID" in df.columns
+    if non_identifying_rows is None:
+        drop_cnn_index = frozenset()
+    else:
+        mask = pd.Series(non_identifying_rows, index=df.index).fillna(False)
+        drop_cnn_index = frozenset(df.index[mask.astype(bool)])
 
     def _row_key(row: "pd.Series") -> Any:
         sources: dict[str, str] = {}
@@ -206,7 +284,12 @@ def derive_unique_identity_key_series(df: pd.DataFrame) -> pd.Series:
             tag_value = _normalize_string(row.get("DetectedTagID"))
         if tag_value:
             sources["apriltag"] = tag_value
-        sources.update(_cnn_identity_sources_for_row(row, cnn_class_columns))
+        if row.name not in drop_cnn_index:
+            sources.update(
+                _cnn_identity_sources_for_row(
+                    row, cnn_class_columns, non_identifying_values_by_column or {}
+                )
+            )
         key = format_identity_key(sources)
         return key if key else np.nan
 
