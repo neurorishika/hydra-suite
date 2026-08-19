@@ -48,6 +48,15 @@ For documentation-specific migrations in this branch:
   (byte-identical equivalence gate). See
   [Individual Analysis](../user-guide/individual-analysis.md#identity-classifiers-and-non-identifying-classes)
   for usage.
+- **Fixed:** non-identity classifiers (behavior, sex, caste, ...) now reach the
+  clean `<video>_tracks.csv` as `<label>[_<factor>]_class` / `_conf`. In User
+  mode the clean CSV is the *only* export written, and it carried no classifier
+  output at all -- so a classifier configured purely as output ran, cost
+  inference time, and was discarded at export. The design's data contract
+  ("they are output, not identity, and still fully exported") had held only in
+  Debug mode. Identity classifiers are deliberately excluded: their channel is
+  the resolved `identity`/`identity_id`, and their per-frame calls are evidence
+  that belongs in the Debug export.
 - **New column:** the clean `<video>_tracks.csv` gains `identity_id`, the
   resolved catalog slot that already existed in the rich export as
   `IdentityFinalID` (`0` = unknown / non-identifying). The `identity` label

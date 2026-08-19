@@ -346,6 +346,7 @@ def export_rich_csv(
         debug_mode=debug_mode,
         fps=fps,
         identity_ran=identity_ran,
+        cnn_classifiers=params.get("CNN_CLASSIFIERS"),
     )
 
 
@@ -431,6 +432,7 @@ def relink_and_export_rich_csv(
             debug_mode=debug_mode,
             fps=fps,
             identity_ran=identity_ran,
+            cnn_classifiers=params.get("CNN_CLASSIFIERS"),
         )
         if not rich_path:
             return None
@@ -451,6 +453,7 @@ def relink_and_export_rich_csv(
                 debug_mode=False,
                 fps=fps,
                 identity_ran=identity_ran,
+                cnn_classifiers=params.get("CNN_CLASSIFIERS"),
             )
 
     logger.info(

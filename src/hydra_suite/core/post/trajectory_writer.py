@@ -20,8 +20,59 @@ def _is_empty_label(series: pd.Series) -> pd.Series:
     return s.isna() | (s.str.strip().str.len() == 0)
 
 
+def _non_identity_classifier_columns(df: pd.DataFrame, cnn_classifiers) -> list:
+    """``(source_col, user_col)`` for every NON-identity classifier column.
+
+    An identity classifier's contribution to the User export is the resolved
+    ``identity``; its per-frame calls are evidence and belong in the Debug
+    export. A behavior/sex/caste classifier has no such channel -- it is
+    output, not identity -- so without this its results never reach a
+    User-mode user at all: the classifier runs, costs inference time, and is
+    discarded at export.
+
+    Names are lowercased into the clean schema's style
+    (``CNN_behavior_Class`` -> ``behavior_class``), matching how pose becomes
+    ``<kpt>_x``/``_y``/``_conf``.
+    """
+    from hydra_suite.core.individual.identity.heads import (
+        identity_class_columns,
+        identity_head_labels,
+    )
+
+    if not cnn_classifiers:
+        return []
+    identity_labels = set(identity_head_labels(cnn_classifiers))
+    all_labels = tuple(
+        str(cfg.get("label", "") or "").strip() or "cnn" for cfg in cnn_classifiers
+    )
+    output_labels = tuple(
+        lbl for lbl in all_labels if lbl and lbl not in identity_labels
+    )
+    if not output_labels:
+        return []
+
+    pairs = []
+    taken = set()
+    for class_col in identity_class_columns(df.columns, output_labels, all_labels):
+        # One stem for both columns: `_Class` and `_Conf` are different
+        # lengths, so slicing each by its own suffix silently truncates the
+        # confidence name by a character.
+        stem = class_col[len("CNN_") : -len("_Class")].lower()
+        conf_col = f"{class_col[: -len('_Class')]}_Conf"
+        for src, user_col in ((class_col, f"{stem}_class"), (conf_col, f"{stem}_conf")):
+            if src not in df.columns or user_col in taken:
+                continue
+            taken.add(user_col)
+            pairs.append((src, user_col))
+    return pairs
+
+
 def project_user_tracks(
-    df: pd.DataFrame, *, fps: float | None, identity_ran: bool = True
+    df: pd.DataFrame,
+    *,
+    fps: float | None,
+    identity_ran: bool = True,
+    cnn_classifiers=None,
 ) -> pd.DataFrame:
     """Project the full trajectory DataFrame to the clean User-mode schema.
 
@@ -73,6 +124,11 @@ def project_user_tracks(
         if C.FINAL_SOURCE in df.columns:
             out["identity_source"] = df[C.FINAL_SOURCE]
 
+    # Non-identity classifier output (behavior, sex, caste, ...). Identity
+    # heads are excluded: `identity` above already carries their result.
+    for src_col, user_col in _non_identity_classifier_columns(df, cnn_classifiers):
+        out[user_col] = df[src_col]
+
     # Pose — one <kpt>_x/_y/_conf triple per PoseKpt_<name>_X column present.
     pose_x_cols = [
         c
@@ -105,6 +161,7 @@ def write_final_trajectories(
     debug_mode: bool,
     fps: float | None,
     identity_ran: bool = True,
+    cnn_classifiers=None,
 ) -> str | None:
     """Terminal trajectory writer. Debug → `_with_individual.csv`; User → `<stem>_tracks.csv`.
 
@@ -116,7 +173,12 @@ def write_final_trajectories(
         from hydra_suite.core.post.rich_export import write_rich_export_csv
 
         return write_rich_export_csv(rich_df, final_csv_path)
-    clean = project_user_tracks(rich_df, fps=fps, identity_ran=identity_ran)
+    clean = project_user_tracks(
+        rich_df,
+        fps=fps,
+        identity_ran=identity_ran,
+        cnn_classifiers=cnn_classifiers,
+    )
     out_path = user_tracks_path(final_csv_path)
     clean.to_csv(out_path, index=False)
     return out_path

@@ -143,3 +143,62 @@ def test_identity_id_omitted_when_the_column_was_never_written():
     out = project_user_tracks(df, fps=10.0)
     assert "identity" in out.columns
     assert "identity_id" not in out.columns
+
+
+def _classifiers():
+    return [
+        {"label": "colortag", "unique_identifier": True},
+        {"label": "behavior", "unique_identifier": False},
+    ]
+
+
+def _df_with_classifiers():
+    df = _base_df()
+    df[C.FINAL_LABEL] = ["antA", "antA"]
+    df[C.FINAL_ID] = [1, 1]
+    df["CNN_colortag_Class"] = ["red", "red"]
+    df["CNN_colortag_Conf"] = [0.9, 0.8]
+    df["CNN_behavior_Class"] = ["walk", "groom"]
+    df["CNN_behavior_Conf"] = [0.7, 0.6]
+    return df
+
+
+def test_non_identity_classifier_reaches_the_user_export():
+    """A behavior classifier is output, not identity -- it must not be discarded.
+
+    Without this the classifier runs, costs inference time, and never reaches
+    a User-mode user in any form.
+    """
+    out = project_user_tracks(
+        _df_with_classifiers(), fps=10.0, cnn_classifiers=_classifiers()
+    )
+    assert out["behavior_class"].tolist() == ["walk", "groom"]
+    assert out["behavior_conf"].tolist() == [0.7, 0.6]
+
+
+def test_identity_head_columns_stay_out_of_the_user_export():
+    """The identity head's channel is `identity`; its per-frame calls are evidence."""
+    out = project_user_tracks(
+        _df_with_classifiers(), fps=10.0, cnn_classifiers=_classifiers()
+    )
+    assert "colortag_class" not in out.columns
+    assert "colortag_conf" not in out.columns
+    assert out["identity"].tolist() == ["antA", "antA"]
+
+
+def test_multi_factor_non_identity_classifier_keeps_one_column_per_factor():
+    df = _base_df()
+    df["CNN_state_front_Class"] = ["a", "b"]
+    df["CNN_state_front_Conf"] = [0.5, 0.6]
+    df["CNN_state_back_Class"] = ["c", "d"]
+    df["CNN_state_back_Conf"] = [0.7, 0.8]
+    out = project_user_tracks(
+        df, fps=10.0, cnn_classifiers=[{"label": "state", "unique_identifier": False}]
+    )
+    assert out["state_front_class"].tolist() == ["a", "b"]
+    assert out["state_back_conf"].tolist() == [0.7, 0.8]
+
+
+def test_no_classifier_config_leaves_the_schema_untouched():
+    out = project_user_tracks(_df_with_classifiers(), fps=10.0)
+    assert not [c for c in out.columns if c.endswith(("_class", "_conf"))]

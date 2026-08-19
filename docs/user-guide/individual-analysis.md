@@ -37,7 +37,10 @@ resolution. Only classifiers marked **Unique identifier** in the identity
 panel contribute to the identity catalog, the Hungarian assignment that keeps
 identities unique, and the relink veto that stitches fragments across
 occlusions. Every other classifier (behavior, sex, caste, ...) is exported as
-ordinary columns and influences nothing about identity.
+ordinary columns and influences nothing about identity. In the clean
+`<video>_tracks.csv` those appear as `<label>_class` / `<label>_conf` (one
+pair per factor for a multi-factor model); identity classifiers do not, since
+their result is the `identity` / `identity_id` block.
 
 When more than one classifier is marked as a unique identifier, they
 **combine**: thorax colour x abdomen shape produces one composite identity
