@@ -12,7 +12,7 @@
 
 - **Single-arena runs MUST be byte-identical to current `main`.** With one arena, `slot_arena` is uniform, no pair is arena-blocked, and there is one identity decoder — every new code path must degenerate to today's exactly. This is the primary regression gate.
 - **Arena gating conditions on `track_arena[i] != meas_arena[j]`, never on `cost >= 1e6`.** The sentinel value is also carried by *distance*-gated cells that exist today, so a sentinel-valued predicate would silently change existing behavior. Arena mismatch is the only legal predicate anywhere arena gating appears.
-- **`_apply_bayesian_identity_cost` is NOT arena-gated — do not touch it.** See the rebase note below: it is already vectorized, and cross-arena cells stay rejected without any gate because the addon is non-negative.
+- **`_apply_bayesian_identity_cost` MUST be arena-gated.** Not because a cross-arena pair could be *accepted* (it cannot — see the rebase note), but because the overlay writes a *varying* addon onto blocked cells, and the solver then picks *which* blocked cell to consume on the basis of those differences. That consumes a track from an unrelated arena and perturbs the within-arena pairing. Demonstrated, not theorised — see the correction in the rebase note.
 - **The `arena_id` CSV column is emitted only when `n_arenas > 1`.** `tools/equivalence/compare.py:110` bails out entirely when `list(a.columns) != list(b.columns)`, and under the new `--strict-columns` mode that is a hard failure — an unconditional new column would break the byte-identity gate against `legacy/main` for schema reasons alone, and would change the CSV contract for every existing single-arena user.
 - **Animal count is one shared value across all arenas.** `MAX_TARGETS = n_arenas × animals_per_arena` is derived, never entered directly.
 - **Legacy `roi_shapes` without `arena_id` all map to arena 0.** Multi-arena is opt-in, never inferred from shape count.
@@ -39,17 +39,40 @@ resulting changes are folded into the tasks below, but the reasoning lives here.
   Both that function and the identity-rejoin scoring in `_assign_respawn` now compute a
   dense block through `_pairwise_log_compat` (`hungarian.py:108`), a vectorized
   log-domain inner product.
-- Consequently **arena blocking is no longer needed in `_apply_bayesian_identity_cost`,
-  for perf or for correctness.** Correctness: the addon is `alpha * (-log_compat)` with
-  `log_compat = logsumexp(log_posterior + log_likelihood) <= 0` for normalized
-  distributions, so the addon is always `>= 0`; and the cap branch
-  (`np.where(block < max_dist, capped, summed)`) leaves any cell already at the `1e6`
-  sentinel at `1e6 + addon >= 1e6`, still hard-rejected post-solve. Perf: the block op is
-  `rows x cols x n_classes` NumPy work — sub-millisecond even at 400 slots.
-  `compute_assignment_confidence` (`hungarian.py:697`) reads only *matched* pairs, which
-  are never cross-arena, so leaving cross-arena cells un-skipped cannot perturb it.
-- **Net: Task 4 loses its identity-cost half entirely.** That is a simplification and
-  strictly reduces byte-identity risk. The respawn half remains — and is still real.
+- The *performance* motive for gating `_apply_bayesian_identity_cost` is therefore gone.
+  The **correctness** motive is not — see the correction immediately below.
+
+**1a. CORRECTION (found by the Task 3 review, verified experimentally).**
+
+An earlier revision of this plan dropped arena gating from `_apply_bayesian_identity_cost`
+on the argument that the addon is `alpha * (-log_compat) >= 0`, so a blocked cell stays at
+`1e6 + addon >= 1e6` and is still hard-rejected post-solve. **That argument is true but
+insufficient.** It proves no cross-arena pair is ever *accepted*. It does not prove the
+solve is unperturbed.
+
+The cap branch is `np.where(block < max_dist, capped, summed)`, so blocked cells take the
+**uncapped** `summed` — and the addon *varies per (i, j)*. When an arena holds more
+detections than it has free tracks, `linear_sum_assignment` must place some detection on a
+blocked cell, and it chooses *which* one by comparing those varying values. The chosen row
+is a track belonging to a different arena, which is then consumed — so a match that arena
+would have made when run standalone is lost.
+
+Minimal demonstration (2 arenas; arena 0 has tracks t0/t2 and detection d0; arena 1 has
+track t1 and detections d1/d2, so d2 has no arena-1 track left):
+
+| blocked-cell values | accepted pairs |
+|---|---|
+| constant `1e6` | `t0→d0`, `t1→d1` |
+| `1e6 + varying addon` | `t2→d0`, `t1→d1` |
+
+Arena 0's detection is matched to its *worse* track (cost 9 rather than 5) purely because
+of values on cross-arena cells. That is exactly the independence the feature promises.
+
+**Net: Task 4 keeps its identity-cost half after all**, restoring the spec's original
+Touch-point-2 intent that block structure be exploited *during* cost construction. Gate on
+`track_arena[i] != meas_arena[j]` — never on `cost >= 1e6`, which would also skip
+distance-gated cells that exist on `main` today. Single-arena runs pass `None` and skip
+nothing, so byte-identity is unaffected.
 - `_assign_respawn`'s identity-rejoin path was restructured by the same commit into
   `cand_slots` / `cand_dets` + `np.flatnonzero(row > log_threshold)`. Task 4's snippets
   already target that post-sweep shape; `_within_budget` still receives only a coordinate
@@ -706,10 +729,10 @@ git commit -m "feat(arena): arena-blocked cost matrix in the assignment kernel"
 
 ---
 
-### Task 4: Arena gating in the respawn paths
+### Task 4: Arena gating in the identity-cost and respawn paths
 
 **Files:**
-- Modify: `src/hydra_suite/core/assigners/hungarian.py:811` (`_assign_respawn`), `:966` (`assign_tracks`)
+- Modify: `src/hydra_suite/core/assigners/hungarian.py:266` (`_apply_bayesian_identity_cost`), `:811` (`_assign_respawn`), `:966` (`assign_tracks`)
 - Test: `tests/test_arena_blocked_assignment.py` (extend)
 
 **Interfaces:**
@@ -722,11 +745,51 @@ proximity respawn (`hungarian.py:952`, `np.linalg.norm(meas[c][:2] - last_pos)`)
 identity-rejoin scoring block. Without explicit gating, a lost track in arena 3 could
 respawn onto a detection in arena 7.
 
-**Scope reduction vs. the spec:** `_apply_bayesian_identity_cost` is deliberately left
-untouched. See the rebase note — after `2cdf6bb9` it is vectorized, and cross-arena cells
-remain hard-rejected without a gate because the addon is non-negative and the cap's
-`where(block < max_dist)` branch preserves the `1e6` sentinel. Adding a gate there would
-buy nothing and would risk the byte-identity gate.
+**Second reason this task exists:** `_apply_bayesian_identity_cost` (`hungarian.py:266`)
+writes a *varying* addon onto cells the kernel already blocked, because the cap branch
+`np.where(block < max_dist, capped, summed)` leaves sentinel-valued cells uncapped. The
+solver then chooses *which* blocked cell to consume by comparing those values, stealing a
+track from an unrelated arena. See the rebase note's correction for the worked
+counter-example. Gating the overlay restores a constant `1e6` across every blocked cell,
+which is what makes the decomposition exact.
+
+Add to that function:
+
+```python
+    def _apply_bayesian_identity_cost(
+        self,
+        cost: np.ndarray,
+        association_data: Dict[str, Any] | None,
+        meas_arena: np.ndarray | None = None,
+    ) -> None:
+```
+
+After `rows` and `cols` are built and before `_pairwise_log_compat` is called, drop
+cross-arena pairs from the *block itself* rather than masking afterwards — the vectorized
+op should never compute them:
+
+```python
+        ta = self.track_arena
+        if ta is not None and meas_arena is not None and len(ta) >= n_tracks:
+            # Arena mismatch is the ONLY legal predicate. Skipping on `cost >= 1e6`
+            # would also skip distance-gated cells that exist on main today and
+            # change compute_assignment_confidence's inputs.
+            blocked = ta[np.ix_(rows)][:, None] != meas_arena[np.ix_(cols)][None, :]
+        else:
+            blocked = None
+```
+
+and apply it to the final write so blocked cells keep the value the kernel gave them:
+
+```python
+        new_block = np.where(block < dt(max_dist), capped, summed)
+        if blocked is not None:
+            new_block = np.where(blocked, block, new_block)
+        cost[np.ix_(rows, cols)] = new_block
+```
+
+Byte-identity: with `meas_arena=None` (single arena) `blocked` is `None` and the write is
+character-for-character the existing one.
 
 **Critical constraint:** gate on `track_arena[slot] != meas_arena[j]`, never on
 `cost >= 1e6`. Gate at the two loop sites where the detection *index* is in hand; do
