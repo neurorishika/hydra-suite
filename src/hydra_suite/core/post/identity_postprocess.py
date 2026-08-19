@@ -179,21 +179,46 @@ def _cnn_identity_sources_for_row(row: "pd.Series", cnn_class_columns: list) -> 
     return sources
 
 
-def derive_unique_identity_key_series(df: pd.DataFrame) -> pd.Series:
+def derive_unique_identity_key_series(
+    df: pd.DataFrame, identity_heads=None, all_classifier_labels=()
+) -> pd.Series:
     """Re-derive the ``UniqueIdentityKey`` column from per-row evidence columns.
 
     Builds, per row, a ``source -> value`` dict from ``DetectedTagLabel``
-    (preferred) / ``DetectedTagID`` for the ``apriltag`` source and every
-    ``CNN_<head>_Class`` / ``CNN_<head>_<factor>_Class`` column for the CNN
-    sources, then serializes it with :func:`format_identity_key`. Rows with
-    no evidence get ``np.nan`` (never an empty string or a bare label).
+    (preferred) / ``DetectedTagID`` for the ``apriltag`` source and the
+    ``CNN_<head>_Class`` / ``CNN_<head>_<factor>_Class`` columns of the
+    *identity heads* for the CNN sources, then serializes it with
+    :func:`format_identity_key`. Rows with no evidence get ``np.nan``
+    (never an empty string or a bare label).
+
+    ``identity_heads`` is the tuple of classifier labels marked
+    ``unique_identifier`` (see ``identity.heads.identity_head_labels``).
+    Classifiers that are not identity heads -- behavior, sex, caste -- must
+    never enter this key: it feeds the relink identity veto
+    (``processing.py:_score_relink_candidate``), where a mere behavior change
+    across an occlusion gap would otherwise read as an identity conflict and
+    refuse a legitimate relink. ``None`` preserves the legacy
+    every-CNN-column behavior for callers with no classifier config.
+
+    ``all_classifier_labels`` is the full classifier roster's labels
+    (identity and non-identity alike); it is passed straight through to
+    ``identity_class_columns`` to disambiguate prefix collisions between an
+    identity head and a differently-named non-identity classifier (e.g.
+    head ``tag`` vs. classifier ``tag_v2``).
     """
     if df is None or df.empty:
         return pd.Series([], index=getattr(df, "index", None), dtype=object)
 
-    cnn_class_columns = [
-        col for col in df.columns if _CNN_CLASS_COLUMN_RE.match(str(col))
-    ]
+    if identity_heads is None:
+        cnn_class_columns = [
+            col for col in df.columns if _CNN_CLASS_COLUMN_RE.match(str(col))
+        ]
+    else:
+        from hydra_suite.core.individual.identity.heads import identity_class_columns
+
+        cnn_class_columns = identity_class_columns(
+            df.columns, identity_heads, all_classifier_labels
+        )
     has_tag_label = "DetectedTagLabel" in df.columns
     has_tag_id = "DetectedTagID" in df.columns
 

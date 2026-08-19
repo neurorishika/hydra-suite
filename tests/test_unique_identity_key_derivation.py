@@ -15,6 +15,7 @@ from hydra_suite.core.individual.postprocess_df import (
 from hydra_suite.core.post.identity_postprocess import (
     derive_unique_identity_key_series,
     format_identity_key,
+    identity_sources_conflict,
     parse_identity_key,
 )
 
@@ -132,3 +133,59 @@ def test_apply_identity_postprocessing_writes_unique_identity_key():
     assert result[C.UNIQUE_IDENTITY_KEY].notna().all()
     assert result.loc[0, C.UNIQUE_IDENTITY_KEY] == "cnn:uid=alpha"
     assert result.loc[2, C.UNIQUE_IDENTITY_KEY] == "cnn:uid=beta"
+
+
+def _two_head_df():
+    return pd.DataFrame(
+        {
+            "CNN_colortag_Class": ["red_blue", "red_blue"],
+            "CNN_colortag_Conf": [0.8, 0.8],
+            "CNN_behavior_Class": ["walking", "grooming"],
+            "CNN_behavior_Conf": [0.98, 0.97],
+        }
+    )
+
+
+def test_key_excludes_non_identity_heads():
+    keys = derive_unique_identity_key_series(
+        _two_head_df(), identity_heads=("colortag",)
+    )
+    assert parse_identity_key(keys.iloc[0]) == {"cnn:colortag": "red_blue"}
+    assert parse_identity_key(keys.iloc[1]) == {"cnn:colortag": "red_blue"}
+
+
+def test_behavior_change_is_not_an_identity_conflict():
+    keys = derive_unique_identity_key_series(
+        _two_head_df(), identity_heads=("colortag",)
+    )
+    lhs = parse_identity_key(keys.iloc[0])
+    rhs = parse_identity_key(keys.iloc[1])
+    assert not identity_sources_conflict(lhs, rhs)
+
+
+def test_behavior_change_conflicts_under_legacy_unscoped_call():
+    # Documents the bug this task fixes: unscoped, the behavior head makes two
+    # fragments of the SAME animal look like an identity conflict.
+    keys = derive_unique_identity_key_series(_two_head_df())
+    lhs = parse_identity_key(keys.iloc[0])
+    rhs = parse_identity_key(keys.iloc[1])
+    assert identity_sources_conflict(lhs, rhs)
+
+
+def test_empty_identity_heads_drops_all_cnn_sources():
+    keys = derive_unique_identity_key_series(_two_head_df(), identity_heads=())
+    assert keys.isna().all()
+
+
+def test_all_classifier_labels_disambiguates_prefix_collision():
+    df = pd.DataFrame(
+        {
+            "CNN_tag_Class": ["a", "a"],
+            "CNN_tag_v2_Class": ["b", "c"],
+        }
+    )
+    keys = derive_unique_identity_key_series(
+        df, identity_heads=("tag",), all_classifier_labels=("tag", "tag_v2")
+    )
+    assert parse_identity_key(keys.iloc[0]) == {"cnn:tag": "a"}
+    assert parse_identity_key(keys.iloc[1]) == {"cnn:tag": "a"}
