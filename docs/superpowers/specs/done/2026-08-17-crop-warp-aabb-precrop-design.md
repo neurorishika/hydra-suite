@@ -1,7 +1,7 @@
 # Slice A — AABB Pre-Crop Canonical Warp
 
 **Date:** 2026-08-17
-**Status:** Design approved, pending spec review
+**Status:** Shipped — merged to main (8c2288be).
 **Branch:** `perf/crop-warp-aabb-precrop`
 
 ## Context

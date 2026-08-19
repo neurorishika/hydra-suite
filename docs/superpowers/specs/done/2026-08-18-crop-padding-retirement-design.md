@@ -1,7 +1,7 @@
 # Crop-Padding Retirement — one framing dial, plus an AprilTag-local one
 
 **Date:** 2026-08-18
-**Status:** Design approved, pending spec review
+**Status:** Shipped — merged to main (12afcd0c).
 **Branch:** `refactor/crop-padding-retirement` (worktree from local HEAD)
 
 ## Context

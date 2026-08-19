@@ -1,7 +1,7 @@
 # TrackerKit User/Debug Mode — Design
 
 **Date:** 2026-08-07 (identity-column names refreshed 2026-08-11)
-**Status:** Approved (design), pending implementation plan
+**Status:** Shipped — merged to main (655ec778).
 **Scope:** TrackerKit (MAT) tracking pipeline output + GUI
 
 > **Context update (2026-08-11):** the Identity Overhaul (Phases 3-7, merged to `main`

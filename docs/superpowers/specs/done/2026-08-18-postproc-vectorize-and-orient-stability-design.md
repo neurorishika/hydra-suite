@@ -1,7 +1,7 @@
 # Combined core/post Slice — Orientation Stability + Postproc Vectorization
 
 **Date:** 2026-08-18
-**Status:** Design approved, pending spec review
+**Status:** Shipped — merged to main (b0871a96).
 **Branch:** `perf/postproc-vectorize-and-orient` (worktree `.worktrees/postproc-combined`, from main @8c2288be)
 
 ## Context

@@ -1,7 +1,7 @@
 # Active-Learning Escalated Multi-Format Export — Design
 
 **Date:** 2026-08-17
-**Status:** Design approved, pending implementation plan
+**Status:** Shipped — merged to main (2b46e1b7).
 **Scope:** TrackerKit + DetectKit active-learning dataset generation
 
 ## Problem

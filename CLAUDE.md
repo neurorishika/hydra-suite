@@ -8,6 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Isolation:** always do implementation/execution work in a **git worktree branched from local HEAD** (`git worktree add .worktrees/<name> -b <branch> HEAD`), never a fresh-from-origin worktree — local `main` is usually ahead of `origin/main`. Prefer worktrees over in-place feature branches.
 - **Verification:** run tests/equivalence on `hydra-mps` on this box; run CUDA checks on `hydra-cuda` at `rutalab@mehek.taild08eb9.ts.net`.
 - **Before any heavy run** (equivalence harness, training, inference): kill dead/stale **sleap/hydra** processes first. **Never** interfere with a running process that is not sleap/hydra.
+- **Docs lifecycle:** when a branch's work is finally merged to `main`, `git mv` its plan (`docs/superpowers/plans/`) and design spec (`docs/superpowers/specs/`) into the matching `done/` subfolder in the same commit/PR. Only file-move — don't rewrite content — except to fix a stale `**Status:**` header (e.g. "pending implementation plan") into a `Shipped — merged to main (<sha>)` note, as done in `de7ed06e`. Leave a doc active (not `done/`) if the plan's checklist isn't fully checked off, the design is explicitly deferred/superseded, or no corresponding branch has merged yet.
 
 ## Build & Environment Setup
 
