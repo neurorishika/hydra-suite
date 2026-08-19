@@ -13,9 +13,62 @@ from __future__ import annotations
 import itertools
 import json
 import os
-from typing import Mapping, Sequence
+from typing import Mapping, NamedTuple, Sequence
 
 from hydra_suite.core.individual.identity.spec import CatalogEntry, IdentityCatalogSpec
+
+
+class IdentityAxis(NamedTuple):
+    """One factor axis of the identity domain.
+
+    ``model_label`` is the owning classifier's label, ``factor_name`` its
+    factor's name (positional ``factor<i>`` fallback when the config carries
+    no ``factor_names``), and ``classes`` that factor's class vocabulary.
+    """
+
+    model_label: str
+    factor_name: str
+    classes: tuple[str, ...]
+
+    @property
+    def qualified_name(self) -> str:
+        return f"{self.model_label}:{self.factor_name}"
+
+
+def identity_axes(cnn_classifiers: Sequence[Mapping]) -> list[IdentityAxis]:
+    """The identity domain's factor axes, in model-config then factor order.
+
+    Every identity-providing model contributes each of its non-empty factors
+    as one axis. The catalog is the cartesian product over ALL axes -- two
+    complementary tag models (thorax colour + abdomen shape) describe one
+    animal jointly, so their classes multiply rather than compete.
+
+    Redundant voters (two models over the same class vocabulary) are not
+    supported and would produce nonsensical ``ant1_ant1`` composites; see the
+    Non-goals section of the design doc.
+    """
+    axes: list[IdentityAxis] = []
+    for cfg in cnn_classifiers or []:
+        if not bool(cfg.get("unique_identifier", False)):
+            continue
+        model_label = str(cfg.get("label", "") or "").strip() or "cnn"
+        cnpf = list(cfg.get("class_names_per_factor") or [])
+        if not cnpf:
+            cnpf = _read_factors_from_model_file(str(cfg.get("model_path", "")))
+        factor_names = list(cfg.get("factor_names") or [])
+        non_empty_index = 0
+        for i, factor_labels in enumerate(cnpf):
+            classes = tuple(str(c) for c in (factor_labels or []) if c)
+            if not classes:
+                continue
+            name = (
+                str(factor_names[i])
+                if i < len(factor_names) and str(factor_names[i]).strip()
+                else f"factor{non_empty_index}"
+            )
+            non_empty_index += 1
+            axes.append(IdentityAxis(model_label, name, classes))
+    return axes
 
 
 def _read_factors_from_model_file(model_path: str) -> list[list[str]]:
@@ -60,33 +113,14 @@ def resolve_catalog_spec(
                 CatalogEntry(display_label=display, factors=factors, source=source)
             )
 
-    for cfg in cnn_classifiers or []:
-        if not bool(cfg.get("unique_identifier", False)):
-            continue
-        cnpf = list(cfg.get("class_names_per_factor") or [])
-        if not cnpf:
-            cnpf = _read_factors_from_model_file(str(cfg.get("model_path", "")))
-        factor_names = list(cfg.get("factor_names") or [])
-        non_empty = [fl for fl in cnpf if fl]
-
-        if len(non_empty) > 1:
-            for combo in itertools.product(*non_empty):
-                pairs = tuple(
-                    (factor_names[i] if i < len(factor_names) else f"factor{i}", str(c))
-                    for i, c in enumerate(combo)
-                    if c
-                )
-                display = "_".join(str(c) for c in combo if c)
-                _add(display, pairs, "cnn")
-        else:
-            flat: list[str] = []
-            for fl in non_empty:
-                flat.extend([str(x) for x in fl if x])
-            if not flat:
-                flat = [str(x) for x in (cfg.get("labels", []) or []) if x]
-            fname = factor_names[0] if factor_names else "factor0"
-            for lbl in flat:
-                _add(lbl, ((fname, lbl),), "cnn")
+    axes = identity_axes(cnn_classifiers)
+    if axes:
+        for combo in itertools.product(*[a.classes for a in axes]):
+            pairs = tuple(
+                (axes[i].qualified_name, str(c)) for i, c in enumerate(combo) if c
+            )
+            display = "_".join(str(c) for c in combo if c)
+            _add(display, pairs, "cnn")
 
     cnn_derived = set(seen)
     for lbl in tag_identity_labels or []:
