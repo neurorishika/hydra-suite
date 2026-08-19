@@ -1405,7 +1405,14 @@ def _trajectory_arena(traj) -> object:
             f"Trajectory has a non-constant arena_id ({sorted(values.tolist())}); "
             "arena assignment must be static per slot (Tasks 1-6)."
         )
-    return int(values[0])
+    raw = values[0]
+    try:
+        numeric = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"arena_id must be numeric, got {raw!r}") from exc
+    if not numeric.is_integer():
+        raise ValueError(f"arena_id must be an integer value, got {raw!r}")
+    return int(numeric)
 
 
 def resolve_trajectories(

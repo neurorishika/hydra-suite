@@ -3,7 +3,10 @@ import pandas as pd
 import pytest
 
 from hydra_suite.core.individual.identity import columns as C
-from hydra_suite.core.post.processing import resolve_trajectories
+from hydra_suite.core.post.processing import (
+    _resolve_trajectories_single_arena,
+    resolve_trajectories,
+)
 
 
 def _traj(traj_id, x0, n=30, arena_id=0):
@@ -31,17 +34,23 @@ PARAMS = {
 
 
 def test_uniform_arena_id_matches_ungrouped_result():
-    """Single-arena parity: grouping must be a no-op when there is one arena."""
+    """Single-arena parity: the dispatcher's uniform-arena path must reach the
+    untouched single-arena body byte-for-byte, not merely produce SOME output.
+
+    Compares against ``_resolve_trajectories_single_arena`` called directly
+    (the pre-arena-support implementation) rather than against a second call
+    to ``resolve_trajectories`` with identical arguments -- two identical
+    calls to the same function are the same call and would pass
+    unconditionally, proving nothing about the dispatch logic itself.
+    """
     fwd = [_traj(0, 10.0), _traj(1, 200.0)]
     bwd = [_traj(0, 10.0), _traj(1, 200.0)]
-    ungrouped = resolve_trajectories(fwd, bwd, PARAMS)
-    # Every trajectory already carries arena_id=0 (the ``_traj`` default) --
-    # arena is derived from each trajectory's own column now, not a
-    # separate index-aligned array, so this exercises the exact same
-    # dispatch path as a real single-arena run.
-    grouped = resolve_trajectories(fwd, bwd, PARAMS)
-    assert len(ungrouped) == len(grouped)
-    for a, b in zip(ungrouped, grouped):
+    # Every trajectory carries arena_id=0 (the ``_traj`` default), so the
+    # dispatcher must take its single-arena passthrough branch.
+    dispatched = resolve_trajectories(fwd, bwd, PARAMS)
+    direct = _resolve_trajectories_single_arena(fwd, bwd, PARAMS)
+    assert len(dispatched) == len(direct)
+    for a, b in zip(dispatched, direct):
         pd.testing.assert_frame_equal(
             a.reset_index(drop=True), b.reset_index(drop=True)
         )
