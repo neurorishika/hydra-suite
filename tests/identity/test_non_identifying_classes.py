@@ -323,3 +323,111 @@ def test_two_untagged_fragments_do_not_conflict():
     # Sanity: with the values present they'd count as agreement; the fix is
     # that they never reach the comparison at all.
     assert not identity_sources_conflict(lhs, rhs)
+
+
+def test_relink_consumer_treats_notag_as_no_evidence_not_agreement():
+    """Deferred coverage: drive the *consumer* (`_score_relink_candidate`),
+    not just key derivation, with two fragments that are genuinely
+    different real identities (front=red vs front=blue) but share a
+    ``notag`` value on the back axis.
+
+    If ``notag`` were left in as ordinary evidence, the shared back-axis
+    "agreement" (1 agreement, 1 conflict) would outvote the genuine
+    front-axis conflict in ``identity_sources_conflict``'s grouped tally,
+    and the veto would silently fail to fire -- incorrectly permitting a
+    relink between two different real animals. Filtering ``notag`` out at
+    key derivation (Task 9) removes the false agreement, leaving only the
+    real conflict, so the veto correctly fires.
+    """
+    from hydra_suite.core.post.processing import _score_relink_candidate
+
+    df = pd.DataFrame(
+        {
+            "CNN_colortag_front_Class": ["red", "blue"],
+            "CNN_colortag_front_Conf": [0.9, 0.9],
+            "CNN_colortag_back_Class": ["notag", "notag"],
+            "CNN_colortag_back_Conf": [0.9, 0.9],
+        }
+    )
+    keys = derive_unique_identity_key_series(
+        df, identity_heads=("colortag",), non_identifying_values=("notag",)
+    )
+    src_sources = parse_identity_key(keys.iloc[0])
+    dst_sources = parse_identity_key(keys.iloc[1])
+    # The notag axis contributes nothing; only the real front-axis class
+    # values survive into the derived keys.
+    assert src_sources == {"cnn:colortag:front": "red"}
+    assert dst_sources == {"cnn:colortag:front": "blue"}
+
+    src = {
+        "identity_sources": src_sources,
+        "end_frame": 0,
+        "end_pos": np.array([0.0, 0.0]),
+        "end_velocity": np.array([0.0, 0.0]),
+        "end_speed": 0.0,
+        "end_theta": 0.0,
+        "end_pose": None,
+        "end_quality": 0.0,
+    }
+    dst = {
+        "identity_sources": dst_sources,
+        "start_frame": 2,
+        "start_pos": np.array([0.0, 0.0]),
+        "start_speed": 0.0,
+        "start_theta": 0.0,
+        "start_pose": None,
+        "start_quality": 0.0,
+    }
+    result = _score_relink_candidate(
+        src,
+        dst,
+        max_gap=5,
+        max_vel_break=10.0,
+        agreement_distance=10.0,
+        pose_max_distance=10.0,
+        min_pose_quality=1.0,
+        heading_gate=np.pi,
+        min_motion_speed=1.0,
+    )
+    # The genuine front-axis conflict (red vs blue) is untainted by a false
+    # "agreement" on the notag back axis, so the identity veto fires and the
+    # candidate is rejected outright.
+    assert result is None
+
+
+from hydra_suite.core.individual.identity import substrate
+from hydra_suite.core.individual.identity.catalog import IdentityCatalog
+
+
+def test_many_untagged_slots_coexist_in_one_hungarian_solve():
+    """The whole point: N untagged animals must not compete for one slot.
+
+    They are absent from the catalog, so every visible slot's posterior mass
+    sits on unknown and the solver assigns none of them a known identity --
+    rather than handing one of them 'notag_notag' and pushing the rest onto
+    wrong real identities.
+    """
+    spec = resolve_catalog_spec([_tags(["notag"])], [])
+    catalog = IdentityCatalog.from_spec(spec)
+    assert catalog.labels == ("unknown", "red_blue")
+
+    # Five untagged slots: all mass on unknown.
+    posteriors = [np.array([0.95, 0.05]) for _ in range(5)]
+    assignment = substrate.solve_unique_assignment(
+        posteriors, catalog.num_known, display_threshold=0.6
+    )
+    assert assignment == [None] * 5
+
+
+def test_untagged_slots_do_not_displace_a_real_identity():
+    spec = resolve_catalog_spec([_tags(["notag"])], [])
+    catalog = IdentityCatalog.from_spec(spec)
+    posteriors = [
+        np.array([0.05, 0.95]),  # a genuinely tagged animal
+        np.array([0.95, 0.05]),  # untagged
+        np.array([0.95, 0.05]),  # untagged
+    ]
+    assignment = substrate.solve_unique_assignment(
+        posteriors, catalog.num_known, display_threshold=0.6
+    )
+    assert assignment == [1, None, None]

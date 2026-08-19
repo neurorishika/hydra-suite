@@ -322,3 +322,28 @@ effect is attributable.
 | `UniqueIdentityKey` narrowing breaks downstream parsers | Changelog; the column is derived, not authored, so it can be rebuilt |
 | Catalog explosion with many axes | Warning above 256 entries naming the contributing axes |
 | Untagged animals lose identity-based fragment stitching | Accepted trade, stated in Non-goals; they never had correct stitching anyway |
+
+## Changelog
+
+No root `CHANGELOG.md` exists in this repository; these notes record the
+breaking changes shipped by this program (Tasks 1-11) for whoever writes the
+release notes.
+
+- **Breaking:** `UniqueIdentityKey` now contains identity-head sources only.
+  Non-identity classifiers (behavior, sex, caste, ...) no longer appear in
+  this column. Downstream parsers of `UniqueIdentityKey` will see fewer
+  sources per row than before.
+- **Breaking:** configurations with two or more classifiers marked "Unique
+  identifier" now produce a cross-product catalog (one composite identity per
+  axis combination) instead of a union of separate catalogs. Prior results
+  for such multi-identity-model configurations were incorrect (each model
+  competed for the same Hungarian columns); the new cross-product behavior is
+  the correct one and results will differ.
+- **New, opt-in:** identity classifiers can declare `non_identifying_classes`
+  (bare class, `factor:class`, or whole composite label) to exclude those
+  composites from the catalog. Tracks that only ever show non-identifying
+  evidence are labelled with the composite (e.g. `notag_notag`) but keep
+  `IdentityFinalID == 0` and `IdentityFinalSource == "nonidentifying"` — they
+  are tracked and labelled, never identity-resolved. No fixture declares this
+  option, so it is a provable no-op for all existing configurations
+  (byte-identical equivalence gate).

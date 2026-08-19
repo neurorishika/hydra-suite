@@ -976,6 +976,53 @@ flowchart TB
 | AprilTag | tag id + Hamming distance via composite-strip detector |
 | Identity fusion | log-add CNN + AprilTag, sticky Markov prior, per-slot Hungarian for uniqueness |
 
+### Identity heads and the catalog
+
+Only classifiers marked **Unique identifier** in the identity panel feed the
+`Unique Identifier?` branch above and contribute to the identity catalog
+(`n7`). Every other CNN classifier — behavior, sex, caste, anything not meant
+to distinguish individuals — is exported as ordinary columns (`n8`) and
+influences nothing about identity: not the Hungarian solve, not the relink
+veto, not merge/swap decisions.
+
+Multiple unique-identifier classifiers **combine**: thorax colour × abdomen
+shape produces one composite catalog (`red_notch`, `red_plain`, `blue_notch`,
+...), not two catalogs competing for the same track. Each classifier
+contributes one axis; the catalog is the cross-product of all axes.
+
+### Non-identifying classes
+
+Some class values are not identity information at all — an untagged animal
+classified `notag`, a smudged or ambiguous tag read, anything the model can
+detect but that carries no individual identity. Declaring such values as
+**non-identifying** removes the composites they produce from the catalog
+entirely, so no exclusivity mechanism (Hungarian column, swap candidacy,
+relink identity veto) ever applies to them. Any number of tracks can carry a
+non-identifying label at once, and none of them displaces a genuinely
+identified animal.
+
+A mark can be declared at three granularities, per identity classifier:
+
+| Form | Matches |
+|---|---|
+| `notag` | that class value in *any* axis of that model |
+| `front:notag` | that class value in one named factor only |
+| `notag_notag` | one specific whole composite label |
+
+Tracks that never resolve a real identity because every axis reads a declared
+non-identifying value get a descriptive label instead of the ordinary
+"unknown" placeholder: `IdentityFinalLabel` is set to the composite (e.g.
+`notag_notag`), `IdentityFinalSource` is `nonidentifying`, and — the
+load-bearing part — **`IdentityFinalID` stays `0`, the unknown slot**. A
+shared descriptive label is never mistaken for a resolved identity by any
+downstream consumer that keys on `IdentityFinalID`.
+
+The honest limitation: these animals get no identity resolution. They are
+tracked as distinct trajectories and labelled for what they are, but there is
+no identity-based fragment stitching across occlusions for them — the relink
+stage sees no identity evidence for a non-identifying value (not agreement,
+not conflict) and falls back to spatial/motion gates alone.
+
 ---
 
 ## Slide 5 · Online tracking · per-frame loop
