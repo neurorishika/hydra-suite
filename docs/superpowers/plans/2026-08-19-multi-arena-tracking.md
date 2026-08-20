@@ -113,6 +113,39 @@ branch, so Tasks 3 and 5 keep their shape. Four things do land on us:
     its value for single-arena runs and break the newly-strict identity-column gate;
     grouping its *consumers* by arena is equivalent and free.
 
+
+## CORRECTION 2 — the sentinel does NOT make Hungarian decompose exactly
+
+Found by the Task 10 review; verified in the code and by a captured frame. **This
+invalidates the spec's Touch-point-2 claim and every restatement of it in this plan.**
+
+`hungarian.py` uses **two different reject sentinels**:
+
+| Sentinel | Written by | Lines |
+|---|---|---|
+| `1e6` | arena blocking, spatial/candidate gating | 82, 103, 453 |
+| `1e9` | the raw distance / velocity gate | 1160 |
+
+Both are rejected post-solve (`cost >= 1e6`), so **no cross-arena pair is ever accepted** —
+that part of the design holds. But the two values are *different numbers*, and
+`linear_sum_assignment` minimises total cost, so it is **not indifferent between them**.
+
+When an arena holds more established tracks than its own detections — routine, e.g. one
+animal briefly undetected — the square solve must park surplus rows on foreign columns.
+Parking is not cost-neutral: a foreign cell costs `1e6` or `1e9` depending on **other
+arenas'** detections. Captured frame: arena 1 with 7 tracks / 6 detections, the joint solve
+awards a detection at cost `1581.79` where the per-arena solve awards it at `0.0096`,
+because one slot could park on a `1e6` cell and the other could not. **Which of arena 1's
+tracks loses its detection is decided by arenas 0, 2 and 3.**
+
+Why nothing caught it: the oracle's gate-widening used a non-existent config key (see Task
+10 fix), so the competing cell collapsed to `1e6` and the effect was masked; and
+`test_blocked_hungarian_equals_independent_per_arena_hungarian` uses a balanced
+3-tracks/3-detections matrix, which cannot exhibit a surplus row at all.
+
+**User decision: solve per-arena sub-blocks (Task 11).** Independence becomes structural
+rather than emergent — no sentinel reasoning required.
+
 ## File Structure
 
 **New files:**
@@ -2226,3 +2259,38 @@ No spec requirement is unassigned. Out-of-scope items (per-arena overrides, aren
 **Ordering note:** Tasks 3 and 4 both modify `hungarian.py` and 4 depends on 3's `set_track_arena`; run them in order. Task 6 depends on 1, 2, 3, 4, 5. Task 10 depends on everything.
 
 **Rebase ordering:** this plan is written against `main` **with `feat/identity-heads` merged** (merge `807c4e1e`); all line numbers were re-verified against `7c5d54e6`. Executing against pre-merge `main` will collide in `worker.py` (catalog construction, Task 5), `postprocess_df.py` / `rich_export.py` (Task 7), and `tools/equivalence/run_matrix.sh` (Task 10).
+
+---
+
+### Task 11: Per-arena sub-block assignment (replaces the joint solve)
+
+**Files:**
+- Modify: `src/hydra_suite/core/assigners/hungarian.py` — `assign_tracks` / `_assign_established_hungarian`
+- Test: `tests/test_arena_blocked_assignment.py` (extend), `tests/test_arena_tiling_oracle.py` (must now pass at a WIDE gate)
+
+**Why:** see CORRECTION 2. Writing a sentinel into cross-arena cells prevents cross-arena
+*matches* but does not decouple the *solve*. The only way to get the property the feature
+promises — "identical to running each arena separately" — is to actually run separate
+solves.
+
+**Design:** where the established-track Hungarian runs today, partition rows and columns by
+arena and run one `linear_sum_assignment` per arena over that arena's own tracks and
+detections, then concatenate the resulting pairs. Cross-arena cells are never constructed,
+so no sentinel is involved and no parking decision can couple arenas.
+
+**Byte-identity:** with one arena there is exactly one block containing every row and
+column, so the single solve is the existing solve on the existing matrix. Take the
+`track_arena is None` path unchanged — do not route single-arena runs through the
+partitioning code.
+
+**Perf:** this is also strictly cheaper at scale. One `n_arenas × animals` square solve per
+arena replaces a single `MAX_TARGETS × M` solve; Hungarian is roughly cubic, so 100 solves
+of 4×4 is far less work than one 400×400.
+
+**Acceptance:**
+- The tiling oracle passes at a **wide** assignment gate (`max_assignment_distance_multiplier`
+  = 200), which is the configuration that currently exposes the leak.
+- A unit test with an **unbalanced** arena (more tracks than detections) proves the
+  within-arena pairing is identical whether or not other arenas are present. The existing
+  balanced test cannot show this.
+- Single-arena equivalence stays byte-identical (MPS + CUDA).
