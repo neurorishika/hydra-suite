@@ -31,7 +31,6 @@ from hydra_suite.core.individual.properties.export import (
     flatten_pose_keypoints_row,
     pose_wide_columns_for_labels,
 )
-from hydra_suite.core.inference.api import load_pose_backend
 from hydra_suite.core.inference.cache import open_detection_cache_reader
 from hydra_suite.core.post.merge import write_csv_artifact as _write_csv_artifact
 from hydra_suite.core.post.merge import write_roi_npz as _write_roi_npz
@@ -105,209 +104,85 @@ def _get_detection_size(detection_cache, frame_id, detection_id):
     return _size_from_shapes(list(obb.shapes), idx)
 
 
-def _init_pose_backend(params, output_dir):
-    """Initialize pose estimation backend. Returns (backend, kpt_source_names, kpt_labels).
-
-    Routes through ``core/inference/api.load_pose_backend`` (the shared shim
-    over ``stages/pose.load_pose_model`` — the single source of the pose
-    runtime golden rule) instead of duplicating the runtime-flavor ladder
-    here. ``load_pose_model`` still honors the SLEAP-flavor debug override
-    internally.
-    """
-    if not bool(params.get("ENABLE_POSE_EXTRACTOR", False)):
-        return None, [], []
-    try:
-        from hydra_suite.core.individual.pose.utils import load_skeleton_from_json
-
-        backend_family = str(params.get("POSE_MODEL_TYPE", "yolo")).strip().lower()
-        model_path = str(params.get("POSE_MODEL_DIR", ""))
-        min_valid_conf = float(params.get("POSE_MIN_KPT_CONF_VALID", 0.2))
-        batch_size = int(params.get("POSE_BATCH_SIZE", 4))
-        skeleton_file = str(params.get("POSE_SKELETON_FILE", "") or "")
-        keypoint_names, skeleton_edges = load_skeleton_from_json(skeleton_file)
-
-        # Runtime comes solely from RUNTIME_TIER (Runtime Gen-2 FT1): the
-        # COMPUTE_RUNTIME param family was retired. load_pose_backend only
-        # needs the tier bucket (it re-derives the tier via
-        # migrate_runtime_to_tier), so a resolved runtime string is passed.
-        if backend_family == "sleap":
-            pose_stage = "sleap_pose"
-        elif backend_family == "vitpose":
-            pose_stage = "vitpose_pose"
-        else:
-            pose_stage = "yolo_pose"
-        compute_runtime = _resolved_runtime_string(params, pose_stage)
-
-        backend = load_pose_backend(
-            backend_family=backend_family,
-            model_path=model_path,
-            compute_runtime=compute_runtime,
-            keypoint_names=list(keypoint_names),
-            skeleton_edges=skeleton_edges,
-            batch_size=max(1, batch_size),
-            min_valid_confidence=min_valid_conf,
-            out_root=str(Path(output_dir).expanduser()),
-            sleap_env=str(params.get("POSE_SLEAP_ENV", "sleap")),
-            sleap_batch=max(1, batch_size),
-            sleap_max_instances=int(params.get("POSE_SLEAP_MAX_INSTANCES", 1)),
-        )
-
-        # NOTE: do NOT call backend.warmup() here -- load_pose_backend
-        # (-> stages/pose.load_pose_model) already warms the backend it
-        # returns. A second warmup() is redundant, and for the SLEAP
-        # service backend it is not idempotent w.r.t. ownership: the
-        # first warmup sets _service_started_here=True, a second sees
-        # was_running=True and flips it back to False, so close() later
-        # skips shutdown and leaks the SLEAP service subprocess.
-        kpt_source_names = list(getattr(backend, "output_keypoint_names", []) or [])
-        kpt_labels = build_pose_keypoint_labels(kpt_source_names, len(kpt_source_names))
-        return backend, kpt_source_names, kpt_labels
-    except Exception as exc:
-        logger.warning(
-            "Interpolated pose analysis disabled (backend init failed): %s",
-            exc,
-        )
-        return None, [], []
-
-
-def _resolve_backend(params, stage: str):
-    """Resolve the runtime tier in ``params`` to a concrete ResolvedBackend.
-
-    The single Gen-2 authority (``RuntimeResolver``) owns the tier -> backend
-    decision; this pipeline no longer threads per-stage compute_runtime strings.
-    Falls back to the CPU tier when no valid ``RUNTIME_TIER`` is present.
-    """
-    from hydra_suite.runtime.resolver import RuntimeResolver, detect_platform
-
-    tier = str(params.get("RUNTIME_TIER", "cpu") or "cpu").strip().lower()
-    if tier not in {"cpu", "gpu", "gpu_fast"}:
-        tier = "cpu"
-    return RuntimeResolver(tier, detect_platform()).resolve(stage)
-
-
-def _resolved_runtime_string(params, stage: str) -> str:
-    """Resolve ``RUNTIME_TIER`` to a compute-runtime string for ``stage``.
-
-    Used only where a downstream shim (``load_pose_backend``) still takes a
-    runtime string rather than a ``ResolvedBackend``; the string maps back to
-    the correct tier via ``migrate_runtime_to_tier``.
-    """
-    resolved = _resolve_backend(params, stage)
-    if resolved.backend == "tensorrt":
-        return "tensorrt"
-    if resolved.backend == "coreml":
-        return "coreml"
-    return resolved.device  # cpu / cuda / mps
-
-
-def _init_apriltag_detector(params):
-    """Initialize AprilTag detector if configured. Returns detector or None."""
-    apriltag_enabled = (
-        bool(params.get("USE_APRILTAGS", False))
-        or str(params.get("IDENTITY_METHOD", "")).lower() == "apriltags"
-    )
-    if not apriltag_enabled:
-        return None
-    try:
-        from hydra_suite.core.individual.classification.apriltag import (
-            AprilTagConfig,
-            AprilTagDetector,
-        )
-
-        return AprilTagDetector(AprilTagConfig.from_params(params))
-    except Exception as exc:
-        logger.warning("Interpolated AprilTag analysis disabled: %s", exc)
-        return None
-
-
-def _init_cnn_backends(params):
-    """Initialize CNN identity backends. Returns (backends_list, labels_list)."""
-    cnn_backends = []
-    cnn_labels = []
-    cnn_classifiers_cfg = params.get("CNN_CLASSIFIERS", [])
-    if not cnn_classifiers_cfg:
-        return cnn_backends, cnn_labels
-    try:
-        from hydra_suite.core.individual.classification.cnn import (
-            CNNIdentityBackend,
-            CNNIdentityConfig,
-        )
-
-        cnn_resolved = _resolve_backend(params, "cnn")
-        for cnn_cfg_dict in cnn_classifiers_cfg:
-            model_path = str(cnn_cfg_dict.get("model_path", ""))
-            if not model_path or not os.path.exists(model_path):
-                continue
-            label = str(cnn_cfg_dict.get("label", "cnn_identity"))
-            cnn_cfg = CNNIdentityConfig(
-                model_path=model_path,
-                confidence=float(cnn_cfg_dict.get("confidence", 0.5)),
-                scoring_mode=str(cnn_cfg_dict.get("scoring_mode", "atomic")),
-                batch_size=int(cnn_cfg_dict.get("batch_size", 64)),
-            )
-            try:
-                backend = CNNIdentityBackend(
-                    cnn_cfg,
-                    model_path=model_path,
-                    resolved=cnn_resolved,
-                )
-                cnn_backends.append(backend)
-                cnn_labels.append(label)
-            except Exception as exc:
-                logger.warning(
-                    "Interpolated CNN identity '%s' disabled: %s",
-                    label,
-                    exc,
-                )
-    except Exception as exc:
-        logger.warning("Interpolated CNN identity analysis disabled: %s", exc)
-    return cnn_backends, cnn_labels
-
-
-def _init_headtail_analyzer(params, geometry):
-    """Initialize head-tail direction analyzer. Returns analyzer or None.
-
-    Raises:
-        ClassifierFormatError: if the configured model path exists but
-            cannot be loaded by any supported backend.  Callers forward
-            this to the ``error`` signal.
-    """
-    headtail_model_path = str(params.get("YOLO_HEADTAIL_MODEL_PATH", ""))
-    if not headtail_model_path or not os.path.exists(headtail_model_path):
-        return None
-    from hydra_suite.core.individual.classification.headtail import HeadTailAnalyzer
-
-    analyzer = HeadTailAnalyzer(
-        model_path=headtail_model_path,
-        resolved=_resolve_backend(params, "head_tail"),
-        conf_threshold=float(params.get("YOLO_HEADTAIL_CONF_THRESHOLD", 0.5)),
-        batch_size=max(1, int(params.get("HEADTAIL_BATCH_SIZE", 64))),
-        geometry=geometry,
-    )
-    if not analyzer.is_available:
-        analyzer.close()
-        return None
-    return analyzer
-
-
 def _init_interpolation_backends(params, output_dir, geometry):
-    """Initialize optional analysis backends after eligible gap tasks exist."""
-    pose_backend, pose_kpt_source_names, pose_kpt_labels = _init_pose_backend(
-        params, output_dir
-    )
-    apriltag_detector = _init_apriltag_detector(params)
-    cnn_backends, cnn_labels = _init_cnn_backends(params)
-    headtail_analyzer = _init_headtail_analyzer(params, geometry)
-    interp_cnn_rows = {label: [] for label in cnn_labels}
+    """Build the InferenceConfig/RuntimeContext and load the four
+    downstream-stage models (headtail/CNN/pose/AprilTag) via their public
+    stage loaders -- the SAME loaders ``Pipeline`` uses, so the interpolated
+    path shares the tier->backend resolution and model-loading code instead
+    of hand-rolling its own runtime-flavor ladder (design spec
+    "Model-loading glue"; see the plan's "Plan-level deviation from the spec
+    text" note for why the per-stage loaders are called directly here rather
+    than ``runner.py``'s private ``_load_all_models`` -- that function always
+    loads an OBB/bgsub detector too, which this pass never uses).
+
+    Returns (cfg, runtime, pose_model, apriltag_model, cnn_models,
+    cnn_labels, headtail_model). Any model whose config/params disable it is
+    None (pose, apriltag, headtail) or empty (cnn_models/cnn_labels), mirroring
+    today's opt-in behavior -- CNN no longer depends on pose being enabled
+    (design spec, bug fix #1: the CNN/pose decoupling is now real, since
+    ``run_cnn_batch`` builds its own classifier crops independently, unlike
+    the old ``_pending_cnn_crops.append(pose_crop)``).
+    """
+    from hydra_suite.core.inference.config import build_inference_config_from_params
+    from hydra_suite.core.inference.runtime import RuntimeContext
+    from hydra_suite.core.inference.stages.apriltag import load_apriltag_model
+    from hydra_suite.core.inference.stages.cnn import load_cnn_model
+    from hydra_suite.core.inference.stages.headtail import load_headtail_model
+    from hydra_suite.core.inference.stages.pose import load_pose_model
+
+    cfg = build_inference_config_from_params(params)
+    runtime = RuntimeContext.from_config(cfg)
+
+    pose_model = None
+    if cfg.pose is not None:
+        try:
+            pose_model = load_pose_model(
+                cfg.pose,
+                runtime,
+                out_root=str(Path(output_dir).expanduser()),
+            )
+        except Exception as exc:
+            logger.warning(
+                "Interpolated pose analysis disabled (backend init failed): %s",
+                exc,
+            )
+            pose_model = None
+
+    apriltag_model = None
+    if cfg.apriltag.enabled:
+        try:
+            apriltag_model = load_apriltag_model(cfg.apriltag)
+        except Exception as exc:
+            logger.warning("Interpolated AprilTag analysis disabled: %s", exc)
+            apriltag_model = None
+
+    cnn_models = []
+    cnn_labels = []
+    for cnn_cfg in cfg.cnn_phases:
+        try:
+            cnn_models.append(load_cnn_model(cnn_cfg, runtime))
+            cnn_labels.append(cnn_cfg.label)
+        except Exception as exc:
+            logger.warning(
+                "Interpolated CNN identity '%s' disabled: %s", cnn_cfg.label, exc
+            )
+
+    headtail_model = None
+    if cfg.headtail is not None:
+        try:
+            headtail_model = load_headtail_model(cfg.headtail, runtime)
+        except Exception as exc:
+            logger.warning("Interpolated head-tail analysis disabled: %s", exc)
+            headtail_model = None
+
     return (
-        pose_backend,
-        pose_kpt_source_names,
-        pose_kpt_labels,
-        apriltag_detector,
-        cnn_backends,
+        cfg,
+        runtime,
+        pose_model,
+        apriltag_model,
+        cnn_models,
         cnn_labels,
-        headtail_analyzer,
-        interp_cnn_rows,
+        headtail_model,
     )
 
 

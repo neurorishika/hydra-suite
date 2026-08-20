@@ -29,6 +29,33 @@ def test_should_stop_before_setup_returns_empty_payload(tmp_path):
     assert result.get("saved", 0) == 0
 
 
+def test_init_interpolation_backends_returns_config_and_runtime():
+    from hydra_suite.core.canonicalization.geometry import (
+        canonical_geometry_from_params,
+    )
+    from hydra_suite.core.post.interpolated_crops import _init_interpolation_backends
+
+    params = {
+        "ENABLE_POSE_EXTRACTOR": False,
+        "USE_APRILTAGS": False,
+        "CNN_CLASSIFIERS": [],
+        "YOLO_HEADTAIL_MODEL_PATH": "",
+        "RUNTIME_TIER": "cpu",
+    }
+    geometry = canonical_geometry_from_params(params)
+    result = _init_interpolation_backends(params, "/tmp", geometry)
+    cfg, runtime, pose_model, apriltag_model, cnn_models, cnn_labels, headtail_model = (
+        result
+    )
+    assert cfg.pose is None
+    assert pose_model is None
+    assert apriltag_model is None
+    assert cnn_models == []
+    assert cnn_labels == []
+    assert headtail_model is None
+    assert runtime.device in {"cpu", "mps", "cuda:0"}
+
+
 def test_process_occluded_run_uses_csv_value_when_present():
     """A row with non-NaN X/Y/Theta already in the CSV (mechanism-1 fill)
     must be used directly, not re-derived by linear interpolation."""
