@@ -67,7 +67,6 @@ def _build_multi_branch_df() -> pd.DataFrame:
                 nan,
                 nan,
             ],
-            "InterpTagID": [nan] * 14,
             "DetectedTagLabel": [
                 nan,
                 nan,

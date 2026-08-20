@@ -155,21 +155,34 @@ def log_rich_export_summary(df: pd.DataFrame) -> None:
         n = fill_any([f"CNN_{lbl}_Class", f"CNN_{lbl}_Conf"])
         lines.append(f"  CNN [{lbl}]               : {n:>6,} / {total:,}  ({pct(n)})")
 
-    # --- interpolated AprilTag ---
-    if "InterpTagID" in df.columns:
-        n = fill("InterpTagID")
-        if n:
+    # --- AprilTag: real vs interpolated ---
+    if "TagSource" in df.columns:
+        counts = count_by_source(df, "TagSource")
+        if counts["interp"]:
             lines.append(
-                f"  AprilTag (interpolated)  : {n:>6,} / {total:,}  ({pct(n)})"
+                f"  AprilTag (interpolated)  : {counts['interp']:>6,} / {total:,}  "
+                f"({pct(counts['interp'])})"
             )
 
-    # --- interpolated head-tail ---
-    if "InterpHeadingRad" in df.columns:
-        n = fill("InterpHeadingRad")
-        if n:
+    # --- head-tail: real vs interpolated ---
+    if "HeadingSource" in df.columns:
+        counts = count_by_source(df, "HeadingSource")
+        if counts["interp"]:
             lines.append(
-                f"  Head-tail (interpolated) : {n:>6,} / {total:,}  ({pct(n)})"
+                f"  Head-tail (interpolated) : {counts['interp']:>6,} / {total:,}  "
+                f"({pct(counts['interp'])})"
             )
+
+    # --- CNN: real vs interpolated, per label ---
+    for lbl in cnn_labels:
+        source_col = f"CNN_{lbl}_Source"
+        if source_col in df.columns:
+            counts = count_by_source(df, source_col)
+            if counts["interp"]:
+                lines.append(
+                    f"  CNN [{lbl}] (interpolated): {counts['interp']:>6,} / {total:,}  "
+                    f"({pct(counts['interp'])})"
+                )
 
     # --- per-keypoint fill rates (grouped 4 per line) ---
     if kpt_x_cols:
