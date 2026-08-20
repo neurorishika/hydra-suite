@@ -3536,14 +3536,22 @@ class TrackingEngineCore:
                     # arena and therefore bootstraps nothing, mirroring the
                     # assigner's treatment of it. Single-arena runs skip the
                     # gate entirely, so their behaviour is byte-identical.
-                    _det_arena = (
-                        int(meas_arena[d_idx])
-                        if (
-                            not self.arena_layout.is_single_arena
-                            and d_idx < len(meas_arena)
-                        )
-                        else None
-                    )
+                    _det_arena = None
+                    if not self.arena_layout.is_single_arena:
+                        if d_idx >= len(meas_arena):
+                            # `raise`, not a silent fall-through to None: a
+                            # short `meas_arena` would disable this gate and
+                            # silently restore the cross-arena bootstrap it
+                            # exists to prevent. Same contract as the
+                            # slot_arena length check above.
+                            raise RuntimeError(
+                                "meas_arena is shorter than the detection list "
+                                f"({len(meas_arena)} <= d_idx={d_idx}); the "
+                                "free-detection bootstrap cannot be arena-gated "
+                                "and would assign a detection to a foreign "
+                                "arena's slot."
+                            )
+                        _det_arena = int(meas_arena[d_idx])
                     for track_idx in range(N):
                         if (
                             track_states[track_idx] == "lost"

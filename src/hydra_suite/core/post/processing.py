@@ -3682,7 +3682,20 @@ def interpolate_trajectories(
             # run) => no-op, so single-arena output is unchanged.
             if "arena_id" in traj_data.columns:
                 _arena_values = traj_data["arena_id"].dropna().unique()
+                if len(_arena_values) > 1:
+                    # Mirrors `_trajectory_arena`: a trajectory spanning two
+                    # arenas means an upstream invariant is already broken, so
+                    # raise rather than leave the gap-filled rows NaN and let
+                    # them vanish from the arena grouping downstream.
+                    raise ValueError(
+                        f"Trajectory {traj_id} has a non-constant arena_id "
+                        f"({sorted(_arena_values.tolist())}); arena assignment "
+                        "must be static per slot."
+                    )
                 if len(_arena_values) == 1:
+                    # len == 0 (no arena info at all) is legitimate: the
+                    # no-arena partition that `resolve_trajectories` keeps for
+                    # the partial-info edge case. Leave it alone.
                     traj_data["arena_id"] = _arena_values[0]
 
         if "State" in traj_data.columns:
