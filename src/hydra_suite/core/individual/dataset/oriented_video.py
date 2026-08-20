@@ -445,6 +445,48 @@ class OrientedTrackVideoExporter:
         diff1 = abs(((theta1 - ref) + math.pi) % (2.0 * math.pi) - math.pi)
         return theta0 if diff0 <= diff1 else theta1
 
+    def _fallback_interp_record(self, row: Any) -> Optional[dict[str, Any]]:
+        """Build a synthetic interpolated-record dict from the tracking CSV's
+        own X/Y/Theta when the interp sidecar (``interp_lookup``) has no
+        entry for this (frame_id, trajectory_id) row.
+
+        A sidecar-lookup miss does not mean "no geometry at all" for this
+        row -- the CSV itself may still carry a valid interpolated X/Y/Theta
+        (the sidecar is a cache built alongside crop generation, not the
+        source of truth). Falling through and dropping the frame here
+        silently truncates a track whenever the two get out of sync.
+
+        Size (w/h) is derived from this exporter's own canonical geometry
+        (``self._geometry``, the one fixed canvas every task in this run
+        shares) rather than a hardcoded default, so the synthetic OBB is
+        scaled consistently with the rest of the export. Returns ``None``
+        when the CSV row itself has no usable (non-NaN) geometry either.
+        """
+        row_x = getattr(row, "X", float("nan"))
+        row_y = getattr(row, "Y", float("nan"))
+        row_theta = getattr(row, "Theta", float("nan"))
+        if not (np.isfinite(row_x) and np.isfinite(row_y) and np.isfinite(row_theta)):
+            return None
+        # Invert CanonicalGeometry.from_reference: canvas_w = major_axis *
+        # margin, canvas_h = canvas_w / aspect_ratio -- so major_axis =
+        # canvas_w / margin, minor_axis = major_axis / aspect_ratio.
+        margin = max(1.0, float(self._geometry.margin))
+        aspect_ratio = max(1.0, float(self._geometry.aspect_ratio))
+        major_axis = float(self._geometry.canvas_w) / margin
+        minor_axis = major_axis / aspect_ratio
+        cx = float(row_x)
+        cy = float(row_y)
+        theta = float(row_theta)
+        corners = ellipse_to_obb_corners(cx, cy, major_axis, minor_axis, theta)
+        return {
+            "cx": cx,
+            "cy": cy,
+            "theta": theta,
+            "w": major_axis,
+            "h": minor_axis,
+            "obb_corners": corners,
+        }
+
     @classmethod
     def _resolve_task_theta(
         cls,
@@ -652,8 +694,10 @@ class OrientedTrackVideoExporter:
                         traj_id = int(row.TrajectoryID)
                         record = interp_lookup.get((frame_id, traj_id))
                         if record is None:
-                            missing_breakdown["missing_interpolated_rows"] += 1
-                            continue
+                            record = self._fallback_interp_record(row)
+                            if record is None:
+                                missing_breakdown["missing_interpolated_rows"] += 1
+                                continue
                         theta = self._resolve_task_theta(
                             row,
                             record.get("theta", 0.0),
