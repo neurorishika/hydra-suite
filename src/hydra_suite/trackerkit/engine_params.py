@@ -263,6 +263,25 @@ def n_arenas_from_shapes(roi_shapes: list[dict[str, Any]] | None) -> int:
     return len(raw_ids)
 
 
+def next_free_arena_id(roi_shapes: list[dict[str, Any]] | None) -> int:
+    """The next arena id not already used by any shape in ``roi_shapes``.
+
+    Every shape carries an ``arena_id`` -- excludes included, since an
+    exclude hole belonging to arena 3 means arena 3 is in use -- so this
+    scans ALL shapes, not just includes, and returns ``max(used ids) + 1``
+    (or ``0`` for an empty/legacy list). This is the single source of truth
+    for "what id does the next arena get": both
+    ``SessionOrchestrator.start_new_arena`` (advancing past a "New Arena"
+    click) and the bulk grid generator (``MainWindow._on_generate_grid_clicked``,
+    appending a whole grid alongside any existing shapes) must agree on it,
+    or a generated grid could collide with a hand-drawn arena's id.
+    """
+    if not roi_shapes:
+        return 0
+    used = [int(s.get("arena_id", 0)) for s in roi_shapes]
+    return max(used) + 1
+
+
 def build_arena_labels(
     roi_shapes: list[dict[str, Any]] | None,
     width: int | None,

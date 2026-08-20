@@ -152,3 +152,86 @@ def test_dialog_shape_type_combo_switches_geometry(qapp):
     shapes = dialog.accepted_shapes()
     assert shapes[0]["type"] == "polygon"
     assert isinstance(shapes[0]["params"][0], list)
+
+
+# --- MainWindow._on_generate_grid_clicked integration glue (Finding 1, fix
+# round 1): the next-free-id computation over roi_shapes, the merge into
+# existing shapes, and the mask/label refresh were previously unverified by
+# CI. Driven directly on the unbound method with a MagicMock stand-in for
+# MainWindow (the ``test_arena_session_assignment.py`` precedent), with
+# ``ArenaGridDialog`` itself patched out so no modal dialog is ever
+# exec()'d. ---
+
+
+def _make_mock_main_window(roi_shapes):
+    from unittest.mock import MagicMock
+
+    mw = MagicMock()
+    mw.roi_shapes = list(roi_shapes)
+    mw.roi_base_frame = None
+    return mw
+
+
+def test_generate_grid_handler_offsets_past_existing_arenas_and_merges(
+    qapp, monkeypatch
+):
+    """Existing shapes -- including an EXCLUDE-only high arena id -- must
+    both (a) push the generated grid's first id past them and (b) survive
+    the merge untouched, and n_arenas_from_shapes must report the combined
+    total afterwards."""
+    from hydra_suite.trackerkit.engine_params import n_arenas_from_shapes
+    from hydra_suite.trackerkit.gui.main_window import MainWindow
+
+    existing = [
+        {"type": "circle", "params": [1, 1, 1], "mode": "include", "arena_id": 0},
+        # exclude-only "arena" at a HIGH id: must still push next_id past it,
+        # even though n_arenas_from_shapes doesn't count it as its own arena.
+        {"type": "circle", "params": [9, 9, 1], "mode": "exclude", "arena_id": 5},
+    ]
+    mw = _make_mock_main_window(existing)
+
+    class _FakeDialog:
+        captured_first_arena_id = None
+
+        def __init__(self, parent=None, reference_frame=None, first_arena_id=0):
+            _FakeDialog.captured_first_arena_id = first_arena_id
+            self._first_arena_id = first_arena_id
+
+        def exec(self):
+            from PySide6.QtWidgets import QDialog
+
+            return QDialog.Accepted
+
+        def accepted_shapes(self):
+            return generate_grid_shapes(
+                1, 2, 50, 50, 100, 100, 40, first_arena_id=self._first_arena_id
+            )
+
+    monkeypatch.setattr(
+        "hydra_suite.trackerkit.gui.dialogs.arena_grid_dialog.ArenaGridDialog",
+        _FakeDialog,
+    )
+
+    MainWindow._on_generate_grid_clicked(mw)
+
+    # next id must be pushed past arena 5 (the exclude-only arena), i.e. 6 --
+    # NOT past arena 0 alone (which would wrongly give 1).
+    assert _FakeDialog.captured_first_arena_id == 6
+
+    # existing shapes survive untouched, generated ones appended after.
+    assert mw.roi_shapes[0] == existing[0]
+    assert mw.roi_shapes[1] == existing[1]
+    assert len(mw.roi_shapes) == 2 + 2
+    generated_ids = [s["arena_id"] for s in mw.roi_shapes[2:]]
+    assert generated_ids == [6, 7]
+
+    # combined arena count: arena 0 (include) + 2 generated include arenas
+    # (6, 7). The exclude-only arena 5 doesn't count as its own arena (it
+    # renders nothing on its own), matching n_arenas_from_shapes semantics.
+    assert n_arenas_from_shapes(mw.roi_shapes) == 3
+
+    mw._generate_combined_roi_mask.assert_not_called()  # no roi_base_frame
+    mw.btn_undo_roi.setEnabled.assert_called_with(True)
+    mw.btn_crop_video.setEnabled.assert_called_with(True)
+    mw._update_animals_per_arena_total_label.assert_called_once()
+    mw.update_roi_preview.assert_called_once()

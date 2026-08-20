@@ -2097,17 +2097,19 @@ class MainWindow(QMainWindow):
 
         The generator only knows how to append shapes -- it computes the
         next free arena id over ALL existing shapes (hand-drawn or
-        previously generated) so ids never collide, then extends
-        ``roi_shapes`` in place. Generated shapes are ordinary shapes: no
-        marker, no separate storage, fully editable afterwards.
+        previously generated) via the same shared
+        ``engine_params.next_free_arena_id`` helper ``start_new_arena`` uses
+        (single source of truth, so a generated grid can't collide with a
+        hand-drawn arena's id), then extends ``roi_shapes`` in place.
+        Generated shapes are ordinary shapes: no marker, no separate
+        storage, fully editable afterwards.
         """
         from PySide6.QtWidgets import QDialog
 
+        from hydra_suite.trackerkit.engine_params import next_free_arena_id
         from hydra_suite.trackerkit.gui.dialogs.arena_grid_dialog import ArenaGridDialog
 
-        next_id = (
-            max((int(s.get("arena_id", 0)) for s in self.roi_shapes), default=-1) + 1
-        )
+        next_id = next_free_arena_id(self.roi_shapes)
         dialog = ArenaGridDialog(
             parent=self,
             reference_frame=self.roi_base_frame,

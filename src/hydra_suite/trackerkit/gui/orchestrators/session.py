@@ -57,12 +57,17 @@ class SessionOrchestrator:
     def start_new_arena(self) -> int:
         """Begin a new arena; subsequent shapes join it until called again.
 
-        Every shape carries an ``arena_id`` -- excludes included, since an
-        exclude hole belonging to arena 3 means arena 3 is in use -- so the
-        next free id is computed over ALL shapes, not just includes.
+        Delegates to ``engine_params.next_free_arena_id`` -- the single
+        shared rule for "what id does the next arena get" (every shape
+        carries an ``arena_id``, excludes included, so the next free id is
+        computed over ALL shapes, not just includes). The bulk grid
+        generator (``MainWindow._on_generate_grid_clicked``) uses the same
+        helper so the two never disagree and a generated grid can't collide
+        with a hand-drawn arena's id.
         """
-        used = [int(s.get("arena_id", 0)) for s in self._mw.roi_shapes]
-        self.current_arena_id = (max(used) + 1) if used else 0
+        from hydra_suite.trackerkit.engine_params import next_free_arena_id
+
+        self.current_arena_id = next_free_arena_id(self._mw.roi_shapes)
         return self.current_arena_id
 
     # =========================================================================
