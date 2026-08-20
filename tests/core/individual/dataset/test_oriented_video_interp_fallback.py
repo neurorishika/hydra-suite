@@ -3,10 +3,12 @@ tracking CSV's own X/Y/Theta for that (frame_id, trajectory_id) row instead
 of silently dropping the frame -- the sidecar cache missing an entry does not
 mean the CSV itself lacks geometry for it."""
 
+import math
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from hydra_suite.core.canonicalization.geometry import CanonicalGeometry, ClippingStats
 from hydra_suite.core.individual.dataset.oriented_video import (
@@ -64,6 +66,27 @@ def test_interp_lookup_miss_falls_back_to_csv_geometry_instead_of_dropping():
     assert task.center_x == 100.0
     assert task.center_y == 50.0
     assert 1 in track_sizes
+
+    # Width/height regression guard: derived from CanonicalGeometry.from_
+    # reference's own identity (canvas_w = major_axis * margin, since
+    # major_axis = body * sqrt(ar) is already baked into canvas_w -- see
+    # the docstring on CanonicalGeometry and the comment in
+    # _fallback_interp_record). Expressed independently of that method's
+    # internals here (not just re-deriving the same formula) by checking
+    # the geometric mean of width/height recovers the fixture's
+    # reference_body_px=20.0 (within the canvas's integer-pixel _even()
+    # rounding), and that the major/minor ratio matches aspect_ratio=2.2.
+    geometry = exporter._geometry
+    assert task.width == pytest.approx(geometry.canvas_w / geometry.margin, rel=1e-9)
+    assert task.height == pytest.approx(task.width / geometry.aspect_ratio, rel=1e-9)
+    recovered_body = math.sqrt(task.width * task.height)
+    assert recovered_body == pytest.approx(20.0, rel=0.02)
+    assert task.width / task.height == pytest.approx(geometry.aspect_ratio, rel=1e-9)
+
+    # Corners: a valid (4, 2) OBB centered on (cx, cy).
+    assert task.corners.shape == (4, 2)
+    assert np.mean(task.corners[:, 0]) == pytest.approx(100.0, abs=1e-3)
+    assert np.mean(task.corners[:, 1]) == pytest.approx(50.0, abs=1e-3)
 
 
 def test_interp_lookup_miss_with_nan_csv_geometry_still_reports_missing():

@@ -467,9 +467,19 @@ class OrientedTrackVideoExporter:
         row_theta = getattr(row, "Theta", float("nan"))
         if not (np.isfinite(row_x) and np.isfinite(row_y) and np.isfinite(row_theta)):
             return None
-        # Invert CanonicalGeometry.from_reference: canvas_w = major_axis *
-        # margin, canvas_h = canvas_w / aspect_ratio -- so major_axis =
-        # canvas_w / margin, minor_axis = major_axis / aspect_ratio.
+        # Invert CanonicalGeometry.from_reference exactly (up to its _even()
+        # integer-canvas rounding). Per that class's own docstring, with
+        # body = REFERENCE_BODY_SIZE (the geometric mean sqrt(major*minor))
+        # and ar = aspect_ratio = major/minor:
+        #   major_axis = body * sqrt(ar)          (module docstring)
+        #   canvas_w   = body * sqrt(ar) * margin = major_axis * margin
+        # so canvas_w already has the sqrt(ar) factor baked in via
+        # major_axis -- dividing by margin alone recovers major_axis, NOT
+        # body (that would need an *extra* /sqrt(ar), which would instead
+        # recover body and undersize this fallback OBB by sqrt(ar)x too
+        # small). canvas_h = canvas_w / ar, consistent with
+        # minor_axis = major_axis / ar below.
+        #   major_axis = canvas_w / margin, minor_axis = major_axis / aspect_ratio.
         margin = max(1.0, float(self._geometry.margin))
         aspect_ratio = max(1.0, float(self._geometry.aspect_ratio))
         major_axis = float(self._geometry.canvas_w) / margin
