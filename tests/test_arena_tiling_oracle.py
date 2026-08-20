@@ -76,11 +76,11 @@ all. Until that ROI bug is fixed, the registry is covered only by its unit
 tests. Forcing a single global decoder leaves this file green; do not read that
 as evidence.
 
-Note while the Task 11 markers below are in place: two of the five comparisons
-are ``xfail``, so only the forward comparison is live. It catches all four
-leaks above on its own, but the moment Task 11 lands, delete the markers -- the
-backward and post-processed comparisons are the ones that cover the merge and
-post-processing stages.
+All five comparisons are live. Two of them (the backward pass and the
+post-processed output) were ``xfail(strict=True)`` between commits 39aacd22 and
+Task 11 against a real cross-arena leak in the assignment solve; Task 11 fixed
+it by solving one Hungarian sub-block per arena, the markers XPASSed, and they
+were deleted. Do not re-add them: an ``xfail`` here would hide the next leak.
 """
 
 from __future__ import annotations
@@ -451,36 +451,25 @@ def test_single_arena_reference_emits_no_arena_column(tiled_runs):
             ), f"reference {idx} {kind} CSV grew an arena_id column"
 
 
-# --- pending Task 11 -------------------------------------------------------
+# --- historical note: the leak these comparisons used to catch ------------
 #
 # With the assignment gate actually widened (GATE_MULTIPLIER, and see
-# `test_widened_gates_actually_reach_the_engine`), two of the comparisons below
-# fail against a real, unfixed cross-arena leak. Not a test artifact: arena
-# blocking is fully on, no cross-arena match is ever accepted, the per-frame
-# detection sets are identical across arenas, and the runs are deterministic.
+# `test_widened_gates_actually_reach_the_engine`), the backward and final
+# comparisons below used to fail against a real cross-arena leak: arena
+# blocking was fully on and no cross-arena match was ever accepted, but
+# `core/assigners/hungarian.py` rejected with TWO different sentinels -- 1e6
+# for arena/spatial blocking and 1e9 for the raw distance/velocity gate. Both
+# are discarded after the solve, but they are different NUMBERS, and
+# `linear_sum_assignment` minimises the total, so it was not indifferent
+# between them: when an arena had more established tracks than detections of
+# its own, the square solve parked the surplus rows on foreign columns, and
+# which parking spot was cheapest depended on what OTHER arenas detected that
+# frame.
 #
-# Root cause: `core/assigners/hungarian.py` rejects with TWO different
-# sentinels -- 1e6 for arena/spatial blocking (lines 82, 103, 453) and 1e9 for
-# the raw distance/velocity gate (line 1160). Both are discarded after the
-# solve, but they are different NUMBERS, and `linear_sum_assignment` minimises
-# the total, so it is not indifferent between them. When an arena has more
-# established tracks than it has detections of its own, the square solve parks
-# the surplus rows on foreign columns -- and which parking spot is cheapest
-# depends on what OTHER arenas detected that frame. The accepted assignments
-# can therefore shift even though no cross-arena pair is ever accepted.
-#
-# Task 11 (plan commit 96ca3433) fixes it structurally by solving per-arena
-# sub-blocks. These are `strict=True` on purpose: when Task 11 lands and works,
-# they XPASS, pytest reports that as a failure, and whoever lands it has to
-# delete this marker. Do NOT convert them to `skip`, and do not relax the
-# comparison to make them pass -- the comparison is exact and is correct.
-_TASK_11_XFAIL = pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "pending Task 11: hungarian.py's 1e6/1e9 reject sentinels let one "
-        "arena's detections shift another arena's accepted assignments"
-    ),
-)
+# Task 11 removed the coupling structurally by solving one sub-block per
+# arena, so cross-arena cells are never handed to the solver. If either
+# comparison starts failing again, that mechanism (or an equivalent one
+# downstream) has regressed -- do not xfail it.
 
 
 def _slot_history(df, slot: int) -> tuple:
@@ -504,11 +493,12 @@ def _slot_history(df, slot: int) -> tuple:
     "kind",
     [
         "forward",
-        # Backward diverges and forward does not: the backward pass replays the
-        # same detections against a different track population, which is
-        # exactly when an arena ends up with more established tracks than own
-        # detections -- the regime the sentinel bug needs.
-        pytest.param("backward", marks=_TASK_11_XFAIL),
+        # The backward pass is the sharper of the two: it replays the same
+        # detections against a different track population, which is exactly
+        # when an arena ends up with more established tracks than own
+        # detections -- the regime the old sentinel coupling needed, and the
+        # comparison that used to fail because of it.
+        "backward",
     ],
 )
 def test_each_arena_reproduces_the_single_arena_run_slot_for_slot(tiled_runs, kind):
@@ -549,7 +539,6 @@ def test_each_arena_reproduces_the_single_arena_run_slot_for_slot(tiled_runs, ki
         assert (frame[frame["TrackID"].isin(block)]["arena_id"] == arena).all()
 
 
-@_TASK_11_XFAIL
 def test_each_arena_final_output_reproduces_the_single_arena_run(tiled_runs):
     """Post-processed trajectories: exact per-arena equality.
 

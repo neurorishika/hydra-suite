@@ -62,8 +62,16 @@ def _compute_cost_matrix_numba_core(
     both are length-0 sentinels (or otherwise mismatched in length), no arena
     gating is applied and the result is bit-identical to the
     pre-multi-arena kernel. Cross-arena pairs get the same ``1e6``
-    hard-reject sentinel used for distance-gated pairs, which makes the
-    downstream Hungarian solve decompose exactly into per-arena problems.
+    hard-reject sentinel used for distance-gated pairs, so no cross-arena
+    pair is ever *accepted*.
+
+    That sentinel does NOT, on its own, decompose the downstream Hungarian
+    solve into independent per-arena problems: the reject sentinels are not
+    all the same number (``1e6`` here, ``1e9`` for the raw distance/velocity
+    gate in ``assign_tracks``), and a square solve that has to park surplus
+    rows somewhere is therefore not indifferent between them. Independence is
+    obtained structurally instead, by solving one sub-block per arena --
+    see ``_assign_established_hungarian``.
     """
     cost = np.zeros((N, M), dtype=np.float32)
     gate_arenas = track_arena.shape[0] == N and meas_arena.shape[0] == M
@@ -886,8 +894,43 @@ class TrackAssigner:
                 assigned_r.add(r)
         return assignments, assigned_dets
 
+    @staticmethod
+    def _solve_established_block(
+        est_sorted, det_cols, cost, raw_dist_mat, MAX_DIST, VEL_GATE
+    ):
+        """Solve ONE Hungarian block and keep the pairs that pass the gates.
+
+        ``det_cols`` is ``None`` for the whole-matrix (single-arena / ungated)
+        solve -- that branch runs ``linear_sum_assignment(cost[est, :])``
+        exactly as the pre-multi-arena code did, including leaving the column
+        index as the numpy integer scipy returned.  Otherwise ``det_cols`` is
+        the arena's own detection columns and the solve sees only that
+        sub-block.
+        """
+        assignments = []
+        assigned_dets = set()
+        if det_cols is None:
+            cost_sub = cost[est_sorted, :]
+        else:
+            cost_sub = cost[np.ix_(est_sorted, det_cols)]
+        rows, cols = linear_sum_assignment(cost_sub)
+        for r_idx, c_idx in zip(rows, cols):
+            r = est_sorted[r_idx]
+            c = c_idx if det_cols is None else det_cols[c_idx]
+            if cost[r, c] < MAX_DIST and raw_dist_mat[r, c] < VEL_GATE:
+                assignments.append((r, c))
+                assigned_dets.add(c)
+        return assignments, assigned_dets
+
     def _assign_established_hungarian(
-        self, est, cost, raw_dist_mat, MAX_DIST, VEL_GATE
+        self,
+        est,
+        cost,
+        raw_dist_mat,
+        MAX_DIST,
+        VEL_GATE,
+        track_arena=None,
+        meas_arena=None,
     ):
         """Phase 1 Hungarian assignment for established tracks.
 
@@ -897,24 +940,61 @@ class TrackAssigner:
         maps each back to the original track index.  Making the sort explicit
         here documents and enforces this invariant so that the mapping is safe
         even if the calling code ever builds ``est`` differently.
+
+        Multi-arena: when both arena arrays are supplied (the caller only
+        passes them when they are long enough to gate every row and column),
+        rows and columns are partitioned by arena id and ONE
+        ``linear_sum_assignment`` is run per arena over that arena's own tracks
+        and detections.  Cross-arena cells are never handed to the solver at
+        all, so the reject sentinels (``1e6`` for arena/spatial blocking,
+        ``1e9`` for the raw distance gate) can no longer influence which of an
+        arena's tracks keeps its detection: a surplus row parks inside its own
+        arena or nowhere.  Independence is structural, not emergent.
+
+        Arena ``-1`` (a detection that fell outside every arena) is treated
+        the same way the cost kernel already treats it -- as its own arena id
+        under plain equality.  In practice track slots are never ``-1``, so
+        that block has no rows, no solve is run for it and those detections
+        simply stay unassigned here; they are neither matched nor lost,
+        falling through to the later phases (which carry their own arena
+        gates) and finally into ``free_dets``.
+
+        ``track_arena``/``meas_arena`` default to ``None``, which takes the
+        original whole-matrix solve unchanged -- single-arena runs never enter
+        the partitioning code.
         """
         if not est:
             return [], set()
         est_sorted = sorted(est)
-        assignments = []
-        assigned_dets = set()
         cost_sub = cost[est_sorted, :]
         if not np.isfinite(cost_sub).all():
             bad = int(np.size(cost_sub) - np.count_nonzero(np.isfinite(cost_sub)))
             raise ValueError(
                 f"assignment submatrix contains non-finite values (bad={bad}, tracks={len(est_sorted)}, dets={cost_sub.shape[1]})"
             )
-        rows, cols = linear_sum_assignment(cost_sub)
-        for r_idx, c in zip(rows, cols):
-            r = est_sorted[r_idx]
-            if cost[r, c] < MAX_DIST and raw_dist_mat[r, c] < VEL_GATE:
-                assignments.append((r, c))
-                assigned_dets.add(c)
+        if track_arena is None or meas_arena is None:
+            return TrackAssigner._solve_established_block(
+                est_sorted, None, cost, raw_dist_mat, MAX_DIST, VEL_GATE
+            )
+
+        M = cost.shape[1]
+        ta = np.asarray(track_arena, dtype=np.int32)
+        ma = np.asarray(meas_arena, dtype=np.int32)[:M]
+        row_arena = ta[est_sorted]
+        assignments = []
+        assigned_dets = set()
+        # Sorted arena order keeps the emitted pair order deterministic and
+        # independent of dict/set iteration.
+        for arena in sorted({int(a) for a in row_arena}):
+            block_rows = [r for r, a in zip(est_sorted, row_arena) if int(a) == arena]
+            block_cols = np.flatnonzero(ma == arena)
+            if len(block_cols) == 0:
+                continue
+            pairs, dets = TrackAssigner._solve_established_block(
+                block_rows, block_cols, cost, raw_dist_mat, MAX_DIST, VEL_GATE
+            )
+            assignments.extend(pairs)
+            assigned_dets.update(dets)
         return assignments, assigned_dets
 
     def _assign_unstable(
@@ -1186,12 +1266,26 @@ class TrackAssigner:
                     VEL_GATE,
                 )
             else:
+                # Only hand the arena arrays down when they are long enough to
+                # label EVERY row and column -- the same fail-open predicate
+                # `_arena_arrays` and the identity overlay use. A short array
+                # would silently mislabel slots; `None` keeps the original
+                # whole-matrix solve, which is what single-arena runs take.
+                _ta = self.track_arena
+                _arena_gated = (
+                    _ta is not None
+                    and meas_arena is not None
+                    and len(_ta) >= N
+                    and len(meas_arena) >= M
+                )
                 ph1, ph1_dets = self._assign_established_hungarian(
                     est,
                     cost,
                     raw_dist_mat,
                     MAX_DIST,
                     VEL_GATE,
+                    track_arena=_ta if _arena_gated else None,
+                    meas_arena=meas_arena if _arena_gated else None,
                 )
             all_assignments.extend(ph1)
             assigned_dets.update(ph1_dets)

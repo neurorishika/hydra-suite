@@ -518,3 +518,224 @@ def test_oversubscribed_arena_pairing_invariant_to_other_arenas():
     solo_pairs = {int(r): int(c) for r, c in zip(solo_rows, solo_cols)}
     # Slot 1 in the solo problem is T2 -- must win D0, matching the combined run.
     assert solo_pairs.get(1) == 0
+
+
+# --- Task 11: the solve itself must decompose, not just the accepted pairs ---
+
+
+def _unbalanced_scene():
+    """Geometry for the parking counter-example, in one place.
+
+    Arena 0 holds three established tracks A/B/C but only two detections of
+    its own, so in a square solve exactly one arena-0 row must park on a
+    foreign column. Arena 1 holds three tracks and FOUR detections, which is
+    what makes the joint problem square (6 established rows, 6 columns) and
+    therefore forces the parking -- with fewer columns than rows the solver
+    could just leave a row out for free and the coupling would never appear.
+
+    The foreign column left over for arena 0 is the arena-1 detection at
+    x=-850. It is 850 px from A (inside MAX_DIST=900, so its cell keeps the
+    ``1e6`` arena-block sentinel) but 950/1050 px from B/C (outside, so those
+    cells are overwritten with the ``1e9`` distance sentinel). Parking A is
+    therefore a thousand times cheaper than parking C, and a joint solve buys
+    that discount by taking D0/D1 away from A and giving them to B and C.
+    Nothing about arena 0's own geometry changed; arena 1's detections decided
+    it. That is the leak.
+    """
+    # slots 0,1,2 -> arena 0 (A, B, C); slots 3,4,5 -> arena 1
+    track_xy = [
+        (0.0, 0.0),  # A  -- owns D0
+        (100.0, 0.0),  # B  -- owns D1
+        (200.0, 0.0),  # C  -- surplus, no detection of its own
+        (-1000.0, 0.0),
+        (-1100.0, 0.0),
+        (-1200.0, 0.0),
+    ]
+    track_arena = np.array([0, 0, 0, 1, 1, 1], dtype=np.int32)
+    det_xy = [
+        (5.0, 0.0),  # D0 (arena 0), next to A
+        (105.0, 0.0),  # D1 (arena 0), next to B
+        (-995.0, 0.0),
+        (-1105.0, 0.0),
+        (-1205.0, 0.0),
+        (-850.0, 0.0),  # arena 1's spare -- the cheap parking spot for A
+    ]
+    meas_arena = np.array([0, 0, 1, 1, 1, 1], dtype=np.int32)
+    return track_xy, track_arena, det_xy, meas_arena
+
+
+def _unbalanced_params() -> dict:
+    params = _e2e_params(spatial=False)
+    # 900 is load-bearing: it is the per-track distance gate, and it is what
+    # splits the x=-850 column into "1e6 for A" and "1e9 for B and C".
+    params["MAX_DISTANCE_THRESHOLD"] = 900.0
+    params["KALMAN_MATURITY_AGE"] = 10
+    params["KALMAN_MAX_VELOCITY_MULTIPLIER"] = 100.0  # VEL_GATE = 2000 px
+    params["REFERENCE_BODY_SIZE"] = 20.0
+    return params
+
+
+def _run_assignment(track_xy, det_xy, track_arena, meas_arena):
+    """Drive the real cost matrix + assign_tracks for one scene.
+
+    Returns ``{track_index: (det_x, det_y)}`` -- pairs are reported by
+    detection POSITION, not column index, so the combined and solo runs stay
+    comparable even though their column numbering differs.
+    """
+    n = len(track_xy)
+    m = len(det_xy)
+    predictions = np.zeros((n, 3), dtype=np.float32)
+    predictions[:, :2] = np.array(track_xy, dtype=np.float32)
+    measurements = [np.array([x, y, 0.0], dtype=np.float32) for (x, y) in det_xy]
+    kf = _DummyKF(n)
+    kf.X[:, :2] = np.array(track_xy, dtype=np.float32)
+
+    assigner = TrackAssigner(_unbalanced_params())
+    assigner.set_track_arena(track_arena)
+    cost, _ = assigner.compute_cost_matrix(
+        N=n,
+        measurements=measurements,
+        predictions=predictions,
+        shapes=[(20.0, 1.3)] * m,
+        kf_manager=kf,
+        last_shape_info=[(20.0, 1.3)] * n,
+        meas_arena=meas_arena,
+    )
+    rows, cols, free_dets, _ = assigner.assign_tracks(
+        cost=cost,
+        N=n,
+        M=m,
+        meas=measurements,
+        track_states=["active"] * n,
+        tracking_continuity=[100] * n,
+        kf_manager=kf,
+        meas_arena=meas_arena,
+    )
+    pairs = {int(r): det_xy[int(c)] for r, c in zip(rows, cols)}
+    return pairs, cost, sorted(int(d) for d in free_dets)
+
+
+def test_unbalanced_arena_pairing_is_invariant_to_other_arenas():
+    """An arena with more established tracks than detections must pair the
+    same way whether or not other arenas exist.
+
+    This is the property the ``1e6``/``1e9`` sentinels could not deliver and
+    that per-arena sub-block solving delivers structurally. The balanced
+    3-tracks/3-detections test above cannot exhibit it: with a perfect
+    within-arena matching available, nothing has to park.
+    """
+    track_xy, track_arena, det_xy, meas_arena = _unbalanced_scene()
+
+    combined, cost, free_dets = _run_assignment(
+        track_xy, det_xy, track_arena, meas_arena
+    )
+
+    # --- the scene really is the counter-example, not a vacuous pass -------
+    # Arena 0 is genuinely oversubscribed, and the whole problem is square so
+    # some arena-0 row is forced onto a foreign column in a joint solve.
+    assert int((track_arena == 0).sum()) == 3
+    assert int((meas_arena == 0).sum()) == 2
+    assert len(track_xy) == len(det_xy)
+    # The two sentinels really are both present on arena 0's foreign cells.
+    assert cost[0, 5] == pytest.approx(1e6), "A's parking cell lost its 1e6"
+    assert cost[1, 5] == pytest.approx(1e9), "B's parking cell lost its 1e9"
+    assert cost[2, 5] == pytest.approx(1e9), "C's parking cell lost its 1e9"
+
+    # --- the solo run: arena 0 alone, single-arena (ungated) path ----------
+    solo, _, _ = _run_assignment(track_xy[:3], det_xy[:2], None, None)
+    assert solo == {0: det_xy[0], 1: det_xy[1]}, (
+        "control failed: with no other arena present A and B keep their own "
+        "detections and C goes unassigned"
+    )
+
+    # --- the property ------------------------------------------------------
+    arena0 = {slot: det for slot, det in combined.items() if slot < 3}
+    assert arena0 == solo, (
+        "arena 0's pairing changed because arena 1 exists: "
+        f"{arena0} with arena 1 present vs {solo} alone"
+    )
+    # No cross-arena pair was accepted anywhere, in either direction.
+    for slot, det in combined.items():
+        assert (det in det_xy[:2]) == (track_arena[slot] == 0)
+    # Arena 1's spare detection is neither matched nor lost.
+    assert det_xy.index((-850.0, 0.0)) in free_dets
+
+
+def test_joint_solve_on_the_same_matrix_would_get_it_wrong():
+    """Guards the test above from becoming vacuous.
+
+    Feeds the identical cost matrix to the pre-Task-11 whole-matrix solve (the
+    same code path single-arena runs still take, reached by passing no arena
+    arrays) and asserts it produces a DIFFERENT within-arena pairing. If a
+    future change to the geometry, gates or cost weights makes the joint solve
+    right by accident, this fails and tells you the invariance test above is
+    no longer proving anything.
+    """
+    track_xy, track_arena, det_xy, meas_arena = _unbalanced_scene()
+    combined, cost, _ = _run_assignment(track_xy, det_xy, track_arena, meas_arena)
+
+    params = _unbalanced_params()
+    assigner = TrackAssigner(params)
+    n, m = len(track_xy), len(det_xy)
+    kf = _DummyKF(n)
+    kf.X[:, :2] = np.array(track_xy, dtype=np.float32)
+    _, raw_dist_mat, _ = assigner._compute_distance_gates(
+        n,
+        m,
+        [np.array([x, y, 0.0], dtype=np.float32) for (x, y) in det_xy],
+        [100] * n,
+        kf,
+    )
+    joint_pairs, _ = assigner._assign_established_hungarian(
+        list(range(n)),
+        cost,
+        raw_dist_mat,
+        params["MAX_DISTANCE_THRESHOLD"],
+        params["KALMAN_MAX_VELOCITY_MULTIPLIER"] * params["REFERENCE_BODY_SIZE"],
+    )
+    joint = {int(r): det_xy[int(c)] for r, c in joint_pairs if int(r) < 3}
+    assert joint != {slot: d for slot, d in combined.items() if slot < 3}, (
+        "the joint solve now agrees with the per-arena solve on this scene -- "
+        "the invariance test has lost its teeth; re-tune the geometry"
+    )
+
+
+def test_detection_outside_every_arena_survives_the_per_arena_solve():
+    """A detection in no arena (``arena_of_points`` -> -1) must not vanish.
+
+    The per-arena solve builds one block per arena id present among the
+    TRACKS, and track slots are never -1, so a -1 detection belongs to no
+    block and is never offered to the established-track solve -- exactly as
+    the cost kernel's equality test already rejected it. It must come back in
+    ``free_dets`` (available to the later phases and to bootstrapping), and it
+    must not perturb any arena's own pairing.
+
+    Folding -1 columns into every arena's block instead would re-create the
+    very coupling Task 11 removed, one arena at a time: here the stray sits
+    850 px from A but 950/1050 px from B/C, so it carries the same 1e6-vs-1e9
+    split, and admitting it into arena 0's block makes that block square and
+    hands D0/D1 to the wrong tracks. The final assertion below fails if you
+    do that.
+    """
+    track_xy, track_arena, det_xy, meas_arena = _unbalanced_scene()
+    baseline, _, _ = _run_assignment(track_xy, det_xy, track_arena, meas_arena)
+
+    # A stray detection inside neither arena, at the SAME x as arena 1's
+    # spare so it inherits the 1e6/1e9 split across arena 0's three tracks.
+    stray = (-850.0, 1.0)
+    det_xy_stray = det_xy + [stray]
+    meas_arena_stray = np.append(meas_arena, np.int32(-1))
+    with_stray, cost, free_dets = _run_assignment(
+        track_xy, det_xy_stray, track_arena, meas_arena_stray
+    )
+
+    # Non-vacuity: only the arena label keeps the stray out of arena 0's
+    # reach -- it is inside A's distance gate, so its cell is arena-blocked
+    # (1e6), not distance-gated (1e9).
+    assert cost[0, 6] == pytest.approx(
+        1e6
+    ), "stray cell is distance-gated, not arena-gated"
+    assert cost[2, 6] == pytest.approx(1e9)
+    assert stray not in with_stray.values(), "a -1 detection was matched to a track"
+    assert det_xy_stray.index(stray) in free_dets, "the -1 detection vanished"
+    assert with_stray == baseline, "a -1 detection perturbed the per-arena pairings"
