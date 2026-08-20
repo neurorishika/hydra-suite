@@ -327,6 +327,196 @@ def test_detect_apriltags_in_frame_writes_tag_source_via_run_apriltag(monkeypatc
     assert interp_tag_rows == [{"frame_id": 1, "trajectory_id": 5, "tag_id": 7}]
 
 
+def test_write_interpolation_artifacts_pose_csv_includes_pose_source(tmp_path):
+    """Regression: pose_fieldnames must include "PoseSource" (Finding 4).
+
+    ``_flush_pose_cnn_window`` stamps every pose row with
+    ``"PoseSource": "interp"``, but ``write_csv_artifact`` uses
+    ``csv.DictWriter(..., fieldnames=...)`` with the default
+    ``extrasaction="raise"``, wrapped in a bare ``except Exception:
+    return None`` (``core/post/merge.py``). Without "PoseSource" in
+    ``pose_fieldnames``, a real pose row (which always carries that key)
+    would silently fail to write -- no error, just a missing
+    interpolated_pose.csv. Also checks the trimmed tag fieldnames
+    (interpolated_tags.csv must be exactly frame_id/trajectory_id/tag_id,
+    no center_x/center_y/hamming).
+    """
+    from types import SimpleNamespace
+
+    from hydra_suite.core.post.interpolated_crops import _write_interpolation_artifacts
+
+    gen = SimpleNamespace(run_dir=tmp_path, crops_dir=None)
+
+    pose_row = {
+        "frame_id": 1,
+        "trajectory_id": 5,
+        "filename": "x.png",
+        "PoseSource": "interp",
+        "PoseKpt_head_X": 1.0,
+        "PoseKpt_head_Y": 2.0,
+        "PoseKpt_head_Conf": 0.9,
+    }
+    tag_row = {"frame_id": 1, "trajectory_id": 5, "tag_id": 7}
+
+    result = _write_interpolation_artifacts(
+        gen,
+        save_interpolated_outputs=True,
+        cache_interpolated_artifacts=False,
+        interp_rows=[],
+        roi_rows=[],
+        roi_corners=[],
+        interp_pose_rows=[pose_row],
+        interp_tag_rows=[tag_row],
+        interp_cnn_rows={},
+        interp_headtail_rows=[],
+        pose_kpt_labels=["head"],
+    )
+
+    assert result["pose_csv_path"] is not None
+    pose_header = result["pose_csv_path"].read_text().splitlines()[0]
+    assert "PoseSource" in pose_header.split(",")
+
+    assert result["tag_csv_path"] is not None
+    tag_header = result["tag_csv_path"].read_text().splitlines()[0]
+    assert tag_header == "frame_id,trajectory_id,tag_id"
+
+
+def test_run_frame_tasks_loop_flushes_mid_loop_and_at_end(monkeypatch):
+    """Windowing test for _run_frame_tasks_loop (Finding 5).
+
+    5 needed frames, window_batch_size=3: frames 1-3 trigger a mid-loop
+    flush (pending count hits the threshold at idx=3), leaving frame 4's
+    task alone in the pending buffer (count=1, under threshold). The
+    prefetcher then fails to read frame 5 (``ret=False``), which hits the
+    loop's ``continue`` BEFORE the old flush-trigger check
+    (``len(pending) >= window_batch_size or idx == total_frames``) is ever
+    evaluated for idx=5 -- so pre-Finding-1-fix, frame 4's still-pending
+    task is silently dropped with no error (the exact bug: the flush
+    trigger only fired from *inside* a loop iteration, and this iteration's
+    body exits early via `continue`). The Finding-1 fix's unconditional
+    flush after the loop must catch it. Asserting frame 4's row (the LAST
+    frame whose task actually reaches the pending buffer) is present is
+    the point of this test, not just an early frame's.
+    """
+    import types
+
+    import numpy as np
+
+    from hydra_suite.core.canonicalization.geometry import (
+        canonical_geometry_from_params,
+    )
+    from hydra_suite.core.inference.config import PoseConfig
+    from hydra_suite.core.inference.result import PoseResult
+    from hydra_suite.core.inference.stages.pose import PoseModel
+    from hydra_suite.core.post import interpolated_crops as ic
+
+    class _FakeBackend:
+        def predict_batch(self, crops):
+            return [
+                PoseResult(
+                    keypoints=np.zeros((1, 1, 3), dtype=np.float32),
+                    valid_mask=np.array([True]),
+                )
+                for _ in crops
+            ]
+
+    params = {"RUNTIME_TIER": "cpu", "INTERP_POSE_INFERENCE_BATCH_SIZE": 3}
+    geometry = canonical_geometry_from_params(params)
+    pose_model = PoseModel(
+        backend=_FakeBackend(), n_keypoints=1, keypoint_names=["head"]
+    )
+    cfg = types.SimpleNamespace(pose=PoseConfig(), cnn_phases=[], apriltag=None)
+
+    def _task(frame_id, traj_id):
+        return {
+            "frame_id": frame_id,
+            "cx": 32.0,
+            "cy": 32.0,
+            "w": 20.0,
+            "h": 8.0,
+            "theta": 0.0,
+            "traj_id": traj_id,
+            "interp_index": 1,
+            "interp_from": (0, 2),
+            "interp_total": 1,
+        }
+
+    frame_tasks = {
+        1: [_task(1, 101)],
+        2: [_task(2, 102)],
+        3: [_task(3, 103)],
+        4: [_task(4, 104)],  # left pending (count=1) after the idx=3 flush
+        5: [_task(5, 105)],  # its own read fails, never reaches pending
+    }
+    frame_by_idx = {f: np.zeros((64, 64, 3), dtype=np.uint8) for f in frame_tasks}
+    # Frame 5's read reports failure (ret=False) -- triggers the loop's
+    # `continue` before the old in-loop flush-trigger check is reached.
+    read_plan = [
+        (1, True, frame_by_idx[1]),
+        (2, True, frame_by_idx[2]),
+        (3, True, frame_by_idx[3]),
+        (4, True, frame_by_idx[4]),
+        (5, False, None),
+    ]
+
+    class _FakePrefetcher:
+        def __init__(self, plan):
+            self._items = iter(plan)
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+        def read(self):
+            try:
+                return next(self._items)
+            except StopIteration:
+                return None
+
+    monkeypatch.setattr(
+        ic, "_build_prefetcher", lambda cap, nf, tf: _FakePrefetcher(read_plan)
+    )
+
+    interp_pose_rows: list = []
+    result = ic._run_frame_tasks_loop(
+        params,
+        None,
+        None,
+        frame_tasks,
+        None,
+        None,
+        False,
+        geometry,
+        None,
+        cfg,
+        None,
+        pose_model,
+        [],
+        [],
+        None,
+        None,
+        0,
+        [],
+        [],
+        [],
+        interp_pose_rows,
+        [],
+        {},
+        [],
+        None,
+    )
+
+    assert result is not None
+    traj_ids = {row["trajectory_id"] for row in interp_pose_rows}
+    # Frames 1-3 came from the mid-loop flush; frame 4 (pending, never
+    # flushed in-loop because frame 5's `continue` skips the old trigger
+    # check) must survive via the trailing/final flush.
+    assert traj_ids == {101, 102, 103, 104}
+    assert 104 in traj_ids
+
+
 def test_flush_headtail_window_writes_heading_rows(monkeypatch):
     import types
 

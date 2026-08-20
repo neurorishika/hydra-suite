@@ -12,7 +12,12 @@ from hydra_suite.core.inference.config import (
 )
 from hydra_suite.core.inference.result import OBBResult
 from hydra_suite.core.inference.runtime import RuntimeContext
-from hydra_suite.core.inference.stages.pose import PoseModel, load_pose_model, run_pose
+from hydra_suite.core.inference.stages.pose import (
+    PoseModel,
+    load_pose_model,
+    run_pose,
+    run_pose_batch,
+)
 
 _TEST_GEOMETRY = CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
 
@@ -204,6 +209,96 @@ def test_load_pose_model_sleap_gpu_fast_tier_uses_tensorrt(tmp_path, monkeypatch
 
     assert captured["runtime_flavor"] == "tensorrt"
     assert captured["device"] == "cuda"
+
+
+def test_run_pose_batch_composes_layer2_fit_with_layer1_affine_for_backprojection():
+    """Numeric back-projection composition check.
+
+    Ported from the deleted `_flush_pose_batch`-era test in
+    `test_interpolated_crops_worker_layer2_fit.py` (removed when Task 12
+    inlined interpolated-crops pose inference onto this module's
+    `run_pose_batch`, which now owns the composition being verified): a
+    keypoint at the exact Layer-2-fitted location of the canonical canvas's
+    centre must round-trip back to that centre through `run_pose_batch`'s
+    composed Layer 1 (OBB -> canvas) . Layer 2 (canvas -> model input)
+    inverse affine, proving the two transforms are composed correctly before
+    inverting rather than applied/ignored inconsistently.
+    """
+    from hydra_suite.core.canonicalization.fit import fit_affine, fit_to_model_input
+    from hydra_suite.core.individual.pose.types import PoseResult as BackendPoseResult
+    from hydra_suite.core.inference.result import CropBatch
+
+    geometry = _TEST_GEOMETRY
+    canvas_w, canvas_h = geometry.canvas_wh
+    model_wh = (96, 64)  # non-square, and != the canonical canvas size
+
+    fit = fit_to_model_input(geometry.canvas_wh, model_wh)
+    fit_m = fit_affine(fit)
+    canvas_center = np.array([canvas_w / 2.0, canvas_h / 2.0, 1.0], dtype=np.float64)
+    model_space_center = fit_m @ canvas_center  # where Layer 2 puts the canvas centre
+
+    # OBB corners centred on the canvas centre with angle 0 -> canonical_affine
+    # for this detection is the identity 2x3 (Layer 1 is a no-op), isolating
+    # the Layer-2 (fit_m) composition under test.
+    cx, cy = canvas_w / 2.0, canvas_h / 2.0
+    major, minor = canvas_w * 0.5, canvas_h * 0.5
+    corners = np.array(
+        [
+            [cx - major / 2, cy - minor / 2],
+            [cx + major / 2, cy - minor / 2],
+            [cx + major / 2, cy + minor / 2],
+            [cx - major / 2, cy + minor / 2],
+        ],
+        dtype=np.float32,
+    )
+    obb = OBBResult(
+        frame_idx=0,
+        centroids=np.array([[cx, cy]], dtype=np.float32),
+        angles=np.zeros(1, dtype=np.float32),
+        sizes=np.array([major * minor], dtype=np.float32),
+        shapes=np.array([[major, minor]], dtype=np.float32),
+        confidences=np.ones(1, dtype=np.float32),
+        corners=corners[None, ...],
+        detection_ids=OBBResult.make_detection_ids(0, 1),
+    )
+
+    class FakePoseBackend:
+        preferred_input_size = 0  # signals "has a preferred_input_wh instead"
+
+        @property
+        def preferred_input_wh(self):
+            return model_wh
+
+        def predict_batch(self, crops):
+            kpts = np.array(
+                [[model_space_center[0], model_space_center[1], 1.0]],
+                dtype=np.float32,
+            )
+            return [
+                BackendPoseResult(
+                    keypoints=kpts,
+                    mean_conf=1.0,
+                    valid_fraction=1.0,
+                    num_valid=1,
+                    num_keypoints=1,
+                )
+            ]
+
+    model = PoseModel(backend=FakePoseBackend(), n_keypoints=1, keypoint_names=["k0"])
+    config = PoseConfig(yolo=PoseYOLOConfig(model_path="/p.pt"))
+    batch = CropBatch(
+        crops=torch.zeros((1, 3, canvas_h, canvas_w)),
+        detection_ids=OBBResult.make_detection_ids(0, 1),
+        frame_index=np.array([0], dtype=np.int64),
+        obb_by_frame={0: obb},
+        native_sizes=np.array([[canvas_h, canvas_w]], dtype=np.int64),
+    )
+
+    results = run_pose_batch(batch, model, config, _cpu_rt(), geometry=geometry)
+
+    kpt = results[0].keypoints[0, 0]
+    assert abs(float(kpt[0]) - cx) < 1e-3
+    assert abs(float(kpt[1]) - cy) < 1e-3
 
 
 def test_run_pose_valid_mask_high_conf():

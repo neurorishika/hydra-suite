@@ -1128,13 +1128,24 @@ def _run_frame_tasks_loop(
             _prefetcher.stop()
             return None
         interp_saved = result
-        if len(_pending_frames) >= window_batch_size or idx == total_frames:
+        if len(_pending_frames) >= window_batch_size:
             if _stop():
                 _prefetcher.stop()
                 return None
             _flush_window()
-        if idx % 25 == 0:
-            del frame
+    # Flush any frames still buffered when the loop exits -- whether it ran
+    # to completion, `break`-ed out on prefetcher exhaustion, or the last
+    # iteration(s) `continue`-ed past a bad read. The old `idx == total_frames`
+    # trigger only fired from inside a loop iteration, so a `break`/`continue`
+    # on the final index silently dropped up to `window_batch_size` frames'
+    # worth of pose/CNN/head-tail rows -- this final flush is unconditional so
+    # that can no longer happen. Buffered frames are freed here (list.clear()
+    # inside _flush_window), not via any per-iteration `del`.
+    if _pending_frames:
+        if _stop():
+            _prefetcher.stop()
+            return None
+        _flush_window()
     _prefetcher.stop()
     return interp_saved
 
