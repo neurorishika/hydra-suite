@@ -1197,7 +1197,7 @@ def merge_interpolated_apriltag_df(
     merged["DetectedTagID"] = merged["DetectedTagID"].where(
         merged["DetectedTagID"].notna(), merged["tag_id"]
     )
-    filled_by_interp = merged["tag_id"].notna() & ~had_real
+    filled_by_interp = merged["tag_id"].notna() & ~had_real.values
     merged["TagSource"] = pd.Series(np.nan, index=merged.index, dtype=object)
     merged.loc[had_real.values, "TagSource"] = "real"
     merged.loc[filled_by_interp.values, "TagSource"] = "interp"
@@ -1284,7 +1284,7 @@ def merge_interpolated_cnn_df(
         if not uses_wide_columns
         else (merged[output_cols].notna().any(axis=1))
     )
-    filled_by_interp = now_present & ~had_real
+    filled_by_interp = now_present & ~had_real.values
     merged[source_col] = pd.Series(np.nan, index=merged.index, dtype=object)
     merged.loc[had_real.values, source_col] = "real"
     merged.loc[filled_by_interp.values, source_col] = "interp"

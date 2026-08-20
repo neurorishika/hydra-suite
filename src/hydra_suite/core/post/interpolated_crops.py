@@ -124,6 +124,11 @@ def _init_interpolation_backends(params, output_dir, geometry):
     ``run_cnn_batch`` builds its own classifier crops independently, unlike
     the old ``_pending_cnn_crops.append(pose_crop)``).
     """
+    # NOTE: `geometry` is unused in this body -- none of the four stage
+    # loaders need the canonical-geometry object at load time (only at
+    # crop-extraction time, later). Kept in the signature because the sole
+    # call site's tuple-unpack convention and existing tests already pass it
+    # positionally; not removed here to avoid a wider signature churn.
     from hydra_suite.core.inference.config import build_inference_config_from_params
     from hydra_suite.core.inference.runtime import RuntimeContext
     from hydra_suite.core.inference.stages.apriltag import load_apriltag_model
@@ -439,10 +444,12 @@ def _flush_pose_cnn_window(
     (``pipeline.py:367-387``): ``extract_canonical_crops_batch`` then
     ``run_pose_batch`` for pose, ``run_cnn_batch`` per CNN phase for CNN --
     instead of this module's old hand-rolled crop extraction + batching
-    (``_flush_pose_batch``/``_flush_cnn_batch``). ``suppress_foreign=True``
-    for the pose call matches today's intra-synthetic-batch masking of other
-    interpolated tasks in the same frame (design spec, AprilTag/foreign-
-    suppression decisions). Pose and CNN crops are now genuinely independent
+    (``_flush_pose_batch``/``_flush_cnn_batch``). ``suppress_foreign`` for the
+    pose call is read from ``cfg.pose.suppress_foreign_regions`` -- the SAME
+    config knob ``Pipeline`` reads for real detections (``pipeline.py:369-
+    370``) -- so a user who disables foreign suppression gets that honored for
+    interpolated crops too, not a hardcoded ``True`` (design spec, AprilTag/
+    foreign-suppression decisions). Pose and CNN crops are now genuinely independent
     (CNN via ``extract_classifier_crops_batch_np`` inside ``run_cnn_batch``,
     not a reused pose crop) -- design spec bug fix #1.
 
@@ -471,7 +478,9 @@ def _flush_pose_cnn_window(
             pending_obbs,
             geometry,
             runtime,
-            suppress_foreign=True,
+            suppress_foreign=(
+                cfg.pose.suppress_foreign_regions if cfg.pose is not None else False
+            ),
             background_color=(0, 0, 0),
         )
         pose_by_frame = run_pose_batch(
@@ -838,7 +847,7 @@ def _build_prefetcher(cap, needed_frames, total_frames):
     return SparseFramePrefetcher(cap, needed_frames, buffer_size=4)
 
 
-def _compute_frame_corners_and_affines(tasks, geometry, clipping_stats):
+def _filter_degenerate_and_get_corners(tasks, geometry, clipping_stats):
     """Degenerate-OBB pre-filter + corner geometry for one frame's tasks.
 
     Delegates the pre-filter itself to
@@ -946,11 +955,18 @@ def _process_single_frame(
     _pending_obbs,
     _pending_tasks_by_frame,
 ):
+    # NOTE: `params` and `should_stop` are unused in this body -- per-frame
+    # work here has no stop-checkpoint of its own (the caller's loop already
+    # checks `should_stop` before/after calling this) and reads no params
+    # directly. Kept in the signature because the caller passes them
+    # positionally alongside the other loop state and existing tests call
+    # this function with the same positional shape; not removed here to
+    # avoid a wider signature churn.
     def _emit(v, m):
         if progress is not None:
             progress(v, m)
 
-    kept_tasks, corners = _compute_frame_corners_and_affines(
+    kept_tasks, corners = _filter_degenerate_and_get_corners(
         frame_tasks[f], geometry, clipping_stats
     )
 
@@ -1054,7 +1070,13 @@ def _run_frame_tasks_loop(
 
     needed_frames = sorted(frame_tasks.keys())
     total_frames = len(needed_frames)
-    window_batch_size = int(params.get("INTERP_POSE_INFERENCE_BATCH_SIZE", 64))
+    # NOTE: unlike POSE_BATCH_SIZE/CNN batch knobs (which bound a batch of
+    # individual crops), this now bounds the number of FULL DECODED FRAMES
+    # buffered in `_pending_frames` per inference window (each frame can
+    # carry many per-animal tasks) -- on a 4K clip a large value here is
+    # multiple GB resident. Default kept small and memory-safe; this key has
+    # no GUI/param-builder exposure yet (hand-edit the params dict only).
+    window_batch_size = int(params.get("INTERP_POSE_INFERENCE_BATCH_SIZE", 8))
     _pending_frames: list = []
     _pending_obbs: list = []
     _pending_tasks_by_frame: list = []
@@ -1124,9 +1146,9 @@ def _run_frame_tasks_loop(
             _pending_obbs,
             _pending_tasks_by_frame,
         )
-        if result is None:
-            _prefetcher.stop()
-            return None
+        # `_process_single_frame` always returns an int (its internal
+        # `_stop()`-based early-return path was removed) -- no None check
+        # needed here.
         interp_saved = result
         if len(_pending_frames) >= window_batch_size:
             if _stop():

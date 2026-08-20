@@ -398,6 +398,29 @@ def test_merge_interpolated_apriltag_coalesces_into_detected_tag_id():
     assert pd.isna(out["TagSource"].iloc[2])
 
 
+def test_merge_interpolated_apriltag_sets_tag_source_with_non_default_index():
+    """Regression: trajectories_df with a non-default index must not crash
+    the TagSource assignment (merged always gets a fresh RangeIndex, so any
+    mask derived from out's index must be repositioned via .values), mirroring
+    the equivalent pose regression test above."""
+    trajectories = pd.DataFrame(
+        {
+            "FrameID": [0, 1, 2],
+            "TrajectoryID": [1, 1, 1],
+            "DetectedTagID": [5, np.nan, np.nan],
+        },
+        index=[5, 6, 7],
+    )
+    interp_tags = pd.DataFrame({"frame_id": [1], "trajectory_id": [1], "tag_id": [7]})
+    out = merge_interpolated_apriltag_df(trajectories, interp_tags)
+    assert out["DetectedTagID"].tolist()[0] == 5
+    assert out["DetectedTagID"].tolist()[1] == 7
+    assert pd.isna(out["DetectedTagID"].tolist()[2])
+    assert out["TagSource"].tolist()[0] == "real"
+    assert out["TagSource"].tolist()[1] == "interp"
+    assert pd.isna(out["TagSource"].tolist()[2])
+
+
 def test_merge_interpolated_headtail_coalesces_and_sets_heading_method():
     trajectories = pd.DataFrame(
         {

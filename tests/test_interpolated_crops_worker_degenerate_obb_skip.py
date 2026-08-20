@@ -15,7 +15,7 @@ of fitting a crop that cannot be honestly fit.
 
 Task 12 replaced ``_extract_pose_crop``/``_process_single_task`` with a
 delegation to ``synthetic_detections.filter_degenerate_tasks`` (called from
-``_compute_frame_corners_and_affines``): a degenerate task never survives
+``_filter_degenerate_and_get_corners``): a degenerate task never survives
 into ``kept_tasks``, so it never reaches ``build_synthetic_obb_result`` or
 any of the windowed pose/CNN/AprilTag/head-tail stage calls at all -- there
 is no more per-task pending_crops/pending_entries machinery to guard here.
@@ -68,7 +68,7 @@ def _fitting_task(frame_id=0, traj_id=2) -> dict:
 
 def test_filter_degenerate_tasks_drops_degenerate_obb_and_warns(caplog):
     """The stage-layer entry point (``filter_degenerate_tasks``, called from
-    ``_compute_frame_corners_and_affines``) must loudly skip a degenerate OBB
+    ``_filter_degenerate_and_get_corners``) must loudly skip a degenerate OBB
     rather than let it flow into ``build_synthetic_obb_result``."""
     with caplog.at_level(logging.WARNING):
         kept = filter_degenerate_tasks(

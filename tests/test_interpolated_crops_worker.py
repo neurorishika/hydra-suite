@@ -208,7 +208,7 @@ def test_crops_worker_has_no_divergent_flavor_ladder() -> None:
             ), f"divergent pose ladder token still present in {module_name}: {banned}"
 
 
-def test_compute_frame_corners_and_affines_accumulates_clipping_stats() -> None:
+def test_filter_degenerate_and_get_corners_accumulates_clipping_stats() -> None:
     """GAP 1: the interpolated-crops path shares the same run-scoped
     ClippingStats accumulator/reporting pattern as InferenceRunner/Pipeline
     (core/tracking/worker.py's end-of-run summary), instead of discarding the
@@ -225,7 +225,7 @@ def test_compute_frame_corners_and_affines_accumulates_clipping_stats() -> None:
     # A task sized to the reference body fits comfortably within the canvas.
     fitting_task = {"cx": 0.0, "cy": 0.0, "w": 20.0, "h": 10.0, "theta": 0.0}
 
-    ic._compute_frame_corners_and_affines(
+    ic._filter_degenerate_and_get_corners(
         [clipped_task, fitting_task], geometry, clipping_stats
     )
 
@@ -237,7 +237,7 @@ def test_compute_frame_corners_and_affines_accumulates_clipping_stats() -> None:
     assert "1/2" in summary
 
 
-def test_compute_frame_corners_and_affines_counts_degenerate_drops() -> None:
+def test_filter_degenerate_and_get_corners_counts_degenerate_drops() -> None:
     """A degenerate OBB is DROPPED here -- filtered out of ``kept_tasks``
     entirely (Task 12 delegates to ``synthetic_detections.filter_degenerate_
     tasks``, which returns kept tasks only rather than a ``None`` placeholder
@@ -267,7 +267,7 @@ def test_compute_frame_corners_and_affines_counts_degenerate_drops() -> None:
         "traj_id": 2,
     }
 
-    kept_tasks, corners = ic._compute_frame_corners_and_affines(
+    kept_tasks, corners = ic._filter_degenerate_and_get_corners(
         [degenerate_task, fitting_task], geometry, clipping_stats
     )
 
@@ -401,12 +401,12 @@ def test_run_interpolated_crops_rearms_degenerate_padding_warning_each_run(
         assert len(warnings_after_run2) == 2
 
 
-def test_compute_frame_corners_and_affines_tolerates_no_stats() -> None:
+def test_filter_degenerate_and_get_corners_tolerates_no_stats() -> None:
     """The accumulator is optional; a degenerate task must not blow up when
     the caller passed no ClippingStats, and is simply absent from the kept
     tasks (Task 12's ``filter_degenerate_tasks`` delegation)."""
     geometry = CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
-    kept_tasks, corners = ic._compute_frame_corners_and_affines(
+    kept_tasks, corners = ic._filter_degenerate_and_get_corners(
         [
             {
                 "cx": 0.0,

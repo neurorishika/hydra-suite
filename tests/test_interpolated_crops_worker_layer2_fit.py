@@ -139,7 +139,11 @@ def test_flush_pose_cnn_window_delegates_to_the_shared_stage_functions(monkeypat
     monkeypatch.setattr(cnn_module, "run_cnn_batch", _fake_run_cnn_batch)
 
     class _FakeCfg:
-        pose = type("P", (), {"min_keypoint_confidence": 0.2})()
+        pose = type(
+            "P",
+            (),
+            {"min_keypoint_confidence": 0.2, "suppress_foreign_regions": True},
+        )()
         cnn_phases = [object()]
 
     interp_pose_rows: list = []

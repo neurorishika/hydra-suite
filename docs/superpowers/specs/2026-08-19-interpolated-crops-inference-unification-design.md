@@ -173,6 +173,17 @@ result without a parallel bool. `DetectionID` itself is unaffected — it stays 
 interpolated rows as today; `*Source` is now the authoritative, explicit signal,
 `DetectionID`-absence becomes a derivable (not primary) fact.
 
+**Identity-evidence consequence (final-review addendum, not called out in the original
+draft).** Because interpolated AprilTag ids now coalesce into `DetectedTagID`, they are also
+read by `identity_postprocess.derive_unique_identity_key_series` as apriltag identity
+evidence — feeding the relink identity-veto logic for rows that used to be excluded (when the
+interpolated id lived only in the separate, unconsumed `InterpTagID` column). This is accepted
+as intentional: it is consistent with the already-shipped CNN coalesce precedent (CNN's
+interpolated values already flowed into identity evidence the same way via coalescing into
+their original columns), and it achieves the same real-detection-parity goal this refactor
+targets. No gating logic was added to distinguish real vs. interpolated tag ids in the identity
+path.
+
 **Consumer migration (adversarial-review G5, not enumerated in the earlier draft).** The
 `Interp*` columns being retired are read outside the merge functions themselves — the plan
 must update every one of these call sites, not just the writers:

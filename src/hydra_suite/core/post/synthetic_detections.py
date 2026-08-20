@@ -41,7 +41,7 @@ def filter_degenerate_tasks(
     is what restores today's loud-skip-and-tally behavior: it must run
     BEFORE any task reaches ``build_synthetic_obb_result``/the batch stage
     functions, exactly mirroring what
-    ``interpolated_crops.py::_compute_frame_corners_and_affines`` used to do
+    ``interpolated_crops.py::_filter_degenerate_and_get_corners`` used to do
     inline. For kept tasks it also records the real overflow via
     ``canonical_affine``, matching what ``Pipeline`` does for real
     detections (``pipeline.py:331-338``).
