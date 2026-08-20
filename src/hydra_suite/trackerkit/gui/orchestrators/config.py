@@ -1705,6 +1705,18 @@ class ConfigOrchestrator:
         if not preset_mode:
             cfg["yolo_device"] = runtime_detection["yolo_device"]
 
+        # Solver auto-pick must see the DERIVED total slot count
+        # (n_arenas * animals_per_arena), not the per-arena spinbox value --
+        # otherwise a many-arena session with few animals per arena
+        # auto-picks as though tracking only that per-arena count, while the
+        # engine actually allocates n_arenas * that many slots. Uses the
+        # same n_arenas_from_shapes the save gate uses, so there is one
+        # definition of arena count in this file.
+        _derived_total_targets = (
+            n_arenas_from_shapes(self._mw.roi_shapes)
+            * self._panels.setup.spin_max_targets.value()
+        )
+
         cfg.update(
             {
                 # Detection frame batching (drives InferenceConfig.detection_batch_size)
@@ -1741,14 +1753,16 @@ class ConfigOrchestrator:
                 "pose_valid_orientation_scale": 0.15,
                 "use_mahalanobis_distance": self._panels.tracking.chk_use_mahal.isChecked(),
                 # === ASSIGNMENT ALGORITHM ===
-                # Solver flags: respect saved override, else auto-pick from N animals.
+                # Solver flags: respect saved override, else auto-pick from
+                # the DERIVED total slot count (see _derived_total_targets
+                # above), not the per-arena spinbox value.
                 "enable_greedy_assignment": _resolve_solver_flags(
                     self._panels.tracking,
-                    self._panels.setup.spin_max_targets.value(),
+                    _derived_total_targets,
                 )[0],
                 "enable_spatial_optimization": _resolve_solver_flags(
                     self._panels.tracking,
-                    self._panels.setup.spin_max_targets.value(),
+                    _derived_total_targets,
                 )[1],
                 "association_stage1_motion_gate_multiplier": self._panels.tracking.spin_assoc_gate_multiplier.value(),
                 "association_stage1_max_area_ratio": self._panels.tracking.spin_assoc_max_area_ratio.value(),

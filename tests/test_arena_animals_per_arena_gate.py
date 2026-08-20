@@ -185,3 +185,77 @@ def test_single_arena_animal_count_round_trips_through_save_and_load(
         assert fresh._setup_panel.spin_max_targets.value() == 7
     finally:
         fresh.close()
+
+
+# ---------------------------------------------------------------------------
+# Fix round 2, Finding 1 (Important): the solver auto-pick
+# (_resolve_solver_flags, called from build_config_dict for
+# enable_greedy_assignment/enable_spatial_optimization) must see the DERIVED
+# total slot count (n_arenas * animals_per_arena), not the per-arena spinbox
+# value directly -- otherwise a many-arena session with few animals per
+# arena silently auto-picks the small-N solver branch while the engine
+# actually allocates a large total (exactly the N > 50 Python-cost-matrix-
+# fallback regime a many-arena session is likely to hit).
+# ---------------------------------------------------------------------------
+
+
+def _make_n_arena_shapes(n_arenas):
+    return [
+        {"type": "circle", "params": [i, i, 1], "mode": "include", "arena_id": i}
+        for i in range(n_arenas)
+    ]
+
+
+def _clear_solver_overrides(main_window):
+    """The shipped default.json preset (loaded on every MainWindow startup)
+    carries explicit `enable_greedy_assignment`/`enable_spatial_optimization:
+    false` -- a "saved override" that always wins over auto-pick. Clearing
+    it here is what actually exercises the auto-pick branch these tests are
+    about (pre-existing app behavior, unrelated to this fix)."""
+    main_window._tracking_panel._enable_greedy_override = None
+    main_window._tracking_panel._enable_spatial_override = None
+
+
+def test_solver_flags_use_derived_total_not_per_arena_count(main_window):
+    """10 arenas x 6 animals/arena = 60 total (>= the 50-target autopick
+    threshold) must resolve the SAME solver flags as a single-arena config
+    whose max_targets is entered directly as 60 -- not the per-arena
+    spinbox value of 6, which alone would stay under the threshold."""
+    _clear_solver_overrides(main_window)
+    main_window.roi_shapes = _make_n_arena_shapes(10)
+    main_window._setup_panel.spin_max_targets.setValue(
+        6
+    )  # per-arena; derived total = 60
+
+    cfg = main_window._config_orch.build_config_dict()
+
+    assert cfg["animals_per_arena"] == 6
+    assert cfg["enable_greedy_assignment"] is True
+    assert cfg["enable_spatial_optimization"] is True
+
+    # Equivalent single-arena config with the same DERIVED total entered directly.
+    main_window.roi_shapes = []
+    main_window._setup_panel.spin_max_targets.setValue(60)
+    _clear_solver_overrides(main_window)
+    equivalent_cfg = main_window._config_orch.build_config_dict()
+
+    assert equivalent_cfg["enable_greedy_assignment"] == cfg["enable_greedy_assignment"]
+    assert (
+        equivalent_cfg["enable_spatial_optimization"]
+        == cfg["enable_spatial_optimization"]
+    )
+
+
+def test_solver_flags_stay_false_below_threshold_for_multi_arena(main_window):
+    """10 arenas x 4 animals/arena = 40 total (< the 50-target threshold)
+    must NOT auto-pick greedy/spatial -- confirms the derived-total fix
+    doesn't just always return True, only when the real total crosses the
+    threshold."""
+    _clear_solver_overrides(main_window)
+    main_window.roi_shapes = _make_n_arena_shapes(10)
+    main_window._setup_panel.spin_max_targets.setValue(4)  # derived total = 40
+
+    cfg = main_window._config_orch.build_config_dict()
+
+    assert cfg["enable_greedy_assignment"] is False
+    assert cfg["enable_spatial_optimization"] is False
