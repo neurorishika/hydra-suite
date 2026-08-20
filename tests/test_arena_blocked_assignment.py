@@ -575,12 +575,19 @@ def _unbalanced_params() -> dict:
     return params
 
 
-def _run_assignment(track_xy, det_xy, track_arena, meas_arena):
+def _run_assignment(
+    track_xy, det_xy, track_arena, meas_arena, tracking_continuity=None
+):
     """Drive the real cost matrix + assign_tracks for one scene.
 
     Returns ``{track_index: (det_x, det_y)}`` -- pairs are reported by
     detection POSITION, not column index, so the combined and solo runs stay
     comparable even though their column numbering differs.
+
+    ``tracking_continuity`` defaults to "every track established" (100 for
+    all slots); callers that need a non-contiguous ``est`` (some slot below
+    ``KALMAN_MATURITY_AGE``, so excluded from the established phase) pass
+    their own list.
     """
     n = len(track_xy)
     m = len(det_xy)
@@ -589,6 +596,8 @@ def _run_assignment(track_xy, det_xy, track_arena, meas_arena):
     measurements = [np.array([x, y, 0.0], dtype=np.float32) for (x, y) in det_xy]
     kf = _DummyKF(n)
     kf.X[:, :2] = np.array(track_xy, dtype=np.float32)
+    if tracking_continuity is None:
+        tracking_continuity = [100] * n
 
     assigner = TrackAssigner(_unbalanced_params())
     assigner.set_track_arena(track_arena)
@@ -607,7 +616,7 @@ def _run_assignment(track_xy, det_xy, track_arena, meas_arena):
         M=m,
         meas=measurements,
         track_states=["active"] * n,
-        tracking_continuity=[100] * n,
+        tracking_continuity=tracking_continuity,
         kf_manager=kf,
         meas_arena=meas_arena,
     )
@@ -659,6 +668,12 @@ def test_unbalanced_arena_pairing_is_invariant_to_other_arenas():
         assert (det in det_xy[:2]) == (track_arena[slot] == 0)
     # Arena 1's spare detection is neither matched nor lost.
     assert det_xy.index((-850.0, 0.0)) in free_dets
+    # Arena 1 is not vacuously untested: its own three tracks must pair to
+    # their own three (non-spare) detections, not silently drop to zero pairs
+    # or get mapped through the wrong (block-local vs. global) column index.
+    assert combined.get(3) == (-995.0, 0.0)
+    assert combined.get(4) == (-1105.0, 0.0)
+    assert combined.get(5) == (-1205.0, 0.0)
 
 
 def test_joint_solve_on_the_same_matrix_would_get_it_wrong():
@@ -698,6 +713,61 @@ def test_joint_solve_on_the_same_matrix_would_get_it_wrong():
         "the joint solve now agrees with the per-arena solve on this scene -- "
         "the invariance test has lost its teeth; re-tune the geometry"
     )
+
+
+def test_arena_partition_uses_true_track_index_not_position_in_est():
+    """The per-arena row partition must key off each track's real index, not
+    its position within ``est``.
+
+    ``est`` is only every established (non-young, non-lost) track, so it can
+    be a non-contiguous subset of ``range(N)``. Slot 0 here is young
+    (``tracking_continuity`` below ``KALMAN_MATURITY_AGE``) and excluded from
+    ``est``, so ``est_sorted == [1..6]`` -- NOT ``range(6)``. A partition that
+    slices the arena-id array by *position in est* (e.g.
+    ``track_arena[:len(est_sorted)]``) rather than by *true track index*
+    (``track_arena[est_sorted]``) silently shifts every later arena lookup by
+    one, exactly the failure mode this guards against.
+    """
+    # slot 0: young/unstable, own (unused) arena id, far from everything so
+    # it cannot accidentally win a detection through phase 2.
+    # slots 1,2,3 -> arena 0 (A, B, C); slots 4,5,6 -> arena 1.
+    track_xy = [
+        (9999.0, 9999.0),
+        (0.0, 0.0),
+        (100.0, 0.0),
+        (200.0, 0.0),
+        (-1000.0, 0.0),
+        (-1100.0, 0.0),
+        (-1200.0, 0.0),
+    ]
+    track_arena = np.array([2, 0, 0, 0, 1, 1, 1], dtype=np.int32)
+    det_xy = [
+        (5.0, 0.0),  # D0 (arena 0), next to A (slot 1)
+        (105.0, 0.0),  # D1 (arena 0), next to B (slot 2)
+        (-995.0, 0.0),
+        (-1105.0, 0.0),
+        (-1205.0, 0.0),
+        (-850.0, 0.0),  # arena 1's spare
+    ]
+    meas_arena = np.array([0, 0, 1, 1, 1, 1], dtype=np.int32)
+    tracking_continuity = [1] + [100] * (len(track_xy) - 1)
+
+    pairs, _, free_dets = _run_assignment(
+        track_xy,
+        det_xy,
+        track_arena,
+        meas_arena,
+        tracking_continuity=tracking_continuity,
+    )
+
+    assert pairs.get(1) == det_xy[0], "slot 1 (A) should keep its own D0"
+    assert pairs.get(2) == det_xy[1], "slot 2 (B) should keep its own D1"
+    assert pairs.get(4) == det_xy[2]
+    assert pairs.get(5) == det_xy[3]
+    assert pairs.get(6) == det_xy[4]
+    assert det_xy.index((-850.0, 0.0)) in free_dets
+    # Slot 0 (young, far away, orphan arena id) must not have stolen anything.
+    assert 0 not in pairs
 
 
 def test_detection_outside_every_arena_survives_the_per_arena_solve():

@@ -906,6 +906,16 @@ class TrackAssigner:
         index as the numpy integer scipy returned.  Otherwise ``det_cols`` is
         the arena's own detection columns and the solve sees only that
         sub-block.
+
+        The finiteness check runs on this same ``cost_sub`` slice -- the one
+        slice that is actually handed to ``linear_sum_assignment`` -- instead
+        of a separate whole-row slice computed by the caller and discarded.
+        For the ungated path that is the same cells the old pre-check
+        covered (identical error semantics, one slice instead of two); for a
+        per-arena block it means only the cells that block can actually solve
+        are checked -- cross-arena cells the solver never sees no longer need
+        to be finite either, matching the "never handed to the solver at all"
+        invariant already documented on the caller.
         """
         assignments = []
         assigned_dets = set()
@@ -913,6 +923,11 @@ class TrackAssigner:
             cost_sub = cost[est_sorted, :]
         else:
             cost_sub = cost[np.ix_(est_sorted, det_cols)]
+        if not np.isfinite(cost_sub).all():
+            bad = int(np.size(cost_sub) - np.count_nonzero(np.isfinite(cost_sub)))
+            raise ValueError(
+                f"assignment submatrix contains non-finite values (bad={bad}, tracks={len(est_sorted)}, dets={cost_sub.shape[1]})"
+            )
         rows, cols = linear_sum_assignment(cost_sub)
         for r_idx, c_idx in zip(rows, cols):
             r = est_sorted[r_idx]
@@ -966,12 +981,6 @@ class TrackAssigner:
         if not est:
             return [], set()
         est_sorted = sorted(est)
-        cost_sub = cost[est_sorted, :]
-        if not np.isfinite(cost_sub).all():
-            bad = int(np.size(cost_sub) - np.count_nonzero(np.isfinite(cost_sub)))
-            raise ValueError(
-                f"assignment submatrix contains non-finite values (bad={bad}, tracks={len(est_sorted)}, dets={cost_sub.shape[1]})"
-            )
         if track_arena is None or meas_arena is None:
             return TrackAssigner._solve_established_block(
                 est_sorted, None, cost, raw_dist_mat, MAX_DIST, VEL_GATE
@@ -980,16 +989,46 @@ class TrackAssigner:
         M = cost.shape[1]
         ta = np.asarray(track_arena, dtype=np.int32)
         ma = np.asarray(meas_arena, dtype=np.int32)[:M]
-        row_arena = ta[est_sorted]
+        est_arr = np.asarray(est_sorted, dtype=np.intp)
+        row_arena = ta[est_arr]
+
+        # Vectorized grouping: one stable argsort per side turns "A full
+        # scans over N (rows) / M (cols)" into "sort once, then a single
+        # np.unique pass for group boundaries" -- O((N+M) log(N+M) + A)
+        # instead of O(A*(N+M)). ``kind="stable"`` on both sides preserves
+        # each side's original ascending order *within* a group, so the rows
+        # and columns handed to each block are in exactly the order the old
+        # per-arena list-comprehension / ``np.flatnonzero`` scan produced --
+        # required for byte-identical results, not just equivalent ones.
+        row_order = np.argsort(row_arena, kind="stable")
+        row_arena_sorted = row_arena[row_order]
+        row_ids_sorted = est_arr[row_order]
+        uniq_row_arenas, row_start, row_count = np.unique(
+            row_arena_sorted, return_index=True, return_counts=True
+        )
+
+        col_order = np.argsort(ma, kind="stable")
+        ma_sorted = ma[col_order]
+        uniq_col_arenas, col_start, col_count = np.unique(
+            ma_sorted, return_index=True, return_counts=True
+        )
+        col_index_of_arena = {int(arena): i for i, arena in enumerate(uniq_col_arenas)}
+
         assignments = []
         assigned_dets = set()
-        # Sorted arena order keeps the emitted pair order deterministic and
-        # independent of dict/set iteration.
-        for arena in sorted({int(a) for a in row_arena}):
-            block_rows = [r for r, a in zip(est_sorted, row_arena) if int(a) == arena]
-            block_cols = np.flatnonzero(ma == arena)
-            if len(block_cols) == 0:
+        # Sorted arena order (np.unique already returns ascending) keeps the
+        # emitted pair order deterministic and independent of dict/set
+        # iteration, matching the previous ``sorted({...})`` loop.
+        for i, arena in enumerate(uniq_row_arenas):
+            j = col_index_of_arena.get(int(arena))
+            if j is None:
                 continue
+            r0 = int(row_start[i])
+            rc = int(row_count[i])
+            block_rows = row_ids_sorted[r0 : r0 + rc]
+            c0 = int(col_start[j])
+            cc = int(col_count[j])
+            block_cols = col_order[c0 : c0 + cc]
             pairs, dets = TrackAssigner._solve_established_block(
                 block_rows, block_cols, cost, raw_dist_mat, MAX_DIST, VEL_GATE
             )
@@ -1267,10 +1306,14 @@ class TrackAssigner:
                 )
             else:
                 # Only hand the arena arrays down when they are long enough to
-                # label EVERY row and column -- the same fail-open predicate
-                # `_arena_arrays` and the identity overlay use. A short array
-                # would silently mislabel slots; `None` keeps the original
-                # whole-matrix solve, which is what single-arena runs take.
+                # label EVERY row and column -- the same fail-open ``>=``
+                # predicate the identity overlay uses (line ~1111). NOTE:
+                # `_arena_arrays` (the cost-kernel gate) requires an exact
+                # ``==`` length match instead and falls back to "no gating"
+                # on any mismatch, short or long -- do not cite it as sharing
+                # this predicate. A short array here would silently mislabel
+                # slots; `None` keeps the original whole-matrix solve, which
+                # is what single-arena runs take.
                 _ta = self.track_arena
                 _arena_gated = (
                     _ta is not None
