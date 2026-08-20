@@ -2194,6 +2194,13 @@ class SessionOrchestrator:
         exclude_count = sum(
             1 for s in self._mw.roi_shapes if s.get("mode", "include") == "exclude"
         )
+        # Display-only count over ALL shapes (include + exclude). This
+        # intentionally differs from the engine's authoritative count,
+        # `engine_params.n_arenas_from_shapes` (include-shapes only) -- if the
+        # highest arena id appears only on an exclude shape, this label shows
+        # one more arena than the engine will actually use. Not unified with
+        # the engine count because that would change engine behavior; this is
+        # a status label, not a config value.
         arena_count = len({int(s.get("arena_id", 0)) for s in self._mw.roi_shapes})
         arena_note = (
             f", arena {self.current_arena_id + 1} ({arena_count} arena(s) total)"

@@ -209,6 +209,15 @@ class BackgroundMeasurer:
         N = p["MAX_TARGETS"]
         max_allowed_contours = N * p.get("MAX_CONTOUR_MULTIPLIER", 20)
 
+        # KNOWN LIMITATION (multi-arena): this skip threshold is spent globally,
+        # not per arena. When multi-arena is active, MAX_TARGETS is the derived
+        # n_arenas * animals_per_arena, so the threshold here is that much larger
+        # than a single-arena run's -- a noisy frame that would have been skipped
+        # running one arena alone may now be processed (and vice versa). Fixing
+        # this means per-arena detection budgets, which is a detection-stage
+        # restructure deliberately scoped out of the multi-arena feature. Only
+        # bites when total contours exceed the combined budget (noise/crowding);
+        # the nominal case is unaffected.
         if len(cnts) > max_allowed_contours:
             logger.debug(
                 f"Frame {frame_count}: Too many contours ({len(cnts)}), skipping."
@@ -258,6 +267,15 @@ class BackgroundMeasurer:
                     f"Size filtering: {original_count} -> {len(meas)} detections"
                 )
 
+        # KNOWN LIMITATION (multi-arena): this top-N-by-area truncation keeps the
+        # largest N = MAX_TARGETS contours across the WHOLE FRAME, not per arena.
+        # A crowded arena can therefore consume detection slots that "belong" to
+        # a quiet arena, breaking the "same as running each arena separately"
+        # promise -- the one place multi-arena independence is not achieved.
+        # Fixing this means per-arena detection budgets (deliberately scoped out
+        # of the multi-arena feature; see the design spec). Only bites when total
+        # detections exceed total slots (noise/crowding); the nominal case, where
+        # each arena's detections stay within its own share of N, is unaffected.
         if len(meas) > N:
             idxs = np.argsort(sizes)[::-1][:N]
             meas = [meas[i] for i in idxs]

@@ -2128,6 +2128,13 @@ class MainWindow(QMainWindow):
             self._generate_combined_roi_mask(fh, fw)
         self.btn_undo_roi.setEnabled(len(self.roi_shapes) > 0)
         self.btn_crop_video.setEnabled(True)
+        # Display-only count over ALL shapes (include + exclude); intentionally
+        # differs from the engine's authoritative count,
+        # `engine_params.n_arenas_from_shapes` (include-shapes only) -- an
+        # arena id appearing only on an exclude shape makes this label report
+        # one more arena than the engine will actually use. Left unreconciled
+        # because unifying them would change engine behavior; this is just a
+        # status label.
         arena_count = len({int(s.get("arena_id", 0)) for s in self.roi_shapes})
         self.roi_status_label.setText(
             f"Generated {len(new_shapes)} arena shape(s) "

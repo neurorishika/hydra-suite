@@ -2254,7 +2254,7 @@ git commit -m "test(arena): end-to-end tiling oracle proving per-arena independe
 
 No spec requirement is unassigned. Out-of-scope items (per-arena overrides, arena crossing, per-arena files, auto-detection, global catalogs) have no tasks, as intended.
 
-**Naming consistency check:** `build_arena_labels` (Tasks 1, 6), `ArenaLayout` with `.slot_arena`/`.max_targets`/`.arena_of_points`/`.is_single_arena`/`.label_image_for_size` (Tasks 2, 6), `set_track_arena` (Tasks 3, 4, 6), `meas_arena` (Tasks 3, 4, 6), `ArenaDecoderRegistry` (Task 5), `slot_arena=` keyword on `resolve_trajectories` (Task 7), `animals_per_arena` (Tasks 6, 8), `generate_grid_shapes` (Task 9) — each used identically wherever it appears.
+**Naming consistency check:** `build_arena_labels` (Tasks 1, 6), `ArenaLayout` with `.slot_arena`/`.max_targets`/`.arena_of_points`/`.is_single_arena`/`.label_image_for_size` (Tasks 2, 6), `set_track_arena` (Tasks 3, 4, 6), `meas_arena` (Tasks 3, 4, 6), `ArenaDecoderRegistry` (Task 5), per-trajectory `arena_id` column consumed by `resolve_trajectories` (Task 7, superseding the earlier `slot_arena=` keyword design per the Task 7 correction above), `animals_per_arena` (Tasks 6, 8), `generate_grid_shapes` (Task 9) — each used identically wherever it appears.
 
 **Ordering note:** Tasks 3 and 4 both modify `hungarian.py` and 4 depends on 3's `set_track_arena`; run them in order. Task 6 depends on 1, 2, 3, 4, 5. Task 10 depends on everything.
 
@@ -2283,9 +2283,16 @@ column, so the single solve is the existing solve on the existing matrix. Take t
 `track_arena is None` path unchanged — do not route single-arena runs through the
 partitioning code.
 
-**Perf:** this is also strictly cheaper at scale. One `n_arenas × animals` square solve per
-arena replaces a single `MAX_TARGETS × M` solve; Hungarian is roughly cubic, so 100 solves
-of 4×4 is far less work than one 400×400.
+**Perf:** measured, not predicted -- and the first measurement was the opposite of the
+"obviously cheaper" intuition below. The initial per-arena partition loop (a per-arena
+Python scan of rows plus a per-arena `np.flatnonzero` over all columns) was
+O(arenas × (N+M)) and at N=1600 ran in 37.5ms, ~11x *slower* than the single joint solve
+it replaced. Replacing it with one stable argsort per side plus `np.unique` to get
+contiguous per-arena row/col slices in O((N+M) log(N+M) + arenas) brought it to 3.4ms --
+3x *faster* than the joint solve (`89ab18f1`). The naive "100 solves of 4x4 is far less
+work than one 400x400" argument is true of the Hungarian solves themselves, but was
+swamped by the partitioning overhead until it was vectorized; state the measured result,
+not the asymptotic argument alone.
 
 **Acceptance:**
 - The tiling oracle passes at a **wide** assignment gate (`max_assignment_distance_multiplier`

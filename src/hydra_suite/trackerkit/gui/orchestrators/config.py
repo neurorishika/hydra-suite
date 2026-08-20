@@ -1402,9 +1402,11 @@ class ConfigOrchestrator:
         # needs the now-current spin_max_targets value plus the roi_shapes
         # about to be loaded below.
         self._mw.roi_shapes = cfg.get("roi_shapes", [])
-        # Resume arena assignment from the highest id already used (excludes
-        # included), so newly drawn shapes on a reloaded multi-arena project
-        # join a fresh arena instead of collapsing back into arena 0.
+        # Resume arena assignment from the highest id already used (includes
+        # and excludes), so newly drawn shapes on a reloaded multi-arena project
+        # join the last existing arena (not a fresh one) until the user presses
+        # "New Arena" -- matching the in-session behavior rather than
+        # collapsing back into arena 0.
         used_arena_ids = [int(s.get("arena_id", 0)) for s in self._mw.roi_shapes]
         self._mw._session_orch.current_arena_id = (
             max(used_arena_ids) if used_arena_ids else 0
