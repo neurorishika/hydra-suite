@@ -626,6 +626,17 @@ class MainWindow(QMainWindow):
             "an include zone plus its exclude hole belong in the SAME arena."
         )
 
+        # Bulk-entry convenience for many identical arenas (e.g. a 96-well
+        # plate) -- generates ordinary roi_shapes, indistinguishable from
+        # hand-drawn ones and just as editable afterwards. See task-9 brief.
+        self.btn_generate_grid = QPushButton("Generate Grid")
+        self.btn_generate_grid.clicked.connect(self._on_generate_grid_clicked)
+        self.btn_generate_grid.setToolTip(
+            "Bulk-add a rows x cols grid of arena shapes (e.g. a well plate)\n"
+            "instead of drawing each one by hand. Generated shapes are\n"
+            "ordinary, individually-editable ROI shapes."
+        )
+
         self.btn_clear_roi = QPushButton("Clear All")
         self.btn_clear_roi.clicked.connect(self.clear_roi)
         self.btn_clear_roi.setShortcut("Ctrl+C")
@@ -654,6 +665,7 @@ class MainWindow(QMainWindow):
         roi_layout.addWidget(self.btn_finish_roi)
         roi_layout.addWidget(self.btn_undo_roi)
         roi_layout.addWidget(self.btn_new_arena)
+        roi_layout.addWidget(self.btn_generate_grid)
         roi_layout.addWidget(self.btn_clear_roi)
         roi_layout.addWidget(self.btn_crop_video)
         roi_layout.addStretch()
@@ -2079,6 +2091,51 @@ class MainWindow(QMainWindow):
             "'New Arena' is pressed again."
         )
         self._update_animals_per_arena_total_label()
+
+    def _on_generate_grid_clicked(self):
+        """Open the bulk arena-grid dialog and merge its output into roi_shapes.
+
+        The generator only knows how to append shapes -- it computes the
+        next free arena id over ALL existing shapes (hand-drawn or
+        previously generated) so ids never collide, then extends
+        ``roi_shapes`` in place. Generated shapes are ordinary shapes: no
+        marker, no separate storage, fully editable afterwards.
+        """
+        from PySide6.QtWidgets import QDialog
+
+        from hydra_suite.trackerkit.gui.dialogs.arena_grid_dialog import ArenaGridDialog
+
+        next_id = (
+            max((int(s.get("arena_id", 0)) for s in self.roi_shapes), default=-1) + 1
+        )
+        dialog = ArenaGridDialog(
+            parent=self,
+            reference_frame=self.roi_base_frame,
+            first_arena_id=next_id,
+        )
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        new_shapes = dialog.accepted_shapes()
+        if not new_shapes:
+            return
+        self.roi_shapes.extend(new_shapes)
+
+        if self.roi_base_frame:
+            fh, fw = self.roi_base_frame.height(), self.roi_base_frame.width()
+            self._generate_combined_roi_mask(fh, fw)
+        self.btn_undo_roi.setEnabled(len(self.roi_shapes) > 0)
+        self.btn_crop_video.setEnabled(True)
+        arena_count = len({int(s.get("arena_id", 0)) for s in self.roi_shapes})
+        self.roi_status_label.setText(
+            f"Generated {len(new_shapes)} arena shape(s) "
+            f"({arena_count} arena(s) total)"
+        )
+        self._update_roi_optimization_info()
+        self._update_animals_per_arena_total_label()
+        self.update_roi_preview()
+        if self.roi_base_frame:
+            self._display_roi_with_zoom()
 
     def _update_animals_per_arena_total_label(self):
         """Keep the derived-total label next to "Animals per arena" live.
