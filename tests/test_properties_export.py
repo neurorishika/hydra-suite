@@ -453,6 +453,53 @@ def test_merge_interpolated_headtail_coalesces_and_sets_heading_method():
     assert pd.isna(out["HeadingMethod"].iloc[2])
 
 
+def test_merge_interpolated_headtail_does_not_fabricate_conf_for_undirected_row():
+    """Regression (I4): an interp row with NaN heading_rad (no real
+    interpolated heading) but a present heading_conf/heading_directed (e.g.
+    an undirected row in the interp CSV, where heading_conf/heading_directed
+    can still be 0.0/False) must NOT get a fabricated HeadTailClassifierConf
+    -- it should stay NaN, matching HeadingSource staying NaN for that row
+    too (no provenance marker, no confidence). A row WITH a real interp
+    heading (heading_rad non-NaN) must still get both HeadTailAngleRad and
+    HeadTailClassifierConf coalesced (the working case must not break)."""
+    trajectories = pd.DataFrame(
+        {
+            "FrameID": [0, 1],
+            "TrajectoryID": [1, 1],
+            # Pre-seeded as object dtype (mirrors real trajectories_df, which
+            # always carries string/bool values in these columns already) so
+            # the "headtail_interp"/bool backfills below don't hit pandas's
+            # "Invalid value for dtype float64" upcast guard on an
+            # all-NaN-initialized float64 column -- an orthogonal fixture
+            # detail, not part of the I4 gate under test.
+            "HeadingMethod": pd.array([None, None], dtype=object),
+            "HeadingIsDirected": pd.array([None, None], dtype=object),
+        }
+    )
+    interp_ht = pd.DataFrame(
+        {
+            "frame_id": [0, 1],
+            "trajectory_id": [1, 1],
+            "heading_rad": [np.nan, 2.0],
+            "heading_conf": [0.0, 0.9],
+            "heading_directed": [0, 1],
+        }
+    )
+    out = merge_interpolated_headtail_df(trajectories, interp_ht)
+
+    # Row 0: no real interpolated heading (heading_rad NaN) -> no fabricated
+    # confidence and no provenance stamp.
+    assert pd.isna(out["HeadTailAngleRad"].iloc[0])
+    assert pd.isna(out["HeadTailClassifierConf"].iloc[0])
+    assert pd.isna(out["HeadingSource"].iloc[0])
+
+    # Row 1: real interpolated heading -> both angle and confidence coalesce,
+    # provenance stamped "interp" (the working case, unbroken by the gate).
+    assert out["HeadTailAngleRad"].iloc[1] == pytest.approx(2.0)
+    assert out["HeadTailClassifierConf"].iloc[1] == pytest.approx(0.9)
+    assert out["HeadingSource"].iloc[1] == "interp"
+
+
 def test_merge_interpolated_cnn_sets_cnn_source():
     trajectories = pd.DataFrame(
         {

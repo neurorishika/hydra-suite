@@ -129,15 +129,49 @@ def _init_interpolation_backends(params, output_dir, geometry):
     # crop-extraction time, later). Kept in the signature because the sole
     # call site's tuple-unpack convention and existing tests already pass it
     # positionally; not removed here to avoid a wider signature churn.
-    from hydra_suite.core.inference.config import build_inference_config_from_params
+    from hydra_suite.core.inference.config import (
+        AprilTagConfig,
+        build_inference_config_from_params,
+    )
     from hydra_suite.core.inference.runtime import RuntimeContext
     from hydra_suite.core.inference.stages.apriltag import load_apriltag_model
     from hydra_suite.core.inference.stages.cnn import load_cnn_model
     from hydra_suite.core.inference.stages.headtail import load_headtail_model
     from hydra_suite.core.inference.stages.pose import load_pose_model
 
-    cfg = build_inference_config_from_params(params)
-    runtime = RuntimeContext.from_config(cfg)
+    try:
+        cfg = build_inference_config_from_params(params)
+        runtime = RuntimeContext.from_config(cfg)
+    except Exception:
+        # Unlike the four per-model try/except blocks below (which degrade
+        # ONE signal and keep going), a failure here -- e.g.
+        # PoseModelUnresolvedError when ENABLE_POSE_EXTRACTOR is set but no
+        # usable pose model resolves, or any other InferenceConfigError --
+        # used to propagate all the way up to `run_interpolated_crops`'s
+        # outer blanket `except Exception: return {"saved": 0, "gaps": 0}`,
+        # which has NO logging at all: the entire interpolated-crop
+        # post-pass (crops, ROI CSV/NPZ, pose/tag/cnn/headtail CSVs --
+        # everything) would silently vanish with zero diagnostic trace. Log
+        # loudly and degrade to "no models available" instead, matching this
+        # function's existing return contract (mirrors the old code's
+        # graceful degradation: a failed pose-backend init logged and kept
+        # the other three signals running -- here nothing about config-
+        # building is stage-specific, so all four degrade together, but the
+        # caller still runs the frame-task loop and saves crops/ROI).
+        logger.exception(
+            "Interpolated post-pass: failed to build the inference config/"
+            "runtime; disabling pose/AprilTag/CNN/head-tail analysis for "
+            "this run (crop/ROI extraction is unaffected)."
+        )
+        from types import SimpleNamespace
+
+        degraded_cfg = SimpleNamespace(
+            pose=None,
+            apriltag=AprilTagConfig(enabled=False),
+            headtail=None,
+            cnn_phases=[],
+        )
+        return degraded_cfg, None, None, None, [], [], None
 
     pose_model = None
     if cfg.pose is not None:
@@ -155,6 +189,14 @@ def _init_interpolation_backends(params, output_dir, geometry):
             pose_model = None
 
     apriltag_model = None
+    # `cfg.apriltag.enabled` == `bool(params.get("USE_APRILTAGS", False))` only
+    # (see `build_inference_config_from_params`, config.py) -- it deliberately
+    # does NOT also check `IDENTITY_METHOD == "apriltags"` the way the old
+    # hand-rolled interpolated-crops enablement check did. This is intentional
+    # parity with `Pipeline`'s own real-detection enablement check
+    # (`pipeline.py`'s `self.stages.apriltag_model is not None`, built from the
+    # SAME `cfg.apriltag.enabled` field with no `IDENTITY_METHOD` fallback of
+    # its own) -- not a functional regression versus real detections.
     if cfg.apriltag.enabled:
         try:
             apriltag_model = load_apriltag_model(cfg.apriltag)
@@ -437,6 +479,7 @@ def _flush_pose_cnn_window(
     interp_pose_rows,
     interp_cnn_rows,
     profiler,
+    background_color=(0, 0, 0),
 ):
     """Run pose + CNN inference over a window of (frame, synthetic OBB) pairs.
 
@@ -481,7 +524,11 @@ def _flush_pose_cnn_window(
             suppress_foreign=(
                 cfg.pose.suppress_foreign_regions if cfg.pose is not None else False
             ),
-            background_color=(0, 0, 0),
+            # Match `gen.save_interpolated_crop`'s (`_process_single_frame`)
+            # background color -- both paths must agree so the images saved
+            # to disk and the crops actually fed to the pose/CNN models are
+            # the same crop, not two differently-padded versions.
+            background_color=tuple(background_color),
         )
         pose_by_frame = run_pose_batch(
             crop_batch, pose_model, cfg.pose, runtime, geometry
@@ -496,10 +543,28 @@ def _flush_pose_cnn_window(
                 kpts = (
                     pose_result.keypoints[i] if i < len(pose_result.keypoints) else None
                 )
+                # `_assemble_pose_result` (stages/pose.py) pre-allocates a
+                # zero-filled (n, K, 3) array and simply `continue`s past a
+                # detection the backend found nothing for -- so `kpts` here
+                # is NEVER None, even for a fabricated all-zero (x=0, y=0,
+                # conf=0) "no detection" case. `valid_mask[i]` is the ONLY
+                # signal that distinguishes a real backend result from that
+                # fabrication (it is only set True when the backend actually
+                # returned keypoints AND enough of them cleared the
+                # confidence gate) -- gate on it so a backend miss produces
+                # NO `PoseKpt_*` columns and no false `PoseSource="interp"`
+                # stamp, matching the old ``_flush_pose_batch``'s ``keypoints
+                # is not None and len(keypoints) > 0`` semantics.
+                is_valid = (
+                    bool(pose_result.valid_mask[i])
+                    if i < len(pose_result.valid_mask)
+                    else False
+                )
                 pose_wide = {}
                 pose_mean_conf = pose_valid_fraction = 0.0
                 pose_num_valid = pose_num_keypoints = 0
-                if kpts is not None:
+                pose_source = None
+                if kpts is not None and is_valid:
                     conf_col = kpts[:, 2]
                     pose_num_keypoints = int(kpts.shape[0])
                     valid_mask = conf_col >= float(cfg.pose.min_keypoint_confidence)
@@ -518,15 +583,23 @@ def _flush_pose_cnn_window(
                             pose_model.keypoint_names, pose_num_keypoints
                         ),
                     )
+                    pose_source = "interp"
                 pose_row = {
                     "frame_id": int(task["frame_id"]),
                     "trajectory_id": int(task["traj_id"]),
+                    # Always empty (unlike the old per-frame `_flush_pose_batch`,
+                    # which had the saved crop's filename in scope): this is a
+                    # windowed batch flush over many frames' tasks, with no
+                    # per-detection filename in scope at flush time. Nothing
+                    # downstream reads this column (verified: no reader of
+                    # interpolated_pose.csv's "filename" grep-hits anywhere in
+                    # src/), so left empty rather than threading it through.
                     "filename": "",
                     "PoseMeanConf": pose_mean_conf,
                     "PoseValidFraction": pose_valid_fraction,
                     "PoseNumValid": pose_num_valid,
                     "PoseNumKeypoints": pose_num_keypoints,
-                    "PoseSource": "interp",
+                    "PoseSource": pose_source,
                 }
                 pose_row.update(pose_wide)
                 interp_pose_rows.append(pose_row)
@@ -790,6 +863,41 @@ def _write_interpolation_artifacts(
     return result
 
 
+def _close_resource(resource):
+    """Best-effort ``release()``/``close()`` on one resource, swallowing errors."""
+    if resource is None:
+        return
+    try:
+        if hasattr(resource, "release"):
+            resource.release()
+        elif hasattr(resource, "close"):
+            resource.close()
+    except Exception:
+        pass
+
+
+def _close_model_backend(model):
+    """Close the REAL backend behind a stage-model wrapper, not the wrapper.
+
+    ``PoseModel.close()``/``CNNModel.close()``/``HeadTailModel.close()``/
+    ``AprilTagModel.close()`` (``core/inference/stages/*.py``) are ALL
+    ``def close(self): pass`` -- shared infra also used by
+    ``Pipeline``/``InferenceRunner`` for real detections, out of scope to
+    change here. Calling ``.close()`` on the wrapper is therefore a no-op:
+    for the SLEAP service backend in particular, the underlying
+    ``model.backend`` is what actually reaches ``shutdown_sleap_service()``
+    and terminates the subprocess. Reach into ``.backend`` (pose/CNN/
+    head-tail models) or ``.detector`` (AprilTag's field is named
+    differently) and close/release THAT object instead.
+    """
+    if model is None:
+        return
+    underlying = getattr(model, "backend", None)
+    if underlying is None:
+        underlying = getattr(model, "detector", None)
+    _close_resource(underlying)
+
+
 def _cleanup_backends(
     cap,
     detection_cache,
@@ -799,26 +907,12 @@ def _cleanup_backends(
     headtail_model,
 ):
     """Safely close all loaded resources."""
-    for resource in (
-        cap,
-        detection_cache,
-        pose_model,
-        apriltag_model,
-        headtail_model,
-    ):
-        if resource is not None:
-            try:
-                if hasattr(resource, "release"):
-                    resource.release()
-                elif hasattr(resource, "close"):
-                    resource.close()
-            except Exception:
-                pass
+    for resource in (cap, detection_cache):
+        _close_resource(resource)
+    for model in (pose_model, apriltag_model, headtail_model):
+        _close_model_backend(model)
     for model in cnn_models or []:
-        try:
-            model.close()
-        except Exception:
-            pass
+        _close_model_backend(model)
 
 
 def _build_prefetcher(cap, needed_frames, total_frames):
@@ -1095,6 +1189,7 @@ def _run_frame_tasks_loop(
             interp_pose_rows,
             interp_cnn_rows,
             profiler,
+            background_color=getattr(gen, "background_color", (0, 0, 0)),
         )
         _flush_headtail_window(
             _pending_frames,
@@ -1488,6 +1583,17 @@ def run_interpolated_crops(
             )
         return {"saved": 0, "gaps": 0}
     except Exception:
+        # Any future silent-failure class must be visible in logs, even when
+        # graceful degradation isn't possible for it -- this blanket handler
+        # used to swallow everything with zero diagnostic trace, which is
+        # exactly how a whole-pass loss (crops, ROI, pose/tag/cnn/headtail
+        # CSVs -- everything) could vanish silently (see
+        # `_init_interpolation_backends`'s own try/except for the specific
+        # config-build failure this was first found from).
+        logger.exception(
+            "Interpolated post-pass failed; returning an empty payload "
+            "(saved=0, gaps=0)."
+        )
         return {"saved": 0, "gaps": 0}
     finally:
         _cleanup_backends(

@@ -1374,9 +1374,18 @@ def merge_interpolated_headtail_df(
         merged["HeadTailAngleRad"].notna(), merged["heading_rad"]
     )
     if "heading_conf" in merged.columns:
-        merged["HeadTailClassifierConf"] = merged["HeadTailClassifierConf"].where(
-            merged["HeadTailClassifierConf"].notna(), merged["heading_conf"]
-        )
+        # Gate on `has_interp` (heading_rad genuinely non-NaN), same as the
+        # HeadingResolved/HeadingMethod/HeadingIsDirected backfill below --
+        # NOT just "HeadTailClassifierConf is NaN". Without this gate, an
+        # undirected interp row (heading_rad NaN but heading_conf/
+        # heading_directed still present as 0.0/False in the interp CSV)
+        # would get a fabricated 0.0 confidence written into
+        # HeadTailClassifierConf with NO provenance marker explaining it
+        # (HeadingSource is only stamped "interp" when has_interp is true).
+        conf_fill_mask = merged["HeadTailClassifierConf"].isna() & has_interp
+        merged.loc[conf_fill_mask, "HeadTailClassifierConf"] = merged.loc[
+            conf_fill_mask, "heading_conf"
+        ]
 
     backfill_resolved = has_interp.values & resolved_was_nan.values
     merged.loc[backfill_resolved, "HeadingResolved"] = merged.loc[
