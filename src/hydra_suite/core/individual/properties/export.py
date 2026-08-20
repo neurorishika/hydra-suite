@@ -1063,10 +1063,10 @@ def merge_interpolated_pose_df(
     # PoseKpt_* value before this merge, "interp" where this merge filled it,
     # NaN where neither a real nor an interpolated pose exists for the row.
     had_real = out[pose_cols_interp].notna().any(axis=1)
-    filled_by_interp = merged[pose_cols_interp].notna().any(axis=1) & ~had_real
+    filled_by_interp = merged[pose_cols_interp].notna().any(axis=1) & ~had_real.values
     merged["PoseSource"] = pd.Series(np.nan, index=merged.index, dtype=object)
-    merged.loc[had_real, "PoseSource"] = "real"
-    merged.loc[filled_by_interp, "PoseSource"] = "interp"
+    merged.loc[had_real.values, "PoseSource"] = "real"
+    merged.loc[filled_by_interp.values, "PoseSource"] = "interp"
 
     merged.drop(
         columns=[
@@ -1318,6 +1318,16 @@ def merge_interpolated_headtail_df(
     ``"default"``) can represent an interpolated head-tail result without a
     parallel bool. Retires the separate ``InterpHeadingRad``/
     ``InterpHeadingConf``/``InterpHeadingDirected`` columns entirely.
+
+    ``HeadingSource`` reflects provenance of ``HeadTailAngleRad`` (the raw
+    classifier output), not of the resolved ``HeadingResolved``/
+    ``HeadingMethod`` triplet -- a row can show ``HeadingSource="interp"``
+    while its resolved heading came from an earlier source (pose/velocity)
+    and was correctly left untouched by this merge (see the separate
+    ``backfill_resolved`` gate below). This mirrors the other three
+    ``*Source`` columns in this module, each of which tracks provenance of
+    its own primary data column rather than a separate downstream-derived
+    field.
     """
     if trajectories_df is None or trajectories_df.empty:
         return trajectories_df

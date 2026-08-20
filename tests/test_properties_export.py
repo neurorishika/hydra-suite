@@ -234,6 +234,33 @@ def test_merge_interpolated_pose_sets_pose_source():
     )
 
 
+def test_merge_interpolated_pose_sets_pose_source_with_non_default_index():
+    """Regression: trajectories_df with a non-default index must not crash
+    the PoseSource assignment (merged always gets a fresh RangeIndex, so any
+    mask derived from out's index must be repositioned via .values)."""
+    trajectories = pd.DataFrame(
+        {
+            "FrameID": [0, 1, 2],
+            "TrajectoryID": [1, 1, 1],
+            "PoseKpt_head_X": [10.0, np.nan, np.nan],
+            "PoseKpt_head_Y": [20.0, np.nan, np.nan],
+        },
+        index=[5, 6, 7],
+    )
+    interp_pose = pd.DataFrame(
+        {
+            "frame_id": [1],
+            "trajectory_id": [1],
+            "PoseKpt_head_X": [11.0],
+            "PoseKpt_head_Y": [21.0],
+        }
+    )
+    out = merge_interpolated_pose_df(trajectories, interp_pose)
+    assert out["PoseSource"].tolist()[0] == "real"
+    assert out["PoseSource"].tolist()[1] == "interp"
+    assert pd.isna(out["PoseSource"].tolist()[2])
+
+
 def test_augment_trajectories_with_pose_cache_coordinate_scale(tmp_path):
     """When coordinate_scale != 1.0, PoseKpt_*_X/Y are rescaled."""
     cache_path = tmp_path / "props_scale.npz"
