@@ -18,7 +18,6 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from hydra_suite.core.canonicalization.fit import apply_fit
 from hydra_suite.core.canonicalization.geometry import (
     ClippingStats,
     canonical_geometry_from_params,
@@ -418,176 +417,166 @@ def _detect_interpolation_gaps(
     return frame_tasks, occluded_rows, interp_runs, interp_gaps
 
 
-def _flush_pose_batch(
-    pose_backend,
-    pending_crops,
-    pending_entries,
-    interp_pose_rows,
-    pose_kpt_source_names,
-    pose_kpt_labels,
-    profiler,
-    geometry,
-):
-    """Run pose inference on accumulated crops and append results.
-
-    Pre-fits every canonical (Layer 1) crop through Layer 2
-    (``fit_to_model_input`` / ``apply_fit``) before handing it to the backend
-    -- the SAME call shape ``core/inference/stages/pose.py`` uses, so this
-    module's interpolated-frame keypoints agree on content scale with the
-    tracked-frame keypoints produced by the same model.  Every entry here is
-    Layer 1 canonical by construction: ``_extract_pose_crop`` skips (rather
-    than produces) a crop for the degenerate-OBB case where no rigid Layer 1
-    transform exists, so there is no non-canonical entry left to special-case.
-    An ``apply_fit`` failure on an otherwise-canonical crop is treated the
-    same way: there is no honest crop to feed the backend (a raw canvas crop
-    would be anisotropically resized by the backend, and there is no fit to
-    invert for the keypoint back-projection), so the detection is dropped
-    exactly like the degenerate-OBB case in ``_extract_pose_crop``.
-    """
-    from hydra_suite.core.canonicalization.crop import invert_keypoints as _invert_kpts
-    from hydra_suite.core.canonicalization.fit import fit_affine, fit_to_model_input
-    from hydra_suite.core.inference.stages.pose import compose_affine, model_input_wh
-
-    class _BackendHolder:
-        backend = pose_backend
-
-    model_wh = model_input_wh(_BackendHolder, geometry)
-    fit = fit_to_model_input(geometry.canvas_wh, model_wh)
-    fit_m = fit_affine(fit)
-
-    fitted_crops = []
-    kept_entries = []
-    for _crop, _entry in zip(pending_crops, pending_entries):
-        _crop_info = _entry.get("crop_info") or {}
-        if _crop_info.get("canonical"):
-            try:
-                fitted_crop = apply_fit(_crop, fit)
-            except Exception:
-                logger.warning(
-                    "Interp pose: skipping frame_id=%s traj_id=%s -- Layer 2 "
-                    "fit (apply_fit) failed for an otherwise-canonical crop; "
-                    "the old raw-crop fallback fed the backend a "
-                    "wrongly-scaled crop and inverted a fit that was never "
-                    "applied instead of skipping.",
-                    _entry["task"]["frame_id"],
-                    _entry["task"]["traj_id"],
-                    exc_info=True,
-                )
-                continue
-            fitted_crops.append(fitted_crop)
-            kept_entries.append(_entry)
-        else:
-            fitted_crops.append(_crop)
-            kept_entries.append(_entry)
-
-    profiler.tick("interp_pose_inference")
-    pose_results = pose_backend.predict_batch(fitted_crops)
-    profiler.tock("interp_pose_inference")
-    for pidx, entry in enumerate(kept_entries):
-        pose_out = pose_results[pidx] if pidx < len(pose_results) else None
-        pose_mean_conf = 0.0
-        pose_valid_fraction = 0.0
-        pose_num_valid = 0
-        pose_num_keypoints = 0
-        pose_wide = {}
-        if pose_out is not None:
-            pose_mean_conf = float(getattr(pose_out, "mean_conf", 0.0))
-            pose_valid_fraction = float(getattr(pose_out, "valid_fraction", 0.0))
-            pose_num_valid = int(getattr(pose_out, "num_valid", 0))
-            pose_num_keypoints = int(getattr(pose_out, "num_keypoints", 0))
-            keypoints = getattr(pose_out, "keypoints", None)
-            crop_info = entry.get("crop_info") or {}
-            if keypoints is not None and len(keypoints) > 0:
-                gkpts = np.asarray(keypoints, dtype=np.float32).copy()
-                _M_align = crop_info.get("M_forward")
-                if _M_align is not None and crop_info.get("canonical"):
-                    # Keypoints come back in MODEL-input coords, so the
-                    # back-projection must undo Layer 2 (fit) then Layer 1
-                    # (canonical align) -- invert the composed transform.
-                    _m_total = compose_affine(fit_m, _M_align)
-                    _M_inv = cv2.invertAffineTransform(_m_total.astype(np.float32))
-                    gkpts = _invert_kpts(gkpts, _M_inv).astype(np.float32)
-                else:
-                    crop_bbox = crop_info.get("crop_bbox")
-                    if crop_bbox is not None and len(crop_bbox) >= 2:
-                        gkpts[:, 0] += float(crop_bbox[0])
-                        gkpts[:, 1] += float(crop_bbox[1])
-                if len(gkpts) > len(pose_kpt_labels):
-                    pose_kpt_labels[:] = build_pose_keypoint_labels(
-                        pose_kpt_source_names, len(gkpts)
-                    )
-                pose_wide = flatten_pose_keypoints_row(gkpts, pose_kpt_labels)
-
-        pose_row = {
-            "frame_id": int(entry["task"]["frame_id"]),
-            "trajectory_id": int(entry["task"]["traj_id"]),
-            "filename": entry["filename"],
-            "PoseMeanConf": pose_mean_conf,
-            "PoseValidFraction": pose_valid_fraction,
-            "PoseNumValid": pose_num_valid,
-            "PoseNumKeypoints": pose_num_keypoints,
-        }
-        pose_row.update(pose_wide)
-        interp_pose_rows.append(pose_row)
-    pending_crops.clear()
-    pending_entries.clear()
-
-
-def _flush_cnn_batch(
-    cnn_backends,
+def _flush_pose_cnn_window(
+    pending_frames,
+    pending_obbs,
+    pending_tasks_by_frame,
+    pose_model,
+    cnn_models,
     cnn_labels,
-    pending_cnn_crops,
-    pending_cnn_entries,
+    cfg,
+    runtime,
+    geometry,
+    interp_pose_rows,
     interp_cnn_rows,
     profiler,
-    geometry,
 ):
-    """Run CNN identity inference on accumulated crops and append results.
+    """Run pose + CNN inference over a window of (frame, synthetic OBB) pairs.
 
-    Pre-fits the shared Layer 1 canonical crops through Layer 2
-    (``fit_to_model_input`` / ``apply_fit``) per classifier, exactly as
-    ``core/inference/stages/cnn.py`` does -- each classifier may have a
-    different input size, so the fit is computed and applied fresh for every
-    backend rather than shared across them.  Without this,
-    ``core/individual/classification/backend.py`` would ANISOTROPICALLY stretch
-    the canonical crop to the model's input.
+    Calls the SAME stage functions ``Pipeline`` calls for real detections
+    (``pipeline.py:367-387``): ``extract_canonical_crops_batch`` then
+    ``run_pose_batch`` for pose, ``run_cnn_batch`` per CNN phase for CNN --
+    instead of this module's old hand-rolled crop extraction + batching
+    (``_flush_pose_batch``/``_flush_cnn_batch``). ``suppress_foreign=True``
+    for the pose call matches today's intra-synthetic-batch masking of other
+    interpolated tasks in the same frame (design spec, AprilTag/foreign-
+    suppression decisions). Pose and CNN crops are now genuinely independent
+    (CNN via ``extract_classifier_crops_batch_np`` inside ``run_cnn_batch``,
+    not a reused pose crop) -- design spec bug fix #1.
+
+    ``flatten_cnn_prediction_row`` (``properties/export.py``) expects a
+    PRE-COMPUTED argmax class name + confidence per factor -- it just indexes
+    ``class_names[idx]``/``confidences[idx]``, it does not run its own
+    argmax. ``CNNDetectionPrediction.factors`` (``result.py``) carries raw
+    probability vectors (``CNNFactorPrediction.raw_probabilities``) plus the
+    full per-factor class-name list, so the argmax is done here for each
+    factor before calling ``flatten_cnn_prediction_row``, mirroring the same
+    conversion ``frame_result_bridge._cnn_det_pred_to_class_prediction`` does
+    for the live tracking path.
     """
-    from hydra_suite.core.canonicalization.fit import apply_fit, fit_to_model_input
+    from hydra_suite.core.inference.stages.cnn import run_cnn_batch
+    from hydra_suite.core.inference.stages.crops import extract_canonical_crops_batch
+    from hydra_suite.core.inference.stages.pose import run_pose_batch
 
-    profiler.tick("interp_cnn_inference")
-    for _bi, _cnn_be in enumerate(cnn_backends):
-        _cnn_label = cnn_labels[_bi]
+    if not pending_frames:
+        return
+
+    if profiler is not None:
+        profiler.tick("interp_pose_inference")
+    if pose_model is not None:
+        crop_batch = extract_canonical_crops_batch(
+            pending_frames,
+            pending_obbs,
+            geometry,
+            runtime,
+            suppress_foreign=True,
+            background_color=(0, 0, 0),
+        )
+        pose_by_frame = run_pose_batch(
+            crop_batch, pose_model, cfg.pose, runtime, geometry
+        )
+        for frame_idx, tasks in zip(
+            (obb.frame_idx for obb in pending_obbs), pending_tasks_by_frame
+        ):
+            pose_result = pose_by_frame.get(frame_idx)
+            if pose_result is None:
+                continue
+            for i, task in enumerate(tasks):
+                kpts = (
+                    pose_result.keypoints[i] if i < len(pose_result.keypoints) else None
+                )
+                pose_wide = {}
+                pose_mean_conf = pose_valid_fraction = 0.0
+                pose_num_valid = pose_num_keypoints = 0
+                if kpts is not None:
+                    conf_col = kpts[:, 2]
+                    pose_num_keypoints = int(kpts.shape[0])
+                    valid_mask = conf_col >= float(cfg.pose.min_keypoint_confidence)
+                    pose_num_valid = int(valid_mask.sum())
+                    pose_mean_conf = (
+                        float(conf_col.mean()) if pose_num_keypoints else 0.0
+                    )
+                    pose_valid_fraction = (
+                        pose_num_valid / pose_num_keypoints
+                        if pose_num_keypoints
+                        else 0.0
+                    )
+                    pose_wide = flatten_pose_keypoints_row(
+                        kpts,
+                        build_pose_keypoint_labels(
+                            pose_model.keypoint_names, pose_num_keypoints
+                        ),
+                    )
+                pose_row = {
+                    "frame_id": int(task["frame_id"]),
+                    "trajectory_id": int(task["traj_id"]),
+                    "filename": "",
+                    "PoseMeanConf": pose_mean_conf,
+                    "PoseValidFraction": pose_valid_fraction,
+                    "PoseNumValid": pose_num_valid,
+                    "PoseNumKeypoints": pose_num_keypoints,
+                    "PoseSource": "interp",
+                }
+                pose_row.update(pose_wide)
+                interp_pose_rows.append(pose_row)
+    if profiler is not None:
+        profiler.tock("interp_pose_inference")
+
+    if profiler is not None:
+        profiler.tick("interp_cnn_inference")
+    for cnn_model, cnn_label, cnn_cfg in zip(cnn_models, cnn_labels, cfg.cnn_phases):
         try:
-            _in_h, _in_w = _cnn_be.metadata.input_size  # documents (H, W)
-            _fit = fit_to_model_input(geometry.canvas_wh, (_in_w, _in_h))
-            _fitted_cnn_crops = [apply_fit(_c, _fit) for _c in pending_cnn_crops]
-            _cnn_preds = _cnn_be.predict_batch(_fitted_cnn_crops)
-            for _pi, _pred in enumerate(_cnn_preds):
-                if _pi >= len(pending_cnn_entries):
-                    break
-                _ce = pending_cnn_entries[_pi]
+            cnn_by_frame = run_cnn_batch(
+                pending_frames, pending_obbs, cnn_model, cnn_cfg, runtime, geometry
+            )
+        except Exception as exc:
+            logger.warning("Interp CNN '%s' batch failed: %s", cnn_label, exc)
+            continue
+        for frame_idx, tasks in zip(
+            (obb.frame_idx for obb in pending_obbs), pending_tasks_by_frame
+        ):
+            cnn_result = cnn_by_frame.get(frame_idx)
+            if cnn_result is None:
+                continue
+            for i, task in enumerate(tasks):
+                pred = next(
+                    (p for p in cnn_result.predictions if p.det_index == i), None
+                )
+                if pred is None:
+                    continue
+                factor_names = []
+                class_names = []
+                confidences = []
+                for factor in pred.factors:
+                    factor_names.append(factor.factor_name)
+                    probs = np.asarray(factor.raw_probabilities, dtype=np.float32)
+                    if probs.size == 0:
+                        class_names.append(None)
+                        confidences.append(0.0)
+                        continue
+                    best_idx = int(np.argmax(probs))
+                    best_conf = float(probs[best_idx])
+                    if 0 <= best_idx < len(factor.class_names):
+                        class_names.append(factor.class_names[best_idx])
+                    else:
+                        class_names.append(None)
+                    confidences.append(best_conf)
                 row = {
-                    "frame_id": int(_ce["task"]["frame_id"]),
-                    "trajectory_id": int(_ce["task"]["traj_id"]),
+                    "frame_id": int(task["frame_id"]),
+                    "trajectory_id": int(task["traj_id"]),
                 }
                 row.update(
                     flatten_cnn_prediction_row(
-                        _cnn_label,
-                        getattr(_pred, "factor_names", ("flat",)),
-                        getattr(_pred, "class_names", ()),
-                        getattr(_pred, "confidences", ()),
+                        cnn_label,
+                        factor_names,
+                        class_names,
+                        confidences,
                     )
                 )
-                interp_cnn_rows[_cnn_label].append(row)
-        except Exception as exc:
-            logger.warning(
-                "Interp CNN '%s' batch failed: %s",
-                _cnn_label,
-                exc,
-            )
-    profiler.tock("interp_cnn_inference")
-    pending_cnn_crops.clear()
-    pending_cnn_entries.clear()
+                row[f"CNN_{cnn_label}_Source"] = "interp"
+                interp_cnn_rows.setdefault(cnn_label, []).append(row)
+    if profiler is not None:
+        profiler.tock("interp_cnn_inference")
 
 
 def _detect_apriltags_in_frame(
@@ -1199,6 +1188,13 @@ def _process_single_frame(
             interp_headtail_rows,
         )
 
+    # TODO(Task 12): this pending_crops/pending_entries accumulation and its
+    # flush call are being replaced by _flush_pose_cnn_window (Task 10) driven
+    # off pending_frames/pending_obbs windows instead -- the caller-side
+    # rewiring (this frame loop, the buffers it accumulates into, and the
+    # batch-size triggers below) is Task 12's job. Until then this loop no
+    # longer flushes pose/CNN crops; the buffers are cleared so they don't
+    # grow unbounded across frames.
     if (
         pose_backend is not None
         and _pending_crops
@@ -1206,31 +1202,16 @@ def _process_single_frame(
     ):
         if _stop():
             return None
-        _flush_pose_batch(
-            pose_backend,
-            _pending_crops,
-            _pending_entries,
-            interp_pose_rows,
-            pose_kpt_source_names,
-            pose_kpt_labels,
-            profiler,
-            geometry,
-        )
+        _pending_crops.clear()
+        _pending_entries.clear()
 
     if (
         cnn_backends
         and _pending_cnn_crops
         and (len(_pending_cnn_crops) >= _cnn_batch_size or idx == total_frames)
     ):
-        _flush_cnn_batch(
-            cnn_backends,
-            cnn_labels,
-            _pending_cnn_crops,
-            _pending_cnn_entries,
-            interp_cnn_rows,
-            profiler,
-            geometry,
-        )
+        _pending_cnn_crops.clear()
+        _pending_cnn_entries.clear()
 
     if idx % 25 == 0 or idx == total_frames:
         progress_pct = int((idx / total_frames) * 100)

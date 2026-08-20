@@ -134,3 +134,149 @@ def test_process_occluded_run_falls_back_when_csv_value_is_nan():
     # falls back to the existing linear midpoint: t=0.5 between (0,0) and (20,20)
     assert task["cx"] == pytest.approx(10.0)
     assert task["cy"] == pytest.approx(10.0)
+
+
+def test_flush_pose_cnn_window_stamps_pose_source_interp():
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from hydra_suite.core.canonicalization.geometry import (
+        canonical_geometry_from_params,
+    )
+    from hydra_suite.core.inference.config import PoseConfig
+    from hydra_suite.core.inference.result import PoseResult
+    from hydra_suite.core.inference.stages.pose import PoseModel
+    from hydra_suite.core.post import interpolated_crops as ic
+    from hydra_suite.core.post.synthetic_detections import build_synthetic_obb_result
+
+    class _FakeBackend:
+        def predict_batch(self, crops):
+            return [
+                PoseResult(
+                    keypoints=np.zeros((1, 1, 3), dtype=np.float32),
+                    valid_mask=np.array([True]),
+                )
+                for _ in crops
+            ]
+
+        # run_pose_batch checks hasattr(backend, "predict_batch_cuda") to
+        # decide the CUDA branch; omit it so the CPU branch is taken.
+
+    params = {"RUNTIME_TIER": "cpu"}
+    geometry = canonical_geometry_from_params(params)
+    pose_model = PoseModel(
+        backend=_FakeBackend(), n_keypoints=1, keypoint_names=["head"]
+    )
+    cfg = SimpleNamespace(pose=PoseConfig(), cnn_phases=[])
+
+    task = {
+        "frame_id": 1,
+        "cx": 32.0,
+        "cy": 32.0,
+        "w": 20.0,
+        "h": 8.0,
+        "theta": 0.0,
+        "traj_id": 5,
+        "interp_index": 1,
+        "interp_from": (0, 2),
+        "interp_total": 1,
+    }
+    obb = build_synthetic_obb_result(1, [task])
+    frame = np.zeros((64, 64, 3), dtype=np.uint8)
+
+    interp_pose_rows = []
+    ic._flush_pose_cnn_window(
+        pending_frames=[frame],
+        pending_obbs=[obb],
+        pending_tasks_by_frame=[[task]],
+        pose_model=pose_model,
+        cnn_models=[],
+        cnn_labels=[],
+        cfg=cfg,
+        runtime=None,
+        geometry=geometry,
+        interp_pose_rows=interp_pose_rows,
+        interp_cnn_rows={},
+        profiler=None,
+    )
+    assert len(interp_pose_rows) == 1
+    assert interp_pose_rows[0]["PoseSource"] == "interp"
+    assert interp_pose_rows[0]["trajectory_id"] == 5
+
+
+def test_flush_pose_cnn_window_stamps_cnn_source_interp_with_argmax_class():
+    """flatten_cnn_prediction_row expects pre-computed argmax class name +
+    confidence per factor, NOT raw probability vectors -- confirmed by
+    reading its body (export.py:141-161): it indexes class_names[idx] and
+    confidences[idx] directly with no argmax of its own. This test feeds a
+    fake CNN backend whose raw probabilities peak at index 1 ("b") and
+    asserts the flattened row carries that argmax class + its probability,
+    proving the adapter in ``_flush_pose_cnn_window`` does the argmax
+    itself before calling ``flatten_cnn_prediction_row``.
+    """
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from hydra_suite.core.canonicalization.geometry import (
+        canonical_geometry_from_params,
+    )
+    from hydra_suite.core.inference.config import CNNConfig, PoseConfig
+    from hydra_suite.core.inference.stages.cnn import CNNModel
+    from hydra_suite.core.post import interpolated_crops as ic
+    from hydra_suite.core.post.synthetic_detections import build_synthetic_obb_result
+
+    class _FakeCNNBackend:
+        def predict_batch(self, crops):
+            # one factor ("flat"), two classes; class index 1 ("b") wins.
+            return [[[0.1, 0.9]] for _ in crops]
+
+    params = {"RUNTIME_TIER": "cpu"}
+    geometry = canonical_geometry_from_params(params)
+    cnn_model = CNNModel(
+        backend=_FakeCNNBackend(),
+        input_size=(32, 32),
+        factor_names=["flat"],
+        factor_class_names=[["a", "b"]],
+    )
+    cnn_cfg = CNNConfig(label="identity", model_path="unused.onnx")
+    cfg = SimpleNamespace(pose=PoseConfig(), cnn_phases=[cnn_cfg])
+
+    task = {
+        "frame_id": 1,
+        "cx": 32.0,
+        "cy": 32.0,
+        "w": 20.0,
+        "h": 8.0,
+        "theta": 0.0,
+        "traj_id": 5,
+        "interp_index": 1,
+        "interp_from": (0, 2),
+        "interp_total": 1,
+    }
+    obb = build_synthetic_obb_result(1, [task])
+    frame = np.zeros((64, 64, 3), dtype=np.uint8)
+
+    interp_cnn_rows = {}
+    ic._flush_pose_cnn_window(
+        pending_frames=[frame],
+        pending_obbs=[obb],
+        pending_tasks_by_frame=[[task]],
+        pose_model=None,
+        cnn_models=[cnn_model],
+        cnn_labels=["identity"],
+        cfg=cfg,
+        runtime=None,
+        geometry=geometry,
+        interp_pose_rows=[],
+        interp_cnn_rows=interp_cnn_rows,
+        profiler=None,
+    )
+    rows = interp_cnn_rows["identity"]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["trajectory_id"] == 5
+    assert row["CNN_identity_Source"] == "interp"
+    assert row["CNN_identity_Class"] == "b"
+    assert row["CNN_identity_Conf"] == pytest.approx(0.9)
