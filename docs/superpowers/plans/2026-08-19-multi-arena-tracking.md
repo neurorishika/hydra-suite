@@ -1783,7 +1783,28 @@ In `session.py`, track the active arena and stamp it on every appended shape:
 
 At both `roi_shapes.append(...)` sites (lines 2112, 2133) include `"arena_id": self.current_arena_id`. Update the status label (line 2167) to report arena count alongside shape counts.
 
-In `main_window.py`, add to the ROI toolbar next to `btn_start_roi` (line 598) a `QPushButton("New Arena")` wired to `start_new_arena`, plus a `QSpinBox` for animals per arena bound to `config.animals_per_arena`. The distinction matters: one arena is often several shapes (an include circle plus an exclude hole), so a new shape joins the current arena unless "New Arena" is pressed.
+In `main_window.py`, add to the ROI toolbar next to `btn_start_roi` (line 598) a
+`QPushButton("New Arena")` wired to `start_new_arena`.
+
+**ONE animal-count control, not two (user decision).** Do NOT add a second spinbox. The
+existing "Max Targets" control (`gui/panels/setup_panel.py:207`) is *repurposed* as the
+per-arena count: relabel it "Animals per arena" and show the derived total beside it —
+
+```
+Animals per arena:  [ 20 ]
+                    = 40 total across 2 arenas
+```
+
+Rationale: two unlinked controls for one quantity are a standing source of silent
+divergence. With `MAX_TARGETS = n_arenas x animals_per_arena` derived, a separate legacy
+"Max Targets" spinbox stops mattering the instant a second arena exists — a user with
+Max Targets = 20 who adds one arena would get `MAX_TARGETS = 2`, a silent 10x
+under-allocation that quietly loses most of their animals. One control makes that
+unrepresentable.
+
+A legacy single-arena project keeps its exact meaning, because with `n_arenas == 1` the
+per-arena count *is* the total. The derived-total label must update live as arenas are
+added or removed. The distinction matters: one arena is often several shapes (an include circle plus an exclude hole), so a new shape joins the current arena unless "New Arena" is pressed.
 
 - [ ] **Step 4: Run test to verify it passes**
 
