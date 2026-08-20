@@ -19,8 +19,8 @@ difference is how many arenas the tracking layer is told about. The expected
 answer is then exact, and every comparison below is bit-for-bit on X/Y/Theta
 with no tolerance at all.
 
-Three fixture choices that the oracle's power depends on
---------------------------------------------------------
+Four fixture choices that the oracle's power depends on
+-------------------------------------------------------
 1. ``worm_bgsub``. The reference construction needs detections restricted to
    one tile, i.e. a working ROI gate. Background subtraction honours
    ``ROI_MASK`` (``core/inference/stages/bgsub.py`` intersects it with the
@@ -41,36 +41,46 @@ Three fixture choices that the oracle's power depends on
    pixel statistics as the full frame. Four identical tiles do; an arbitrary
    region does not.
 
-3. A *mirror* tiling with a narrow gutter, not a plain repeat. Under
-   ``np.tile`` this fixture's animals end up 1200px from any arena border, so
-   every cross-arena pair is rejected on distance before arena membership is
-   ever consulted. Reflecting each tile puts animals a few tens of pixels
-   across the border instead -- inside the assignment gate -- so a cross-arena
-   match is at least geometrically legal. Reflection also preserves each
-   tile's pixel multiset, which the ROI-vs-full-frame comparison needs.
+3. A *mirror* tiling with a narrow gutter, not a plain repeat. The gutter
+   keeps the two runs' detection sets identical: objects a few px apart across
+   a seam merge into ONE bg-sub contour, which the 4-arena run would see and
+   the one-tile reference runs could not. Reflection (rather than repetition)
+   preserves each tile's pixel multiset, which point 2 depends on.
 
-What this oracle demonstrably catches, and what it does not
-----------------------------------------------------------
-Verified by disabling one mechanism at a time and re-running (see the task
-report). It catches:
+4. Assignment gates widened to ``GATE_MULTIPLIER`` body lengths on BOTH sides.
+   This is what gives the oracle its power, and it is easy to get silently
+   wrong -- see the constant's comment and
+   ``test_widened_gates_actually_reach_the_engine``. The animals occupy
+   X in [740, 1490], Y in [90, 1190] of each tile, i.e. >= ~180px from any
+   arena border, so at the fixture's own gate (~126px) the arenas are
+   geometrically isolated: distance rejects every cross-arena pair before
+   arena membership is consulted, the arena gates never fire, and deleting
+   them changes nothing. Measured both ways.
 
+What this oracle catches, measured
+----------------------------------
+By disabling one mechanism at a time and re-running the whole file (see the
+task report for the numbers). At the widened gate it catches:
+
+* deleting the arena block from the cost matrix (``_arena_arrays``);
+* deleting the arena gate from phase-3 respawn;
 * the free-detection bootstrap loop taking the first lost slot in *global*
-  slot order (3 of the 5 tests fail);
+  slot order;
 * interpolated post-processing rows losing their ``arena_id``.
 
-It does **not** catch, on this fixture, deleting the arena block from the cost
-matrix or the arena gate from respawn: with all of them removed the output is
-unchanged. That is not slack in the comparison -- it is exact -- it is that
-those two gates never fire here. The Hungarian optimum never prefers a
-cross-arena pair while each arena has at least as many slots as detections, and
-respawn only sees an unassigned detection in the same circumstance. The regime
-that would exercise them is an arena holding MORE detections than it has slots
--- which is unreachable in a valid reference run, because bg-sub's detection
-cap is ``MAX_TARGETS`` itself, so a one-arena run can never see a surplus. The
-same asymmetry is a defect in its own right (the 4-arena run's cap is
-``n_arenas * animals_per_arena`` and is spent globally, so a crowded arena can
-starve a quiet one); it is out of this file's scope and reported separately.
-Cover those two gates with the assigner-level unit tests, not with this oracle.
+It does NOT catch a leak in the per-arena identity decoder registry, and
+cannot: ``worm_bgsub`` runs with ``identity_method: none_disabled`` so no
+decoder is ever built, and covering it needs a YOLO clip -- whose ROI is
+ignored (point 1), so the "arena alone" reference is not constructible there at
+all. Until that ROI bug is fixed, the registry is covered only by its unit
+tests. Forcing a single global decoder leaves this file green; do not read that
+as evidence.
+
+Note while the Task 11 markers below are in place: two of the five comparisons
+are ``xfail``, so only the forward comparison is live. It catches all four
+leaks above on its own, but the moment Task 11 lands, delete the markers -- the
+backward and post-processed comparisons are the ones that cover the merge and
+post-processing stages.
 """
 
 from __future__ import annotations
@@ -106,17 +116,24 @@ ANIMALS_PER_ARENA = 10
 N_ARENAS = 4
 # (column, row) of each quadrant, in arena-id order.
 QUADRANTS = ((0, 0), (1, 0), (0, 1), (1, 1))
-# Assignment gates are widened to ~200 body lengths (~2500px, i.e. wider than
-# the whole tiled frame) for BOTH sides of the comparison. This is what makes
-# the oracle able to fail. At the fixture's own gate (~10 body lengths) every
-# cross-arena pair is already rejected on distance alone, arenas being 1200px
-# apart -- so the arena gates in the cost matrix and in respawn are dead weight
-# and the oracle passes unchanged when you delete them (measured). Widening the
-# distance gate makes a cross-arena match geometrically legal, leaving the
-# arena gates as the only thing preventing it. It is applied identically to the
-# multi-arena run and to every reference run, so it cannot mask a difference:
-# it only removes an unrelated gate that was hiding one.
-GATE_MULTIPLIER = 10.0
+# Assignment gates, in body lengths, applied identically to the 4-arena run and
+# to every reference run. 200 body lengths is ~2524px -- wider than the whole
+# tiled frame -- so distance rejects nothing and arena membership becomes the
+# only thing that can reject a (track, detection) pair. That is what makes the
+# oracle able to see the arena gates at all: at the fixture's own 10 (~126px)
+# the arenas are geometrically isolated (the animals occupy X in [740, 1490],
+# Y in [90, 1190] of each tile, i.e. >= ~180px from any arena border) and every
+# cross-arena pair is rejected on distance before arena membership is ever
+# consulted -- so deleting the arena gates changes nothing and the oracle
+# silently proves less than it appears to.
+#
+# The key name matters: the engine reads `max_assignment_distance_multiplier`
+# (engine_params.py:517). An earlier revision of this file set a plausible but
+# non-existent `max_distance_multiplier`, which the config layer accepted and
+# discarded, so the "widened" gate was never applied and three leak-injection
+# negatives were drawn from a run at the default gate.
+# `test_widened_gates_actually_reach_the_engine` now pins this.
+GATE_MULTIPLIER = 200.0
 # Blank margin between tiles, in pixels. It has to clear the bg-sub morphology
 # kernel (two objects a few px apart merge into ONE contour, which would make
 # the 4-arena run detect something the reference runs cannot) while staying
@@ -257,7 +274,7 @@ def _run_tracking(
     # compares tracking, not solver selection.
     cfg["enable_greedy_assignment"] = False
     cfg["enable_spatial_optimization"] = False
-    cfg["max_distance_multiplier"] = GATE_MULTIPLIER
+    cfg["max_assignment_distance_multiplier"] = GATE_MULTIPLIER
     cfg["kalman_max_velocity_multiplier"] = GATE_MULTIPLIER
     # Lighting stabilisation is the one bg-sub stage whose statistics are taken
     # over the ROI pixels rather than per-pixel, so it makes the detections
@@ -285,9 +302,10 @@ def _run_tracking(
 def tiled_runs(tmp_path_factory):
     """Run the 4-arena tiling once plus one single-arena run per quadrant.
 
-    Returns ``(multi_frames, ref_frames)`` where ``multi_frames`` maps CSV kind
-    -> DataFrame for the 4-arena run and ``ref_frames[i]`` does the same for the
-    reference run of quadrant ``i``.
+    Returns ``(multi_frames, ref_frames, base_dir)`` where ``multi_frames``
+    maps CSV kind -> DataFrame for the 4-arena run, ``ref_frames[i]`` does the
+    same for the reference run of tile ``i``, and ``base_dir`` holds each run's
+    written config (used to verify what the engine actually received).
     """
     base = tmp_path_factory.mktemp("arena_oracle")
     tiled = base / "worm_tiled.mp4"
@@ -319,7 +337,7 @@ def tiled_runs(tmp_path_factory):
             written,
         )
         refs.append(_load(base / f"ref{idx}"))
-    return multi, refs
+    return multi, refs, base
 
 
 def _slot_rows(df, slot: int):
@@ -362,7 +380,7 @@ def _canonical_trajectories(df) -> list:
 
 def test_arena_oracle_is_not_vacuous(tiled_runs):
     """Guard the oracle itself: an empty or degenerate run would pass anything."""
-    multi, refs = tiled_runs
+    multi, refs, _ = tiled_runs
     forward = multi["forward"]
     assert "arena_id" in forward.columns
     assert set(forward["arena_id"].unique()) == set(range(N_ARENAS))
@@ -381,18 +399,88 @@ def test_arena_oracle_is_not_vacuous(tiled_runs):
     assert len(interpolated) > 0, "no interpolated rows -- interpolation untested"
 
 
+def test_widened_gates_actually_reach_the_engine(tiled_runs):
+    """The gate widening must be observable in the engine params, not just set.
+
+    Config keys are absorbed silently: ``build_engine_params`` reads the ones
+    it knows and ignores the rest, so a misspelled knob leaves the run at its
+    default and every conclusion drawn from "the gate was wide" is void. That
+    happened here once (``max_distance_multiplier`` instead of
+    ``max_assignment_distance_multiplier``), so assert the derived threshold
+    rather than trusting the key.
+    """
+    from hydra_suite.trackerkit.cli_config import load_tracker_cli_session
+
+    _, _, base = tiled_runs
+    for name in ("multi", "ref0"):
+        run_dir = base / name
+        video = next(run_dir.glob("*.mp4"))
+        session = load_tracker_cli_session(
+            str(video), config_path=str(run_dir / "oracle_config.json")
+        )
+        params = session.params
+        body = float(params["REFERENCE_BODY_SIZE"]) * float(params["RESIZE_FACTOR"])
+        assert params["MAX_DISTANCE_THRESHOLD"] == pytest.approx(
+            GATE_MULTIPLIER * body
+        ), (
+            f"{name}: MAX_DISTANCE_THRESHOLD is "
+            f"{params['MAX_DISTANCE_THRESHOLD']}, expected "
+            f"{GATE_MULTIPLIER * body} -- the gate config key did not take"
+        )
+        assert float(params["KALMAN_MAX_VELOCITY_MULTIPLIER"]) == GATE_MULTIPLIER
+        # Wide enough that a track anywhere in one tile can reach a detection
+        # in the horizontally adjacent tile: distance no longer rejects
+        # cross-arena pairs, so arena membership is the only criterion left.
+        with open(run_dir / "oracle_config.json", encoding="utf-8") as handle:
+            corners = json.load(handle)["roi_shapes"][0]["params"]
+        tile_w = corners[1][0] - corners[0][0]
+        assert params["MAX_DISTANCE_THRESHOLD"] > tile_w + GUTTER_PX
+
+
 def test_single_arena_reference_emits_no_arena_column(tiled_runs):
     """``arena_id`` is emitted only when ``n_arenas > 1``.
 
     The byte-identity gate compares column lists; an ``arena_id`` leaking into a
     single-arena run would break it on schema grounds alone.
     """
-    _, refs = tiled_runs
+    _, refs, _ = tiled_runs
     for idx, ref in enumerate(refs):
         for kind, frame in ref.items():
             assert (
                 "arena_id" not in frame.columns
             ), f"reference {idx} {kind} CSV grew an arena_id column"
+
+
+# --- pending Task 11 -------------------------------------------------------
+#
+# With the assignment gate actually widened (GATE_MULTIPLIER, and see
+# `test_widened_gates_actually_reach_the_engine`), two of the comparisons below
+# fail against a real, unfixed cross-arena leak. Not a test artifact: arena
+# blocking is fully on, no cross-arena match is ever accepted, the per-frame
+# detection sets are identical across arenas, and the runs are deterministic.
+#
+# Root cause: `core/assigners/hungarian.py` rejects with TWO different
+# sentinels -- 1e6 for arena/spatial blocking (lines 82, 103, 453) and 1e9 for
+# the raw distance/velocity gate (line 1160). Both are discarded after the
+# solve, but they are different NUMBERS, and `linear_sum_assignment` minimises
+# the total, so it is not indifferent between them. When an arena has more
+# established tracks than it has detections of its own, the square solve parks
+# the surplus rows on foreign columns -- and which parking spot is cheapest
+# depends on what OTHER arenas detected that frame. The accepted assignments
+# can therefore shift even though no cross-arena pair is ever accepted.
+#
+# Task 11 (plan commit 96ca3433) fixes it structurally by solving per-arena
+# sub-blocks. These are `strict=True` on purpose: when Task 11 lands and works,
+# they XPASS, pytest reports that as a failure, and whoever lands it has to
+# delete this marker. Do NOT convert them to `skip`, and do not relax the
+# comparison to make them pass -- the comparison is exact and is correct.
+_TASK_11_XFAIL = pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "pending Task 11: hungarian.py's 1e6/1e9 reject sentinels let one "
+        "arena's detections shift another arena's accepted assignments"
+    ),
+)
 
 
 def _slot_history(df, slot: int) -> tuple:
@@ -412,7 +500,17 @@ def _slot_history(df, slot: int) -> tuple:
     )
 
 
-@pytest.mark.parametrize("kind", ["forward", "backward"])
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "forward",
+        # Backward diverges and forward does not: the backward pass replays the
+        # same detections against a different track population, which is
+        # exactly when an arena ends up with more established tracks than own
+        # detections -- the regime the sentinel bug needs.
+        pytest.param("backward", marks=_TASK_11_XFAIL),
+    ],
+)
 def test_each_arena_reproduces_the_single_arena_run_slot_for_slot(tiled_runs, kind):
     """Frame-for-frame, bit-for-bit equality of every slot's life, per arena.
 
@@ -425,8 +523,15 @@ def test_each_arena_reproduces_the_single_arena_run_slot_for_slot(tiled_runs, ki
     global detection ordering, so two runs can swap a pair of an arena's own
     slots. That is a relabelling inside one arena and carries no information
     across arenas; every position, angle and state still has to match exactly.
+
+    At the settings this file ships with, that latitude is currently unused --
+    the forward histories match index-for-index in all four arenas, and the
+    backward divergence is a genuine content difference (pending Task 11) that
+    a multiset does not absorb. It is kept because the swap is real: it was
+    observed during development at a narrower gate, and it would be wrong to
+    have the oracle fail on a within-arena relabelling.
     """
-    multi, refs = tiled_runs
+    multi, refs, _ = tiled_runs
     frame = multi[kind]
     for arena, ref in enumerate(refs):
         block = range(arena * ANIMALS_PER_ARENA, (arena + 1) * ANIMALS_PER_ARENA)
@@ -444,6 +549,7 @@ def test_each_arena_reproduces_the_single_arena_run_slot_for_slot(tiled_runs, ki
         assert (frame[frame["TrackID"].isin(block)]["arena_id"] == arena).all()
 
 
+@_TASK_11_XFAIL
 def test_each_arena_final_output_reproduces_the_single_arena_run(tiled_runs):
     """Post-processed trajectories: exact per-arena equality.
 
@@ -451,7 +557,7 @@ def test_each_arena_final_output_reproduces_the_single_arena_run(tiled_runs):
     forward/backward resolution, relinking, identity post-processing and gap
     interpolation -- all of which must partition by arena.
     """
-    multi, refs = tiled_runs
+    multi, refs, _ = tiled_runs
     final = multi["final"]
     for arena, ref in enumerate(refs):
         got = _canonical_trajectories(final[final["arena_id"] == arena])
@@ -469,7 +575,7 @@ def test_no_output_row_loses_its_arena(tiled_runs):
     trajectory onto a contiguous frame range) must inherit their trajectory's
     arena; a NaN there silently drops the row out of every arena grouping.
     """
-    multi, _ = tiled_runs
+    multi, _, _ = tiled_runs
     for kind, frame in multi.items():
         assert frame["arena_id"].notna().all(), f"{kind}: rows with no arena_id"
         spans = frame.groupby("TrajectoryID")["arena_id"].nunique()
@@ -481,7 +587,7 @@ def test_no_output_row_loses_its_arena(tiled_runs):
 
 def test_trajectory_ids_stay_globally_unique(tiled_runs):
     """Per-arena processing renumbers ids; the result must not collide."""
-    multi, _ = tiled_runs
+    multi, _, _ = tiled_runs
     final = multi["final"]
     per_arena = final.groupby("arena_id")["TrajectoryID"].nunique().sum()
     assert (
