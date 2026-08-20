@@ -2201,6 +2201,7 @@ class SessionOrchestrator:
         )
         self._mw.btn_crop_video.setEnabled(True)
         self._mw._update_roi_optimization_info()
+        self._mw._update_animals_per_arena_total_label()
 
         if self._mw.roi_base_frame:
             QTimer.singleShot(10, self._mw._fit_image_to_screen)
@@ -2259,6 +2260,7 @@ class SessionOrchestrator:
             self._mw.roi_status_label.setText("No ROI")
             if self._mw.roi_base_frame:
                 self._mw._set_video_pixmap(QPixmap.fromImage(self._mw.roi_base_frame))
+        self._mw._update_animals_per_arena_total_label()
         self._mw.update_roi_preview()
 
     def clear_roi(self):
@@ -2282,6 +2284,7 @@ class SessionOrchestrator:
             self._mw.video_label.setCursor(Qt.OpenHandCursor)
         else:
             self._mw.video_label.unsetCursor()
+        self._mw._update_animals_per_arena_total_label()
         logger.info("All ROI shapes cleared")
 
     def keyPressEvent(self, event) -> None:

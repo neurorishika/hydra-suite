@@ -30,7 +30,6 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSlider,
-    QSpinBox,
     QSplitter,
     QStackedWidget,
     QTabWidget,
@@ -627,19 +626,6 @@ class MainWindow(QMainWindow):
             "an include zone plus its exclude hole belong in the SAME arena."
         )
 
-        self.spin_animals_per_arena = QSpinBox()
-        self.spin_animals_per_arena.setRange(1, 1000)
-        self.spin_animals_per_arena.setValue(self.config.animals_per_arena)
-        self.spin_animals_per_arena.setPrefix("Animals/arena: ")
-        self.spin_animals_per_arena.setToolTip(
-            "Animal count is shared across every arena; the total slot\n"
-            "count (MAX_TARGETS) is derived as n_arenas * animals_per_arena,\n"
-            "never entered directly."
-        )
-        self.spin_animals_per_arena.valueChanged.connect(
-            self._on_animals_per_arena_changed
-        )
-
         self.btn_clear_roi = QPushButton("Clear All")
         self.btn_clear_roi.clicked.connect(self.clear_roi)
         self.btn_clear_roi.setShortcut("Ctrl+C")
@@ -668,7 +654,6 @@ class MainWindow(QMainWindow):
         roi_layout.addWidget(self.btn_finish_roi)
         roi_layout.addWidget(self.btn_undo_roi)
         roi_layout.addWidget(self.btn_new_arena)
-        roi_layout.addWidget(self.spin_animals_per_arena)
         roi_layout.addWidget(self.btn_clear_roi)
         roi_layout.addWidget(self.btn_crop_video)
         roi_layout.addStretch()
@@ -2093,10 +2078,40 @@ class MainWindow(QMainWindow):
             f"Started arena {new_id + 1} -- new shapes join it until "
             "'New Arena' is pressed again."
         )
+        self._update_animals_per_arena_total_label()
 
-    def _on_animals_per_arena_changed(self, value):
-        """Handle the shared per-arena animal-count spinbox."""
-        self.config.animals_per_arena = int(value)
+    def _update_animals_per_arena_total_label(self):
+        """Keep the derived-total label next to "Animals per arena" live.
+
+        ONE animal-count control (user decision, see task-8 fix round 1):
+        the existing "Max Targets" spinbox IS the per-arena count now --
+        there is no separate ``spin_animals_per_arena`` widget. This keeps
+        ``self.config.animals_per_arena`` mirroring that single control (so
+        the typed config field is never a second, divergent source of
+        truth) and refreshes the "= N total across K arenas" label, which
+        is blank for a legacy/single-arena project (n_arenas <= 1) so the
+        control's plain "Max Targets" meaning is visually unchanged.
+        """
+        from hydra_suite.trackerkit.engine_params import n_arenas_from_shapes
+
+        # SetupPanel's own construction (_build_ui -> _sync_realtime_cache_
+        # controls -> _sync_batch_policy_controls) calls back into this method
+        # before `self._setup_panel = SetupPanel(...)` in init_ui has
+        # finished assigning -- guard the same way the codebase's other
+        # cross-panel sync hooks do (see _sync_batch_policy_controls's own
+        # hasattr checks).
+        if not hasattr(self, "_setup_panel"):
+            return
+        per_arena = self._setup_panel.spin_max_targets.value()
+        self.config.animals_per_arena = int(per_arena)
+        n_arenas = n_arenas_from_shapes(self.roi_shapes)
+        if n_arenas > 1:
+            total = n_arenas * per_arena
+            self._setup_panel.lbl_animals_per_arena_total.setText(
+                f"= {total} total across {n_arenas} arenas"
+            )
+        else:
+            self._setup_panel.lbl_animals_per_arena_total.setText("")
 
     def _handle_video_mouse_press(self, evt):
         """Handle mouse press on video - either ROI selection or pan/zoom."""

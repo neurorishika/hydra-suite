@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from hydra_suite.core.inference.config import migrate_runtime_to_tier
+from hydra_suite.trackerkit.engine_params import n_arenas_from_shapes
 
 
 @dataclass
@@ -46,14 +47,24 @@ class TrackerConfig:
     dataset_class_names: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize to a JSON-compatible dict."""
-        return {
+        """Serialize to a JSON-compatible dict.
+
+        ``animals_per_arena`` is only emitted once ``roi_shapes`` actually
+        encodes more than one arena (``n_arenas_from_shapes(self.roi_shapes)
+        > 1``) -- the same gate ``ConfigOrchestrator.build_config_dict``
+        applies to the GUI's own (separate) config dict. Keeping the two
+        consistent means this dataclass can never become a "loaded gun": if
+        it were ever serialized directly into an engine-params config
+        (bypassing the GUI glue), a single-arena project still wouldn't
+        carry an `animals_per_arena` override that could defeat
+        ``build_engine_params``'s fallback-to-`max_targets` safety net.
+        """
+        d = {
             "current_video_path": self.current_video_path,
             "batch_videos": list(self.batch_videos),
             "roi_shapes": list(self.roi_shapes),
             "roi_current_mode": self.roi_current_mode,
             "roi_current_zone_type": self.roi_current_zone_type,
-            "animals_per_arena": int(self.animals_per_arena),
             "runtime_tier": self.runtime_tier,
             "debug_mode": self.debug_mode,
             "dataset_export_levels": list(self.dataset_export_levels),
@@ -61,6 +72,9 @@ class TrackerConfig:
             "dataset_dedup_threshold": self.dataset_dedup_threshold,
             "dataset_class_names": self.dataset_class_names,
         }
+        if n_arenas_from_shapes(self.roi_shapes) > 1:
+            d["animals_per_arena"] = int(self.animals_per_arena)
+        return d
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> TrackerConfig:

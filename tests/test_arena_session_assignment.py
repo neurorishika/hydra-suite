@@ -9,11 +9,16 @@ explicitly starts a new one -- shape count is never arena count. Every shape
 the next free id by scanning ALL shapes, not just includes.
 
 Drives the real ``SessionOrchestrator`` (not a reimplementation) against a
-``MagicMock`` stand-in for ``MainWindow`` -- avoids constructing a real Qt
-``MainWindow``, which hits an unrelated pre-existing ``SyntaxError`` in
-``trackerkit/gui/dialogs/train_yolo_dialog.py`` on this box's Python 3.10 (see
-``tests/test_arena_gui_frame_dimensions.py`` and the task-8 brief). A real
-(offscreen) ``QApplication`` backs the ``QTimer.singleShot`` calls
+``MagicMock`` stand-in for ``MainWindow`` -- a real Qt ``MainWindow`` is not
+actually required here (an earlier draft of this file wrongly claimed one
+was blocked by a pre-existing ``SyntaxError`` in
+``trackerkit/gui/dialogs/train_yolo_dialog.py``; that was an artifact of
+running pytest under the wrong interpreter -- see
+``tests/test_arena_gui_frame_dimensions.py``'s docstring for the correction).
+The ``MagicMock`` is used here because ``SessionOrchestrator`` needs many
+more attributes than ``ConfigOrchestrator`` does, and none of this file's
+assertions depend on real widget behavior. A real (offscreen)
+``QApplication`` backs the ``QTimer.singleShot`` calls
 ``finish_roi_selection`` makes at the end of a successful shape add.
 """
 

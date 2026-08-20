@@ -198,24 +198,38 @@ class SetupPanel(QWidget):
         )
         acquisition_row.addWidget(self.btn_detect_fps)
 
-        animal_caption = QLabel("Animals")
+        animal_caption = QLabel("Animals/arena")
         animal_caption.setStyleSheet(
             "font-size: 10px; font-weight: 600; color: #bdbdbd; margin-left: 6px;"
         )
         acquisition_row.addWidget(animal_caption)
 
+        # ONE animal-count control (user decision, task-8 fix round 1): this
+        # spinbox IS the per-arena animal count. With a single arena
+        # (n_arenas == 1, the legacy/default case) that count IS the total,
+        # so single-arena behavior and labeling are unchanged. Once 2+
+        # arenas are drawn, MAX_TARGETS = n_arenas * this value (derived,
+        # never entered directly) -- lbl_animals_per_arena_total shows that
+        # derived total live so it's never silently wrong.
         self.spin_max_targets = QSpinBox()
         self.spin_max_targets.setRange(1, 200)
         self.spin_max_targets.setValue(4)
         self.spin_max_targets.setFixedHeight(30)
         self.spin_max_targets.setMinimumWidth(84)
         self.spin_max_targets.setToolTip(
-            "Maximum number of animals to track simultaneously (1-200).\n"
-            "Set this to the expected number of animals in your video.\n"
+            "Number of animals PER ARENA (1-200) -- with a single arena this\n"
+            "is the total. The overall slot count (MAX_TARGETS) is derived as\n"
+            "n_arenas * this value once more than one arena is drawn.\n"
             "Higher values use more memory and may slow down processing."
         )
         self.spin_max_targets.valueChanged.connect(self._sync_batch_policy_controls)
         acquisition_row.addWidget(self.spin_max_targets)
+
+        self.lbl_animals_per_arena_total = QLabel("")
+        self.lbl_animals_per_arena_total.setStyleSheet(
+            "color: #6a6a6a; font-size: 10px; font-style: italic; margin-left: 4px;"
+        )
+        acquisition_row.addWidget(self.lbl_animals_per_arena_total)
         acquisition_row.addStretch(1)
         fl.addRow("Acquisition", acquisition_row)
 
@@ -937,6 +951,8 @@ class SetupPanel(QWidget):
             self._main_window._detection_panel._sync_live_detection_batch_controls()
         if hasattr(self._main_window, "_identity_panel"):
             self._main_window._identity_panel._sync_realtime_individual_batch_ui()
+        if hasattr(self._main_window, "_update_animals_per_arena_total_label"):
+            self._main_window._update_animals_per_arena_total_label()
 
     def apply_config(self, config: TrackerConfig) -> None:
         """Update panel widgets to reflect a new config object."""
