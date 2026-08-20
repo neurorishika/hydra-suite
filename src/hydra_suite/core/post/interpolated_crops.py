@@ -394,9 +394,30 @@ def _process_occluded_run(
         row = group.iloc[k]
         f = int(row["FrameID"])
         t = (f - f0) / (f1 - f0)
-        cx = float(prev_row["X"]) + t * (float(next_row["X"]) - float(prev_row["X"]))
-        cy = float(prev_row["Y"]) + t * (float(next_row["Y"]) - float(prev_row["Y"]))
-        theta = _interp_angle(float(prev_row["Theta"]), float(next_row["Theta"]), t)
+        # Geometry-sourcing priority (design spec "Geometry sourcing",
+        # NaN-triggered, not max_gap-triggered): if mechanism (1)'s
+        # trajectory interpolation already filled this row's X/Y/Theta
+        # (honoring the user's interpolation_method and heading-flip
+        # correction), use it directly instead of re-deriving a bespoke
+        # linear/± 180 degree estimate. Only fall back to independent
+        # linear interpolation when the CSV row is genuinely NaN here
+        # (interpolation_method="None" -- the GUI default -- or a gap
+        # beyond max_gap).
+        row_x = row["X"] if "X" in group.columns else float("nan")
+        row_y = row["Y"] if "Y" in group.columns else float("nan")
+        row_theta = row["Theta"] if "Theta" in group.columns else float("nan")
+        if not (pd.isna(row_x) or pd.isna(row_y) or pd.isna(row_theta)):
+            cx = float(row_x)
+            cy = float(row_y)
+            theta = float(row_theta)
+        else:
+            cx = float(prev_row["X"]) + t * (
+                float(next_row["X"]) - float(prev_row["X"])
+            )
+            cy = float(prev_row["Y"]) + t * (
+                float(next_row["Y"]) - float(prev_row["Y"])
+            )
+            theta = _interp_angle(float(prev_row["Theta"]), float(next_row["Theta"]), t)
         w = w0 + t * (w1 - w0)
         h = h0 + t * (h1 - h0)
 
