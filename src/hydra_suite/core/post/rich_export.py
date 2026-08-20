@@ -81,39 +81,22 @@ def remove_legacy_rich_exports(final_csv_path: str) -> None:
             logger.warning("Failed to remove stale rich-export CSV: %s", candidate)
 
 
-def count_augmented_pose_rows(with_pose_df):
-    pose_cols = [col for col in with_pose_df.columns if str(col).startswith("Pose")]
-    if not pose_cols:
-        return 0, 0
-    pose_present = with_pose_df[pose_cols].notna().any(axis=1)
-    detection_present = pd.to_numeric(
-        with_pose_df.get("DetectionID"), errors="coerce"
-    ).notna()
-    detection_rows = int((detection_present & pose_present).sum())
-    interpolated_rows = int(((~detection_present) & pose_present).sum())
-    return detection_rows, interpolated_rows
+def count_by_source(df: pd.DataFrame, source_col: str) -> dict:
+    """Real-vs-interpolated row counts for one ``*Source`` provenance column.
 
-
-def count_interpolated_cnn_rows(with_pose_df):
-    labels = []
-    for col in with_pose_df.columns:
-        match = re.match(r"^CNN_(.+)_Class$", str(col))
-        if match:
-            labels.append(match.group(1))
-    labels = sorted(set(labels))
-    parts = []
-    for label in labels:
-        class_col = f"CNN_{label}_Class"
-        conf_col = f"CNN_{label}_Conf"
-        present = pd.Series(False, index=with_pose_df.index)
-        if class_col in with_pose_df.columns:
-            present = present | with_pose_df[class_col].fillna("").astype(str).ne("")
-        if conf_col in with_pose_df.columns:
-            present = present | with_pose_df[conf_col].notna()
-        count = int(present.sum())
-        if count > 0:
-            parts.append(f"{label}={count}")
-    return ", ".join(parts) if parts else "none"
+    Replaces the dead ``count_augmented_pose_rows``/``count_interpolated_cnn_rows``
+    (zero callers) with one generic counter used uniformly for all four
+    signal types (Pose/CNN/AprilTag/head-tail) now that they share the same
+    coalesce-into-original-columns + explicit ``*Source`` provenance
+    convention (design spec, "Provenance").
+    """
+    if source_col not in df.columns:
+        return {"real": 0, "interp": 0}
+    counts = df[source_col].value_counts()
+    return {
+        "real": int(counts.get("real", 0)),
+        "interp": int(counts.get("interp", 0)),
+    }
 
 
 def log_rich_export_summary(df: pd.DataFrame) -> None:
