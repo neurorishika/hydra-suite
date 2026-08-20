@@ -3671,6 +3671,19 @@ def interpolate_trajectories(
             all_frames = np.arange(min_frame, max_frame + 1)
             traj_data = traj_data.set_index("FrameID").reindex(all_frames).reset_index()
             traj_data["TrajectoryID"] = traj_id
+            # ``reindex`` fills EVERY column of a newly created frame row with
+            # NaN, and only TrajectoryID/State/X/Y/Theta are restored below.
+            # ``arena_id`` is constant per trajectory (slot -> arena is a
+            # static property), so a gap-filled row must inherit it: left NaN,
+            # the interpolated rows silently fall out of every downstream
+            # arena grouping and out of the exported arena column, so an
+            # arena's post-processed output is short exactly one row per
+            # interpolated gap. No ``arena_id`` column (every single-arena
+            # run) => no-op, so single-arena output is unchanged.
+            if "arena_id" in traj_data.columns:
+                _arena_values = traj_data["arena_id"].dropna().unique()
+                if len(_arena_values) == 1:
+                    traj_data["arena_id"] = _arena_values[0]
 
         if "State" in traj_data.columns:
             traj_data["State"] = traj_data["State"].fillna("occluded")

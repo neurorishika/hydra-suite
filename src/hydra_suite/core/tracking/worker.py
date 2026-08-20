@@ -3524,11 +3524,36 @@ class TrackingEngineCore:
                     else set()
                 )
                 for d_idx in free_dets:
+                    # Arena gate for the bootstrap loop. This loop takes the
+                    # FIRST lost slot in global slot order, which without a
+                    # gate hands a detection in arena 3 to a slot belonging to
+                    # arena 0. The arena-blocked cost matrix then refuses to
+                    # ever match that track to its own arena's detections, so
+                    # the slot churns (respawn every frame) and the detection's
+                    # real arena is left permanently under-tracked -- the
+                    # single largest cross-arena leak the tiling oracle finds.
+                    # A detection outside every arena (`-1`) matches no slot
+                    # arena and therefore bootstraps nothing, mirroring the
+                    # assigner's treatment of it. Single-arena runs skip the
+                    # gate entirely, so their behaviour is byte-identical.
+                    _det_arena = (
+                        int(meas_arena[d_idx])
+                        if (
+                            not self.arena_layout.is_single_arena
+                            and d_idx < len(meas_arena)
+                        )
+                        else None
+                    )
                     for track_idx in range(N):
                         if (
                             track_states[track_idx] == "lost"
                             and track_idx not in _committed_slots_set
                         ):
+                            if (
+                                _det_arena is not None
+                                and int(self._slot_arena[track_idx]) != _det_arena
+                            ):
+                                continue
                             # Diagnostic: log slot reuse distance
                             if self.trajectories_full[track_idx]:
                                 _old = self.trajectories_full[track_idx][-1]
