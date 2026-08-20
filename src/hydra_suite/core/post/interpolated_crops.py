@@ -31,6 +31,8 @@ from hydra_suite.core.individual.properties.export import (
     pose_wide_columns_for_labels,
 )
 from hydra_suite.core.inference.cache import open_detection_cache_reader
+from hydra_suite.core.inference.stages.apriltag import run_apriltag
+from hydra_suite.core.inference.stages.crops import extract_aabb_crops
 from hydra_suite.core.post.merge import write_csv_artifact as _write_csv_artifact
 from hydra_suite.core.post.merge import write_roi_npz as _write_roi_npz
 from hydra_suite.utils.geometry import wrap_angle_degs
@@ -579,82 +581,78 @@ def _flush_pose_cnn_window(
         profiler.tock("interp_cnn_inference")
 
 
-def _detect_apriltags_in_frame(
-    apriltag_detector,
-    frame,
-    frame_tasks_f,
-    all_corners,
-    params,
-    interp_tag_rows,
-):
-    """Detect AprilTags in all interpolated crops for one frame."""
-    from hydra_suite.core.tracking.pose.pose_pipeline import (
-        extract_one_crop as _extract_aabb_crop,
-    )
+def _detect_apriltags_in_frame(apriltag_model, cfg, frame, obb, tasks, interp_tag_rows):
+    """Detect AprilTags in one frame's interpolated crops via the SAME
+    ``extract_aabb_crops``/``run_apriltag`` ``Pipeline`` uses for real
+    detections (``pipeline.py:389-398``) -- no batch variant exists for
+    AprilTag (design spec, "Key architectural finding"), so this stays
+    per-frame like today.
 
-    _tag_crops = []
-    _tag_offsets = []
-    _tag_det_indices = []
-    _tag_tasks = []
-    _crop_padding = float(params.get("APRILTAG_CROP_PADDING", 0.0))
-    _suppress_foreign = bool(params.get("SUPPRESS_FOREIGN_OBB_REGIONS", True))
-    _bg_color = tuple(params.get("INDIVIDUAL_BACKGROUND_COLOR", (0, 0, 0)))
-    for ti, task in enumerate(frame_tasks_f):
-        aabb_result = _extract_aabb_crop(
-            frame,
-            all_corners[ti],
-            ti,
-            _crop_padding,
-            all_corners,
-            _suppress_foreign,
-            _bg_color,
+    Per the design spec's AprilTag/foreign-suppression decision: unlike the
+    old hand-rolled path (which foreign-masked other synthetic tasks' AABB
+    regions via ``SUPPRESS_FOREIGN_OBB_REGIONS``), ``extract_aabb_crops`` has
+    no suppression parameter at all -- interpolated AprilTag crops lose
+    foreign-suppression of other interpolated tasks, deliberately matching
+    what real detections already get.
+    """
+    if not tasks:
+        return
+    aabb_crops = extract_aabb_crops(frame, obb, padding=cfg.crop_padding)
+    result = run_apriltag(aabb_crops, obb, apriltag_model, cfg)
+    for tag_id, det_idx in zip(result.tag_ids, result.det_indices):
+        if det_idx >= len(tasks):
+            continue
+        task = tasks[det_idx]
+        interp_tag_rows.append(
+            {
+                "frame_id": int(task["frame_id"]),
+                "trajectory_id": int(task["traj_id"]),
+                "tag_id": int(tag_id),
+            }
         )
-        if aabb_result is not None:
-            crop, offset, _ = aabb_result
-            _tag_crops.append(crop)
-            _tag_offsets.append(offset)
-            _tag_det_indices.append(ti)
-            _tag_tasks.append(task)
-    if _tag_crops:
-        tag_obs = apriltag_detector.detect_in_crops(
-            _tag_crops,
-            _tag_offsets,
-            det_indices=_tag_det_indices,
-        )
-        for obs in tag_obs:
-            _ti = obs.det_index
-            _ttask = _tag_tasks[_ti] if _ti < len(_tag_tasks) else _tag_tasks[0]
-            interp_tag_rows.append(
-                {
-                    "frame_id": int(_ttask["frame_id"]),
-                    "trajectory_id": int(_ttask["traj_id"]),
-                    "tag_id": int(obs.tag_id),
-                    "center_x": float(obs.center_xy[0]),
-                    "center_y": float(obs.center_xy[1]),
-                    "hamming": int(obs.hamming),
-                }
-            )
 
 
-def _detect_headtail_in_frame(
-    headtail_analyzer,
-    frame,
-    frame_tasks_f,
-    all_corners,
+def _flush_headtail_window(
+    pending_frames,
+    pending_obbs,
+    pending_tasks_by_frame,
+    headtail_model,
+    cfg,
+    runtime,
+    geometry,
     interp_headtail_rows,
 ):
-    """Detect head-tail directions for all interpolated detections in one frame."""
-    ht_results = headtail_analyzer.analyze_crops([frame], [all_corners])
-    if ht_results and ht_results[0]:
-        for ti, (heading, conf, directed) in enumerate(ht_results[0]):
-            task = frame_tasks_f[ti]
+    """Run head-tail classification over a window via ``run_headtail_batch``
+    -- the SAME function ``Pipeline`` calls for real detections
+    (``pipeline.py:342-350``). Switches from the old per-frame
+    ``HeadTailAnalyzer.analyze_crops`` to the windowed batch path: a
+    materially different crop-construction path, registered as an expected
+    difference in the design spec's Testing section (verify equivalence
+    empirically on the characterization golden, not byte-identity).
+    """
+    from hydra_suite.core.inference.stages.headtail import run_headtail_batch
+
+    if not pending_frames or headtail_model is None:
+        return
+    headtail_by_frame = run_headtail_batch(
+        pending_frames, pending_obbs, headtail_model, cfg.headtail, runtime, geometry
+    )
+    for frame_idx, tasks in zip(
+        (obb.frame_idx for obb in pending_obbs), pending_tasks_by_frame
+    ):
+        result = headtail_by_frame.get(frame_idx)
+        if result is None:
+            continue
+        for i, task in enumerate(tasks):
+            if i >= len(result.heading_hints):
+                continue
             interp_headtail_rows.append(
                 {
                     "frame_id": int(task["frame_id"]),
                     "trajectory_id": int(task["traj_id"]),
-                    "heading_rad": float(heading),
-                    "heading_conf": float(conf),
-                    "heading_directed": int(directed),
+                    "heading_rad": float(result.heading_hints[i]),
+                    "heading_conf": float(result.heading_confidences[i]),
+                    "heading_directed": int(result.directed_mask[i]),
                 }
             )
 
@@ -1169,24 +1167,21 @@ def _process_single_frame(
             _pending_cnn_entries,
         )
 
-    if apriltag_detector is not None and frame_tasks[f]:
-        _detect_apriltags_in_frame(
-            apriltag_detector,
-            frame,
-            frame_tasks[f],
-            _frame_all_corners,
-            params,
-            interp_tag_rows,
-        )
+    # TODO(Task 12): _detect_apriltags_in_frame (Task 11) now takes
+    # (apriltag_model, cfg, frame, obb, tasks, interp_tag_rows) -- a
+    # synthetic OBBResult (build_synthetic_obb_result, Task 7) built from
+    # frame_tasks[f], not the old _frame_all_corners list, plus an
+    # AprilTagConfig instead of the raw params dict. Building that OBB/cfg
+    # here and re-wiring this call is Task 12's job. Until then this frame
+    # loop does not run AprilTag detection, so interp_tag_rows stays empty.
 
-    if headtail_analyzer is not None and frame_tasks[f] and _frame_all_corners:
-        _detect_headtail_in_frame(
-            headtail_analyzer,
-            frame,
-            frame_tasks[f],
-            _frame_all_corners,
-            interp_headtail_rows,
-        )
+    # TODO(Task 12): _detect_headtail_in_frame is replaced by
+    # _flush_headtail_window (Task 11) -- a WINDOWED batch call (matching
+    # run_headtail_batch's own signature) driven off pending_frames/
+    # pending_obbs/pending_tasks_by_frame accumulated across the frame loop,
+    # not a per-frame call. Wiring that accumulation + flush trigger here is
+    # Task 12's job. Until then this frame loop does not run head-tail
+    # detection, so interp_headtail_rows stays empty.
 
     # TODO(Task 12): this pending_crops/pending_entries accumulation and its
     # flush call are being replaced by _flush_pose_cnn_window (Task 10) driven

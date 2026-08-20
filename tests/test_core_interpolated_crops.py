@@ -280,3 +280,106 @@ def test_flush_pose_cnn_window_stamps_cnn_source_interp_with_argmax_class():
     assert row["CNN_identity_Source"] == "interp"
     assert row["CNN_identity_Class"] == "b"
     assert row["CNN_identity_Conf"] == pytest.approx(0.9)
+
+
+def test_detect_apriltags_in_frame_writes_tag_source_via_run_apriltag(monkeypatch):
+    import numpy as np
+
+    from hydra_suite.core.inference.config import AprilTagConfig
+    from hydra_suite.core.inference.result import AprilTagResult
+    from hydra_suite.core.post import interpolated_crops as ic
+    from hydra_suite.core.post.synthetic_detections import build_synthetic_obb_result
+
+    task = {
+        "frame_id": 1,
+        "cx": 32.0,
+        "cy": 32.0,
+        "w": 20.0,
+        "h": 8.0,
+        "theta": 0.0,
+        "traj_id": 5,
+        "interp_index": 1,
+        "interp_from": (0, 2),
+        "interp_total": 1,
+    }
+    obb = build_synthetic_obb_result(1, [task])
+    frame = np.zeros((64, 64, 3), dtype=np.uint8)
+
+    def _fake_run_apriltag(cpu_crops, obb_result, model, config):
+        return AprilTagResult(
+            tag_ids=[7],
+            det_indices=[0],
+            centers=np.array([[32.0, 32.0]], dtype=np.float32),
+            corners=np.zeros((1, 4, 2), dtype=np.float32),
+        )
+
+    monkeypatch.setattr(ic, "run_apriltag", _fake_run_apriltag, raising=False)
+
+    interp_tag_rows = []
+    ic._detect_apriltags_in_frame(
+        apriltag_model=object(),
+        cfg=AprilTagConfig(enabled=True),
+        frame=frame,
+        obb=obb,
+        tasks=[task],
+        interp_tag_rows=interp_tag_rows,
+    )
+    assert interp_tag_rows == [{"frame_id": 1, "trajectory_id": 5, "tag_id": 7}]
+
+
+def test_flush_headtail_window_writes_heading_rows(monkeypatch):
+    import types
+
+    import numpy as np
+
+    from hydra_suite.core.canonicalization.geometry import (
+        canonical_geometry_from_params,
+    )
+    from hydra_suite.core.inference.config import HeadTailConfig
+    from hydra_suite.core.inference.stages.headtail import HeadTailModel
+    from hydra_suite.core.post import interpolated_crops as ic
+    from hydra_suite.core.post.synthetic_detections import build_synthetic_obb_result
+
+    class _FakeBackend:
+        def predict_batch(self, crops):
+            return [[np.array([0.9, 0.1])] for _ in crops]
+
+    params = {"RUNTIME_TIER": "cpu"}
+    geometry = canonical_geometry_from_params(params)
+    headtail_model = HeadTailModel(
+        backend=_FakeBackend(), input_size=(32, 32), class_names=["right", "left"]
+    )
+    task = {
+        "frame_id": 1,
+        "cx": 32.0,
+        "cy": 32.0,
+        "w": 20.0,
+        "h": 8.0,
+        "theta": 0.0,
+        "traj_id": 5,
+        "interp_index": 1,
+        "interp_from": (0, 2),
+        "interp_total": 1,
+    }
+    obb = build_synthetic_obb_result(1, [task])
+    frame = np.zeros((64, 64, 3), dtype=np.uint8)
+
+    interp_headtail_rows = []
+    headtail_cfg = HeadTailConfig(
+        model_path="unused-in-test",
+        candidate_confidence_threshold=0.0,
+        confidence_threshold=0.0,
+    )
+    cfg = types.SimpleNamespace(headtail=headtail_cfg)
+    ic._flush_headtail_window(
+        pending_frames=[frame],
+        pending_obbs=[obb],
+        pending_tasks_by_frame=[[task]],
+        headtail_model=headtail_model,
+        cfg=cfg,
+        runtime=None,
+        geometry=geometry,
+        interp_headtail_rows=interp_headtail_rows,
+    )
+    assert len(interp_headtail_rows) == 1
+    assert interp_headtail_rows[0]["trajectory_id"] == 5
