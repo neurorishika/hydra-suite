@@ -252,7 +252,6 @@ ignore-names = [
     # Public/test-only compatibility helpers; deadcode scans src/ but not tests/
     "apply_correction",
     "apply_headtail_rotation",
-    "build_tag_only_trajectories",
     "compute_crop_dimensions",
     "detection_cache_hash",
     "extract_and_classify_batch",
