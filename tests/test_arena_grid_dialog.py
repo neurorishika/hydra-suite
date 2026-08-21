@@ -12,6 +12,13 @@ from hydra_suite.trackerkit.arena_geometry import generate_grid_shapes
 from hydra_suite.trackerkit.gui.dialogs.arena_grid_dialog import ArenaGridDialog
 
 
+@pytest.fixture(scope="module")
+def qt_app():
+    from PySide6.QtWidgets import QApplication
+
+    return QApplication.instance() or QApplication([])
+
+
 def test_grid_produces_rows_times_cols_shapes():
     shapes = generate_grid_shapes(2, 3, 50, 50, 100, 100, 40)
     assert len(shapes) == 6
@@ -124,13 +131,13 @@ def qapp():
 
 def test_dialog_accepted_shapes_matches_pure_function(qapp):
     dialog = ArenaGridDialog(parent=None, reference_frame=None, first_arena_id=3)
+    dialog.spin_radius.setValue(4)  # diameter 8, matching the old spin_size=8
     dialog.spin_rows.setValue(2)
     dialog.spin_cols.setValue(4)
     dialog.spin_origin_x.setValue(20)
     dialog.spin_origin_y.setValue(30)
     dialog.spin_pitch_x.setValue(15)
     dialog.spin_pitch_y.setValue(12)
-    dialog.spin_size.setValue(8)
 
     expected = generate_grid_shapes(2, 4, 20, 30, 15, 12, 8, first_arena_id=3)
     assert dialog.accepted_shapes() == expected
@@ -146,7 +153,7 @@ def test_dialog_shape_type_combo_switches_geometry(qapp):
     dialog = ArenaGridDialog(parent=None, reference_frame=None, first_arena_id=0)
     dialog.spin_rows.setValue(1)
     dialog.spin_cols.setValue(1)
-    dialog.combo_shape_type.setCurrentText("polygon")
+    dialog.combo_shape_type.setCurrentText("Rectangle")
     shapes = dialog.accepted_shapes()
     assert shapes[0]["type"] == "polygon"
     assert isinstance(shapes[0]["params"][0], list)
@@ -232,3 +239,115 @@ def test_generate_grid_handler_offsets_past_existing_arenas_and_merges(
     mw.arena_panel.set_shapes.assert_called_with(mw.roi_shapes)
     mw._update_animals_per_arena_total_label.assert_called_once()
     mw.update_roi_preview.assert_called_once()
+
+
+# --- Task 10: shape choice, rotation, spacing floors, extent caps, shared
+# preview renderer ---
+
+
+def _dialog(app, width=640, height=480):
+    from PySide6.QtGui import QImage
+
+    frame = QImage(width, height, QImage.Format_RGB888)
+    frame.fill(0)
+    return ArenaGridDialog(reference_frame=frame, first_arena_id=0)
+
+
+def test_dialog_starts_at_one_by_one(qt_app):
+    dialog = _dialog(qt_app)
+    assert dialog.spin_rows.value() == 1
+    assert dialog.spin_cols.value() == 1
+
+
+def test_spacing_controls_hidden_at_one_by_one(qt_app):
+    """Spacing is meaningless with a single arena, so it must not be shown."""
+    dialog = _dialog(qt_app)
+    assert dialog.spin_pitch_x.isVisibleTo(dialog) is False
+    assert dialog.spin_pitch_y.isVisibleTo(dialog) is False
+
+
+def test_spacing_controls_appear_once_a_column_is_added(qt_app):
+    dialog = _dialog(qt_app)
+    dialog.spin_cols.setValue(2)
+    assert dialog.spin_pitch_x.isVisibleTo(dialog) is True
+
+
+def test_spacing_defaults_to_the_non_overlapping_minimum(qt_app):
+    dialog = _dialog(qt_app)
+    dialog.combo_shape_type.setCurrentText("Circle")
+    dialog.spin_radius.setValue(30)
+    dialog.spin_cols.setValue(2)
+    assert dialog.spin_pitch_x.value() == 60
+    assert dialog.spin_pitch_x.minimum() == 60
+
+
+def test_rectangle_spacing_uses_width_and_height_separately(qt_app):
+    dialog = _dialog(qt_app)
+    dialog.combo_shape_type.setCurrentText("Rectangle")
+    dialog.spin_width.setValue(40)
+    dialog.spin_height.setValue(20)
+    dialog.spin_rows.setValue(2)
+    dialog.spin_cols.setValue(2)
+    assert dialog.spin_pitch_x.minimum() == 40
+    assert dialog.spin_pitch_y.minimum() == 20
+
+
+def test_circle_shows_radius_only(qt_app):
+    dialog = _dialog(qt_app)
+    dialog.combo_shape_type.setCurrentText("Circle")
+    assert dialog.spin_radius.isVisibleTo(dialog) is True
+    assert dialog.spin_width.isVisibleTo(dialog) is False
+
+
+def test_rectangle_shows_width_and_height(qt_app):
+    dialog = _dialog(qt_app)
+    dialog.combo_shape_type.setCurrentText("Rectangle")
+    assert dialog.spin_width.isVisibleTo(dialog) is True
+    assert dialog.spin_height.isVisibleTo(dialog) is True
+    assert dialog.spin_radius.isVisibleTo(dialog) is False
+
+
+def test_rotation_range_and_step(qt_app):
+    dialog = _dialog(qt_app)
+    assert dialog.spin_rotation.minimum() == -45.0
+    assert dialog.spin_rotation.maximum() == 45.0
+    assert dialog.spin_rotation.singleStep() == 0.5
+
+
+def test_rotation_slider_and_spinbox_stay_in_sync(qt_app):
+    dialog = _dialog(qt_app)
+    dialog.spin_rotation.setValue(12.5)
+    assert dialog.slider_rotation.value() == 25  # half-degree ticks
+    dialog.slider_rotation.setValue(-30)
+    assert dialog.spin_rotation.value() == -15.0
+
+
+def test_rows_and_cols_capped_so_centres_stay_in_frame(qt_app):
+    dialog = _dialog(qt_app, width=400, height=300)
+    dialog.spin_origin_x.setValue(50)
+    dialog.spin_origin_y.setValue(50)
+    dialog.spin_cols.setValue(2)
+    dialog.spin_pitch_x.setValue(100)
+    dialog.spin_pitch_y.setValue(100)
+    assert dialog.spin_cols.maximum() == 4
+    assert dialog.spin_rows.maximum() == 3
+
+
+def test_generated_grid_never_overlaps_at_default_spacing(qt_app):
+    from hydra_suite.trackerkit.arena_geometry import overlapping_arena_pairs
+
+    dialog = _dialog(qt_app)
+    dialog.combo_shape_type.setCurrentText("Circle")
+    dialog.spin_radius.setValue(20)
+    dialog.spin_rows.setValue(3)
+    dialog.spin_cols.setValue(3)
+    shapes = dialog.accepted_shapes()
+    assert overlapping_arena_pairs(shapes, 640, 480) == []
+
+
+def test_accepted_shapes_carry_the_rotation(qt_app):
+    dialog = _dialog(qt_app)
+    dialog.spin_cols.setValue(2)
+    dialog.spin_rotation.setValue(45.0)
+    shapes = dialog.accepted_shapes()
+    assert shapes[0]["params"][1] != shapes[1]["params"][1]
