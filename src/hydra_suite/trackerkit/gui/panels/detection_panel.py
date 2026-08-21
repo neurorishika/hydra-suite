@@ -1583,6 +1583,7 @@ class DetectionPanel(QWidget):
         if tracking_worker is not None and tracking_worker.isRunning():
             last_rgb = getattr(self._main_window, "_last_tracking_frame_rgb", None)
             if last_rgb is not None:
+                self._main_window.video_label.set_shapes([])
                 from PySide6.QtCore import Qt
                 from PySide6.QtGui import QImage, QPixmap
 
@@ -1730,6 +1731,7 @@ class DetectionPanel(QWidget):
 
     def _update_preview_display(self):
         """Update the video display with current brightness/contrast/gamma settings."""
+        self._main_window.video_label.set_shapes([])
         if self._main_window.preview_frame_original is None:
             return
         if self._main_window.detection_test_result is not None:
@@ -1780,6 +1782,7 @@ class DetectionPanel(QWidget):
 
     def _redisplay_detection_test(self):
         """Redisplay the stored detection test result with current zoom."""
+        self._main_window.video_label.set_shapes([])
         if self._main_window.detection_test_result is None:
             return
 
@@ -2041,6 +2044,7 @@ class DetectionPanel(QWidget):
     @Slot(dict)
     def _on_preview_detection_finished(self, result: dict):
         """Handle successful async preview detection completion."""
+        self._main_window.video_label.set_shapes([])
         test_frame_rgb = result.get("test_frame_rgb")
         raw_frame_rgb = result.get("raw_frame_rgb")
         resize_f = float(result.get("resize_factor", 1.0))

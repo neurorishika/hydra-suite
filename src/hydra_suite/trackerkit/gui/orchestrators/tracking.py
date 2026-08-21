@@ -672,6 +672,7 @@ class TrackingOrchestrator:
 
     def on_new_frame(self, rgb):
         """on_new_frame method documentation."""
+        self._mw.video_label.set_shapes([])
         z = max(self._mw.slider_zoom.value() / 100.0, 0.1)
         h, w, _ = rgb.shape
 

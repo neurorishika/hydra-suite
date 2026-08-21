@@ -141,3 +141,69 @@ def test_start_roi_selection_applies_zoom_synchronously(window, tmp_path):
     window._session_orch.start_roi_selection()
 
     assert window.video_label._zoom == pytest.approx(1.5)
+
+
+# ---------------------------------------------------------------------------
+# Fix Wave 10: the ArenaCanvas overlay must not survive into tracking/preview
+# display modes with its raw image-space shapes, since the canvas's own
+# `_zoom` gets reset to 1.0 by any already_scaled=True push -- rendering
+# leftover shapes wildly oversized and misaligned. Each frame-push site must
+# clear the canvas's shapes; `update_roi_preview()` restores them the moment
+# ROI editing resumes.
+# ---------------------------------------------------------------------------
+
+
+def _fake_rgb(width: int = 64, height: int = 48):
+    import numpy as np
+
+    return np.zeros((height, width, 3), dtype=np.uint8)
+
+
+def test_on_new_frame_clears_stale_arena_shapes(window):
+    """Fix Wave 10: tracking's on_new_frame must clear leftover ROI shapes."""
+    window.video_label.set_shapes(
+        [{"type": "circle", "cx": 2256, "cy": 2256, "r": 2000}]
+    )
+    assert window.video_label._shapes != []
+
+    window._tracking_orch.on_new_frame(_fake_rgb())
+
+    assert window.video_label._shapes == []
+
+
+def test_update_preview_display_clears_stale_arena_shapes(window):
+    """Fix Wave 10: detection-preview's _update_preview_display must clear
+    leftover ROI shapes even when there is no preview frame loaded yet."""
+    window.video_label.set_shapes([{"type": "circle", "cx": 100, "cy": 100, "r": 50}])
+    assert window.video_label._shapes != []
+
+    window.preview_frame_original = None
+    window._detection_panel._update_preview_display()
+
+    assert window.video_label._shapes == []
+
+
+def test_redisplay_detection_test_clears_stale_arena_shapes(window):
+    """Fix Wave 10: _redisplay_detection_test must clear leftover shapes."""
+    window.video_label.set_shapes([{"type": "circle", "cx": 100, "cy": 100, "r": 50}])
+    assert window.video_label._shapes != []
+
+    window.detection_test_result = None
+    window._detection_panel._redisplay_detection_test()
+
+    assert window.video_label._shapes == []
+
+
+def test_update_roi_preview_restores_shapes_after_tracking_cleared_them(window):
+    """Fix Wave 10, other direction: once ROI editing resumes after a
+    tracking/preview run cleared the canvas's shapes, update_roi_preview()
+    must restore them from window.roi_shapes."""
+    window.roi_shapes = [{"type": "circle", "cx": 10, "cy": 10, "r": 5}]
+
+    # Simulate a tracking frame having cleared the overlay.
+    window._tracking_orch.on_new_frame(_fake_rgb())
+    assert window.video_label._shapes == []
+
+    window._session_orch.update_roi_preview()
+
+    assert window.video_label._shapes == window.roi_shapes

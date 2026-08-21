@@ -260,6 +260,8 @@ class SessionOrchestrator:
         from PySide6.QtGui import QColor, QPainter, QPixmap
         from PySide6.QtSvg import QSvgRenderer
 
+        self._mw.video_label.set_shapes([])
+
         try:
             from PySide6.QtCore import QByteArray
 

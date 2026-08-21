@@ -2842,6 +2842,7 @@ class MainWindow(QMainWindow):
         API, so placeholder/status text is drawn onto a pixmap and pushed
         through the same set_frame() path a real video frame uses.
         """
+        self.video_label.set_shapes([])
         width = max(minimum_width, self.scroll.viewport().width())
         height = max(minimum_height, self.scroll.viewport().height())
         pixmap = QPixmap(width, height)
