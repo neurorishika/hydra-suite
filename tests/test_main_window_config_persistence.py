@@ -533,6 +533,54 @@ def test_video_autoload_restores_pose_keypoint_groups_and_headtail_model(
     reloaded_window.close()
 
 
+def test_loading_a_config_with_roi_shapes_restores_them_onto_the_canvas_and_done_state(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    """Fix Wave 12 end-to-end regression guard: opening a video whose saved
+    config already has fully-configured ROIs must (a) push those shapes onto
+    the canvas (``video_label._shapes``), not just onto ``roi_shapes``/the
+    panel's own state, and (b) land the arena panel in its "done" state
+    (Modify Existing Arenas / Start Fresh) rather than the editing bar, since
+    there's nothing left to actively drastically edit yet.
+
+    This must fail against the pre-Fix-Wave-12 code (canvas never received
+    the shapes; the panel never entered the done state) and pass after it.
+    """
+    import cv2
+
+    video_path = tmp_path / "sample.mp4"
+    width, height = 64, 48
+    writer = cv2.VideoWriter(
+        str(video_path), cv2.VideoWriter_fourcc(*"mp4v"), 10.0, (width, height)
+    )
+    for _ in range(3):
+        writer.write(np.zeros((height, width, 3), dtype=np.uint8))
+    writer.release()
+
+    roi_shapes = [
+        {"type": "circle", "params": [30, 20, 10], "mode": "include", "arena_id": 0},
+    ]
+
+    window = _make_main_window(monkeypatch)
+    window._setup_video_file(str(video_path), skip_config_load=True)
+
+    cfg = window.get_parameters_dict()
+    cfg["roi_shapes"] = roi_shapes
+    cfg["file_path"] = str(video_path)
+    config_path = tmp_path / "sample_config.json"
+    config_path.write_text(json.dumps(cfg), encoding="utf-8")
+
+    window._load_config_from_file(str(config_path))
+
+    assert window.roi_shapes == roi_shapes
+    assert window.video_label._shapes == roi_shapes
+    assert window.arena_panel.stack.currentWidget() is window.arena_panel.done_widget
+
+    window.close()
+
+
 def test_remove_buttons_delete_only_the_selected_tracker_models(
     monkeypatch: pytest.MonkeyPatch,
     qapp: QApplication,

@@ -522,7 +522,7 @@ def test_setup_video_file_adds_recent_video_to_main_window_store(monkeypatch) ->
         current_detection_cache_path="stale-detections.npz",
         current_individual_properties_cache_path="stale-properties.npz",
         roi_selection_active=False,
-        clear_roi=lambda: None,
+        clear_roi=lambda show_toast=True: None,
         btn_test_detection=FakeButton(),
         video_total_frames=240,
         _recents_store=SimpleNamespace(add=recent_paths.append),

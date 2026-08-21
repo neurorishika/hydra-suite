@@ -2287,9 +2287,9 @@ class MainWindow(QMainWindow):
         """Remove the last added ROI shape."""
         self._session_orch.undo_last_roi_shape()
 
-    def clear_roi(self):
+    def clear_roi(self, show_toast: bool = True):
         """Clear all ROI shapes and reset state."""
-        self._session_orch.clear_roi()
+        self._session_orch.clear_roi(show_toast=show_toast)
 
     def keyPressEvent(self, event) -> None:
         """Handle key press events."""

@@ -206,6 +206,20 @@ def test_resume_editing_returns_from_done_state(panel):
     assert panel.stack.currentWidget() is panel.editing_widget
 
 
+def test_open_in_done_state_if_shapes_exist_lands_in_done_state(panel):
+    panel.set_shapes([_circle(50, 50, 20, 0)])
+    assert panel.stack.currentWidget() is panel.editing_widget
+    panel.open_in_done_state_if_shapes_exist()
+    assert panel.stack.currentWidget() is panel.done_widget
+
+
+def test_open_in_done_state_if_shapes_exist_is_a_noop_with_no_shapes(panel):
+    assert panel.stack.currentWidget() is panel.empty_widget
+    panel.open_in_done_state_if_shapes_exist()
+    assert panel.stack.currentWidget() is panel.empty_widget
+    assert not panel._done
+
+
 def test_editing_bar_is_split_into_two_rows(panel):
     from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout
 

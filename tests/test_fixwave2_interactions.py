@@ -262,6 +262,36 @@ def test_fix9b_clear_roi_shows_a_toast_not_a_blocking_message(window, monkeypatc
     assert "blocking_message_called" not in calls
 
 
+def test_fixwave12_clear_roi_show_toast_false_suppresses_the_toast(window, monkeypatch):
+    """Fix Wave 12, Fix 1: the internal per-video-open reset (show_toast=False)
+    must not show the "ROI Cleared" toast that the user-initiated Start Fresh /
+    Remove All Arenas path (show_toast=True, the default) correctly shows."""
+    calls = {}
+    monkeypatch.setattr(
+        window.video_label,
+        "show_toast",
+        lambda text, **k: calls.setdefault("text", text),
+    )
+    window.clear_roi(show_toast=False)
+    assert "text" not in calls
+
+
+def test_fixwave12_mainwindow_clear_roi_forwards_show_toast_flag(window, monkeypatch):
+    """Fix Wave 12, Fix 1: MainWindow.clear_roi(show_toast=...) must forward the
+    flag through to SessionOrchestrator.clear_roi, not just swallow it."""
+    received = {}
+
+    def _fake_session_clear_roi(show_toast=True):
+        received["show_toast"] = show_toast
+
+    monkeypatch.setattr(window._session_orch, "clear_roi", _fake_session_clear_roi)
+    window.clear_roi(show_toast=False)
+    assert received["show_toast"] is False
+
+    window.clear_roi()
+    assert received["show_toast"] is True
+
+
 def test_fix9b_toast_pauses_canvas_input():
     canvas = ArenaCanvas()
     assert canvas.is_input_paused() is False

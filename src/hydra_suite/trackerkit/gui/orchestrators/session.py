@@ -2146,7 +2146,7 @@ class SessionOrchestrator:
         # start_roi_selection); this just refreshes the shape/point overlay.
         self.update_roi_preview()
 
-    def clear_roi(self):
+    def clear_roi(self, show_toast: bool = True):
         """Clear all ROI shapes and reset state."""
         self._mw.roi_mask = None
         self._mw.roi_points = []
@@ -2158,7 +2158,8 @@ class SessionOrchestrator:
         self._panels.arena.set_drawing_active(False)
         self._panels.arena.set_shapes([])
         self._mw.roi_status_label.setText("No ROI")
-        self._mw.video_label.show_toast("ROI Cleared")
+        if show_toast:
+            self._mw.video_label.show_toast("ROI Cleared")
         self.update_roi_preview()
         if hasattr(Qt, "OpenHandCursor"):
             self._mw.video_label.setCursor(Qt.OpenHandCursor)

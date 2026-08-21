@@ -389,6 +389,15 @@ class ArenaPanel(QWidget):
         self._done = False
         self.refresh()
 
+    def open_in_done_state_if_shapes_exist(self) -> None:
+        """Enter the done state directly (no user click), for when a video
+        opens with ROIs already configured -- there's nothing to actively edit
+        yet, so land on "Modify Existing Arenas" / "Start Fresh" rather than
+        dropping the user straight into the arena editing bar."""
+        if self._shapes:
+            self._done = True
+            self.refresh()
+
     def mark_grid_generated(self, params: dict[str, Any]) -> None:
         """Record that the CURRENT arena set was just (re)generated via the
         grid dialog, and remember its parameters so "Modify Existing Arenas"

@@ -1433,6 +1433,8 @@ class ConfigOrchestrator:
                         self._panels.arena.set_shapes(self._mw.roi_shapes)
                         self._panels.arena.mark_hand_drawn()
                         self._panels.arena.set_frame_size(fw, fh)
+                        self._mw._session_orch.update_roi_preview()
+                        self._panels.arena.open_in_done_state_if_shapes_exist()
                         logger.info(f"Loaded {num_shapes} ROI shapes from config")
                     cap.release()
             else:
@@ -2539,7 +2541,7 @@ class ConfigOrchestrator:
         self._mw.current_detection_cache_path = None
         self._mw.current_individual_properties_cache_path = None
 
-        self._mw.clear_roi()
+        self._mw.clear_roi(show_toast=False)
 
         # Auto-generate output paths based on video name
         video_dir = os.path.dirname(fp)
@@ -2893,7 +2895,7 @@ class ConfigOrchestrator:
         """Set up the UI to use the newly cropped video."""
         self._panels.setup.file_line.setText(output_path)
         self._mw.current_video_path = output_path
-        self._mw.clear_roi()
+        self._mw.clear_roi(show_toast=False)
 
         video_dir = os.path.dirname(output_path)
         video_name = os.path.splitext(os.path.basename(output_path))[0]
