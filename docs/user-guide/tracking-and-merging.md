@@ -143,6 +143,26 @@ Post-processing turns raw trajectories into analysis-ready outputs. The current 
 <!-- TODO: add postprocessing-stack.svg diagram -->
 <!-- ![Post-processing stack](../assets/figures/postprocessing-stack.svg) -->
 
+### 8. Multi-arena videos
+
+If your ROI is set up as several separate shapes, each tagged with its own arena ID
+(dishes, wells, or boxes captured in one camera view), the tracker runs each arena as an
+**independent tracking problem**: its own track slots, its own assignment, its own
+identity decoding, and its own post-processing. An identity label (e.g. "ant A") can
+repeat once per arena without the two being confused for each other, and animals in one
+arena never compete for track slots with animals in another.
+
+**Caveat — detection budgets are still shared across the whole frame.** The per-frame
+detection budget (how many candidate objects a frame is allowed to yield, and which ones
+survive if there are more candidates than slots) is spent globally, not per arena. In
+practice this means a crowded or noisy arena can consume detection budget that "belongs"
+to a quieter arena, so the quiet arena may lose detections it would have kept had it been
+tracked alone. This only bites when total detections across all arenas exceed the total
+number of track slots (`animals_per_arena * number_of_arenas`) — the nominal case, where
+each arena's real detection count stays within its own share of that budget, is
+unaffected. Tracking, assignment, identity decoding, and post-processing remain fully
+per-arena regardless.
+
 ## The Current Tracking Logic in Detail
 
 ### Measurement representation
