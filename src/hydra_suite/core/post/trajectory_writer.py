@@ -67,6 +67,29 @@ def _non_identity_classifier_columns(df: pd.DataFrame, cnn_classifiers) -> list:
     return pairs
 
 
+def _directed_flag(series: pd.Series) -> pd.Series:
+    """Coerce a ``HeadingIsDirected`` column to a nullable boolean.
+
+    Rows with no detection carry no head-tail evidence at all, and those
+    must stay ``<NA>`` rather than collapse to ``False`` -- "no direction
+    was resolved here" and "we never looked" are different claims. A plain
+    ``astype(bool)`` cannot express that, and on a CSV round-trip (where the
+    column arrives as the strings ``"True"``/``"False"``) it would report
+    every row as directed, since any non-empty string is truthy.
+    """
+    out = pd.Series(pd.NA, index=series.index, dtype="boolean")
+    known = series.notna()
+    if not known.any():
+        return out
+    values = series[known]
+    if values.dtype == object or pd.api.types.is_string_dtype(values):
+        text = values.astype("string").str.strip().str.lower()
+        out[known] = text.map({"true": True, "false": False}).astype("boolean")
+    else:
+        out[known] = values.astype(bool)
+    return out
+
+
 def project_user_tracks(
     df: pd.DataFrame,
     *,
@@ -87,6 +110,14 @@ def project_user_tracks(
     """
     out = pd.DataFrame(index=df.index)
     out["id"] = df["TrajectoryID"]
+    # Arena — present only on multi-arena runs (the engine appends the column
+    # when n_arenas > 1). Without it, every per-arena grouping a user wants
+    # from this file is impossible: trajectory ids are globally unique but
+    # carry no arena, so a 24-arena plate exports as one undifferentiated
+    # pool. Single-arena runs have no such column, so their schema is
+    # unchanged.
+    if "arena_id" in df.columns:
+        out["arena_id"] = pd.to_numeric(df["arena_id"], errors="coerce").astype("Int64")
     out["frame"] = pd.to_numeric(df["FrameID"], errors="coerce").round().astype("Int64")
     if fps and float(fps) > 0:
         out["time_s"] = out["frame"].astype("Float64") / float(fps)
@@ -96,6 +127,21 @@ def project_user_tracks(
     out["y"] = df["Y"]
     theta = pd.to_numeric(df["Theta"], errors="coerce")
     out["heading_deg"] = np.mod(np.degrees(theta), 360.0)
+    # Is `heading_deg` a real head-forward direction, or only a body axis?
+    # `Theta` already carries the pose/head-tail resolution when one was
+    # available (the directed angle is substituted for the OBB axis before
+    # the Kalman update), but where no model resolved a direction it stays
+    # the axis -- meaningful mod 180, not 360. Both kinds land in the same
+    # column, indistinguishable, so a turning-rate or mean-heading
+    # calculation over the undirected rows silently averages nonsense.
+    #
+    # Per-row semantics: "a model resolved head-vs-tail on THIS row".
+    # Post-processing's global flip-fixer propagates direction along a whole
+    # trajectory, so an undirected row can still inherit a correct heading
+    # -- this flag therefore under-reports rather than over-reports. Group
+    # by `id` for a per-track answer.
+    if "HeadingIsDirected" in df.columns:
+        out["heading_is_directed"] = _directed_flag(df["HeadingIsDirected"])
     out["state"] = df["State"]
     out["detection_confidence"] = df.get("DetectionConfidence")
 
@@ -103,10 +149,14 @@ def project_user_tracks(
     # resolved-final label column is present.
     if identity_ran and C.FINAL_LABEL in df.columns:
         label = df[C.FINAL_LABEL].astype("string")
+        from_smoothed = pd.Series(False, index=df.index)
         if C.FINAL_SMOOTHED_LABEL in df.columns:
-            label = label.mask(
-                _is_empty_label(label), df[C.FINAL_SMOOTHED_LABEL].astype("string")
-            )
+            smoothed = df[C.FINAL_SMOOTHED_LABEL].astype("string")
+            # Only rows that actually take the smoothed label count as
+            # smoothed-sourced: an empty Final *and* an empty Smoothed stays
+            # empty and must keep its own (Final) confidence.
+            from_smoothed = _is_empty_label(label) & ~_is_empty_label(smoothed)
+            label = label.mask(_is_empty_label(label), smoothed)
         out["identity"] = label
         # ``identity`` is a *display* label and is not unique on its own: a
         # class declared non-identifying (an untagged animal, an unreadable
@@ -120,7 +170,17 @@ def project_user_tracks(
                 "Int64"
             )
         if C.FINAL_CONFIDENCE in df.columns:
-            out["identity_confidence"] = df[C.FINAL_CONFIDENCE]
+            confidence = df[C.FINAL_CONFIDENCE]
+            # A row whose label came from the smoothed column must report the
+            # smoothed confidence with it. Reading FINAL_CONFIDENCE for those
+            # rows pairs one estimator's label with another's score -- and
+            # FINAL_CONFIDENCE is exactly the field that is empty/0 there,
+            # so the smoothed labels looked like the least trustworthy rows.
+            if C.FINAL_SMOOTHED_CONFIDENCE in df.columns and from_smoothed.any():
+                confidence = confidence.mask(
+                    from_smoothed, df[C.FINAL_SMOOTHED_CONFIDENCE]
+                )
+            out["identity_confidence"] = confidence
         if C.FINAL_SOURCE in df.columns:
             out["identity_source"] = df[C.FINAL_SOURCE]
 

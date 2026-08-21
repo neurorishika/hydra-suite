@@ -202,3 +202,80 @@ def test_multi_factor_non_identity_classifier_keeps_one_column_per_factor():
 def test_no_classifier_config_leaves_the_schema_untouched():
     out = project_user_tracks(_df_with_classifiers(), fps=10.0)
     assert not [c for c in out.columns if c.endswith(("_class", "_conf"))]
+
+
+def test_arena_id_travels_into_the_clean_export():
+    """Multi-arena runs must carry the arena into the User-mode CSV.
+
+    Trajectory ids are globally unique but arena-blind, so without this
+    column a 24-arena plate exports as one undifferentiated pool and no
+    per-arena analysis is possible from this file.
+    """
+    df = _base_df()
+    df["arena_id"] = [7, 7]
+    out = project_user_tracks(df, fps=10.0)
+    assert list(out.columns)[:3] == ["id", "arena_id", "frame"]
+    assert out["arena_id"].tolist() == [7, 7]
+    assert str(out["arena_id"].dtype) == "Int64"
+
+
+def test_arena_id_absent_for_single_arena_runs():
+    out = project_user_tracks(_base_df(), fps=10.0)
+    assert "arena_id" not in out.columns
+
+
+def test_smoothed_label_carries_the_smoothed_confidence():
+    """A row whose label falls back to Smoothed reports the Smoothed score."""
+    df = _base_df()
+    df[C.FINAL_LABEL] = ["antA", ""]
+    df[C.FINAL_SMOOTHED_LABEL] = ["antA", "antB"]
+    df[C.FINAL_CONFIDENCE] = [0.7, 0.0]
+    df[C.FINAL_SMOOTHED_CONFIDENCE] = [0.1, 0.6]
+    df[C.FINAL_SOURCE] = ["realtime", "offline"]
+    out = project_user_tracks(df, fps=10.0)
+    assert out["identity"].tolist() == ["antA", "antB"]
+    # row 0 kept its Final label -> Final confidence; row 1 fell back.
+    assert out["identity_confidence"].tolist() == [0.7, 0.6]
+
+
+def test_empty_final_and_empty_smoothed_keeps_final_confidence():
+    df = _base_df()
+    df[C.FINAL_LABEL] = ["antA", ""]
+    df[C.FINAL_SMOOTHED_LABEL] = ["antA", "  "]
+    df[C.FINAL_CONFIDENCE] = [0.7, 0.0]
+    df[C.FINAL_SMOOTHED_CONFIDENCE] = [0.1, 0.9]
+    out = project_user_tracks(df, fps=10.0)
+    assert out["identity_confidence"].tolist() == [0.7, 0.0]
+
+
+def test_heading_is_directed_travels_with_heading():
+    """`heading_deg` mixes true headings and body axes; the flag separates them."""
+    df = _base_df()
+    df["HeadingIsDirected"] = [True, False]
+    out = project_user_tracks(df, fps=10.0)
+    cols = list(out.columns)
+    assert cols[cols.index("heading_deg") + 1] == "heading_is_directed"
+    assert out["heading_is_directed"].tolist() == [True, False]
+    assert str(out["heading_is_directed"].dtype) == "boolean"
+
+
+def test_heading_is_directed_absent_without_head_tail():
+    out = project_user_tracks(_base_df(), fps=10.0)
+    assert "heading_is_directed" not in out.columns
+
+
+def test_heading_is_directed_keeps_na_for_detectionless_rows():
+    """No detection = no evidence; that must not read as "not directed"."""
+    df = _base_df()
+    df["HeadingIsDirected"] = [True, float("nan")]
+    out = project_user_tracks(df, fps=10.0)
+    assert out["heading_is_directed"].tolist()[0] is True
+    assert pd.isna(out["heading_is_directed"].tolist()[1])
+
+
+def test_heading_is_directed_survives_a_csv_round_trip():
+    """Strings must map by value: any non-empty string is truthy to bool()."""
+    df = _base_df()
+    df["HeadingIsDirected"] = ["True", "False"]
+    out = project_user_tracks(df, fps=10.0)
+    assert out["heading_is_directed"].tolist() == [True, False]
