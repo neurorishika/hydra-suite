@@ -1283,7 +1283,13 @@ class TrackingEngineCore:
         # Runs for BOTH fresh and cached detections (forward pass only).
         # Backward pass loads regions from the sidecar JSON instead.
         # For YOLO OBB: uses InferenceRunner detection cache via build_density_cache_dict.
-        # For background subtraction: no cached detections → skip density map.
+        # For background subtraction: SKIPPED BY DESIGN -- bg-sub produces no
+        # confidence signal (its cached `confidences` are all NaN), so there is
+        # nothing to build a confidence-density map from; the (1-conf) weights
+        # would be NaN. Structurally it can never reach here: bg-sub uses the
+        # separate `bgsub_runner`, so `inference_runner is None` below.
+        # (The old reason on this line -- "no cached detections" -- is stale:
+        # bg-sub does write a detection cache since the InferenceRunner unification.)
         if (
             density_map_enabled
             and not self.backward_mode
