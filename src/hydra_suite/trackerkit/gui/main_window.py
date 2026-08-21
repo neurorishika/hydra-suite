@@ -371,14 +371,6 @@ class MainWindow(QMainWindow):
 
         # ROI display caching (for performance)
         self._roi_masked_cache = {}  # Cache: {(frame_id, roi_hash): masked_image}
-        # Interactive pan/zoom state
-        self._is_panning = False
-        self._pan_start_pos = None
-        self._scroll_start_h = 0
-        self._scroll_start_v = 0
-        self._pan_start_pos = None
-        self._scroll_start_h = 0
-        self._scroll_start_v = 0
 
         # Track first frame for auto-fit during tracking
         self._tracking_first_frame = True
@@ -2214,18 +2206,6 @@ class MainWindow(QMainWindow):
             )
         else:
             self._setup_panel.lbl_animals_per_arena_total.setText("")
-
-    def _handle_video_mouse_press(self, evt):
-        """Handle mouse press on video - either ROI selection or pan/zoom."""
-        self._session_orch._handle_video_mouse_press(evt)
-
-    def _handle_video_mouse_move(self, evt):
-        """Handle mouse move - update pan if active."""
-        self._session_orch._handle_video_mouse_move(evt)
-
-    def _handle_video_mouse_release(self, evt):
-        """Handle mouse release - end pan."""
-        self._session_orch._handle_video_mouse_release(evt)
 
     def _on_canvas_pan(self, dx: int, dy: int) -> None:
         """Scroll by a drag delta the canvas already classified as a pan."""

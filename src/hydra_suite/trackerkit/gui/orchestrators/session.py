@@ -1730,51 +1730,6 @@ class SessionOrchestrator:
         """Handle ROI zone type selection change."""
         self._mw.roi_current_zone_type = "include" if index == 0 else "exclude"
 
-    def _handle_video_mouse_press(self, evt):
-        """Handle mouse press on video - either ROI selection or pan/zoom."""
-        if not self._mw._video_interactions_enabled:
-            evt.ignore()
-            return
-
-        if evt.button() == Qt.LeftButton or evt.button() == Qt.MiddleButton:
-            self._mw._is_panning = True
-            self._mw._pan_start_pos = evt.globalPosition().toPoint()
-            self._mw._scroll_start_h = self._mw.scroll.horizontalScrollBar().value()
-            self._mw._scroll_start_v = self._mw.scroll.verticalScrollBar().value()
-            self._mw.video_label.setCursor(Qt.ClosedHandCursor)
-            evt.accept()
-
-    def _handle_video_mouse_move(self, evt):
-        """Handle mouse move - update pan if active."""
-        if not self._mw._video_interactions_enabled:
-            evt.ignore()
-            return
-        if self._mw._is_panning and self._mw._pan_start_pos:
-            delta = evt.globalPosition().toPoint() - self._mw._pan_start_pos
-            self._mw.scroll.horizontalScrollBar().setValue(
-                self._mw._scroll_start_h - delta.x()
-            )
-            self._mw.scroll.verticalScrollBar().setValue(
-                self._mw._scroll_start_v - delta.y()
-            )
-            evt.accept()
-        elif not self._mw.roi_selection_active:
-            self._mw.video_label.setCursor(Qt.OpenHandCursor)
-
-    def _handle_video_mouse_release(self, evt):
-        """Handle mouse release - end pan."""
-        if not self._mw._video_interactions_enabled:
-            evt.ignore()
-            return
-        if self._mw._is_panning:
-            self._mw._is_panning = False
-            self._mw._pan_start_pos = None
-            if not self._mw.roi_selection_active:
-                self._mw.video_label.setCursor(Qt.OpenHandCursor)
-            else:
-                self._mw.video_label.setCursor(Qt.ArrowCursor)
-            evt.accept()
-
     def _handle_video_double_click(self, evt):
         """Handle double-click on video to fit to screen."""
         if not self._mw._video_interactions_enabled:
