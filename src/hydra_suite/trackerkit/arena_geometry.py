@@ -178,3 +178,132 @@ def overlapping_arena_pairs(
             if np.any(mask_a & mask_b):
                 pairs.append((first, second))
     return pairs
+
+
+def min_pitch(shape_type: str, size: int, size_y: int | None = None) -> tuple[int, int]:
+    """Tightest centre-to-centre pitch that cannot produce overlap.
+
+    Circles of radius r avoid overlap only when spacing is at least 2r, i.e.
+    the full diameter -- ``size`` already IS the diameter. Rectangles need the
+    full width in x and the full height in y. (The original brief specified
+    half these values, which guarantees overlap rather than preventing it.)
+    """
+    height = int(size if size_y is None else size_y)
+    if shape_type == "circle":
+        return (int(size), int(size))
+    return (int(size), height)
+
+
+def _rotate(dx: float, dy: float, cos_t: float, sin_t: float) -> tuple[float, float]:
+    return (dx * cos_t - dy * sin_t, dx * sin_t + dy * cos_t)
+
+
+def generate_grid_shapes(
+    rows: int,
+    cols: int,
+    origin_x: int,
+    origin_y: int,
+    pitch_x: int,
+    pitch_y: int,
+    size: int,
+    shape_type: str = "circle",
+    first_arena_id: int = 0,
+    *,
+    size_y: int | None = None,
+    rotation_deg: float = 0.0,
+) -> list[dict[str, Any]]:
+    """Build a row-major grid of arena shapes, optionally rotated.
+
+    ``origin_x``/``origin_y`` is the centre of the top-left (row 0, col 0)
+    arena and is the pivot for ``rotation_deg``. ``size`` is the circle
+    diameter or the rectangle width; ``size_y`` is the rectangle height and
+    defaults to ``size``. Ids are row-major from ``first_arena_id``, matching
+    well-plate naming (A1, A2, ..., B1, ...).
+
+    Every shape is an ``include`` shape -- the grid generator only adds
+    arenas, it never punches exclude holes. Rotated rectangles are emitted as
+    ordinary 4-point polygons, an already-supported shape type, so nothing
+    downstream distinguishes them from hand-drawn shapes.
+    """
+    theta = math.radians(float(rotation_deg))
+    cos_t, sin_t = math.cos(theta), math.sin(theta)
+    half_x = int(size) // 2
+    half_y = int(size if size_y is None else size_y) // 2
+
+    shapes: list[dict[str, Any]] = []
+    arena_id = int(first_arena_id)
+    for row in range(int(rows)):
+        for col in range(int(cols)):
+            offset_x, offset_y = _rotate(
+                col * int(pitch_x), row * int(pitch_y), cos_t, sin_t
+            )
+            center_x = int(round(int(origin_x) + offset_x))
+            center_y = int(round(int(origin_y) + offset_y))
+            if shape_type == "polygon":
+                corners = [
+                    (-half_x, -half_y),
+                    (half_x, -half_y),
+                    (half_x, half_y),
+                    (-half_x, half_y),
+                ]
+                params: Any = [
+                    [
+                        int(round(center_x + rx)),
+                        int(round(center_y + ry)),
+                    ]
+                    for rx, ry in (_rotate(dx, dy, cos_t, sin_t) for dx, dy in corners)
+                ]
+            else:
+                params = [center_x, center_y, half_x]
+            shapes.append(
+                {
+                    "type": "circle" if shape_type != "polygon" else "polygon",
+                    "params": params,
+                    "mode": "include",
+                    "arena_id": arena_id,
+                }
+            )
+            arena_id += 1
+    return shapes
+
+
+def max_grid_extent(
+    origin_x: int,
+    origin_y: int,
+    pitch_x: int,
+    pitch_y: int,
+    width: int,
+    height: int,
+    rotation_deg: float = 0.0,
+    limit: int = 100,
+) -> tuple[int, int]:
+    """Largest (rows, cols) keeping every arena CENTRE inside the frame.
+
+    A rotated lattice is an affine image of a rectangular one, so every centre
+    lies in the convex hull of the four corner centres. The frame is convex,
+    so checking those four corners is exact -- and O(1) per candidate instead
+    of O(rows*cols). Returns at least (1, 1) so the caller always has a usable
+    minimum even when the origin itself is off-frame.
+    """
+    theta = math.radians(float(rotation_deg))
+    cos_t, sin_t = math.cos(theta), math.sin(theta)
+
+    def corners_inside(rows: int, cols: int) -> bool:
+        for row in (0, rows - 1):
+            for col in (0, cols - 1):
+                offset_x, offset_y = _rotate(
+                    col * int(pitch_x), row * int(pitch_y), cos_t, sin_t
+                )
+                center_x = int(origin_x) + offset_x
+                center_y = int(origin_y) + offset_y
+                if not (0 <= center_x < width and 0 <= center_y < height):
+                    return False
+        return True
+
+    max_cols = 1
+    while max_cols < limit and corners_inside(1, max_cols + 1):
+        max_cols += 1
+    max_rows = 1
+    while max_rows < limit and corners_inside(max_rows + 1, max_cols):
+        max_rows += 1
+    return (max_rows, max_cols)

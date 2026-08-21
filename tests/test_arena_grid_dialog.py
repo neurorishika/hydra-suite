@@ -8,10 +8,8 @@ dialogs in tests" rule (some GUI tests crash the interpreter).
 
 import pytest
 
-from hydra_suite.trackerkit.gui.dialogs.arena_grid_dialog import (
-    ArenaGridDialog,
-    generate_grid_shapes,
-)
+from hydra_suite.trackerkit.arena_geometry import generate_grid_shapes
+from hydra_suite.trackerkit.gui.dialogs.arena_grid_dialog import ArenaGridDialog
 
 
 def test_grid_produces_rows_times_cols_shapes():

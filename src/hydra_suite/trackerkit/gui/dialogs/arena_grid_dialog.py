@@ -30,58 +30,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hydra_suite.trackerkit.arena_geometry import generate_grid_shapes
 from hydra_suite.widgets.dialogs import BaseDialog
-
-
-def generate_grid_shapes(
-    rows: int,
-    cols: int,
-    origin_x: int,
-    origin_y: int,
-    pitch_x: int,
-    pitch_y: int,
-    size: int,
-    shape_type: str = "circle",
-    first_arena_id: int = 0,
-) -> list[dict[str, Any]]:
-    """Build a row-major grid of arena shapes.
-
-    ``origin_x``/``origin_y`` is the centre of the top-left (row 0, col 0)
-    arena. ``pitch_x``/``pitch_y`` is the centre-to-centre spacing between
-    adjacent columns/rows. ``size`` is the full width of one arena --
-    diameter for circles, edge length for the polygon squares. Ids are
-    assigned row-major (row 0 left-to-right, then row 1, ...) starting at
-    ``first_arena_id``, matching well-plate naming (A1, A2, ..., B1, ...).
-
-    Every shape is an ``include`` shape -- the grid generator only adds
-    arenas, it never punches exclude holes.
-    """
-    half = int(size) // 2
-    shapes: list[dict[str, Any]] = []
-    arena_id = int(first_arena_id)
-    for row in range(int(rows)):
-        for col in range(int(cols)):
-            cx = int(origin_x) + col * int(pitch_x)
-            cy = int(origin_y) + row * int(pitch_y)
-            if shape_type == "polygon":
-                params: Any = [
-                    [cx - half, cy - half],
-                    [cx + half, cy - half],
-                    [cx + half, cy + half],
-                    [cx - half, cy + half],
-                ]
-            else:
-                params = [cx, cy, half]
-            shapes.append(
-                {
-                    "type": "circle" if shape_type != "polygon" else "polygon",
-                    "params": params,
-                    "mode": "include",
-                    "arena_id": arena_id,
-                }
-            )
-            arena_id += 1
-    return shapes
 
 
 class ArenaGridDialog(BaseDialog):
