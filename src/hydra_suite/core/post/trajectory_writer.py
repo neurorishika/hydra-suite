@@ -87,6 +87,14 @@ def project_user_tracks(
     """
     out = pd.DataFrame(index=df.index)
     out["id"] = df["TrajectoryID"]
+    # Arena — present only on multi-arena runs (the engine appends the column
+    # when n_arenas > 1). Without it, every per-arena grouping a user wants
+    # from this file is impossible: trajectory ids are globally unique but
+    # carry no arena, so a 24-arena plate exports as one undifferentiated
+    # pool. Single-arena runs have no such column, so their schema is
+    # unchanged.
+    if "arena_id" in df.columns:
+        out["arena_id"] = pd.to_numeric(df["arena_id"], errors="coerce").astype("Int64")
     out["frame"] = pd.to_numeric(df["FrameID"], errors="coerce").round().astype("Int64")
     if fps and float(fps) > 0:
         out["time_s"] = out["frame"].astype("Float64") / float(fps)
@@ -103,10 +111,14 @@ def project_user_tracks(
     # resolved-final label column is present.
     if identity_ran and C.FINAL_LABEL in df.columns:
         label = df[C.FINAL_LABEL].astype("string")
+        from_smoothed = pd.Series(False, index=df.index)
         if C.FINAL_SMOOTHED_LABEL in df.columns:
-            label = label.mask(
-                _is_empty_label(label), df[C.FINAL_SMOOTHED_LABEL].astype("string")
-            )
+            smoothed = df[C.FINAL_SMOOTHED_LABEL].astype("string")
+            # Only rows that actually take the smoothed label count as
+            # smoothed-sourced: an empty Final *and* an empty Smoothed stays
+            # empty and must keep its own (Final) confidence.
+            from_smoothed = _is_empty_label(label) & ~_is_empty_label(smoothed)
+            label = label.mask(_is_empty_label(label), smoothed)
         out["identity"] = label
         # ``identity`` is a *display* label and is not unique on its own: a
         # class declared non-identifying (an untagged animal, an unreadable
@@ -120,7 +132,17 @@ def project_user_tracks(
                 "Int64"
             )
         if C.FINAL_CONFIDENCE in df.columns:
-            out["identity_confidence"] = df[C.FINAL_CONFIDENCE]
+            confidence = df[C.FINAL_CONFIDENCE]
+            # A row whose label came from the smoothed column must report the
+            # smoothed confidence with it. Reading FINAL_CONFIDENCE for those
+            # rows pairs one estimator's label with another's score -- and
+            # FINAL_CONFIDENCE is exactly the field that is empty/0 there,
+            # so the smoothed labels looked like the least trustworthy rows.
+            if C.FINAL_SMOOTHED_CONFIDENCE in df.columns and from_smoothed.any():
+                confidence = confidence.mask(
+                    from_smoothed, df[C.FINAL_SMOOTHED_CONFIDENCE]
+                )
+            out["identity_confidence"] = confidence
         if C.FINAL_SOURCE in df.columns:
             out["identity_source"] = df[C.FINAL_SOURCE]
 
