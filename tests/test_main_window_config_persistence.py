@@ -581,6 +581,66 @@ def test_loading_a_config_with_roi_shapes_restores_them_onto_the_canvas_and_done
     window.close()
 
 
+def test_opening_video_with_saved_roi_config_autoloads_shapes_onto_canvas(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    """Fix Wave 13 end-to-end regression guard: opening a video via the REAL
+    single-call auto-load path (``_setup_video_file(..., skip_config_load=False)``,
+    which drives ``_init_video_player`` -> ``_update_preview_display`` for the
+    very first frame, then auto-loads a matching ``<video>_config.json`` found
+    next to the video) must leave the saved ROI shapes visible on the canvas
+    afterward.
+
+    Fix Wave 10 added an unconditional ``video_label.set_shapes([])`` at the
+    top of ``_update_preview_display`` (the shared "show current frame"
+    method used for both normal display and detection-test re-render) to fix
+    a real bug (stale overlay during detection-test rendering), but that
+    clear fired on every normal frame display too and nothing re-populated
+    the shapes afterward on this path -- wiping a legitimately auto-loaded
+    ROI overlay the instant a video with saved ROIs opened.
+
+    The previous Fix Wave 12 regression test used a two-step
+    ``skip_config_load=True`` + separate ``_load_config_from_file`` call,
+    which happened not to re-invoke ``_update_preview_display`` after the
+    shapes were pushed onto the canvas, so it did not expose this. This test
+    drives the single-call auto-load path instead, which does.
+    """
+    import cv2
+
+    video_path = tmp_path / "sample.mp4"
+    width, height = 64, 48
+    writer = cv2.VideoWriter(
+        str(video_path), cv2.VideoWriter_fourcc(*"mp4v"), 10.0, (width, height)
+    )
+    for _ in range(3):
+        writer.write(np.zeros((height, width, 3), dtype=np.uint8))
+    writer.release()
+
+    roi_shapes = [
+        {"type": "circle", "params": [30, 20, 10], "mode": "include", "arena_id": 0},
+    ]
+
+    window = _make_main_window(monkeypatch)
+
+    # Build the config that `_setup_video_file`'s auto-detection will find:
+    # it must sit next to the video as `<video_name>_config.json`.
+    cfg = window.get_parameters_dict()
+    cfg["roi_shapes"] = roi_shapes
+    cfg["file_path"] = str(video_path)
+    config_path = tmp_path / "sample_config.json"
+    config_path.write_text(json.dumps(cfg), encoding="utf-8")
+
+    # The real auto-load-on-open path: a single call, config load NOT skipped.
+    window._setup_video_file(str(video_path), skip_config_load=False)
+
+    assert window.roi_shapes == roi_shapes
+    assert window.video_label._shapes == roi_shapes
+
+    window.close()
+
+
 def test_remove_buttons_delete_only_the_selected_tracker_models(
     monkeypatch: pytest.MonkeyPatch,
     qapp: QApplication,

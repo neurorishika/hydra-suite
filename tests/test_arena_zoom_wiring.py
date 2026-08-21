@@ -171,13 +171,45 @@ def test_on_new_frame_clears_stale_arena_shapes(window):
     assert window.video_label._shapes == []
 
 
-def test_update_preview_display_clears_stale_arena_shapes(window):
-    """Fix Wave 10: detection-preview's _update_preview_display must clear
-    leftover ROI shapes even when there is no preview frame loaded yet."""
-    window.video_label.set_shapes([{"type": "circle", "cx": 100, "cy": 100, "r": 50}])
+def test_update_preview_display_does_not_clear_shapes_during_plain_display(window):
+    """Fix Wave 13: `_update_preview_display` is the shared "show the current
+    frame" method used for BOTH normal video review/scrubbing AND real
+    detection-test rendering. When there is no active detection test
+    (`detection_test_result is None`), it must NOT clear pre-set ROI
+    shapes -- Fix Wave 10 previously added an unconditional
+    `set_shapes([])` at its top that fired on every normal frame display
+    too, wiping a legitimately-loaded ROI overlay the instant a video with
+    saved ROIs opened or the user scrubbed to any frame. The
+    detection-test case remains covered separately by
+    `_redisplay_detection_test`'s own clear (see the test below)."""
+    shapes = [{"type": "circle", "cx": 100, "cy": 100, "r": 50}]
+    window.video_label.set_shapes(shapes)
     assert window.video_label._shapes != []
 
     window.preview_frame_original = None
+    window.detection_test_result = None
+    window._detection_panel._update_preview_display()
+
+    assert window.video_label._shapes == shapes
+
+
+def test_update_preview_display_still_clears_shapes_when_redirected_to_detection_test(
+    window,
+):
+    """Fix Wave 13 (no regression on the original Fix Wave 10 bug): when a
+    real detection-test result IS present, `_update_preview_display` must
+    still redirect into `_redisplay_detection_test`, whose own (untouched)
+    clear still fires -- the original misaligned-overlay bug this whole
+    class of fix targets must remain fixed."""
+    import numpy as np
+
+    window.video_label.set_shapes([{"type": "circle", "cx": 100, "cy": 100, "r": 50}])
+    assert window.video_label._shapes != []
+
+    fake_frame = np.zeros((48, 64, 3), dtype=np.uint8)
+    window.preview_frame_original = fake_frame
+    window.detection_test_result = (fake_frame, 1.0)
+
     window._detection_panel._update_preview_display()
 
     assert window.video_label._shapes == []

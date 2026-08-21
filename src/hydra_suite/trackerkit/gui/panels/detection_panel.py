@@ -1731,7 +1731,6 @@ class DetectionPanel(QWidget):
 
     def _update_preview_display(self):
         """Update the video display with current brightness/contrast/gamma settings."""
-        self._main_window.video_label.set_shapes([])
         if self._main_window.preview_frame_original is None:
             return
         if self._main_window.detection_test_result is not None:
