@@ -2130,6 +2130,7 @@ class SessionOrchestrator:
         else:
             self._mw.roi_mask = None
         self._panels.arena.set_shapes(self._mw.roi_shapes)
+        self._panels.arena.mark_hand_drawn()
         if self._mw.roi_shapes:
             num_shapes = len(self._mw.roi_shapes)
             shape_summary = ", ".join([s["type"] for s in self._mw.roi_shapes])

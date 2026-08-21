@@ -1431,6 +1431,7 @@ class ConfigOrchestrator:
                             f"Loaded ROI: {num_shapes} shape(s) ({shape_summary})"
                         )
                         self._panels.arena.set_shapes(self._mw.roi_shapes)
+                        self._panels.arena.mark_hand_drawn()
                         self._panels.arena.set_frame_size(fw, fh)
                         logger.info(f"Loaded {num_shapes} ROI shapes from config")
                     cap.release()

@@ -158,3 +158,42 @@ def test_undo_last_roi_shape_is_scoped_to_the_current_arena(qapp):
     # Arena 1's shape is completely untouched, even though it was the list's
     # actual last element before the undo.
     assert shapes[2] in remaining
+
+
+def test_undo_last_roi_shape_marks_hand_drawn_even_if_previously_grid_generated(qapp):
+    """Fix wave 8, round 2, finding 2: Undo (Remove Last Zone) must flip
+    made_via_grid to False even when the arena set was previously
+    grid-generated -- otherwise reopening the grid dialog to "modify" it
+    would silently regenerate and resurrect the shape that was just
+    removed. Driven against a REAL ArenaPanel (not the file's usual
+    MagicMock ``panels``) so the wiring is actually verified -- a mocked
+    ``_panels.arena`` would hide whether ``mark_hand_drawn()`` was really
+    called on a real panel."""
+    from hydra_suite.trackerkit.gui.panels.arena_panel import ArenaPanel
+
+    shapes = [
+        {"type": "circle", "params": [1, 1, 1], "mode": "include", "arena_id": 0},
+        {"type": "circle", "params": [2, 2, 2], "mode": "include", "arena_id": 0},
+    ]
+    mw = MagicMock()
+    mw.roi_shapes = list(shapes)
+    mw.roi_base_frame = None
+
+    class _PanelsRealArena:
+        def __init__(self):
+            self.arena = ArenaPanel()
+            self.arena.set_frame_size(400, 400)
+
+        def __getattr__(self, name):
+            return MagicMock()
+
+    panels = _PanelsRealArena()
+    panels.arena.set_shapes(shapes)
+    panels.arena.mark_grid_generated({"first_arena_id": 0})
+    assert panels.arena.made_via_grid is True
+
+    orch = SessionOrchestrator(mw, config=MagicMock(), panels=panels)
+    orch.current_arena_id = 0
+    orch.undo_last_roi_shape()
+
+    assert panels.arena.made_via_grid is False

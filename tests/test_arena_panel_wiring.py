@@ -53,3 +53,25 @@ def test_panel_starts_in_the_empty_state(window):
     assert window.arena_panel.lbl_default.text() == (
         "By default, the whole video is used."
     )
+
+
+# --- Fix wave 8, round 2, finding 2: Clear Arena must flip made_via_grid
+# to False even if the arena set was previously grid-generated -- otherwise
+# reopening the grid dialog to "modify" it would silently regenerate and
+# resurrect the shapes that were just cleared. Driven against a REAL
+# ArenaPanel (not a MagicMock stand-in) so the wiring is actually verified,
+# per the reviewer's note that a mocked ``_panels.arena`` would hide this. ---
+
+
+def test_clear_arena_marks_hand_drawn_even_if_previously_grid_generated(window):
+    window.roi_base_frame = None
+    window.roi_shapes = [
+        {"type": "circle", "params": [1, 1, 1], "mode": "include", "arena_id": 0},
+    ]
+    window.arena_panel.set_shapes(window.roi_shapes)
+    window.arena_panel.mark_grid_generated({"first_arena_id": 0})
+    assert window.arena_panel.made_via_grid is True
+
+    window._on_clear_arena(0)
+
+    assert window.arena_panel.made_via_grid is False

@@ -2051,15 +2051,24 @@ class MainWindow(QMainWindow):
         new_shapes = dialog.accepted_shapes()
         if not new_shapes:
             return
+        had_existing_shapes = bool(self.roi_shapes)
         self.roi_shapes.extend(new_shapes)
 
         if self.roi_base_frame:
             fh, fw = self.roi_base_frame.height(), self.roi_base_frame.width()
             self._generate_combined_roi_mask(fh, fw)
         self.arena_panel.set_shapes(self.roi_shapes)
-        grid_params = dialog.current_params()
-        grid_params["first_arena_id"] = next_id
-        self.arena_panel.mark_grid_generated(grid_params)
+        if had_existing_shapes:
+            # roi_shapes already had other (e.g. hand-drawn) arenas before
+            # this grid was appended -- the resulting set is now a MIX of
+            # grid and non-grid origin, so "Modify Existing Arenas" must
+            # fall back to the plain editor rather than risk replacing the
+            # pre-existing shapes with just the grid's regenerated output.
+            self.arena_panel.mark_hand_drawn()
+        else:
+            grid_params = dialog.current_params()
+            grid_params["first_arena_id"] = next_id
+            self.arena_panel.mark_grid_generated(grid_params)
         # Display-only count over ALL shapes (include + exclude); intentionally
         # differs from the engine's authoritative count,
         # `engine_params.n_arenas_from_shapes` (include-shapes only) -- an
@@ -2125,8 +2134,14 @@ class MainWindow(QMainWindow):
         new_params["first_arena_id"] = params.get("first_arena_id", 0)
         self.arena_panel.mark_grid_generated(new_params)
         self.arena_panel.resume_editing()
+        arena_count = len({int(s.get("arena_id", 0)) for s in self.roi_shapes})
+        self.roi_status_label.setText(
+            f"Regenerated {len(new_shapes)} arena shape(s) "
+            f"({arena_count} arena(s) total)"
+        )
         self._update_roi_optimization_info()
         self._update_animals_per_arena_total_label()
+        self.update_roi_preview()
 
     def _update_animals_per_arena_total_label(self):
         """Keep the derived-total label next to "Animals per arena" live.
@@ -2188,6 +2203,7 @@ class MainWindow(QMainWindow):
         """Empty an arena's shapes; the arena and its number remain."""
         self.roi_shapes = self.arena_panel.shapes_after_clearing(arena_id)
         self.arena_panel.set_shapes(self.roi_shapes)
+        self.arena_panel.mark_hand_drawn()
         if self.roi_base_frame:
             self._generate_combined_roi_mask(
                 self.roi_base_frame.height(), self.roi_base_frame.width()

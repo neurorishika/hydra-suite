@@ -246,6 +246,188 @@ def test_generate_grid_handler_offsets_past_existing_arenas_and_merges(
     mw.update_roi_preview.assert_called_once()
 
 
+# --- Fix wave 8, round 2 (findings 1-4): the "Modify Existing Arenas" /
+# "Done" workflow's canvas-repaint bug and grid-origin-tracking honesty. All
+# driven the same way as the test above: unbound-method calls against a
+# MagicMock stand-in for MainWindow, with ArenaGridDialog patched out. ---
+
+
+class _FakeModifyDialog:
+    """Stand-in for ArenaGridDialog used by _reopen_grid_dialog_for_modification.
+
+    Captures constructor kwargs so tests can assert the dialog was reopened
+    prefilled with the right params, and lets each test control accept vs.
+    reject without ever calling the real (modal) ``exec()``.
+    """
+
+    last_instance = None
+
+    def __init__(
+        self, parent=None, reference_frame=None, first_arena_id=0, initial_params=None
+    ):
+        self.first_arena_id = first_arena_id
+        self.initial_params = initial_params
+        self._accept = True
+        self._shapes = [
+            {
+                "type": "circle",
+                "params": [9, 9, 9],
+                "mode": "include",
+                "arena_id": first_arena_id,
+            }
+        ]
+        self._params = {"shape_type": "Circle", "radius": 9}
+        _FakeModifyDialog.last_instance = self
+
+    def exec(self):
+        from PySide6.QtWidgets import QDialog
+
+        return QDialog.Accepted if self._accept else QDialog.Rejected
+
+    def accepted_shapes(self):
+        return list(self._shapes)
+
+    def current_params(self):
+        return dict(self._params)
+
+
+def test_on_modify_existing_arenas_reopens_grid_dialog_when_made_via_grid(qapp):
+    """made_via_grid True + last_grid_params set -> route to the grid dialog,
+    never straight to the plain editor."""
+    from hydra_suite.trackerkit.gui.main_window import MainWindow
+
+    mw = _make_mock_main_window([])
+    mw.arena_panel.made_via_grid = True
+    mw.arena_panel.last_grid_params = {"first_arena_id": 0}
+
+    MainWindow._on_modify_existing_arenas(mw)
+
+    mw._reopen_grid_dialog_for_modification.assert_called_once()
+    mw.arena_panel.resume_editing.assert_not_called()
+
+
+def test_on_modify_existing_arenas_resumes_editing_when_not_made_via_grid(qapp):
+    """made_via_grid False (hand-drawn / mixed-origin set) -> straight to the
+    plain arena editor, the grid dialog is never involved."""
+    from hydra_suite.trackerkit.gui.main_window import MainWindow
+
+    mw = _make_mock_main_window([])
+    mw.arena_panel.made_via_grid = False
+    mw.arena_panel.last_grid_params = None
+
+    MainWindow._on_modify_existing_arenas(mw)
+
+    mw.arena_panel.resume_editing.assert_called_once()
+    mw._reopen_grid_dialog_for_modification.assert_not_called()
+
+
+def test_reopen_grid_dialog_accepted_replaces_shapes_and_repaints(qapp, monkeypatch):
+    """Finding 1 + part of Finding 4: on accept, roi_shapes is REPLACED (not
+    extended), the panel is resumed, and the canvas/labels are actually
+    repainted (update_roi_preview + the optimization/animals-per-arena
+    labels), which was the Critical bug -- previously only the mask/panel
+    updated and the video overlay kept showing the OLD arenas."""
+    from hydra_suite.trackerkit.gui.main_window import MainWindow
+
+    existing = [
+        {"type": "circle", "params": [1, 1, 1], "mode": "include", "arena_id": 0},
+        {"type": "circle", "params": [2, 2, 2], "mode": "include", "arena_id": 1},
+    ]
+    mw = _make_mock_main_window(existing)
+    mw.arena_panel.last_grid_params = {"first_arena_id": 0, "rows": 2, "cols": 1}
+
+    monkeypatch.setattr(
+        "hydra_suite.trackerkit.gui.dialogs.arena_grid_dialog.ArenaGridDialog",
+        _FakeModifyDialog,
+    )
+
+    MainWindow._reopen_grid_dialog_for_modification(mw)
+
+    # Replaced, not extended: the fake dialog's accepted_shapes() is exactly
+    # ONE shape, so the resulting list must be exactly 1, not 2 + 1.
+    assert len(mw.roi_shapes) == 1
+    assert mw.roi_shapes == _FakeModifyDialog.last_instance.accepted_shapes()
+
+    mw.arena_panel.set_shapes.assert_called_with(mw.roi_shapes)
+    mw.arena_panel.resume_editing.assert_called_once()
+    mw._update_roi_optimization_info.assert_called_once()
+    mw._update_animals_per_arena_total_label.assert_called_once()
+    mw.update_roi_preview.assert_called_once()
+    mw.roi_status_label.setText.assert_called_once()
+    (status_text,), _ = mw.roi_status_label.setText.call_args
+    assert "Regenerated" in status_text
+
+
+def test_reopen_grid_dialog_rejected_leaves_shapes_untouched(qapp, monkeypatch):
+    """Cancel: roi_shapes must be byte-identical to before, but the panel is
+    still resumed (the user isn't stuck in a dead dialog-less state)."""
+    from hydra_suite.trackerkit.gui.main_window import MainWindow
+
+    existing = [
+        {"type": "circle", "params": [1, 1, 1], "mode": "include", "arena_id": 0},
+    ]
+    mw = _make_mock_main_window(existing)
+    mw.arena_panel.last_grid_params = {"first_arena_id": 0}
+
+    class _RejectingDialog(_FakeModifyDialog):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            self._accept = False
+
+    monkeypatch.setattr(
+        "hydra_suite.trackerkit.gui.dialogs.arena_grid_dialog.ArenaGridDialog",
+        _RejectingDialog,
+    )
+
+    MainWindow._reopen_grid_dialog_for_modification(mw)
+
+    assert mw.roi_shapes == existing
+    mw.arena_panel.resume_editing.assert_called_once()
+    mw.arena_panel.set_shapes.assert_not_called()
+    mw.update_roi_preview.assert_not_called()
+
+
+def test_generate_grid_into_empty_shapes_marks_grid_generated(qapp, monkeypatch):
+    """Finding 3: generating a grid into an EMPTY roi_shapes marks the
+    result as grid-made (safe to blindly regenerate later)."""
+    from hydra_suite.trackerkit.gui.main_window import MainWindow
+
+    mw = _make_mock_main_window([])
+
+    monkeypatch.setattr(
+        "hydra_suite.trackerkit.gui.dialogs.arena_grid_dialog.ArenaGridDialog",
+        _FakeModifyDialog,
+    )
+
+    MainWindow._on_generate_grid_clicked(mw)
+
+    mw.arena_panel.mark_grid_generated.assert_called_once()
+    mw.arena_panel.mark_hand_drawn.assert_not_called()
+
+
+def test_generate_grid_into_nonempty_shapes_marks_hand_drawn(qapp, monkeypatch):
+    """Finding 3: generating a grid ON TOP of pre-existing (e.g. hand-drawn)
+    shapes must NOT mark the whole set grid-made -- that would let a later
+    "Modify Existing Arenas" silently replace-and-destroy the pre-existing
+    arenas. Falls back to mark_hand_drawn() for this mixed-origin set."""
+    from hydra_suite.trackerkit.gui.main_window import MainWindow
+
+    existing = [
+        {"type": "circle", "params": [1, 1, 1], "mode": "include", "arena_id": 0},
+    ]
+    mw = _make_mock_main_window(existing)
+
+    monkeypatch.setattr(
+        "hydra_suite.trackerkit.gui.dialogs.arena_grid_dialog.ArenaGridDialog",
+        _FakeModifyDialog,
+    )
+
+    MainWindow._on_generate_grid_clicked(mw)
+
+    mw.arena_panel.mark_hand_drawn.assert_called_once()
+    mw.arena_panel.mark_grid_generated.assert_not_called()
+
+
 # --- Task 10: shape choice, rotation, spacing floors, extent caps, shared
 # preview renderer ---
 
