@@ -156,15 +156,30 @@ def test_fix5_zone_button_press_locks_navigation_and_other_buttons(window):
     assert all(b.isEnabled() for b in panel._zone_buttons)
 
 
-def test_fix5_navigation_locked_via_set_current_arena_noop(window):
-    """SessionOrchestrator.set_current_arena silently no-ops mid-draw, so the
-    panel's own nav-lock is the only thing that actually protects the user."""
-    orch = window._session_orch
-    window.roi_shapes = [_circle(50, 50, 20, 0), _circle(200, 200, 20, 1)]
-    window.arena_panel.set_shapes(window.roi_shapes)
-    window.roi_selection_active = True
-    orch.set_current_arena(1)
-    assert orch.current_arena_id != 1
+def test_fix5_failed_start_roi_selection_releases_the_drawing_lock(window, monkeypatch):
+    """Regression for the hard-lock dead-end: a zone-button press sets
+    _drawing_active True before start_roi_selection can fail. If
+    _ensure_roi_base_frame() then returns False (e.g. no video selected),
+    _drawing_active must not stay stuck True forever -- Escape, Undo, and
+    Clear Arena were all gated on it, and the only escape hatch was
+    destroying every arena via Remove All Arenas."""
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
+    window._on_add_single_arena()
+    panel = window.arena_panel
+
+    # No video selected -- the "No Video" branch of _ensure_roi_base_frame.
+    window._setup_panel.file_line.setText("")
+
+    panel._on_zone_button_clicked(panel.btn_add_circle, "circle", "include")
+
+    assert panel._drawing_active is False
+    assert all(b.isEnabled() for b in panel._zone_buttons)
+    assert window.roi_selection_active is False
+
+    # Escape (cancel_roi_shape called directly) must also be a safe no-op
+    # release of the lock, even when drawing never actually started.
+    window._session_orch.cancel_roi_shape()
+    assert panel._drawing_active is False
 
 
 # ---------------------------------------------------------------------------

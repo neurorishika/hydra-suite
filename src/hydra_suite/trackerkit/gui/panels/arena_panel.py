@@ -242,7 +242,7 @@ class ArenaPanel(QWidget):
     def _on_zone_button_clicked(self, button, shape_type, zone_mode) -> None:
         """A zone button was pressed: commit to this shape/zone for the
         current shape, and lock out the other choices and navigation until
-        the shape is finished, undone away, or cancelled."""
+        the shape is finished or cancelled."""
         for b in self._zone_buttons:
             b.setChecked(b is button)
         self._drawing_active = True

@@ -1933,16 +1933,19 @@ class SessionOrchestrator:
             QMessageBox.warning(
                 self._mw, "No Video", "Please select a video file first."
             )
+            self._panels.arena.set_drawing_active(False)
             return False
         if self._mw.roi_base_frame is None:
             cap = cv2.VideoCapture(self._panels.setup.file_line.text())
             if not cap.isOpened():
                 QMessageBox.warning(self._mw, "Error", "Cannot open video file.")
+                self._panels.arena.set_drawing_active(False)
                 return False
             ret, frame = cap.read()
             cap.release()
             if not ret:
                 QMessageBox.warning(self._mw, "Error", "Cannot read video frame.")
+                self._panels.arena.set_drawing_active(False)
                 return False
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             h, w, ch = rgb.shape
@@ -2152,12 +2155,12 @@ class SessionOrchestrator:
 
     def cancel_roi_shape(self) -> None:
         """Cancel the in-progress shape only; already-committed arenas are untouched."""
+        self._panels.arena.set_drawing_active(False)
         if not self._mw.roi_selection_active:
             return
         self._mw.roi_points = []
         self._mw.roi_fitted_circle = None
         self._mw.roi_selection_active = False
-        self._panels.arena.set_drawing_active(False)
         if hasattr(Qt, "OpenHandCursor"):
             self._mw.video_label.setCursor(Qt.OpenHandCursor)
         else:
