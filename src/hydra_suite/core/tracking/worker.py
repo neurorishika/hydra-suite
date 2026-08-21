@@ -41,7 +41,10 @@ from hydra_suite.core.individual.pose.features import (
 from hydra_suite.core.individual.pose.features import (
     resolve_pose_group_indices as _pf_resolve_indices,
 )
-from hydra_suite.core.tracking.arenas import ArenaLayout
+from hydra_suite.core.tracking.arenas import (
+    arena_layout_from_params,
+    check_slot_arena_covers_all_slots,
+)
 from hydra_suite.core.tracking.confidence.density import get_density_region_flags
 from hydra_suite.core.tracking.features.live_features import (
     LiveCNNIdentityStore,
@@ -875,11 +878,10 @@ class TrackingEngineCore:
         # backward tracking and post-processing complete.
         individual_generator = None
 
-        self.arena_layout = ArenaLayout(
-            n_arenas=int(p.get("N_ARENAS", 1)),
-            animals_per_arena=int(p.get("ANIMALS_PER_ARENA", p["MAX_TARGETS"])),
-            label_image=p.get("ARENA_LABELS"),
-        )
+        # Shared constructor: every consumer of engine params (this worker, the
+        # parameter optimizer, the tracking preview) must build the layout the
+        # same way, or one of them silently simulates a different experiment.
+        self.arena_layout = arena_layout_from_params(p)
         # `slot_arena` is a `@property` that recomputes `np.repeat(...)` on
         # every access; cache it once here rather than re-deriving it on
         # every CSV row emitted (multi-arena hot path).
@@ -895,17 +897,7 @@ class TrackingEngineCore:
         )
 
         N = p["MAX_TARGETS"]
-        if len(self._slot_arena) != self.kf_manager.X.shape[0]:
-            # `raise`, not `assert`: this is the registry's only protection
-            # against a half-gated cost matrix (see `_arena_arrays`'s
-            # fail-open contract), and `assert` vanishes under `python -O`.
-            raise RuntimeError(
-                "arena_layout.slot_arena must have exactly one entry per "
-                "Kalman track slot (N == n_arenas * animals_per_arena) -- a "
-                "mismatch here would leave the numba cost kernel ungated "
-                "while the identity overlay/respawn gates stay active "
-                "(half-gated cost matrix)."
-            )
+        check_slot_arena_covers_all_slots(self.arena_layout, self.kf_manager.X.shape[0])
         # Start all tracks as "lost" so the free_dets loop bootstraps each slot
         # from the first frame's real detections via initialize_filter.  Starting
         # as "active" with a zero-initialised KF state causes every track to sit
@@ -1367,6 +1359,13 @@ class TrackingEngineCore:
                         min_frame_duration=int(p.get("DENSITY_MIN_FRAME_DURATION", 3)),
                         min_area_px=_density_min_area_px,
                         progress_callback=_density_progress,
+                        # Multi-arena runs get one independent density volume
+                        # (and one independent maximum) per arena, with every
+                        # region arena-tagged. Single-arena layouts and layouts
+                        # with no label image take the original whole-frame
+                        # path structurally -- see
+                        # `compute_density_map_from_cache`'s dispatch.
+                        arena_layout=self.arena_layout,
                     )
                     self._density_regions = _dm.regions
 
@@ -2904,6 +2903,14 @@ class TrackingEngineCore:
                             meas,
                             self._density_regions,
                             frame_idx=actual_frame_index,
+                            # `None` for single-arena keeps the arena tag out
+                            # of the loop entirely (structural inertness);
+                            # multi-arena scopes each region to its own arena.
+                            meas_arena=(
+                                None
+                                if self.arena_layout.is_single_arena
+                                else meas_arena
+                            ),
                         )
                     except Exception:
                         logger.debug(

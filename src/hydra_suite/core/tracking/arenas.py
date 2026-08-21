@@ -91,3 +91,66 @@ class ArenaLayout:
         cx = np.clip(xy[:, 0].astype(np.int32), 0, w - 1)
         cy = np.clip(xy[:, 1].astype(np.int32), 0, h - 1)
         return labels[cy, cx].astype(np.int32) - 1
+
+
+def arena_layout_from_params(params) -> ArenaLayout:
+    """Build the layout the way every consumer of engine params must build it.
+
+    One constructor, so a new consumer cannot silently disagree with the live
+    tracking path about how many arenas there are or which label image defines
+    them -- which is exactly how the parameter optimizer ended up simulating
+    unrestricted cross-arena tracking while the real run was gated.
+    """
+    return ArenaLayout(
+        n_arenas=int(params.get("N_ARENAS", 1)),
+        animals_per_arena=int(params.get("ANIMALS_PER_ARENA", params["MAX_TARGETS"])),
+        label_image=params.get("ARENA_LABELS"),
+    )
+
+
+def check_slot_arena_covers_all_slots(layout: ArenaLayout, n_slots: int) -> None:
+    """Raise unless the layout labels exactly ``n_slots`` track slots.
+
+    ``raise``, not ``assert``: a mismatch leaves the numba cost kernel ungated
+    (``_arena_arrays`` fails open on any length mismatch) while the identity
+    overlay/respawn gates -- which fail open only on a SHORT array -- stay
+    active, i.e. a half-gated cost matrix. ``assert`` vanishes under ``-O``.
+    """
+    if int(layout.slot_arena.shape[0]) != int(n_slots):
+        raise RuntimeError(
+            "arena_layout.slot_arena must have exactly one entry per "
+            "Kalman track slot (N == n_arenas * animals_per_arena) -- a "
+            "mismatch here would leave the numba cost kernel ungated "
+            "while the identity overlay/respawn gates stay active "
+            "(half-gated cost matrix)."
+        )
+
+
+def tracking_frame_size(params, base_w: int, base_h: int):
+    """``(width, height)`` of the frame detections are expressed in.
+
+    Mirrors ``worker.py``'s cached-detection fallback: the capture's native
+    size scaled by ``RESIZE_FACTOR``. Returns ``None`` when the base size is
+    unusable (e.g. the video could not be opened), which makes
+    ``arena_of_points`` fall back to the label image's native resolution
+    rather than resizing to a degenerate size.
+    """
+    resize_f = float(params.get("RESIZE_FACTOR", 1.0))
+    if int(base_w) <= 0 or int(base_h) <= 0:
+        return None
+    return (max(1, int(int(base_w) * resize_f)), max(1, int(int(base_h) * resize_f)))
+
+
+def arena_ids_for_meas(layout: ArenaLayout, meas, frame_size=None):
+    """Arena id per detection for a ``[x, y, theta]`` measurement list.
+
+    Returns ``None`` for a single-arena layout: that is what makes single-arena
+    callers take the assigner's original, ungated path STRUCTURALLY (see
+    ``_arena_arrays``) rather than merely arithmetically.
+    """
+    if layout.is_single_arena:
+        return None
+    if len(meas) == 0:
+        return np.zeros(0, dtype=np.int32)
+    xy = np.asarray([[m[0], m[1]] for m in meas], dtype=np.float32)
+    return layout.arena_of_points(xy, frame_size=frame_size)

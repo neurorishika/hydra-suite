@@ -151,9 +151,16 @@ pytestmark = pytest.mark.skipif(
 )
 
 # Side outputs cost time and disk and prove nothing about arena independence.
+#
+# `enable_confidence_density_map` is deliberately NOT disabled: it defaults
+# True in production (engine_params.py), and disabling it here is what hid the
+# fact that density regions were accumulated over the WHOLE frame, coupling
+# arenas through a shared binarisation maximum and through region bounding
+# boxes that spanned arena walls. The oracle must run the feature the shipped
+# default runs. (Its per-arena implementation is unit-tested in
+# tests/test_arena_density_regions.py.)
 _DISABLE = {
     "video_output_enabled": False,
-    "enable_confidence_density_map": False,
     "enable_dataset_generation": False,
     "enable_individual_dataset": False,
     "enable_individual_image_save": False,

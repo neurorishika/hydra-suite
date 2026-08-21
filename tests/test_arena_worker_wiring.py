@@ -363,6 +363,202 @@ def _run_bgsub_arena_case(monkeypatch, tmp_path, single_arena: bool = False):
     return csv_writer.rows
 
 
+def _run_bgsub_density_case(monkeypatch, tmp_path, regions, single_arena=False):
+    """Same real bg-sub loop, but with density regions pre-loaded and the
+    density flag helper spied on, so the `meas_arena=` threading at worker.py's
+    `get_density_region_flags` call site is observed on live engine data."""
+    import hydra_suite.core.tracking.worker as worker_mod
+
+    monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
+    monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _FakeVideoCapture)
+    monkeypatch.setattr(worker_mod, "InferenceRunner", _FakeBgsubRunner)
+
+    calls = []
+    _real = worker_mod.get_density_region_flags
+
+    def _spy(meas, regions_, frame_idx, meas_arena=None):
+        out = _real(meas, regions_, frame_idx, meas_arena=meas_arena)
+        calls.append(
+            {
+                "meas": [list(m)[:2] for m in meas],
+                "meas_arena": (
+                    None if meas_arena is None else list(map(int, meas_arena))
+                ),
+                "flags": out.tolist(),
+            }
+        )
+        return out
+
+    monkeypatch.setattr(worker_mod, "get_density_region_flags", _spy)
+
+    csv_writer = _CapturingCSVWriter()
+    worker = worker_mod.TrackingEngineCore(
+        str(tmp_path / "video.mp4"),
+        on_finished=lambda *_a: None,
+        preview_mode=True,
+        csv_writer_thread=csv_writer,
+    )
+    worker.set_parameters(
+        _bgsub_arena_params(
+            single_arena=single_arena, ENABLE_CONFIDENCE_DENSITY_MAP=True
+        )
+    )
+    worker._density_regions = list(regions)
+    worker.run_tracking()
+    return calls
+
+
+def _density_region_everywhere(arena):
+    from hydra_suite.core.tracking.confidence.confidence_density import DensityRegion
+
+    return DensityRegion(
+        label="region-1",
+        frame_start=0,
+        frame_end=99,
+        pixel_bbox=(0, 0, 1000, 1000),
+        arena=arena,
+    )
+
+
+def test_worker_threads_meas_arena_into_the_density_gate(monkeypatch, tmp_path):
+    """The density gate must see each detection's arena id.
+
+    The bg-sub fixture's only detection sits in arena 1 (resized (40, 25),
+    boundary at 25). A whole-frame region tagged `arena=0` must therefore NOT
+    flag it, while the same region tagged `arena=1` must. Asserting on the
+    derived FLAG (not on the config key, and not merely that a kwarg was
+    passed) is what makes this fail if `meas_arena=` is dropped at the call
+    site: without it the tag is ignored and the arena-0 region flags an
+    arena-1 detection.
+    """
+    calls0 = _run_bgsub_density_case(
+        monkeypatch, tmp_path, [_density_region_everywhere(0)]
+    )
+    assert calls0, "density gate never ran -- the test proves nothing"
+    assert any(c["meas"] for c in calls0)
+    assert all(c["meas_arena"] == [1] for c in calls0 if c["meas"]), calls0
+    assert all(c["flags"] == [False] for c in calls0 if c["meas"]), calls0
+
+    calls1 = _run_bgsub_density_case(
+        monkeypatch, tmp_path, [_density_region_everywhere(1)]
+    )
+    assert any(c["flags"] == [True] for c in calls1 if c["meas"]), calls1
+
+
+def test_single_arena_density_gate_gets_no_meas_arena(monkeypatch, tmp_path):
+    """Single-arena inertness at the call site: `meas_arena` stays `None`, so
+    the tag branch inside `get_density_region_flags` is never entered."""
+    calls = _run_bgsub_density_case(
+        monkeypatch, tmp_path, [_density_region_everywhere(None)], single_arena=True
+    )
+    assert calls, "density gate never ran -- the test proves nothing"
+    assert all(c["meas_arena"] is None for c in calls), calls
+
+
+class _StopAfterDensity(RuntimeError):
+    """Sentinel raised from the probed density builder to end run_tracking()."""
+
+
+class _CachedOBBRunner:
+    """Valid, covering caches -> the forward pass takes the cached-replay
+    branch, which is the one that computes the confidence density map."""
+
+    def __init__(self, *_a, **_k):
+        self.clipping_stats = _ClippingStatsStub()
+
+    def caches_all_valid(self):
+        return True
+
+    def detection_cache_covers_range(self, *_a, **_k):
+        return True
+
+    def detection_cache_missing_frames(self, *_a, **_k):
+        return []
+
+    def run_batch_pass(self, *_a, **_k):
+        raise AssertionError("run_batch_pass must NOT run when caches are valid")
+
+    def load_frame(self, *_a, **_k):
+        return None
+
+    def close(self):
+        pass
+
+
+def _capture_density_builder_kwargs(monkeypatch, tmp_path, *, single_arena):
+    """Drive the REAL cached-replay forward pass and capture the kwargs the
+    worker hands to `compute_density_map_from_cache`."""
+    import hydra_suite.core.tracking.confidence.confidence_density as cd_mod
+    import hydra_suite.core.tracking.worker as worker_mod
+
+    monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
+    monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _FakeVideoCapture)
+    monkeypatch.setattr(worker_mod, "InferenceRunner", _CachedOBBRunner)
+    monkeypatch.setattr(
+        worker_mod, "build_density_cache_dict", lambda *_a, **_k: {0: None}
+    )
+
+    captured = {}
+
+    def _probe(**kwargs):
+        captured.update(kwargs)
+        raise _StopAfterDensity("density builder reached")
+
+    monkeypatch.setattr(cd_mod, "compute_density_map_from_cache", _probe)
+
+    worker = worker_mod.TrackingEngineCore(
+        str(tmp_path / "video.mp4"),
+        on_finished=lambda *_a: None,
+        preview_mode=True,
+        use_cached_detections=True,
+        csv_writer_thread=_CapturingCSVWriter(),
+    )
+    params = _bgsub_arena_params(
+        single_arena=single_arena, ENABLE_CONFIDENCE_DENSITY_MAP=True
+    )
+    params["DETECTION_METHOD"] = "yolo_obb"
+    params["TRACKING_WORKFLOW_MODE"] = "non_realtime"
+    params["RESIZE_FACTOR"] = 1.0
+    worker.set_parameters(params)
+    worker.run_tracking()
+    return worker, captured
+
+
+def test_worker_passes_the_arena_layout_to_the_density_map_builder(
+    monkeypatch, tmp_path
+):
+    """`compute_density_map_from_cache` must receive the layout, else regions
+    are computed whole-frame no matter how good the per-arena code is.
+
+    Asserts on the LAYOUT's derived properties (arena count and a label image
+    that actually splits the frame), not merely that some kwarg was present.
+    """
+    worker, kwargs = _capture_density_builder_kwargs(
+        monkeypatch, tmp_path, single_arena=False
+    )
+    layout = kwargs.get("arena_layout")
+    assert layout is not None, f"arena_layout not forwarded; got {sorted(kwargs)}"
+    assert layout.n_arenas == 2 and not layout.is_single_arena
+    assert layout.label_image is not None
+    # The layout really partitions the frame the way the config asked for.
+    probes = np.array([[10.0, 50.0], [90.0, 50.0]], dtype=np.float32)
+    np.testing.assert_array_equal(
+        layout.arena_of_points(probes, frame_size=(100, 100)), [0, 1]
+    )
+
+
+def test_single_arena_density_builder_gets_an_inert_layout(monkeypatch, tmp_path):
+    """A single-arena run must reach `compute_density_map_from_cache`'s ORIGINAL
+    whole-frame branch: the layout it receives has to be one the dispatch
+    rejects (single arena and/or no label image)."""
+    _worker, kwargs = _capture_density_builder_kwargs(
+        monkeypatch, tmp_path, single_arena=True
+    )
+    layout = kwargs.get("arena_layout")
+    assert layout is not None
+    assert layout.is_single_arena or layout.label_image is None
+
+
 def _matched_rows(rows):
     """Rows with a real (non-NaN) X value -- i.e. an actual detection was
     written for that track slot this frame."""
