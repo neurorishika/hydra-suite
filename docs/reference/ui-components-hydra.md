@@ -14,12 +14,100 @@ This reference describes the HYDRA Suite UI by tab, with practical guidance for 
 
 | Feature | Role | How to use it |
 |---|---|---|
-| ROI mode and zone type | Define where tracking is valid (include) and invalid (exclude). | Draw include zones first, then subtract problematic zones. |
-| ROI shape controls | Add, confirm, undo, clear ROI geometry. | Confirm each shape before adding the next one. |
+| Arena bar | Arena-centric replacement for the old ROI toolbar; empty by default, switches to editing mode once a shape exists. | See "Arena and ROI Setup" below. |
+| `+`/`-` zone buttons (Circle / Polygon) | Draw an inclusion or exclusion zone directly, with no separate mode switch first. | Press "+ Circle"/"+ Polygon" to add area, "- Circle"/"- Polygon" to subtract from the current arena. |
 | Crop Video to ROI | Creates a cropped video for faster tracking. | Use when ROI occupies a small fraction of frame area. |
 | Timeline + playback controls | Frame-level inspection before running tracking. | Scrub and inspect crossings/occlusions before choosing frame range. |
 | Tracking frame range controls | Limit processing to specific interval. | Start after setup transients, end before unusable tails. |
-| Zoom and pan tools | Pixel-level inspection for ROI and detection checks. | Use before setting body size and threshold parameters. |
+| Zoom and pan tools | Pixel-level inspection for ROI and detection checks. | Drawing works correctly at any zoom level, so zoom in for precise placement before or during shape entry. |
+
+### Arena and ROI Setup
+
+The arena bar replaces the old ROI toolbar's include/exclude dropdown with an
+arena-centric workflow. It has two states:
+
+**Empty state.** Before any shape is drawn, the bar shows only "By default,
+the whole video is used." next to two buttons: **+ Add Single Arena** and
+**+ Add Grid of Arenas**. A video with no ROI at all is a valid, common case
+-- tracking runs across the full frame.
+
+**Editing state.** Once at least one shape exists (or a new arena has been
+started), the bar switches to show:
+
+- **Arena navigation** -- "Currently labelling: Arena N", with **< Previous**
+  and **Next >** to step between existing arenas, and **+ Add new arena** to
+  start a fresh, empty arena (it holds no shapes until you draw one).
+- **Zone tools** -- **+ Circle**, **- Circle**, **+ Polygon**, **- Polygon**.
+  There is no longer a separate include/exclude mode to set before drawing:
+  the `+` buttons draw an inclusion zone, the `-` buttons draw an exclusion
+  zone (subtracted from the current arena), both for the arena you are
+  currently labelling. Left-click places points; right-click removes the
+  last point. **Finish Shape** commits the shape once it is valid; **Undo**
+  removes the most recent point or shape; **Clear Arena** removes every
+  shape belonging to the current arena while keeping its arena number
+  reserved (numbers are never renumbered, since they appear in the exported
+  `arena_id` column).
+- **Overflow menu (`...`)** -- **Add Grid of Arenas**, **Clear All**, and
+  **Crop Video to ROI**.
+
+Drawing works correctly at any zoom level: clicks map back to image
+coordinates through the current zoom transform, so you can zoom in for
+precision without breaking shape placement.
+
+**One arena is exactly a plain ROI.** If you only ever draw a single arena
+(with any number of include/exclude zones inside it), the exported tracking
+CSV carries no `arena_id` column at all -- it behaves exactly like the ROI
+masking of previous versions. The `arena_id` column only appears once a
+second arena exists.
+
+**Overlap warning.** Arenas must not overlap, because an animal in a shared
+region cannot be assigned to a single arena. When arenas overlap:
+
+- If the arena you are *currently labelling* is one of the overlapping
+  pair, the warning banner names the conflicting arena(s), and **Previous**,
+  **Next**, and **Add new arena** are disabled until you resolve it -- you
+  cannot navigate away from an overlapping arena.
+- If any other pair of arenas overlaps (not involving the one you're
+  currently on), navigation stays enabled and the banner still explains
+  which arenas conflict, but you can keep working elsewhere.
+- Regardless of which arena you're on, **tracking itself is blocked** if
+  *any* pair of arenas overlaps anywhere in the shape list -- the overlap
+  must be resolved everywhere before you can start a run, not just for the
+  arena you happen to be viewing.
+
+### Grid Builder ("+ Add Grid of Arenas")
+
+For layouts with many identical arenas (multi-well plates, arrayed dishes),
+the grid builder generates a rectangular grid of arenas in one step instead
+of hand-drawing each one. The generated shapes are ordinary `roi_shapes`
+entries with sequential arena ids, individually editable afterwards like any
+other arena -- the grid builder is a bulk-entry convenience, not a separate
+persistent mode.
+
+Controls:
+
+- **Shape** -- Circle or Rectangle. Circle exposes a **Radius** field;
+  Rectangle exposes **Width** and **Height** fields.
+- **Top-Left Position X/Y** -- the origin of the grid (the position of
+  arena 1) in image pixels.
+- **Rows** / **Columns** -- grid dimensions. Their maximum is capped so that
+  every generated arena's centre stays inside the frame given the current
+  origin, spacing, and rotation.
+- **X spacing** / **Y spacing** -- centre-to-centre pitch between columns
+  and rows. Each has a floor: the tightest spacing that still guarantees
+  adjacent arenas cannot touch or overlap for the chosen shape and size.
+  Spacing controls are hidden entirely when there is only one row or one
+  column, since spacing is meaningless in that case.
+- **Rotation (about arena 1)** -- rotates the whole grid layout, in half
+  degree steps from -45 deg to +45 deg, via either the slider or the spin
+  box.
+
+A live preview (drawn with the same renderer used for the main canvas, so it
+cannot visually diverge from the real overlay) shows the resulting arenas
+over the current reference frame as you adjust the controls, along with a
+summary line ("N arena(s), ids first..last"). Accepting the dialog appends
+the generated shapes to the existing `roi_shapes` list; it does not replace
+arenas you already drew.
 
 ### Action Panel
 
