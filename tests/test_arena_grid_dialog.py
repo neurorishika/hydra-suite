@@ -326,6 +326,11 @@ def test_rotation_slider_and_spinbox_stay_in_sync(qt_app):
 
 def test_rows_and_cols_capped_so_centres_stay_in_frame(qt_app):
     dialog = _dialog(qt_app, width=400, height=300)
+    # Fix Wave 6 gives this 400x300 frame a much bigger default circle
+    # (radius ~70, so a default 140px min-pitch floor) than this test's
+    # pitch=100 wants -- pin a small radius explicitly so the floor doesn't
+    # clamp the pitch values this test is actually exercising.
+    dialog.spin_radius.setValue(10)
     dialog.spin_origin_x.setValue(50)
     dialog.spin_origin_y.setValue(50)
     dialog.spin_cols.setValue(2)
@@ -416,3 +421,136 @@ def test_top_left_position_nonzero_offset_carries_through_rectangle(qt_app):
     min_x = min(pt[0] for pt in polygon)
     min_y = min(pt[1] for pt in polygon)
     assert (min_x, min_y) == (80, 40)
+
+
+# --- Fix Wave 6 ---
+#
+# Fix 1: the preview must fit BOTH width and height (a dialog window wider
+# than the reference frame's own aspect ratio previously cropped the
+# top/bottom, since the zoom was computed from width alone), and a
+# resizeEvent handler must re-fit the preview on resize.
+#
+# Fix 2: default radius/width/height/origin must derive from the reference
+# frame's own size (20% of its average dimension), not hardcoded 20/40/50px.
+#
+# Fix 3: every numeric field (radius, width, height, centre X/Y, rows,
+# columns, X/Y spacing) gets a slider alongside its spinbox, like Rotation.
+
+
+def test_preview_fits_the_full_height_of_a_tall_narrow_frame(qt_app):
+    """A reference frame much taller than it is wide, relative to the
+    preview label's fixed minimum size (320x240), forces the height to be
+    the binding constraint. Under the old width-only zoom calculation this
+    frame would render at full scale (zoom clamped to 1.0 because
+    target_w / image.width() > 1), producing a scaled image far taller than
+    the label -- cropped top/bottom. The new fit-both-dimensions zoom must
+    keep the whole frame inside the label's height.
+    """
+    dialog = _dialog(qt_app, width=100, height=2000)
+    dialog._update_preview()
+    pixmap = dialog.preview_label.pixmap()
+    assert pixmap is not None
+    assert pixmap.height() <= dialog.preview_label.height()
+    assert pixmap.width() <= dialog.preview_label.width()
+
+
+def test_resize_event_refits_the_preview(qt_app):
+    """There was previously no resizeEvent override at all, so the preview
+    never re-fit after the window was resized."""
+    dialog = _dialog(qt_app, width=100, height=2000)
+    assert hasattr(dialog, "resizeEvent")
+    from PySide6.QtCore import QSize
+    from PySide6.QtGui import QResizeEvent
+
+    event = QResizeEvent(QSize(500, 500), QSize(320, 240))
+    dialog.resizeEvent(event)
+    pixmap = dialog.preview_label.pixmap()
+    assert pixmap is not None
+    assert pixmap.height() <= dialog.preview_label.height()
+    assert pixmap.width() <= dialog.preview_label.width()
+
+
+def test_default_radius_derives_from_reference_frame_average_dimension(qt_app):
+    """1000x1000 reference frame: default radius = round(0.20 * 1000) = 200,
+    and the default centre (Arena 1 Centre X/Y) equals that same radius so
+    arena 1's edge is tangent to the frame's top-left corner."""
+    dialog = _dialog(qt_app, width=1000, height=1000)
+    assert dialog.spin_radius.value() == 200
+    assert dialog.spin_origin_x.value() == 200
+    assert dialog.spin_origin_y.value() == 200
+
+
+def test_default_radius_scales_with_a_different_frame_size(qt_app):
+    """2000x500 reference frame: average dimension 1250, default radius =
+    round(0.20 * 1250) = 250 -- proportional to the frame, not a fixed
+    number."""
+    dialog = _dialog(qt_app, width=2000, height=500)
+    assert dialog.spin_radius.value() == 250
+    assert dialog.spin_origin_x.value() == 250
+    assert dialog.spin_origin_y.value() == 250
+
+
+def test_default_width_and_height_match_the_radius_based_footprint(qt_app):
+    dialog = _dialog(qt_app, width=1000, height=1000)
+    assert dialog.spin_width.value() == 400
+    assert dialog.spin_height.value() == 400
+
+
+def test_slider_radius_moves_the_spinbox(qt_app):
+    dialog = _dialog(qt_app)
+    assert hasattr(dialog, "slider_radius")
+    dialog.slider_radius.setValue(75)
+    assert dialog.spin_radius.value() == 75
+
+
+def test_spinbox_radius_moves_the_slider(qt_app):
+    dialog = _dialog(qt_app)
+    dialog.spin_radius.setValue(50)
+    assert dialog.slider_radius.value() == 50
+
+
+def test_spinbox_radius_beyond_slider_range_clamps_the_slider(qt_app):
+    """Typing a value outside the slider's range must still work in the
+    spinbox -- the slider just clamps to its own end."""
+    dialog = _dialog(qt_app, width=1000, height=1000)
+    dialog.spin_radius.setValue(dialog.spin_radius.maximum())
+    assert dialog.spin_radius.value() == dialog.spin_radius.maximum()
+    assert dialog.slider_radius.value() == dialog.slider_radius.maximum()
+
+
+def test_slider_rows_moves_the_spinbox(qt_app):
+    dialog = _dialog(qt_app)
+    assert hasattr(dialog, "slider_rows")
+    # Small radius/origin so the extent cap doesn't clamp rows.maximum()
+    # below the value this test wants to set.
+    dialog.spin_radius.setValue(5)
+    dialog.spin_origin_x.setValue(0)
+    dialog.spin_origin_y.setValue(0)
+    dialog.slider_rows.setValue(4)
+    assert dialog.spin_rows.value() == 4
+
+
+def test_spinbox_rows_moves_the_slider(qt_app):
+    dialog = _dialog(qt_app)
+    dialog.spin_radius.setValue(5)
+    dialog.spin_origin_x.setValue(0)
+    dialog.spin_origin_y.setValue(0)
+    dialog.spin_rows.setValue(6)
+    assert dialog.slider_rows.value() == 6
+
+
+def test_slider_rows_maximum_tracks_the_extent_cap(qt_app):
+    """slider_rows.maximum() must move in lockstep with spin_rows.maximum()
+    when _sync_extent_caps shrinks it (mirroring
+    test_rows_and_cols_capped_so_centres_stay_in_frame)."""
+    dialog = _dialog(qt_app, width=400, height=300)
+    dialog.spin_radius.setValue(10)  # see test_rows_and_cols_capped... above
+    dialog.spin_origin_x.setValue(50)
+    dialog.spin_origin_y.setValue(50)
+    dialog.spin_cols.setValue(2)
+    dialog.spin_pitch_x.setValue(100)
+    dialog.spin_pitch_y.setValue(100)
+    assert dialog.spin_cols.maximum() == 4
+    assert dialog.spin_rows.maximum() == 3
+    assert dialog.slider_cols.maximum() == 4
+    assert dialog.slider_rows.maximum() == 3

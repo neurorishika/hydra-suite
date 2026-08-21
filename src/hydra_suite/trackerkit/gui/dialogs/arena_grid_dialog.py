@@ -67,6 +67,14 @@ class ArenaGridDialog(BaseDialog):
         self._reference_frame = reference_frame
         self._first_arena_id = int(first_arena_id)
 
+        if self._reference_frame is not None:
+            avg_dim = (
+                self._reference_frame.width() + self._reference_frame.height()
+            ) / 2.0
+            default_radius = max(1, round(0.20 * avg_dim))
+        else:
+            default_radius = 20  # no reference frame available -- keep the old fallback
+
         form_group = QGroupBox("Grid layout")
         form = QFormLayout(form_group)
 
@@ -76,51 +84,96 @@ class ArenaGridDialog(BaseDialog):
 
         self.spin_radius = QSpinBox()
         self.spin_radius.setRange(1, 100000)
-        self.spin_radius.setValue(20)
+        self.spin_radius.setValue(default_radius)
         self.row_radius = QLabel("Radius:")
-        form.addRow(self.row_radius, self.spin_radius)
+        radius_slider_max = (
+            max(1, round(avg_dim)) if self._reference_frame is not None else 2000
+        )
+        self.slider_radius = self._pair_with_slider(
+            form, self.row_radius, self.spin_radius, 1, radius_slider_max
+        )
 
         self.spin_width = QSpinBox()
         self.spin_width.setRange(1, 100000)
-        self.spin_width.setValue(40)
+        self.spin_width.setValue(default_radius * 2)
         self.row_width = QLabel("Width:")
-        form.addRow(self.row_width, self.spin_width)
+        self.slider_width = self._pair_with_slider(
+            form, self.row_width, self.spin_width, 1, radius_slider_max
+        )
 
         self.spin_height = QSpinBox()
         self.spin_height.setRange(1, 100000)
-        self.spin_height.setValue(40)
+        self.spin_height.setValue(default_radius * 2)
         self.row_height = QLabel("Height:")
-        form.addRow(self.row_height, self.spin_height)
+        self.slider_height = self._pair_with_slider(
+            form, self.row_height, self.spin_height, 1, radius_slider_max
+        )
 
         self.spin_origin_x = QSpinBox()
         self.spin_origin_x.setRange(0, 100000)
-        self.spin_origin_x.setValue(50)
-        form.addRow("Arena 1 Centre X:", self.spin_origin_x)
+        self.spin_origin_x.setValue(default_radius)
+        origin_x_slider_max = (
+            self._reference_frame.width() if self._reference_frame is not None else 2000
+        )
+        self.slider_origin_x = self._pair_with_slider(
+            form, "Arena 1 Centre X:", self.spin_origin_x, 0, origin_x_slider_max
+        )
 
         self.spin_origin_y = QSpinBox()
         self.spin_origin_y.setRange(0, 100000)
-        self.spin_origin_y.setValue(50)
-        form.addRow("Arena 1 Centre Y:", self.spin_origin_y)
+        self.spin_origin_y.setValue(default_radius)
+        origin_y_slider_max = (
+            self._reference_frame.height()
+            if self._reference_frame is not None
+            else 2000
+        )
+        self.slider_origin_y = self._pair_with_slider(
+            form, "Arena 1 Centre Y:", self.spin_origin_y, 0, origin_y_slider_max
+        )
 
         self.spin_rows = QSpinBox()
         self.spin_rows.setRange(1, 100)
         self.spin_rows.setValue(1)
-        form.addRow("Rows:", self.spin_rows)
+        self.slider_rows = self._pair_with_slider(
+            form, "Rows:", self.spin_rows, 1, self.spin_rows.maximum()
+        )
 
         self.spin_cols = QSpinBox()
         self.spin_cols.setRange(1, 100)
         self.spin_cols.setValue(1)
-        form.addRow("Columns:", self.spin_cols)
+        self.slider_cols = self._pair_with_slider(
+            form, "Columns:", self.spin_cols, 1, self.spin_cols.maximum()
+        )
 
         self.spin_pitch_x = QSpinBox()
         self.spin_pitch_x.setRange(1, 100000)
         self.row_pitch_x = QLabel("X spacing:")
-        form.addRow(self.row_pitch_x, self.spin_pitch_x)
+        pitch_x_slider_max = (
+            self._reference_frame.width() if self._reference_frame is not None else 2000
+        )
+        self.slider_pitch_x = self._pair_with_slider(
+            form,
+            self.row_pitch_x,
+            self.spin_pitch_x,
+            self.spin_pitch_x.minimum(),
+            pitch_x_slider_max,
+        )
 
         self.spin_pitch_y = QSpinBox()
         self.spin_pitch_y.setRange(1, 100000)
         self.row_pitch_y = QLabel("Y spacing:")
-        form.addRow(self.row_pitch_y, self.spin_pitch_y)
+        pitch_y_slider_max = (
+            self._reference_frame.height()
+            if self._reference_frame is not None
+            else 2000
+        )
+        self.slider_pitch_y = self._pair_with_slider(
+            form,
+            self.row_pitch_y,
+            self.spin_pitch_y,
+            self.spin_pitch_y.minimum(),
+            pitch_y_slider_max,
+        )
 
         rotation_row = QWidget()
         rotation_layout = QHBoxLayout(rotation_row)
@@ -186,6 +239,45 @@ class ArenaGridDialog(BaseDialog):
         self._on_shape_changed()
         self._update_preview()
 
+    def _pair_with_slider(
+        self,
+        form: QFormLayout,
+        label: str | QLabel,
+        spin: QSpinBox,
+        slider_min: int,
+        slider_max: int,
+    ) -> QSlider:
+        """Add *spin* to *form* as one row, paired with a QSlider covering the
+        same integer range. Both stay in sync; typing a value outside the
+        slider's range still works in the spinbox (the slider just clamps to
+        its own end), since the spinbox remains the authoritative value.
+        """
+        slider = QSlider(Qt.Horizontal)
+        slider.setRange(int(slider_min), max(int(slider_min) + 1, int(slider_max)))
+        slider.setValue(max(slider_min, min(slider_max, spin.value())))
+
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.addWidget(slider)
+        row_layout.addWidget(spin)
+        form.addRow(label, row)
+
+        slider.valueChanged.connect(spin.setValue)
+
+        def _on_spin_changed(value: int, slider=slider) -> None:
+            # blockSignals so a spin value beyond the slider's range doesn't
+            # bounce back through slider.valueChanged -> spin.setValue and
+            # clamp the spinbox itself -- the spinbox is meant to stay
+            # authoritative (same pattern Rotation already uses to avoid a
+            # slider<->spin feedback loop).
+            slider.blockSignals(True)
+            slider.setValue(max(slider.minimum(), min(slider.maximum(), value)))
+            slider.blockSignals(False)
+
+        spin.valueChanged.connect(_on_spin_changed)
+        return slider
+
     def _shape_key(self) -> str:
         """Internal shape id for the geometry helpers."""
         return (
@@ -201,13 +293,15 @@ class ArenaGridDialog(BaseDialog):
 
     def _on_shape_changed(self, *_args) -> None:
         is_circle = self._shape_key() == "circle"
-        for widget in (self.row_radius, self.spin_radius):
+        for widget in (self.row_radius, self.spin_radius, self.slider_radius):
             widget.setVisible(is_circle)
         for widget in (
             self.row_width,
             self.spin_width,
+            self.slider_width,
             self.row_height,
             self.spin_height,
+            self.slider_height,
         ):
             widget.setVisible(not is_circle)
         self._sync_pitch_floors()
@@ -220,12 +314,13 @@ class ArenaGridDialog(BaseDialog):
         """
         size_x, size_y = self._size_pair()
         floor_x, floor_y = min_pitch(self._shape_key(), size_x, size_y=size_y)
-        for spin, floor in (
-            (self.spin_pitch_x, floor_x),
-            (self.spin_pitch_y, floor_y),
+        for spin, slider, floor in (
+            (self.spin_pitch_x, self.slider_pitch_x, floor_x),
+            (self.spin_pitch_y, self.slider_pitch_y, floor_y),
         ):
             was_at_floor = spin.value() <= spin.minimum()
             spin.setMinimum(int(floor))
+            slider.setMinimum(int(floor))
             if was_at_floor or spin.value() < floor:
                 spin.setValue(int(floor))
         self._sync_spacing_visibility()
@@ -237,8 +332,10 @@ class ArenaGridDialog(BaseDialog):
         multi_row = self.spin_rows.value() > 1
         self.row_pitch_x.setVisible(multi_col)
         self.spin_pitch_x.setVisible(multi_col)
+        self.slider_pitch_x.setVisible(multi_col)
         self.row_pitch_y.setVisible(multi_row)
         self.spin_pitch_y.setVisible(multi_row)
+        self.slider_pitch_y.setVisible(multi_row)
 
     def _sync_extent_caps(self, *_args) -> None:
         """Cap rows/cols so every arena CENTRE stays inside the frame."""
@@ -256,6 +353,8 @@ class ArenaGridDialog(BaseDialog):
         )
         self.spin_rows.setMaximum(max_rows)
         self.spin_cols.setMaximum(max_cols)
+        self.slider_rows.setMaximum(max_rows)
+        self.slider_cols.setMaximum(max_cols)
 
     def _on_slider_rotation(self, ticks: int) -> None:
         self.spin_rotation.setValue(ticks / 2.0)
@@ -307,7 +406,10 @@ class ArenaGridDialog(BaseDialog):
         renderer.set_frame(image)
         renderer.set_shapes(shapes)
         target_w = self.preview_label.width() or 320
-        renderer.set_zoom(min(1.0, target_w / max(1, image.width())))
+        target_h = self.preview_label.height() or 240
+        zoom_w = target_w / max(1, image.width())
+        zoom_h = target_h / max(1, image.height())
+        renderer.set_zoom(min(1.0, zoom_w, zoom_h))
         pixmap = QPixmap(renderer.width(), renderer.height())
         pixmap.fill(Qt.black)
         painter = QPainter(pixmap)
@@ -315,6 +417,10 @@ class ArenaGridDialog(BaseDialog):
         renderer.render_overlay(painter)
         painter.end()
         self.preview_label.setPixmap(pixmap)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._update_preview()
 
     def accepted_shapes(self) -> list[dict[str, Any]]:
         """The generated shapes for the dialog's current widget values.
