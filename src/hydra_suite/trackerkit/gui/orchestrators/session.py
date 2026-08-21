@@ -1791,14 +1791,14 @@ class SessionOrchestrator:
 
     def _handle_video_event(self, evt):
         """Handle video events including pinch gestures."""
-        from PySide6.QtWidgets import QLabel
+        from PySide6.QtWidgets import QWidget
 
         if evt.type() == QEvent.Gesture:
             if not self._mw._video_interactions_enabled:
                 evt.ignore()
                 return False
             return self._mw._handle_gesture_event(evt)
-        return QLabel.event(self._mw.video_label, evt)
+        return QWidget.event(self._mw.video_label, evt)
 
     def _handle_gesture_event(self, evt):
         """Handle pinch-to-zoom gesture."""
