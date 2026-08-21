@@ -67,9 +67,18 @@ class _StubKalmanFilterManager:
 class _StubTrackAssigner:
     last_association_data = None
     last_meas_ori_directed = None
+    last_track_arena = "unset"
+    last_meas_arena = "unset"
 
     def __init__(self, params):
         self.params = params
+        self.track_arena = None
+
+    def set_track_arena(self, track_arena) -> None:
+        # Mirrors the real TrackAssigner: the optimizer MUST install the
+        # per-slot arena mapping, or it tunes against an ungated simulation.
+        self.track_arena = track_arena
+        _StubTrackAssigner.last_track_arena = track_arena
 
     def compute_cost_matrix(
         self,
@@ -81,14 +90,17 @@ class _StubTrackAssigner:
         last_shape_info,
         meas_ori_directed=None,
         association_data=None,
+        meas_arena=None,
     ):
         _StubTrackAssigner.last_association_data = association_data
+        _StubTrackAssigner.last_meas_arena = meas_arena
         _StubTrackAssigner.last_meas_ori_directed = np.asarray(
             meas_ori_directed, dtype=np.uint8
         )
         return np.zeros((N, len(meas)), dtype=np.float32), {}
 
     def assign_tracks(self, cost, N, M, meas, *args, **kwargs):
+        _StubTrackAssigner.last_assign_meas_arena = kwargs.get("meas_arena", "missing")
         return [0], [0], [], []
 
 

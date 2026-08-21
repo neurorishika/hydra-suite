@@ -43,6 +43,12 @@ from hydra_suite.core.inference.api import (
 )
 from hydra_suite.core.inference.config import build_inference_config_from_params
 from hydra_suite.core.inference.runner import _open_caches, video_signature
+from hydra_suite.core.tracking.arenas import arena_ids_for_meas as _meas_arena_ids
+from hydra_suite.core.tracking.arenas import (
+    arena_layout_from_params,
+    check_slot_arena_covers_all_slots,
+    tracking_frame_size,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -331,6 +337,22 @@ def run_tracking_preview(
 
         kf_manager = KalmanFilterManager(params["MAX_TARGETS"], params)
         assigner = TrackAssigner(params)
+        # Same arena gating as the live run (worker.py) and the optimizer's
+        # scoring loop -- a preview that shows unrestricted cross-arena
+        # tracking is a preview of a run that cannot happen. `None` for
+        # single-arena keeps the assigner's original ungated path.
+        _arena_layout = arena_layout_from_params(params)
+        check_slot_arena_covers_all_slots(_arena_layout, params["MAX_TARGETS"])
+        assigner.set_track_arena(
+            None if _arena_layout.is_single_arena else _arena_layout.slot_arena
+        )
+        _arena_frame_size = None
+        if not _arena_layout.is_single_arena:
+            _arena_frame_size = tracking_frame_size(
+                params,
+                int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+                int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+            )
 
         # Correction 21: _ParamsFilter is a lightweight shim that exposes .params
         # so _preview_filter_cached_detections can read DETECTION_CONFIDENCE from
@@ -472,6 +494,7 @@ def run_tracking_preview(
             }
 
             if meas:
+                _meas_arena = _meas_arena_ids(_arena_layout, meas, _arena_frame_size)
                 cost, _ = assigner.compute_cost_matrix(
                     N,
                     meas,
@@ -485,6 +508,7 @@ def run_tracking_preview(
                         else None
                     ),
                     association_data=_association_data,
+                    meas_arena=_meas_arena,
                 )
                 matched_r, matched_c, free_dets, _identity_rejoin_pairs = (
                     assigner.assign_tracks(
@@ -497,6 +521,7 @@ def run_tracking_preview(
                         kf_manager,
                         association_data=_association_data,
                         missed_frames=missed_frames,
+                        meas_arena=_meas_arena,
                     )
                 )
                 _preview_process_matched_tracks(
