@@ -1,7 +1,7 @@
 # Multi-Arena Tracking — independent trackers, one shared inference pass
 
 **Date:** 2026-08-18
-**Status:** Design approved, pending spec review
+**Status:** Shipped — merged to main (see the multi-arena merge commit)
 **Branch:** `feat/multi-arena-tracking` (worktree from local HEAD)
 
 ## Context
