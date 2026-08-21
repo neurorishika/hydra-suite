@@ -298,7 +298,7 @@ class SessionOrchestrator:
                 painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
                 renderer.render(painter, QRectF(x, y, logo_w, logo_h))
                 painter.end()
-                self._mw._set_video_pixmap(canvas)
+                self._mw._set_video_pixmap(canvas, already_scaled=True)
                 return
         except Exception:
             pass
@@ -1711,7 +1711,7 @@ class SessionOrchestrator:
             evt.ignore()
             return
         if evt.button() == Qt.LeftButton:
-            self._mw._fit_image_to_screen()
+            QTimer.singleShot(0, self._mw._fit_image_to_screen)
 
     def _handle_video_wheel(self, evt):
         """Handle mouse wheel - zoom in/out, anchored to the cursor position."""
@@ -1721,7 +1721,7 @@ class SessionOrchestrator:
         if evt.modifiers() == Qt.ControlModifier:
             delta = evt.angleDelta().y()
             current_zoom = self._mw.slider_zoom.value()
-            zoom_change = 10 if delta > 0 else -10
+            zoom_change = max(-15, min(15, round(delta / 24)))
             new_zoom = max(10, min(400, current_zoom + zoom_change))
 
             if new_zoom == current_zoom:
@@ -2045,7 +2045,6 @@ class SessionOrchestrator:
         self._mw._update_animals_per_arena_total_label()
 
         if self._mw.roi_base_frame:
-            QTimer.singleShot(10, self._mw._fit_image_to_screen)
             QTimer.singleShot(50, self._mw._display_roi_with_zoom)
 
     def _generate_combined_roi_mask(self, height, width):

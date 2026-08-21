@@ -2726,8 +2726,20 @@ class MainWindow(QMainWindow):
         # Fallback during early init before orchestrators exist
         self._set_video_message("HYDRA\n\nLoad a video to begin...")
 
-    def _set_video_pixmap(self, pixmap: QPixmap):
-        """Display a pixmap on the canvas."""
+    def _set_video_pixmap(self, pixmap: QPixmap, already_scaled: bool = False):
+        """Display a pixmap on the canvas.
+
+        Some callers (tracking playback, detection-test preview, the
+        placeholder-text message) pre-scale the image themselves before
+        calling this -- sometimes combining the zoom slider with an unrelated
+        content-resize factor. ArenaCanvas scales by its own `_zoom` state on
+        every set_frame() call, so pushing an already-scaled pixmap without
+        resetting zoom would double-apply the zoom factor. Pass
+        already_scaled=True for any pixmap the caller has already sized for
+        display; this resets canvas zoom to 1.0 so it is not scaled again.
+        """
+        if already_scaled:
+            self.video_label.set_zoom(1.0)
         self.video_label.set_frame(pixmap.toImage())
         self._video_is_placeholder_text = False
         self._video_placeholder_text = None
@@ -2758,7 +2770,7 @@ class MainWindow(QMainWindow):
         painter.setFont(font)
         painter.drawText(pixmap.rect(), Qt.AlignCenter | Qt.TextWordWrap, text)
         painter.end()
-        self._set_video_pixmap(pixmap)
+        self._set_video_pixmap(pixmap, already_scaled=True)
         self._video_is_placeholder_text = True
         self._video_placeholder_text = text
 

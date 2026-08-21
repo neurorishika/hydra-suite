@@ -1592,7 +1592,9 @@ class DetectionPanel(QWidget):
                 scaled = qimg.scaled(
                     int(w * z), int(h * z), Qt.KeepAspectRatio, Qt.SmoothTransformation
                 )
-                self._main_window._set_video_pixmap(QPixmap.fromImage(scaled))
+                self._main_window._set_video_pixmap(
+                    QPixmap.fromImage(scaled), already_scaled=True
+                )
             return
 
         if self._main_window.detection_test_result is not None:
@@ -1774,7 +1776,7 @@ class DetectionPanel(QWidget):
             )
 
         pixmap = QPixmap.fromImage(qimg)
-        self._main_window._set_video_pixmap(pixmap)
+        self._main_window._set_video_pixmap(pixmap, already_scaled=True)
 
     def _redisplay_detection_test(self):
         """Redisplay the stored detection test result with current zoom."""
@@ -1797,7 +1799,7 @@ class DetectionPanel(QWidget):
             )
 
         pixmap = QPixmap.fromImage(qimg)
-        self._main_window._set_video_pixmap(pixmap)
+        self._main_window._set_video_pixmap(pixmap, already_scaled=True)
 
     # =========================================================================
     # PREVIEW DETECTION TEST (moved from MainWindow)
@@ -2070,7 +2072,9 @@ class DetectionPanel(QWidget):
             qimg = qimg.scaled(
                 scaled_w, scaled_h, Qt.KeepAspectRatio, Qt.SmoothTransformation
             )
-        self._main_window._set_video_pixmap(QPixmap.fromImage(qimg))
+        self._main_window._set_video_pixmap(
+            QPixmap.fromImage(qimg), already_scaled=True
+        )
         self._main_window._fit_image_to_screen()
         logger.info("Detection test completed on preview frame")
 

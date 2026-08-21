@@ -687,7 +687,7 @@ class TrackingOrchestrator:
         scaled = qimg.scaled(
             int(w * z), int(h * z), Qt.KeepAspectRatio, Qt.SmoothTransformation
         )
-        self._mw._set_video_pixmap(QPixmap.fromImage(scaled))
+        self._mw._set_video_pixmap(QPixmap.fromImage(scaled), already_scaled=True)
 
         # Auto-fit to screen on first frame of tracking
         if self._mw._tracking_first_frame:
