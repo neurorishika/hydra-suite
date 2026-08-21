@@ -2017,15 +2017,6 @@ class MainWindow(QMainWindow):
         """Lock/unlock UI while async preview detection is running."""
         self._session_orch._set_preview_test_running(running)
 
-    def _on_new_arena_clicked(self):
-        """Advance to a new arena; subsequent shapes join it."""
-        new_id = self._session_orch.start_new_arena()
-        self.roi_status_label.setText(
-            f"Started arena {new_id + 1} -- new shapes join it until "
-            "'New Arena' is pressed again."
-        )
-        self._update_animals_per_arena_total_label()
-
     def _on_generate_grid_clicked(self):
         """Open the bulk arena-grid dialog and merge its output into roi_shapes.
 
