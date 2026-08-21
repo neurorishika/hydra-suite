@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QSizePolicy,
     QSlider,
     QSpinBox,
     QVBoxLayout,
@@ -197,6 +198,7 @@ class ArenaGridDialog(BaseDialog):
         self.preview_label = QLabel()
         self.preview_label.setAlignment(Qt.AlignCenter)
         self.preview_label.setMinimumSize(320, 240)
+        self.preview_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
         self.preview_label.setStyleSheet(
             "background-color: #000000; border: 1px solid #3e3e42;"
         )
@@ -320,7 +322,14 @@ class ArenaGridDialog(BaseDialog):
         ):
             was_at_floor = spin.value() <= spin.minimum()
             spin.setMinimum(int(floor))
+            # blockSignals: QSlider.setMinimum can raise both the maximum and
+            # the current value when the new floor exceeds the slider's
+            # current maximum, firing valueChanged -> spin.setValue and
+            # clobbering a larger user-typed spinbox value -- same
+            # feedback-loop class _pair_with_slider already guards against.
+            slider.blockSignals(True)
             slider.setMinimum(int(floor))
+            slider.blockSignals(False)
             if was_at_floor or spin.value() < floor:
                 spin.setValue(int(floor))
         self._sync_spacing_visibility()

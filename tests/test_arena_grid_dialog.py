@@ -518,6 +518,33 @@ def test_spinbox_radius_beyond_slider_range_clamps_the_slider(qt_app):
     assert dialog.slider_radius.value() == dialog.slider_radius.maximum()
 
 
+def test_raising_the_pitch_floor_past_the_slider_max_does_not_clobber_the_spinbox(
+    qt_app,
+):
+    """Regression: _sync_pitch_floors' slider.setMinimum(...) for the pitch
+    sliders used to run unblocked. When the new floor exceeds the slider's
+    CURRENT maximum, Qt's QSlider.setMinimum raises both the maximum and the
+    current value to the new minimum -- which fires valueChanged into the
+    paired spinbox (slider.valueChanged is connected to spin.setValue) and
+    silently knocks a larger user-typed spinbox value down to the floor.
+
+    Reproduction (1000x1000 frame, 2-column grid): set pitch_x to an
+    arbitrarily large 5000, then raise the radius to 900 so the circle
+    min-pitch floor becomes 1800 (comfortably above the slider's prior
+    maximum). The spinbox must keep the user's 5000 -- only the slider's own
+    minimum/value may visibly clamp to the floor.
+    """
+    dialog = _dialog(qt_app, width=1000, height=1000)
+    dialog.spin_cols.setValue(2)
+    dialog.spin_pitch_x.setValue(5000)
+    assert dialog.spin_pitch_x.value() == 5000
+
+    dialog.spin_radius.setValue(900)  # circle min-pitch floor -> 1800
+
+    assert dialog.spin_pitch_x.value() == 5000
+    assert dialog.slider_pitch_x.minimum() == 1800
+
+
 def test_slider_rows_moves_the_spinbox(qt_app):
     dialog = _dialog(qt_app)
     assert hasattr(dialog, "slider_rows")
