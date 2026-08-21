@@ -581,3 +581,53 @@ def test_slider_rows_maximum_tracks_the_extent_cap(qt_app):
     assert dialog.spin_rows.maximum() == 3
     assert dialog.slider_cols.maximum() == 4
     assert dialog.slider_rows.maximum() == 3
+
+
+@pytest.mark.parametrize(
+    "dialog_w, dialog_h, frame_w, frame_h",
+    [
+        (1200, 700, 2000, 2000),  # wide dialog, square frame
+        (700, 1200, 2000, 2000),  # tall/narrow dialog, square frame
+        (1400, 900, 3000, 1200),  # wide dialog, wide/rectangular frame
+        (900, 1400, 1200, 3000),  # tall dialog, tall/rectangular frame
+    ],
+)
+def test_preview_pixmap_never_exceeds_the_labels_settled_size(
+    qt_app, dialog_w, dialog_h, frame_w, frame_h
+):
+    """Regression test for Fix Wave 7: the previous fix round set
+    preview_label's size policy to Ignored/Ignored (to solve a resize
+    hysteresis bug) but gave neither preview_col nor preview_label any
+    stretch factor, so the label never actually claimed the extra space a
+    QSizePolicy of Ignored merely permits it to take. Combined with
+    _update_preview() running at construction time -- before the layout had
+    settled into its final geometry -- this produced a pixmap sized for a
+    box the label never actually grew into, and QLabel (with no
+    setScaledContents) silently clipped the overflow.
+
+    The fix gives preview_col/preview_label real stretch factors and defers
+    the first _update_preview() call by one event-loop tick via
+    QTimer.singleShot(0, ...). This asserts the exact invariant that was
+    violated: the rendered pixmap must fit inside the label's own settled
+    width/height in both dimensions, across dialog sizes and reference
+    frame aspect ratios.
+    """
+    from PySide6.QtGui import QImage
+
+    frame = QImage(frame_w, frame_h, QImage.Format_RGB888)
+    frame.fill(200)
+    dialog = ArenaGridDialog(reference_frame=frame, first_arena_id=0)
+    dialog.resize(dialog_w, dialog_h)
+    dialog.show()
+    # Flush the event loop so the deferred singleShot(0, self._update_preview)
+    # from __init__ actually runs against the layout's real, settled geometry
+    # (not a mid-construction snapshot).
+    qt_app.processEvents()
+    qt_app.processEvents()
+
+    pixmap = dialog.preview_label.pixmap()
+    assert pixmap is not None
+    assert pixmap.width() <= dialog.preview_label.width()
+    assert pixmap.height() <= dialog.preview_label.height()
+
+    dialog.close()

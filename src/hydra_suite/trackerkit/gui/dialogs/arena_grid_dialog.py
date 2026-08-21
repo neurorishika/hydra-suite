@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QPainter, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
@@ -208,8 +208,8 @@ class ArenaGridDialog(BaseDialog):
         layout.addWidget(form_group)
         preview_col = QVBoxLayout()
         preview_col.addWidget(QLabel("Preview"))
-        preview_col.addWidget(self.preview_label)
-        layout.addLayout(preview_col)
+        preview_col.addWidget(self.preview_label, 1)
+        layout.addLayout(preview_col, 1)
 
         self.add_content(container)
 
@@ -239,7 +239,7 @@ class ArenaGridDialog(BaseDialog):
         self.combo_shape_type.currentTextChanged.connect(self._update_preview)
 
         self._on_shape_changed()
-        self._update_preview()
+        QTimer.singleShot(0, self._update_preview)
 
     def _pair_with_slider(
         self,
