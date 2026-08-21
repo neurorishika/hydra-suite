@@ -99,8 +99,9 @@ class ArenaPanel(QWidget):
 
     def _build_editing(self) -> QWidget:
         widget = QWidget()
-        layout = QHBoxLayout(widget)
-        layout.setContentsMargins(0, 0, 0, 0)
+        outer = QVBoxLayout(widget)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(2)
 
         self.lbl_current = QLabel("Currently labelling: Arena 1")
         self.lbl_current.setStyleSheet("font-weight: bold; color: #cccccc;")
@@ -170,12 +171,22 @@ class ArenaPanel(QWidget):
         self.btn_done = QPushButton("Done")
         self.btn_done.clicked.connect(self._on_done_clicked)
 
+        nav_row = QHBoxLayout()
+        nav_row.setContentsMargins(0, 0, 0, 0)
         for w in (
             self.lbl_current,
             self.btn_prev,
             self.btn_next,
             self.btn_add_new,
-            self._separator(),
+            self.btn_done,
+        ):
+            nav_row.addWidget(w)
+        nav_row.addStretch()
+        outer.addLayout(nav_row)
+
+        tools_row = QHBoxLayout()
+        tools_row.setContentsMargins(0, 0, 0, 0)
+        for w in (
             self.lbl_hint,
             self.btn_clear_arena,
             self.btn_add_circle,
@@ -185,10 +196,11 @@ class ArenaPanel(QWidget):
             self.btn_finish,
             self.btn_undo,
             self.btn_overflow,
-            self.btn_done,
         ):
-            layout.addWidget(w)
-        layout.addStretch()
+            tools_row.addWidget(w)
+        tools_row.addStretch()
+        outer.addLayout(tools_row)
+
         return widget
 
     def _build_done(self) -> QWidget:

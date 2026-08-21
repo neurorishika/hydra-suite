@@ -204,3 +204,29 @@ def test_resume_editing_returns_from_done_state(panel):
     assert panel.stack.currentWidget() is panel.done_widget
     panel.resume_editing()
     assert panel.stack.currentWidget() is panel.editing_widget
+
+
+def test_editing_bar_is_split_into_two_rows(panel):
+    from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout
+
+    outer = panel.editing_widget.layout()
+    assert isinstance(outer, QVBoxLayout)
+    assert outer.count() == 2
+    nav_row = outer.itemAt(0).layout()
+    tools_row = outer.itemAt(1).layout()
+    assert isinstance(nav_row, QHBoxLayout)
+    assert isinstance(tools_row, QHBoxLayout)
+
+    def _layout_containing(layout, widget):
+        for i in range(layout.count()):
+            item = layout.itemAt(i)
+            if item.widget() is widget:
+                return layout
+        return None
+
+    # Navigation and drawing-tool controls really are on separate rows,
+    # not just visually reordered within one row.
+    assert _layout_containing(nav_row, panel.lbl_current) is nav_row
+    assert _layout_containing(tools_row, panel.lbl_hint) is tools_row
+    assert _layout_containing(nav_row, panel.lbl_hint) is None
+    assert _layout_containing(tools_row, panel.lbl_current) is None
