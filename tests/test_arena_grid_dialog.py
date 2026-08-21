@@ -229,7 +229,6 @@ def test_generate_grid_handler_offsets_past_existing_arenas_and_merges(
     assert n_arenas_from_shapes(mw.roi_shapes) == 3
 
     mw._generate_combined_roi_mask.assert_not_called()  # no roi_base_frame
-    mw.btn_undo_roi.setEnabled.assert_called_with(True)
-    mw.btn_crop_video.setEnabled.assert_called_with(True)
+    mw.arena_panel.set_shapes.assert_called_with(mw.roi_shapes)
     mw._update_animals_per_arena_total_label.assert_called_once()
     mw.update_roi_preview.assert_called_once()

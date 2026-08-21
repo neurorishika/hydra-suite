@@ -17,7 +17,6 @@ from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
-    QComboBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -49,6 +48,7 @@ from hydra_suite.core.inference.model_paths import (
     resolve_pose_model_path,
 )
 from hydra_suite.trackerkit.config.schemas import TrackerConfig
+from hydra_suite.trackerkit.gui.panels.arena_panel import ArenaPanel
 from hydra_suite.trackerkit.gui.widgets.arena_canvas import ArenaCanvas
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
 from hydra_suite.utils.geometry import wrap_angle_degs
@@ -573,99 +573,21 @@ class MainWindow(QMainWindow):
         roi_main_layout.setContentsMargins(8, 4, 8, 4)
         roi_main_layout.setSpacing(4)
 
-        # Top row: mode selection and controls
-        roi_layout = QHBoxLayout()
-        roi_label = QLabel("ROI controls")
-        roi_label.setStyleSheet("font-weight: bold; color: #cccccc;")
-
-        # Mode selector
-        self.combo_roi_mode = QComboBox()
-        self.combo_roi_mode.addItems(["Circle", "Polygon"])
-        self.combo_roi_mode.setToolTip("Select shape type for ROI")
-        self.combo_roi_mode.currentIndexChanged.connect(self._on_roi_mode_changed)
-
-        # Zone type selector (Include/Exclude)
-        self.combo_roi_zone = QComboBox()
-        self.combo_roi_zone.addItems(["Include Zone", "Exclude Zone"])
-        self.combo_roi_zone.setToolTip(
-            "Include: Area where tracking is active\n"
-            "Exclude: Area to remove from tracking (applied after inclusions)"
-        )
-        self.combo_roi_zone.currentIndexChanged.connect(self._on_roi_zone_changed)
-
-        self.btn_start_roi = QPushButton("Add Shape")
-        self.btn_start_roi.clicked.connect(self.start_roi_selection)
-        self.btn_start_roi.setShortcut("Ctrl+R")
-        self.btn_start_roi.setToolTip("Start adding ROI shape (Ctrl+R)")
-
-        self.btn_finish_roi = QPushButton("Confirm Shape")
-        self.btn_finish_roi.clicked.connect(self.finish_roi_selection)
-        self.btn_finish_roi.setEnabled(False)
-        self.btn_finish_roi.setShortcut("Ctrl+F")
-        self.btn_finish_roi.setToolTip("Finish current shape (Ctrl+F)")
-
-        self.btn_undo_roi = QPushButton("Undo Last")
-        self.btn_undo_roi.clicked.connect(self.undo_last_roi_shape)
-        self.btn_undo_roi.setEnabled(False)
-        self.btn_undo_roi.setToolTip("Remove last added shape")
-
-        # A new shape joins the CURRENT arena by default -- one arena is
-        # often several shapes (an include circle plus an exclude hole
-        # punched in it), so shape count is not arena count. "New Arena"
-        # is the only thing that advances current_arena_id.
-        self.btn_new_arena = QPushButton("New Arena")
-        self.btn_new_arena.clicked.connect(self._on_new_arena_clicked)
-        self.btn_new_arena.setToolTip(
-            "Start a new arena: shapes added after this join a fresh arena.\n"
-            "Use this only when moving on to a physically separate arena --\n"
-            "an include zone plus its exclude hole belong in the SAME arena."
-        )
-
-        # Bulk-entry convenience for many identical arenas (e.g. a 96-well
-        # plate) -- generates ordinary roi_shapes, indistinguishable from
-        # hand-drawn ones and just as editable afterwards. See task-9 brief.
-        self.btn_generate_grid = QPushButton("Generate Grid")
-        self.btn_generate_grid.clicked.connect(self._on_generate_grid_clicked)
-        self.btn_generate_grid.setToolTip(
-            "Bulk-add a rows x cols grid of arena shapes (e.g. a well plate)\n"
-            "instead of drawing each one by hand. Generated shapes are\n"
-            "ordinary, individually-editable ROI shapes."
-        )
-
-        self.btn_clear_roi = QPushButton("Clear All")
-        self.btn_clear_roi.clicked.connect(self.clear_roi)
-        self.btn_clear_roi.setShortcut("Ctrl+C")
-        self.btn_clear_roi.setToolTip("Clear all ROI shapes (Ctrl+C)")
-
-        self.btn_crop_video = QPushButton("Crop Video to ROI")
-        self.btn_crop_video.clicked.connect(self.crop_video_to_roi)
-        self.btn_crop_video.setEnabled(False)
-        self.btn_crop_video.setToolTip(
-            "Generate a cropped video containing only the ROI area\n"
-            "This can significantly improve tracking performance"
-        )
-        self.btn_crop_video.setStyleSheet(
-            "QPushButton { background-color: #2d7a3e; }"
-            "QPushButton:hover { background-color: #3a9150; }"
-            "QPushButton:disabled { background-color: #3e3e42; color: #777777; }"
-        )
-
+        # Top row: arena-centric panel (Task 9)
         self.roi_status_label = QLabel("No ROI")
         self.roi_status_label.setStyleSheet("color: #6a6a6a; margin-left: 10px;")
 
-        roi_layout.addWidget(roi_label)
-        roi_layout.addWidget(self.combo_roi_mode)
-        roi_layout.addWidget(self.combo_roi_zone)
-        roi_layout.addWidget(self.btn_start_roi)
-        roi_layout.addWidget(self.btn_finish_roi)
-        roi_layout.addWidget(self.btn_undo_roi)
-        roi_layout.addWidget(self.btn_new_arena)
-        roi_layout.addWidget(self.btn_generate_grid)
-        roi_layout.addWidget(self.btn_clear_roi)
-        roi_layout.addWidget(self.btn_crop_video)
-        roi_layout.addStretch()
-
-        roi_main_layout.addLayout(roi_layout)
+        self.arena_panel = ArenaPanel()
+        self.arena_panel.add_single_requested.connect(self._on_add_single_arena)
+        self.arena_panel.add_grid_requested.connect(self._on_generate_grid_clicked)
+        self.arena_panel.arena_changed.connect(self._on_arena_changed)
+        self.arena_panel.clear_arena_requested.connect(self._on_clear_arena)
+        self.arena_panel.draw_requested.connect(self._on_draw_requested)
+        self.arena_panel.finish_requested.connect(self.finish_roi_selection)
+        self.arena_panel.undo_requested.connect(self.undo_last_roi_shape)
+        self.arena_panel.clear_all_requested.connect(self.clear_roi)
+        self.arena_panel.crop_requested.connect(self.crop_video_to_roi)
+        roi_main_layout.addWidget(self.arena_panel)
 
         # Second row: status and optimization info
         roi_status_layout = QHBoxLayout()
@@ -676,15 +598,6 @@ class MainWindow(QMainWindow):
         )
         roi_status_layout.addWidget(self.roi_optimization_label)
         roi_main_layout.addLayout(roi_status_layout)
-
-        # Instructions (Hidden unless active)
-        self.roi_instructions = QLabel("")
-        self.roi_instructions.setWordWrap(True)
-        self.roi_instructions.setStyleSheet(
-            "color: #4fc1ff; font-size: 11px; font-weight: bold; "
-            "padding: 6px; background-color: #0d3354; border-radius: 4px;"
-        )
-        roi_main_layout.addWidget(self.roi_instructions)
 
         left_layout.addWidget(self.scroll, stretch=1)
 
@@ -1029,6 +942,7 @@ class MainWindow(QMainWindow):
         ns.postprocess = self._postprocess_panel
         ns.dataset = self._dataset_panel
         ns.identity = self._identity_panel
+        ns.arena = self.arena_panel
         return ns
 
     def _make_welcome_page(self):
@@ -2103,14 +2017,6 @@ class MainWindow(QMainWindow):
         """Lock/unlock UI while async preview detection is running."""
         self._session_orch._set_preview_test_running(running)
 
-    def _on_roi_mode_changed(self, index):
-        """Handle ROI mode selection change."""
-        self._session_orch._on_roi_mode_changed(index)
-
-    def _on_roi_zone_changed(self, index):
-        """Handle ROI zone type selection change."""
-        self._session_orch._on_roi_zone_changed(index)
-
     def _on_new_arena_clicked(self):
         """Advance to a new arena; subsequent shapes join it."""
         new_id = self._session_orch.start_new_arena()
@@ -2154,8 +2060,7 @@ class MainWindow(QMainWindow):
         if self.roi_base_frame:
             fh, fw = self.roi_base_frame.height(), self.roi_base_frame.width()
             self._generate_combined_roi_mask(fh, fw)
-        self.btn_undo_roi.setEnabled(len(self.roi_shapes) > 0)
-        self.btn_crop_video.setEnabled(True)
+        self.arena_panel.set_shapes(self.roi_shapes)
         # Display-only count over ALL shapes (include + exclude); intentionally
         # differs from the engine's authoritative count,
         # `engine_params.n_arenas_from_shapes` (include-shapes only) -- an
@@ -2206,6 +2111,32 @@ class MainWindow(QMainWindow):
             )
         else:
             self._setup_panel.lbl_animals_per_arena_total.setText("")
+
+    def _on_add_single_arena(self):
+        """Start the first (or a fresh) arena and immediately begin a circle."""
+        self.arena_panel.begin_new_arena()
+        self._session_orch.current_arena_id = self.arena_panel.current_arena
+        self._on_draw_requested("circle", "include")
+
+    def _on_arena_changed(self, arena_id: int):
+        self._session_orch.set_current_arena(arena_id)
+
+    def _on_clear_arena(self, arena_id: int):
+        """Empty an arena's shapes; the arena and its number remain."""
+        self.roi_shapes = self.arena_panel.shapes_after_clearing(arena_id)
+        self.arena_panel.set_shapes(self.roi_shapes)
+        if self.roi_base_frame:
+            self._generate_combined_roi_mask(
+                self.roi_base_frame.height(), self.roi_base_frame.width()
+            )
+        self._update_animals_per_arena_total_label()
+        self.update_roi_preview()
+
+    def _on_draw_requested(self, shape_type: str, zone_mode: str):
+        """Begin drawing a shape of the requested type and zone role."""
+        self.roi_current_mode = shape_type
+        self.roi_current_zone_type = zone_mode
+        self.start_roi_selection()
 
     def _on_canvas_pan(self, dx: int, dy: int) -> None:
         """Scroll by a drag delta the canvas already classified as a pan."""

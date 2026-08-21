@@ -1430,7 +1430,7 @@ class ConfigOrchestrator:
                         self._mw.roi_status_label.setText(
                             f"Loaded ROI: {num_shapes} shape(s) ({shape_summary})"
                         )
-                        self._mw.btn_undo_roi.setEnabled(True)
+                        self._panels.arena.set_shapes(self._mw.roi_shapes)
                         logger.info(f"Loaded {num_shapes} ROI shapes from config")
                     cap.release()
             else:
@@ -2830,19 +2830,12 @@ class ConfigOrchestrator:
 
             # Disable UI controls while cropping is in progress
             self._mw._set_ui_controls_enabled(False)
-            # Also disable crop button specifically
-            if hasattr(self, "btn_crop_video"):
-                self._mw.btn_crop_video.setText("Cropping...")
-                self._mw.btn_crop_video.setEnabled(False)
 
             logger.info(f"Started background video crop: {video_path} -> {output_path}")
 
         except Exception as e:
             # Re-enable UI if crop failed to start
             self._mw._set_ui_controls_enabled(True)
-            if hasattr(self, "btn_crop_video"):
-                self._mw.btn_crop_video.setText("Crop Video to ROI")
-                self._mw.btn_crop_video.setEnabled(True)
 
             QMessageBox.critical(
                 self,
@@ -2912,7 +2905,6 @@ class ConfigOrchestrator:
 
         self._mw.btn_test_detection.setEnabled(True)
         self._panels.setup.btn_detect_fps.setEnabled(True)
-        self._mw.btn_crop_video.setEnabled(False)
         if hasattr(self._mw, "roi_optimization_label"):
             self._mw.roi_optimization_label.setText("")
 
@@ -2953,16 +2945,11 @@ class ConfigOrchestrator:
             self._load_cropped_video(output_path)
 
         self._mw._set_ui_controls_enabled(True)
-        if hasattr(self._mw, "btn_crop_video"):
-            self._mw.btn_crop_video.setText("Crop Video to ROI")
         logger.info(f"Successfully cropped video to {output_path}")
 
     def _handle_crop_failure(self, return_code):
         """Handle a failed crop completion."""
         self._mw._set_ui_controls_enabled(True)
-        if hasattr(self._mw, "btn_crop_video"):
-            self._mw.btn_crop_video.setText("Crop Video to ROI")
-            self._mw.btn_crop_video.setEnabled(True)
         logger.error(f"Video crop failed with return code {return_code}")
         QMessageBox.critical(
             self._mw,

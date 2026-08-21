@@ -179,18 +179,10 @@ class SessionOrchestrator:
             self._mw.video_label.unsetCursor()
 
     def _sync_contextual_controls(self):
-        # ROI
-        self._mw.btn_finish_roi.setEnabled(self._mw.roi_selection_active)
-        self._mw.btn_undo_roi.setEnabled(len(self._mw.roi_shapes) > 0)
-        self._mw.btn_clear_roi.setEnabled(
-            len(self._mw.roi_shapes) > 0 or self._mw.roi_selection_active
-        )
-
-        # Crop video only if ROI exists and video loaded
-        if hasattr(self._mw, "btn_crop_video"):
-            self._mw.btn_crop_video.setEnabled(
-                bool(self._mw.roi_shapes) and bool(self._mw.current_video_path)
-            )
+        # ROI: ArenaPanel now owns its own enabled/disabled state (refreshed
+        # from set_shapes/set_shape_valid/set_current_arena calls elsewhere),
+        # so there is nothing left to sync here.
+        pass
 
     def _apply_ui_state(self, state: str):
         if state == "no_video":
@@ -1713,23 +1705,6 @@ class SessionOrchestrator:
         self._mw.progress_bar.setRange(0, 100)
         self._mw._refresh_progress_visibility()
 
-    def _on_roi_mode_changed(self, index):
-        """Handle ROI mode selection change."""
-        self._mw.roi_current_mode = "circle" if index == 0 else "polygon"
-        if self._mw.roi_selection_active:
-            if self._mw.roi_current_mode == "circle":
-                self._mw.roi_instructions.setText(
-                    "Circle: Left-click 3+ points on boundary  •  Right-click to undo  •  ESC to cancel"
-                )
-            else:
-                self._mw.roi_instructions.setText(
-                    "Polygon: Left-click vertices  •  Right-click to undo  •  Double-click to finish  •  ESC to cancel"
-                )
-
-    def _on_roi_zone_changed(self, index):
-        """Handle ROI zone type selection change."""
-        self._mw.roi_current_zone_type = "include" if index == 0 else "exclude"
-
     def _handle_video_double_click(self, evt):
         """Handle double-click on video to fit to screen."""
         if not self._mw._video_interactions_enabled:
@@ -1903,15 +1878,11 @@ class SessionOrchestrator:
         self.update_roi_preview()
 
     def set_current_arena(self, arena_id: int) -> None:
-        """Make *arena_id* the arena new shapes join.
-
-        Task 9 adds the ``self._panels.arena.set_current_arena(arena_id)``
-        line here once the panel exists; do NOT add it now -- the panel is not
-        registered yet and this task's tests would fail on it.
-        """
+        """Make *arena_id* the arena new shapes join."""
         if self._mw.roi_selection_active:
             return
         self.current_arena_id = int(arena_id)
+        self._panels.arena.set_current_arena(arena_id)
         self._mw.video_label.set_current_arena(arena_id)
 
     def update_roi_preview(self):
@@ -1936,9 +1907,7 @@ class SessionOrchestrator:
                 valid = True
         elif self._mw.roi_current_mode == "polygon" and len(self._mw.roi_points) >= 3:
             valid = True
-        # Task 9 replaces this with `self._panels.arena.set_shape_valid(valid)`.
-        # The old button still exists at this point; the panel does not.
-        self._mw.btn_finish_roi.setEnabled(valid)
+        self._panels.arena.set_shape_valid(valid)
 
     def start_roi_selection(self):
         """Start an ROI shape selection session."""
@@ -1971,10 +1940,6 @@ class SessionOrchestrator:
         self._mw.roi_points = []
         self._mw.roi_fitted_circle = None
         self._mw.roi_selection_active = True
-        self._mw.btn_start_roi.setEnabled(False)
-        self._mw.btn_finish_roi.setEnabled(False)
-        self._mw.combo_roi_mode.setEnabled(False)
-        self._mw.combo_roi_zone.setEnabled(False)
         self._mw.video_label.setCursor(Qt.CrossCursor)
 
         zone_type = (
@@ -1984,17 +1949,11 @@ class SessionOrchestrator:
             self._mw.roi_status_label.setText(
                 f"Click points on {zone_type.lower()} circle boundary"
             )
-            self._mw.roi_instructions.setText(
-                f"{zone_type} Circle: Left-click 3+ points on boundary  •  Right-click to undo  •  ESC to cancel"
-            )
         else:
             self._mw.roi_status_label.setText(
                 f"Click {zone_type.lower()} polygon vertices"
             )
-            self._mw.roi_instructions.setText(
-                f"{zone_type} Polygon: Left-click vertices  •  Right-click to undo  •  Double-click to finish  •  ESC to cancel"
-            )
-        self._mw.update_roi_preview()
+        self.update_roi_preview()
 
     def finish_roi_selection(self):
         """Finalize the current ROI shape and add it to the shape list."""
@@ -2052,12 +2011,7 @@ class SessionOrchestrator:
         self._mw.roi_points = []
         self._mw.roi_fitted_circle = None
         self._mw.roi_selection_active = False
-        self._mw.btn_start_roi.setEnabled(True)
-        self._mw.btn_finish_roi.setEnabled(False)
-        self._mw.btn_undo_roi.setEnabled(len(self._mw.roi_shapes) > 0)
-        self._mw.combo_roi_mode.setEnabled(True)
-        self._mw.combo_roi_zone.setEnabled(True)
-        self._mw.roi_instructions.setText("")
+        self._panels.arena.set_shapes(self._mw.roi_shapes)
 
         if hasattr(Qt, "OpenHandCursor"):
             self._mw.video_label.setCursor(Qt.OpenHandCursor)
@@ -2087,7 +2041,6 @@ class SessionOrchestrator:
             f"Active ROI: {include_count} inclusion, {exclude_count} exclusion zone(s)"
             f"{arena_note}"
         )
-        self._mw.btn_crop_video.setEnabled(True)
         self._mw._update_roi_optimization_info()
         self._mw._update_animals_per_arena_total_label()
 
@@ -2134,7 +2087,7 @@ class SessionOrchestrator:
             self._mw._generate_combined_roi_mask(fh, fw)
         else:
             self._mw.roi_mask = None
-        self._mw.btn_undo_roi.setEnabled(len(self._mw.roi_shapes) > 0)
+        self._panels.arena.set_shapes(self._mw.roi_shapes)
         if self._mw.roi_shapes:
             num_shapes = len(self._mw.roi_shapes)
             shape_summary = ", ".join([s["type"] for s in self._mw.roi_shapes])
@@ -2146,7 +2099,7 @@ class SessionOrchestrator:
         self._mw._update_animals_per_arena_total_label()
         # The base frame is already on the canvas (pushed once in
         # start_roi_selection); this just refreshes the shape/point overlay.
-        self._mw.update_roi_preview()
+        self.update_roi_preview()
 
     def clear_roi(self):
         """Clear all ROI shapes and reset state."""
@@ -2157,12 +2110,8 @@ class SessionOrchestrator:
         self._mw.roi_selection_active = False
         self._mw.roi_base_frame = None
         self.current_arena_id = 0
-        self._mw.btn_start_roi.setEnabled(True)
-        self._mw.btn_finish_roi.setEnabled(False)
-        self._mw.btn_undo_roi.setEnabled(False)
-        self._mw.combo_roi_mode.setEnabled(True)
+        self._panels.arena.set_shapes([])
         self._mw.roi_status_label.setText("No ROI")
-        self._mw.roi_instructions.setText("")
         self._mw._set_video_message("ROI Cleared.")
         self.update_roi_preview()
         if hasattr(Qt, "OpenHandCursor"):
