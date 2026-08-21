@@ -13,7 +13,7 @@ from hydra_suite.core.canonicalization.geometry import (
     CanonicalGeometry,
     canonical_affine,
 )
-from hydra_suite.core.canonicalization.resample import canonical_warp_batch
+from hydra_suite.core.canonicalization.resample import canonical_warp_batch_from_frame
 
 from ..result import CropBatch, NumpyCropBatch, OBBResult
 from ..runtime import RuntimeContext
@@ -61,7 +61,10 @@ def extract_canonical_crops(
     One device-agnostic path for every runtime: the frame is normalised to a
     CHW float tensor on ITS OWN device (numpy -> CPU tensor; a CUDA/MPS tensor
     stays put) and warped via the single torch resampler seam
-    (``canonical_warp_batch``, ``F.grid_sample``). There is no separate cv2
+    (``canonical_warp_batch_from_frame``, ``F.grid_sample``), which slices each
+    detection's AABB footprint out of the RAW frame and converts only those
+    sub-regions -- the full frame is never materialised as a float32 tensor.
+    There is no separate cv2
     CPU kernel any more -- ``runtime`` is accepted for signature/call-site
     compatibility but no longer selects a code path; the OUTPUT device always
     matches the frame's device, which downstream consumers (e.g.
@@ -86,7 +89,6 @@ def extract_canonical_crops(
         )
 
     device = frame.device if isinstance(frame, torch.Tensor) else "cpu"
-    frame_chw = _frame_to_chw_float(frame, device)
 
     m_aligns: list[np.ndarray] = []
     for i in range(n):
@@ -98,7 +100,9 @@ def extract_canonical_crops(
             m_align = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float64)
         m_aligns.append(m_align)
 
-    crops = canonical_warp_batch(frame_chw, m_aligns, geometry)
+    crops = canonical_warp_batch_from_frame(
+        frame, m_aligns, geometry, lambda sub: _frame_to_chw_float(sub, device)
+    )
 
     if suppress_foreign and n > 1:
         crops = _apply_foreign_mask_canonical_batch(
@@ -190,7 +194,9 @@ def extract_classifier_crops(
     Device-agnostic, same as :func:`extract_canonical_crops`: the frame is
     normalised to a CHW float tensor on its own device and warped in one
     batched call via the shared torch resampler seam
-    (``canonical_warp_batch``), then quantised back to HWC uint8 -- there is
+    (``canonical_warp_batch_from_frame``, which converts only each detection's
+    AABB footprint rather than the whole frame), then quantised back to HWC
+    uint8 -- there is
     no separate per-crop CPU kernel any more.
     """
     n = obb_result.num_detections
@@ -198,7 +204,6 @@ def extract_classifier_crops(
         return []
 
     device = frame.device if isinstance(frame, torch.Tensor) else "cpu"
-    frame_chw = _frame_to_chw_float(frame, device)
 
     m_aligns: list[np.ndarray] = []
     for i in range(n):
@@ -210,7 +215,9 @@ def extract_classifier_crops(
             m_align = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float64)
         m_aligns.append(m_align)
 
-    crops_t = canonical_warp_batch(frame_chw, m_aligns, geometry)
+    crops_t = canonical_warp_batch_from_frame(
+        frame, m_aligns, geometry, lambda sub: _frame_to_chw_float(sub, device)
+    )
     crops_u8 = (
         (crops_t * 255.0)
         .round()

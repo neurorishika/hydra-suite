@@ -127,6 +127,109 @@ def _canvas_footprint_aabb(
     return x0, y0, x1, y1
 
 
+def _frame_view(frame):
+    """Squeeze a raw frame to a sliceable 3-D view and report its layout.
+
+    Returns ``(view, h_in, w_in, layout)`` where ``layout`` is ``"hwc"`` or
+    ``"chw"``. Mirrors the layout rules of the crop layer's
+    ``_frame_to_chw_float``: numpy frames are always ``(H, W, 3)``; torch
+    frames may be ``(3, H, W)``, ``(H, W, 3)`` (NVDEC), or carry a leading
+    batch axis of 1.
+    """
+    if isinstance(frame, np.ndarray):
+        return frame, int(frame.shape[0]), int(frame.shape[1]), "hwc"
+    view = frame
+    if view.ndim == 4:
+        view = view.squeeze(0)
+    if view.ndim == 3 and view.shape[-1] == 3 and view.shape[0] != 3:
+        return view, int(view.shape[0]), int(view.shape[1]), "hwc"
+    return view, int(view.shape[1]), int(view.shape[2]), "chw"
+
+
+def _slice_frame_view(view, layout: str, x0: int, y0: int, x1: int, y1: int):
+    """Spatial sub-region of a frame view, preserving its layout."""
+    if layout == "hwc":
+        return view[y0:y1, x0:x1]
+    return view[:, y0:y1, x0:x1]
+
+
+def canonical_warp_batch_from_frame(
+    frame,
+    m_aligns: List[np.ndarray],
+    geometry: CanonicalGeometry,
+    to_chw_float,
+) -> torch.Tensor:
+    """``canonical_warp_batch`` that never materialises the whole frame.
+
+    Identical output to ``canonical_warp_batch(to_chw_float(frame), ...)``,
+    but the per-detection AABB pre-crop happens on the RAW frame and only
+    those sub-regions are handed to ``to_chw_float``. ``to_chw_float`` is an
+    elementwise conversion (layout change + dtype cast + optional scale), and
+    elementwise conversion commutes exactly with slicing, so the pasted values
+    are bit-for-bit what the full-frame conversion would have produced -- while
+    the conversion cost drops from O(frame area) to O(sum of crop footprints).
+
+    This matters because the conversion is per *consumer*: head-tail, each CNN
+    phase and pose each call a per-frame crop extractor, so a 4512x4512 frame
+    was converted to a 244 MB float32 tensor three times per frame to sample a
+    few dozen small crops.
+    """
+    view, h_in, w_in, layout = _frame_view(frame)
+    canvas_w, canvas_h = geometry.canvas_w, geometry.canvas_h
+    n = len(m_aligns)
+
+    if n == 0:
+        probe = to_chw_float(
+            _slice_frame_view(view, layout, 0, 0, min(1, w_in), min(1, h_in))
+        )
+        return torch.zeros(
+            0,
+            probe.shape[0],
+            canvas_h,
+            canvas_w,
+            dtype=probe.dtype,
+            device=probe.device,
+        )
+
+    boxes = [_canvas_footprint_aabb(m, geometry, (h_in, w_in)) for m in m_aligns]
+    subs: List[torch.Tensor | None] = []
+    for x0, y0, x1, y1 in boxes:
+        if x1 > x0 and y1 > y0:
+            subs.append(to_chw_float(_slice_frame_view(view, layout, x0, y0, x1, y1)))
+        else:
+            subs.append(None)
+
+    ref = next((s for s in subs if s is not None), None)
+    if ref is None:
+        ref = to_chw_float(
+            _slice_frame_view(view, layout, 0, 0, min(1, w_in), min(1, h_in))
+        )
+    c = int(ref.shape[0])
+    pad_h = max(1, max((int(s.shape[1]) for s in subs if s is not None), default=1))
+    pad_w = max(1, max((int(s.shape[2]) for s in subs if s is not None), default=1))
+
+    batch = ref.new_zeros((n, c, pad_h, pad_w))
+    thetas_np = np.empty((n, 2, 3), dtype=np.float32)
+    for i, (x0, y0, _x1, _y1) in enumerate(boxes):
+        sub = subs[i]
+        if sub is not None:
+            batch[i, :, : sub.shape[1], : sub.shape[2]] = sub
+        thetas_np[i] = _theta_for_subregion(
+            m_aligns[i], x0, y0, (canvas_w, canvas_h), (pad_w, pad_h)
+        )
+
+    thetas_t = torch.as_tensor(thetas_np, dtype=torch.float32, device=batch.device)
+    with torch.inference_mode():
+        grid = F.affine_grid(thetas_t, (n, c, canvas_h, canvas_w), align_corners=True)
+        return F.grid_sample(
+            batch.float(),
+            grid,
+            mode="bilinear",
+            padding_mode="zeros",
+            align_corners=True,
+        )
+
+
 def canonical_warp(
     frame_chw: torch.Tensor,
     m_align: np.ndarray,
