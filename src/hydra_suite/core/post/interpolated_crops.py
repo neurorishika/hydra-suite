@@ -545,26 +545,33 @@ def _flush_pose_cnn_window(
                 )
                 # `_assemble_pose_result` (stages/pose.py) pre-allocates a
                 # zero-filled (n, K, 3) array and simply `continue`s past a
-                # detection the backend found nothing for -- so `kpts` here
-                # is NEVER None, even for a fabricated all-zero (x=0, y=0,
-                # conf=0) "no detection" case. `valid_mask[i]` is the ONLY
-                # signal that distinguishes a real backend result from that
-                # fabrication (it is only set True when the backend actually
-                # returned keypoints AND enough of them cleared the
-                # confidence gate) -- gate on it so a backend miss produces
-                # NO `PoseKpt_*` columns and no false `PoseSource="interp"`
-                # stamp, matching the old ``_flush_pose_batch``'s ``keypoints
-                # is not None and len(keypoints) > 0`` semantics.
-                is_valid = (
-                    bool(pose_result.valid_mask[i])
-                    if i < len(pose_result.valid_mask)
-                    else False
-                )
+                # detection the backend found nothing for -- it never writes
+                # into that detection's row of the array. So `kpts` here is
+                # NEVER None, even for a genuine backend miss: a miss leaves
+                # the row as the untouched all-zero (x=0, y=0, conf=0)
+                # placeholder, while any real backend result -- however
+                # low-confidence -- overwrites the row with actual values.
+                # `valid_mask[i]` is NOT the right signal to gate row
+                # construction on: it is `n_confident >= min_valid_keypoints`,
+                # an AGGREGATE confidence threshold, so it is also False for
+                # real (non-fabricated) keypoints that just don't individually
+                # or collectively clear that bar. Gating on it would silently
+                # drop genuine low-confidence pose data that the real-
+                # detection export path (`flatten_pose_keypoints_df` in
+                # `properties/export.py`) always writes -- that path only uses
+                # the threshold to compute `PoseNumValid`/`PoseValidFraction`
+                # stats, never to suppress the row. Instead, distinguish "no
+                # data at all" from "real but low-confidence data" by checking
+                # whether the row is still the untouched all-zero placeholder
+                # (`np.any(kpts)`) -- that is true exactly when
+                # `_assemble_pose_result` actually wrote something into this
+                # detection's slot.
+                has_data = kpts is not None and bool(np.any(kpts))
                 pose_wide = {}
                 pose_mean_conf = pose_valid_fraction = 0.0
                 pose_num_valid = pose_num_keypoints = 0
                 pose_source = None
-                if kpts is not None and is_valid:
+                if has_data:
                     conf_col = kpts[:, 2]
                     pose_num_keypoints = int(kpts.shape[0])
                     valid_mask = conf_col >= float(cfg.pose.min_keypoint_confidence)
