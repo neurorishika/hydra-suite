@@ -1,6 +1,6 @@
 # Interpolated-Crop Inference Unification — Design Spec
 
-> **Status:** APPROVED, ready for planning.
+> **Status:** Shipped — merged to main (123d08ce).
 > **Decided:** 2026-08-19. Revised 2026-08-19 after adversarial spec review (6 factual
 > corrections, expected-difference registry, and load-bearing decisions added — see
 > "Adversarial review corrections" callouts throughout).
