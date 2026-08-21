@@ -30,6 +30,7 @@ from hydra_suite.core.canonicalization.geometry import (
 from hydra_suite.core.canonicalization.resample import (
     canonical_warp,
     canonical_warp_batch,
+    canonical_warp_batch_from_frame,
 )
 
 logger = logging.getLogger(__name__)
@@ -129,18 +130,29 @@ def extract_canonical_crop(
     :class:`~hydra_suite.core.canonicalization.geometry.CanonicalGeometry`)
     must be given. If both are given they must agree.
 
-    Delegates to the torch seam (:func:`canonical_warp`): converts the HWC
-    uint8 frame to a CHW float tensor once, warps via ``F.grid_sample``, then
-    converts back to HWC uint8. This replaces the former OpenCV affine-warp
-    kernel; the foreign-mask call sequence below (still ``cv2.fillPoly``-based)
-    is unchanged.
+    Delegates to the torch seam
+    (:func:`~hydra_suite.core.canonicalization.resample.canonical_warp_batch_from_frame`),
+    which slices this detection's canvas footprint out of the RAW frame and
+    converts only that sub-region to a CHW float tensor, then warps via
+    ``F.grid_sample`` and converts back to HWC uint8. Converting the whole
+    frame here was O(frame area) PER CROP -- and every caller
+    (``extract_canonical_crops_batch``, the head-tail analyzer, the individual
+    dataset generator) loops this over a frame's detections, so a 4512x4512
+    frame was turned into a 244 MB float32 tensor once per animal. Slicing
+    before an elementwise conversion is bit-for-bit what slicing after it
+    produced. This replaces the former OpenCV affine-warp kernel; the
+    foreign-mask call sequence below (still ``cv2.fillPoly``-based) is
+    unchanged.
     """
     canvas_w, canvas_h = _resolve_canvas(canvas_w, canvas_h, geometry)
     effective_geometry = geometry or _geometry_from_canvas(canvas_w, canvas_h)
 
-    arr = np.asarray(frame)
-    frame_chw = torch.from_numpy(np.ascontiguousarray(arr)).permute(2, 0, 1).float()
-    crop_chw = canonical_warp(frame_chw, M_align, effective_geometry)
+    def _to_chw_float(sub: np.ndarray) -> "torch.Tensor":
+        return torch.from_numpy(np.ascontiguousarray(sub)).permute(2, 0, 1).float()
+
+    crop_chw = canonical_warp_batch_from_frame(
+        np.asarray(frame), [M_align], effective_geometry, _to_chw_float
+    ).squeeze(0)
     crop = (
         crop_chw.round()
         .clamp_(0, 255)
