@@ -182,11 +182,17 @@ def test_update_preview_display_does_not_clear_shapes_during_plain_display(windo
     saved ROIs opened or the user scrubbed to any frame. The
     detection-test case remains covered separately by
     `_redisplay_detection_test`'s own clear (see the test below)."""
+    import numpy as np
+
     shapes = [{"type": "circle", "cx": 100, "cy": 100, "r": 50}]
     window.video_label.set_shapes(shapes)
     assert window.video_label._shapes != []
 
-    window.preview_frame_original = None
+    # A real (small, fake) frame so this actually reaches past the
+    # `detection_test_result` check into the real rendering body below,
+    # rather than only exercising the early `preview_frame_original is None`
+    # return.
+    window.preview_frame_original = np.zeros((48, 64, 3), dtype=np.uint8)
     window.detection_test_result = None
     window._detection_panel._update_preview_display()
 

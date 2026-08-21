@@ -635,6 +635,16 @@ def test_opening_video_with_saved_roi_config_autoloads_shapes_onto_canvas(
     # The real auto-load-on-open path: a single call, config load NOT skipped.
     window._setup_video_file(str(video_path), skip_config_load=False)
 
+    # `_init_video_player` schedules `_fit_image_to_screen` via
+    # `QTimer.singleShot(0, ...)`, deferred to the next event-loop tick. That
+    # callback chain is what actually re-enters `_update_preview_display` via
+    # `_on_zoom_changed` and is where the real Fix Wave 10/13 bug bit -- so the
+    # assertion below must only run after pumping the event loop enough to
+    # drain that queued callback, or it can't observe the regression either
+    # way.
+    qapp.processEvents()
+    qapp.processEvents()
+
     assert window.roi_shapes == roi_shapes
     assert window.video_label._shapes == roi_shapes
 
