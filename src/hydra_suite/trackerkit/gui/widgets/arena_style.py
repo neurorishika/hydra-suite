@@ -29,35 +29,43 @@ class ArenaPalette:
     line_include: tuple[int, int, int]
     line_exclude: tuple[int, int, int]
     line_preview: tuple[int, int, int]
+    line_boundary: tuple[int, int, int]
     veil: tuple[int, int, int]
     glyph: tuple[int, int, int]
     halo: tuple[int, int, int]
 
 
+# Fixed per-role colours -- learnable across footage, independent of
+# frame polarity. Only the arena-number glyph/halo still adapt to
+# luminance, since legibility against arbitrary footage still matters there.
+_LINE_INCLUDE = (0, 160, 60)  # green
+_LINE_EXCLUDE = (210, 30, 30)  # red
+_LINE_PREVIEW = (255, 140, 0)  # orange -- distinct from committed include (green)
+_LINE_BOUNDARY = (20, 100, 220)  # blue -- the combined-ROI outline
+_VEIL = (20, 100, 220)  # same blue as the boundary, filled at VEIL_ALPHA
+
+
 def frame_palette(mean_luminance: float) -> ArenaPalette:
     """Palette for a frame of the given mean luminance (0.0-1.0).
 
-    Hue is fixed per ROLE -- include blue, exclude red, in-progress green --
-    so the meaning stays learnable across videos. Only the light/dark variant
-    changes with the footage, along with veil, glyph and halo polarity.
+    Zone/boundary/veil colours are fixed regardless of footage polarity, so
+    green/red/blue stay learnable across videos. Only the arena-number
+    glyph/halo still flip for contrast against the actual frame content.
     """
     dark_frame = mean_luminance < _LUMINANCE_MIDPOINT
-    if dark_frame:
-        return ArenaPalette(
-            line_include=(120, 190, 255),
-            line_exclude=(255, 120, 110),
-            line_preview=(140, 255, 150),
-            veil=(255, 255, 255),
-            glyph=(255, 255, 255),
-            halo=(20, 20, 20),
-        )
+    glyph, halo = (
+        ((255, 255, 255), (20, 20, 20))
+        if dark_frame
+        else ((20, 20, 20), (255, 255, 255))
+    )
     return ArenaPalette(
-        line_include=(0, 80, 200),
-        line_exclude=(200, 25, 25),
-        line_preview=(20, 130, 40),
-        veil=(0, 0, 0),
-        glyph=(20, 20, 20),
-        halo=(255, 255, 255),
+        line_include=_LINE_INCLUDE,
+        line_exclude=_LINE_EXCLUDE,
+        line_preview=_LINE_PREVIEW,
+        line_boundary=_LINE_BOUNDARY,
+        veil=_VEIL,
+        glyph=glyph,
+        halo=halo,
     )
 
 
@@ -69,6 +77,17 @@ def line_width_px(viewport_min_dim: int) -> int:
     cyan pen vanishes when zoomed out.
     """
     return max(2, int(round(int(viewport_min_dim) / _LINE_WIDTH_DIVISOR)))
+
+
+def zone_line_width_px(viewport_min_dim: int) -> int:
+    """Thin outline width for individual inclusion/exclusion zone shapes --
+    secondary detail relative to the thicker combined-ROI boundary."""
+    return max(1, line_width_px(viewport_min_dim) // 2)
+
+
+def boundary_line_width_px(viewport_min_dim: int) -> int:
+    """Thick outline width for an arena's combined-ROI boundary stroke."""
+    return line_width_px(viewport_min_dim) * 2
 
 
 def glyph_size_px(on_screen_radius: float) -> int:

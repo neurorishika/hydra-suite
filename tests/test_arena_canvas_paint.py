@@ -14,6 +14,9 @@ from hydra_suite.trackerkit.gui.widgets.arena_canvas import (  # noqa: E402
     ArenaCanvas,
     paint_arena_number,
 )
+from hydra_suite.trackerkit.gui.widgets.arena_style import (  # noqa: E402
+    zone_line_width_px,
+)
 
 
 @pytest.fixture(scope="module")
@@ -61,21 +64,16 @@ def _rendered(canvas):
     return out
 
 
-def test_veil_darkens_the_arena_interior_on_light_footage(app):
-    """Veil goes INSIDE the ROI, per the design decision."""
-    canvas = _canvas(app, 230)
-    out = _rendered(canvas)
-    inside = QColor(out.pixel(100, 100)).lightness()
-    outside = QColor(out.pixel(5, 5)).lightness()
-    assert inside < outside
+def test_veil_colour_does_not_depend_on_frame_polarity(app):
+    """The veil is now a fixed blue fill (matching the boundary) rather than
+    a luminance-adaptive black/white -- so its RGB colour tuple is the same
+    regardless of whether the footage is light or dark. (A dedicated pixel
+    test of the blue tint itself lives in
+    ``test_veil_fill_is_blue_tinted_relative_to_background`` below, sampled
+    off the arena-number glyph.)"""
+    from hydra_suite.trackerkit.gui.widgets.arena_style import frame_palette
 
-
-def test_veil_lightens_the_arena_interior_on_dark_footage(app):
-    canvas = _canvas(app, 20)
-    out = _rendered(canvas)
-    inside = QColor(out.pixel(100, 100)).lightness()
-    outside = QColor(out.pixel(5, 5)).lightness()
-    assert inside > outside
+    assert frame_palette(0.90).veil == frame_palette(0.10).veil
 
 
 def test_exclude_hole_is_not_veiled(app):
@@ -98,7 +96,9 @@ def test_exclude_hole_is_not_veiled(app):
         ]
     )
     out = _rendered(canvas)
-    in_hole = QColor(out.pixel(100, 100)).lightness()
+    # Sample off-centre (still within the r=15 exclude hole) to avoid the
+    # arena-number glyph, which is drawn at the shape's exact centroid.
+    in_hole = QColor(out.pixel(100, 88)).lightness()
     in_ring = QColor(out.pixel(130, 100)).lightness()
     assert in_hole > in_ring
 
@@ -110,6 +110,97 @@ def test_outline_width_is_independent_of_zoom(app):
     width_at_1x = canvas._line_width()
     canvas.set_zoom(4.0)
     assert canvas._line_width() == width_at_1x
+
+
+def _canvas_with_include_and_exclude(app, gray=150):
+    """Non-overlapping include/exclude circles so each shape's own outline
+    stroke lands on unambiguous, non-shared pixels."""
+    widget = ArenaCanvas()
+    widget.set_frame(_frame(app, gray))
+    widget.set_shapes(
+        [
+            {
+                "type": "circle",
+                "params": (60, 100, 30),
+                "mode": "include",
+                "arena_id": 0,
+            },
+            {
+                "type": "circle",
+                "params": (140, 100, 15),
+                "mode": "exclude",
+                "arena_id": 0,
+            },
+        ]
+    )
+    return widget
+
+
+def test_include_outline_pixel_is_green_dominant(app):
+    canvas = _canvas_with_include_and_exclude(app)
+    out = _rendered(canvas)
+    r, g, b = QColor(out.pixel(60, 70)).getRgb()[:3]
+    assert g == max(r, g, b)
+
+
+def test_exclude_outline_pixel_is_red_dominant(app):
+    canvas = _canvas_with_include_and_exclude(app)
+    out = _rendered(canvas)
+    r, g, b = QColor(out.pixel(155, 100)).getRgb()[:3]
+    assert r == max(r, g, b)
+
+
+def test_veil_fill_is_blue_tinted_relative_to_background(app):
+    """A pixel inside the net ROI, away from any stroke or the arena-number
+    glyph, should show an elevated blue channel relative to the untouched
+    background -- the fixed blue veil, not the old luminance-adaptive
+    black/white fill."""
+    canvas = _canvas(app, gray=100)
+    out = _rendered(canvas)
+    inside = QColor(out.pixel(75, 75))
+    outside = QColor(out.pixel(5, 5))
+    assert inside.blue() > outside.blue()
+
+
+def test_boundary_stroke_pixel_is_blue_dominant_and_thicker_than_zone_outline(app):
+    """A pixel that falls within the thicker boundary stroke's width but
+    outside the thin zone outline's width (just inside the include shape's
+    edge) should be blue-dominant -- proving the boundary is both a
+    distinct colour and visibly wider than the zone outline."""
+    canvas = _canvas(app, gray=150)
+    out = _rendered(canvas)
+    r, g, b = QColor(out.pixel(60, 68)).getRgb()[:3]
+    assert b == max(r, g, b)
+
+    # And directly: the boundary width is a measurably larger integer than
+    # the zone outline width at the same viewport size.
+    zone_width = zone_line_width_px(min(canvas.parentWidth(), canvas.parentHeight()))
+    boundary_width = canvas._boundary_width_for(0)
+    assert boundary_width > zone_width
+
+
+def test_boundary_for_current_arena_is_thicker_than_non_current(app):
+    canvas = _canvas(app, 230)
+    canvas.set_shapes(
+        [
+            {
+                "type": "circle",
+                "params": (60, 100, 30),
+                "mode": "include",
+                "arena_id": 0,
+            },
+            {
+                "type": "circle",
+                "params": (140, 100, 20),
+                "mode": "include",
+                "arena_id": 1,
+            },
+        ]
+    )
+    canvas.set_current_arena(0)
+    current_width = canvas._boundary_width_for(0)
+    non_current_width = canvas._boundary_width_for(1)
+    assert current_width > non_current_width
 
 
 def test_paint_arena_number_draws_a_dark_glyph_over_a_light_halo(app):
@@ -149,9 +240,9 @@ def test_paint_arena_number_respects_alpha(app):
     assert QColor(out.pixel(80, 80)).lightness() == QColor(128, 128, 128).lightness()
 
 
-def test_current_arena_outline_is_heavier(app):
+def test_current_arena_boundary_is_heavier(app):
     canvas = _canvas(app, 230)
     canvas.set_current_arena(None)
-    plain = canvas._outline_width_for(0)
+    plain = canvas._boundary_width_for(0)
     canvas.set_current_arena(0)
-    assert canvas._outline_width_for(0) > plain
+    assert canvas._boundary_width_for(0) > plain

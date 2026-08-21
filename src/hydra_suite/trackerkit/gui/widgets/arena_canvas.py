@@ -35,9 +35,11 @@ from hydra_suite.trackerkit.gui.widgets.arena_style import (
     CLICK_DRAG_THRESHOLD_PX,
     TEXT_ALPHA,
     VEIL_ALPHA,
+    boundary_line_width_px,
     frame_palette,
     glyph_size_px,
     line_width_px,
+    zone_line_width_px,
 )
 
 
@@ -315,9 +317,9 @@ class ArenaCanvas(QWidget):
         parent = self.parentWidget()
         return parent.height() if parent is not None else 600
 
-    def _outline_width_for(self, arena_id: int) -> int:
-        base = self._line_width()
-        return base * 2 if arena_id == self._current_arena else base
+    def _boundary_width_for(self, arena_id: int) -> int:
+        base = boundary_line_width_px(min(self.parentWidth(), self.parentHeight()))
+        return int(round(base * 1.5)) if arena_id == self._current_arena else base
 
     def _shape_path(self, shape: dict[str, Any]) -> QPainterPath:
         """The shape as a viewport-space path."""
@@ -340,7 +342,7 @@ class ArenaCanvas(QWidget):
         return path
 
     def render_overlay(self, painter: QPainter) -> None:
-        """Paint veil, outlines, in-progress points and arena numbers.
+        """Paint veil+boundary, zone outlines, in-progress points and arena numbers.
 
         Everything here is in WIDGET coordinates: pen widths and glyph sizes
         are device pixels, so apparent size does not change with zoom.
@@ -351,23 +353,39 @@ class ArenaCanvas(QWidget):
         include = [s for s in self._shapes if s.get("mode", "include") == "include"]
         exclude = [s for s in self._shapes if s.get("mode", "include") == "exclude"]
 
-        # Veil: inside the include region, minus every exclude hole.
-        if include:
-            veil_path = QPainterPath()
-            for shape in include:
-                veil_path = veil_path.united(self._shape_path(shape))
-            for shape in exclude:
-                veil_path = veil_path.subtracted(self._shape_path(shape))
+        # Combined-ROI boundary + veil, PER ARENA (so current-arena emphasis on
+        # the boundary applies to the right arena, and each arena's own net
+        # region -- union of its includes, minus its excludes -- gets its own
+        # stroke rather than one path spanning every arena).
+        for arena_id in sorted({int(s.get("arena_id", 0)) for s in include}):
+            arena_include = [
+                s for s in include if int(s.get("arena_id", 0)) == arena_id
+            ]
+            arena_exclude = [
+                s for s in exclude if int(s.get("arena_id", 0)) == arena_id
+            ]
+            boundary_path = QPainterPath()
+            for shape in arena_include:
+                boundary_path = boundary_path.united(self._shape_path(shape))
+            for shape in arena_exclude:
+                boundary_path = boundary_path.subtracted(self._shape_path(shape))
             painter.save()
             painter.setOpacity(VEIL_ALPHA)
-            painter.fillPath(veil_path, QBrush(QColor(*palette.veil)))
+            painter.fillPath(boundary_path, QBrush(QColor(*palette.veil)))
             painter.restore()
+            painter.setPen(
+                QPen(QColor(*palette.line_boundary), self._boundary_width_for(arena_id))
+            )
+            painter.setBrush(Qt.NoBrush)
+            painter.drawPath(boundary_path)
 
+        # Individual zone outlines -- thin, uniform, no per-arena emphasis (the
+        # boundary above already shows which arena is current).
+        zone_width = zone_line_width_px(min(self.parentWidth(), self.parentHeight()))
         for shape in self._shapes:
             is_include = shape.get("mode", "include") == "include"
             colour = palette.line_include if is_include else palette.line_exclude
-            width = self._outline_width_for(int(shape.get("arena_id", 0)))
-            painter.setPen(QPen(QColor(*colour), width))
+            painter.setPen(QPen(QColor(*colour), zone_width))
             painter.setBrush(Qt.NoBrush)
             painter.drawPath(self._shape_path(shape))
 
