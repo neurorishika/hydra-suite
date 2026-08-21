@@ -107,3 +107,37 @@ def test_update_roi_preview_never_schedules_a_fit_to_screen():
 
     source = inspect.getsource(session.SessionOrchestrator.update_roi_preview)
     assert "_fit_image_to_screen" not in source
+
+
+def test_start_roi_selection_applies_zoom_synchronously(window, tmp_path):
+    """Fix Wave 3, Fix 2: start_roi_selection must apply the slider's zoom to
+    the canvas SYNCHRONOUSLY, not rely on the update_roi_preview()'s deferred
+    QTimer.singleShot(50, _display_roi_with_zoom) reapplication.
+
+    Before the fix, the canvas's `_zoom` stayed at whatever it happened to be
+    (e.g. left at 1.0 by an earlier already_scaled=True push) until that timer
+    fired 50ms later. A point placed before the timer fires would convert
+    through the WRONG zoom, permanently corrupting its recorded coordinates.
+    This assertion is made with NO event loop pumped in between, so it can
+    only pass if the zoom was applied synchronously inside the call itself.
+    """
+    import pytest
+    from PySide6.QtGui import QImage
+
+    # _ensure_roi_base_frame requires a non-empty video path on the setup
+    # panel even when roi_base_frame is already loaded, else it shows a
+    # blocking "No Video" QMessageBox instead of proceeding.
+    window._setup_panel.file_line.setText(str(tmp_path / "dummy.mp4"))
+
+    # Leave the canvas zoom stale at a value that disagrees with the slider,
+    # as an earlier already_scaled=True push would.
+    window.video_label.set_zoom(1.0)
+
+    window.roi_base_frame = QImage(640, 480, QImage.Format_RGB888)
+    window.roi_current_mode = "polygon"
+    window.roi_current_zone_type = "include"
+    window.slider_zoom.setValue(150)
+
+    window._session_orch.start_roi_selection()
+
+    assert window.video_label._zoom == pytest.approx(1.5)

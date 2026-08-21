@@ -199,6 +199,17 @@ class ArenaGridDialog(BaseDialog):
             return (diameter, diameter)
         return (self.spin_width.value(), self.spin_height.value())
 
+    def _origin_center(self) -> tuple[int, int]:
+        """Convert the user-facing "Top-Left Position" (arena 1's unrotated
+        bounding-box corner) into the centre coordinate
+        generate_grid_shapes/max_grid_extent expect.
+        """
+        size_x, size_y = self._size_pair()
+        return (
+            self.spin_origin_x.value() + size_x // 2,
+            self.spin_origin_y.value() + size_y // 2,
+        )
+
     def _on_shape_changed(self, *_args) -> None:
         is_circle = self._shape_key() == "circle"
         for widget in (self.row_radius, self.spin_radius):
@@ -244,9 +255,10 @@ class ArenaGridDialog(BaseDialog):
         """Cap rows/cols so every arena CENTRE stays inside the frame."""
         if self._reference_frame is None:
             return
+        origin_x, origin_y = self._origin_center()
         max_rows, max_cols = max_grid_extent(
-            self.spin_origin_x.value(),
-            self.spin_origin_y.value(),
+            origin_x,
+            origin_y,
             self.spin_pitch_x.value(),
             self.spin_pitch_y.value(),
             self._reference_frame.width(),
@@ -269,11 +281,12 @@ class ArenaGridDialog(BaseDialog):
     def _current_shapes(self) -> list[dict[str, Any]]:
         """The grid shapes for the dialog's current widget values."""
         size_x, size_y = self._size_pair()
+        origin_x, origin_y = self._origin_center()
         return generate_grid_shapes(
             self.spin_rows.value(),
             self.spin_cols.value(),
-            self.spin_origin_x.value(),
-            self.spin_origin_y.value(),
+            origin_x,
+            origin_y,
             self.spin_pitch_x.value(),
             self.spin_pitch_y.value(),
             size_x,

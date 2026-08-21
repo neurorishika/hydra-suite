@@ -1966,6 +1966,7 @@ class SessionOrchestrator:
         # holds; push the ROI base frame explicitly so drawing starts against
         # it rather than whatever was last shown (e.g. a stale preview frame).
         self._mw._set_video_pixmap(QPixmap.fromImage(self._mw.roi_base_frame))
+        self._mw.video_label.set_zoom(max(self._mw.slider_zoom.value() / 100.0, 0.1))
 
         self._mw.roi_points = []
         self._mw.roi_fitted_circle = None
