@@ -2044,6 +2044,7 @@ class SessionOrchestrator:
         self._mw.roi_selection_active = False
         self._panels.arena.set_shapes(self._mw.roi_shapes)
         self._panels.arena.set_drawing_active(False)
+        self._panels.arena.mark_hand_drawn()
         self.update_roi_preview()
 
         if hasattr(Qt, "OpenHandCursor"):
@@ -2109,10 +2110,19 @@ class SessionOrchestrator:
         self._mw._invalidate_roi_cache()
 
     def undo_last_roi_shape(self):
-        """Remove the last added ROI shape."""
-        if not self._mw.roi_shapes:
+        """Remove the most recently added zone in the CURRENT arena only.
+
+        Scoped so Undo can never silently remove a different arena's shape
+        just because it happened to be the list's last entry overall.
+        """
+        current_id = self.current_arena_id
+        removed = None
+        for index in range(len(self._mw.roi_shapes) - 1, -1, -1):
+            if int(self._mw.roi_shapes[index].get("arena_id", 0)) == current_id:
+                removed = self._mw.roi_shapes.pop(index)
+                break
+        if removed is None:
             return
-        removed = self._mw.roi_shapes.pop()
         logger.info(f"Removed last ROI shape: {removed['type']}")
         if self._mw.roi_base_frame:
             fh, fw = self._mw.roi_base_frame.height(), self._mw.roi_base_frame.width()

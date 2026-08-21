@@ -214,6 +214,9 @@ def test_generate_grid_handler_offsets_past_existing_arenas_and_merges(
                 1, 2, 50, 50, 100, 100, 40, first_arena_id=self._first_arena_id
             )
 
+        def current_params(self):
+            return {"shape_type": "Circle", "radius": 40}
+
     monkeypatch.setattr(
         "hydra_suite.trackerkit.gui.dialogs.arena_grid_dialog.ArenaGridDialog",
         _FakeDialog,
@@ -631,3 +634,62 @@ def test_preview_pixmap_never_exceeds_the_labels_settled_size(
     assert pixmap.height() <= dialog.preview_label.height()
 
     dialog.close()
+
+
+# --- Fix Wave 8: initial_params prefill + current_params() reporter ---
+
+
+def test_initial_params_prefill_overrides_frame_derived_defaults(qapp):
+    initial_params = {
+        "radius": 77,
+        "origin_x": 10,
+        "origin_y": 20,
+        "rows": 3,
+        "cols": 2,
+    }
+    dialog = ArenaGridDialog(
+        parent=None,
+        reference_frame=None,
+        first_arena_id=0,
+        initial_params=initial_params,
+    )
+    assert dialog.spin_radius.value() == 77
+    assert dialog.spin_origin_x.value() == 10
+    assert dialog.spin_origin_y.value() == 20
+    assert dialog.spin_rows.value() == 3
+    assert dialog.spin_cols.value() == 2
+
+
+def test_current_params_round_trips_into_a_second_dialog(qapp):
+    dialog = ArenaGridDialog(parent=None, reference_frame=None, first_arena_id=0)
+    dialog.spin_radius.setValue(33)
+    dialog.spin_rows.setValue(4)
+    dialog.spin_cols.setValue(5)
+    dialog.spin_origin_x.setValue(12)
+    dialog.spin_origin_y.setValue(34)
+    dialog.spin_pitch_x.setValue(50)
+    dialog.spin_pitch_y.setValue(60)
+    dialog.spin_rotation.setValue(5.5)
+
+    params = dialog.current_params()
+
+    dialog2 = ArenaGridDialog(
+        parent=None,
+        reference_frame=None,
+        first_arena_id=0,
+        initial_params=params,
+    )
+    assert dialog2.current_params() == params
+    assert (
+        dialog2.combo_shape_type.currentText() == dialog.combo_shape_type.currentText()
+    )
+    assert dialog2.spin_radius.value() == dialog.spin_radius.value()
+    assert dialog2.spin_width.value() == dialog.spin_width.value()
+    assert dialog2.spin_height.value() == dialog.spin_height.value()
+    assert dialog2.spin_origin_x.value() == dialog.spin_origin_x.value()
+    assert dialog2.spin_origin_y.value() == dialog.spin_origin_y.value()
+    assert dialog2.spin_rows.value() == dialog.spin_rows.value()
+    assert dialog2.spin_cols.value() == dialog.spin_cols.value()
+    assert dialog2.spin_pitch_x.value() == dialog.spin_pitch_x.value()
+    assert dialog2.spin_pitch_y.value() == dialog.spin_pitch_y.value()
+    assert dialog2.spin_rotation.value() == dialog.spin_rotation.value()

@@ -42,6 +42,8 @@ class ArenaPanel(QWidget):
     undo_requested = Signal()
     clear_all_requested = Signal()
     crop_requested = Signal()
+    done_requested = Signal()
+    modify_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -51,6 +53,9 @@ class ArenaPanel(QWidget):
         self._pending_new = False
         self._shape_valid = False
         self._drawing_active = False
+        self._done = False
+        self._made_via_grid = False
+        self._last_grid_params: dict[str, Any] | None = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 4, 8, 4)
@@ -59,8 +64,10 @@ class ArenaPanel(QWidget):
         self.stack = QStackedWidget()
         self.empty_widget = self._build_empty()
         self.editing_widget = self._build_editing()
+        self.done_widget = self._build_done()
         self.stack.addWidget(self.empty_widget)
         self.stack.addWidget(self.editing_widget)
+        self.stack.addWidget(self.done_widget)
         root.addWidget(self.stack)
 
         self.lbl_warning = QLabel("")
@@ -149,7 +156,7 @@ class ArenaPanel(QWidget):
         self.btn_finish = QPushButton("Finish Shape")
         self.btn_finish.setEnabled(False)
         self.btn_finish.clicked.connect(self.finish_requested.emit)
-        self.btn_undo = QPushButton("Undo")
+        self.btn_undo = QPushButton("Remove Last Zone")
         self.btn_undo.clicked.connect(self.undo_requested.emit)
 
         self.btn_overflow = QToolButton()
@@ -159,6 +166,9 @@ class ArenaPanel(QWidget):
         menu.addAction("Remove All Arenas", self.clear_all_requested.emit)
         menu.addAction("Crop Video to ROI", self.crop_requested.emit)
         self.btn_overflow.setMenu(menu)
+
+        self.btn_done = QPushButton("Done")
+        self.btn_done.clicked.connect(self._on_done_clicked)
 
         for w in (
             self.lbl_current,
@@ -175,10 +185,32 @@ class ArenaPanel(QWidget):
             self.btn_finish,
             self.btn_undo,
             self.btn_overflow,
+            self.btn_done,
         ):
             layout.addWidget(w)
         layout.addStretch()
         return widget
+
+    def _build_done(self) -> QWidget:
+        widget = QWidget()
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.lbl_done = QLabel("Arenas are set up. What would you like to do?")
+        self.lbl_done.setStyleSheet("color: #cccccc;")
+        self.btn_modify_existing = QPushButton("Modify Existing Arenas")
+        self.btn_start_fresh = QPushButton("Start Fresh")
+        self.btn_modify_existing.clicked.connect(self.modify_requested.emit)
+        self.btn_start_fresh.clicked.connect(self.clear_all_requested.emit)
+        layout.addWidget(self.lbl_done)
+        layout.addWidget(self.btn_modify_existing)
+        layout.addWidget(self.btn_start_fresh)
+        layout.addStretch()
+        return widget
+
+    def _on_done_clicked(self) -> None:
+        self._done = True
+        self.refresh()
+        self.done_requested.emit()
 
     @staticmethod
     def _separator() -> QFrame:
@@ -296,7 +328,12 @@ class ArenaPanel(QWidget):
     def refresh(self) -> None:
         ids = self.arena_ids()
         if not self._shapes and not self._pending_new:
+            self._done = False
             self.stack.setCurrentWidget(self.empty_widget)
+            self.lbl_warning.setVisible(False)
+            return
+        if self._done:
+            self.stack.setCurrentWidget(self.done_widget)
             self.lbl_warning.setVisible(False)
             return
         self.stack.setCurrentWidget(self.editing_widget)
@@ -331,5 +368,33 @@ class ArenaPanel(QWidget):
         self.btn_add_new.setEnabled(not nav_locked and not current_empty)
         self.btn_clear_arena.setEnabled(not current_empty and not self._drawing_active)
         self.btn_undo.setEnabled(bool(self._shapes))
+        self.btn_done.setEnabled(not nav_locked and bool(self._shapes))
         for b in self._zone_buttons:
             b.setEnabled(not self._drawing_active)
+
+    def resume_editing(self) -> None:
+        """Return to the editing bar from the done state."""
+        self._done = False
+        self.refresh()
+
+    def mark_grid_generated(self, params: dict[str, Any]) -> None:
+        """Record that the CURRENT arena set was just (re)generated via the
+        grid dialog, and remember its parameters so "Modify Existing Arenas"
+        can reopen the dialog prefilled with them."""
+        self._made_via_grid = True
+        self._last_grid_params = dict(params)
+
+    def mark_hand_drawn(self) -> None:
+        """Record that a shape was hand-drawn -- the current arena set is no
+        longer purely grid-generated, so "Modify Existing Arenas" must go to
+        the ordinary arena editor instead of reopening the grid dialog."""
+        self._made_via_grid = False
+        self._last_grid_params = None
+
+    @property
+    def made_via_grid(self) -> bool:
+        return self._made_via_grid
+
+    @property
+    def last_grid_params(self) -> dict[str, Any] | None:
+        return self._last_grid_params

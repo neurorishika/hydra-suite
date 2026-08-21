@@ -124,3 +124,83 @@ def test_finish_disabled_until_a_shape_is_valid(panel):
     assert panel.btn_finish.isEnabled() is False
     panel.set_shape_valid(True)
     assert panel.btn_finish.isEnabled() is True
+
+
+def test_done_button_switches_to_done_state_and_emits_signal(panel):
+    panel.set_shapes([_circle(50, 50, 20, 0)])
+    fired = []
+    panel.done_requested.connect(lambda: fired.append(True))
+    panel.btn_done.click()
+    assert panel.stack.currentWidget() is panel.done_widget
+    assert fired == [True]
+
+
+def test_done_state_shows_exactly_the_three_expected_widgets(panel):
+    panel.set_shapes([_circle(50, 50, 20, 0)])
+    panel.btn_done.click()
+    assert panel.stack.currentWidget() is panel.done_widget
+    children = panel.done_widget.children()
+    assert panel.lbl_done in children
+    assert panel.btn_modify_existing in children
+    assert panel.btn_start_fresh in children
+
+
+def test_start_fresh_reuses_the_existing_clear_all_signal(panel):
+    panel.set_shapes([_circle(50, 50, 20, 0)])
+    panel.btn_done.click()
+    fired = []
+    panel.clear_all_requested.connect(lambda: fired.append(True))
+    panel.btn_start_fresh.click()
+    assert fired == [True]
+
+
+def test_mark_grid_generated_and_mark_hand_drawn(panel):
+    assert panel.made_via_grid is False
+    assert panel.last_grid_params is None
+    params = {"rows": 3, "cols": 4}
+    panel.mark_grid_generated(params)
+    assert panel.made_via_grid is True
+    assert panel.last_grid_params == params
+    panel.mark_hand_drawn()
+    assert panel.made_via_grid is False
+    assert panel.last_grid_params is None
+
+
+def test_done_disabled_while_drawing_active(panel):
+    panel.set_shapes([_circle(50, 50, 20, 0)])
+    panel.set_drawing_active(True)
+    assert panel.btn_done.isEnabled() is False
+    panel.set_drawing_active(False)
+    assert panel.btn_done.isEnabled() is True
+
+
+def test_done_disabled_while_current_arena_overlaps(panel):
+    panel.set_shapes([_circle(100, 100, 50, 0), _circle(130, 100, 50, 1)])
+    panel.set_current_arena(0)
+    assert panel.btn_done.isEnabled() is False
+
+
+def test_done_disabled_with_no_shapes_yet(panel):
+    panel.set_shapes([])
+    panel.begin_new_arena()
+    assert panel.btn_done.isEnabled() is False
+
+
+def test_start_fresh_cycle_resets_done_flag(panel):
+    panel.set_shapes([_circle(50, 50, 20, 0)])
+    panel.btn_done.click()
+    assert panel.stack.currentWidget() is panel.done_widget
+    # Simulate the "Remove All Arenas"/Start Fresh outcome: shapes go to zero.
+    panel.set_shapes([])
+    assert panel.stack.currentWidget() is panel.empty_widget
+    # A later set_shapes([...]) call must land in editing, not a stale done state.
+    panel.set_shapes([_circle(60, 60, 20, 0)])
+    assert panel.stack.currentWidget() is panel.editing_widget
+
+
+def test_resume_editing_returns_from_done_state(panel):
+    panel.set_shapes([_circle(50, 50, 20, 0)])
+    panel.btn_done.click()
+    assert panel.stack.currentWidget() is panel.done_widget
+    panel.resume_editing()
+    assert panel.stack.currentWidget() is panel.editing_widget

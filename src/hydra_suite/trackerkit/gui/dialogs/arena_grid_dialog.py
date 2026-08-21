@@ -63,6 +63,7 @@ class ArenaGridDialog(BaseDialog):
         parent: QWidget | None = None,
         reference_frame=None,
         first_arena_id: int = 0,
+        initial_params: dict[str, Any] | None = None,
     ) -> None:
         super().__init__("Generate Arena Grid", parent)
         self._reference_frame = reference_frame
@@ -240,6 +241,25 @@ class ArenaGridDialog(BaseDialog):
 
         self._on_shape_changed()
         QTimer.singleShot(0, self._update_preview)
+
+        if initial_params:
+            if "shape_type" in initial_params:
+                self.combo_shape_type.setCurrentText(initial_params["shape_type"])
+            for key, spin in (
+                ("radius", self.spin_radius),
+                ("width", self.spin_width),
+                ("height", self.spin_height),
+                ("origin_x", self.spin_origin_x),
+                ("origin_y", self.spin_origin_y),
+                ("rows", self.spin_rows),
+                ("cols", self.spin_cols),
+                ("pitch_x", self.spin_pitch_x),
+                ("pitch_y", self.spin_pitch_y),
+                ("rotation_deg", self.spin_rotation),
+            ):
+                if key in initial_params:
+                    spin.setValue(initial_params[key])
+            self._update_preview()
 
     def _pair_with_slider(
         self,
@@ -438,3 +458,21 @@ class ArenaGridDialog(BaseDialog):
         and extend their own ``roi_shapes`` list with the result.
         """
         return self._current_shapes()
+
+    def current_params(self) -> dict[str, Any]:
+        """This dialog's current widget values, in the shape mark_grid_generated
+        expects -- lets a caller remember exactly what was used to regenerate
+        the grid later."""
+        return {
+            "shape_type": self.combo_shape_type.currentText(),
+            "radius": self.spin_radius.value(),
+            "width": self.spin_width.value(),
+            "height": self.spin_height.value(),
+            "origin_x": self.spin_origin_x.value(),
+            "origin_y": self.spin_origin_y.value(),
+            "rows": self.spin_rows.value(),
+            "cols": self.spin_cols.value(),
+            "pitch_x": self.spin_pitch_x.value(),
+            "pitch_y": self.spin_pitch_y.value(),
+            "rotation_deg": self.spin_rotation.value(),
+        }

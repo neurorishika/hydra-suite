@@ -137,3 +137,24 @@ def test_finish_roi_selection_without_new_arena_joins_current_arena(qapp):
     orch.finish_roi_selection()
     arena_ids = [s["arena_id"] for s in orch._mw.roi_shapes]
     assert arena_ids == [0, 0]
+
+
+def test_undo_last_roi_shape_is_scoped_to_the_current_arena(qapp):
+    """Undo (Remove Last Zone) must never remove a DIFFERENT arena's shape
+    just because it happens to be the list's last entry overall."""
+    shapes = [
+        {"type": "circle", "params": [1, 1, 1], "mode": "include", "arena_id": 0},
+        {"type": "circle", "params": [2, 2, 2], "mode": "include", "arena_id": 0},
+        {"type": "circle", "params": [3, 3, 3], "mode": "include", "arena_id": 1},
+    ]
+    orch = _make_orch(qapp, roi_shapes=list(shapes))
+    # Current arena is arena 0 (NOT the list's last shape's arena, which is 1).
+    orch.current_arena_id = 0
+    orch.undo_last_roi_shape()
+
+    remaining = orch._mw.roi_shapes
+    # Arena 0's own last shape (index 1) was removed.
+    assert remaining == [shapes[0], shapes[2]]
+    # Arena 1's shape is completely untouched, even though it was the list's
+    # actual last element before the undo.
+    assert shapes[2] in remaining
