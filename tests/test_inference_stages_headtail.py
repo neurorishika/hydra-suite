@@ -282,3 +282,16 @@ def test_run_headtail_candidate_confidence_none_classifies_everything():
     result = run_headtail(crops, obb, model, config, _cpu_rt(), geometry=_TEST_GEOMETRY)
     assert result.directed_mask[0] == 1
     assert result.heading_hints[0] == pytest.approx(0.0)
+
+
+def test_headtail_model_close_closes_underlying_backend():
+    """Regression: HeadTailModel.close() used to be a no-op that never
+    released the underlying ClassifierBackend's model weights."""
+    from hydra_suite.core.inference.stages.headtail import HeadTailModel
+
+    mock_backend = MagicMock(spec=["close"])
+    model = HeadTailModel(
+        backend=mock_backend, input_size=(64, 64), class_names=["head", "tail"]
+    )
+    model.close()
+    mock_backend.close.assert_called_once()

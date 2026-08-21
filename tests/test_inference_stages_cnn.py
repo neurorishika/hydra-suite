@@ -144,3 +144,17 @@ def test_run_cnn_det_index_assigned_in_order():
     frame = torch.zeros((3, 100, 100))
     result = run_cnn(frame, _obb(3), model, config, _cpu_rt(), geometry=_TEST_GEOMETRY)
     assert [p.det_index for p in result.predictions] == [0, 1, 2]
+
+
+def test_cnn_model_close_closes_underlying_backend():
+    """Regression: CNNModel.close() used to be a no-op that never released
+    the underlying ClassifierBackend's model weights."""
+    mock_backend = MagicMock(spec=["close"])
+    model = CNNModel(
+        backend=mock_backend,
+        input_size=(64, 64),
+        factor_names=["identity"],
+        factor_class_names=[["ant1", "ant2"]],
+    )
+    model.close()
+    mock_backend.close.assert_called_once()

@@ -109,3 +109,21 @@ def test_run_apriltag_max_tag_id_filter():
     crops = [np.zeros((64, 64, 3), dtype=np.uint8)]
     result = run_apriltag(crops, _obb(1), model, config)
     assert result.tag_ids == [5, 8]
+
+
+def test_apriltag_model_close_closes_underlying_detector():
+    """Regression: AprilTagModel.close() used to be a no-op that never
+    released the underlying apriltag detector."""
+    from hydra_suite.core.inference.stages.apriltag import AprilTagModel
+
+    mock_detector = MagicMock(spec=["close"])
+    model = AprilTagModel(detector=mock_detector, config=AprilTagConfig())
+    model.close()
+    mock_detector.close.assert_called_once()
+
+
+def test_apriltag_model_close_tolerates_none_detector():
+    from hydra_suite.core.inference.stages.apriltag import AprilTagModel
+
+    model = AprilTagModel(detector=None, config=AprilTagConfig())
+    model.close()  # must not raise
