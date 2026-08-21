@@ -21,6 +21,7 @@ from hydra_suite.core.individual.pose.crop_dtype import to_uint8_image
 from ..config import PoseConfig
 from ..result import CropBatch, OBBResult, PoseResult
 from ..runtime import RuntimeContext, resolved_backend_for
+from ._resource_close import close_backend_resource
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +110,9 @@ class PoseModel:
     keypoint_names: list[str]
 
     def close(self) -> None:
-        pass
+        # Reach past this wrapper into the real backend -- for the SLEAP
+        # service backend, this is what actually terminates the subprocess.
+        close_backend_resource(self.backend)
 
 
 def load_pose_model(

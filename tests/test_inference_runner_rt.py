@@ -183,3 +183,66 @@ def test_inference_runner_close_calls_model_close():
     mock_cnn1.close.assert_called_once()
     mock_pose.close.assert_called_once()
     mock_at.close.assert_called_once()
+
+
+def test_inference_runner_close_reaches_underlying_backends():
+    """Regression: InferenceRunner.close() must shut down the REAL backend/
+    detector behind each stage-model wrapper, not just the wrapper.
+
+    PoseModel/CNNModel/HeadTailModel/AprilTagModel.close() used to be
+    ``def close(self): pass`` no-ops -- calling them did nothing, so e.g. the
+    SLEAP service subprocess (reached only via ``PoseModel.backend.close()``)
+    was never shut down by InferenceRunner.close(). This test uses the real
+    wrapper dataclasses (not MagicMocks standing in for them) so it actually
+    exercises each wrapper's close() body against a fake backend/detector.
+    """
+    from hydra_suite.core.inference.config import AprilTagConfig
+    from hydra_suite.core.inference.runner import InferenceRunner, _AllModels
+    from hydra_suite.core.inference.stages.apriltag import AprilTagModel
+    from hydra_suite.core.inference.stages.cnn import CNNModel
+    from hydra_suite.core.inference.stages.headtail import HeadTailModel
+    from hydra_suite.core.inference.stages.pose import PoseModel
+
+    # spec=["close"]: pin the fakes to only expose close() (matching the real
+    # backends here), not release() -- close_backend_resource() prefers
+    # release() when both are present, which a bare MagicMock() always has.
+    fake_pose_backend = MagicMock(spec=["close"])
+    fake_cnn_backend = MagicMock(spec=["close"])
+    fake_ht_backend = MagicMock(spec=["close"])
+    fake_at_detector = MagicMock(spec=["close"])
+
+    pose_model = PoseModel(
+        backend=fake_pose_backend, n_keypoints=4, keypoint_names=["a", "b", "c", "d"]
+    )
+    cnn_model = CNNModel(
+        backend=fake_cnn_backend,
+        input_size=(64, 64),
+        factor_names=["identity"],
+        factor_class_names=[["ant1", "ant2"]],
+    )
+    ht_model = HeadTailModel(
+        backend=fake_ht_backend, input_size=(64, 64), class_names=["head", "tail"]
+    )
+    at_model = AprilTagModel(detector=fake_at_detector, config=AprilTagConfig())
+
+    mock_models = _AllModels(
+        obb=MagicMock(),
+        headtail=ht_model,
+        cnn=[cnn_model],
+        pose=pose_model,
+        apriltag=at_model,
+    )
+    with patch(
+        "hydra_suite.core.inference.runner._load_all_models",
+        return_value=mock_models,
+    ):
+        runner = InferenceRunner(_cfg())
+    runner.close()
+
+    # The underlying backend/detector -- not just the wrapper -- must have
+    # been closed. For the real SLEAP service backend, this .close() call is
+    # what reaches shutdown_sleap_service() and kills the subprocess.
+    fake_pose_backend.close.assert_called_once()
+    fake_cnn_backend.close.assert_called_once()
+    fake_ht_backend.close.assert_called_once()
+    fake_at_detector.close.assert_called_once()

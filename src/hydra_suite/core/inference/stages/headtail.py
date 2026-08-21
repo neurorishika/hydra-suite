@@ -14,6 +14,7 @@ from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
 from ..config import HeadTailConfig
 from ..result import HeadTailResult, OBBResult
 from ..runtime import RuntimeContext, resolved_backend_for
+from ._resource_close import close_backend_resource
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,9 @@ class HeadTailModel:
     class_names: list[str]
 
     def close(self) -> None:
-        pass
+        # Reach past this wrapper into the real backend to actually release
+        # model weights.
+        close_backend_resource(self.backend)
 
 
 def load_headtail_model(

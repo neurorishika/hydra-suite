@@ -13,6 +13,7 @@ from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
 from ..config import CNNConfig
 from ..result import CNNDetectionPrediction, CNNFactorPrediction, CNNResult, OBBResult
 from ..runtime import RuntimeContext, resolved_backend_for
+from ._resource_close import close_backend_resource
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +26,9 @@ class CNNModel:
     factor_class_names: list[list[str]]  # class names per factor
 
     def close(self) -> None:
-        pass
+        # Reach past this wrapper into the real backend to actually release
+        # model weights (each phase owns its own ClassifierBackend instance).
+        close_backend_resource(self.backend)
 
 
 def load_cnn_model(config: CNNConfig, runtime: RuntimeContext) -> CNNModel:

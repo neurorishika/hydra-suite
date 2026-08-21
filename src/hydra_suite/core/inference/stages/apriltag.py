@@ -8,6 +8,7 @@ import numpy as np
 
 from ..config import AprilTagConfig
 from ..result import AprilTagResult, OBBResult
+from ._resource_close import close_backend_resource
 
 
 @dataclass
@@ -16,7 +17,9 @@ class AprilTagModel:
     config: AprilTagConfig
 
     def close(self) -> None:
-        pass
+        # Reach past this wrapper into the real detector object (field is
+        # named `detector` here, not `backend`, unlike the other stages).
+        close_backend_resource(self.detector)
 
 
 def load_apriltag_model(config: AprilTagConfig) -> AprilTagModel:

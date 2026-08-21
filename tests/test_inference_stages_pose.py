@@ -221,3 +221,15 @@ def test_run_pose_valid_mask_high_conf():
     result = run_pose(crops, _obb(2), model, config, _cpu_rt(), geometry=_TEST_GEOMETRY)
     assert bool(result.valid_mask[0]) is True
     assert bool(result.valid_mask[1]) is False
+
+
+def test_pose_model_close_closes_underlying_backend():
+    """Regression: PoseModel.close() used to be a no-op; for the SLEAP
+    service backend this is what actually reaches shutdown_sleap_service()."""
+    # spec=["close"]: real backends here (YoloNativeBackend/SleapExportedBackend)
+    # expose close() only, not release() -- pin the fake to match so the test
+    # actually exercises the close() branch of close_backend_resource().
+    mock_backend = MagicMock(spec=["close"])
+    model = PoseModel(backend=mock_backend, n_keypoints=4, keypoint_names=list("abcd"))
+    model.close()
+    mock_backend.close.assert_called_once()
