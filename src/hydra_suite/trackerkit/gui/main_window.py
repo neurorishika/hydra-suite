@@ -585,7 +585,7 @@ class MainWindow(QMainWindow):
         self.arena_panel.draw_requested.connect(self._on_draw_requested)
         self.arena_panel.finish_requested.connect(self.finish_roi_selection)
         self.arena_panel.undo_requested.connect(self.undo_last_roi_shape)
-        self.arena_panel.clear_all_requested.connect(self.clear_roi)
+        self.arena_panel.clear_all_requested.connect(self._on_remove_all_arenas)
         self.arena_panel.crop_requested.connect(self.crop_video_to_roi)
         roi_main_layout.addWidget(self.arena_panel)
 
@@ -2029,6 +2029,9 @@ class MainWindow(QMainWindow):
         Generated shapes are ordinary shapes: no marker, no separate
         storage, fully editable afterwards.
         """
+        if not self._session_orch._ensure_roi_base_frame():
+            return
+
         from PySide6.QtWidgets import QDialog
 
         from hydra_suite.trackerkit.engine_params import next_free_arena_id
@@ -2104,10 +2107,24 @@ class MainWindow(QMainWindow):
             self._setup_panel.lbl_animals_per_arena_total.setText("")
 
     def _on_add_single_arena(self):
-        """Start the first (or a fresh) arena and immediately begin a circle."""
+        """Start the first (or a fresh) arena; the user must still choose a
+        zone tool before any points can be placed."""
         self.arena_panel.begin_new_arena()
         self._session_orch.current_arena_id = self.arena_panel.current_arena
-        self._on_draw_requested("circle", "include")
+
+    def _on_remove_all_arenas(self):
+        """Confirm, then remove every arena and return to the empty state."""
+        reply = QMessageBox.question(
+            self,
+            "Remove All Arenas",
+            "This removes every arena and its ROI shapes, returning to the "
+            "default state where the whole video is used. This cannot be "
+            "undone. Continue?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply == QMessageBox.Yes:
+            self.clear_roi()
 
     def _on_arena_changed(self, arena_id: int):
         self._session_orch.set_current_arena(arena_id)
@@ -2178,10 +2195,6 @@ class MainWindow(QMainWindow):
     def _fit_image_to_screen(self):
         """Fit the image to the available screen space."""
         self._session_orch._fit_image_to_screen()
-
-    def record_roi_click(self, evt):
-        """Record an ROI click from the video label."""
-        self._session_orch.record_roi_click(evt)
 
     def update_roi_preview(self):
         """Render current ROI shapes + in-progress points onto the video label."""

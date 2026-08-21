@@ -270,11 +270,13 @@ def next_free_arena_id(roi_shapes: list[dict[str, Any]] | None) -> int:
     exclude hole belonging to arena 3 means arena 3 is in use -- so this
     scans ALL shapes, not just includes, and returns ``max(used ids) + 1``
     (or ``0`` for an empty/legacy list). This is the single source of truth
-    for "what id does the next arena get": both
-    ``SessionOrchestrator.start_new_arena`` (advancing past a "New Arena"
-    click) and the bulk grid generator (``MainWindow._on_generate_grid_clicked``,
-    appending a whole grid alongside any existing shapes) must agree on it,
-    or a generated grid could collide with a hand-drawn arena's id.
+    for "what id does the next arena get": ``ArenaPanel.begin_new_arena``
+    (the current GUI-facing path for a "New Arena" click;
+    ``SessionOrchestrator.start_new_arena`` performs the same allocation and
+    remains directly unit-tested, but the GUI no longer calls it) and the
+    bulk grid generator (``MainWindow._on_generate_grid_clicked``, appending
+    a whole grid alongside any existing shapes) must agree on it, or a
+    generated grid could collide with a hand-drawn arena's id.
     """
     if not roi_shapes:
         return 0

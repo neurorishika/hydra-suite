@@ -50,6 +50,7 @@ class ArenaPanel(QWidget):
         self._current = 0
         self._pending_new = False
         self._shape_valid = False
+        self._drawing_active = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 4, 8, 4)
@@ -117,17 +118,33 @@ class ArenaPanel(QWidget):
         self.btn_sub_circle = QPushButton("- Circle")
         self.btn_add_polygon = QPushButton("+ Polygon")
         self.btn_sub_polygon = QPushButton("- Polygon")
+        self._zone_buttons = (
+            self.btn_add_circle,
+            self.btn_sub_circle,
+            self.btn_add_polygon,
+            self.btn_sub_polygon,
+        )
+        for button in self._zone_buttons:
+            button.setCheckable(True)
         self.btn_add_circle.clicked.connect(
-            lambda: self.draw_requested.emit("circle", "include")
+            lambda: self._on_zone_button_clicked(
+                self.btn_add_circle, "circle", "include"
+            )
         )
         self.btn_sub_circle.clicked.connect(
-            lambda: self.draw_requested.emit("circle", "exclude")
+            lambda: self._on_zone_button_clicked(
+                self.btn_sub_circle, "circle", "exclude"
+            )
         )
         self.btn_add_polygon.clicked.connect(
-            lambda: self.draw_requested.emit("polygon", "include")
+            lambda: self._on_zone_button_clicked(
+                self.btn_add_polygon, "polygon", "include"
+            )
         )
         self.btn_sub_polygon.clicked.connect(
-            lambda: self.draw_requested.emit("polygon", "exclude")
+            lambda: self._on_zone_button_clicked(
+                self.btn_sub_polygon, "polygon", "exclude"
+            )
         )
         self.btn_finish = QPushButton("Finish Shape")
         self.btn_finish.setEnabled(False)
@@ -139,8 +156,7 @@ class ArenaPanel(QWidget):
         self.btn_overflow.setText("...")
         self.btn_overflow.setPopupMode(QToolButton.InstantPopup)
         menu = QMenu(self.btn_overflow)
-        menu.addAction("Add Grid of Arenas", self.add_grid_requested.emit)
-        menu.addAction("Clear All", self.clear_all_requested.emit)
+        menu.addAction("Remove All Arenas", self.clear_all_requested.emit)
         menu.addAction("Crop Video to ROI", self.crop_requested.emit)
         self.btn_overflow.setMenu(menu)
 
@@ -223,6 +239,30 @@ class ArenaPanel(QWidget):
         """
         return [s for s in self._shapes if int(s.get("arena_id", 0)) != int(arena_id)]
 
+    def _on_zone_button_clicked(self, button, shape_type, zone_mode) -> None:
+        """A zone button was pressed: commit to this shape/zone for the
+        current shape, and lock out the other choices and navigation until
+        the shape is finished, undone away, or cancelled."""
+        for b in self._zone_buttons:
+            b.setChecked(b is button)
+        self._drawing_active = True
+        self.refresh()
+        self.draw_requested.emit(shape_type, zone_mode)
+
+    def set_drawing_active(self, active: bool) -> None:
+        """External sync: whether a shape is currently being drawn.
+
+        Called by the session orchestrator whenever drawing starts or ends
+        for a reason OTHER than pressing a zone button (finishing a shape,
+        cancelling it, clearing the arena) so the zone buttons and navigation
+        lock stay in sync with the real drawing state.
+        """
+        self._drawing_active = bool(active)
+        if not self._drawing_active:
+            for b in self._zone_buttons:
+                b.setChecked(False)
+        self.refresh()
+
     def _step(self, delta: int) -> None:
         ids = self.arena_ids()
         if self._current not in ids:
@@ -284,11 +324,12 @@ class ArenaPanel(QWidget):
             self.lbl_warning.setText(self.can_track()[1])
         self.lbl_warning.setVisible(bool(pairs))
 
+        nav_locked = current_blocked or self._drawing_active
         index = ids.index(self._current) if self._current in ids else -1
-        self.btn_prev.setEnabled(not current_blocked and index > 0)
-        self.btn_next.setEnabled(
-            not current_blocked and index >= 0 and index < len(ids) - 1
-        )
-        self.btn_add_new.setEnabled(not current_blocked and not current_empty)
-        self.btn_clear_arena.setEnabled(not current_empty)
+        self.btn_prev.setEnabled(not nav_locked and index > 0)
+        self.btn_next.setEnabled(not nav_locked and index >= 0 and index < len(ids) - 1)
+        self.btn_add_new.setEnabled(not nav_locked and not current_empty)
+        self.btn_clear_arena.setEnabled(not current_empty and not self._drawing_active)
         self.btn_undo.setEnabled(bool(self._shapes))
+        for b in self._zone_buttons:
+            b.setEnabled(not self._drawing_active)

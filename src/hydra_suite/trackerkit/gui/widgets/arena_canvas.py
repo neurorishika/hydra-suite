@@ -15,7 +15,7 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -122,6 +122,9 @@ class ArenaCanvas(QWidget):
         self._drawing = False
         self._press_pos: QPointF | None = None
         self._panning = False
+        self._toast_text: str | None = None
+        self._input_paused = False
+        self._preview_shape: dict[str, Any] | None = None
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.setMinimumSize(320, 240)
         self.setMouseTracking(True)
@@ -155,6 +158,29 @@ class ArenaCanvas(QWidget):
         self.setContextMenuPolicy(
             Qt.PreventContextMenu if drawing else Qt.DefaultContextMenu
         )
+        self.update()
+
+    def set_preview_shape(self, shape: dict[str, Any] | None) -> None:
+        """The in-progress shape (fitted circle, or polygon-so-far), or None."""
+        self._preview_shape = shape
+        self.update()
+
+    def is_input_paused(self) -> bool:
+        """Whether a toast is showing and input should be ignored."""
+        return self._input_paused
+
+    def show_toast(self, text: str, duration_ms: int = 3000) -> None:
+        """Show a small, self-dismissing overlay message without touching the
+        displayed frame. Input is ignored for the duration so a stray click
+        during the message can't be misinterpreted."""
+        self._toast_text = text
+        self._input_paused = True
+        self.update()
+        QTimer.singleShot(duration_ms, self._clear_toast)
+
+    def _clear_toast(self) -> None:
+        self._toast_text = None
+        self._input_paused = False
         self.update()
 
     def _rescale(self) -> None:
@@ -196,12 +222,18 @@ class ArenaCanvas(QWidget):
     # -- input ------------------------------------------------------------
 
     def mousePressEvent(self, event) -> None:
+        if self._input_paused:
+            event.ignore()
+            return
         self._press_pos = QPointF(event.position())
         if event.button() == Qt.MiddleButton:
             self._panning = True
         event.accept()
 
     def mouseMoveEvent(self, event) -> None:
+        if self._input_paused:
+            event.ignore()
+            return
         if self._press_pos is None:
             event.accept()
             return
@@ -217,6 +249,9 @@ class ArenaCanvas(QWidget):
         event.accept()
 
     def mouseReleaseEvent(self, event) -> None:
+        if self._input_paused:
+            event.ignore()
+            return
         press, self._press_pos = self._press_pos, None
         panning, self._panning = self._panning, False
         if press is None:
@@ -343,6 +378,11 @@ class ArenaCanvas(QWidget):
             for x, y in self._points:
                 painter.drawPoint(self.to_viewport(x, y))
 
+        if self._preview_shape is not None:
+            painter.setPen(QPen(QColor(*palette.line_preview), self._line_width()))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawPath(self._shape_path(self._preview_shape))
+
         for arena_id in sorted({int(s.get("arena_id", 0)) for s in include}):
             members = [s for s in include if int(s.get("arena_id", 0)) == arena_id]
             centroids = [shape_centroid(s) for s in members]
@@ -358,3 +398,25 @@ class ArenaCanvas(QWidget):
                 palette.halo,
                 TEXT_ALPHA,
             )
+
+        if self._toast_text:
+            painter.save()
+            font = painter.font()
+            font.setPixelSize(16)
+            painter.setFont(font)
+            metrics = painter.fontMetrics()
+            text_rect = metrics.boundingRect(self._toast_text)
+            pad_x, pad_y = 24, 14
+            banner_w = text_rect.width() + 2 * pad_x
+            banner_h = text_rect.height() + 2 * pad_y
+            banner_x = (self.width() - banner_w) / 2.0
+            banner_y = 24
+            banner_rect = QRectF(banner_x, banner_y, banner_w, banner_h)
+            painter.setOpacity(0.85)
+            painter.setBrush(QBrush(QColor(20, 20, 20)))
+            painter.setPen(Qt.NoPen)
+            painter.drawRoundedRect(banner_rect, 8, 8)
+            painter.setOpacity(1.0)
+            painter.setPen(QColor(255, 255, 255))
+            painter.drawText(banner_rect, Qt.AlignCenter, self._toast_text)
+            painter.restore()

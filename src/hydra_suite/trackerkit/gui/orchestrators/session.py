@@ -179,10 +179,11 @@ class SessionOrchestrator:
             self._mw.video_label.unsetCursor()
 
     def _sync_contextual_controls(self):
-        # ROI: ArenaPanel now owns its own enabled/disabled state (refreshed
-        # from set_shapes/set_shape_valid/set_current_arena calls elsewhere),
-        # so there is nothing left to sync here.
-        pass
+        # ArenaPanel owns its enabled/disabled state, but the interactive-widget
+        # enable sweep in _apply_ui_state can still blanket re-enable its
+        # buttons on some UI-state transitions (it walks every QAbstractButton).
+        # Re-run refresh() here so the panel's own lock/disable rules always win.
+        self._panels.arena.refresh()
 
     def _apply_ui_state(self, state: str):
         if state == "no_video":
@@ -1706,16 +1707,23 @@ class SessionOrchestrator:
         self._mw._refresh_progress_visibility()
 
     def _handle_video_double_click(self, evt):
-        """Handle double-click on video to fit to screen."""
+        """Handle double-click: finish an in-progress polygon, else fit to screen."""
         if not self._mw._video_interactions_enabled:
             evt.ignore()
             return
-        if evt.button() == Qt.LeftButton:
+        if evt.button() != Qt.LeftButton:
+            return
+        if self._mw.roi_selection_active and self._mw.roi_current_mode == "polygon":
+            self.finish_roi_selection()
+        else:
             QTimer.singleShot(0, self._mw._fit_image_to_screen)
 
     def _handle_video_wheel(self, evt):
         """Handle mouse wheel - zoom in/out, anchored to the cursor position."""
         if not self._mw._video_interactions_enabled:
+            evt.ignore()
+            return
+        if self._mw.video_label.is_input_paused():
             evt.ignore()
             return
         if evt.modifiers() == Qt.ControlModifier:
@@ -1900,37 +1908,56 @@ class SessionOrchestrator:
         canvas.set_drawing(self._mw.roi_selection_active)
 
         valid = False
+        preview_shape = None
         if self._mw.roi_current_mode == "circle" and len(self._mw.roi_points) >= 3:
             circle_fit = fit_circle_to_points(self._mw.roi_points)
             if circle_fit:
                 self._mw.roi_fitted_circle = circle_fit
                 valid = True
+                cx, cy, radius = circle_fit
+                preview_shape = {"type": "circle", "params": (cx, cy, radius)}
         elif self._mw.roi_current_mode == "polygon" and len(self._mw.roi_points) >= 3:
             valid = True
+            preview_shape = {"type": "polygon", "params": list(self._mw.roi_points)}
+        canvas.set_preview_shape(preview_shape)
         self._panels.arena.set_shape_valid(valid)
 
-    def start_roi_selection(self):
-        """Start an ROI shape selection session."""
+    def _ensure_roi_base_frame(self) -> bool:
+        """Load the first video frame into roi_base_frame if not already loaded.
+
+        Returns False (and shows a warning dialog) if there is no video or the
+        frame can't be read. Also syncs the arena panel's known frame size,
+        since both the manual-drawing and grid-generation paths need it.
+        """
         if not self._panels.setup.file_line.text():
             QMessageBox.warning(
                 self._mw, "No Video", "Please select a video file first."
             )
-            return
+            return False
         if self._mw.roi_base_frame is None:
             cap = cv2.VideoCapture(self._panels.setup.file_line.text())
             if not cap.isOpened():
                 QMessageBox.warning(self._mw, "Error", "Cannot open video file.")
-                return
+                return False
             ret, frame = cap.read()
             cap.release()
             if not ret:
                 QMessageBox.warning(self._mw, "Error", "Cannot read video frame.")
-                return
+                return False
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             h, w, ch = rgb.shape
             bytes_per_line = ch * w
             qt_image = QImage(rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
             self._mw.roi_base_frame = qt_image
+        self._panels.arena.set_frame_size(
+            self._mw.roi_base_frame.width(), self._mw.roi_base_frame.height()
+        )
+        return True
+
+    def start_roi_selection(self):
+        """Start an ROI shape selection session."""
+        if not self._ensure_roi_base_frame():
+            return
 
         # The canvas overlay is painted on top of whatever frame it already
         # holds; push the ROI base frame explicitly so drawing starts against
@@ -2012,6 +2039,8 @@ class SessionOrchestrator:
         self._mw.roi_fitted_circle = None
         self._mw.roi_selection_active = False
         self._panels.arena.set_shapes(self._mw.roi_shapes)
+        self._panels.arena.set_drawing_active(False)
+        self.update_roi_preview()
 
         if hasattr(Qt, "OpenHandCursor"):
             self._mw.video_label.setCursor(Qt.OpenHandCursor)
@@ -2109,9 +2138,10 @@ class SessionOrchestrator:
         self._mw.roi_selection_active = False
         self._mw.roi_base_frame = None
         self.current_arena_id = 0
+        self._panels.arena.set_drawing_active(False)
         self._panels.arena.set_shapes([])
         self._mw.roi_status_label.setText("No ROI")
-        self._mw._set_video_message("ROI Cleared.")
+        self._mw.video_label.show_toast("ROI Cleared")
         self.update_roi_preview()
         if hasattr(Qt, "OpenHandCursor"):
             self._mw.video_label.setCursor(Qt.OpenHandCursor)
@@ -2120,10 +2150,24 @@ class SessionOrchestrator:
         self._mw._update_animals_per_arena_total_label()
         logger.info("All ROI shapes cleared")
 
+    def cancel_roi_shape(self) -> None:
+        """Cancel the in-progress shape only; already-committed arenas are untouched."""
+        if not self._mw.roi_selection_active:
+            return
+        self._mw.roi_points = []
+        self._mw.roi_fitted_circle = None
+        self._mw.roi_selection_active = False
+        self._panels.arena.set_drawing_active(False)
+        if hasattr(Qt, "OpenHandCursor"):
+            self._mw.video_label.setCursor(Qt.OpenHandCursor)
+        else:
+            self._mw.video_label.unsetCursor()
+        self.update_roi_preview()
+
     def keyPressEvent(self, event) -> None:
-        """Handle key press events - cancel ROI on Escape."""
+        """Handle key press events - cancel the in-progress shape on Escape."""
         if event.key() == Qt.Key_Escape and self._mw.roi_selection_active:
-            self._mw.clear_roi()
+            self.cancel_roi_shape()
         else:
             from PySide6.QtWidgets import QMainWindow
 
