@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import cv2
 import numpy as np
 from PySide6.QtCore import QEvent, QSignalBlocker, Qt, QTimer
-from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
+from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QMessageBox
 
 from hydra_suite.runtime.resolver import detect_platform
@@ -247,20 +247,19 @@ class SessionOrchestrator:
 
     def _prepare_tracking_display(self):
         """Clear any stale frame before tracking starts."""
-        self._mw.video_label.clear()
         # Clear stale detection-test result so zoom events don't re-render old frames
         self._mw.detection_test_result = None
         self._mw._last_tracking_frame_rgb = None
         if self._mw._is_visualization_enabled():
-            self._mw.video_label.setText("")
-            self._mw.video_label.setStyleSheet("color: #6a6a6a; font-size: 16px;")
+            self._mw._set_video_message("")
         else:
-            self._mw.video_label.setText(
+            self._mw._set_video_message(
                 "Visualization Disabled\n\n"
                 "Maximum speed processing mode active.\n"
-                "Real-time stats displayed below."
+                "Real-time stats displayed below.",
+                color="#9a9a9a",
+                font_size=14,
             )
-            self._mw.video_label.setStyleSheet("color: #9a9a9a; font-size: 14px;")
 
     def _show_video_logo_placeholder(self):
         """Show HYDRA logo in the video panel when no video is loaded."""
@@ -1736,9 +1735,6 @@ class SessionOrchestrator:
         if not self._mw._video_interactions_enabled:
             evt.ignore()
             return
-        if self._mw.roi_selection_active:
-            self._mw.record_roi_click(evt)
-            return
 
         if evt.button() == Qt.LeftButton or evt.button() == Qt.MiddleButton:
             self._mw._is_panning = True
@@ -1790,9 +1786,6 @@ class SessionOrchestrator:
     def _handle_video_wheel(self, evt):
         """Handle mouse wheel - zoom in/out, anchored to the cursor position."""
         if not self._mw._video_interactions_enabled:
-            evt.ignore()
-            return
-        if self._mw.roi_selection_active:
             evt.ignore()
             return
         if evt.modifiers() == Qt.ControlModifier:
@@ -1895,21 +1888,8 @@ class SessionOrchestrator:
         return False
 
     def _display_roi_with_zoom(self):
-        """Display the ROI base frame with mask and current zoom applied."""
-        if self._mw.roi_base_frame is None or not self._mw.roi_shapes:
-            return
-        qimg_masked = self._mw._apply_roi_mask_to_image(self._mw.roi_base_frame)
-        zoom_val = max(self._mw.slider_zoom.value() / 100.0, 0.1)
-        if zoom_val != 1.0:
-            w = qimg_masked.width()
-            h = qimg_masked.height()
-            scaled_w = int(w * zoom_val)
-            scaled_h = int(h * zoom_val)
-            qimg_masked = qimg_masked.scaled(
-                scaled_w, scaled_h, Qt.KeepAspectRatio, Qt.SmoothTransformation
-            )
-        pixmap = QPixmap.fromImage(qimg_masked)
-        self._mw._set_video_pixmap(pixmap)
+        """Apply the current zoom to the canvas; the overlay follows."""
+        self._mw.video_label.set_zoom(max(self._mw.slider_zoom.value() / 100.0, 0.1))
 
     def _fit_image_to_screen(self):
         """Fit the image to the available screen space."""
@@ -1947,125 +1927,63 @@ class SessionOrchestrator:
         self._mw.scroll.horizontalScrollBar().setValue(0)
         self._mw.scroll.verticalScrollBar().setValue(0)
 
-    def record_roi_click(self, evt):
-        """Record an ROI click from the video label."""
-        if not self._mw.roi_selection_active or self._mw.roi_base_frame is None:
-            return
-        if evt.button() == Qt.RightButton:
-            if len(self._mw.roi_points) > 0:
-                removed = self._mw.roi_points.pop()
-                logger.info(f"Undid last ROI point: ({removed[0]}, {removed[1]})")
-                self._mw.update_roi_preview()
-            return
-        if evt.button() != Qt.LeftButton:
-            return
-        pos = evt.position().toPoint()
-        x, y = pos.x(), pos.y()
-        if self._mw.roi_current_mode == "polygon" and len(self._mw.roi_points) >= 3:
-            if hasattr(self._mw, "_last_click_pos") and hasattr(
-                self._mw, "_last_click_time"
-            ):
-                import time
+    def add_roi_point(self, image_x: float, image_y: float) -> None:
+        """Append an ROI point. Coordinates are already IMAGE coordinates.
 
-                current_time = time.time()
-                last_x, last_y = self._mw._last_click_pos
-                if (
-                    current_time - self._mw._last_click_time < 0.5
-                    and abs(x - last_x) < 10
-                    and abs(y - last_y) < 10
-                ):
-                    self._mw.finish_roi_selection()
-                    return
-            import time
+        The canvas converts through its inverse transform, so this is valid at
+        any zoom -- previously the raw label position was stored directly,
+        which only agreed with image space at 100% zoom.
+        """
+        if not self._mw.roi_selection_active:
+            return
+        self._mw.roi_points.append((image_x, image_y))
+        self.update_roi_preview()
 
-            self._mw._last_click_pos = (x, y)
-            self._mw._last_click_time = time.time()
-        self._mw.roi_points.append((x, y))
-        self._mw.update_roi_preview()
+    def remove_last_roi_point(self) -> None:
+        """Drop the most recent in-progress point."""
+        if not self._mw.roi_selection_active or not self._mw.roi_points:
+            return
+        removed = self._mw.roi_points.pop()
+        logger.info(f"Undid last ROI point: ({removed[0]:.1f}, {removed[1]:.1f})")
+        self.update_roi_preview()
+
+    def set_current_arena(self, arena_id: int) -> None:
+        """Make *arena_id* the arena new shapes join.
+
+        Task 9 adds the ``self._panels.arena.set_current_arena(arena_id)``
+        line here once the panel exists; do NOT add it now -- the panel is not
+        registered yet and this task's tests would fail on it.
+        """
+        if self._mw.roi_selection_active:
+            return
+        self.current_arena_id = int(arena_id)
+        self._mw.video_label.set_current_arena(arena_id)
 
     def update_roi_preview(self):
-        """Render current ROI shapes + in-progress points onto the video label."""
-        if self._mw.roi_base_frame is None:
-            return
-        pix = QPixmap.fromImage(self._mw.roi_base_frame).toImage().copy()
-        painter = QPainter(pix)
+        """Push current shapes and in-progress points to the canvas.
 
-        for shape in self._mw.roi_shapes:
-            is_include = shape.get("mode", "include") == "include"
-            color = Qt.cyan if is_include else Qt.red
-            if shape["type"] == "circle":
-                cx, cy, radius = shape["params"]
-                painter.setPen(QPen(color, 2))
-                painter.drawEllipse(
-                    int(cx - radius), int(cy - radius), int(2 * radius), int(2 * radius)
-                )
-            elif shape["type"] == "polygon":
-                from PySide6.QtCore import QPoint
+        No rasterization here: the canvas paints the overlay in viewport space
+        on its next paintEvent. The old implementation deep-copied and
+        repainted the whole QImage on every click -- about 61 MB per click on
+        a 4512x4512 frame.
+        """
+        canvas = self._mw.video_label
+        canvas.set_shapes(self._mw.roi_shapes)
+        canvas.set_points(self._mw.roi_points)
+        canvas.set_current_arena(self.current_arena_id)
+        canvas.set_drawing(self._mw.roi_selection_active)
 
-                points = [QPoint(int(x), int(y)) for x, y in shape["params"]]
-                painter.setPen(QPen(color, 2))
-                painter.drawPolygon(points)
-
-        painter.setPen(QPen(Qt.red, 6))
-        for i, (px, py) in enumerate(self._mw.roi_points):
-            painter.drawPoint(px, py)
-            painter.setPen(QPen(Qt.black, 3))
-            painter.drawText(px + 12, py - 12, str(i + 1))
-            painter.setPen(QPen(Qt.white, 2))
-            painter.drawText(px + 10, py - 10, str(i + 1))
-            painter.setPen(QPen(Qt.red, 6))
-
-        can_finish = False
-        preview_color = (
-            Qt.green
-            if self._mw.roi_current_zone_type == "include"
-            else QColor(255, 165, 0)
-        )
-
+        valid = False
         if self._mw.roi_current_mode == "circle" and len(self._mw.roi_points) >= 3:
             circle_fit = fit_circle_to_points(self._mw.roi_points)
             if circle_fit:
-                cx, cy, radius = circle_fit
                 self._mw.roi_fitted_circle = circle_fit
-                painter.setPen(QPen(preview_color, 3))
-                painter.drawEllipse(
-                    int(cx - radius), int(cy - radius), int(2 * radius), int(2 * radius)
-                )
-                painter.setPen(QPen(Qt.blue, 8))
-                painter.drawPoint(int(cx), int(cy))
-                zone_type = (
-                    "Include"
-                    if self._mw.roi_current_zone_type == "include"
-                    else "Exclude"
-                )
-                self._mw.roi_status_label.setText(
-                    f"Preview {zone_type} Circle: R={radius:.1f}px"
-                )
-                can_finish = True
-            else:
-                self._mw.roi_status_label.setText("Invalid circle fit")
+                valid = True
         elif self._mw.roi_current_mode == "polygon" and len(self._mw.roi_points) >= 3:
-            from PySide6.QtCore import QPoint
-
-            points = [QPoint(int(x), int(y)) for x, y in self._mw.roi_points]
-            painter.setPen(QPen(preview_color, 3))
-            painter.drawPolygon(points)
-            zone_type = (
-                "Include" if self._mw.roi_current_zone_type == "include" else "Exclude"
-            )
-            self._mw.roi_status_label.setText(
-                f"Preview {zone_type} Polygon: {len(self._mw.roi_points)} vertices"
-            )
-            can_finish = True
-        else:
-            min_pts = 3
-            self._mw.roi_status_label.setText(
-                f"Points: {len(self._mw.roi_points)} (Need {min_pts}+)"
-            )
-
-        self._mw.btn_finish_roi.setEnabled(can_finish)
-        painter.end()
-        self._mw._set_video_pixmap(QPixmap.fromImage(pix))
+            valid = True
+        # Task 9 replaces this with `self._panels.arena.set_shape_valid(valid)`.
+        # The old button still exists at this point; the panel does not.
+        self._mw.btn_finish_roi.setEnabled(valid)
 
     def start_roi_selection(self):
         """Start an ROI shape selection session."""
@@ -2090,6 +2008,11 @@ class SessionOrchestrator:
             qt_image = QImage(rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
             self._mw.roi_base_frame = qt_image
 
+        # The canvas overlay is painted on top of whatever frame it already
+        # holds; push the ROI base frame explicitly so drawing starts against
+        # it rather than whatever was last shown (e.g. a stale preview frame).
+        self._mw._set_video_pixmap(QPixmap.fromImage(self._mw.roi_base_frame))
+
         self._mw.roi_points = []
         self._mw.roi_fitted_circle = None
         self._mw.roi_selection_active = True
@@ -2097,7 +2020,6 @@ class SessionOrchestrator:
         self._mw.btn_finish_roi.setEnabled(False)
         self._mw.combo_roi_mode.setEnabled(False)
         self._mw.combo_roi_zone.setEnabled(False)
-        self._mw.slider_zoom.setEnabled(False)
         self._mw.video_label.setCursor(Qt.CrossCursor)
 
         zone_type = (
@@ -2181,7 +2103,6 @@ class SessionOrchestrator:
         self._mw.combo_roi_mode.setEnabled(True)
         self._mw.combo_roi_zone.setEnabled(True)
         self._mw.roi_instructions.setText("")
-        self._mw.slider_zoom.setEnabled(True)
 
         if hasattr(Qt, "OpenHandCursor"):
             self._mw.video_label.setCursor(Qt.OpenHandCursor)
@@ -2265,14 +2186,11 @@ class SessionOrchestrator:
             self._mw.roi_status_label.setText(
                 f"Active ROI: {num_shapes} shape(s) ({shape_summary})"
             )
-            if self._mw.roi_base_frame:
-                qimg_masked = self._mw._apply_roi_mask_to_image(self._mw.roi_base_frame)
-                self._mw._set_video_pixmap(QPixmap.fromImage(qimg_masked))
         else:
             self._mw.roi_status_label.setText("No ROI")
-            if self._mw.roi_base_frame:
-                self._mw._set_video_pixmap(QPixmap.fromImage(self._mw.roi_base_frame))
         self._mw._update_animals_per_arena_total_label()
+        # The base frame is already on the canvas (pushed once in
+        # start_roi_selection); this just refreshes the shape/point overlay.
         self._mw.update_roi_preview()
 
     def clear_roi(self):
@@ -2290,8 +2208,8 @@ class SessionOrchestrator:
         self._mw.combo_roi_mode.setEnabled(True)
         self._mw.roi_status_label.setText("No ROI")
         self._mw.roi_instructions.setText("")
-        self._mw.video_label.setText("ROI Cleared.")
-        self._mw.slider_zoom.setEnabled(True)
+        self._mw._set_video_message("ROI Cleared.")
+        self.update_roi_preview()
         if hasattr(Qt, "OpenHandCursor"):
             self._mw.video_label.setCursor(Qt.OpenHandCursor)
         else:
@@ -2370,54 +2288,25 @@ class SessionOrchestrator:
 
         if is_tracking_active and is_viz_free and not is_preview_active:
             self._mw._stored_preview_text = (
-                self._mw.video_label.text()
-                if not self._mw.video_label.pixmap()
+                self._mw._video_placeholder_text
+                if self._mw._video_is_placeholder_text
                 else None
             )
-            self._mw.video_label.clear()
-            self._mw.video_label.setText(
+            self._mw._set_video_message(
                 "Visualization Disabled\n\n"
                 "Maximum speed processing mode active.\n"
-                "Real-time stats displayed below."
+                "Real-time stats displayed below.",
+                color="#9a9a9a",
+                font_size=14,
             )
-            self._mw.video_label.setStyleSheet("color: #9a9a9a; font-size: 14px;")
             logger.info("Visualization-Free Mode enabled - Maximum speed processing")
         elif is_tracking_active and not is_viz_free:
             if (
                 hasattr(self._mw, "_stored_preview_text")
                 and self._mw._stored_preview_text
             ):
-                self._mw.video_label.setText(self._mw._stored_preview_text)
-            elif not self._mw.video_label.pixmap():
+                self._mw._set_video_message(self._mw._stored_preview_text)
+            elif not self._mw._video_is_placeholder_text:
+                pass
+            else:
                 self._mw._show_video_logo_placeholder()
-            self._mw.video_label.setStyleSheet("color: #6a6a6a; font-size: 16px;")
-
-    def _draw_roi_overlay(self, qimage):
-        """Draw ROI shapes overlay on a QImage."""
-        from PySide6.QtCore import QPoint
-
-        if not self._mw.roi_shapes:
-            return qimage
-        pix = QPixmap.fromImage(qimage).copy()
-        painter = QPainter(pix)
-        for shape in self._mw.roi_shapes:
-            if shape["type"] == "circle":
-                cx, cy, radius = shape["params"]
-                painter.setPen(QPen(Qt.cyan, 2, Qt.DashLine))
-                painter.drawEllipse(
-                    int(cx - radius), int(cy - radius), int(2 * radius), int(2 * radius)
-                )
-                painter.setPen(QPen(Qt.cyan, 6))
-                painter.drawPoint(int(cx), int(cy))
-            elif shape["type"] == "polygon":
-                points = [QPoint(int(x), int(y)) for x, y in shape["params"]]
-                painter.setPen(QPen(Qt.cyan, 2, Qt.DashLine))
-                painter.drawPolygon(points)
-        painter.end()
-        return pix.toImage()
-
-    def _apply_roi_mask_to_image(self, qimage):
-        """Apply ROI visualization boundary overlay."""
-        if self._mw.roi_mask is None or not self._mw.roi_shapes:
-            return qimage
-        return self._draw_roi_overlay(qimage)

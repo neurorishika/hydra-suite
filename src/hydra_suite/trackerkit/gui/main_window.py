@@ -13,7 +13,7 @@ from pathlib import Path
 
 import cv2
 from PySide6.QtCore import Qt, QTimer, Signal, Slot
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -49,6 +49,7 @@ from hydra_suite.core.inference.model_paths import (
     resolve_pose_model_path,
 )
 from hydra_suite.trackerkit.config.schemas import TrackerConfig
+from hydra_suite.trackerkit.gui.widgets.arena_canvas import ArenaCanvas
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
 from hydra_suite.utils.geometry import wrap_angle_degs
 from hydra_suite.widgets.status_log import StatusLogTail
@@ -550,23 +551,25 @@ class MainWindow(QMainWindow):
         self.scroll.setAlignment(Qt.AlignCenter)
         self.scroll.setStyleSheet("background-color: #121212; border: none;")
         self.scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.video_label = QLabel("")
-        self.video_label.setAlignment(Qt.AlignCenter)
-        self.video_label.setStyleSheet("color: #6a6a6a; font-size: 16px;")
-        self.video_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self.video_label.setMinimumSize(320, 240)
+        self.video_label = ArenaCanvas()
+        # Tracks whether the canvas currently shows rasterized placeholder
+        # text (via _set_video_message) rather than a real video/logo frame
+        # (via _set_video_pixmap) -- ArenaCanvas has no QLabel text()/pixmap()
+        # to query, so this is tracked explicitly for the visualization-free
+        # toggle's "restore previous message" logic.
+        self._video_is_placeholder_text = False
+        self._video_placeholder_text = None
         self.scroll.setWidget(self.video_label)
         self._show_video_logo_placeholder()
 
-        # Enable mouse tracking and events for interactive pan/zoom
-        self.video_label.setMouseTracking(True)
-        self.video_label.mousePressEvent = self._handle_video_mouse_press
-        self.video_label.mouseMoveEvent = self._handle_video_mouse_move
-        self.video_label.mouseReleaseEvent = self._handle_video_mouse_release
-        self.video_label.mouseDoubleClickEvent = self._handle_video_double_click
+        # Pan is driven by the canvas: it reports a delta only for gestures it
+        # classified as drags, so a point-marking click never scrolls.
+        self.video_label.pan_delta.connect(self._on_canvas_pan)
+        self.video_label.point_added.connect(self._on_canvas_point_added)
+        self.video_label.point_removed.connect(self._on_canvas_point_removed)
+        self.video_label.arena_clicked.connect(self._on_canvas_arena_clicked)
         self.video_label.wheelEvent = self._handle_video_wheel
-
-        # Enable pinch-to-zoom gesture
+        self.video_label.mouseDoubleClickEvent = self._handle_video_double_click
         self.video_label.setAttribute(Qt.WA_AcceptTouchEvents, True)
         self.video_label.grabGesture(Qt.PinchGesture)
         self.video_label.event = self._handle_video_event
@@ -2224,6 +2227,27 @@ class MainWindow(QMainWindow):
         """Handle mouse release - end pan."""
         self._session_orch._handle_video_mouse_release(evt)
 
+    def _on_canvas_pan(self, dx: int, dy: int) -> None:
+        """Scroll by a drag delta the canvas already classified as a pan."""
+        self.scroll.horizontalScrollBar().setValue(
+            self.scroll.horizontalScrollBar().value() - dx
+        )
+        self.scroll.verticalScrollBar().setValue(
+            self.scroll.verticalScrollBar().value() - dy
+        )
+
+    def _on_canvas_point_added(self, x: float, y: float) -> None:
+        """A left-click while drawing: append an ROI point in IMAGE coordinates."""
+        self._session_orch.add_roi_point(x, y)
+
+    def _on_canvas_point_removed(self) -> None:
+        """A right-click while drawing: drop the most recent ROI point."""
+        self._session_orch.remove_last_roi_point()
+
+    def _on_canvas_arena_clicked(self, arena_id: int) -> None:
+        """A left-click outside drawing mode: make that arena current."""
+        self._session_orch.set_current_arena(arena_id)
+
     def _handle_video_double_click(self, evt):
         """Handle double-click on video to fit to screen."""
         self._session_orch._handle_video_double_click(evt)
@@ -2801,24 +2825,40 @@ class MainWindow(QMainWindow):
         self._set_video_message("HYDRA\n\nLoad a video to begin...")
 
     def _set_video_pixmap(self, pixmap: QPixmap):
-        """Display a pixmap and resize the video label to match it."""
-        self.video_label.setText("")
-        self.video_label.setPixmap(pixmap)
-        if pixmap is not None and not pixmap.isNull():
-            self.video_label.resize(pixmap.width(), pixmap.height())
+        """Display a pixmap on the canvas."""
+        self.video_label.set_frame(pixmap.toImage())
+        self._video_is_placeholder_text = False
+        self._video_placeholder_text = None
 
     def _set_video_message(
-        self, text: str, minimum_width: int = 320, minimum_height: int = 240
+        self,
+        text: str,
+        minimum_width: int = 320,
+        minimum_height: int = 240,
+        color: str = "#6a6a6a",
+        font_size: int = 16,
     ):
-        """Display centered text in the video area with a stable minimum size."""
-        self.video_label.setPixmap(QPixmap())
-        self.video_label.setText(text)
-        width_hint = self.video_label.sizeHint().width()
-        height_hint = self.video_label.sizeHint().height()
-        self.video_label.resize(
-            max(minimum_width, width_hint),
-            max(minimum_height, height_hint),
-        )
+        """Rasterize *text* onto a pixmap and display it on the canvas.
+
+        ArenaCanvas is a plain QWidget with no QLabel-style setText/setPixmap
+        API, so placeholder/status text is drawn onto a pixmap and pushed
+        through the same set_frame() path a real video frame uses.
+        """
+        width = max(minimum_width, self.scroll.viewport().width())
+        height = max(minimum_height, self.scroll.viewport().height())
+        pixmap = QPixmap(width, height)
+        pixmap.fill(QColor("#121212"))
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setPen(QColor(color))
+        font = painter.font()
+        font.setPixelSize(font_size)
+        painter.setFont(font)
+        painter.drawText(pixmap.rect(), Qt.AlignCenter | Qt.TextWordWrap, text)
+        painter.end()
+        self._set_video_pixmap(pixmap)
+        self._video_is_placeholder_text = True
+        self._video_placeholder_text = text
 
     def _is_visualization_enabled(self) -> bool:
         # Preview should always render frames regardless of visualization-free toggle
@@ -2832,14 +2872,6 @@ class MainWindow(QMainWindow):
 
     def _apply_ui_state(self, state: str):
         self._session_orch._apply_ui_state(state)
-
-    def _draw_roi_overlay(self, qimage):
-        """Draw ROI shapes overlay on a QImage."""
-        return self._session_orch._draw_roi_overlay(qimage)
-
-    def _apply_roi_mask_to_image(self, qimage):
-        """Apply ROI visualization - draw boundary overlay for all detection methods."""
-        return self._session_orch._apply_roi_mask_to_image(qimage)
 
     @Slot(int, str)
     def on_progress_update(

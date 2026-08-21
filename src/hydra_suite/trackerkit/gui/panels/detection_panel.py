@@ -1757,9 +1757,14 @@ class DetectionPanel(QWidget):
         bytes_per_line = ch * w
         qimg = QImage(adjusted_rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
 
-        if self._main_window.roi_mask is not None:
-            qimg = self._main_window._apply_roi_mask_to_image(qimg)
-
+        # NOTE(arena-canvas wiring): the cyan-dashed ROI boundary overlay this
+        # used to bake into the preview pixmap (_apply_roi_mask_to_image) was
+        # retired with the ROI-drawing rasterizer -- ArenaCanvas now owns ROI
+        # overlay rendering, but this detection-preview path renders through
+        # _set_video_pixmap directly rather than the canvas's shape/point
+        # state, so it no longer draws the ROI boundary. Not part of Task 8's
+        # scope; flagged for a follow-up if this preview needs the boundary
+        # back.
         zoom_val = max(self._main_window.slider_zoom.value() / 100.0, 0.1)
         if zoom_val != 1.0:
             scaled_w = int(w * zoom_val)
