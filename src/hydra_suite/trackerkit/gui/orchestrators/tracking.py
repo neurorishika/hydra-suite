@@ -1099,6 +1099,8 @@ class TrackingOrchestrator:
             return
         if not self._validate_identity_requirements("tracking preview"):
             return
+        if not self._validate_arena_overlaps("tracking preview"):
+            return
 
         preview_fps = self._mw._resolve_source_video_fps()
         preview_start_frame = int(params.get("START_FRAME", 0))
@@ -1479,6 +1481,8 @@ class TrackingOrchestrator:
             return
         if not self._validate_identity_requirements("tracking"):
             return
+        if not self._validate_arena_overlaps("tracking"):
+            return
 
         csv_dir = (
             os.path.dirname(self._panels.setup.csv_line.text())
@@ -1624,6 +1628,20 @@ class TrackingOrchestrator:
                 "and a crop OBB model."
             ),
         )
+        return False
+
+    def _validate_arena_overlaps(self, mode_label: str) -> bool:
+        """Refuse to start while any two arenas share a pixel.
+
+        Overlapping arenas are not merely a UI blemish:
+        ``engine_params.build_arena_labels`` resolves them by last-writer-wins
+        in shape draw order, silently, so an animal in the shared region is
+        assigned to whichever arena happened to rasterize last.
+        """
+        allowed, reason = self._mw.arena_panel.can_track()
+        if allowed:
+            return True
+        QMessageBox.warning(self._mw, f"{mode_label}: Overlapping Arenas", reason)
         return False
 
     def _get_detection_size(self, detection_cache, frame_id, detection_id, params):
