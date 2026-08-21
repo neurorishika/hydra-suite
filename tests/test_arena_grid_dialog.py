@@ -139,10 +139,9 @@ def test_dialog_accepted_shapes_matches_pure_function(qapp):
     dialog.spin_pitch_x.setValue(15)
     dialog.spin_pitch_y.setValue(12)
 
-    # The dialog's "Top-Left Position" is the corner of arena 1's bounding
-    # box, but generate_grid_shapes wants its CENTRE -- offset by half the
-    # (diameter-8) size on each axis.
-    expected = generate_grid_shapes(2, 4, 24, 34, 15, 12, 8, first_arena_id=3)
+    # The dialog's "Arena 1 Centre" field is passed straight through to
+    # generate_grid_shapes, which also wants the CENTRE -- no conversion.
+    expected = generate_grid_shapes(2, 4, 20, 30, 15, 12, 8, first_arena_id=3)
     assert dialog.accepted_shapes() == expected
 
 
@@ -356,26 +355,28 @@ def test_accepted_shapes_carry_the_rotation(qt_app):
     assert shapes[0]["params"][1] != shapes[1]["params"][1]
 
 
-# --- Fix Wave 3, Fix 1: "Top-Left Position" is the arena's CORNER, not its
-# centre -- generate_grid_shapes/max_grid_extent want the centre, so the
-# dialog must convert. ---
+# --- Fix Wave 5: "Arena 1 Centre" is the arena's CENTRE, not its bounding-box
+# corner -- generate_grid_shapes/max_grid_extent already want the centre, so
+# the dialog passes the spinbox values straight through with no conversion.
+# (Fix Wave 3 had this backwards based on a misreading of the original bug
+# report; the user has since confirmed centre semantics are correct.) ---
 
 
 def test_top_left_position_zero_puts_circle_bounding_box_at_origin(qt_app):
-    """Radius=20 (diameter 40) at Top-Left=(0, 0), 1x1 grid: the circle's
-    bounding box must start at (0, 0), i.e. its centre must be (20, 20)."""
+    """Radius=20 (diameter 40) at Centre=(0, 0), 1x1 grid: the circle's
+    centre must be exactly (0, 0)."""
     dialog = _dialog(qt_app)
     dialog.combo_shape_type.setCurrentText("Circle")
     dialog.spin_radius.setValue(20)
     dialog.spin_origin_x.setValue(0)
     dialog.spin_origin_y.setValue(0)
     shapes = dialog.accepted_shapes()
-    assert shapes[0]["params"] == [20, 20, 20]
+    assert shapes[0]["params"] == [0, 0, 20]
 
 
 def test_top_left_position_zero_puts_rectangle_bounding_box_at_origin(qt_app):
-    """Width=40, Height=20 at Top-Left=(0, 0): the polygon's actual min-x/
-    min-y vertex must be (0, 0)."""
+    """Width=40, Height=20 at Centre=(0, 0): the polygon's min-x/min-y
+    vertex must be half the width/height back from the centre."""
     dialog = _dialog(qt_app)
     dialog.combo_shape_type.setCurrentText("Rectangle")
     dialog.spin_width.setValue(40)
@@ -386,24 +387,24 @@ def test_top_left_position_zero_puts_rectangle_bounding_box_at_origin(qt_app):
     polygon = shapes[0]["params"]
     min_x = min(pt[0] for pt in polygon)
     min_y = min(pt[1] for pt in polygon)
-    assert (min_x, min_y) == (0, 0)
+    assert (min_x, min_y) == (-20, -10)
 
 
 def test_top_left_position_nonzero_offset_carries_through_circle(qt_app):
-    """Top-Left=(100, 50), Radius=20 (diameter 40): the bounding box's
-    top-left corner must land at (100, 50), not just the zero case."""
+    """Centre=(100, 50), Radius=20 (diameter 40): a non-zero centre must
+    pass straight through unchanged, not just the zero case."""
     dialog = _dialog(qt_app)
     dialog.combo_shape_type.setCurrentText("Circle")
     dialog.spin_radius.setValue(20)
     dialog.spin_origin_x.setValue(100)
     dialog.spin_origin_y.setValue(50)
     shapes = dialog.accepted_shapes()
-    assert shapes[0]["params"] == [120, 70, 20]
+    assert shapes[0]["params"] == [100, 50, 20]
 
 
 def test_top_left_position_nonzero_offset_carries_through_rectangle(qt_app):
-    """Top-Left=(100, 50), Width=40, Height=20: the polygon's min-x/min-y
-    vertex must be (100, 50)."""
+    """Centre=(100, 50), Width=40, Height=20: the polygon's min-x/min-y
+    vertex must be half the width/height back from the centre."""
     dialog = _dialog(qt_app)
     dialog.combo_shape_type.setCurrentText("Rectangle")
     dialog.spin_width.setValue(40)
@@ -414,4 +415,4 @@ def test_top_left_position_nonzero_offset_carries_through_rectangle(qt_app):
     polygon = shapes[0]["params"]
     min_x = min(pt[0] for pt in polygon)
     min_y = min(pt[1] for pt in polygon)
-    assert (min_x, min_y) == (100, 50)
+    assert (min_x, min_y) == (80, 40)

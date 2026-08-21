@@ -88,8 +88,7 @@ Controls:
 
 - **Shape** -- Circle or Rectangle. Circle exposes a **Radius** field;
   Rectangle exposes **Width** and **Height** fields.
-- **Top-Left Position X/Y** -- the origin of the grid (the position of
-  arena 1) in image pixels.
+- **Arena 1 Centre X/Y** -- the centre of arena 1 in image pixels.
 - **Rows** / **Columns** -- grid dimensions. Their maximum is capped so that
   every generated arena's centre stays inside the frame given the current
   origin, spacing, and rotation.
