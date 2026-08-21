@@ -143,7 +143,12 @@ class ArenaCanvas(QWidget):
         release = QPointF(event.position())
         was_click = self._is_click(press.x(), press.y(), release.x(), release.y())
 
-        if event.button() == Qt.RightButton and self._drawing:
+        if (
+            event.button() == Qt.RightButton
+            and self._drawing
+            and was_click
+            and not panning
+        ):
             self.point_removed.emit()
         elif event.button() == Qt.LeftButton and was_click and not panning:
             image_x, image_y = self.to_image(release)

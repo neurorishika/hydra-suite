@@ -64,3 +64,57 @@ def test_large_left_movement_is_a_drag(canvas):
 def test_threshold_boundary_counts_as_a_drag(canvas):
     """At exactly the threshold the gesture is a drag, so a click is strictly under."""
     assert canvas._is_click(0, 0, 3, 0) is False
+
+
+def test_right_button_drag_while_drawing_does_not_remove_point(canvas, app):
+    """Right-button drag should not emit point_removed (requires click, not drag).
+
+    This test verifies the fix for the double-fire bug: mouseMoveEvent emits
+    pan_delta for any button's drag past the threshold, so without gating
+    on was_click, a right-button drag would both pan the view and delete
+    the last point.
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QMouseEvent
+
+    canvas.set_drawing(True)
+
+    # Track emissions of point_removed signal
+    removed_count = []
+    canvas.point_removed.connect(lambda: removed_count.append(1))
+
+    # Simulate a right-button press
+    press_event = QMouseEvent(
+        QMouseEvent.MouseButtonPress,
+        QPointF(100.0, 100.0),
+        QPointF(100.0, 100.0),
+        Qt.RightButton,
+        Qt.RightButton,
+        Qt.NoModifier,
+    )
+    canvas.mousePressEvent(press_event)
+
+    # Simulate a move past the threshold (drag, not click)
+    move_event = QMouseEvent(
+        QMouseEvent.MouseMove,
+        QPointF(150.0, 100.0),  # 50px right, well past CLICK_DRAG_THRESHOLD_PX (3px)
+        QPointF(150.0, 100.0),
+        Qt.NoButton,
+        Qt.RightButton,
+        Qt.NoModifier,
+    )
+    canvas.mouseMoveEvent(move_event)
+
+    # Simulate the release
+    release_event = QMouseEvent(
+        QMouseEvent.MouseButtonRelease,
+        QPointF(150.0, 100.0),
+        QPointF(150.0, 100.0),
+        Qt.RightButton,
+        Qt.NoButton,
+        Qt.NoModifier,
+    )
+    canvas.mouseReleaseEvent(release_event)
+
+    # Assert point_removed was NOT emitted (list should be empty)
+    assert len(removed_count) == 0, "Right-button drag should not emit point_removed"
