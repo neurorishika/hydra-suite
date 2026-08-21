@@ -1,0 +1,114 @@
+"""Overlap detection between arenas, including fast-path/brute-force agreement."""
+
+import numpy as np
+import pytest
+
+from hydra_suite.trackerkit.arena_geometry import overlapping_arena_pairs
+
+
+def _circle(cx, cy, r, arena_id, mode="include"):
+    return {"type": "circle", "params": (cx, cy, r), "mode": mode, "arena_id": arena_id}
+
+
+def _square(cx, cy, half, arena_id, mode="include"):
+    return {
+        "type": "polygon",
+        "params": [
+            [cx - half, cy - half],
+            [cx + half, cy - half],
+            [cx + half, cy + half],
+            [cx - half, cy + half],
+        ],
+        "mode": mode,
+        "arena_id": arena_id,
+    }
+
+
+def _brute_force_pairs(shapes, width, height):
+    """Authoritative reference: rasterize every arena full-frame and intersect."""
+    ids = sorted({int(s["arena_id"]) for s in shapes if s.get("mode") == "include"})
+    import cv2
+
+    masks = {}
+    for arena_id in ids:
+        canvas = np.zeros((height, width), np.uint8)
+        for shape in shapes:
+            if int(shape["arena_id"]) != arena_id:
+                continue
+            value = 255 if shape.get("mode", "include") == "include" else 0
+            if shape["type"] == "circle":
+                cx, cy, r = shape["params"]
+                cv2.circle(canvas, (int(cx), int(cy)), int(r), value, -1)
+            else:
+                pts = np.asarray(shape["params"], np.int32)
+                cv2.fillPoly(canvas, [pts], value)
+        masks[arena_id] = canvas > 0
+    out = []
+    for i, a in enumerate(ids):
+        for b in ids[i + 1 :]:
+            if np.any(masks[a] & masks[b]):
+                out.append((a, b))
+    return out
+
+
+def test_separate_circles_do_not_overlap():
+    shapes = [_circle(50, 50, 20, 0), _circle(200, 50, 20, 1)]
+    assert overlapping_arena_pairs(shapes, 400, 200) == []
+
+
+def test_intersecting_circles_are_reported():
+    shapes = [_circle(100, 100, 40, 0), _circle(150, 100, 40, 1)]
+    assert overlapping_arena_pairs(shapes, 400, 300) == [(0, 1)]
+
+
+def test_exactly_tangent_circles_do_not_overlap():
+    """Centre distance == r1 + r2 touches but shares no interior pixel."""
+    shapes = [_circle(100, 100, 30, 0), _circle(160, 100, 30, 1)]
+    assert overlapping_arena_pairs(shapes, 400, 300) == []
+
+
+def test_exclude_zone_can_resolve_an_overlap():
+    """Punching the shared region out of one arena clears the conflict."""
+    shapes = [
+        _circle(100, 100, 40, 0),
+        _circle(150, 100, 40, 1),
+        _circle(150, 100, 40, 0, mode="exclude"),
+    ]
+    assert overlapping_arena_pairs(shapes, 400, 300) == []
+
+
+def test_pairs_are_sorted_ascending():
+    shapes = [_circle(100, 100, 60, 5), _circle(120, 100, 60, 2)]
+    assert overlapping_arena_pairs(shapes, 400, 300) == [(2, 5)]
+
+
+def test_mixed_circle_and_polygon_overlap():
+    shapes = [_circle(100, 100, 30, 0), _square(115, 100, 20, 1)]
+    assert overlapping_arena_pairs(shapes, 400, 300) == [(0, 1)]
+
+
+def test_single_arena_never_overlaps_itself():
+    shapes = [_circle(100, 100, 40, 0), _circle(110, 100, 40, 0)]
+    assert overlapping_arena_pairs(shapes, 400, 300) == []
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_fast_path_agrees_with_brute_force(seed):
+    """The analytic and bbox filters must never disagree with rasterization.
+
+    Without this, an optimization bug would silently weaken the overlap gate
+    -- the failure mode is a missed conflict, which is invisible in the UI.
+    """
+    rng = np.random.default_rng(seed)
+    width = height = 200
+    shapes = []
+    for arena_id in range(5):
+        cx, cy = rng.integers(20, 180, size=2)
+        r = int(rng.integers(10, 45))
+        if arena_id % 2:
+            shapes.append(_circle(int(cx), int(cy), r, arena_id))
+        else:
+            shapes.append(_square(int(cx), int(cy), r, arena_id))
+    assert overlapping_arena_pairs(shapes, width, height) == _brute_force_pairs(
+        shapes, width, height
+    )
