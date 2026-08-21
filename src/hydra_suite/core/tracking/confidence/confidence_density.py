@@ -17,12 +17,15 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 from scipy.ndimage import find_objects, gaussian_filter, label
 
 from hydra_suite.utils.video_encoder import VideoEncoder
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from hydra_suite.core.tracking.arenas import ArenaLayout
 
 _GAUSSIAN_TRUNCATE = 4.0
 _FULL_SMOOTH_MAX_BYTES = 256 * 1024 * 1024
@@ -46,12 +49,19 @@ class DensityRegion:
         Inclusive last frame index covered by the region.
     pixel_bbox:
         Bounding box in image pixel coordinates ``(x1, y1, x2, y2)``.
+    arena:
+        Zero-based id of the arena this region was discovered in, or ``None``
+        for an untagged (whole-frame) region. ``None`` is what every
+        single-arena run and every pre-multi-arena sidecar produces, and it
+        means "applies to every detection" -- i.e. exactly today's behaviour.
+        A tagged region applies ONLY to detections in that same arena.
     """
 
     label: str
     frame_start: int
     frame_end: int
     pixel_bbox: Tuple[int, int, int, int]
+    arena: Optional[int] = None
 
     # ------------------------------------------------------------------
     # Spatial / temporal membership
@@ -92,22 +102,40 @@ class DensityRegion:
     # ------------------------------------------------------------------
 
     def to_dict(self) -> Dict[str, Any]:
-        """Return a JSON-serialisable dictionary representation."""
-        return {
+        """Return a JSON-serialisable dictionary representation.
+
+        The ``arena`` key is emitted ONLY for arena-tagged regions, so a
+        single-arena run writes a sidecar byte-identical to the pre-arena
+        format and no older reader can trip over an unexpected key.
+        """
+        d: Dict[str, Any] = {
             "label": self.label,
             "frame_start": self.frame_start,
             "frame_end": self.frame_end,
             "pixel_bbox": list(self.pixel_bbox),
         }
+        if self.arena is not None:
+            d["arena"] = int(self.arena)
+        return d
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "DensityRegion":
-        """Reconstruct a :class:`DensityRegion` from a dictionary."""
+        """Reconstruct a :class:`DensityRegion` from a dictionary.
+
+        A sidecar written before per-arena regions existed has no ``arena``
+        key; it reads back as ``arena=None`` (untagged), which reproduces the
+        old whole-frame semantics exactly. That is deliberate: a backward pass
+        replaying an old forward pass's regions must behave as that forward
+        pass did, not silently acquire arena scoping it was never computed
+        with.
+        """
+        _arena = d.get("arena")
         return cls(
             label=d["label"],
             frame_start=int(d["frame_start"]),
             frame_end=int(d["frame_end"]),
             pixel_bbox=tuple(int(v) for v in d["pixel_bbox"]),  # type: ignore[arg-type]
+            arena=None if _arena is None else int(_arena),
         )
 
 
@@ -486,6 +514,177 @@ def load_regions(path: str | Path) -> List[DensityRegion]:
 
 
 # ---------------------------------------------------------------------------
+# per-arena density regions
+# ---------------------------------------------------------------------------
+
+
+def _scaled_for_grid(meas, sizes, ds):
+    """Scale detection positions/sizes from frame space into grid space."""
+    if meas.shape[0] > 0 and ds > 1:
+        meas_scaled = meas.copy()
+        meas_scaled[:, 0] /= ds
+        meas_scaled[:, 1] /= ds
+        return meas_scaled, sizes / (ds**2)
+    return meas, sizes
+
+
+def _compute_density_map_per_arena(
+    detection_cache,
+    arena_layout,
+    frame_h: int,
+    frame_w: int,
+    grid_h: int,
+    grid_w: int,
+    ds: int,
+    sigma_scale: float,
+    temporal_sigma: float,
+    threshold: float,
+    min_frame_duration: int,
+    min_area_px: int,
+    progress_callback: Optional[Callable[[int, str], None]] = None,
+) -> Tuple[ConfidenceDensityMap, np.ndarray]:
+    """Compute density regions independently for each arena.
+
+    Why per-arena at all: the whole-frame pipeline couples arenas in two
+    distinct ways, both demonstrated by the arena adversarial review.
+
+    1. *Spatial spillover* -- a crowd entirely inside arena A produces a
+       connected component whose Gaussian tails, and whose rectangular
+       bounding box, reach across the arena wall, so detections in arena B get
+       flagged by arena A's crowd.
+    2. *Global-max coupling* -- ``smooth_and_binarize`` thresholds at
+       ``threshold * max(volume)`` over the WHOLE frame, so a dense arena
+       raises the bar for every other arena and can erase a region that arena
+       would have had entirely on its own. This needs no adjacency at all:
+       arenas on opposite corners of the frame still couple.
+
+    The fix addresses both at the source rather than post-filtering the
+    output, because only (2) is invisible to any post-hoc geometric filter:
+    a region that never formed cannot be recovered by intersecting bboxes
+    with arena labels. So each arena gets
+
+    * its own volume, accumulated from ONLY its own detections (kills the
+      cross-arena Gaussian contribution),
+    * that volume masked to its own pixels (kills tails that leak across the
+      wall),
+    * its own ``smooth_and_binarize`` call, hence its own maximum (kills the
+      global-max coupling),
+    * its own ``find_regions`` call, and every resulting region tagged with
+      ``arena`` so that even a bounding box which geometrically overlaps a
+      neighbour (unavoidable for non-rectangular arenas) can never flag that
+      neighbour's detections -- see :func:`get_density_region_flags`.
+
+    Each arena's region set is therefore a pure function of that arena's own
+    detections plus the static layout, which is the property the whole
+    multi-arena feature is defined by.
+
+    Detections that fall outside every arena (``arena_of_points`` -> ``-1``)
+    contribute to NO arena's volume and match no arena-tagged region, so they
+    are never density-flagged. This mirrors how the rest of the arena work
+    treats them (they bootstrap no slot and match no track).
+
+    The returned ``frame_grids``/``binary_volume`` are the union over arenas
+    (sum of the masked grids, elementwise max of the binaries) purely so the
+    diagnostic video keeps working; nothing in the tracking path reads them.
+    """
+    sorted_frames = sorted(detection_cache.keys())
+    n_total = len(sorted_frames)
+    n_arenas = int(arena_layout.n_arenas)
+
+    # Arena id per detection, resolved once per frame in the SAME coordinate
+    # space the grid is built in ((frame_w, frame_h)), so a detection's arena
+    # and its grid cell can never disagree.
+    det_arena: List[np.ndarray] = []
+    for frame_idx in sorted_frames:
+        meas, _confs, _sizes = detection_cache[frame_idx]
+        if meas.shape[0] == 0:
+            det_arena.append(np.zeros(0, dtype=np.int32))
+        else:
+            det_arena.append(
+                arena_layout.arena_of_points(meas[:, :2], frame_size=(frame_w, frame_h))
+            )
+
+    # Arena label image at grid resolution (nearest-neighbour, cached by the
+    # layout). Labels are 1-based with 0 meaning "outside every arena".
+    grid_labels = arena_layout.label_image_for_size(grid_w, grid_h)
+
+    total_grids = np.zeros((n_total, grid_h, grid_w), dtype=np.float32)
+    binary_total = np.zeros((n_total, grid_h, grid_w), dtype=np.uint8)
+    work = np.zeros((n_total, grid_h, grid_w), dtype=np.float32)
+    regions: List[DensityRegion] = []
+
+    for arena_id in range(n_arenas):
+        work[:] = 0.0
+        for i, frame_idx in enumerate(sorted_frames):
+            meas, confs, sizes = detection_cache[frame_idx]
+            if meas.shape[0] == 0:
+                continue
+            sel = det_arena[i] == arena_id
+            if not sel.any():
+                continue
+            meas_scaled, sizes_scaled = _scaled_for_grid(meas[sel], sizes[sel], ds)
+            accumulate_frame(
+                work[i], meas_scaled, confs[sel], sizes_scaled, sigma_scale=sigma_scale
+            )
+        # Mask to this arena's own pixels: a Gaussian tail that spills over the
+        # wall must not be able to seed a region on the other side. float32
+        # multiply by an exact 0.0/1.0 mask leaves in-arena values bit-exact.
+        mask = (grid_labels == (arena_id + 1)).astype(np.float32)
+        work *= mask[None, :, :]
+
+        binary = smooth_and_binarize(
+            work, temporal_sigma=temporal_sigma, threshold=threshold
+        )
+        arena_regions = find_regions(
+            binary,
+            frame_h=grid_h,
+            frame_w=grid_w,
+            min_frame_duration=min_frame_duration,
+            min_area_px=min_area_px,
+        )
+        for r in arena_regions:
+            r.arena = arena_id
+        regions.extend(arena_regions)
+
+        total_grids += work
+        np.maximum(binary_total, binary, out=binary_total)
+        del binary
+
+        if progress_callback is not None:
+            pct = int(45 * (arena_id + 1) / max(1, n_arenas))
+            progress_callback(pct, f"Density map: arena {arena_id + 1}/{n_arenas}")
+
+    # Scale bounding boxes back to original pixel coordinates.
+    if ds > 1:
+        for r in regions:
+            x1, y1, x2, y2 = r.pixel_bbox
+            r.pixel_bbox = (x1 * ds, y1 * ds, x2 * ds, y2 * ds)
+
+    # Deterministic global ordering/labelling across arenas (arena breaks ties
+    # so two arenas producing an identical (frame_start, x1) still sort
+    # stably).
+    regions.sort(key=lambda r: (r.frame_start, r.pixel_bbox[0], r.arena))
+    for idx, region in enumerate(regions, start=1):
+        region.label = f"region-{idx}"
+
+    if progress_callback is not None:
+        progress_callback(
+            48,
+            f"Density map complete: {len(regions)} regions found "
+            f"across {n_arenas} arenas",
+        )
+
+    cdm = ConfidenceDensityMap(
+        frame_grids=total_grids,
+        regions=regions,
+        frame_h=grid_h,
+        frame_w=grid_w,
+        binary_volume=binary_total,
+    )
+    return cdm, total_grids
+
+
+# ---------------------------------------------------------------------------
 # compute_density_map_from_cache
 # ---------------------------------------------------------------------------
 
@@ -501,6 +700,7 @@ def compute_density_map_from_cache(
     min_frame_duration: int = 3,
     min_area_px: int = 100,
     progress_callback: Optional[Callable[[int, str], None]] = None,
+    arena_layout: Optional["ArenaLayout"] = None,
 ) -> Tuple[ConfidenceDensityMap, List[np.ndarray]]:
     """Run the full density-map pipeline from a detection cache.
 
@@ -530,6 +730,13 @@ def compute_density_map_from_cache(
     progress_callback:
         Optional callable ``(percent: int, message: str) -> None`` invoked
         periodically to report progress.
+    arena_layout:
+        Optional :class:`~hydra_suite.core.tracking.arenas.ArenaLayout`. When
+        it describes more than one arena AND carries a label image, regions
+        are computed independently per arena (see
+        :func:`_compute_density_map_per_arena`). ``None``, a single-arena
+        layout, or a layout with no label image all take the ORIGINAL
+        whole-frame path below, unmodified.
 
     Returns
     -------
@@ -554,6 +761,27 @@ def compute_density_map_from_cache(
             frame_w=grid_w,
         )
         return cdm, []
+
+    if (
+        arena_layout is not None
+        and not arena_layout.is_single_arena
+        and arena_layout.label_image is not None
+    ):
+        return _compute_density_map_per_arena(
+            detection_cache=detection_cache,
+            arena_layout=arena_layout,
+            frame_h=frame_h,
+            frame_w=frame_w,
+            grid_h=grid_h,
+            grid_w=grid_w,
+            ds=ds,
+            sigma_scale=sigma_scale,
+            temporal_sigma=temporal_sigma,
+            threshold=threshold,
+            min_frame_duration=min_frame_duration,
+            min_area_px=min_area_px,
+            progress_callback=progress_callback,
+        )
 
     sorted_frames = sorted(detection_cache.keys())
     n_total = len(sorted_frames)

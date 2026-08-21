@@ -12,7 +12,7 @@
 
 - **Single-arena runs MUST be byte-identical to current `main`.** With one arena, `slot_arena` is uniform, no pair is arena-blocked, and there is one identity decoder — every new code path must degenerate to today's exactly. This is the primary regression gate.
 - **Arena gating conditions on `track_arena[i] != meas_arena[j]`, never on `cost >= 1e6`.** The sentinel value is also carried by *distance*-gated cells that exist today, so a sentinel-valued predicate would silently change existing behavior. Arena mismatch is the only legal predicate anywhere arena gating appears.
-- **`_apply_bayesian_identity_cost` is NOT arena-gated — do not touch it.** See the rebase note below: it is already vectorized, and cross-arena cells stay rejected without any gate because the addon is non-negative.
+- **`_apply_bayesian_identity_cost` MUST be arena-gated.** Not because a cross-arena pair could be *accepted* (it cannot — see the rebase note), but because the overlay writes a *varying* addon onto blocked cells, and the solver then picks *which* blocked cell to consume on the basis of those differences. That consumes a track from an unrelated arena and perturbs the within-arena pairing. Demonstrated, not theorised — see the correction in the rebase note.
 - **The `arena_id` CSV column is emitted only when `n_arenas > 1`.** `tools/equivalence/compare.py:110` bails out entirely when `list(a.columns) != list(b.columns)`, and under the new `--strict-columns` mode that is a hard failure — an unconditional new column would break the byte-identity gate against `legacy/main` for schema reasons alone, and would change the CSV contract for every existing single-arena user.
 - **Animal count is one shared value across all arenas.** `MAX_TARGETS = n_arenas × animals_per_arena` is derived, never entered directly.
 - **Legacy `roi_shapes` without `arena_id` all map to arena 0.** Multi-arena is opt-in, never inferred from shape count.
@@ -39,17 +39,40 @@ resulting changes are folded into the tasks below, but the reasoning lives here.
   Both that function and the identity-rejoin scoring in `_assign_respawn` now compute a
   dense block through `_pairwise_log_compat` (`hungarian.py:108`), a vectorized
   log-domain inner product.
-- Consequently **arena blocking is no longer needed in `_apply_bayesian_identity_cost`,
-  for perf or for correctness.** Correctness: the addon is `alpha * (-log_compat)` with
-  `log_compat = logsumexp(log_posterior + log_likelihood) <= 0` for normalized
-  distributions, so the addon is always `>= 0`; and the cap branch
-  (`np.where(block < max_dist, capped, summed)`) leaves any cell already at the `1e6`
-  sentinel at `1e6 + addon >= 1e6`, still hard-rejected post-solve. Perf: the block op is
-  `rows x cols x n_classes` NumPy work — sub-millisecond even at 400 slots.
-  `compute_assignment_confidence` (`hungarian.py:697`) reads only *matched* pairs, which
-  are never cross-arena, so leaving cross-arena cells un-skipped cannot perturb it.
-- **Net: Task 4 loses its identity-cost half entirely.** That is a simplification and
-  strictly reduces byte-identity risk. The respawn half remains — and is still real.
+- The *performance* motive for gating `_apply_bayesian_identity_cost` is therefore gone.
+  The **correctness** motive is not — see the correction immediately below.
+
+**1a. CORRECTION (found by the Task 3 review, verified experimentally).**
+
+An earlier revision of this plan dropped arena gating from `_apply_bayesian_identity_cost`
+on the argument that the addon is `alpha * (-log_compat) >= 0`, so a blocked cell stays at
+`1e6 + addon >= 1e6` and is still hard-rejected post-solve. **That argument is true but
+insufficient.** It proves no cross-arena pair is ever *accepted*. It does not prove the
+solve is unperturbed.
+
+The cap branch is `np.where(block < max_dist, capped, summed)`, so blocked cells take the
+**uncapped** `summed` — and the addon *varies per (i, j)*. When an arena holds more
+detections than it has free tracks, `linear_sum_assignment` must place some detection on a
+blocked cell, and it chooses *which* one by comparing those varying values. The chosen row
+is a track belonging to a different arena, which is then consumed — so a match that arena
+would have made when run standalone is lost.
+
+Minimal demonstration (2 arenas; arena 0 has tracks t0/t2 and detection d0; arena 1 has
+track t1 and detections d1/d2, so d2 has no arena-1 track left):
+
+| blocked-cell values | accepted pairs |
+|---|---|
+| constant `1e6` | `t0→d0`, `t1→d1` |
+| `1e6 + varying addon` | `t2→d0`, `t1→d1` |
+
+Arena 0's detection is matched to its *worse* track (cost 9 rather than 5) purely because
+of values on cross-arena cells. That is exactly the independence the feature promises.
+
+**Net: Task 4 keeps its identity-cost half after all**, restoring the spec's original
+Touch-point-2 intent that block structure be exploited *during* cost construction. Gate on
+`track_arena[i] != meas_arena[j]` — never on `cost >= 1e6`, which would also skip
+distance-gated cells that exist on `main` today. Single-arena runs pass `None` and skip
+nothing, so byte-identity is unaffected.
 - `_assign_respawn`'s identity-rejoin path was restructured by the same commit into
   `cand_slots` / `cand_dets` + `np.flatnonzero(row > log_threshold)`. Task 4's snippets
   already target that post-sweep shape; `_within_budget` still receives only a coordinate
@@ -89,6 +112,39 @@ branch, so Tasks 3 and 5 keep their shape. Four things do land on us:
   - `UniqueIdentityKey` itself stays arena-blind. Scoping the key by arena would change
     its value for single-arena runs and break the newly-strict identity-column gate;
     grouping its *consumers* by arena is equivalent and free.
+
+
+## CORRECTION 2 — the sentinel does NOT make Hungarian decompose exactly
+
+Found by the Task 10 review; verified in the code and by a captured frame. **This
+invalidates the spec's Touch-point-2 claim and every restatement of it in this plan.**
+
+`hungarian.py` uses **two different reject sentinels**:
+
+| Sentinel | Written by | Lines |
+|---|---|---|
+| `1e6` | arena blocking, spatial/candidate gating | 82, 103, 453 |
+| `1e9` | the raw distance / velocity gate | 1160 |
+
+Both are rejected post-solve (`cost >= 1e6`), so **no cross-arena pair is ever accepted** —
+that part of the design holds. But the two values are *different numbers*, and
+`linear_sum_assignment` minimises total cost, so it is **not indifferent between them**.
+
+When an arena holds more established tracks than its own detections — routine, e.g. one
+animal briefly undetected — the square solve must park surplus rows on foreign columns.
+Parking is not cost-neutral: a foreign cell costs `1e6` or `1e9` depending on **other
+arenas'** detections. Captured frame: arena 1 with 7 tracks / 6 detections, the joint solve
+awards a detection at cost `1581.79` where the per-arena solve awards it at `0.0096`,
+because one slot could park on a `1e6` cell and the other could not. **Which of arena 1's
+tracks loses its detection is decided by arenas 0, 2 and 3.**
+
+Why nothing caught it: the oracle's gate-widening used a non-existent config key (see Task
+10 fix), so the competing cell collapsed to `1e6` and the effect was masked; and
+`test_blocked_hungarian_equals_independent_per_arena_hungarian` uses a balanced
+3-tracks/3-detections matrix, which cannot exhibit a surplus row at all.
+
+**User decision: solve per-arena sub-blocks (Task 11).** Independence becomes structural
+rather than emergent — no sentinel reasoning required.
 
 ## File Structure
 
@@ -230,7 +286,11 @@ def build_arena_labels(
     if not roi_shapes or not width or not height:
         return None, 1
 
-    includes = [s for s in roi_shapes if s.get("mode", "include") != "exclude"]
+    # Mirror build_roi_mask EXACTLY: it partitions three ways, rendering a shape
+    # only on `== "include"` / `== "exclude"` and silently dropping any other
+    # mode string.  Selecting includes with `!= "exclude"` would render unknown
+    # modes here that the ROI mask drops, breaking the union invariant.
+    includes = [s for s in roi_shapes if s.get("mode", "include") == "include"]
     raw_ids = sorted({int(s.get("arena_id", 0)) for s in includes}) or [0]
     dense = {raw: i for i, raw in enumerate(raw_ids)}
 
@@ -702,10 +762,10 @@ git commit -m "feat(arena): arena-blocked cost matrix in the assignment kernel"
 
 ---
 
-### Task 4: Arena gating in the respawn paths
+### Task 4: Arena gating in the identity-cost and respawn paths
 
 **Files:**
-- Modify: `src/hydra_suite/core/assigners/hungarian.py:811` (`_assign_respawn`), `:966` (`assign_tracks`)
+- Modify: `src/hydra_suite/core/assigners/hungarian.py:266` (`_apply_bayesian_identity_cost`), `:811` (`_assign_respawn`), `:966` (`assign_tracks`)
 - Test: `tests/test_arena_blocked_assignment.py` (extend)
 
 **Interfaces:**
@@ -718,11 +778,51 @@ proximity respawn (`hungarian.py:952`, `np.linalg.norm(meas[c][:2] - last_pos)`)
 identity-rejoin scoring block. Without explicit gating, a lost track in arena 3 could
 respawn onto a detection in arena 7.
 
-**Scope reduction vs. the spec:** `_apply_bayesian_identity_cost` is deliberately left
-untouched. See the rebase note — after `2cdf6bb9` it is vectorized, and cross-arena cells
-remain hard-rejected without a gate because the addon is non-negative and the cap's
-`where(block < max_dist)` branch preserves the `1e6` sentinel. Adding a gate there would
-buy nothing and would risk the byte-identity gate.
+**Second reason this task exists:** `_apply_bayesian_identity_cost` (`hungarian.py:266`)
+writes a *varying* addon onto cells the kernel already blocked, because the cap branch
+`np.where(block < max_dist, capped, summed)` leaves sentinel-valued cells uncapped. The
+solver then chooses *which* blocked cell to consume by comparing those values, stealing a
+track from an unrelated arena. See the rebase note's correction for the worked
+counter-example. Gating the overlay restores a constant `1e6` across every blocked cell,
+which is what makes the decomposition exact.
+
+Add to that function:
+
+```python
+    def _apply_bayesian_identity_cost(
+        self,
+        cost: np.ndarray,
+        association_data: Dict[str, Any] | None,
+        meas_arena: np.ndarray | None = None,
+    ) -> None:
+```
+
+After `rows` and `cols` are built and before `_pairwise_log_compat` is called, drop
+cross-arena pairs from the *block itself* rather than masking afterwards — the vectorized
+op should never compute them:
+
+```python
+        ta = self.track_arena
+        if ta is not None and meas_arena is not None and len(ta) >= n_tracks:
+            # Arena mismatch is the ONLY legal predicate. Skipping on `cost >= 1e6`
+            # would also skip distance-gated cells that exist on main today and
+            # change compute_assignment_confidence's inputs.
+            blocked = ta[np.ix_(rows)][:, None] != meas_arena[np.ix_(cols)][None, :]
+        else:
+            blocked = None
+```
+
+and apply it to the final write so blocked cells keep the value the kernel gave them:
+
+```python
+        new_block = np.where(block < dt(max_dist), capped, summed)
+        if blocked is not None:
+            new_block = np.where(blocked, block, new_block)
+        cost[np.ix_(rows, cols)] = new_block
+```
+
+Byte-identity: with `meas_arena=None` (single arena) `blocked` is `None` and the write is
+character-for-character the existing one.
 
 **Critical constraint:** gate on `track_arena[slot] != meas_arena[j]`, never on
 `cost >= 1e6`. Gate at the two loop sites where the detection *index* is in hand; do
@@ -737,8 +837,11 @@ def test_respawn_never_crosses_arenas():
     from hydra_suite.core.assigners.hungarian import TrackAssigner
 
     class _KF:
-        # slot 0 in arena 0 at (10,10); slot 1 in arena 1 at (410,10)
-        X = np.array([[10.0, 10.0, 0.0, 0.0, 0.0], [410.0, 10.0, 0.0, 0.0, 0.0]])
+        # Geometry matters: the arena-0 slot must be the NEAREST one, otherwise
+        # the nearest-neighbour loop picks the arena-1 slot anyway and the test
+        # passes with the gate deleted.  slot 0 (arena 0) at x=390 is 5px from
+        # the detection; slot 1 (arena 1) at x=410 is 15px away.
+        X = np.array([[390.0, 10.0, 0.0, 0.0, 0.0], [410.0, 10.0, 0.0, 0.0, 0.0]])
 
     params = {
         "MAX_DISTANCE_THRESHOLD": 1000.0,
@@ -752,8 +855,9 @@ def test_respawn_never_crosses_arenas():
     assigner = TrackAssigner(params)
     assigner.set_track_arena(np.array([0, 1], dtype=np.int32))
 
-    # One detection, sitting in arena 1, near slot 1 but within MAX_DIST of slot 0.
-    meas = [np.array([400.0, 10.0, 0.0])]
+    # One detection in arena 1 at x=395 -- CLOSER to the arena-0 slot than to
+    # the arena-1 slot, so only the arena gate can produce the right answer.
+    meas = [np.array([395.0, 10.0, 0.0])]
     cost = np.full((2, 1), 1e6, dtype=np.float32)
     rows, cols, _ = assigner._assign_respawn(
         cost=cost,
@@ -774,6 +878,9 @@ def test_respawn_never_crosses_arenas():
     )
     assert 0 not in rows, "arena-0 slot must not respawn on an arena-1 detection"
     assert list(zip(rows, cols)) == [(1, 0)], "arena-1 slot should take the detection"
+    # Mutation check this test must survive: deleting the proximity-loop gate
+    # makes it return [(0, 0)].  If it still passes with the gate removed, the
+    # geometry has drifted back to trivially-separable and the test is worthless.
 
 
 def test_identity_rejoin_never_crosses_arenas():
@@ -1066,7 +1173,12 @@ class ArenaDecoderRegistry:
     def all_active_slots(self) -> list[int]:
         return sorted(s for d in self.decoders.values() for s in d.all_active_slots())
 
-    def update_frame(self, frame_idx, slot_evidence, *args, **kwargs) -> dict:
+    # NOTE: the real signature is
+    #   update_frame(frame_idx, visible_slots, slot_evidences) -> list[IdentityAssignment]
+    # (core/individual/identity/online.py:382).  Partition BOTH visible_slots and
+    # slot_evidences by arena, call each decoder with only its own slots, and
+    # concatenate the returned assignment lists.
+    def update_frame(self, frame_idx, visible_slots, slot_evidences) -> list:
         """Run each arena's decoder over only that arena's slots.
 
         ``slot_evidence`` is the worker's {slot_index: evidence} mapping; each
@@ -1113,7 +1225,7 @@ git commit -m "feat(arena): one online identity decoder per arena"
 ### Task 6: Worker wiring — layout, per-frame lookup, arena column
 
 **Files:**
-- Modify: `src/hydra_suite/core/tracking/worker.py:873` (kf construction), `:2134`/`:2210`/`:2270`/`:2308` (meas construction sites), `:3533` (row emission)
+- Modify: `src/hydra_suite/core/tracking/worker.py:877` (kf construction), `:1829` (identity-decoder construction), `:2156`/`:2232`/`:2292`/`:2330` (meas construction sites), `:3533` (row emission)
 - Modify: `src/hydra_suite/trackerkit/engine_params.py:1138` (params dict)
 - Test: `tests/test_arena_worker_wiring.py`
 
@@ -1210,7 +1322,9 @@ Passing `None` for the single-arena case is deliberate: it takes the exact ungat
 At each of the four `meas = frame_result_to_meas(...)` sites (lines 2156, 2232, 2292, 2330), derive the per-frame arena vector immediately after:
 
 ```python
-                    meas_arena = self.arena_layout.arena_of_points(_obb.centroids)
+                    meas_arena = self.arena_layout.arena_of_points(
+                        _obb.centroids, frame_size=(frame.shape[1], frame.shape[0])
+                    )
 ```
 
 and for the empty-detection branches (lines 2201, 2373):
@@ -1219,7 +1333,54 @@ and for the empty-detection branches (lines 2201, 2373):
                     meas_arena = np.zeros(0, dtype=np.int32)
 ```
 
-Thread `meas_arena=meas_arena` into the `assign_tracks(...)` call. At row emission (near line 3533), add the arena of each track slot — **only when the
+**Coordinate space — verify before wiring.** `worker.py:2062` resizes the tracking frame
+by `RESIZE_FACTOR`, and `worker.py:2076` resizes `ROI_MASK` to match the *current* frame
+(`target_w, target_h = frame.shape[1], frame.shape[0]`). The arena label image must follow
+the same rule, which is why `arena_of_points` takes `frame_size`. `RESIZE_FACTOR` is
+clamped to 1.0 on the YOLO path, so this only bites on bgsub clips (the `worm_bgsub`
+fixture) — where it would systematically pull every centroid toward the top-left and
+mis-assign arenas. Confirm which space `_obb.centroids` are actually in (resized vs.
+native) before choosing what to pass, and add a test that pins it.
+
+Thread `meas_arena=meas_arena` into the `assign_tracks(...)` call.
+
+**Swap the identity decoder for the registry (Task 5's whole purpose).** At the decoder
+construction site (`worker.py:1829`, search `_identity_online_decoder = None`), replace the
+bare `OnlineIdentityDecoder(...)` with:
+
+```python
+                _identity_online_decoder = (
+                    OnlineIdentityDecoder(_identity_catalog, p)
+                    if self.arena_layout.is_single_arena
+                    else ArenaDecoderRegistry(
+                        _identity_catalog, p, self.arena_layout.slot_arena
+                    )
+                )
+```
+
+The single-arena branch keeps the *literal same object* rather than a one-decoder
+registry, so byte-identity is structural. `_identity_catalog`, `_catalog_spec` and
+`_phase_label_maps` are arena-invariant — build them once, exactly as today, and share
+them. `ArenaDecoderRegistry` exposes the same call surface, so none of the ~12 downstream
+call sites change.
+
+Without this swap the registry is dead code and multi-arena identity decoding never
+happens — the feature silently degrades to one global uniqueness constraint across all
+arenas, which is the exact failure the design exists to prevent.
+
+**Length and type contract (assert it here — the assigner deliberately does not).**
+`_arena_arrays` fails *open* on a length mismatch (silently disabling kernel gating),
+while `_apply_bayesian_identity_cost` and `_assign_respawn` gate on `>=`. A `track_arena`
+longer than `N` would therefore leave the kernel ungated while the overlay and respawn
+gates stay active — a half-gated cost matrix, which is worse than either extreme because
+it is silent. Task 6 owns the invariant:
+
+```python
+        assert len(slot_arena) == self.kf_manager.X.shape[0]
+        assert isinstance(meas_arena, np.ndarray) and len(meas_arena) == len(meas)
+```
+
+`meas_arena` must be an `ndarray`, not a list — the overlay indexes it with `np.ix_`. At row emission (near line 3533), add the arena of each track slot — **only when the
 run is genuinely multi-arena**:
 
 ```python
@@ -1253,6 +1414,30 @@ git commit -m "feat(arena): wire arena layout through the tracking worker"
 
 **Files:**
 - Modify: `src/hydra_suite/core/post/processing.py:1144` (`resolve_trajectories`), `:757` (`process_trajectories_from_csv`)
+**CORRECTION — the `slot_arena` positional parameter is unsound; derive arena from the frames instead.**
+Found by the Task 7 review. Two independent reasons a single positional array cannot work at
+the only call site (`core/post/merge.py:142`):
+
+1. `merge.py:129-134` builds the forward and backward lists with **two separate**
+   `groupby("TrajectoryID")` calls on **two different** DataFrames. The passes have
+   independent id sets and counts, so index *i* is not the same trajectory in the two
+   lists — yet one `slot_arena` array would be applied to both.
+2. `ArenaLayout.slot_arena` is indexed by **Kalman slot**, but
+   `_clean_and_reassign_trajectories` has already renumbered ids by this point, so a
+   slot-indexed array is not a valid list-position array either.
+
+Additionally the positional form silently **drops** any trajectory at an index beyond
+`len(slot_arena)` — data loss where an error is wanted.
+
+**Do this instead:** `resolve_trajectories` derives each trajectory's arena from that
+trajectory's own `arena_id` column. This is sound because slot→arena is static (Tasks 1-6)
+so a trajectory's `arena_id` is constant and a trajectory can never span arenas here; it
+dissolves both the index-mismatch and the silent-drop problems; and it means
+**`merge.py` needs no change at all** — the grouping is reached automatically whenever the
+column is present. Frames without the column take the untouched single-arena path.
+
+Raise, rather than pick silently, if a trajectory's `arena_id` is ever non-constant — that
+would mean an upstream invariant has already been violated.
 - Modify: `src/hydra_suite/core/individual/postprocess_df.py:544` (`run_fragment_solver` call — the offline identity uniqueness solve) and `:559` (`sort_trajectories_by_identity`)
 - Modify: `src/hydra_suite/core/post/rich_export.py:398` (`relink_trajectories_with_pose` call)
 - Test: `tests/test_arena_postproc_grouping.py`
@@ -1531,6 +1716,22 @@ git commit -m "feat(arena): group trajectory resolution, identity and relink by 
 
 ### Task 8: GUI — arena assignment on ROI shapes
 
+> **Blocker discovered in Task 6 — fix this FIRST, the rest of the task is
+> pointless without it.** `gui/orchestrators/config.py:2097-2098` hardcodes
+> `frame_width=None, frame_height=None`, and `build_arena_labels`
+> (`engine_params.py:257`) short-circuits to `(None, 1)` on falsy dimensions.
+> So **every GUI run currently gets `N_ARENAS=1`, `ARENA_LABELS=None`, and
+> `MAX_TARGETS = animals_per_arena`** — no arena gating, no `arena_id` column,
+> and once this task adds an animals-per-arena control, a silently *undersized*
+> slot count. `ROI_MASK` escapes this only because the GUI substitutes a live
+> cached mask; there is no equivalent path for arena labels.
+>
+> Multi-arena is therefore inert from the primary UI until the GUI supplies real
+> frame dimensions (or an equivalently live-rasterized label image) at that call
+> site. There is no single-arena regression today, because `animals_per_arena`
+> defaults to the legacy `max_targets` — which is exactly why this fails silently
+> rather than loudly.
+
 **Files:**
 - Modify: `src/hydra_suite/trackerkit/config/schemas.py:25`
 - Modify: `src/hydra_suite/trackerkit/gui/orchestrators/session.py:2112` and `:2133` (shape append), `:2167` (status label)
@@ -1606,18 +1807,37 @@ In `session.py`, track the active arena and stamp it on every appended shape:
 ```python
     def start_new_arena(self) -> int:
         """Begin a new arena; subsequent include-shapes join it."""
-        used = [
-            int(s.get("arena_id", 0))
-            for s in self._mw.roi_shapes
-            if s.get("mode", "include") != "exclude"
-        ]
+        # Every shape carries an arena_id, excludes included -- an exclude hole
+        # belonging to arena 3 means 3 is in use.
+        used = [int(s.get("arena_id", 0)) for s in self._mw.roi_shapes]
         self.current_arena_id = (max(used) + 1) if used else 0
         return self.current_arena_id
 ```
 
 At both `roi_shapes.append(...)` sites (lines 2112, 2133) include `"arena_id": self.current_arena_id`. Update the status label (line 2167) to report arena count alongside shape counts.
 
-In `main_window.py`, add to the ROI toolbar next to `btn_start_roi` (line 598) a `QPushButton("New Arena")` wired to `start_new_arena`, plus a `QSpinBox` for animals per arena bound to `config.animals_per_arena`. The distinction matters: one arena is often several shapes (an include circle plus an exclude hole), so a new shape joins the current arena unless "New Arena" is pressed.
+In `main_window.py`, add to the ROI toolbar next to `btn_start_roi` (line 598) a
+`QPushButton("New Arena")` wired to `start_new_arena`.
+
+**ONE animal-count control, not two (user decision).** Do NOT add a second spinbox. The
+existing "Max Targets" control (`gui/panels/setup_panel.py:207`) is *repurposed* as the
+per-arena count: relabel it "Animals per arena" and show the derived total beside it —
+
+```
+Animals per arena:  [ 20 ]
+                    = 40 total across 2 arenas
+```
+
+Rationale: two unlinked controls for one quantity are a standing source of silent
+divergence. With `MAX_TARGETS = n_arenas x animals_per_arena` derived, a separate legacy
+"Max Targets" spinbox stops mattering the instant a second arena exists — a user with
+Max Targets = 20 who adds one arena would get `MAX_TARGETS = 2`, a silent 10x
+under-allocation that quietly loses most of their animals. One control makes that
+unrepresentable.
+
+A legacy single-arena project keeps its exact meaning, because with `n_arenas == 1` the
+per-arena count *is* the total. The derived-total label must update live as arenas are
+added or removed. The distinction matters: one arena is often several shapes (an include circle plus an exclude hole), so a new shape joins the current arena unless "New Arena" is pressed.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -2034,8 +2254,50 @@ git commit -m "test(arena): end-to-end tiling oracle proving per-arena independe
 
 No spec requirement is unassigned. Out-of-scope items (per-arena overrides, arena crossing, per-arena files, auto-detection, global catalogs) have no tasks, as intended.
 
-**Naming consistency check:** `build_arena_labels` (Tasks 1, 6), `ArenaLayout` with `.slot_arena`/`.max_targets`/`.arena_of_points`/`.is_single_arena`/`.label_image_for_size` (Tasks 2, 6), `set_track_arena` (Tasks 3, 4, 6), `meas_arena` (Tasks 3, 4, 6), `ArenaDecoderRegistry` (Task 5), `slot_arena=` keyword on `resolve_trajectories` (Task 7), `animals_per_arena` (Tasks 6, 8), `generate_grid_shapes` (Task 9) — each used identically wherever it appears.
+**Naming consistency check:** `build_arena_labels` (Tasks 1, 6), `ArenaLayout` with `.slot_arena`/`.max_targets`/`.arena_of_points`/`.is_single_arena`/`.label_image_for_size` (Tasks 2, 6), `set_track_arena` (Tasks 3, 4, 6), `meas_arena` (Tasks 3, 4, 6), `ArenaDecoderRegistry` (Task 5), per-trajectory `arena_id` column consumed by `resolve_trajectories` (Task 7, superseding the earlier `slot_arena=` keyword design per the Task 7 correction above), `animals_per_arena` (Tasks 6, 8), `generate_grid_shapes` (Task 9) — each used identically wherever it appears.
 
 **Ordering note:** Tasks 3 and 4 both modify `hungarian.py` and 4 depends on 3's `set_track_arena`; run them in order. Task 6 depends on 1, 2, 3, 4, 5. Task 10 depends on everything.
 
 **Rebase ordering:** this plan is written against `main` **with `feat/identity-heads` merged** (merge `807c4e1e`); all line numbers were re-verified against `7c5d54e6`. Executing against pre-merge `main` will collide in `worker.py` (catalog construction, Task 5), `postprocess_df.py` / `rich_export.py` (Task 7), and `tools/equivalence/run_matrix.sh` (Task 10).
+
+---
+
+### Task 11: Per-arena sub-block assignment (replaces the joint solve)
+
+**Files:**
+- Modify: `src/hydra_suite/core/assigners/hungarian.py` — `assign_tracks` / `_assign_established_hungarian`
+- Test: `tests/test_arena_blocked_assignment.py` (extend), `tests/test_arena_tiling_oracle.py` (must now pass at a WIDE gate)
+
+**Why:** see CORRECTION 2. Writing a sentinel into cross-arena cells prevents cross-arena
+*matches* but does not decouple the *solve*. The only way to get the property the feature
+promises — "identical to running each arena separately" — is to actually run separate
+solves.
+
+**Design:** where the established-track Hungarian runs today, partition rows and columns by
+arena and run one `linear_sum_assignment` per arena over that arena's own tracks and
+detections, then concatenate the resulting pairs. Cross-arena cells are never constructed,
+so no sentinel is involved and no parking decision can couple arenas.
+
+**Byte-identity:** with one arena there is exactly one block containing every row and
+column, so the single solve is the existing solve on the existing matrix. Take the
+`track_arena is None` path unchanged — do not route single-arena runs through the
+partitioning code.
+
+**Perf:** measured, not predicted -- and the first measurement was the opposite of the
+"obviously cheaper" intuition below. The initial per-arena partition loop (a per-arena
+Python scan of rows plus a per-arena `np.flatnonzero` over all columns) was
+O(arenas × (N+M)) and at N=1600 ran in 37.5ms, ~11x *slower* than the single joint solve
+it replaced. Replacing it with one stable argsort per side plus `np.unique` to get
+contiguous per-arena row/col slices in O((N+M) log(N+M) + arenas) brought it to 3.4ms --
+3x *faster* than the joint solve (`89ab18f1`). The naive "100 solves of 4x4 is far less
+work than one 400x400" argument is true of the Hungarian solves themselves, but was
+swamped by the partitioning overhead until it was vectorized; state the measured result,
+not the asymptotic argument alone.
+
+**Acceptance:**
+- The tiling oracle passes at a **wide** assignment gate (`max_assignment_distance_multiplier`
+  = 200), which is the configuration that currently exposes the leak.
+- A unit test with an **unbalanced** arena (more tracks than detections) proves the
+  within-arena pairing is identical whether or not other arenas are present. The existing
+  balanced test cannot show this.
+- Single-arena equivalence stays byte-identical (MPS + CUDA).

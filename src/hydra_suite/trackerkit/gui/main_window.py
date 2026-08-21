@@ -408,6 +408,12 @@ class MainWindow(QMainWindow):
         # Video player state
         self.video_cap = None  # cv2.VideoCapture for video playback
         self.video_total_frames = 0
+        # Native frame dimensions (CAP_PROP_FRAME_WIDTH/HEIGHT), set once the
+        # video is opened. This is the coordinate space ROI shapes are drawn
+        # in, and the live source RuntimeContext uses for arena-label
+        # rasterization (see gui/orchestrators/config.py _gui_runtime_context).
+        self.video_width = None
+        self.video_height = None
         self.video_current_frame_idx = 0
         self.last_read_frame_idx = (
             -1
@@ -608,6 +614,29 @@ class MainWindow(QMainWindow):
         self.btn_undo_roi.setEnabled(False)
         self.btn_undo_roi.setToolTip("Remove last added shape")
 
+        # A new shape joins the CURRENT arena by default -- one arena is
+        # often several shapes (an include circle plus an exclude hole
+        # punched in it), so shape count is not arena count. "New Arena"
+        # is the only thing that advances current_arena_id.
+        self.btn_new_arena = QPushButton("New Arena")
+        self.btn_new_arena.clicked.connect(self._on_new_arena_clicked)
+        self.btn_new_arena.setToolTip(
+            "Start a new arena: shapes added after this join a fresh arena.\n"
+            "Use this only when moving on to a physically separate arena --\n"
+            "an include zone plus its exclude hole belong in the SAME arena."
+        )
+
+        # Bulk-entry convenience for many identical arenas (e.g. a 96-well
+        # plate) -- generates ordinary roi_shapes, indistinguishable from
+        # hand-drawn ones and just as editable afterwards. See task-9 brief.
+        self.btn_generate_grid = QPushButton("Generate Grid")
+        self.btn_generate_grid.clicked.connect(self._on_generate_grid_clicked)
+        self.btn_generate_grid.setToolTip(
+            "Bulk-add a rows x cols grid of arena shapes (e.g. a well plate)\n"
+            "instead of drawing each one by hand. Generated shapes are\n"
+            "ordinary, individually-editable ROI shapes."
+        )
+
         self.btn_clear_roi = QPushButton("Clear All")
         self.btn_clear_roi.clicked.connect(self.clear_roi)
         self.btn_clear_roi.setShortcut("Ctrl+C")
@@ -635,6 +664,8 @@ class MainWindow(QMainWindow):
         roi_layout.addWidget(self.btn_start_roi)
         roi_layout.addWidget(self.btn_finish_roi)
         roi_layout.addWidget(self.btn_undo_roi)
+        roi_layout.addWidget(self.btn_new_arena)
+        roi_layout.addWidget(self.btn_generate_grid)
         roi_layout.addWidget(self.btn_clear_roi)
         roi_layout.addWidget(self.btn_crop_video)
         roi_layout.addStretch()
@@ -2051,6 +2082,102 @@ class MainWindow(QMainWindow):
     def _on_roi_zone_changed(self, index):
         """Handle ROI zone type selection change."""
         self._session_orch._on_roi_zone_changed(index)
+
+    def _on_new_arena_clicked(self):
+        """Advance to a new arena; subsequent shapes join it."""
+        new_id = self._session_orch.start_new_arena()
+        self.roi_status_label.setText(
+            f"Started arena {new_id + 1} -- new shapes join it until "
+            "'New Arena' is pressed again."
+        )
+        self._update_animals_per_arena_total_label()
+
+    def _on_generate_grid_clicked(self):
+        """Open the bulk arena-grid dialog and merge its output into roi_shapes.
+
+        The generator only knows how to append shapes -- it computes the
+        next free arena id over ALL existing shapes (hand-drawn or
+        previously generated) via the same shared
+        ``engine_params.next_free_arena_id`` helper ``start_new_arena`` uses
+        (single source of truth, so a generated grid can't collide with a
+        hand-drawn arena's id), then extends ``roi_shapes`` in place.
+        Generated shapes are ordinary shapes: no marker, no separate
+        storage, fully editable afterwards.
+        """
+        from PySide6.QtWidgets import QDialog
+
+        from hydra_suite.trackerkit.engine_params import next_free_arena_id
+        from hydra_suite.trackerkit.gui.dialogs.arena_grid_dialog import ArenaGridDialog
+
+        next_id = next_free_arena_id(self.roi_shapes)
+        dialog = ArenaGridDialog(
+            parent=self,
+            reference_frame=self.roi_base_frame,
+            first_arena_id=next_id,
+        )
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        new_shapes = dialog.accepted_shapes()
+        if not new_shapes:
+            return
+        self.roi_shapes.extend(new_shapes)
+
+        if self.roi_base_frame:
+            fh, fw = self.roi_base_frame.height(), self.roi_base_frame.width()
+            self._generate_combined_roi_mask(fh, fw)
+        self.btn_undo_roi.setEnabled(len(self.roi_shapes) > 0)
+        self.btn_crop_video.setEnabled(True)
+        # Display-only count over ALL shapes (include + exclude); intentionally
+        # differs from the engine's authoritative count,
+        # `engine_params.n_arenas_from_shapes` (include-shapes only) -- an
+        # arena id appearing only on an exclude shape makes this label report
+        # one more arena than the engine will actually use. Left unreconciled
+        # because unifying them would change engine behavior; this is just a
+        # status label.
+        arena_count = len({int(s.get("arena_id", 0)) for s in self.roi_shapes})
+        self.roi_status_label.setText(
+            f"Generated {len(new_shapes)} arena shape(s) "
+            f"({arena_count} arena(s) total)"
+        )
+        self._update_roi_optimization_info()
+        self._update_animals_per_arena_total_label()
+        self.update_roi_preview()
+        if self.roi_base_frame:
+            self._display_roi_with_zoom()
+
+    def _update_animals_per_arena_total_label(self):
+        """Keep the derived-total label next to "Animals per arena" live.
+
+        ONE animal-count control (user decision, see task-8 fix round 1):
+        the existing "Max Targets" spinbox IS the per-arena count now --
+        there is no separate ``spin_animals_per_arena`` widget. This keeps
+        ``self.config.animals_per_arena`` mirroring that single control (so
+        the typed config field is never a second, divergent source of
+        truth) and refreshes the "= N total across K arenas" label, which
+        is blank for a legacy/single-arena project (n_arenas <= 1) so the
+        control's plain "Max Targets" meaning is visually unchanged.
+        """
+        from hydra_suite.trackerkit.engine_params import n_arenas_from_shapes
+
+        # SetupPanel's own construction (_build_ui -> _sync_realtime_cache_
+        # controls -> _sync_batch_policy_controls) calls back into this method
+        # before `self._setup_panel = SetupPanel(...)` in init_ui has
+        # finished assigning -- guard the same way the codebase's other
+        # cross-panel sync hooks do (see _sync_batch_policy_controls's own
+        # hasattr checks).
+        if not hasattr(self, "_setup_panel"):
+            return
+        per_arena = self._setup_panel.spin_max_targets.value()
+        self.config.animals_per_arena = int(per_arena)
+        n_arenas = n_arenas_from_shapes(self.roi_shapes)
+        if n_arenas > 1:
+            total = n_arenas * per_arena
+            self._setup_panel.lbl_animals_per_arena_total.setText(
+                f"= {total} total across {n_arenas} arenas"
+            )
+        else:
+            self._setup_panel.lbl_animals_per_arena_total.setText("")
 
     def _handle_video_mouse_press(self, evt):
         """Handle mouse press on video - either ROI selection or pan/zoom."""

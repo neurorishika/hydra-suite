@@ -21,9 +21,9 @@ non-excluded key's value will fail this test.
 
 Host-dependent keys are dropped from the golden rather than pinned:
 
-* ``ROI_MASK`` is an ndarray-or-None; both sides are normalized to
-  ``None`` or ``{"__ndarray_shape__": [...]}`` before comparing (see
-  ``_normalize_roi_mask``).
+* ``ROI_MASK``/``ARENA_LABELS`` are ndarray-or-None; both sides are
+  normalized to ``None`` or ``{"__ndarray_shape__": [...]}`` before
+  comparing (see ``_normalize_roi_mask``, reused for both keys).
 * Model-path keys whose value embeds this machine's absolute
   ``HYDRA_DATA_DIR``/home-relative model path are dropped entirely -- see
   ``HOST_DEPENDENT_DROPPED_KEYS`` below. These were determined empirically
@@ -367,7 +367,7 @@ def _normalize_params(params: dict) -> dict:
     for key, value in params.items():
         if key in DROPPED_KEYS:
             continue
-        if key == "ROI_MASK":
+        if key in ("ROI_MASK", "ARENA_LABELS"):
             normalized[key] = _normalize_roi_mask(value)
             continue
         normalized[key] = json.loads(json.dumps(value, default=str))

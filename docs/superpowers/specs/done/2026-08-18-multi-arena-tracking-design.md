@@ -1,7 +1,7 @@
 # Multi-Arena Tracking — independent trackers, one shared inference pass
 
 **Date:** 2026-08-18
-**Status:** Design approved, pending spec review
+**Status:** Shipped — merged to main (see the multi-arena merge commit)
 **Branch:** `feat/multi-arena-tracking` (worktree from local HEAD)
 
 ## Context
@@ -242,6 +242,32 @@ Each is addable later on this data model without rework:
 - Per-arena output files.
 - Automatic arena detection from the frame (Hough circles / contours).
 - Globally-unique identity catalogs across arenas.
+
+## Known limitation — detection-stage budgets remain global
+
+Per-arena independence is achieved for assignment, identity decoding, and
+post-processing (Touch points 2-4), but **not** for the detection stage in
+`core/background/measure.py`. Two budgets there are still spent across the
+whole frame rather than per arena:
+
+- The frame-skip guard (`measure.py:210`) compares total contour count against
+  `MAX_TARGETS * MAX_CONTOUR_MULTIPLIER`. Since `MAX_TARGETS` is the derived
+  `n_arenas * animals_per_arena`, this threshold scales with arena count, so a
+  noisy frame that would have been skipped in a single-arena run may be
+  processed under multi-arena, and vice versa.
+- The top-N-by-area truncation (`measure.py:261`) keeps the largest
+  `N = MAX_TARGETS` contours across the whole frame, so a crowded arena can
+  consume detection slots that "belong" to a quiet arena.
+
+This is the one place the "same as running each arena separately" promise does
+not hold. Fixing it means giving each arena its own detection budget — a
+detection-stage restructure that is deliberately out of scope for this
+feature (see Out of scope, above, and the YOLO/OBB path has the analogous
+per-frame top-N behavior for the same reason).
+
+In practice this only bites when total detections exceed total slots, i.e.
+under noise or crowding; the nominal case (each arena's true detection count
+within its own share of `MAX_TARGETS`) is unaffected.
 
 ## Risks
 

@@ -239,6 +239,96 @@ def build_roi_mask(
     return combined_mask
 
 
+def n_arenas_from_shapes(roi_shapes: list[dict[str, Any]] | None) -> int:
+    """Count the distinct arenas an ``roi_shapes`` list actually encodes.
+
+    Pure and dimension-free -- unlike ``build_arena_labels`` this needs no
+    frame width/height, since arena membership lives entirely in the shapes'
+    ``arena_id`` keys. Counts distinct arena ids among ``include`` shapes only
+    (an ``exclude``-only "arena" renders nothing, so it isn't one); mirrors
+    ``build_arena_labels``'s own ``raw_ids`` computation exactly so the two
+    never disagree on "how many arenas are really in use". Shapes with no
+    ``arena_id`` key all count as arena 0, so an empty or legacy list -> 1.
+
+    Used by the GUI (``ConfigOrchestrator.build_config_dict``) to decide
+    whether to emit an explicit ``animals_per_arena`` override at all: a
+    single-arena project must never do so, or it would silently defeat
+    ``build_engine_params``'s fallback-to-``max_targets`` safety net that
+    keeps single-arena ``MAX_TARGETS`` byte-identical to legacy behavior.
+    """
+    if not roi_shapes:
+        return 1
+    includes = [s for s in roi_shapes if s.get("mode", "include") == "include"]
+    raw_ids = {int(s.get("arena_id", 0)) for s in includes} or {0}
+    return len(raw_ids)
+
+
+def next_free_arena_id(roi_shapes: list[dict[str, Any]] | None) -> int:
+    """The next arena id not already used by any shape in ``roi_shapes``.
+
+    Every shape carries an ``arena_id`` -- excludes included, since an
+    exclude hole belonging to arena 3 means arena 3 is in use -- so this
+    scans ALL shapes, not just includes, and returns ``max(used ids) + 1``
+    (or ``0`` for an empty/legacy list). This is the single source of truth
+    for "what id does the next arena get": both
+    ``SessionOrchestrator.start_new_arena`` (advancing past a "New Arena"
+    click) and the bulk grid generator (``MainWindow._on_generate_grid_clicked``,
+    appending a whole grid alongside any existing shapes) must agree on it,
+    or a generated grid could collide with a hand-drawn arena's id.
+    """
+    if not roi_shapes:
+        return 0
+    used = [int(s.get("arena_id", 0)) for s in roi_shapes]
+    return max(used) + 1
+
+
+def build_arena_labels(
+    roi_shapes: list[dict[str, Any]] | None,
+    width: int | None,
+    height: int | None,
+) -> tuple[np.ndarray | None, int]:
+    """Rasterize ROI shapes into a uint16 arena-label image.
+
+    Pixel value is ``arena_id + 1``; 0 means outside every arena. The set
+    ``labels > 0`` is pixel-identical to ``build_roi_mask`` on the same shapes,
+    so detection gating semantics are unchanged.
+
+    Shapes without an ``arena_id`` key map to arena 0 -- a legacy project that
+    drew several shapes as one region keeps single-arena behavior exactly.
+    Sparse ids are densified to a contiguous 0..n-1 range.
+    """
+    if not roi_shapes or not width or not height:
+        return None, 1
+
+    # Mirror build_roi_mask EXACTLY: it partitions three ways, rendering a shape
+    # only on `== "include"` / `== "exclude"` and silently dropping any other
+    # mode string.  Selecting includes with `!= "exclude"` would render unknown
+    # modes here that the ROI mask drops, breaking the union invariant.
+    includes = [s for s in roi_shapes if s.get("mode", "include") == "include"]
+    raw_ids = sorted({int(s.get("arena_id", 0)) for s in includes}) or [0]
+    dense = {raw: i for i, raw in enumerate(raw_ids)}
+
+    labels = np.zeros((height, width), np.uint16)
+    for shape in includes:
+        value = dense[int(shape.get("arena_id", 0))] + 1
+        _fill_shape(labels, shape, value)
+    for shape in roi_shapes:
+        if shape.get("mode", "include") == "exclude":
+            _fill_shape(labels, shape, 0)
+    return labels, len(raw_ids)
+
+
+def _fill_shape(canvas: np.ndarray, shape: dict[str, Any], value: int) -> None:
+    """Rasterize one ROI shape onto *canvas* with the given fill value."""
+    if shape.get("type") == "circle":
+        center_x, center_y, radius = shape.get("params", [0, 0, 0])
+        cv2.circle(canvas, (int(center_x), int(center_y)), int(radius), value, -1)
+    elif shape.get("type") == "polygon":
+        points = np.array(shape.get("params", []), dtype=np.int32)
+        if len(points) > 0:
+            cv2.fillPoly(canvas, [points], value)
+
+
 def _seconds_to_frames(seconds: float, fps: float, min_frames: int = 1) -> int:
     return max(min_frames, round(seconds * max(fps, 1e-6)))
 
@@ -375,6 +465,16 @@ def build_engine_params(
 
     fps = float(_cfg_get(cfg, "fps", default=runtime.fps) or runtime.fps or 30.0)
     max_targets = int(_cfg_get(cfg, "max_targets", default=4))
+    # Multi-arena: MAX_TARGETS becomes a derived value (n_arenas * animals_per_arena)
+    # rather than a directly-configured knob. `animals_per_arena` defaults to the
+    # legacy `max_targets` value, so a legacy config with no `roi_shapes`/arena_id
+    # (n_arenas == 1) reproduces today's MAX_TARGETS exactly -- byte-identical
+    # single-arena behavior.
+    arena_labels, n_arenas = build_arena_labels(
+        cfg.get("roi_shapes"), runtime.frame_width, runtime.frame_height
+    )
+    animals_per_arena = int(_cfg_get(cfg, "animals_per_arena", default=max_targets))
+    max_targets = n_arenas * animals_per_arena
     reference_body_size = float(_cfg_get(cfg, "reference_body_size", default=20.0))
     resize_factor = float(_cfg_get(cfg, "resize_factor", default=1.0))
     # RESIZE_FACTOR is a background-subtraction knob. The worker's frame
@@ -1153,6 +1253,9 @@ def build_engine_params(
         "TRACKING_WORKFLOW_MODE": "non_realtime",
         "zoom_factor": 1.0,
         "ROI_MASK": roi_mask,
+        "ARENA_LABELS": arena_labels,
+        "N_ARENAS": n_arenas,
+        "ANIMALS_PER_ARENA": animals_per_arena,
         "REFERENCE_BODY_SIZE": reference_body_size,
         "AGREEMENT_DISTANCE": float(
             _cfg_get(cfg, "merge_agreement_distance_multiplier", default=0.5)

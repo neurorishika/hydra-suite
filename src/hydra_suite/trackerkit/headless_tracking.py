@@ -30,8 +30,17 @@ from hydra_suite.trackerkit.tracking_cache import plan_tracking_cache
 logger = logging.getLogger(__name__)
 
 
-def build_tracking_csv_header(identity_method: str = "none_disabled") -> list[str]:
-    """Build the raw tracking CSV header. Confidence columns are always emitted."""
+def build_tracking_csv_header(
+    identity_method: str = "none_disabled", n_arenas: int = 1
+) -> list[str]:
+    """Build the raw tracking CSV header. Confidence columns are always emitted.
+
+    ``arena_id`` is appended ONLY when ``n_arenas > 1`` -- an unconditional
+    column would change the CSV contract (and column-count) for every existing
+    single-arena user, and `tools/equivalence/compare.py` bails out entirely
+    when the column lists differ, which would fail the byte-identity gate on
+    schema grounds alone for single-arena runs.
+    """
     base_cols = [
         "TrackID",
         "TrajectoryID",
@@ -56,6 +65,8 @@ def build_tracking_csv_header(identity_method: str = "none_disabled") -> list[st
                 "DetectedTagHamming",
             ]
         )
+    if int(n_arenas) > 1:
+        header.append("arena_id")
     return header
 
 
@@ -98,7 +109,10 @@ def _run_engine_pass(
     direction = "backward" if backward_mode else "forward"
     csv_writer = CSVWriterThread(
         raw_csv_path,
-        header=build_tracking_csv_header(identity_method=session.identity_method),
+        header=build_tracking_csv_header(
+            identity_method=session.identity_method,
+            n_arenas=int(params.get("N_ARENAS", 1)),
+        ),
     )
     csv_writer.start()
 

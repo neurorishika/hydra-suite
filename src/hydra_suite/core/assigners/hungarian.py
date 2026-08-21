@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 @njit(cache=True, fastmath=True)
-def _compute_cost_matrix_numba(
+def _compute_cost_matrix_numba_core(
     N,
     M,
     meas_pos,
@@ -48,6 +48,8 @@ def _compute_cost_matrix_numba(
     Wasp,
     per_track_gates,
     meas_ori_directed,
+    track_arena,
+    meas_arena,
 ):
     """Numba kernel using pre-calculated batch Inverse Covariances.
 
@@ -55,16 +57,39 @@ def _compute_cost_matrix_numba(
     track's individual spatial cull distance.  This replaces the former
     scalar ``cull_threshold`` so that young/uncertain tracks get an
     appropriately expanded gate while established tracks keep a tight one.
+
+    ``track_arena``/``meas_arena`` are int32 arrays of length N and M. When
+    both are length-0 sentinels (or otherwise mismatched in length), no arena
+    gating is applied and the result is bit-identical to the
+    pre-multi-arena kernel. Cross-arena pairs get the same ``1e6``
+    hard-reject sentinel used for distance-gated pairs, so no cross-arena
+    pair is ever *accepted*.
+
+    That sentinel does NOT, on its own, decompose the downstream Hungarian
+    solve into independent per-arena problems: the reject sentinels are not
+    all the same number (``1e6`` here, ``1e9`` for the raw distance/velocity
+    gate in ``assign_tracks``), and a square solve that has to park surplus
+    rows somewhere is therefore not indifferent between them. Independence is
+    obtained structurally instead, by solving one sub-block per arena --
+    see ``_assign_established_hungarian``.
     """
     cost = np.zeros((N, M), dtype=np.float32)
+    gate_arenas = track_arena.shape[0] == N and meas_arena.shape[0] == M
 
     for i in range(N):
         # Extract pre-calculated 2x2 inverse position covariance from the 3x3 S_inv
         # (This avoids N*M matrix inversions inside the loop)
         inv_S_pos = S_inv_batch[i, :2, :2]
         gate_i = per_track_gates[i]
+        arena_i = track_arena[i] if gate_arenas else 0
 
         for j in range(M):
+            # Arena gating first: skips all downstream work for blocked pairs,
+            # which is what keeps 100 arenas tractable.
+            if gate_arenas and meas_arena[j] != arena_i:
+                cost[i, j] = 1e6
+                continue
+
             diff = meas_pos[j] - pred_pos[i]
 
             # 1. Position Cost
@@ -103,6 +128,80 @@ def _compute_cost_matrix_numba(
             cost[i, j] = Wp * pos_dist + Wo * odiff + Wa * area_diff + Wasp * asp_diff
 
     return cost
+
+
+_NO_ARENA = np.zeros(0, dtype=np.int32)
+
+
+def _arena_arrays(track_arena, meas_arena, N, M):
+    """Normalize optional arena arrays to numba-safe int32 arrays.
+
+    Returns the length-0 sentinel pair when gating is off, which the kernel
+    detects by shape and skips entirely.
+    """
+    if track_arena is None or meas_arena is None:
+        return _NO_ARENA, _NO_ARENA
+    ta = np.ascontiguousarray(track_arena, dtype=np.int32)
+    ma = np.ascontiguousarray(meas_arena, dtype=np.int32)
+    if ta.shape[0] != N or ma.shape[0] != M:
+        return _NO_ARENA, _NO_ARENA
+    return ta, ma
+
+
+def _compute_cost_matrix_numba(
+    N,
+    M,
+    meas_pos,
+    meas_ori,
+    pred_pos,
+    pred_ori,
+    shapes_area,
+    shapes_asp,
+    prev_areas,
+    prev_asps,
+    S_inv_batch,
+    use_maha,
+    Wp,
+    Wo,
+    Wa,
+    Wasp,
+    per_track_gates,
+    meas_ori_directed,
+    track_arena=None,
+    meas_arena=None,
+):
+    """Thin, non-jitted dispatch wrapper around ``_compute_cost_matrix_numba_core``.
+
+    Normalizes ``track_arena``/``meas_arena`` (``None`` or mismatched-length
+    inputs both mean "no gating") to the ``_NO_ARENA`` sentinel via
+    ``_arena_arrays`` before calling the cached numba kernel, so the compiled
+    kernel itself never has to type-infer over an ``Optional`` argument --
+    it always sees concrete int32 arrays. ``None``/``None`` (the default)
+    reproduces the pre-multi-arena kernel bit-for-bit.
+    """
+    ta, ma = _arena_arrays(track_arena, meas_arena, N, M)
+    return _compute_cost_matrix_numba_core(
+        N,
+        M,
+        meas_pos,
+        meas_ori,
+        pred_pos,
+        pred_ori,
+        shapes_area,
+        shapes_asp,
+        prev_areas,
+        prev_asps,
+        S_inv_batch,
+        use_maha,
+        Wp,
+        Wo,
+        Wa,
+        Wasp,
+        per_track_gates,
+        meas_ori_directed,
+        ta,
+        ma,
+    )
 
 
 def _pairwise_log_compat(posts, likes):
@@ -155,6 +254,15 @@ class TrackAssigner:
         self.params = params
         self.worker = worker
         self._large_n_warning_shown = False  # Track if we've shown the warning
+        self.track_arena = None  # set by the worker via set_track_arena()
+
+    def set_track_arena(self, track_arena) -> None:
+        """Install the static per-slot arena mapping (None disables gating)."""
+        self.track_arena = (
+            None
+            if track_arena is None
+            else np.ascontiguousarray(track_arena, dtype=np.int32)
+        )
 
     def _spatial_optimization_enabled(self) -> bool:
         """Support both the current flag and the legacy alias."""
@@ -267,6 +375,7 @@ class TrackAssigner:
         self,
         cost: np.ndarray,
         association_data: Dict[str, Any] | None,
+        meas_arena: np.ndarray | None = None,
     ) -> None:
         """Add a soft Bayesian identity cost term to the assignment cost matrix.
 
@@ -305,6 +414,20 @@ class TrackAssigner:
         if not rows or not cols:
             return
 
+        ta = self.track_arena
+        if (
+            ta is not None
+            and meas_arena is not None
+            and len(ta) >= n_tracks
+            and len(meas_arena) >= n_dets
+        ):
+            # Arena mismatch is the ONLY legal predicate. Skipping on `cost >= 1e6`
+            # would also skip distance-gated cells that exist on main today and
+            # change compute_assignment_confidence's inputs.
+            blocked = ta[np.ix_(rows)][:, None] != meas_arena[np.ix_(cols)][None, :]
+        else:
+            blocked = None
+
         log_compat = _pairwise_log_compat(
             [track_log_posts[i] for i in rows], [det_log_likes[j] for j in cols]
         )
@@ -320,7 +443,10 @@ class TrackAssigner:
         # Cap: identity can reorder preferences but must never block a
         # geometrically-valid match by pushing cost above max_dist.
         capped = np.where(summed <= dt(max_dist - 1e-3), summed, dt(max_dist - 1e-3))
-        cost[np.ix_(rows, cols)] = np.where(block < dt(max_dist), capped, summed)
+        new_block = np.where(block < dt(max_dist), capped, summed)
+        if blocked is not None:
+            new_block = np.where(blocked, block, new_block)
+        cost[np.ix_(rows, cols)] = new_block
 
     @staticmethod
     def _apply_candidate_gate(
@@ -469,9 +595,16 @@ class TrackAssigner:
         last_shape_info: List[Any],
         meas_ori_directed: np.ndarray | None = None,
         association_data: Dict[str, Any] | None = None,
+        meas_arena: np.ndarray | None = None,
     ) -> Tuple[np.ndarray, Dict[int, List[int]]]:
         """
         Computes cost matrix. Compatible with Vectorized Kalman Filter.
+
+        ``meas_arena`` (optional) is paired with ``self.track_arena`` (set via
+        ``set_track_arena``) to block cross-arena track/detection pairs with
+        the same ``1e6`` hard-reject sentinel used for distance gating. Both
+        default to ``None``, which reproduces the pre-multi-arena, ungated
+        behaviour exactly.
         """
         p = self.params
         M = len(measurements)
@@ -616,6 +749,10 @@ class TrackAssigner:
                 local_gates=local_gates,
             )
 
+        track_arena_arr, meas_arena_arr = _arena_arrays(
+            self.track_arena, meas_arena, N, M
+        )
+
         spatial_candidates = {}
         if has_pose_data and self._spatial_optimization_enabled() and N > 50:
             spatial_candidates = pose_candidates
@@ -635,6 +772,8 @@ class TrackAssigner:
                 p,
                 spatial_candidates,
                 meas_ori_directed_arr,
+                track_arena_arr,
+                meas_arena_arr,
             )
         elif self._spatial_optimization_enabled() and N > 50:
             spatial_candidates = self._get_spatial_candidates(
@@ -656,6 +795,8 @@ class TrackAssigner:
                 p,
                 spatial_candidates,
                 meas_ori_directed_arr,
+                track_arena_arr,
+                meas_arena_arr,
             )
         else:
             cost = _compute_cost_matrix_numba(
@@ -677,10 +818,17 @@ class TrackAssigner:
                 p["W_ASPECT"],
                 local_gates,
                 meas_ori_directed_arr,
+                track_arena_arr,
+                meas_arena_arr,
             )
 
         if association_data:
-            self._apply_bayesian_identity_cost(cost, association_data)
+            # Pass the raw `meas_arena` argument, not the numba-kernel-normalized
+            # `meas_arena_arr` -- the latter collapses to the `_NO_ARENA` empty
+            # sentinel (a real, non-None ndarray) on a length mismatch, which
+            # would masquerade as "gating requested but empty" to the overlay's
+            # `meas_arena is not None` check below and raise on indexing.
+            self._apply_bayesian_identity_cost(cost, association_data, meas_arena)
 
             if has_pose_data:
                 self._apply_candidate_gate(cost, pose_candidates)
@@ -746,8 +894,58 @@ class TrackAssigner:
                 assigned_r.add(r)
         return assignments, assigned_dets
 
+    @staticmethod
+    def _solve_established_block(
+        est_sorted, det_cols, cost, raw_dist_mat, MAX_DIST, VEL_GATE
+    ):
+        """Solve ONE Hungarian block and keep the pairs that pass the gates.
+
+        ``det_cols`` is ``None`` for the whole-matrix (single-arena / ungated)
+        solve -- that branch runs ``linear_sum_assignment(cost[est, :])``
+        exactly as the pre-multi-arena code did, including leaving the column
+        index as the numpy integer scipy returned.  Otherwise ``det_cols`` is
+        the arena's own detection columns and the solve sees only that
+        sub-block.
+
+        The finiteness check runs on this same ``cost_sub`` slice -- the one
+        slice that is actually handed to ``linear_sum_assignment`` -- instead
+        of a separate whole-row slice computed by the caller and discarded.
+        For the ungated path that is the same cells the old pre-check
+        covered (identical error semantics, one slice instead of two); for a
+        per-arena block it means only the cells that block can actually solve
+        are checked -- cross-arena cells the solver never sees no longer need
+        to be finite either, matching the "never handed to the solver at all"
+        invariant already documented on the caller.
+        """
+        assignments = []
+        assigned_dets = set()
+        if det_cols is None:
+            cost_sub = cost[est_sorted, :]
+        else:
+            cost_sub = cost[np.ix_(est_sorted, det_cols)]
+        if not np.isfinite(cost_sub).all():
+            bad = int(np.size(cost_sub) - np.count_nonzero(np.isfinite(cost_sub)))
+            raise ValueError(
+                f"assignment submatrix contains non-finite values (bad={bad}, tracks={len(est_sorted)}, dets={cost_sub.shape[1]})"
+            )
+        rows, cols = linear_sum_assignment(cost_sub)
+        for r_idx, c_idx in zip(rows, cols):
+            r = est_sorted[r_idx]
+            c = c_idx if det_cols is None else det_cols[c_idx]
+            if cost[r, c] < MAX_DIST and raw_dist_mat[r, c] < VEL_GATE:
+                assignments.append((r, c))
+                assigned_dets.add(c)
+        return assignments, assigned_dets
+
     def _assign_established_hungarian(
-        self, est, cost, raw_dist_mat, MAX_DIST, VEL_GATE
+        self,
+        est,
+        cost,
+        raw_dist_mat,
+        MAX_DIST,
+        VEL_GATE,
+        track_arena=None,
+        meas_arena=None,
     ):
         """Phase 1 Hungarian assignment for established tracks.
 
@@ -757,24 +955,85 @@ class TrackAssigner:
         maps each back to the original track index.  Making the sort explicit
         here documents and enforces this invariant so that the mapping is safe
         even if the calling code ever builds ``est`` differently.
+
+        Multi-arena: when both arena arrays are supplied (the caller only
+        passes them when they are long enough to gate every row and column),
+        rows and columns are partitioned by arena id and ONE
+        ``linear_sum_assignment`` is run per arena over that arena's own tracks
+        and detections.  Cross-arena cells are never handed to the solver at
+        all, so the reject sentinels (``1e6`` for arena/spatial blocking,
+        ``1e9`` for the raw distance gate) can no longer influence which of an
+        arena's tracks keeps its detection: a surplus row parks inside its own
+        arena or nowhere.  Independence is structural, not emergent.
+
+        Arena ``-1`` (a detection that fell outside every arena) is treated
+        the same way the cost kernel already treats it -- as its own arena id
+        under plain equality.  In practice track slots are never ``-1``, so
+        that block has no rows, no solve is run for it and those detections
+        simply stay unassigned here; they are neither matched nor lost,
+        falling through to the later phases (which carry their own arena
+        gates) and finally into ``free_dets``.
+
+        ``track_arena``/``meas_arena`` default to ``None``, which takes the
+        original whole-matrix solve unchanged -- single-arena runs never enter
+        the partitioning code.
         """
         if not est:
             return [], set()
         est_sorted = sorted(est)
+        if track_arena is None or meas_arena is None:
+            return TrackAssigner._solve_established_block(
+                est_sorted, None, cost, raw_dist_mat, MAX_DIST, VEL_GATE
+            )
+
+        M = cost.shape[1]
+        ta = np.asarray(track_arena, dtype=np.int32)
+        ma = np.asarray(meas_arena, dtype=np.int32)[:M]
+        est_arr = np.asarray(est_sorted, dtype=np.intp)
+        row_arena = ta[est_arr]
+
+        # Vectorized grouping: one stable argsort per side turns "A full
+        # scans over N (rows) / M (cols)" into "sort once, then a single
+        # np.unique pass for group boundaries" -- O((N+M) log(N+M) + A)
+        # instead of O(A*(N+M)). ``kind="stable"`` on both sides preserves
+        # each side's original ascending order *within* a group, so the rows
+        # and columns handed to each block are in exactly the order the old
+        # per-arena list-comprehension / ``np.flatnonzero`` scan produced --
+        # required for byte-identical results, not just equivalent ones.
+        row_order = np.argsort(row_arena, kind="stable")
+        row_arena_sorted = row_arena[row_order]
+        row_ids_sorted = est_arr[row_order]
+        uniq_row_arenas, row_start, row_count = np.unique(
+            row_arena_sorted, return_index=True, return_counts=True
+        )
+
+        col_order = np.argsort(ma, kind="stable")
+        ma_sorted = ma[col_order]
+        uniq_col_arenas, col_start, col_count = np.unique(
+            ma_sorted, return_index=True, return_counts=True
+        )
+        col_index_of_arena = {int(arena): i for i, arena in enumerate(uniq_col_arenas)}
+
         assignments = []
         assigned_dets = set()
-        cost_sub = cost[est_sorted, :]
-        if not np.isfinite(cost_sub).all():
-            bad = int(np.size(cost_sub) - np.count_nonzero(np.isfinite(cost_sub)))
-            raise ValueError(
-                f"assignment submatrix contains non-finite values (bad={bad}, tracks={len(est_sorted)}, dets={cost_sub.shape[1]})"
+        # Sorted arena order (np.unique already returns ascending) keeps the
+        # emitted pair order deterministic and independent of dict/set
+        # iteration, matching the previous ``sorted({...})`` loop.
+        for i, arena in enumerate(uniq_row_arenas):
+            j = col_index_of_arena.get(int(arena))
+            if j is None:
+                continue
+            r0 = int(row_start[i])
+            rc = int(row_count[i])
+            block_rows = row_ids_sorted[r0 : r0 + rc]
+            c0 = int(col_start[j])
+            cc = int(col_count[j])
+            block_cols = col_order[c0 : c0 + cc]
+            pairs, dets = TrackAssigner._solve_established_block(
+                block_rows, block_cols, cost, raw_dist_mat, MAX_DIST, VEL_GATE
             )
-        rows, cols = linear_sum_assignment(cost_sub)
-        for r_idx, c in zip(rows, cols):
-            r = est_sorted[r_idx]
-            if cost[r, c] < MAX_DIST and raw_dist_mat[r, c] < VEL_GATE:
-                assignments.append((r, c))
-                assigned_dets.add(c)
+            assignments.extend(pairs)
+            assigned_dets.update(dets)
         return assignments, assigned_dets
 
     def _assign_unstable(
@@ -824,6 +1083,7 @@ class TrackAssigner:
         _M=None,
         _MAX_DIST=None,
         _assigned_dets=None,
+        meas_arena: np.ndarray | None = None,
     ) -> tuple:
         """Phase 3: respawn lost tracks with unassigned detections.
 
@@ -841,6 +1101,14 @@ class TrackAssigner:
         M = _M if _M is not None else cost.shape[1]
         MAX_DIST = _MAX_DIST if _MAX_DIST is not None else p["MAX_DISTANCE_THRESHOLD"]
         assigned_dets: set = _assigned_dets if _assigned_dets is not None else set()
+
+        ta = self.track_arena
+        gate = (
+            ta is not None
+            and meas_arena is not None
+            and len(ta) >= N
+            and len(meas_arena) >= M
+        )
 
         # Split lost slots into committed vs. uncommitted
         if committed_slot_identities:
@@ -908,6 +1176,8 @@ class TrackAssigner:
                     row = scores[si]
                     for dj in np.flatnonzero(row > log_threshold):
                         j = cand_dets[dj]
+                        if gate and meas_arena[j] != ta[slot]:
+                            continue
                         det_xy = np.asarray(meas[j][:2], dtype=np.float64)
                         if not _within_budget(slot, det_xy):
                             continue
@@ -951,6 +1221,8 @@ class TrackAssigner:
                 break
             best_r, best_c_val = None, 1e6
             for r in remaining_uncommitted:
+                if gate and meas_arena[c] != ta[r]:
+                    continue
                 last_pos = kf_manager.X[r, :2]
                 dist = float(np.linalg.norm(meas[c][:2] - last_pos))
                 if dist < best_c_val:
@@ -976,6 +1248,7 @@ class TrackAssigner:
         association_data: Dict[str, Any] | None = None,
         committed_slot_identities: Dict[int, str] | None = None,
         missed_frames: list | None = None,
+        meas_arena: np.ndarray | None = None,
     ) -> object:
         """
         Drop-in replacement for track assignment logic.
@@ -1032,12 +1305,30 @@ class TrackAssigner:
                     VEL_GATE,
                 )
             else:
+                # Only hand the arena arrays down when they are long enough to
+                # label EVERY row and column -- the same fail-open ``>=``
+                # predicate the identity overlay uses (line ~1111). NOTE:
+                # `_arena_arrays` (the cost-kernel gate) requires an exact
+                # ``==`` length match instead and falls back to "no gating"
+                # on any mismatch, short or long -- do not cite it as sharing
+                # this predicate. A short array here would silently mislabel
+                # slots; `None` keeps the original whole-matrix solve, which
+                # is what single-arena runs take.
+                _ta = self.track_arena
+                _arena_gated = (
+                    _ta is not None
+                    and meas_arena is not None
+                    and len(_ta) >= N
+                    and len(meas_arena) >= M
+                )
                 ph1, ph1_dets = self._assign_established_hungarian(
                     est,
                     cost,
                     raw_dist_mat,
                     MAX_DIST,
                     VEL_GATE,
+                    track_arena=_ta if _arena_gated else None,
+                    meas_arena=meas_arena if _arena_gated else None,
                 )
             all_assignments.extend(ph1)
             assigned_dets.update(ph1_dets)
@@ -1072,6 +1363,7 @@ class TrackAssigner:
             _M=M,
             _MAX_DIST=MAX_DIST,
             _assigned_dets=assigned_dets,
+            meas_arena=meas_arena,
         )
         all_assignments.extend(zip(ph3_rows, ph3_cols))
 
@@ -1098,6 +1390,8 @@ class TrackAssigner:
         p,
         candidates,
         meas_ori_directed,
+        track_arena=_NO_ARENA,
+        meas_arena=_NO_ARENA,
     ):
         """Python fallback for spatial optimization."""
         cost = np.full((N, M), 1e6, dtype=np.float32)
@@ -1107,10 +1401,15 @@ class TrackAssigner:
             p["W_AREA"],
             p["W_ASPECT"],
         )
+        ta, ma = track_arena, meas_arena
+        gate_arenas = ta.shape[0] == N and ma.shape[0] == M
 
         for r, det_indices in candidates.items():
             inv_S = S_inv[r, :2, :2]
+            arena_r = ta[r] if gate_arenas else None
             for c in det_indices:
+                if arena_r is not None and ma[c] != arena_r:
+                    continue  # stays at the 1e6 initialization value
                 diff = meas_pos[c] - pred_pos[r]
                 if p["USE_MAHALANOBIS"]:
                     maha_sq = float(diff @ inv_S @ diff)

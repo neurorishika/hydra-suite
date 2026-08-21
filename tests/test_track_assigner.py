@@ -29,12 +29,24 @@ def _compute_cost_matrix_numba_py(
     Wasp,
     per_track_gates,
     meas_ori_directed,
+    track_arena=None,
+    meas_arena=None,
 ):
     cost = np.zeros((N, M), dtype=np.float32)
+    gate_arenas = (
+        track_arena is not None
+        and meas_arena is not None
+        and len(track_arena) == N
+        and len(meas_arena) == M
+    )
     for i in range(N):
         inv_S_pos = S_inv_batch[i, :2, :2]
         gate_i = float(per_track_gates[i])
+        arena_i = track_arena[i] if gate_arenas else 0
         for j in range(M):
+            if gate_arenas and meas_arena[j] != arena_i:
+                cost[i, j] = 1e6
+                continue
             diff = meas_pos[j] - pred_pos[i]
             if use_maha:
                 pos_dist = float(np.sqrt(diff @ inv_S_pos @ diff))

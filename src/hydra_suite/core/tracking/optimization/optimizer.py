@@ -43,6 +43,12 @@ from hydra_suite.core.inference.api import (
 # makes the handle read back as empty.
 from hydra_suite.core.inference.config import build_inference_config_from_params
 from hydra_suite.core.inference.runner import _open_caches, video_signature
+from hydra_suite.core.tracking.arenas import arena_ids_for_meas as _meas_arena_ids
+from hydra_suite.core.tracking.arenas import (
+    arena_layout_from_params,
+    check_slot_arena_covers_all_slots,
+    tracking_frame_size,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +113,28 @@ def _normalise_scoring_weights(params):
     _w_vel /= _w_sum
     _w_crd /= _w_sum
     return _w_cov, _w_asn, _w_frg, _w_occ, _w_vel, _w_crd
+
+
+def _optimizer_frame_size(video_path, params):
+    """Coordinate space of the cached detections, for the arena lookup.
+
+    The optimizer never reads a live tracking frame (it replays a detection
+    cache), so it mirrors worker.py's cached-detection fallback: the capture's
+    native size scaled by ``RESIZE_FACTOR``. ``None`` (unopenable video) means
+    "assume the label image's own resolution", the same fallback worker.py's
+    `target_w is None` sites take.
+    """
+    import cv2 as _cv2
+
+    cap = _cv2.VideoCapture(str(video_path))
+    try:
+        base_w = int(cap.get(_cv2.CAP_PROP_FRAME_WIDTH))
+        base_h = int(cap.get(_cv2.CAP_PROP_FRAME_HEIGHT))
+    except Exception:  # pragma: no cover - defensive
+        return None
+    finally:
+        cap.release()
+    return tracking_frame_size(params, base_w, base_h)
 
 
 def _filter_cached_detections(det_filter, cache, f_idx, roi_mask):
@@ -867,6 +895,19 @@ class TrackingOptimizerCore:
         det_filter = _ParamsFilter(params)
         kf_manager = KalmanFilterManager(params["MAX_TARGETS"], params)
         assigner = TrackAssigner(params)
+        # Arena gating must be identical to the live run's (worker.py): tuning
+        # against an UNGATED simulation hands the real, gated run parameters
+        # chosen under cross-arena assignment it will never be allowed to make.
+        # `None` for single-arena takes the assigner's ungated path
+        # STRUCTURALLY, so single-arena optimizer runs are unchanged.
+        _arena_layout = arena_layout_from_params(params)
+        check_slot_arena_covers_all_slots(_arena_layout, params["MAX_TARGETS"])
+        assigner.set_track_arena(
+            None if _arena_layout.is_single_arena else _arena_layout.slot_arena
+        )
+        _arena_frame_size = None
+        if not _arena_layout.is_single_arena:
+            _arena_frame_size = _optimizer_frame_size(self.video_path, params)
         _roi_mask = params.get("ROI_MASK", None)
 
         (
@@ -994,6 +1035,7 @@ class TrackingOptimizerCore:
             if meas:
                 kf_manager.predict()
 
+                _meas_arena = _meas_arena_ids(_arena_layout, meas, _arena_frame_size)
                 cost, _spatial_candidates = assigner.compute_cost_matrix(
                     N,
                     meas,
@@ -1007,6 +1049,7 @@ class TrackingOptimizerCore:
                         else None
                     ),
                     association_data=_association_data,
+                    meas_arena=_meas_arena,
                 )
                 matched_r, matched_c, free_dets, _identity_rejoin_pairs = (
                     assigner.assign_tracks(
@@ -1020,6 +1063,7 @@ class TrackingOptimizerCore:
                         spatial_candidates=_spatial_candidates,
                         association_data=_association_data,
                         missed_frames=missed_frames,
+                        meas_arena=_meas_arena,
                     )
                 )
                 respawned_matches = {r for r in matched_r if track_states[r] == "lost"}

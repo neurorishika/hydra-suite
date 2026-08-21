@@ -780,12 +780,6 @@ def process_trajectories_from_csv(
         logger.warning("pandas is not available. Skipping trajectory post-processing.")
         return None, {}
 
-    min_len = params.get("MIN_TRAJECTORY_LENGTH", 10)
-    max_vel_break = params.get("MAX_VELOCITY_BREAK", 100.0)
-    max_occlusion_gap = params.get("MAX_OCCLUSION_GAP", 30)
-    max_vel_zscore = params.get("MAX_VELOCITY_ZSCORE", 0.0)
-    vel_zscore_window = params.get("VELOCITY_ZSCORE_WINDOW", 10)
-
     try:
         df = pd.read_csv(csv_path)
         logger.info(
@@ -804,6 +798,53 @@ def process_trajectories_from_csv(
     except Exception as e:
         logger.error(f"Failed to read CSV {csv_path}: {e}")
         return None, {}
+
+    # Trajectories never span arenas (Task 1-6: an arena id is a static,
+    # per-slot property), so merge/break/split candidates found while
+    # scanning across the whole file could otherwise chain fragments that
+    # merely share coordinates by coincidence in different arenas. Grouping
+    # here runs the untouched single-arena body once per arena and
+    # concatenates -- with no ``arena_id`` column, or a single arena, this
+    # falls straight through to one unchanged call so single-arena runs stay
+    # byte-identical.
+    if "arena_id" in df.columns and df["arena_id"].nunique() > 1:
+        parts = []
+        combined_stats: dict = {}
+        for _, group in df.groupby("arena_id", sort=True):
+            part_df, part_stats = _process_trajectories_single_arena(
+                group, params, should_stop=should_stop
+            )
+            if part_df is not None and len(part_df) > 0:
+                parts.append(part_df)
+            for key, value in (part_stats or {}).items():
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    combined_stats[key] = combined_stats.get(key, 0) + value
+                else:
+                    combined_stats.setdefault(key, value)
+        result_df = _renumber_concatenated(parts)
+        if "final_count" in combined_stats:
+            combined_stats["final_count"] = (
+                result_df["TrajectoryID"].nunique() if len(result_df) else 0
+            )
+        logger.info(f"Post-processing stats (arena-grouped): {combined_stats}")
+        return result_df, combined_stats
+
+    return _process_trajectories_single_arena(df, params, should_stop=should_stop)
+
+
+def _process_trajectories_single_arena(
+    df: object, params: object, *, should_stop=None
+) -> object:
+    """Single-arena body of :func:`process_trajectories_from_csv`.
+
+    Takes an already-loaded trajectory DataFrame (one arena's rows, or all
+    rows when there is only one arena) rather than a CSV path.
+    """
+    min_len = params.get("MIN_TRAJECTORY_LENGTH", 10)
+    max_vel_break = params.get("MAX_VELOCITY_BREAK", 100.0)
+    max_occlusion_gap = params.get("MAX_OCCLUSION_GAP", 30)
+    max_vel_zscore = params.get("MAX_VELOCITY_ZSCORE", 0.0)
+    vel_zscore_window = params.get("VELOCITY_ZSCORE_WINDOW", 10)
 
     # Set X, Y, Theta to NaN for occluded/lost states to enable proper interpolation
     if "State" in df.columns:
@@ -1141,7 +1182,7 @@ def _reassign_trajectory_ids(result_trajectories):
             traj.drop(columns=["_source"], inplace=True)
 
 
-def resolve_trajectories(
+def _resolve_trajectories_single_arena(
     forward_trajs: object,
     backward_trajs: object,
     params: object = None,
@@ -1339,6 +1380,166 @@ def resolve_trajectories(
     logger.info(f"Final result: {len(result_trajectories)} trajectories")
 
     return result_trajectories
+
+
+def _trajectory_arena(traj) -> object:
+    """Return a trajectory's constant arena id, or ``None`` if it carries none.
+
+    Only DataFrames can carry an ``arena_id`` column (the legacy
+    list-of-tuples format predates arena support and never will). Slot ->
+    arena is a static, per-track-slot property (Tasks 1-6), so every row of
+    a single trajectory must agree on ``arena_id`` -- a trajectory cannot
+    legitimately span arenas. A non-constant ``arena_id`` within one
+    trajectory means an upstream invariant is already broken; raise rather
+    than silently picking one arena and hiding it.
+    """
+    if not isinstance(traj, pd.DataFrame) or "arena_id" not in traj.columns:
+        return None
+    if traj.empty:
+        return None
+    values = pd.unique(traj["arena_id"].dropna())
+    if len(values) == 0:
+        return None
+    if len(values) > 1:
+        raise ValueError(
+            f"Trajectory has a non-constant arena_id ({sorted(values.tolist())}); "
+            "arena assignment must be static per slot (Tasks 1-6)."
+        )
+    raw = values[0]
+    try:
+        numeric = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"arena_id must be numeric, got {raw!r}") from exc
+    if not numeric.is_integer():
+        raise ValueError(f"arena_id must be an integer value, got {raw!r}")
+    return int(numeric)
+
+
+def resolve_trajectories(
+    forward_trajs: object,
+    backward_trajs: object,
+    params: object = None,
+    *,
+    should_stop=None,
+) -> object:
+    """Resolve forward/backward trajectories, independently per arena.
+
+    Each trajectory's arena is read directly off its own ``arena_id`` column
+    (see :func:`_trajectory_arena`) -- there is no separate index-aligned
+    array to keep in sync, so this is sound regardless of how the forward
+    and backward lists were built (they commonly have different lengths and
+    id sets; see ``core/post/merge.py``). When every trajectory names the
+    same arena (or none does -- the legacy/no-arena case), this delegates
+    straight to the single-arena implementation, so existing behavior is
+    bit-for-bit preserved.
+
+    Otherwise each arena's trajectories are resolved in isolation: merge
+    candidates can never span arenas because the partitions never meet. Results
+    are concatenated and trajectory ids renumbered so they stay globally unique.
+    """
+    fwd_arenas = [_trajectory_arena(t) for t in forward_trajs]
+    bwd_arenas = [_trajectory_arena(t) for t in backward_trajs]
+    distinct_arenas = {a for a in fwd_arenas + bwd_arenas if a is not None}
+
+    if len(distinct_arenas) <= 1:
+        return _resolve_trajectories_single_arena(
+            forward_trajs, backward_trajs, params, should_stop=should_stop
+        )
+
+    # Group by arena; trajectories with no arena info (arena is None) sit in
+    # their own group, so nothing is silently dropped even in a partial-info
+    # edge case.
+    all_arenas = sorted(distinct_arenas) + (
+        [None] if None in fwd_arenas or None in bwd_arenas else []
+    )
+
+    resolved: list = []
+    for arena in all_arenas:
+        fwd = [t for t, a in zip(forward_trajs, fwd_arenas) if a == arena]
+        bwd = [t for t, a in zip(backward_trajs, bwd_arenas) if a == arena]
+        if not fwd and not bwd:
+            continue
+        resolved.extend(
+            _resolve_trajectories_single_arena(
+                fwd, bwd, params, should_stop=should_stop
+            )
+        )
+    for new_id, df in enumerate(resolved):
+        df["TrajectoryID"] = new_id
+    return resolved
+
+
+def _renumber_concatenated(parts: object) -> object:
+    """Concatenate per-arena post-processing outputs and renumber ids globally.
+
+    ``parts`` is a list of DataFrames (one per arena group, already processed
+    independently by the untouched single-arena code path). This is the one
+    shared concatenation helper used at every site that groups post-processing
+    by arena: it concatenates the parts in encounter order and reassigns
+    ``TrajectoryID`` (and ``trajectory_id``, when present) to a dense,
+    contiguous, globally-unique range -- so ids never collide across arenas
+    even though each arena's solver started counting from zero independently.
+
+    Renumbering is done PART-BY-PART (each part factorized on its own, then
+    offset by a running total), not by factorizing the ids of the whole
+    concatenated frame at once: two different arenas' local id sequences
+    both restart from 0 independently, so the *same* id value can appear in
+    two different parts by pure coincidence (e.g. both arenas end up with
+    exactly one surviving trajectory, both locally numbered 0). Factorizing
+    globally would treat that coincidence as one shared id and silently
+    re-merge the two arenas' trajectories under a single TrajectoryID.
+
+    Two hardening details this depends on:
+    - NaN ids: ``pd.factorize`` maps every NaN to code ``-1``; adding a
+      per-part ``offset`` to a bare ``-1`` lands on the *previous* part's
+      last id, silently merging across arenas. NaN rows are remapped to a
+      dedicated in-part code before the offset is applied, so they can never
+      collide with a neighboring part's ids.
+    - Heterogeneous parts: if an id column is present in some parts but not
+      all, renumbering only the parts that have it would leave the others'
+      raw ids untouched and free to collide with the renumbered range. This
+      is a malformed input for this helper (every part is supposed to be a
+      same-schema post-processing output), so it raises rather than risk a
+      silent collision.
+    """
+    parts = [p for p in parts if p is not None]
+    if not parts:
+        return pd.DataFrame()
+
+    for id_col in ("TrajectoryID", "trajectory_id"):
+        present_flags = [id_col in p.columns for p in parts]
+        if not any(present_flags):
+            continue
+        if not all(present_flags):
+            raise ValueError(
+                f"_renumber_concatenated: {id_col!r} present in some parts "
+                "but not all; refusing to renumber (would silently leave "
+                "some parts' raw ids free to collide with the renumbered "
+                "range)."
+            )
+        offset = 0
+        renumbered_parts = []
+        for part in parts:
+            part = part.copy()
+            codes, uniques = pd.factorize(part[id_col], sort=False)
+            n_real = len(uniques)
+            is_nan = codes == -1
+            if is_nan.any():
+                # Give every NaN row in this part one dedicated in-part code
+                # (the next id after the real, non-NaN ones) instead of the
+                # bare factorize sentinel -1, which would otherwise land on
+                # the previous part's last id once `offset` is added.
+                codes = np.where(is_nan, n_real, codes)
+                n_used = n_real + 1
+            else:
+                n_used = n_real
+            part[id_col] = codes + offset
+            offset += n_used
+            renumbered_parts.append(part)
+        parts = renumbered_parts
+
+    combined = pd.concat(parts, ignore_index=True)
+    return combined
 
 
 # ---------------------------------------------------------------------------
@@ -3470,6 +3671,32 @@ def interpolate_trajectories(
             all_frames = np.arange(min_frame, max_frame + 1)
             traj_data = traj_data.set_index("FrameID").reindex(all_frames).reset_index()
             traj_data["TrajectoryID"] = traj_id
+            # ``reindex`` fills EVERY column of a newly created frame row with
+            # NaN, and only TrajectoryID/State/X/Y/Theta are restored below.
+            # ``arena_id`` is constant per trajectory (slot -> arena is a
+            # static property), so a gap-filled row must inherit it: left NaN,
+            # the interpolated rows silently fall out of every downstream
+            # arena grouping and out of the exported arena column, so an
+            # arena's post-processed output is short exactly one row per
+            # interpolated gap. No ``arena_id`` column (every single-arena
+            # run) => no-op, so single-arena output is unchanged.
+            if "arena_id" in traj_data.columns:
+                _arena_values = traj_data["arena_id"].dropna().unique()
+                if len(_arena_values) > 1:
+                    # Mirrors `_trajectory_arena`: a trajectory spanning two
+                    # arenas means an upstream invariant is already broken, so
+                    # raise rather than leave the gap-filled rows NaN and let
+                    # them vanish from the arena grouping downstream.
+                    raise ValueError(
+                        f"Trajectory {traj_id} has a non-constant arena_id "
+                        f"({sorted(_arena_values.tolist())}); arena assignment "
+                        "must be static per slot."
+                    )
+                if len(_arena_values) == 1:
+                    # len == 0 (no arena info at all) is legitimate: the
+                    # no-arena partition that `resolve_trajectories` keeps for
+                    # the partial-info edge case. Leave it alone.
+                    traj_data["arena_id"] = _arena_values[0]
 
         if "State" in traj_data.columns:
             traj_data["State"] = traj_data["State"].fillna("occluded")
@@ -3935,6 +4162,41 @@ def relink_trajectories_with_pose(
         result_df["TrajectoryID"].nunique(),
     )
     return result_df
+
+
+def relink_trajectories_with_pose_by_arena(
+    trajectories_df: pd.DataFrame, params: dict
+) -> pd.DataFrame:
+    """Arena-scoped wrapper around :func:`relink_trajectories_with_pose`.
+
+    ``relink_trajectories_with_pose`` matches fragments via
+    ``UniqueIdentityKey`` (see ``_fragment_unique_identity_sources``), which
+    is arena-blind by design -- scoping the key itself would change its value
+    on single-arena runs and break the equivalence harness's strict identity
+    column comparison. Since the key repeats across arenas (arena 0's "ant A"
+    and arena 7's "ant A" carry the same key), an ungrouped relink is a
+    genuine cross-arena merge risk: two fragments in different arenas could
+    be chained into one trajectory.
+
+    This groups by ``arena_id`` and relinks each arena independently through
+    the untouched function, then concatenates and renumbers ids so they stay
+    globally unique. With no ``arena_id`` column, or a single arena, this
+    falls straight through to one unchanged call -- single-arena behavior is
+    bit-for-bit unchanged.
+    """
+    if trajectories_df is None or trajectories_df.empty:
+        return trajectories_df
+    if (
+        "arena_id" not in trajectories_df.columns
+        or trajectories_df["arena_id"].nunique() <= 1
+    ):
+        return relink_trajectories_with_pose(trajectories_df, params)
+
+    parts = [
+        relink_trajectories_with_pose(group, params)
+        for _, group in trajectories_df.groupby("arena_id", sort=True)
+    ]
+    return _renumber_concatenated(parts)
 
 
 def _make_interp_func(method, valid_frames, valid_values, n_valid):

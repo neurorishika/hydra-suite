@@ -395,9 +395,17 @@ def relink_and_export_rich_csv(
     relink_input_df = (
         with_pose_df if with_pose_df is not None and not with_pose_df.empty else base_df
     )
-    from hydra_suite.core.post.processing import relink_trajectories_with_pose
+    # relink_trajectories_with_pose matches fragments via UniqueIdentityKey,
+    # which repeats across arenas (arena 0 and arena 7 can both hold an
+    # "ant A"), so an ungrouped relink is a genuine cross-arena merge risk.
+    # This path is reached from relink_and_export_rich_csv, not from
+    # process_trajectories_from_csv, so the grouping there does not cover it.
+    # relink_trajectories_with_pose_by_arena groups by arena_id (falling
+    # straight through to one unchanged call when there is no arena_id
+    # column, or a single arena).
+    from hydra_suite.core.post.processing import relink_trajectories_with_pose_by_arena
 
-    relinked_with_pose = relink_trajectories_with_pose(relink_input_df, params)
+    relinked_with_pose = relink_trajectories_with_pose_by_arena(relink_input_df, params)
     if relinked_with_pose is None or relinked_with_pose.empty:
         relinked_with_pose = relink_input_df
 

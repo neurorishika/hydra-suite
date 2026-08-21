@@ -294,6 +294,15 @@ def test_tracking_worker_realtime_yolo_obb_handles_zero_detection_frame(
         def __init__(self, params, worker=None):
             self.params = params
 
+        def set_track_arena(self, *_args, **_kwargs):
+            # Installing the static single-/multi-arena mapping at setup is
+            # not an "assignment" -- worker.py calls this unconditionally
+            # right after construction (see hungarian.py:set_track_arena),
+            # before any detections exist. Accept it silently; only
+            # `compute_cost_matrix` below is the "assigner was actually
+            # used" tripwire this probe exists to guard.
+            return None
+
         def compute_cost_matrix(self, *_args, **_kwargs):
             raise AssertionError(
                 "compute_cost_matrix should not be called with zero detections"

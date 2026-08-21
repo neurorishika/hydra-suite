@@ -42,6 +42,7 @@ from hydra_suite.trackerkit.engine_params import (
     RuntimeContext,
     build_engine_params,
     build_roi_mask,
+    n_arenas_from_shapes,
 )
 from hydra_suite.trackerkit.gui.panels.tracking_panel import (
     DENSITY_BINARIZE_THRESHOLD_CONST,
@@ -1393,7 +1394,24 @@ class ConfigOrchestrator:
         self._mw._sync_individual_analysis_mode_ui()
 
         # === ROI ===
+        # ONE animal-count control (user decision, task-8 fix round 1):
+        # "Animals per arena" IS spin_max_targets, already loaded by
+        # _load_config_core_tracking above from cfg["max_targets"]. There is
+        # no separate `animals_per_arena` config key to restore -- syncing
+        # self._mw.config.animals_per_arena and the derived-total label just
+        # needs the now-current spin_max_targets value plus the roi_shapes
+        # about to be loaded below.
         self._mw.roi_shapes = cfg.get("roi_shapes", [])
+        # Resume arena assignment from the highest id already used (includes
+        # and excludes), so newly drawn shapes on a reloaded multi-arena project
+        # join the last existing arena (not a fresh one) until the user presses
+        # "New Arena" -- matching the in-session behavior rather than
+        # collapsing back into arena 0.
+        used_arena_ids = [int(s.get("arena_id", 0)) for s in self._mw.roi_shapes]
+        self._mw._session_orch.current_arena_id = (
+            max(used_arena_ids) if used_arena_ids else 0
+        )
+        self._mw._update_animals_per_arena_total_label()
         if self._mw.roi_shapes:
             # Regenerate the combined mask from loaded shapes
             # Need to get video frame dimensions first
@@ -1689,6 +1707,18 @@ class ConfigOrchestrator:
         if not preset_mode:
             cfg["yolo_device"] = runtime_detection["yolo_device"]
 
+        # Solver auto-pick must see the DERIVED total slot count
+        # (n_arenas * animals_per_arena), not the per-arena spinbox value --
+        # otherwise a many-arena session with few animals per arena
+        # auto-picks as though tracking only that per-arena count, while the
+        # engine actually allocates n_arenas * that many slots. Uses the
+        # same n_arenas_from_shapes the save gate uses, so there is one
+        # definition of arena count in this file.
+        _derived_total_targets = (
+            n_arenas_from_shapes(self._mw.roi_shapes)
+            * self._panels.setup.spin_max_targets.value()
+        )
+
         cfg.update(
             {
                 # Detection frame batching (drives InferenceConfig.detection_batch_size)
@@ -1725,14 +1755,16 @@ class ConfigOrchestrator:
                 "pose_valid_orientation_scale": 0.15,
                 "use_mahalanobis_distance": self._panels.tracking.chk_use_mahal.isChecked(),
                 # === ASSIGNMENT ALGORITHM ===
-                # Solver flags: respect saved override, else auto-pick from N animals.
+                # Solver flags: respect saved override, else auto-pick from
+                # the DERIVED total slot count (see _derived_total_targets
+                # above), not the per-arena spinbox value.
                 "enable_greedy_assignment": _resolve_solver_flags(
                     self._panels.tracking,
-                    self._panels.setup.spin_max_targets.value(),
+                    _derived_total_targets,
                 )[0],
                 "enable_spatial_optimization": _resolve_solver_flags(
                     self._panels.tracking,
-                    self._panels.setup.spin_max_targets.value(),
+                    _derived_total_targets,
                 )[1],
                 "association_stage1_motion_gate_multiplier": self._panels.tracking.spin_assoc_gate_multiplier.value(),
                 "association_stage1_max_area_ratio": self._panels.tracking.spin_assoc_max_area_ratio.value(),
@@ -1840,6 +1872,21 @@ class ConfigOrchestrator:
         # Skip ROI when saving as preset
         if not preset_mode:
             cfg["roi_shapes"] = self._mw.roi_shapes
+            # ONE animal-count control (user decision, task-8 fix round 1):
+            # "Animals per arena" IS spin_max_targets -- read it directly
+            # here rather than through self._mw.config.animals_per_arena, so
+            # this write can never go stale relative to the live widget.
+            # Only emit an explicit override once more than one arena is
+            # actually in use -- build_engine_params falls back to the
+            # legacy `max_targets` spinner when this key is absent, so a
+            # single-arena user who never presses "New Arena" gets EXACTLY
+            # today's MAX_TARGETS. Writing this key unconditionally would
+            # silently collapse MAX_TARGETS down to a stray/default
+            # animals_per_arena value for every existing user.
+            if n_arenas_from_shapes(self._mw.roi_shapes) > 1:
+                cfg["animals_per_arena"] = int(
+                    self._panels.setup.spin_max_targets.value()
+                )
 
         cfg.update(
             {
@@ -2069,19 +2116,51 @@ class ConfigOrchestrator:
     def _gui_runtime_context(self, config) -> RuntimeContext:
         """Per-run values the pure builder cannot derive from config alone.
 
-        Sources every field exactly as the legacy ``get_parameters_dict`` did:
-        ROI mask from the live ``self._mw.roi_mask`` (a shared
-        ``build_roi_mask`` fallback rasterizes ``config["roi_shapes"]`` if no
-        live mask is cached -- the two rasterizations are byte-identical, see
-        ``tests/test_get_parameters_dict_characterization.py``); START/END frame
-        straight off the setup spin boxes (kept stable even while the controls
-        are disabled during a tracking/backward pass); the video-derived output
-        dirs; and the individual-properties cache path / dataset run id.
+        Sources every field exactly as the legacy ``get_parameters_dict`` did,
+        with ONE deliberate, in-scope behavior change from this fix round:
+
+        ROI mask: preferred from the live ``self._mw.roi_mask``. The local
+        fallback right below (``build_roi_mask(config.get("roi_shapes"),
+        None, None)``) is unconditionally dead -- it always returns ``None``
+        -- and is left as-is (out of scope here). But
+        ``build_engine_params``'s OWN internal fallback
+        (``engine_params.py``, right after ``RuntimeContext`` construction:
+        ``build_roi_mask(cfg.get("roi_shapes"), runtime.frame_width,
+        runtime.frame_height)``) now receives REAL dimensions instead of the
+        ``None, None`` it always got before this fix round, because it reads
+        the same ``runtime.frame_width``/``frame_height`` fields
+        ``build_arena_labels`` needs. That fallback predates the arena work
+        entirely (``cadce564``, the original CLI/GUI builder extraction) and
+        the CLI has always fed it real dimensions -- only the GUI path left
+        it permanently dead. So this is a genuine, deliberate GUI/CLI parity
+        fix, reachable whenever ``self._mw.roi_mask`` is ``None`` while
+        ``roi_shapes`` is populated (e.g. a config loaded when the saved
+        video path didn't exist yet -- ``_load_config_individual_analysis``'s
+        "video not available yet" branch -- followed by the user manually
+        loading a video later; ``_setup_video_file`` never re-derives
+        ``self._mw.roi_mask`` in that case). Previously ROI gating was
+        silently OFF in that state; now it correctly turns ON, matching what
+        the CLI has always done. Pinned by
+        ``test_stale_roi_mask_now_rasterizes_with_real_dimensions`` in
+        ``tests/test_arena_gui_frame_dimensions.py``.
+
+        frame_width / frame_height from ``self._mw.video_width`` /
+        ``.video_height`` (set in ``SessionOrchestrator._init_video_player``
+        off ``CAP_PROP_FRAME_WIDTH``/``_HEIGHT`` -- the exact pixel
+        coordinate space ROI shapes are drawn in); ``None`` before any video
+        is loaded, which keeps ``build_arena_labels`` on its ``(None, 1)``
+        short-circuit); START/END frame straight off the setup spin boxes
+        (kept stable even while the controls are disabled during a
+        tracking/backward pass); the video-derived output dirs; and the
+        individual-properties cache path / dataset run id.
         """
         fps = float(config.get("fps", 30.0) or 30.0)
         total_frames = int(getattr(self._mw, "video_total_frames", 0) or 0)
         roi_mask = self._mw.roi_mask
         if roi_mask is None and config.get("roi_shapes"):
+            # Dead: always None, None -- see the docstring above. Left as-is;
+            # build_engine_params' own fallback (fed real dims now) is what
+            # actually rasterizes ROI_MASK in this state.
             roi_mask = build_roi_mask(config.get("roi_shapes"), None, None)
         headtail_selected = bool(
             str(
@@ -2091,8 +2170,8 @@ class ConfigOrchestrator:
         return RuntimeContext(
             fps=fps,
             total_frames=total_frames,
-            frame_width=None,
-            frame_height=None,
+            frame_width=getattr(self._mw, "video_width", None),
+            frame_height=getattr(self._mw, "video_height", None),
             roi_mask=roi_mask,
             start_frame=self._panels.setup.spin_start_frame.value(),
             end_frame=self._panels.setup.spin_end_frame.value(),
