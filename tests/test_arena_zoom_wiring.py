@@ -340,3 +340,67 @@ def test_zoom_changed_still_routes_through_roi_display_when_roi_base_frame_is_se
     window._detection_panel._on_zoom_changed(150)
 
     assert window.video_label._zoom == pytest.approx(1.5)
+
+
+# ---------------------------------------------------------------------------
+# Fix Wave 15: _update_preview_display must not bake the current zoom into
+# canvas._frame (via already_scaled=True) -- it must push the NATIVE frame
+# and sync canvas zoom via set_zoom(), exactly like
+# start_roi_selection/_display_roi_with_zoom already do. Otherwise, once it
+# runs at a non-1.0 zoom, canvas._frame silently becomes pre-shrunk while
+# canvas._zoom resets to 1.0, and any SUBSEQUENT zoom change (routed through
+# _display_roi_with_zoom) compounds on top of the already-shrunk frame
+# instead of replacing it.
+# ---------------------------------------------------------------------------
+
+
+def _fake_rgb_wave15(width: int = 300, height: int = 200):
+    import numpy as np
+
+    return np.zeros((height, width, 3), dtype=np.uint8)
+
+
+def test_update_preview_display_does_not_compound_with_subsequent_roi_zoom(window):
+    """Exact root-cause compounding scenario: _update_preview_display at 50%
+    zoom, THEN a zoom-slider move to 150% routed through
+    _display_roi_with_zoom, must land on canvas._scaled == native * 1.5
+    (450x300), NOT the compounded 225x150 the broken code produced."""
+    window.preview_frame_original = _fake_rgb_wave15(300, 200)
+    window.roi_shapes = [
+        {"type": "circle", "params": [20, 20, 10], "mode": "include", "arena_id": 0}
+    ]
+    window.detection_test_result = None
+    dp = window._detection_panel
+
+    window.slider_zoom.setValue(50)
+    dp._update_preview_display()
+
+    window.slider_zoom.setValue(150)
+    dp._on_zoom_changed(150)
+
+    assert window.video_label._zoom == pytest.approx(1.5)
+    assert window.video_label._scaled.width() == 450
+    assert window.video_label._scaled.height() == 300
+
+
+def test_update_preview_display_is_idempotent_at_same_zoom_across_calls(window):
+    """Most-likely real-world trigger: a zoom slider value left over from a
+    previously opened video (still 50 here), then a fresh video loads and
+    _update_preview_display runs again at the SAME nominal zoom. Repeated
+    calls at an unchanged zoom value must not compound -- each call must
+    independently produce native * zoom, not native * zoom^2 on the second
+    call."""
+    window.preview_frame_original = _fake_rgb_wave15(300, 200)
+    window.roi_shapes = []
+    window.detection_test_result = None
+    dp = window._detection_panel
+
+    window.slider_zoom.setValue(50)
+    dp._update_preview_display()
+    assert window.video_label._scaled.width() == 150
+    assert window.video_label._scaled.height() == 100
+
+    # Simulate a fresh video load at the same nominal slider value.
+    dp._update_preview_display()
+    assert window.video_label._scaled.width() == 150
+    assert window.video_label._scaled.height() == 100

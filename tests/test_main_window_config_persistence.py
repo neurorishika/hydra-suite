@@ -651,6 +651,75 @@ def test_opening_video_with_saved_roi_config_autoloads_shapes_onto_canvas(
     window.close()
 
 
+def test_video_autoload_with_saved_roi_produces_correctly_fit_non_compounded_frame(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    """Fix Wave 15 end-to-end regression guard: opening a video with a saved
+    ``roi_shapes`` config via the REAL auto-load path
+    (``_setup_video_file(..., skip_config_load=False)``) must leave
+    ``video_label._zoom``/``._scaled`` reflecting a genuinely NATIVE frame
+    scaled by whatever zoom ``_fit_image_to_screen`` computed -- not a
+    compounded/baked scale. Before the fix, ``_update_preview_display``
+    baked the (stale, previous-video) zoom into ``canvas._frame`` and reset
+    ``canvas._zoom`` to 1.0 on the first frame push, corrupting every
+    zoom-slider move (routed through ``_display_roi_with_zoom`` once
+    ``roi_shapes`` is populated) that followed, including the
+    ``_fit_image_to_screen`` call scheduled during video load.
+    """
+    import cv2
+
+    video_path = tmp_path / "sample.mp4"
+    width, height = 64, 48
+    writer = cv2.VideoWriter(
+        str(video_path), cv2.VideoWriter_fourcc(*"mp4v"), 10.0, (width, height)
+    )
+    for _ in range(3):
+        writer.write(np.zeros((height, width, 3), dtype=np.uint8))
+    writer.release()
+
+    roi_shapes = [
+        {"type": "circle", "params": [30, 20, 10], "mode": "include", "arena_id": 0},
+    ]
+
+    window = _make_main_window(monkeypatch)
+
+    cfg = window.get_parameters_dict()
+    cfg["roi_shapes"] = roi_shapes
+    cfg["file_path"] = str(video_path)
+    config_path = tmp_path / "sample_config.json"
+    config_path.write_text(json.dumps(cfg), encoding="utf-8")
+
+    # Simulate a zoom value left over from a previously opened video, the
+    # most likely real-world trigger the brief calls out.
+    window.slider_zoom.setValue(50)
+
+    window._setup_video_file(str(video_path), skip_config_load=False)
+
+    # `_init_video_player` schedules `_fit_image_to_screen` via
+    # `QTimer.singleShot(0, ...)` -- pump the event loop to drain it.
+    qapp.processEvents()
+    qapp.processEvents()
+
+    viewport_width = window.scroll.viewport().width()
+    viewport_height = window.scroll.viewport().height()
+    zoom_w = viewport_width / width
+    zoom_h = viewport_height / height
+    expected_zoom_fit = min(zoom_w, zoom_h) * 0.95
+    expected_zoom_fit = max(0.1, min(5.0, expected_zoom_fit))
+    # `_fit_image_to_screen` stores the zoom via
+    # `slider_zoom.setValue(int(expected_zoom_fit * 100))`, an integer
+    # percent, so recover the same truncated value it actually applied.
+    expected_zoom = int(expected_zoom_fit * 100) / 100.0
+
+    assert window.video_label._zoom == pytest.approx(expected_zoom)
+    assert window.video_label._scaled.width() == int(width * expected_zoom)
+    assert window.video_label._scaled.height() == int(height * expected_zoom)
+
+    window.close()
+
+
 def test_remove_buttons_delete_only_the_selected_tracker_models(
     monkeypatch: pytest.MonkeyPatch,
     qapp: QApplication,

@@ -1767,15 +1767,9 @@ class DetectionPanel(QWidget):
         # scope; flagged for a follow-up if this preview needs the boundary
         # back.
         zoom_val = max(self._main_window.slider_zoom.value() / 100.0, 0.1)
-        if zoom_val != 1.0:
-            scaled_w = int(w * zoom_val)
-            scaled_h = int(h * zoom_val)
-            qimg = qimg.scaled(
-                scaled_w, scaled_h, Qt.KeepAspectRatio, Qt.FastTransformation
-            )
-
+        self._main_window.video_label.set_zoom(zoom_val)
         pixmap = QPixmap.fromImage(qimg)
-        self._main_window._set_video_pixmap(pixmap, already_scaled=True)
+        self._main_window._set_video_pixmap(pixmap, already_scaled=False)
 
     def _redisplay_detection_test(self):
         """Redisplay the stored detection test result with current zoom."""
