@@ -13,7 +13,6 @@ mod = load_src_module(
 )
 resolve_tag_identities = mod.resolve_tag_identities
 detect_tag_swaps = mod.detect_tag_swaps
-build_tag_only_trajectories = mod.build_tag_only_trajectories
 
 
 class FakeTagCache:
@@ -149,39 +148,3 @@ def test_detect_tag_swaps_simple():
 def test_detect_tag_swaps_no_data():
     result = detect_tag_swaps(None, None, {})
     assert result == []
-
-
-# ---------------------------------------------------------------------------
-# build_tag_only_trajectories
-# ---------------------------------------------------------------------------
-
-
-def test_build_tag_only_trajectories_basic():
-    """Each unique tag should become its own trajectory with interpolation."""
-    cache_data = {}
-    # Tag 1 observed on frames 0, 2, 4 (gaps of 2)
-    for fid in [0, 2, 4, 6, 8]:
-        cache_data[fid] = {
-            "tag_ids": np.array([1], dtype=np.int32),
-            "centers_xy": np.array([[float(fid * 10), 50.0]], dtype=np.float32),
-        }
-    cache = FakeTagCache(cache_data, total_frames=10)
-
-    result = build_tag_only_trajectories(
-        cache,
-        {"TAG_ONLY_MAX_GAP": 5, "TAG_ONLY_MIN_OBS": 3},
-        start_frame=0,
-        end_frame=9,
-    )
-    assert isinstance(result, pd.DataFrame)
-    assert len(result) > 0
-    assert "TagID" in result.columns
-    assert (result["TagID"] == 1).all()
-    # Should have interpolated frames
-    assert len(result) >= 5  # At least the observed frames
-
-
-def test_build_tag_only_trajectories_no_cache():
-    result = build_tag_only_trajectories(None, {})
-    assert isinstance(result, pd.DataFrame)
-    assert len(result) == 0

@@ -142,6 +142,10 @@ dmypy.json
 # test_postproc_invariants suite reads; without this they are ignored and the
 # test fails on a fresh checkout with empty inputs).
 !tests/fixtures/postproc/**/*.csv
+# Exception: committed interpolated-crops characterization golden (small CSVs
+# captured from pre-refactor main; test_interpolated_crops_characterization_golden
+# reads them, so they must survive a fresh checkout).
+!tests/fixtures/interpolated_crops_golden/**/*.csv
 *.avi
 *.mp4
 *.mov
@@ -394,6 +398,11 @@ profiling/
 *.engine
 *.trt
 *.pth
+# Exception: committed interpolated-crops characterization golden weights
+# (small tinyclassifier checkpoints the golden was captured with; the
+# characterization test reuses them verbatim so golden vs. current compares
+# identical weights, not independently-random ones).
+!tests/fixtures/interpolated_crops_golden/**/*.pth
 
 # Custom user presets (gitignored)
 configs/custom.json

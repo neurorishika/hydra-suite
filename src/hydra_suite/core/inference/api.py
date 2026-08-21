@@ -59,10 +59,14 @@ def load_pose_backend(
     """Build a pose backend (with predict_batch) via the canonical stages/pose loader.
 
     Single source of the tier->backend golden rule; returns the backend, not the
-    PoseModel wrapper. GUI pose workers (PoseKit's ``_build_pose_backend`` and
-    TrackerKit's ``crops_worker._init_pose_backend``) route their SLEAP/YOLO
-    settings through here instead of hand-rolling the runtime-flavor ladder, so
-    CPU/GPU/GPU-Fast tiers all resolve through ``stages.pose.load_pose_model``.
+    PoseModel wrapper. GUI/service pose loaders (PoseKit's ``_build_pose_backend``
+    in ``posekit/gui/workers.py`` and ``integrations/sleap/service.py``) route
+    their SLEAP/YOLO settings through here instead of hand-rolling the
+    runtime-flavor ladder, so CPU/GPU/GPU-Fast tiers all resolve through
+    ``stages.pose.load_pose_model``. (TrackerKit's interpolated-crop path no
+    longer routes through here -- it now calls ``stages.pose.load_pose_model``
+    directly via ``interpolated_crops.py``'s ``_init_interpolation_backends``,
+    the successor to the since-deleted module-level ``_init_pose_backend``.)
 
     ``keypoint_names``/``skeleton_edges`` are threaded through as an explicit
     override (GUI callers already hold them and have no ``skeleton_file`` path);

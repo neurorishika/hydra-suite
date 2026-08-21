@@ -16,7 +16,9 @@ from hydra_suite.core.individual.properties.export import (
     augment_trajectories_with_detected_properties_cache,
     augment_trajectories_with_pose_cache,
     build_detected_apriltag_lookup_dataframe,
+    merge_interpolated_apriltag_df,
     merge_interpolated_cnn_df,
+    merge_interpolated_headtail_df,
     merge_interpolated_pose_df,
 )
 
@@ -207,6 +209,58 @@ def test_merge_interpolated_pose_fills_only_missing_detection_pose():
     assert out.iloc[1]["PoseKpt_head_Conf"] == pytest.approx(0.7)
 
 
+def test_merge_interpolated_pose_sets_pose_source():
+    trajectories = pd.DataFrame(
+        {
+            "FrameID": [0, 1, 2],
+            "TrajectoryID": [1, 1, 1],
+            "PoseKpt_head_X": [10.0, np.nan, np.nan],
+            "PoseKpt_head_Y": [20.0, np.nan, np.nan],
+        }
+    )
+    interp_pose = pd.DataFrame(
+        {
+            "frame_id": [1],
+            "trajectory_id": [1],
+            "PoseKpt_head_X": [11.0],
+            "PoseKpt_head_Y": [21.0],
+        }
+    )
+    out = merge_interpolated_pose_df(trajectories, interp_pose)
+    assert list(out["PoseSource"]) == ["real", "interp", np.nan] or (
+        out["PoseSource"].tolist()[0] == "real"
+        and out["PoseSource"].tolist()[1] == "interp"
+        and pd.isna(out["PoseSource"].tolist()[2])
+    )
+
+
+def test_merge_interpolated_pose_sets_pose_source_with_non_default_index():
+    """Regression: trajectories_df with a non-default index must not crash
+    the PoseSource assignment (merged always gets a fresh RangeIndex, so any
+    mask derived from out's index must be repositioned via .values)."""
+    trajectories = pd.DataFrame(
+        {
+            "FrameID": [0, 1, 2],
+            "TrajectoryID": [1, 1, 1],
+            "PoseKpt_head_X": [10.0, np.nan, np.nan],
+            "PoseKpt_head_Y": [20.0, np.nan, np.nan],
+        },
+        index=[5, 6, 7],
+    )
+    interp_pose = pd.DataFrame(
+        {
+            "frame_id": [1],
+            "trajectory_id": [1],
+            "PoseKpt_head_X": [11.0],
+            "PoseKpt_head_Y": [21.0],
+        }
+    )
+    out = merge_interpolated_pose_df(trajectories, interp_pose)
+    assert out["PoseSource"].tolist()[0] == "real"
+    assert out["PoseSource"].tolist()[1] == "interp"
+    assert pd.isna(out["PoseSource"].tolist()[2])
+
+
 def test_augment_trajectories_with_pose_cache_coordinate_scale(tmp_path):
     """When coordinate_scale != 1.0, PoseKpt_*_X/Y are rescaled."""
     cache_path = tmp_path / "props_scale.npz"
@@ -321,6 +375,151 @@ def test_merge_interpolated_cnn_df_backfills_multihead_columns():
     assert out.iloc[0]["CNN_idA_side_Conf"] == pytest.approx(0.81)
     assert pd.isna(out.iloc[1]["CNN_idA_color_Class"])
     assert pd.isna(out.iloc[1]["CNN_idA_side_Class"])
+
+
+def test_merge_interpolated_apriltag_coalesces_into_detected_tag_id():
+    trajectories = pd.DataFrame(
+        {
+            "FrameID": [0, 1, 2],
+            "TrajectoryID": [1, 1, 1],
+            "DetectedTagID": [5, np.nan, np.nan],
+        }
+    )
+    interp_tags = pd.DataFrame({"frame_id": [1], "trajectory_id": [1], "tag_id": [7]})
+    out = merge_interpolated_apriltag_df(trajectories, interp_tags)
+    assert "InterpTagID" not in out.columns
+    assert out["DetectedTagID"].tolist() == [5, 7, None] or (
+        out["DetectedTagID"].iloc[0] == 5
+        and out["DetectedTagID"].iloc[1] == 7
+        and pd.isna(out["DetectedTagID"].iloc[2])
+    )
+    assert out["TagSource"].iloc[0] == "real"
+    assert out["TagSource"].iloc[1] == "interp"
+    assert pd.isna(out["TagSource"].iloc[2])
+
+
+def test_merge_interpolated_apriltag_sets_tag_source_with_non_default_index():
+    """Regression: trajectories_df with a non-default index must not crash
+    the TagSource assignment (merged always gets a fresh RangeIndex, so any
+    mask derived from out's index must be repositioned via .values), mirroring
+    the equivalent pose regression test above."""
+    trajectories = pd.DataFrame(
+        {
+            "FrameID": [0, 1, 2],
+            "TrajectoryID": [1, 1, 1],
+            "DetectedTagID": [5, np.nan, np.nan],
+        },
+        index=[5, 6, 7],
+    )
+    interp_tags = pd.DataFrame({"frame_id": [1], "trajectory_id": [1], "tag_id": [7]})
+    out = merge_interpolated_apriltag_df(trajectories, interp_tags)
+    assert out["DetectedTagID"].tolist()[0] == 5
+    assert out["DetectedTagID"].tolist()[1] == 7
+    assert pd.isna(out["DetectedTagID"].tolist()[2])
+    assert out["TagSource"].tolist()[0] == "real"
+    assert out["TagSource"].tolist()[1] == "interp"
+    assert pd.isna(out["TagSource"].tolist()[2])
+
+
+def test_merge_interpolated_headtail_coalesces_and_sets_heading_method():
+    trajectories = pd.DataFrame(
+        {
+            "FrameID": [0, 1, 2],
+            "TrajectoryID": [1, 1, 1],
+            "HeadTailAngleRad": [1.0, np.nan, np.nan],
+            "HeadingResolved": [1.0, np.nan, np.nan],
+            "HeadingMethod": ["headtail", np.nan, np.nan],
+            "HeadingIsDirected": [True, np.nan, np.nan],
+        }
+    )
+    interp_ht = pd.DataFrame(
+        {
+            "frame_id": [1],
+            "trajectory_id": [1],
+            "heading_rad": [2.0],
+            "heading_conf": [0.9],
+            "heading_directed": [1],
+        }
+    )
+    out = merge_interpolated_headtail_df(trajectories, interp_ht)
+    assert "InterpHeadingRad" not in out.columns
+    assert out["HeadTailAngleRad"].iloc[1] == 2.0
+    assert out["HeadingResolved"].iloc[1] == 2.0
+    assert out["HeadingMethod"].iloc[1] == "headtail_interp"
+    assert bool(out["HeadingIsDirected"].iloc[1]) is True
+    assert out["HeadingSource"].iloc[0] == "real"
+    assert out["HeadingSource"].iloc[1] == "interp"
+    # row 2 (frame 2) has neither real nor interp heading -> untouched
+    assert pd.isna(out["HeadingMethod"].iloc[2])
+
+
+def test_merge_interpolated_headtail_does_not_fabricate_conf_for_undirected_row():
+    """Regression (I4): an interp row with NaN heading_rad (no real
+    interpolated heading) but a present heading_conf/heading_directed (e.g.
+    an undirected row in the interp CSV, where heading_conf/heading_directed
+    can still be 0.0/False) must NOT get a fabricated HeadTailClassifierConf
+    -- it should stay NaN, matching HeadingSource staying NaN for that row
+    too (no provenance marker, no confidence). A row WITH a real interp
+    heading (heading_rad non-NaN) must still get both HeadTailAngleRad and
+    HeadTailClassifierConf coalesced (the working case must not break)."""
+    trajectories = pd.DataFrame(
+        {
+            "FrameID": [0, 1],
+            "TrajectoryID": [1, 1],
+            # Pre-seeded as object dtype (mirrors real trajectories_df, which
+            # always carries string/bool values in these columns already) so
+            # the "headtail_interp"/bool backfills below don't hit pandas's
+            # "Invalid value for dtype float64" upcast guard on an
+            # all-NaN-initialized float64 column -- an orthogonal fixture
+            # detail, not part of the I4 gate under test.
+            "HeadingMethod": pd.array([None, None], dtype=object),
+            "HeadingIsDirected": pd.array([None, None], dtype=object),
+        }
+    )
+    interp_ht = pd.DataFrame(
+        {
+            "frame_id": [0, 1],
+            "trajectory_id": [1, 1],
+            "heading_rad": [np.nan, 2.0],
+            "heading_conf": [0.0, 0.9],
+            "heading_directed": [0, 1],
+        }
+    )
+    out = merge_interpolated_headtail_df(trajectories, interp_ht)
+
+    # Row 0: no real interpolated heading (heading_rad NaN) -> no fabricated
+    # confidence and no provenance stamp.
+    assert pd.isna(out["HeadTailAngleRad"].iloc[0])
+    assert pd.isna(out["HeadTailClassifierConf"].iloc[0])
+    assert pd.isna(out["HeadingSource"].iloc[0])
+
+    # Row 1: real interpolated heading -> both angle and confidence coalesce,
+    # provenance stamped "interp" (the working case, unbroken by the gate).
+    assert out["HeadTailAngleRad"].iloc[1] == pytest.approx(2.0)
+    assert out["HeadTailClassifierConf"].iloc[1] == pytest.approx(0.9)
+    assert out["HeadingSource"].iloc[1] == "interp"
+
+
+def test_merge_interpolated_cnn_sets_cnn_source():
+    trajectories = pd.DataFrame(
+        {
+            "FrameID": [0, 1],
+            "TrajectoryID": [1, 1],
+            "CNN_idA_Class": ["antA", np.nan],
+            "CNN_idA_Conf": [0.9, np.nan],
+        }
+    )
+    interp_cnn = pd.DataFrame(
+        {
+            "frame_id": [1],
+            "trajectory_id": [1],
+            "class_name": ["antB"],
+            "confidence": [0.7],
+        }
+    )
+    out = merge_interpolated_cnn_df(trajectories, interp_cnn, label="idA")
+    assert out["CNN_idA_Source"].iloc[0] == "real"
+    assert out["CNN_idA_Source"].iloc[1] == "interp"
 
 
 # ---------------------------------------------------------------------------

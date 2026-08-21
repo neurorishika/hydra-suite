@@ -1,10 +1,10 @@
-"""GAP 3 regression: the interpolated-crops pipeline's pose/CNN fallback path
-for a degenerate OBB (``canonical_affine`` raises -- zero-length edge, see
-``core/canonicalization/geometry.py::_axes``) must skip the detection loudly
-instead of feeding a wrongly-scaled, un-canonicalized masked crop to the
-backend.
+"""GAP 3 regression: the interpolated-crops pipeline's pose/CNN/AprilTag/
+head-tail path for a degenerate OBB (``canonical_affine`` raises --
+zero-length edge, see ``core/canonicalization/geometry.py::_axes``) must skip
+the detection loudly instead of feeding a wrongly-scaled, un-canonicalized
+masked crop to any backend.
 
-Old behavior: ``_extract_pose_crop`` fell back to
+Old behavior (pre-Task 12): ``_extract_pose_crop`` fell back to
 ``gen._extract_obb_masked_crop`` -- an axis-aligned crop with an arbitrary
 aspect ratio and no Layer 1 rigid transform -- and ``_flush_pose_batch`` fed
 it straight to the backend, bypassing Layer 2 entirely (``fit_to_model_input``
@@ -12,6 +12,13 @@ assumes the source is the canonical canvas, so ``apply_fit`` would have
 silently mis-scaled it even if it *had* been called). A genuinely degenerate
 OBB has no salvageable animal geometry to recover, so the fix skips instead
 of fitting a crop that cannot be honestly fit.
+
+Task 12 replaced ``_extract_pose_crop``/``_process_single_task`` with a
+delegation to ``synthetic_detections.filter_degenerate_tasks`` (called from
+``_filter_degenerate_and_get_corners``): a degenerate task never survives
+into ``kept_tasks``, so it never reaches ``build_synthetic_obb_result`` or
+any of the windowed pose/CNN/AprilTag/head-tail stage calls at all -- there
+is no more per-task pending_crops/pending_entries machinery to guard here.
 """
 
 from __future__ import annotations
@@ -22,115 +29,123 @@ import numpy as np
 
 from hydra_suite.core.canonicalization.geometry import CanonicalGeometry, ClippingStats
 from hydra_suite.core.post import interpolated_crops as ic
+from hydra_suite.core.post.synthetic_detections import filter_degenerate_tasks
 
 _GEOMETRY = CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
 
 
-def _degenerate_corners() -> np.ndarray:
-    # A zero-area OBB: every corner coincides, so both edges are
+def _degenerate_task(frame_id=0, traj_id=1) -> dict:
+    # w=h=0 -> every ellipse-derived OBB corner coincides -> both edges are
     # zero-length -- canonical_affine's _axes() raises ValueError.
-    return np.zeros((4, 2), dtype=np.float32)
+    return {
+        "cx": 0.0,
+        "cy": 0.0,
+        "w": 0.0,
+        "h": 0.0,
+        "theta": 0.0,
+        "frame_id": frame_id,
+        "traj_id": traj_id,
+        "interp_from": (0, 1),
+        "interp_index": 0,
+        "interp_total": 1,
+    }
 
 
-def test_extract_pose_crop_skips_degenerate_obb_instead_of_masked_fallback(caplog):
-    class _UnusedGen:
-        background_color = (0, 0, 0)
+def _fitting_task(frame_id=0, traj_id=2) -> dict:
+    return {
+        "cx": 0.0,
+        "cy": 0.0,
+        "w": 20.0,
+        "h": 10.0,
+        "theta": 0.0,
+        "frame_id": frame_id,
+        "traj_id": traj_id,
+        "interp_from": (0, 1),
+        "interp_index": 0,
+        "interp_total": 1,
+    }
 
-        def _extract_obb_masked_crop(self, *args, **kwargs):
-            raise AssertionError(
-                "the un-canonicalized masked-crop fallback must not be called "
-                "for a degenerate OBB -- the fix skips instead of fitting one"
-            )
 
-    def _unused_extract_canonical(*args, **kwargs):
-        raise AssertionError("Layer 1 extraction must not run when _aff is None")
-
+def test_filter_degenerate_tasks_drops_degenerate_obb_and_warns(caplog):
+    """The stage-layer entry point (``filter_degenerate_tasks``, called from
+    ``_filter_degenerate_and_get_corners``) must loudly skip a degenerate OBB
+    rather than let it flow into ``build_synthetic_obb_result``."""
     with caplog.at_level(logging.WARNING):
-        pose_crop, pose_crop_info = ic._extract_pose_crop(
-            task_idx=0,
-            frame=np.zeros((10, 10, 3), dtype=np.uint8),
-            _frame_all_corners=[_degenerate_corners()],
-            _aff=None,  # what _compute_frame_corners_and_affines stores when
-            # canonical_affine raised for this task's corners.
-            corners=_degenerate_corners(),
-            gen=_UnusedGen(),
-            _extract_canonical=_unused_extract_canonical,
+        kept = filter_degenerate_tasks(
+            [_degenerate_task(), _fitting_task()], _GEOMETRY, ClippingStats()
         )
 
-    assert pose_crop is None
-    assert pose_crop_info is None
+    assert len(kept) == 1
+    assert kept[0]["traj_id"] == 2
     assert any("degenerate OBB" in rec.message for rec in caplog.records)
 
 
-def test_process_single_task_adds_nothing_to_pending_batches_for_degenerate_obb():
-    """End-to-end through the real call site: a degenerate-OBB task must not
-    reach pending_crops/pending_cnn_crops at all (nothing to fit, nothing to
-    predict on), rather than arriving as an un-fit, wrongly-scaled crop.
+def test_process_single_frame_never_builds_a_synthetic_obb_for_a_degenerate_only_frame(
+    monkeypatch,
+):
+    """End-to-end through the real call site: a frame whose only task is a
+    degenerate OBB must never reach ``build_synthetic_obb_result`` -- nothing
+    to fit, nothing to predict on, nothing to detect AprilTags/head-tail in --
+    rather than arriving as an un-fit, wrongly-scaled crop.
     """
 
     class _FakeGen:
         background_color = (0, 0, 0)
 
         def save_interpolated_crop(self, **kwargs):
-            return ""
-
-        def _extract_obb_masked_crop(self, *args, **kwargs):
-            # The old fallback: a real (but un-canonicalized, arbitrary-aspect)
-            # crop. If this pipeline still called it for a degenerate OBB, the
-            # crop below would flow into pending_crops/pending_cnn_crops --
-            # exactly the wrongly-scaled-crop bug this test guards against.
-            return (
-                np.full((7, 13, 3), 128, dtype=np.uint8),
-                {"crop_size": (13, 7), "crop_bbox": (0, 0, 13, 7)},
+            raise AssertionError(
+                "save_interpolated_outputs is False; save_interpolated_crop "
+                "must not be called"
             )
 
-    task = {
-        "cx": 0.0,
-        "cy": 0.0,
-        "w": 0.0,
-        "h": 0.0,
-        "theta": 0.0,
-        "frame_id": 0,
-        "traj_id": 1,
-        "interp_from": (0, 1),
-        "interp_index": 0,
-        "interp_total": 1,
-    }
-    frame_corners, frame_affines = ic._compute_frame_corners_and_affines(
-        [task], _GEOMETRY, ClippingStats()
+    def _unused_build_synthetic_obb_result(*args, **kwargs):
+        raise AssertionError(
+            "a frame with only a degenerate-OBB task must never reach "
+            "build_synthetic_obb_result"
+        )
+
+    monkeypatch.setattr(
+        "hydra_suite.core.post.synthetic_detections.build_synthetic_obb_result",
+        _unused_build_synthetic_obb_result,
     )
-    assert frame_affines == [None]  # degenerate OBB -> canonical_affine raised
 
-    pending_crops: list = []
-    pending_entries: list = []
-    pending_cnn_crops: list = []
-    pending_cnn_entries: list = []
+    task = _degenerate_task()
+    frame_tasks = {0: [task]}
+    interp_saved = 0
+    interp_rows: list = []
+    roi_rows: list = []
+    roi_corners: list = []
+    interp_tag_rows: list = []
+    pending_frames: list = []
+    pending_obbs: list = []
+    pending_tasks_by_frame: list = []
 
-    def _unused_extract_canonical(*args, **kwargs):
-        raise AssertionError("must not extract Layer 1 crop for a degenerate OBB")
-
-    ic._process_single_task(
-        task,
+    result = ic._process_single_frame(
+        {},
+        None,
+        None,
         0,
+        1,
         np.zeros((10, 10, 3), dtype=np.uint8),
-        frame_corners,
-        frame_affines,
+        1,
+        frame_tasks,
         _FakeGen(),
         False,  # save_interpolated_outputs
-        _unused_extract_canonical,
-        [object()],  # cnn_backends: non-empty so the CNN branch is exercised
-        object(),  # pose_backend: non-None so the pose branch is exercised
-        0,
-        [],
-        [],
-        [],
-        pending_crops,
-        pending_entries,
-        pending_cnn_crops,
-        pending_cnn_entries,
+        _GEOMETRY,
+        ClippingStats(),
+        None,  # apriltag_model
+        None,  # apriltag_cfg
+        interp_saved,
+        interp_rows,
+        roi_rows,
+        roi_corners,
+        interp_tag_rows,
+        pending_frames,
+        pending_obbs,
+        pending_tasks_by_frame,
     )
 
-    assert pending_crops == []
-    assert pending_entries == []
-    assert pending_cnn_crops == []
-    assert pending_cnn_entries == []
+    assert result == 0
+    assert pending_frames == []
+    assert pending_obbs == []
+    assert pending_tasks_by_frame == []

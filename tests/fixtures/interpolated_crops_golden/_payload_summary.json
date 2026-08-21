@@ -1,0 +1,18 @@
+{
+  "saved": 13,
+  "gaps": 13,
+  "occluded_rows": 13,
+  "interp_runs": 3,
+  "eligible_frames": 8,
+  "eligible_rows": 13,
+  "roi_rows_cached": 13,
+  "pose_rows_produced": 0,
+  "tag_rows_produced": 0,
+  "cnn_rows_produced": 0,
+  "headtail_rows_produced": 13,
+  "no_work_reason": "",
+  "mapping_path": "/tmp/interp_golden_root_final2/output/golden_run_20260820_163607/interpolated_mapping.csv",
+  "roi_csv_path": "/tmp/interp_golden_root_final2/output/golden_run_20260820_163607/interpolated_rois.csv",
+  "roi_npz_path": "/tmp/interp_golden_root_final2/output/golden_run_20260820_163607/interpolated_rois.npz",
+  "headtail_csv_path": "/tmp/interp_golden_root_final2/output/golden_run_20260820_163607/interpolated_headtail.csv"
+}

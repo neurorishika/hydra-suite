@@ -62,6 +62,9 @@ def should_run_interpolated_postpass(config: Mapping[str, Any]) -> bool:
         should_export_final_canonical_images(config)
         or is_pose_export_enabled(config)
         or should_export_final_media_videos(config)
+        or bool(config.get("cnn_classifiers", []))
+        or bool(config.get("use_apriltags", False))
+        or is_headtail_compute_enabled(config)
     )
 
 

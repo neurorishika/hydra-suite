@@ -37,6 +37,46 @@ def test_predicates_callable_and_boolean(cfg_path):
     assert sp.workflow_mode_key(cfg) in ("realtime", "non_realtime")
 
 
+def _base_config(**overrides):
+    """Base config for unit-level postpass trigger tests."""
+    cfg = {
+        "detection_method": "yolo_obb",
+        "individual_interpolate_occlusions": True,
+        "enable_individual_dataset": False,
+        "enable_pose_extractor": False,
+        "final_media_export_videos_enabled": False,
+        "cnn_classifiers": [],
+        "use_apriltags": False,
+        "enable_headtail_orientation": False,
+        "yolo_headtail_model_path": "",
+    }
+    cfg.update(overrides)
+    return cfg
+
+
+def test_postpass_triggers_on_cnn_classifiers_alone():
+    cfg = _base_config(cnn_classifiers=[{"model_path": "x.pt", "label": "id"}])
+    assert sp.should_run_interpolated_postpass(cfg) is True
+
+
+def test_postpass_triggers_on_apriltags_alone():
+    cfg = _base_config(use_apriltags=True)
+    assert sp.should_run_interpolated_postpass(cfg) is True
+
+
+def test_postpass_triggers_on_headtail_alone():
+    cfg = _base_config(
+        enable_headtail_orientation=True,
+        yolo_headtail_model_path="/tmp/headtail.pt",
+    )
+    assert sp.should_run_interpolated_postpass(cfg) is True
+
+
+def test_postpass_false_when_nothing_enabled():
+    cfg = _base_config()
+    assert sp.should_run_interpolated_postpass(cfg) is False
+
+
 def test_fly_obb_expected_values():
     cfg = json.loads((FIXTURES[0].parent / "fly_obb.json").read_text())
     # fly_obb: yolo_obb detection, no pose extractor, no identity.
@@ -62,6 +102,10 @@ def test_fly_obb_expected_values():
 # should_export_final_media_videos is False for every current fixture (none enable
 # final_media_export_videos_enabled), so its True branch is exercised only by unit-level
 # logic elsewhere, not by this fixture table.
+#
+# NOTE: After Task 5 (postpass-trigger completeness fix), postpass now also triggers
+# on CNN classifiers, AprilTags, and head-tail compute being enabled (not just on the
+# three export modes). The oracle has been updated to reflect this.
 ORACLE = {
     "ant_pose_headtail": {
         "is_pose_export_enabled": True,
@@ -77,26 +121,33 @@ ORACLE = {
         "should_export_final_media_videos": False,
         "should_run_interpolated_postpass": True,
     },
+    "ant_cnn_identity_marked": {
+        "is_pose_export_enabled": True,
+        "is_pose_inference_enabled": True,
+        "is_headtail_compute_enabled": True,
+        "should_export_final_media_videos": False,
+        "should_run_interpolated_postpass": True,
+    },
     "ant_obb_sleap": {
         "is_pose_export_enabled": False,
         "is_pose_inference_enabled": False,
         "is_headtail_compute_enabled": True,
         "should_export_final_media_videos": False,
-        "should_run_interpolated_postpass": False,
+        "should_run_interpolated_postpass": True,
     },
     "ant_obb_sequential": {
         "is_pose_export_enabled": False,
         "is_pose_inference_enabled": False,
         "is_headtail_compute_enabled": True,
         "should_export_final_media_videos": False,
-        "should_run_interpolated_postpass": False,
+        "should_run_interpolated_postpass": True,
     },
     "emi_obb_identity": {
         "is_pose_export_enabled": False,
         "is_pose_inference_enabled": False,
         "is_headtail_compute_enabled": True,
         "should_export_final_media_videos": False,
-        "should_run_interpolated_postpass": False,
+        "should_run_interpolated_postpass": True,
     },
     "fly_obb": {
         "is_pose_export_enabled": False,
@@ -106,6 +157,13 @@ ORACLE = {
         "should_run_interpolated_postpass": False,
     },
     "worm_bgsub": {
+        "is_pose_export_enabled": False,
+        "is_pose_inference_enabled": False,
+        "is_headtail_compute_enabled": False,
+        "should_export_final_media_videos": False,
+        "should_run_interpolated_postpass": False,
+    },
+    "worm_bgsub_scaled": {
         "is_pose_export_enabled": False,
         "is_pose_inference_enabled": False,
         "is_headtail_compute_enabled": False,

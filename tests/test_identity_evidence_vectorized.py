@@ -6,7 +6,8 @@ columns (``_row_sources``/``_row_conflict``/``_row_top_evidence`` in
 ``hydra_suite.core.individual.postprocess_df``) on two hand-built input
 DataFrames that exercise every branch of those three helpers:
 
-- apriltag-only evidence (``DetectedTagID``/``InterpTagID``)
+- apriltag-only evidence (``DetectedTagID``, coalesced from real + interpolated
+  detections via ``TagSource`` -- the retired ``InterpTagID`` column no longer exists)
 - CNN-only evidence (``CNN_*_Class``/``CNN_*_Conf`` pairs)
 - ``IdentityFinalLabel`` present with no ``IdentityFinalSource`` -> "offline"
   fallback
@@ -67,7 +68,6 @@ def _build_multi_branch_df() -> pd.DataFrame:
                 nan,
                 nan,
             ],
-            "InterpTagID": [nan] * 14,
             "DetectedTagLabel": [
                 nan,
                 nan,

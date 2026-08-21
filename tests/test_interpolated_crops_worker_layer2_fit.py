@@ -1,15 +1,29 @@
-"""Regression guard (Deviation B): the interpolated-crops pipeline must pre-fit
-every Layer 1 canonical crop through Layer 2 (``fit_to_model_input`` /
-``apply_fit``) before handing it to a pose or CNN backend -- exactly like
-``core/inference/stages/pose.py`` / ``core/inference/stages/cnn.py`` do for
-the tracked-frame path.
+"""Regression guard (Deviation B): the interpolated-crops pipeline must run
+pose/CNN inference over interpolated crops through the SAME Layer2-fit-aware
+stage functions ``Pipeline`` uses for real detections (``run_pose_batch`` /
+``run_cnn_batch``, ``core/inference/stages/pose.py`` / ``.../cnn.py``) --
+not a hand-rolled raw-crop path that bypasses the model's true input
+geometry.
 
-Bug: `_flush_pose_batch` fed the raw canonical (Layer 1) crop straight to
-`pose_backend.predict_batch`, and `_flush_cnn_batch` fed the same raw crop to
-`cnn_backend.predict_batch`, which anisotropically stretches it
-(`cv2.resize(crop, (w, h))`). Both bypassed the model's true input geometry,
-so interpolated-frame identity/pose came out under a different (or sheared)
-geometry than tracked-frame results from the same model.
+Old bug (pre-Task 10): ``_flush_pose_batch`` fed the raw canonical (Layer 1)
+crop straight to ``pose_backend.predict_batch``, and ``_flush_cnn_batch`` fed
+the same raw crop to ``cnn_backend.predict_batch``, which anisotropically
+stretches it (``cv2.resize(crop, (w, h))``). Both bypassed the model's true
+input geometry, so interpolated-frame identity/pose came out under a
+different (or sheared) geometry than tracked-frame results from the same
+model.
+
+Task 10 deleted ``_flush_pose_batch``/``_flush_cnn_batch`` outright and
+replaced them with ``_flush_pose_cnn_window``, which calls
+``extract_canonical_crops_batch`` then ``run_pose_batch``/``run_cnn_batch``
+per CNN phase -- the exact same stage functions ``Pipeline`` calls
+(``pipeline.py:367-387``), so the Layer2-fit guarantee is now structural
+(shared code, not a parallel re-implementation) rather than something this
+module needs to re-verify numerically. What Task 12's wiring must still
+prove is that ``_flush_pose_cnn_window`` actually delegates to those shared
+functions (not a resurrected raw-crop path) and stamps the resulting rows
+with the ``PoseSource``/``CNN_<label>_Source`` provenance columns Task 10
+added.
 """
 
 from __future__ import annotations
@@ -17,7 +31,14 @@ from __future__ import annotations
 import numpy as np
 
 from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
+from hydra_suite.core.inference.result import (
+    CNNDetectionPrediction,
+    CNNFactorPrediction,
+    CNNResult,
+    PoseResult,
+)
 from hydra_suite.core.post import interpolated_crops as ic
+from hydra_suite.core.post.synthetic_detections import build_synthetic_obb_result
 
 
 class _NoopProfiler:
@@ -32,143 +53,136 @@ _GEOMETRY = CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
 _CANVAS_W, _CANVAS_H = _GEOMETRY.canvas_wh
 
 
-def _canonical_crop() -> np.ndarray:
-    return np.full((_CANVAS_H, _CANVAS_W, 3), 128, dtype=np.uint8)
+def _task(frame_id=0, traj_id=1) -> dict:
+    return {
+        "cx": 0.0,
+        "cy": 0.0,
+        "w": 20.0,
+        "h": 10.0,
+        "theta": 0.0,
+        "frame_id": frame_id,
+        "traj_id": traj_id,
+        "interp_index": 0,
+    }
 
 
-def test_flush_pose_batch_hands_backend_the_models_input_size_not_the_canvas():
-    captured: dict = {}
+def _frame() -> np.ndarray:
+    return np.zeros((64, 64, 3), dtype=np.uint8)
 
-    class FakePoseBackend:
-        preferred_input_size = 0  # signals "has a preferred_input_wh instead"
 
-        @property
-        def preferred_input_wh(self):
-            return (96, 64)  # non-square, and != the canonical canvas size
+class _FakePoseModel:
+    keypoint_names = ["k0"]
 
-        def predict_batch(self, crops):
-            captured["shapes"] = [c.shape for c in crops]
-            return [None for _ in crops]
 
-    entries = [
-        {
-            "task": {"frame_id": 0, "traj_id": 1},
-            "filename": "x.png",
-            "crop_info": {"canonical": True, "M_forward": np.eye(2, 3)},
-        }
-    ]
-    pending_crops = [_canonical_crop()]
-    interp_pose_rows: list = []
+class _FakeCNNModel:
+    pass
 
-    ic._flush_pose_batch(
-        FakePoseBackend(),
-        pending_crops,
-        entries,
-        interp_pose_rows,
-        [],
-        [],
-        _NoopProfiler(),
-        _GEOMETRY,
+
+def test_flush_pose_cnn_window_delegates_to_the_shared_stage_functions(monkeypatch):
+    """``_flush_pose_cnn_window`` must build crops via
+    ``extract_canonical_crops_batch`` and run pose/CNN via
+    ``run_pose_batch``/``run_cnn_batch`` -- the SAME functions ``Pipeline``
+    calls -- rather than any hand-rolled raw-crop resize path."""
+    pose_module = __import__(
+        "hydra_suite.core.inference.stages.pose", fromlist=["run_pose_batch"]
+    )
+    cnn_module = __import__(
+        "hydra_suite.core.inference.stages.cnn", fromlist=["run_cnn_batch"]
+    )
+    crops_stage_module = __import__(
+        "hydra_suite.core.inference.stages.crops",
+        fromlist=["extract_canonical_crops_batch"],
     )
 
-    assert captured["shapes"] == [(64, 96, 3)]
-    # The raw canvas must NOT have reached the backend unchanged.
-    assert captured["shapes"][0][:2] != (_CANVAS_H, _CANVAS_W)
-    # pending_crops/pending_entries are drained same as before the fix.
-    assert pending_crops == []
-    assert entries == []
+    task = _task()
+    obb = build_synthetic_obb_result(0, [task])
 
+    calls: dict = {}
 
-def test_flush_cnn_batch_hands_backend_the_models_input_size_not_the_canvas():
-    captured: dict = {}
+    def _fake_extract_canonical_crops_batch(frames, obbs, geometry, runtime, **kwargs):
+        calls["extract_canonical_crops_batch"] = (frames, obbs, geometry, kwargs)
+        return "FAKE_CROP_BATCH"
 
-    class _Meta:
-        input_size = (48, 32)  # (H, W)
+    def _fake_run_pose_batch(crop_batch, model, pose_cfg, runtime, geometry):
+        calls["run_pose_batch"] = (crop_batch, model, pose_cfg, geometry)
+        kpts = np.array([[[1.0, 2.0, 0.9]]], dtype=np.float32)  # (D=1, K=1, 3)
+        return {0: PoseResult(keypoints=kpts, valid_mask=np.array([True], dtype=bool))}
 
-    class FakeCNNBackend:
-        metadata = _Meta()
-
-        def predict_batch(self, crops):
-            captured["shapes"] = [c.shape for c in crops]
-            return []
-
-    pending_cnn_crops = [_canonical_crop()]
-    pending_cnn_entries = [{"task": {"frame_id": 0, "traj_id": 1}}]
-    interp_cnn_rows: dict = {"cnn": []}
-
-    ic._flush_cnn_batch(
-        [FakeCNNBackend()],
-        ["cnn"],
-        pending_cnn_crops,
-        pending_cnn_entries,
-        interp_cnn_rows,
-        _NoopProfiler(),
-        _GEOMETRY,
-    )
-
-    assert captured["shapes"] == [(48, 32, 3)]
-    assert captured["shapes"][0][:2] != (_CANVAS_H, _CANVAS_W)
-
-
-def test_flush_pose_batch_composes_layer2_fit_with_layer1_affine_for_backprojection():
-    """A keypoint at the exact Layer2-fitted location of the canonical
-    canvas's centre must round-trip back to that centre -- proving the
-    Layer2 fit affine is composed with the Layer1 affine before inverting,
-    not applied/ignored inconsistently.
-    """
-    from hydra_suite.core.canonicalization.fit import fit_affine, fit_to_model_input
-    from hydra_suite.core.individual.pose.types import PoseResult as BackendPoseResult
-
-    model_wh = (96, 64)
-    fit = fit_to_model_input(_GEOMETRY.canvas_wh, model_wh)
-    fit_m = fit_affine(fit)
-    canvas_center = np.array([_CANVAS_W / 2.0, _CANVAS_H / 2.0, 1.0], dtype=np.float64)
-    model_space_center = fit_m @ canvas_center  # where Layer2 puts it
-
-    class FakePoseBackend:
-        preferred_input_size = 0
-
-        @property
-        def preferred_input_wh(self):
-            return model_wh
-
-        def predict_batch(self, crops):
-            kpts = np.array(
-                [[model_space_center[0], model_space_center[1], 1.0]],
-                dtype=np.float32,
+    def _fake_run_cnn_batch(frames, obbs, cnn_model, cnn_cfg, runtime, geometry):
+        calls["run_cnn_batch"] = (frames, obbs, cnn_model, cnn_cfg, geometry)
+        return {
+            0: CNNResult(
+                label="identity",
+                predictions=[
+                    CNNDetectionPrediction(
+                        det_index=0,
+                        factors=[
+                            CNNFactorPrediction(
+                                factor_name="identity",
+                                class_names=["ant_a", "ant_b"],
+                                raw_probabilities=np.array(
+                                    [0.2, 0.8], dtype=np.float32
+                                ),
+                            )
+                        ],
+                    )
+                ],
             )
-            return [
-                BackendPoseResult(
-                    keypoints=kpts,
-                    mean_conf=1.0,
-                    valid_fraction=1.0,
-                    num_valid=1,
-                    num_keypoints=1,
-                )
-            ]
-
-    entries = [
-        {
-            "task": {"frame_id": 0, "traj_id": 1},
-            "filename": "x.png",
-            # Identity Layer 1 affine: canonical canvas == image coords.
-            "crop_info": {"canonical": True, "M_forward": np.eye(2, 3)},
         }
-    ]
-    pending_crops = [_canonical_crop()]
-    interp_pose_rows: list = []
 
-    ic._flush_pose_batch(
-        FakePoseBackend(),
-        pending_crops,
-        entries,
-        interp_pose_rows,
-        ["k0"],
-        ["k0"],
-        _NoopProfiler(),
-        _GEOMETRY,
+    monkeypatch.setattr(
+        crops_stage_module,
+        "extract_canonical_crops_batch",
+        _fake_extract_canonical_crops_batch,
+    )
+    monkeypatch.setattr(pose_module, "run_pose_batch", _fake_run_pose_batch)
+    monkeypatch.setattr(cnn_module, "run_cnn_batch", _fake_run_cnn_batch)
+
+    class _FakeCfg:
+        pose = type(
+            "P",
+            (),
+            {"min_keypoint_confidence": 0.2, "suppress_foreign_regions": True},
+        )()
+        cnn_phases = [object()]
+
+    interp_pose_rows: list = []
+    interp_cnn_rows: dict = {}
+
+    ic._flush_pose_cnn_window(
+        [_frame()],
+        [obb],
+        [[task]],
+        _FakePoseModel(),
+        [_FakeCNNModel()],
+        ["identity"],
+        _FakeCfg(),
+        runtime=None,
+        geometry=_GEOMETRY,
+        interp_pose_rows=interp_pose_rows,
+        interp_cnn_rows=interp_cnn_rows,
+        profiler=_NoopProfiler(),
     )
 
-    row = interp_pose_rows[0]
-    assert abs(row["PoseKpt_k0_X"] - _CANVAS_W / 2.0) < 1e-3
-    assert abs(row["PoseKpt_k0_Y"] - _CANVAS_H / 2.0) < 1e-3
+    # The shared stage functions were actually called (proving delegation,
+    # not a resurrected hand-rolled raw-crop path).
+    assert "extract_canonical_crops_batch" in calls
+    assert "run_pose_batch" in calls
+    assert "run_cnn_batch" in calls
+    assert calls["run_pose_batch"][0] == "FAKE_CROP_BATCH"
+
+    # Rows are stamped with the provenance columns Task 10 added.
+    assert len(interp_pose_rows) == 1
+    pose_row = interp_pose_rows[0]
+    assert pose_row["PoseSource"] == "interp"
+    assert pose_row["frame_id"] == task["frame_id"]
+    assert pose_row["trajectory_id"] == task["traj_id"]
+    assert pose_row["PoseKpt_k0_X"] == 1.0
+    assert pose_row["PoseKpt_k0_Y"] == 2.0
+
+    assert "identity" in interp_cnn_rows
+    cnn_row = interp_cnn_rows["identity"][0]
+    assert cnn_row["CNN_identity_Source"] == "interp"
+    # argmax over [0.2, 0.8] -> "ant_b" at confidence 0.8.
+    assert cnn_row["CNN_identity_Class"] == "ant_b"
+    assert abs(cnn_row["CNN_identity_Conf"] - 0.8) < 1e-6

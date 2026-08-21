@@ -629,10 +629,6 @@ flowchart TB
 
 **What's not here (and why)**
 
-- **`build_tag_only_trajectories`** (`tag_identity.py:332`) is defined but
-  has **no call site** anywhere in the pipeline — dead code. The previous
-  Section 6 listed it as "Tag-only fallback trajectories"; that step
-  doesn't actually run.
 - **`resolve_simultaneous_identity_conflicts`** is mapped in Section 5,
   not here, because it lives *inside* `resolve_trajectories` rather than
   as a standalone primitive — it always runs together with the conservative
@@ -1211,11 +1207,10 @@ flowchart RL
 | **④ Identity finalize** | `_build_rich_export_dataframe` (`tracking.py:3174-3175`), after `run_fragment_solver` | per-trajectory mode for `IdentityAssignedLabel` NaN fill; renumber by `(label, first_frame)` — purely cosmetic |
 
 > **Not in the pipeline (despite previous diagrams claiming so):**
-> `build_tag_only_trajectories` (`tag_identity.py:332`) is dead code with
-> zero call sites. There is no "forward + backward fill of entropy /
-> margin." Identity-conflict arbitration and identity-disagreement splits
-> live inside `resolve_trajectories` (Slide 6 stage ⑤), not as standalone
-> primitives.
+> `build_tag_only_trajectories` was deleted (dead code with zero call sites).
+> There is no "forward + backward fill of entropy / margin." Identity-conflict
+> arbitration and identity-disagreement splits live inside `resolve_trajectories`
+> (Slide 6 stage ⑤), not as standalone primitives.
 
 ---
 

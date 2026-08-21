@@ -1058,6 +1058,16 @@ def merge_interpolated_pose_df(
         if col not in merged.columns:
             merged[col] = np.nan
         merged[col] = merged[col].where(merged[col].notna(), merged[interp_col])
+
+    # PoseSource: "real" where the row already had at least one non-NaN
+    # PoseKpt_* value before this merge, "interp" where this merge filled it,
+    # NaN where neither a real nor an interpolated pose exists for the row.
+    had_real = out[pose_cols_interp].notna().any(axis=1)
+    filled_by_interp = merged[pose_cols_interp].notna().any(axis=1) & ~had_real.values
+    merged["PoseSource"] = pd.Series(np.nan, index=merged.index, dtype=object)
+    merged.loc[had_real.values, "PoseSource"] = "real"
+    merged.loc[filled_by_interp.values, "PoseSource"] = "interp"
+
     merged.drop(
         columns=[
             "_frame_join",
@@ -1144,8 +1154,6 @@ def _can_merge_interp(
 # AprilTag interpolated merge
 # ---------------------------------------------------------------------------
 
-APRILTAG_INTERP_COLUMNS = ["InterpTagID", "InterpTagHamming", "InterpTagConf"]
-
 
 def merge_interpolated_apriltag_df(
     trajectories_df: pd.DataFrame,
@@ -1153,26 +1161,29 @@ def merge_interpolated_apriltag_df(
 ) -> pd.DataFrame:
     """Merge interpolated AprilTag observations into final trajectories.
 
-    Existing ``TagID`` values (from pre-tracking) are preserved.
-    Interpolated rows receive ``InterpTagID`` / ``InterpTagHamming``.
+    Coalesces into the real-detection ``DetectedTagID`` column (design spec,
+    "Provenance"): a row's tag id comes from a real detection if present,
+    otherwise from interpolation. ``TagSource`` records which, so
+    ``DetectionID``-absence is no longer the only signal for "was this
+    interpolated". Retires the separate ``InterpTagID``/``InterpTagHamming``/
+    ``InterpTagConf`` columns entirely -- no backward-compatible aliasing.
     """
     if trajectories_df is None or trajectories_df.empty:
         return trajectories_df
     if not _can_merge_interp(
         trajectories_df, interp_tag_df, {"frame_id", "trajectory_id", "tag_id"}
     ):
-        return trajectories_df
+        out = trajectories_df.copy()
+        if "TagSource" not in out.columns:
+            out["TagSource"] = np.nan
+        return out
 
     out, interp = _prepare_interp_join_keys(trajectories_df, interp_tag_df)
-    out = _ensure_interp_columns(out, APRILTAG_INTERP_COLUMNS)
+    if "DetectedTagID" not in out.columns:
+        out["DetectedTagID"] = np.nan
+    had_real = out["DetectedTagID"].notna()
 
-    tag_cols = ["tag_id"]
-    if "hamming" in interp.columns:
-        tag_cols.append("hamming")
-    if "confidence" in interp.columns:
-        tag_cols.append("confidence")
-
-    interp_lookup = interp[["_frame_join", "_traj_join", *tag_cols]].drop_duplicates(
+    interp_lookup = interp[["_frame_join", "_traj_join", "tag_id"]].drop_duplicates(
         subset=["_frame_join", "_traj_join"], keep="first"
     )
 
@@ -1183,18 +1194,16 @@ def merge_interpolated_apriltag_df(
         suffixes=("", "_itag"),
         sort=False,
     )
-
-    merged = _backfill_interp_columns(
-        merged,
-        {
-            "tag_id": "InterpTagID",
-            "hamming": "InterpTagHamming",
-            "confidence": "InterpTagConf",
-        },
+    merged["DetectedTagID"] = merged["DetectedTagID"].where(
+        merged["DetectedTagID"].notna(), merged["tag_id"]
     )
+    filled_by_interp = merged["tag_id"].notna() & ~had_real.values
+    merged["TagSource"] = pd.Series(np.nan, index=merged.index, dtype=object)
+    merged.loc[had_real.values, "TagSource"] = "real"
+    merged.loc[filled_by_interp.values, "TagSource"] = "interp"
 
     merged.drop(
-        columns=["_frame_join", "_traj_join"],
+        columns=["_frame_join", "_traj_join", "tag_id"],
         inplace=True,
         errors="ignore",
     )
@@ -1263,6 +1272,23 @@ def merge_interpolated_cnn_df(
 
     merged = _backfill_interp_columns(merged, column_map)
 
+    source_col = f"CNN_{label}_Source"
+    class_col_for_source = output_cols[0]  # CNN_<label>_Class (flat) or first wide col
+    had_real = (
+        out[class_col_for_source].notna()
+        if not uses_wide_columns
+        else out[output_cols].notna().any(axis=1)
+    )
+    now_present = (
+        merged[class_col_for_source].notna()
+        if not uses_wide_columns
+        else (merged[output_cols].notna().any(axis=1))
+    )
+    filled_by_interp = now_present & ~had_real.values
+    merged[source_col] = pd.Series(np.nan, index=merged.index, dtype=object)
+    merged.loc[had_real.values, source_col] = "real"
+    merged.loc[filled_by_interp.values, source_col] = "interp"
+
     merged.drop(
         columns=["_frame_join", "_traj_join"],
         inplace=True,
@@ -1275,34 +1301,62 @@ def merge_interpolated_cnn_df(
 # Head-tail interpolated merge
 # ---------------------------------------------------------------------------
 
-HEADTAIL_INTERP_COLUMNS = [
-    "InterpHeadingRad",
-    "InterpHeadingConf",
-    "InterpHeadingDirected",
-]
-
 
 def merge_interpolated_headtail_df(
     trajectories_df: pd.DataFrame,
     interp_ht_df: Optional[pd.DataFrame],
 ) -> pd.DataFrame:
-    """Merge interpolated head-tail direction into final trajectories."""
+    """Merge interpolated head-tail direction into final trajectories.
+
+    Coalesces into the real-detection ``HeadTailAngleRad`` /
+    ``HeadTailClassifierConf`` columns (the classifier's own raw output),
+    and additionally backfills ``HeadingResolved``/``HeadingIsDirected``
+    (only where those were NaN -- never overwriting an already-resolved
+    heading from another source, e.g. pose or velocity) with
+    ``HeadingMethod="headtail_interp"`` so the existing 4-way
+    ``HeadingMethod`` vocabulary (``"headtail"``/``"pose"``/``"velocity"``/
+    ``"default"``) can represent an interpolated head-tail result without a
+    parallel bool. Retires the separate ``InterpHeadingRad``/
+    ``InterpHeadingConf``/``InterpHeadingDirected`` columns entirely.
+
+    ``HeadingSource`` reflects provenance of ``HeadTailAngleRad`` (the raw
+    classifier output), not of the resolved ``HeadingResolved``/
+    ``HeadingMethod`` triplet -- a row can show ``HeadingSource="interp"``
+    while its resolved heading came from an earlier source (pose/velocity)
+    and was correctly left untouched by this merge (see the separate
+    ``backfill_resolved`` gate below). This mirrors the other three
+    ``*Source`` columns in this module, each of which tracks provenance of
+    its own primary data column rather than a separate downstream-derived
+    field.
+    """
     if trajectories_df is None or trajectories_df.empty:
         return trajectories_df
     if not _can_merge_interp(
         trajectories_df, interp_ht_df, {"frame_id", "trajectory_id", "heading_rad"}
     ):
-        return _ensure_interp_columns(trajectories_df, HEADTAIL_INTERP_COLUMNS)
+        out = trajectories_df.copy()
+        if "HeadingSource" not in out.columns:
+            out["HeadingSource"] = np.nan
+        return out
 
     out, interp = _prepare_interp_join_keys(trajectories_df, interp_ht_df)
-    out = _ensure_interp_columns(out, HEADTAIL_INTERP_COLUMNS)
+    for col in (
+        "HeadTailAngleRad",
+        "HeadTailClassifierConf",
+        "HeadingResolved",
+        "HeadingMethod",
+        "HeadingIsDirected",
+    ):
+        if col not in out.columns:
+            out[col] = np.nan
+    had_real = out["HeadTailAngleRad"].notna()
+    resolved_was_nan = out["HeadingResolved"].isna()
 
     ht_cols = ["heading_rad"]
     if "heading_conf" in interp.columns:
         ht_cols.append("heading_conf")
     if "heading_directed" in interp.columns:
         ht_cols.append("heading_directed")
-
     interp_lookup = interp[["_frame_join", "_traj_join", *ht_cols]].drop_duplicates(
         subset=["_frame_join", "_traj_join"], keep="first"
     )
@@ -1314,18 +1368,47 @@ def merge_interpolated_headtail_df(
         suffixes=("", "_iht"),
         sort=False,
     )
+    has_interp = merged["heading_rad"].notna()
 
-    merged = _backfill_interp_columns(
-        merged,
-        {
-            "heading_rad": "InterpHeadingRad",
-            "heading_conf": "InterpHeadingConf",
-            "heading_directed": "InterpHeadingDirected",
-        },
+    merged["HeadTailAngleRad"] = merged["HeadTailAngleRad"].where(
+        merged["HeadTailAngleRad"].notna(), merged["heading_rad"]
     )
+    if "heading_conf" in merged.columns:
+        # Gate on `has_interp` (heading_rad genuinely non-NaN), same as the
+        # HeadingResolved/HeadingMethod/HeadingIsDirected backfill below --
+        # NOT just "HeadTailClassifierConf is NaN". Without this gate, an
+        # undirected interp row (heading_rad NaN but heading_conf/
+        # heading_directed still present as 0.0/False in the interp CSV)
+        # would get a fabricated 0.0 confidence written into
+        # HeadTailClassifierConf with NO provenance marker explaining it
+        # (HeadingSource is only stamped "interp" when has_interp is true).
+        conf_fill_mask = merged["HeadTailClassifierConf"].isna() & has_interp
+        merged.loc[conf_fill_mask, "HeadTailClassifierConf"] = merged.loc[
+            conf_fill_mask, "heading_conf"
+        ]
+
+    backfill_resolved = has_interp.values & resolved_was_nan.values
+    merged.loc[backfill_resolved, "HeadingResolved"] = merged.loc[
+        backfill_resolved, "heading_rad"
+    ]
+    merged.loc[backfill_resolved, "HeadingMethod"] = "headtail_interp"
+    if "heading_directed" in merged.columns:
+        merged.loc[backfill_resolved, "HeadingIsDirected"] = merged.loc[
+            backfill_resolved, "heading_directed"
+        ].astype(bool)
+
+    merged["HeadingSource"] = pd.Series(np.nan, index=merged.index, dtype=object)
+    merged.loc[had_real.values, "HeadingSource"] = "real"
+    merged.loc[has_interp.values & ~had_real.values, "HeadingSource"] = "interp"
 
     merged.drop(
-        columns=["_frame_join", "_traj_join"],
+        columns=[
+            "_frame_join",
+            "_traj_join",
+            "heading_rad",
+            "heading_conf",
+            "heading_directed",
+        ],
         inplace=True,
         errors="ignore",
     )

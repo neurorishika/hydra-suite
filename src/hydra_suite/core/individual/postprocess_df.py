@@ -285,9 +285,13 @@ def apply_identity_postprocessing_to_df(
             n = len(frame)
             idx = frame.index
 
+            # InterpTagID retired (design spec, "Provenance"): interpolated
+            # tag ids now coalesce directly into DetectedTagID, so its
+            # presence alone is authoritative. TagSource (if present) carries
+            # the real-vs-interp distinction for any downstream consumer that
+            # still needs it.
             tag_id = _column_or_nan(frame, "DetectedTagID")
-            interp_id = _column_or_nan(frame, "InterpTagID")
-            has_apriltag = tag_id.notna() | interp_id.notna()
+            has_apriltag = tag_id.notna()
 
             has_cnn = pd.Series(False, index=idx)
             for col in cnn_class_columns:

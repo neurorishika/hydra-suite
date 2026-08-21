@@ -18,7 +18,6 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from hydra_suite.core.canonicalization.fit import apply_fit
 from hydra_suite.core.canonicalization.geometry import (
     ClippingStats,
     canonical_geometry_from_params,
@@ -31,8 +30,9 @@ from hydra_suite.core.individual.properties.export import (
     flatten_pose_keypoints_row,
     pose_wide_columns_for_labels,
 )
-from hydra_suite.core.inference.api import load_pose_backend
 from hydra_suite.core.inference.cache import open_detection_cache_reader
+from hydra_suite.core.inference.stages.apriltag import run_apriltag
+from hydra_suite.core.inference.stages.crops import extract_aabb_crops
 from hydra_suite.core.post.merge import write_csv_artifact as _write_csv_artifact
 from hydra_suite.core.post.merge import write_roi_npz as _write_roi_npz
 from hydra_suite.utils.geometry import wrap_angle_degs
@@ -105,209 +105,132 @@ def _get_detection_size(detection_cache, frame_id, detection_id):
     return _size_from_shapes(list(obb.shapes), idx)
 
 
-def _init_pose_backend(params, output_dir):
-    """Initialize pose estimation backend. Returns (backend, kpt_source_names, kpt_labels).
-
-    Routes through ``core/inference/api.load_pose_backend`` (the shared shim
-    over ``stages/pose.load_pose_model`` — the single source of the pose
-    runtime golden rule) instead of duplicating the runtime-flavor ladder
-    here. ``load_pose_model`` still honors the SLEAP-flavor debug override
-    internally.
-    """
-    if not bool(params.get("ENABLE_POSE_EXTRACTOR", False)):
-        return None, [], []
-    try:
-        from hydra_suite.core.individual.pose.utils import load_skeleton_from_json
-
-        backend_family = str(params.get("POSE_MODEL_TYPE", "yolo")).strip().lower()
-        model_path = str(params.get("POSE_MODEL_DIR", ""))
-        min_valid_conf = float(params.get("POSE_MIN_KPT_CONF_VALID", 0.2))
-        batch_size = int(params.get("POSE_BATCH_SIZE", 4))
-        skeleton_file = str(params.get("POSE_SKELETON_FILE", "") or "")
-        keypoint_names, skeleton_edges = load_skeleton_from_json(skeleton_file)
-
-        # Runtime comes solely from RUNTIME_TIER (Runtime Gen-2 FT1): the
-        # COMPUTE_RUNTIME param family was retired. load_pose_backend only
-        # needs the tier bucket (it re-derives the tier via
-        # migrate_runtime_to_tier), so a resolved runtime string is passed.
-        if backend_family == "sleap":
-            pose_stage = "sleap_pose"
-        elif backend_family == "vitpose":
-            pose_stage = "vitpose_pose"
-        else:
-            pose_stage = "yolo_pose"
-        compute_runtime = _resolved_runtime_string(params, pose_stage)
-
-        backend = load_pose_backend(
-            backend_family=backend_family,
-            model_path=model_path,
-            compute_runtime=compute_runtime,
-            keypoint_names=list(keypoint_names),
-            skeleton_edges=skeleton_edges,
-            batch_size=max(1, batch_size),
-            min_valid_confidence=min_valid_conf,
-            out_root=str(Path(output_dir).expanduser()),
-            sleap_env=str(params.get("POSE_SLEAP_ENV", "sleap")),
-            sleap_batch=max(1, batch_size),
-            sleap_max_instances=int(params.get("POSE_SLEAP_MAX_INSTANCES", 1)),
-        )
-
-        # NOTE: do NOT call backend.warmup() here -- load_pose_backend
-        # (-> stages/pose.load_pose_model) already warms the backend it
-        # returns. A second warmup() is redundant, and for the SLEAP
-        # service backend it is not idempotent w.r.t. ownership: the
-        # first warmup sets _service_started_here=True, a second sees
-        # was_running=True and flips it back to False, so close() later
-        # skips shutdown and leaks the SLEAP service subprocess.
-        kpt_source_names = list(getattr(backend, "output_keypoint_names", []) or [])
-        kpt_labels = build_pose_keypoint_labels(kpt_source_names, len(kpt_source_names))
-        return backend, kpt_source_names, kpt_labels
-    except Exception as exc:
-        logger.warning(
-            "Interpolated pose analysis disabled (backend init failed): %s",
-            exc,
-        )
-        return None, [], []
-
-
-def _resolve_backend(params, stage: str):
-    """Resolve the runtime tier in ``params`` to a concrete ResolvedBackend.
-
-    The single Gen-2 authority (``RuntimeResolver``) owns the tier -> backend
-    decision; this pipeline no longer threads per-stage compute_runtime strings.
-    Falls back to the CPU tier when no valid ``RUNTIME_TIER`` is present.
-    """
-    from hydra_suite.runtime.resolver import RuntimeResolver, detect_platform
-
-    tier = str(params.get("RUNTIME_TIER", "cpu") or "cpu").strip().lower()
-    if tier not in {"cpu", "gpu", "gpu_fast"}:
-        tier = "cpu"
-    return RuntimeResolver(tier, detect_platform()).resolve(stage)
-
-
-def _resolved_runtime_string(params, stage: str) -> str:
-    """Resolve ``RUNTIME_TIER`` to a compute-runtime string for ``stage``.
-
-    Used only where a downstream shim (``load_pose_backend``) still takes a
-    runtime string rather than a ``ResolvedBackend``; the string maps back to
-    the correct tier via ``migrate_runtime_to_tier``.
-    """
-    resolved = _resolve_backend(params, stage)
-    if resolved.backend == "tensorrt":
-        return "tensorrt"
-    if resolved.backend == "coreml":
-        return "coreml"
-    return resolved.device  # cpu / cuda / mps
-
-
-def _init_apriltag_detector(params):
-    """Initialize AprilTag detector if configured. Returns detector or None."""
-    apriltag_enabled = (
-        bool(params.get("USE_APRILTAGS", False))
-        or str(params.get("IDENTITY_METHOD", "")).lower() == "apriltags"
-    )
-    if not apriltag_enabled:
-        return None
-    try:
-        from hydra_suite.core.individual.classification.apriltag import (
-            AprilTagConfig,
-            AprilTagDetector,
-        )
-
-        return AprilTagDetector(AprilTagConfig.from_params(params))
-    except Exception as exc:
-        logger.warning("Interpolated AprilTag analysis disabled: %s", exc)
-        return None
-
-
-def _init_cnn_backends(params):
-    """Initialize CNN identity backends. Returns (backends_list, labels_list)."""
-    cnn_backends = []
-    cnn_labels = []
-    cnn_classifiers_cfg = params.get("CNN_CLASSIFIERS", [])
-    if not cnn_classifiers_cfg:
-        return cnn_backends, cnn_labels
-    try:
-        from hydra_suite.core.individual.classification.cnn import (
-            CNNIdentityBackend,
-            CNNIdentityConfig,
-        )
-
-        cnn_resolved = _resolve_backend(params, "cnn")
-        for cnn_cfg_dict in cnn_classifiers_cfg:
-            model_path = str(cnn_cfg_dict.get("model_path", ""))
-            if not model_path or not os.path.exists(model_path):
-                continue
-            label = str(cnn_cfg_dict.get("label", "cnn_identity"))
-            cnn_cfg = CNNIdentityConfig(
-                model_path=model_path,
-                confidence=float(cnn_cfg_dict.get("confidence", 0.5)),
-                scoring_mode=str(cnn_cfg_dict.get("scoring_mode", "atomic")),
-                batch_size=int(cnn_cfg_dict.get("batch_size", 64)),
-            )
-            try:
-                backend = CNNIdentityBackend(
-                    cnn_cfg,
-                    model_path=model_path,
-                    resolved=cnn_resolved,
-                )
-                cnn_backends.append(backend)
-                cnn_labels.append(label)
-            except Exception as exc:
-                logger.warning(
-                    "Interpolated CNN identity '%s' disabled: %s",
-                    label,
-                    exc,
-                )
-    except Exception as exc:
-        logger.warning("Interpolated CNN identity analysis disabled: %s", exc)
-    return cnn_backends, cnn_labels
-
-
-def _init_headtail_analyzer(params, geometry):
-    """Initialize head-tail direction analyzer. Returns analyzer or None.
-
-    Raises:
-        ClassifierFormatError: if the configured model path exists but
-            cannot be loaded by any supported backend.  Callers forward
-            this to the ``error`` signal.
-    """
-    headtail_model_path = str(params.get("YOLO_HEADTAIL_MODEL_PATH", ""))
-    if not headtail_model_path or not os.path.exists(headtail_model_path):
-        return None
-    from hydra_suite.core.individual.classification.headtail import HeadTailAnalyzer
-
-    analyzer = HeadTailAnalyzer(
-        model_path=headtail_model_path,
-        resolved=_resolve_backend(params, "head_tail"),
-        conf_threshold=float(params.get("YOLO_HEADTAIL_CONF_THRESHOLD", 0.5)),
-        batch_size=max(1, int(params.get("HEADTAIL_BATCH_SIZE", 64))),
-        geometry=geometry,
-    )
-    if not analyzer.is_available:
-        analyzer.close()
-        return None
-    return analyzer
-
-
 def _init_interpolation_backends(params, output_dir, geometry):
-    """Initialize optional analysis backends after eligible gap tasks exist."""
-    pose_backend, pose_kpt_source_names, pose_kpt_labels = _init_pose_backend(
-        params, output_dir
+    """Build the InferenceConfig/RuntimeContext and load the four
+    downstream-stage models (headtail/CNN/pose/AprilTag) via their public
+    stage loaders -- the SAME loaders ``Pipeline`` uses, so the interpolated
+    path shares the tier->backend resolution and model-loading code instead
+    of hand-rolling its own runtime-flavor ladder (design spec
+    "Model-loading glue"; see the plan's "Plan-level deviation from the spec
+    text" note for why the per-stage loaders are called directly here rather
+    than ``runner.py``'s private ``_load_all_models`` -- that function always
+    loads an OBB/bgsub detector too, which this pass never uses).
+
+    Returns (cfg, runtime, pose_model, apriltag_model, cnn_models,
+    cnn_labels, headtail_model). Any model whose config/params disable it is
+    None (pose, apriltag, headtail) or empty (cnn_models/cnn_labels), mirroring
+    today's opt-in behavior -- CNN no longer depends on pose being enabled
+    (design spec, bug fix #1: the CNN/pose decoupling is now real, since
+    ``run_cnn_batch`` builds its own classifier crops independently, unlike
+    the old ``_pending_cnn_crops.append(pose_crop)``).
+    """
+    # NOTE: `geometry` is unused in this body -- none of the four stage
+    # loaders need the canonical-geometry object at load time (only at
+    # crop-extraction time, later). Kept in the signature because the sole
+    # call site's tuple-unpack convention and existing tests already pass it
+    # positionally; not removed here to avoid a wider signature churn.
+    from hydra_suite.core.inference.config import (
+        AprilTagConfig,
+        build_inference_config_from_params,
     )
-    apriltag_detector = _init_apriltag_detector(params)
-    cnn_backends, cnn_labels = _init_cnn_backends(params)
-    headtail_analyzer = _init_headtail_analyzer(params, geometry)
-    interp_cnn_rows = {label: [] for label in cnn_labels}
+    from hydra_suite.core.inference.runtime import RuntimeContext
+    from hydra_suite.core.inference.stages.apriltag import load_apriltag_model
+    from hydra_suite.core.inference.stages.cnn import load_cnn_model
+    from hydra_suite.core.inference.stages.headtail import load_headtail_model
+    from hydra_suite.core.inference.stages.pose import load_pose_model
+
+    try:
+        cfg = build_inference_config_from_params(params)
+        runtime = RuntimeContext.from_config(cfg)
+    except Exception:
+        # Unlike the four per-model try/except blocks below (which degrade
+        # ONE signal and keep going), a failure here -- e.g.
+        # PoseModelUnresolvedError when ENABLE_POSE_EXTRACTOR is set but no
+        # usable pose model resolves, or any other InferenceConfigError --
+        # used to propagate all the way up to `run_interpolated_crops`'s
+        # outer blanket `except Exception: return {"saved": 0, "gaps": 0}`,
+        # which has NO logging at all: the entire interpolated-crop
+        # post-pass (crops, ROI CSV/NPZ, pose/tag/cnn/headtail CSVs --
+        # everything) would silently vanish with zero diagnostic trace. Log
+        # loudly and degrade to "no models available" instead, matching this
+        # function's existing return contract (mirrors the old code's
+        # graceful degradation: a failed pose-backend init logged and kept
+        # the other three signals running -- here nothing about config-
+        # building is stage-specific, so all four degrade together, but the
+        # caller still runs the frame-task loop and saves crops/ROI).
+        logger.exception(
+            "Interpolated post-pass: failed to build the inference config/"
+            "runtime; disabling pose/AprilTag/CNN/head-tail analysis for "
+            "this run (crop/ROI extraction is unaffected)."
+        )
+        from types import SimpleNamespace
+
+        degraded_cfg = SimpleNamespace(
+            pose=None,
+            apriltag=AprilTagConfig(enabled=False),
+            headtail=None,
+            cnn_phases=[],
+        )
+        return degraded_cfg, None, None, None, [], [], None
+
+    pose_model = None
+    if cfg.pose is not None:
+        try:
+            pose_model = load_pose_model(
+                cfg.pose,
+                runtime,
+                out_root=str(Path(output_dir).expanduser()),
+            )
+        except Exception as exc:
+            logger.warning(
+                "Interpolated pose analysis disabled (backend init failed): %s",
+                exc,
+            )
+            pose_model = None
+
+    apriltag_model = None
+    # `cfg.apriltag.enabled` == `bool(params.get("USE_APRILTAGS", False))` only
+    # (see `build_inference_config_from_params`, config.py) -- it deliberately
+    # does NOT also check `IDENTITY_METHOD == "apriltags"` the way the old
+    # hand-rolled interpolated-crops enablement check did. This is intentional
+    # parity with `Pipeline`'s own real-detection enablement check
+    # (`pipeline.py`'s `self.stages.apriltag_model is not None`, built from the
+    # SAME `cfg.apriltag.enabled` field with no `IDENTITY_METHOD` fallback of
+    # its own) -- not a functional regression versus real detections.
+    if cfg.apriltag.enabled:
+        try:
+            apriltag_model = load_apriltag_model(cfg.apriltag)
+        except Exception as exc:
+            logger.warning("Interpolated AprilTag analysis disabled: %s", exc)
+            apriltag_model = None
+
+    cnn_models = []
+    cnn_labels = []
+    for cnn_cfg in cfg.cnn_phases:
+        try:
+            cnn_models.append(load_cnn_model(cnn_cfg, runtime))
+            cnn_labels.append(cnn_cfg.label)
+        except Exception as exc:
+            logger.warning(
+                "Interpolated CNN identity '%s' disabled: %s", cnn_cfg.label, exc
+            )
+
+    headtail_model = None
+    if cfg.headtail is not None:
+        try:
+            headtail_model = load_headtail_model(cfg.headtail, runtime)
+        except Exception as exc:
+            logger.warning("Interpolated head-tail analysis disabled: %s", exc)
+            headtail_model = None
+
     return (
-        pose_backend,
-        pose_kpt_source_names,
-        pose_kpt_labels,
-        apriltag_detector,
-        cnn_backends,
+        cfg,
+        runtime,
+        pose_model,
+        apriltag_model,
+        cnn_models,
         cnn_labels,
-        headtail_analyzer,
-        interp_cnn_rows,
+        headtail_model,
     )
 
 
@@ -394,9 +317,30 @@ def _process_occluded_run(
         row = group.iloc[k]
         f = int(row["FrameID"])
         t = (f - f0) / (f1 - f0)
-        cx = float(prev_row["X"]) + t * (float(next_row["X"]) - float(prev_row["X"]))
-        cy = float(prev_row["Y"]) + t * (float(next_row["Y"]) - float(prev_row["Y"]))
-        theta = _interp_angle(float(prev_row["Theta"]), float(next_row["Theta"]), t)
+        # Geometry-sourcing priority (design spec "Geometry sourcing",
+        # NaN-triggered, not max_gap-triggered): if mechanism (1)'s
+        # trajectory interpolation already filled this row's X/Y/Theta
+        # (honoring the user's interpolation_method and heading-flip
+        # correction), use it directly instead of re-deriving a bespoke
+        # linear/± 180 degree estimate. Only fall back to independent
+        # linear interpolation when the CSV row is genuinely NaN here
+        # (interpolation_method="None" -- the GUI default -- or a gap
+        # beyond max_gap).
+        row_x = row["X"] if "X" in group.columns else float("nan")
+        row_y = row["Y"] if "Y" in group.columns else float("nan")
+        row_theta = row["Theta"] if "Theta" in group.columns else float("nan")
+        if not (pd.isna(row_x) or pd.isna(row_y) or pd.isna(row_theta)):
+            cx = float(row_x)
+            cy = float(row_y)
+            theta = float(row_theta)
+        else:
+            cx = float(prev_row["X"]) + t * (
+                float(next_row["X"]) - float(prev_row["X"])
+            )
+            cy = float(prev_row["Y"]) + t * (
+                float(next_row["Y"]) - float(prev_row["Y"])
+            )
+            theta = _interp_angle(float(prev_row["Theta"]), float(next_row["Theta"]), t)
         w = w0 + t * (w1 - w0)
         h = h0 + t * (h1 - h0)
 
@@ -522,254 +466,282 @@ def _detect_interpolation_gaps(
     return frame_tasks, occluded_rows, interp_runs, interp_gaps
 
 
-def _flush_pose_batch(
-    pose_backend,
-    pending_crops,
-    pending_entries,
-    interp_pose_rows,
-    pose_kpt_source_names,
-    pose_kpt_labels,
-    profiler,
-    geometry,
-):
-    """Run pose inference on accumulated crops and append results.
-
-    Pre-fits every canonical (Layer 1) crop through Layer 2
-    (``fit_to_model_input`` / ``apply_fit``) before handing it to the backend
-    -- the SAME call shape ``core/inference/stages/pose.py`` uses, so this
-    module's interpolated-frame keypoints agree on content scale with the
-    tracked-frame keypoints produced by the same model.  Every entry here is
-    Layer 1 canonical by construction: ``_extract_pose_crop`` skips (rather
-    than produces) a crop for the degenerate-OBB case where no rigid Layer 1
-    transform exists, so there is no non-canonical entry left to special-case.
-    An ``apply_fit`` failure on an otherwise-canonical crop is treated the
-    same way: there is no honest crop to feed the backend (a raw canvas crop
-    would be anisotropically resized by the backend, and there is no fit to
-    invert for the keypoint back-projection), so the detection is dropped
-    exactly like the degenerate-OBB case in ``_extract_pose_crop``.
-    """
-    from hydra_suite.core.canonicalization.crop import invert_keypoints as _invert_kpts
-    from hydra_suite.core.canonicalization.fit import fit_affine, fit_to_model_input
-    from hydra_suite.core.inference.stages.pose import compose_affine, model_input_wh
-
-    class _BackendHolder:
-        backend = pose_backend
-
-    model_wh = model_input_wh(_BackendHolder, geometry)
-    fit = fit_to_model_input(geometry.canvas_wh, model_wh)
-    fit_m = fit_affine(fit)
-
-    fitted_crops = []
-    kept_entries = []
-    for _crop, _entry in zip(pending_crops, pending_entries):
-        _crop_info = _entry.get("crop_info") or {}
-        if _crop_info.get("canonical"):
-            try:
-                fitted_crop = apply_fit(_crop, fit)
-            except Exception:
-                logger.warning(
-                    "Interp pose: skipping frame_id=%s traj_id=%s -- Layer 2 "
-                    "fit (apply_fit) failed for an otherwise-canonical crop; "
-                    "the old raw-crop fallback fed the backend a "
-                    "wrongly-scaled crop and inverted a fit that was never "
-                    "applied instead of skipping.",
-                    _entry["task"]["frame_id"],
-                    _entry["task"]["traj_id"],
-                    exc_info=True,
-                )
-                continue
-            fitted_crops.append(fitted_crop)
-            kept_entries.append(_entry)
-        else:
-            fitted_crops.append(_crop)
-            kept_entries.append(_entry)
-
-    profiler.tick("interp_pose_inference")
-    pose_results = pose_backend.predict_batch(fitted_crops)
-    profiler.tock("interp_pose_inference")
-    for pidx, entry in enumerate(kept_entries):
-        pose_out = pose_results[pidx] if pidx < len(pose_results) else None
-        pose_mean_conf = 0.0
-        pose_valid_fraction = 0.0
-        pose_num_valid = 0
-        pose_num_keypoints = 0
-        pose_wide = {}
-        if pose_out is not None:
-            pose_mean_conf = float(getattr(pose_out, "mean_conf", 0.0))
-            pose_valid_fraction = float(getattr(pose_out, "valid_fraction", 0.0))
-            pose_num_valid = int(getattr(pose_out, "num_valid", 0))
-            pose_num_keypoints = int(getattr(pose_out, "num_keypoints", 0))
-            keypoints = getattr(pose_out, "keypoints", None)
-            crop_info = entry.get("crop_info") or {}
-            if keypoints is not None and len(keypoints) > 0:
-                gkpts = np.asarray(keypoints, dtype=np.float32).copy()
-                _M_align = crop_info.get("M_forward")
-                if _M_align is not None and crop_info.get("canonical"):
-                    # Keypoints come back in MODEL-input coords, so the
-                    # back-projection must undo Layer 2 (fit) then Layer 1
-                    # (canonical align) -- invert the composed transform.
-                    _m_total = compose_affine(fit_m, _M_align)
-                    _M_inv = cv2.invertAffineTransform(_m_total.astype(np.float32))
-                    gkpts = _invert_kpts(gkpts, _M_inv).astype(np.float32)
-                else:
-                    crop_bbox = crop_info.get("crop_bbox")
-                    if crop_bbox is not None and len(crop_bbox) >= 2:
-                        gkpts[:, 0] += float(crop_bbox[0])
-                        gkpts[:, 1] += float(crop_bbox[1])
-                if len(gkpts) > len(pose_kpt_labels):
-                    pose_kpt_labels[:] = build_pose_keypoint_labels(
-                        pose_kpt_source_names, len(gkpts)
-                    )
-                pose_wide = flatten_pose_keypoints_row(gkpts, pose_kpt_labels)
-
-        pose_row = {
-            "frame_id": int(entry["task"]["frame_id"]),
-            "trajectory_id": int(entry["task"]["traj_id"]),
-            "filename": entry["filename"],
-            "PoseMeanConf": pose_mean_conf,
-            "PoseValidFraction": pose_valid_fraction,
-            "PoseNumValid": pose_num_valid,
-            "PoseNumKeypoints": pose_num_keypoints,
-        }
-        pose_row.update(pose_wide)
-        interp_pose_rows.append(pose_row)
-    pending_crops.clear()
-    pending_entries.clear()
-
-
-def _flush_cnn_batch(
-    cnn_backends,
+def _flush_pose_cnn_window(
+    pending_frames,
+    pending_obbs,
+    pending_tasks_by_frame,
+    pose_model,
+    cnn_models,
     cnn_labels,
-    pending_cnn_crops,
-    pending_cnn_entries,
+    cfg,
+    runtime,
+    geometry,
+    interp_pose_rows,
     interp_cnn_rows,
     profiler,
-    geometry,
+    background_color=(0, 0, 0),
 ):
-    """Run CNN identity inference on accumulated crops and append results.
+    """Run pose + CNN inference over a window of (frame, synthetic OBB) pairs.
 
-    Pre-fits the shared Layer 1 canonical crops through Layer 2
-    (``fit_to_model_input`` / ``apply_fit``) per classifier, exactly as
-    ``core/inference/stages/cnn.py`` does -- each classifier may have a
-    different input size, so the fit is computed and applied fresh for every
-    backend rather than shared across them.  Without this,
-    ``core/individual/classification/backend.py`` would ANISOTROPICALLY stretch
-    the canonical crop to the model's input.
+    Calls the SAME stage functions ``Pipeline`` calls for real detections
+    (``pipeline.py:367-387``): ``extract_canonical_crops_batch`` then
+    ``run_pose_batch`` for pose, ``run_cnn_batch`` per CNN phase for CNN --
+    instead of this module's old hand-rolled crop extraction + batching
+    (``_flush_pose_batch``/``_flush_cnn_batch``). ``suppress_foreign`` for the
+    pose call is read from ``cfg.pose.suppress_foreign_regions`` -- the SAME
+    config knob ``Pipeline`` reads for real detections (``pipeline.py:369-
+    370``) -- so a user who disables foreign suppression gets that honored for
+    interpolated crops too, not a hardcoded ``True`` (design spec, AprilTag/
+    foreign-suppression decisions). Pose and CNN crops are now genuinely independent
+    (CNN via ``extract_classifier_crops_batch_np`` inside ``run_cnn_batch``,
+    not a reused pose crop) -- design spec bug fix #1.
+
+    ``flatten_cnn_prediction_row`` (``properties/export.py``) expects a
+    PRE-COMPUTED argmax class name + confidence per factor -- it just indexes
+    ``class_names[idx]``/``confidences[idx]``, it does not run its own
+    argmax. ``CNNDetectionPrediction.factors`` (``result.py``) carries raw
+    probability vectors (``CNNFactorPrediction.raw_probabilities``) plus the
+    full per-factor class-name list, so the argmax is done here for each
+    factor before calling ``flatten_cnn_prediction_row``, mirroring the same
+    conversion ``frame_result_bridge._cnn_det_pred_to_class_prediction`` does
+    for the live tracking path.
     """
-    from hydra_suite.core.canonicalization.fit import apply_fit, fit_to_model_input
+    from hydra_suite.core.inference.stages.cnn import run_cnn_batch
+    from hydra_suite.core.inference.stages.crops import extract_canonical_crops_batch
+    from hydra_suite.core.inference.stages.pose import run_pose_batch
 
-    profiler.tick("interp_cnn_inference")
-    for _bi, _cnn_be in enumerate(cnn_backends):
-        _cnn_label = cnn_labels[_bi]
+    if not pending_frames:
+        return
+
+    if profiler is not None:
+        profiler.tick("interp_pose_inference")
+    if pose_model is not None:
+        crop_batch = extract_canonical_crops_batch(
+            pending_frames,
+            pending_obbs,
+            geometry,
+            runtime,
+            suppress_foreign=(
+                cfg.pose.suppress_foreign_regions if cfg.pose is not None else False
+            ),
+            # Match `gen.save_interpolated_crop`'s (`_process_single_frame`)
+            # background color -- both paths must agree so the images saved
+            # to disk and the crops actually fed to the pose/CNN models are
+            # the same crop, not two differently-padded versions.
+            background_color=tuple(background_color),
+        )
+        pose_by_frame = run_pose_batch(
+            crop_batch, pose_model, cfg.pose, runtime, geometry
+        )
+        for frame_idx, tasks in zip(
+            (obb.frame_idx for obb in pending_obbs), pending_tasks_by_frame
+        ):
+            pose_result = pose_by_frame.get(frame_idx)
+            if pose_result is None:
+                continue
+            for i, task in enumerate(tasks):
+                kpts = (
+                    pose_result.keypoints[i] if i < len(pose_result.keypoints) else None
+                )
+                # `_assemble_pose_result` (stages/pose.py) pre-allocates a
+                # zero-filled (n, K, 3) array and simply `continue`s past a
+                # detection the backend found nothing for -- it never writes
+                # into that detection's row of the array. So `kpts` here is
+                # NEVER None, even for a genuine backend miss: a miss leaves
+                # the row as the untouched all-zero (x=0, y=0, conf=0)
+                # placeholder, while any real backend result -- however
+                # low-confidence -- overwrites the row with actual values.
+                # `valid_mask[i]` is NOT the right signal to gate row
+                # construction on: it is `n_confident >= min_valid_keypoints`,
+                # an AGGREGATE confidence threshold, so it is also False for
+                # real (non-fabricated) keypoints that just don't individually
+                # or collectively clear that bar. Gating on it would silently
+                # drop genuine low-confidence pose data that the real-
+                # detection export path (`flatten_pose_keypoints_df` in
+                # `properties/export.py`) always writes -- that path only uses
+                # the threshold to compute `PoseNumValid`/`PoseValidFraction`
+                # stats, never to suppress the row. Instead, distinguish "no
+                # data at all" from "real but low-confidence data" by checking
+                # whether the row is still the untouched all-zero placeholder
+                # (`np.any(kpts)`) -- that is true exactly when
+                # `_assemble_pose_result` actually wrote something into this
+                # detection's slot.
+                has_data = kpts is not None and bool(np.any(kpts))
+                pose_wide = {}
+                pose_mean_conf = pose_valid_fraction = 0.0
+                pose_num_valid = pose_num_keypoints = 0
+                pose_source = None
+                if has_data:
+                    conf_col = kpts[:, 2]
+                    pose_num_keypoints = int(kpts.shape[0])
+                    valid_mask = conf_col >= float(cfg.pose.min_keypoint_confidence)
+                    pose_num_valid = int(valid_mask.sum())
+                    pose_mean_conf = (
+                        float(conf_col.mean()) if pose_num_keypoints else 0.0
+                    )
+                    pose_valid_fraction = (
+                        pose_num_valid / pose_num_keypoints
+                        if pose_num_keypoints
+                        else 0.0
+                    )
+                    pose_wide = flatten_pose_keypoints_row(
+                        kpts,
+                        build_pose_keypoint_labels(
+                            pose_model.keypoint_names, pose_num_keypoints
+                        ),
+                    )
+                    pose_source = "interp"
+                pose_row = {
+                    "frame_id": int(task["frame_id"]),
+                    "trajectory_id": int(task["traj_id"]),
+                    # Always empty (unlike the old per-frame `_flush_pose_batch`,
+                    # which had the saved crop's filename in scope): this is a
+                    # windowed batch flush over many frames' tasks, with no
+                    # per-detection filename in scope at flush time. Nothing
+                    # downstream reads this column (verified: no reader of
+                    # interpolated_pose.csv's "filename" grep-hits anywhere in
+                    # src/), so left empty rather than threading it through.
+                    "filename": "",
+                    "PoseMeanConf": pose_mean_conf,
+                    "PoseValidFraction": pose_valid_fraction,
+                    "PoseNumValid": pose_num_valid,
+                    "PoseNumKeypoints": pose_num_keypoints,
+                    "PoseSource": pose_source,
+                }
+                pose_row.update(pose_wide)
+                interp_pose_rows.append(pose_row)
+    if profiler is not None:
+        profiler.tock("interp_pose_inference")
+
+    if profiler is not None:
+        profiler.tick("interp_cnn_inference")
+    for cnn_model, cnn_label, cnn_cfg in zip(cnn_models, cnn_labels, cfg.cnn_phases):
         try:
-            _in_h, _in_w = _cnn_be.metadata.input_size  # documents (H, W)
-            _fit = fit_to_model_input(geometry.canvas_wh, (_in_w, _in_h))
-            _fitted_cnn_crops = [apply_fit(_c, _fit) for _c in pending_cnn_crops]
-            _cnn_preds = _cnn_be.predict_batch(_fitted_cnn_crops)
-            for _pi, _pred in enumerate(_cnn_preds):
-                if _pi >= len(pending_cnn_entries):
-                    break
-                _ce = pending_cnn_entries[_pi]
+            cnn_by_frame = run_cnn_batch(
+                pending_frames, pending_obbs, cnn_model, cnn_cfg, runtime, geometry
+            )
+        except Exception as exc:
+            logger.warning("Interp CNN '%s' batch failed: %s", cnn_label, exc)
+            continue
+        for frame_idx, tasks in zip(
+            (obb.frame_idx for obb in pending_obbs), pending_tasks_by_frame
+        ):
+            cnn_result = cnn_by_frame.get(frame_idx)
+            if cnn_result is None:
+                continue
+            for i, task in enumerate(tasks):
+                pred = next(
+                    (p for p in cnn_result.predictions if p.det_index == i), None
+                )
+                if pred is None:
+                    continue
+                factor_names = []
+                class_names = []
+                confidences = []
+                for factor in pred.factors:
+                    factor_names.append(factor.factor_name)
+                    probs = np.asarray(factor.raw_probabilities, dtype=np.float32)
+                    if probs.size == 0:
+                        class_names.append(None)
+                        confidences.append(0.0)
+                        continue
+                    best_idx = int(np.argmax(probs))
+                    best_conf = float(probs[best_idx])
+                    if 0 <= best_idx < len(factor.class_names):
+                        class_names.append(factor.class_names[best_idx])
+                    else:
+                        class_names.append(None)
+                    confidences.append(best_conf)
                 row = {
-                    "frame_id": int(_ce["task"]["frame_id"]),
-                    "trajectory_id": int(_ce["task"]["traj_id"]),
+                    "frame_id": int(task["frame_id"]),
+                    "trajectory_id": int(task["traj_id"]),
                 }
                 row.update(
                     flatten_cnn_prediction_row(
-                        _cnn_label,
-                        getattr(_pred, "factor_names", ("flat",)),
-                        getattr(_pred, "class_names", ()),
-                        getattr(_pred, "confidences", ()),
+                        cnn_label,
+                        factor_names,
+                        class_names,
+                        confidences,
                     )
                 )
-                interp_cnn_rows[_cnn_label].append(row)
-        except Exception as exc:
-            logger.warning(
-                "Interp CNN '%s' batch failed: %s",
-                _cnn_label,
-                exc,
-            )
-    profiler.tock("interp_cnn_inference")
-    pending_cnn_crops.clear()
-    pending_cnn_entries.clear()
+                row[f"CNN_{cnn_label}_Source"] = "interp"
+                interp_cnn_rows.setdefault(cnn_label, []).append(row)
+    if profiler is not None:
+        profiler.tock("interp_cnn_inference")
 
 
-def _detect_apriltags_in_frame(
-    apriltag_detector,
-    frame,
-    frame_tasks_f,
-    all_corners,
-    params,
-    interp_tag_rows,
-):
-    """Detect AprilTags in all interpolated crops for one frame."""
-    from hydra_suite.core.tracking.pose.pose_pipeline import (
-        extract_one_crop as _extract_aabb_crop,
-    )
+def _detect_apriltags_in_frame(apriltag_model, cfg, frame, obb, tasks, interp_tag_rows):
+    """Detect AprilTags in one frame's interpolated crops via the SAME
+    ``extract_aabb_crops``/``run_apriltag`` ``Pipeline`` uses for real
+    detections (``pipeline.py:389-398``) -- no batch variant exists for
+    AprilTag (design spec, "Key architectural finding"), so this stays
+    per-frame like today.
 
-    _tag_crops = []
-    _tag_offsets = []
-    _tag_det_indices = []
-    _tag_tasks = []
-    _crop_padding = float(params.get("APRILTAG_CROP_PADDING", 0.0))
-    _suppress_foreign = bool(params.get("SUPPRESS_FOREIGN_OBB_REGIONS", True))
-    _bg_color = tuple(params.get("INDIVIDUAL_BACKGROUND_COLOR", (0, 0, 0)))
-    for ti, task in enumerate(frame_tasks_f):
-        aabb_result = _extract_aabb_crop(
-            frame,
-            all_corners[ti],
-            ti,
-            _crop_padding,
-            all_corners,
-            _suppress_foreign,
-            _bg_color,
+    Per the design spec's AprilTag/foreign-suppression decision: unlike the
+    old hand-rolled path (which foreign-masked other synthetic tasks' AABB
+    regions via ``SUPPRESS_FOREIGN_OBB_REGIONS``), ``extract_aabb_crops`` has
+    no suppression parameter at all -- interpolated AprilTag crops lose
+    foreign-suppression of other interpolated tasks, deliberately matching
+    what real detections already get.
+    """
+    if not tasks:
+        return
+    aabb_crops = extract_aabb_crops(frame, obb, padding=cfg.crop_padding)
+    result = run_apriltag(aabb_crops, obb, apriltag_model, cfg)
+    for tag_id, det_idx in zip(result.tag_ids, result.det_indices):
+        if det_idx >= len(tasks):
+            continue
+        task = tasks[det_idx]
+        interp_tag_rows.append(
+            {
+                "frame_id": int(task["frame_id"]),
+                "trajectory_id": int(task["traj_id"]),
+                "tag_id": int(tag_id),
+            }
         )
-        if aabb_result is not None:
-            crop, offset, _ = aabb_result
-            _tag_crops.append(crop)
-            _tag_offsets.append(offset)
-            _tag_det_indices.append(ti)
-            _tag_tasks.append(task)
-    if _tag_crops:
-        tag_obs = apriltag_detector.detect_in_crops(
-            _tag_crops,
-            _tag_offsets,
-            det_indices=_tag_det_indices,
-        )
-        for obs in tag_obs:
-            _ti = obs.det_index
-            _ttask = _tag_tasks[_ti] if _ti < len(_tag_tasks) else _tag_tasks[0]
-            interp_tag_rows.append(
-                {
-                    "frame_id": int(_ttask["frame_id"]),
-                    "trajectory_id": int(_ttask["traj_id"]),
-                    "tag_id": int(obs.tag_id),
-                    "center_x": float(obs.center_xy[0]),
-                    "center_y": float(obs.center_xy[1]),
-                    "hamming": int(obs.hamming),
-                }
-            )
 
 
-def _detect_headtail_in_frame(
-    headtail_analyzer,
-    frame,
-    frame_tasks_f,
-    all_corners,
+def _flush_headtail_window(
+    pending_frames,
+    pending_obbs,
+    pending_tasks_by_frame,
+    headtail_model,
+    cfg,
+    runtime,
+    geometry,
     interp_headtail_rows,
 ):
-    """Detect head-tail directions for all interpolated detections in one frame."""
-    ht_results = headtail_analyzer.analyze_crops([frame], [all_corners])
-    if ht_results and ht_results[0]:
-        for ti, (heading, conf, directed) in enumerate(ht_results[0]):
-            task = frame_tasks_f[ti]
+    """Run head-tail classification over a window via ``run_headtail_batch``
+    -- the SAME function ``Pipeline`` calls for real detections
+    (``pipeline.py:342-350``). Switches from the old per-frame
+    ``HeadTailAnalyzer.analyze_crops`` to the windowed batch path: a
+    materially different crop-construction path, registered as an expected
+    difference in the design spec's Testing section (verify equivalence
+    empirically on the characterization golden, not byte-identity).
+    """
+    from hydra_suite.core.inference.stages.headtail import run_headtail_batch
+
+    if not pending_frames or headtail_model is None:
+        return
+    headtail_by_frame = run_headtail_batch(
+        pending_frames, pending_obbs, headtail_model, cfg.headtail, runtime, geometry
+    )
+    for frame_idx, tasks in zip(
+        (obb.frame_idx for obb in pending_obbs), pending_tasks_by_frame
+    ):
+        result = headtail_by_frame.get(frame_idx)
+        if result is None:
+            continue
+        for i, task in enumerate(tasks):
+            if i >= len(result.heading_hints):
+                continue
             interp_headtail_rows.append(
                 {
                     "frame_id": int(task["frame_id"]),
                     "trajectory_id": int(task["traj_id"]),
-                    "heading_rad": float(heading),
-                    "heading_conf": float(conf),
-                    "heading_directed": int(directed),
+                    "heading_rad": float(result.heading_hints[i]),
+                    "heading_conf": float(result.heading_confidences[i]),
+                    "heading_directed": int(result.directed_mask[i]),
                 }
             )
 
@@ -851,6 +823,7 @@ def _write_interpolation_artifacts(
             "trajectory_id",
             "filename",
             *POSE_SUMMARY_COLUMNS,
+            "PoseSource",
             *pose_wide_columns_for_labels(pose_kpt_labels),
         ]
         result["pose_csv_path"] = _write_csv_artifact(
@@ -860,14 +833,7 @@ def _write_interpolation_artifacts(
     if interp_tag_rows:
         result["tag_csv_path"] = _write_csv_artifact(
             parent / "interpolated_tags.csv",
-            [
-                "frame_id",
-                "trajectory_id",
-                "tag_id",
-                "center_x",
-                "center_y",
-                "hamming",
-            ],
+            ["frame_id", "trajectory_id", "tag_id"],
             interp_tag_rows,
         )
 
@@ -904,35 +870,56 @@ def _write_interpolation_artifacts(
     return result
 
 
+def _close_resource(resource):
+    """Best-effort ``release()``/``close()`` on one resource, swallowing errors."""
+    if resource is None:
+        return
+    try:
+        if hasattr(resource, "release"):
+            resource.release()
+        elif hasattr(resource, "close"):
+            resource.close()
+    except Exception:
+        pass
+
+
+def _close_model_backend(model):
+    """Close the REAL backend behind a stage-model wrapper, not the wrapper.
+
+    ``PoseModel.close()``/``CNNModel.close()``/``HeadTailModel.close()``/
+    ``AprilTagModel.close()`` (``core/inference/stages/*.py``) are ALL
+    ``def close(self): pass`` -- shared infra also used by
+    ``Pipeline``/``InferenceRunner`` for real detections, out of scope to
+    change here. Calling ``.close()`` on the wrapper is therefore a no-op:
+    for the SLEAP service backend in particular, the underlying
+    ``model.backend`` is what actually reaches ``shutdown_sleap_service()``
+    and terminates the subprocess. Reach into ``.backend`` (pose/CNN/
+    head-tail models) or ``.detector`` (AprilTag's field is named
+    differently) and close/release THAT object instead.
+    """
+    if model is None:
+        return
+    underlying = getattr(model, "backend", None)
+    if underlying is None:
+        underlying = getattr(model, "detector", None)
+    _close_resource(underlying)
+
+
 def _cleanup_backends(
     cap,
     detection_cache,
-    pose_backend,
-    apriltag_detector,
-    cnn_backends,
-    headtail_analyzer,
+    pose_model,
+    apriltag_model,
+    cnn_models,
+    headtail_model,
 ):
-    """Safely close all backends and resources."""
-    for resource in (
-        cap,
-        detection_cache,
-        pose_backend,
-        apriltag_detector,
-        headtail_analyzer,
-    ):
-        if resource is not None:
-            try:
-                if hasattr(resource, "release"):
-                    resource.release()
-                elif hasattr(resource, "close"):
-                    resource.close()
-            except Exception:
-                pass
-    for _be in cnn_backends or []:
-        try:
-            _be.close()
-        except Exception:
-            pass
+    """Safely close all loaded resources."""
+    for resource in (cap, detection_cache):
+        _close_resource(resource)
+    for model in (pose_model, apriltag_model, headtail_model):
+        _close_model_backend(model)
+    for model in cnn_models or []:
+        _close_model_backend(model)
 
 
 def _build_prefetcher(cap, needed_frames, total_frames):
@@ -961,191 +948,21 @@ def _build_prefetcher(cap, needed_frames, total_frames):
     return SparseFramePrefetcher(cap, needed_frames, buffer_size=4)
 
 
-def _compute_frame_corners_and_affines(tasks, geometry, clipping_stats):
-    """Layer 1 affine per task against the ONE project-wide canonical canvas.
+def _filter_degenerate_and_get_corners(tasks, geometry, clipping_stats):
+    """Degenerate-OBB pre-filter + corner geometry for one frame's tasks.
 
-    ``clipping_stats`` accumulates the per-detection overflow so a too-small
-    ``canonical_margin`` produces a visible end-of-run signal instead of
-    silently truncated animals -- the same guard the core tracking loop
-    applies (``core/tracking/worker.py``). It also tallies the tasks DROPPED
-    here for a degenerate OBB (``canonical_affine`` raises on a zero-length
-    edge): those store ``None`` and are skipped downstream by
-    ``_extract_pose_crop``, so without the counter the run would just be
-    quietly shorter.
+    Delegates the pre-filter itself to
+    ``synthetic_detections.filter_degenerate_tasks`` (design spec, "Error
+    handling") -- this wrapper now just also returns the per-task OBB
+    corners for callers that still need the raw geometry (the
+    interpolated-crop image-save path in ``_process_single_frame``).
     """
-    from hydra_suite.core.canonicalization.geometry import canonical_affine
     from hydra_suite.core.individual.geometry import ellipse_to_obb_corners as _e2obb
+    from hydra_suite.core.post.synthetic_detections import filter_degenerate_tasks
 
-    corners = [_e2obb(t["cx"], t["cy"], t["w"], t["h"], t["theta"]) for t in tasks]
-    affines = []
-    for _c in corners:
-        try:
-            _M, _theta, _clipped = canonical_affine(_c, geometry)
-        except ValueError:
-            # Degenerate OBB (zero-length edge): no rigid Layer 1 transform
-            # exists and there is no non-canonical fallback, so this task is
-            # dropped -- counted so the drop is visible in the run summary.
-            if clipping_stats is not None:
-                clipping_stats.record_degenerate()
-            affines.append(None)
-            continue
-        if clipping_stats is not None:
-            clipping_stats.record(_c, geometry)
-        affines.append((_M, geometry.canvas_w, geometry.canvas_h))
-    return corners, affines
-
-
-def _process_single_task(
-    task,
-    task_idx,
-    frame,
-    _frame_all_corners,
-    _frame_affines,
-    gen,
-    save_interpolated_outputs,
-    _extract_canonical,
-    cnn_backends,
-    pose_backend,
-    interp_saved,
-    interp_rows,
-    roi_rows,
-    roi_corners,
-    _pending_crops,
-    _pending_entries,
-    _pending_cnn_crops,
-    _pending_cnn_entries,
-):
-    corners = _frame_all_corners[task_idx]
-    _aff = _frame_affines[task_idx]
-    filename = ""
-    if save_interpolated_outputs:
-        filename = gen.save_interpolated_crop(
-            frame=frame,
-            frame_id=task["frame_id"],
-            cx=task["cx"],
-            cy=task["cy"],
-            w=task["w"],
-            h=task["h"],
-            theta=task["theta"],
-            traj_id=task["traj_id"],
-            interp_from=task["interp_from"],
-            interp_index=task["interp_index"],
-            interp_total=task["interp_total"],
-            canonical_affine=(_aff[0] if _aff is not None else None),
-        )
-    if save_interpolated_outputs and filename:
-        interp_saved += 1
-        interp_rows.append(
-            {
-                "frame_id": int(task["frame_id"]),
-                "trajectory_id": int(task["traj_id"]),
-                "filename": filename,
-                "interp_from_start": int(task["interp_from"][0]),
-                "interp_from_end": int(task["interp_from"][1]),
-                "interp_index": int(task["interp_index"]),
-                "interp_total": int(task["interp_total"]),
-            }
-        )
-        roi_rows.append(
-            {
-                "frame_id": int(task["frame_id"]),
-                "trajectory_id": int(task["traj_id"]),
-                "filename": filename,
-                "cx": float(task["cx"]),
-                "cy": float(task["cy"]),
-                "w": float(task["w"]),
-                "h": float(task["h"]),
-                "theta": float(task["theta"]),
-                "interp_from_start": int(task["interp_from"][0]),
-                "interp_from_end": int(task["interp_from"][1]),
-                "interp_index": int(task["interp_index"]),
-                "interp_total": int(task["interp_total"]),
-            }
-        )
-        roi_corners.append(corners)
-    if pose_backend is not None:
-        pose_crop, pose_crop_info = _extract_pose_crop(
-            task_idx,
-            frame,
-            _frame_all_corners,
-            _aff,
-            corners,
-            gen,
-            _extract_canonical,
-        )
-        if pose_crop is not None and pose_crop.size > 0:
-            _pending_crops.append(pose_crop)
-            _pending_entries.append(
-                {"task": task, "filename": filename, "crop_info": pose_crop_info}
-            )
-        if cnn_backends and pose_crop is not None and pose_crop.size > 0:
-            _pending_cnn_crops.append(pose_crop)
-            _pending_cnn_entries.append({"task": task})
-    return interp_saved
-
-
-def _extract_pose_crop(
-    task_idx,
-    frame,
-    _frame_all_corners,
-    _aff,
-    corners,
-    gen,
-    _extract_canonical,
-):
-    """Extract the pose/CNN crop for one task via Layer 1 canonicalization.
-
-    ``_aff`` is None exactly when ``canonical_affine`` raised
-    (``core/canonicalization/geometry.py::_axes`` -- a degenerate OBB with a
-    zero-length edge). There is no rigid Layer 1 transform for a degenerate
-    box. The un-canonicalized masked-crop fallback this used to feed the
-    backend (retired with the crop-padding knob, spec 2026-08-18) produced an
-    arbitrary axis-aligned aspect ratio for which Layer 2's
-    ``fit_to_model_input`` cannot honestly be computed (it assumes the source
-    is the fixed canonical canvas) -- feeding it anyway would hand the backend
-    a wrongly-scaled crop, exactly the defect class this work removes. A
-    genuinely degenerate OBB has no salvageable animal geometry to recover
-    either way, so this loudly skips the detection.
-    """
-    if _aff is None:
-        logger.warning(
-            "Interp pose/CNN: skipping task_idx=%s -- degenerate OBB has no "
-            "Layer 1 canonical transform (canonical_affine raised); the "
-            "retired masked-crop fallback fed the backend an un-canonicalized, "
-            "wrongly-scaled crop instead of skipping.",
-            task_idx,
-        )
-        return None, None
-    pose_crop = None
-    pose_crop_info = None
-    try:
-        _other_corners = [
-            c for ci, c in enumerate(_frame_all_corners) if ci != task_idx
-        ]
-        _M_pose, _cw_pose, _ch_pose = _aff
-        _foreign = _other_corners if _other_corners else None
-        pose_crop = _extract_canonical(
-            frame,
-            _M_pose,
-            _cw_pose,
-            _ch_pose,
-            bg_color=gen.background_color,
-            foreign_corners=_foreign,
-        )
-        _M_inv = cv2.invertAffineTransform(_M_pose).astype(np.float32)
-        pose_crop_info = {
-            "crop_size": (_cw_pose, _ch_pose),
-            "M_inverse": _M_inv,
-            # Layer 1 forward affine (image -> canonical canvas). Kept so the
-            # Layer 2 (model-fit) affine can be composed onto it at flush
-            # time -- see ``_flush_pose_batch``.
-            "M_forward": np.asarray(_M_pose, dtype=np.float64),
-            "canonical": True,
-        }
-    except Exception:
-        pose_crop = None
-        pose_crop_info = None
-    return pose_crop, pose_crop_info
+    kept_tasks = filter_degenerate_tasks(tasks, geometry, clipping_stats)
+    corners = [_e2obb(t["cx"], t["cy"], t["w"], t["h"], t["theta"]) for t in kept_tasks]
+    return kept_tasks, corners
 
 
 def _build_finished_payload(
@@ -1228,118 +1045,97 @@ def _process_single_frame(
     save_interpolated_outputs,
     geometry,
     clipping_stats,
-    _extract_canonical,
-    pose_backend,
-    cnn_backends,
-    cnn_labels,
-    apriltag_detector,
-    headtail_analyzer,
+    apriltag_model,
+    apriltag_cfg,
     interp_saved,
     interp_rows,
     roi_rows,
     roi_corners,
-    interp_pose_rows,
     interp_tag_rows,
-    interp_cnn_rows,
-    interp_headtail_rows,
-    _pending_crops,
-    _pending_entries,
-    _pending_cnn_crops,
-    _pending_cnn_entries,
-    _pose_batch_size,
-    _cnn_batch_size,
-    pose_kpt_source_names,
-    pose_kpt_labels,
-    profiler,
+    _pending_frames,
+    _pending_obbs,
+    _pending_tasks_by_frame,
 ):
-    def _stop():
-        return bool(should_stop()) if should_stop is not None else False
-
+    # NOTE: `params` and `should_stop` are unused in this body -- per-frame
+    # work here has no stop-checkpoint of its own (the caller's loop already
+    # checks `should_stop` before/after calling this) and reads no params
+    # directly. Kept in the signature because the caller passes them
+    # positionally alongside the other loop state and existing tests call
+    # this function with the same positional shape; not removed here to
+    # avoid a wider signature churn.
     def _emit(v, m):
         if progress is not None:
             progress(v, m)
 
-    _frame_all_corners, _frame_affines = _compute_frame_corners_and_affines(
+    kept_tasks, corners = _filter_degenerate_and_get_corners(
         frame_tasks[f], geometry, clipping_stats
     )
-    for task_idx, task in enumerate(frame_tasks[f]):
-        interp_saved = _process_single_task(
-            task,
-            task_idx,
-            frame,
-            _frame_all_corners,
-            _frame_affines,
-            gen,
-            save_interpolated_outputs,
-            _extract_canonical,
-            cnn_backends,
-            pose_backend,
-            interp_saved,
-            interp_rows,
-            roi_rows,
-            roi_corners,
-            _pending_crops,
-            _pending_entries,
-            _pending_cnn_crops,
-            _pending_cnn_entries,
+
+    for task_idx, task in enumerate(kept_tasks):
+        filename = ""
+        if save_interpolated_outputs:
+            filename = gen.save_interpolated_crop(
+                frame=frame,
+                frame_id=task["frame_id"],
+                cx=task["cx"],
+                cy=task["cy"],
+                w=task["w"],
+                h=task["h"],
+                theta=task["theta"],
+                traj_id=task["traj_id"],
+                interp_from=task["interp_from"],
+                interp_index=task["interp_index"],
+                interp_total=task["interp_total"],
+                canonical_affine=None,
+            )
+        if save_interpolated_outputs and filename:
+            interp_saved += 1
+            interp_rows.append(
+                {
+                    "frame_id": int(task["frame_id"]),
+                    "trajectory_id": int(task["traj_id"]),
+                    "filename": filename,
+                    "interp_from_start": int(task["interp_from"][0]),
+                    "interp_from_end": int(task["interp_from"][1]),
+                    "interp_index": int(task["interp_index"]),
+                    "interp_total": int(task["interp_total"]),
+                }
+            )
+            roi_rows.append(
+                {
+                    "frame_id": int(task["frame_id"]),
+                    "trajectory_id": int(task["traj_id"]),
+                    "filename": filename,
+                    "cx": float(task["cx"]),
+                    "cy": float(task["cy"]),
+                    "w": float(task["w"]),
+                    "h": float(task["h"]),
+                    "theta": float(task["theta"]),
+                    "interp_from_start": int(task["interp_from"][0]),
+                    "interp_from_end": int(task["interp_from"][1]),
+                    "interp_index": int(task["interp_index"]),
+                    "interp_total": int(task["interp_total"]),
+                }
+            )
+            roi_corners.append(corners[task_idx])
+
+    if kept_tasks:
+        from hydra_suite.core.post.synthetic_detections import (
+            build_synthetic_obb_result,
         )
 
-    if apriltag_detector is not None and frame_tasks[f]:
-        _detect_apriltags_in_frame(
-            apriltag_detector,
-            frame,
-            frame_tasks[f],
-            _frame_all_corners,
-            params,
-            interp_tag_rows,
-        )
-
-    if headtail_analyzer is not None and frame_tasks[f] and _frame_all_corners:
-        _detect_headtail_in_frame(
-            headtail_analyzer,
-            frame,
-            frame_tasks[f],
-            _frame_all_corners,
-            interp_headtail_rows,
-        )
-
-    if (
-        pose_backend is not None
-        and _pending_crops
-        and (len(_pending_crops) >= _pose_batch_size or idx == total_frames)
-    ):
-        if _stop():
-            return None
-        _flush_pose_batch(
-            pose_backend,
-            _pending_crops,
-            _pending_entries,
-            interp_pose_rows,
-            pose_kpt_source_names,
-            pose_kpt_labels,
-            profiler,
-            geometry,
-        )
-
-    if (
-        cnn_backends
-        and _pending_cnn_crops
-        and (len(_pending_cnn_crops) >= _cnn_batch_size or idx == total_frames)
-    ):
-        _flush_cnn_batch(
-            cnn_backends,
-            cnn_labels,
-            _pending_cnn_crops,
-            _pending_cnn_entries,
-            interp_cnn_rows,
-            profiler,
-            geometry,
-        )
+        obb = build_synthetic_obb_result(f, kept_tasks)
+        if apriltag_model is not None:
+            _detect_apriltags_in_frame(
+                apriltag_model, apriltag_cfg, frame, obb, kept_tasks, interp_tag_rows
+            )
+        _pending_frames.append(frame)
+        _pending_obbs.append(obb)
+        _pending_tasks_by_frame.append(kept_tasks)
 
     if idx % 25 == 0 or idx == total_frames:
         progress_pct = int((idx / total_frames) * 100)
         _emit(progress_pct, f"Interpolating occlusions... {idx}/{total_frames}")
-        del frame
     return interp_saved
 
 
@@ -1353,12 +1149,13 @@ def _run_frame_tasks_loop(
     save_interpolated_outputs,
     geometry,
     clipping_stats,
-    _extract_canonical,
-    pose_backend,
-    cnn_backends,
+    cfg,
+    runtime,
+    pose_model,
+    cnn_models,
     cnn_labels,
-    apriltag_detector,
-    headtail_analyzer,
+    apriltag_model,
+    headtail_model,
     interp_saved,
     interp_rows,
     roi_rows,
@@ -1367,8 +1164,6 @@ def _run_frame_tasks_loop(
     interp_tag_rows,
     interp_cnn_rows,
     interp_headtail_rows,
-    pose_kpt_source_names,
-    pose_kpt_labels,
     profiler,
 ):
     def _stop():
@@ -1376,12 +1171,46 @@ def _run_frame_tasks_loop(
 
     needed_frames = sorted(frame_tasks.keys())
     total_frames = len(needed_frames)
-    _pose_batch_size = int(params.get("INTERP_POSE_INFERENCE_BATCH_SIZE", 64))
-    _pending_crops: list = []
-    _pending_entries: list = []
-    _cnn_batch_size = 64
-    _pending_cnn_crops: list = []
-    _pending_cnn_entries: list = []
+    # NOTE: unlike POSE_BATCH_SIZE/CNN batch knobs (which bound a batch of
+    # individual crops), this now bounds the number of FULL DECODED FRAMES
+    # buffered in `_pending_frames` per inference window (each frame can
+    # carry many per-animal tasks) -- on a 4K clip a large value here is
+    # multiple GB resident. Default kept small and memory-safe; this key has
+    # no GUI/param-builder exposure yet (hand-edit the params dict only).
+    window_batch_size = int(params.get("INTERP_POSE_INFERENCE_BATCH_SIZE", 8))
+    _pending_frames: list = []
+    _pending_obbs: list = []
+    _pending_tasks_by_frame: list = []
+
+    def _flush_window():
+        _flush_pose_cnn_window(
+            _pending_frames,
+            _pending_obbs,
+            _pending_tasks_by_frame,
+            pose_model,
+            cnn_models,
+            cnn_labels,
+            cfg,
+            runtime,
+            geometry,
+            interp_pose_rows,
+            interp_cnn_rows,
+            profiler,
+            background_color=getattr(gen, "background_color", (0, 0, 0)),
+        )
+        _flush_headtail_window(
+            _pending_frames,
+            _pending_obbs,
+            _pending_tasks_by_frame,
+            headtail_model,
+            cfg,
+            runtime,
+            geometry,
+            interp_headtail_rows,
+        )
+        _pending_frames.clear()
+        _pending_obbs.clear()
+        _pending_tasks_by_frame.clear()
 
     _prefetcher = _build_prefetcher(cap, needed_frames, total_frames)
     _prefetcher.start()
@@ -1408,33 +1237,39 @@ def _run_frame_tasks_loop(
             save_interpolated_outputs,
             geometry,
             clipping_stats,
-            _extract_canonical,
-            pose_backend,
-            cnn_backends,
-            cnn_labels,
-            apriltag_detector,
-            headtail_analyzer,
+            apriltag_model,
+            cfg.apriltag,
             interp_saved,
             interp_rows,
             roi_rows,
             roi_corners,
-            interp_pose_rows,
             interp_tag_rows,
-            interp_cnn_rows,
-            interp_headtail_rows,
-            _pending_crops,
-            _pending_entries,
-            _pending_cnn_crops,
-            _pending_cnn_entries,
-            _pose_batch_size,
-            _cnn_batch_size,
-            pose_kpt_source_names,
-            pose_kpt_labels,
-            profiler,
+            _pending_frames,
+            _pending_obbs,
+            _pending_tasks_by_frame,
         )
-        if result is None:
-            return None
+        # `_process_single_frame` always returns an int (its internal
+        # `_stop()`-based early-return path was removed) -- no None check
+        # needed here.
         interp_saved = result
+        if len(_pending_frames) >= window_batch_size:
+            if _stop():
+                _prefetcher.stop()
+                return None
+            _flush_window()
+    # Flush any frames still buffered when the loop exits -- whether it ran
+    # to completion, `break`-ed out on prefetcher exhaustion, or the last
+    # iteration(s) `continue`-ed past a bad read. The old `idx == total_frames`
+    # trigger only fired from inside a loop iteration, so a `break`/`continue`
+    # on the final index silently dropped up to `window_batch_size` frames'
+    # worth of pose/CNN/head-tail rows -- this final flush is unconditional so
+    # that can no longer happen. Buffered frames are freed here (list.clear()
+    # inside _flush_window), not via any per-iteration `del`.
+    if _pending_frames:
+        if _stop():
+            _prefetcher.stop()
+            return None
+        _flush_window()
     _prefetcher.stop()
     return interp_saved
 
@@ -1566,9 +1401,6 @@ def run_interpolated_crops(
     ``InterpolatedCropsWorker.execute()``. Returns the finished-payload dict
     that the worker used to emit via ``finished_signal``.
     """
-    from hydra_suite.core.canonicalization.crop import (
-        extract_canonical_crop as _extract_canonical,
-    )
     from hydra_suite.core.tracking.pose.pose_pipeline import (
         reset_degenerate_padding_warning,
     )
@@ -1589,15 +1421,13 @@ def run_interpolated_crops(
     profiler = TrackingProfiler(enabled=enable_profiling)
     profiler.phase_start("interp_setup")
 
-    pose_backend = None
+    pose_model = None
     detection_cache = None
     cap = None
-    cnn_backends = []
+    cnn_models = []
     cnn_labels = []
-    apriltag_detector = None
-    headtail_analyzer = None
-    pose_kpt_source_names = []
-    pose_kpt_labels = []
+    apriltag_model = None
+    headtail_model = None
     interp_cnn_rows = {}
     try:
         setup = _validate_and_setup(
@@ -1653,17 +1483,21 @@ def run_interpolated_crops(
         profiler.phase_end("interp_gap_detection")
         profiler.phase_start("interp_crop_extraction")
 
+        pose_kpt_labels = []
         if frame_tasks:
             (
-                pose_backend,
-                pose_kpt_source_names,
-                pose_kpt_labels,
-                apriltag_detector,
-                cnn_backends,
+                cfg,
+                runtime,
+                pose_model,
+                apriltag_model,
+                cnn_models,
                 cnn_labels,
-                headtail_analyzer,
-                interp_cnn_rows,
+                headtail_model,
             ) = _init_interpolation_backends(params, output_dir, geometry)
+            if pose_model is not None:
+                pose_kpt_labels = build_pose_keypoint_labels(
+                    pose_model.keypoint_names, pose_model.n_keypoints
+                )
             interp_saved = _run_frame_tasks_loop(
                 params,
                 should_stop,
@@ -1674,12 +1508,13 @@ def run_interpolated_crops(
                 save_interpolated_outputs,
                 geometry,
                 clipping_stats,
-                _extract_canonical,
-                pose_backend,
-                cnn_backends,
+                cfg,
+                runtime,
+                pose_model,
+                cnn_models,
                 cnn_labels,
-                apriltag_detector,
-                headtail_analyzer,
+                apriltag_model,
+                headtail_model,
                 interp_saved,
                 interp_rows,
                 roi_rows,
@@ -1688,8 +1523,6 @@ def run_interpolated_crops(
                 interp_tag_rows,
                 interp_cnn_rows,
                 interp_headtail_rows,
-                pose_kpt_source_names,
-                pose_kpt_labels,
                 profiler,
             )
             if interp_saved is None:
@@ -1757,13 +1590,24 @@ def run_interpolated_crops(
             )
         return {"saved": 0, "gaps": 0}
     except Exception:
+        # Any future silent-failure class must be visible in logs, even when
+        # graceful degradation isn't possible for it -- this blanket handler
+        # used to swallow everything with zero diagnostic trace, which is
+        # exactly how a whole-pass loss (crops, ROI, pose/tag/cnn/headtail
+        # CSVs -- everything) could vanish silently (see
+        # `_init_interpolation_backends`'s own try/except for the specific
+        # config-build failure this was first found from).
+        logger.exception(
+            "Interpolated post-pass failed; returning an empty payload "
+            "(saved=0, gaps=0)."
+        )
         return {"saved": 0, "gaps": 0}
     finally:
         _cleanup_backends(
             cap,
             detection_cache,
-            pose_backend,
-            apriltag_detector,
-            cnn_backends,
-            headtail_analyzer,
+            pose_model,
+            apriltag_model,
+            cnn_models,
+            headtail_model,
         )
