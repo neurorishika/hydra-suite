@@ -14,12 +14,92 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import QPointF, Qt, Signal
-from PySide6.QtGui import QImage, QPainter, QPixmap
+import numpy as np
+from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QFont,
+    QImage,
+    QPainter,
+    QPainterPath,
+    QPainterPathStroker,
+    QPen,
+    QPixmap,
+    QPolygonF,
+)
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
-from hydra_suite.trackerkit.arena_geometry import arena_at_point
-from hydra_suite.trackerkit.gui.widgets.arena_style import CLICK_DRAG_THRESHOLD_PX
+from hydra_suite.trackerkit.arena_geometry import arena_at_point, shape_centroid
+from hydra_suite.trackerkit.gui.widgets.arena_style import (
+    CLICK_DRAG_THRESHOLD_PX,
+    TEXT_ALPHA,
+    VEIL_ALPHA,
+    frame_palette,
+    glyph_size_px,
+    line_width_px,
+)
+
+
+def paint_arena_number(
+    painter: QPainter,
+    text: str,
+    center: QPointF,
+    size_px: int,
+    glyph_rgb: tuple[int, int, int],
+    halo_rgb: tuple[int, int, int],
+    alpha: float,
+) -> None:
+    """Draw a haloed arena number, composited ONCE at *alpha*.
+
+    The glyph and its halo are rendered into an offscreen ARGB layer at full
+    opacity and that layer is composited in one pass. Stroking and filling
+    directly at partial alpha would composite twice where the halo underlies
+    the glyph, letting the halo bleed through the glyph edge and making the
+    number look doubled.
+    """
+    font = QFont()
+    font.setPixelSize(int(size_px))
+    font.setBold(True)
+
+    path = QPainterPath()
+    path.addText(0.0, 0.0, font, text)
+    bounds = path.boundingRect()
+    path.translate(-bounds.center().x(), -bounds.center().y())
+
+    stroker = QPainterPathStroker()
+    stroker.setWidth(max(2.0, size_px * 0.18))
+    halo_path = stroker.createStroke(path)
+
+    pad = int(max(4.0, size_px * 0.5))
+    layer_rect = path.boundingRect().united(halo_path.boundingRect())
+    layer = QImage(
+        int(layer_rect.width()) + 2 * pad,
+        int(layer_rect.height()) + 2 * pad,
+        QImage.Format_ARGB32_Premultiplied,
+    )
+    layer.fill(Qt.transparent)
+
+    layer_painter = QPainter(layer)
+    layer_painter.setRenderHint(QPainter.Antialiasing, True)
+    layer_painter.translate(
+        pad - layer_rect.left(),
+        pad - layer_rect.top(),
+    )
+    layer_painter.fillPath(halo_path, QBrush(QColor(*halo_rgb)))
+    layer_painter.fillPath(path, QBrush(QColor(*glyph_rgb)))
+    layer_painter.end()
+
+    painter.save()
+    painter.setOpacity(float(alpha))
+    painter.drawImage(
+        QPointF(
+            center.x() - layer.width() / 2.0,
+            center.y() - layer.height() / 2.0,
+        ),
+        layer,
+    )
+    painter.restore()
 
 
 class ArenaCanvas(QWidget):
@@ -34,6 +114,7 @@ class ArenaCanvas(QWidget):
         super().__init__(parent)
         self._frame: QImage | None = None
         self._scaled: QPixmap | None = None
+        self._luminance: float | None = None
         self._zoom = 1.0
         self._shapes: list[dict[str, Any]] = []
         self._points: list[tuple[float, float]] = []
@@ -49,6 +130,7 @@ class ArenaCanvas(QWidget):
 
     def set_frame(self, image: QImage | None) -> None:
         self._frame = image
+        self._luminance = None
         self._rescale()
 
     def set_zoom(self, zoom: float) -> None:
@@ -164,4 +246,115 @@ class ArenaCanvas(QWidget):
         painter = QPainter(self)
         if self._scaled is not None:
             painter.drawPixmap(0, 0, self._scaled)
+        self.render_overlay(painter)
         painter.end()
+
+    # -- overlay ------------------------------------------------------------
+
+    def mean_luminance(self) -> float:
+        """Mean luminance of the base frame, 0.0-1.0. Cached per frame."""
+        if self._frame is None:
+            return 0.5
+        if self._luminance is None:
+            small = self._frame.scaled(
+                64, 64, Qt.IgnoreAspectRatio, Qt.FastTransformation
+            ).convertToFormat(QImage.Format_Grayscale8)
+            buffer = np.frombuffer(
+                small.constBits(), dtype=np.uint8, count=small.sizeInBytes()
+            )
+            self._luminance = float(buffer.mean()) / 255.0
+        return self._luminance
+
+    def _palette(self):
+        return frame_palette(self.mean_luminance())
+
+    def _line_width(self) -> int:
+        """Device-pixel outline width -- independent of zoom by construction."""
+        return line_width_px(min(self.parentWidth(), self.parentHeight()))
+
+    def parentWidth(self) -> int:
+        parent = self.parentWidget()
+        return parent.width() if parent is not None else 800
+
+    def parentHeight(self) -> int:
+        parent = self.parentWidget()
+        return parent.height() if parent is not None else 600
+
+    def _outline_width_for(self, arena_id: int) -> int:
+        base = self._line_width()
+        return base * 2 if arena_id == self._current_arena else base
+
+    def _shape_path(self, shape: dict[str, Any]) -> QPainterPath:
+        """The shape as a viewport-space path."""
+        path = QPainterPath()
+        if shape.get("type") == "circle":
+            cx, cy, radius = (float(v) for v in shape["params"])
+            top_left = self.to_viewport(cx - radius, cy - radius)
+            path.addEllipse(
+                QRectF(
+                    top_left.x(),
+                    top_left.y(),
+                    2.0 * radius * self._zoom,
+                    2.0 * radius * self._zoom,
+                )
+            )
+        else:
+            polygon = QPolygonF([self.to_viewport(x, y) for x, y in shape["params"]])
+            path.addPolygon(polygon)
+            path.closeSubpath()
+        return path
+
+    def render_overlay(self, painter: QPainter) -> None:
+        """Paint veil, outlines, in-progress points and arena numbers.
+
+        Everything here is in WIDGET coordinates: pen widths and glyph sizes
+        are device pixels, so apparent size does not change with zoom.
+        """
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        palette = self._palette()
+
+        include = [s for s in self._shapes if s.get("mode", "include") == "include"]
+        exclude = [s for s in self._shapes if s.get("mode", "include") == "exclude"]
+
+        # Veil: inside the include region, minus every exclude hole.
+        if include:
+            veil_path = QPainterPath()
+            for shape in include:
+                veil_path = veil_path.united(self._shape_path(shape))
+            for shape in exclude:
+                veil_path = veil_path.subtracted(self._shape_path(shape))
+            painter.save()
+            painter.setOpacity(VEIL_ALPHA)
+            painter.fillPath(veil_path, QBrush(QColor(*palette.veil)))
+            painter.restore()
+
+        for shape in self._shapes:
+            is_include = shape.get("mode", "include") == "include"
+            colour = palette.line_include if is_include else palette.line_exclude
+            width = self._outline_width_for(int(shape.get("arena_id", 0)))
+            painter.setPen(QPen(QColor(*colour), width))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawPath(self._shape_path(shape))
+
+        # In-progress points and their preview outline.
+        if self._points:
+            preview = QColor(*palette.line_preview)
+            painter.setPen(QPen(preview, self._line_width() * 2))
+            for x, y in self._points:
+                painter.drawPoint(self.to_viewport(x, y))
+
+        for arena_id in sorted({int(s.get("arena_id", 0)) for s in include}):
+            members = [s for s in include if int(s.get("arena_id", 0)) == arena_id]
+            centroids = [shape_centroid(s) for s in members]
+            center_x = sum(c[0] for c in centroids) / len(centroids)
+            center_y = sum(c[1] for c in centroids) / len(centroids)
+            box = self._shape_path(members[0]).boundingRect()
+            paint_arena_number(
+                painter,
+                str(arena_id + 1),
+                self.to_viewport(center_x, center_y),
+                glyph_size_px(min(box.width(), box.height()) / 2.0),
+                palette.glyph,
+                palette.halo,
+                TEXT_ALPHA,
+            )
