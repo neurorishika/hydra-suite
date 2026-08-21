@@ -59,8 +59,19 @@ def test_non_scaled_pixmap_still_gets_canvas_zoom_applied(window):
 
 
 def test_update_roi_preview_never_changes_zoom_slider(window):
-    """Fix 2: adding/removing ROI points must not silently auto-refit."""
+    """Fix 2: adding/removing ROI points must not silently auto-refit.
+
+    NOTE: the bug this guards (`QTimer.singleShot(10, self._mw._fit_image_to_screen)`
+    scheduled from inside `update_roi_preview`) is a DEFERRED callback -- it only
+    fires once Qt's event loop is pumped. Asserting the slider value synchronously
+    right after calling `update_roi_preview()`, with no event loop pumped in
+    between, would pass identically whether or not the buggy line is present.
+    We therefore pump the event loop (`QTest.qWait`) after each call so a
+    reintroduced singleShot auto-refit actually gets a chance to fire and flip
+    the slider before we assert on it.
+    """
     from PySide6.QtGui import QImage
+    from PySide6.QtTest import QTest
 
     window.roi_base_frame = QImage(640, 480, QImage.Format_RGB888)
     window.roi_selection_active = True
@@ -76,9 +87,23 @@ def test_update_roi_preview_never_changes_zoom_slider(window):
     for i in range(5):
         window.roi_points.append((10.0 * i, 20.0 * i))
         window._session_orch.update_roi_preview()
+        QTest.qWait(50)
         assert window.slider_zoom.value() == initial_zoom, (
             f"slider_zoom.value() changed after point {i}: "
             f"{window.slider_zoom.value()} != {initial_zoom}"
         )
 
     assert window.slider_zoom.value() == initial_zoom
+
+
+def test_update_roi_preview_never_schedules_a_fit_to_screen():
+    """update_roi_preview must never auto-refit -- zoom only changes on
+    explicit user action. A reintroduced singleShot(..., _fit_image_to_screen)
+    inside this method would silently reset the zoom slider on every point
+    add/remove/finish/clear/undo, which is exactly the bug this guards."""
+    import inspect
+
+    from hydra_suite.trackerkit.gui.orchestrators import session
+
+    source = inspect.getsource(session.SessionOrchestrator.update_roi_preview)
+    assert "_fit_image_to_screen" not in source
