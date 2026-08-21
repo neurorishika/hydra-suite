@@ -30,7 +30,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
-from hydra_suite.trackerkit.arena_geometry import arena_at_point, shape_centroid
+from hydra_suite.trackerkit.arena_geometry import arena_at_point
 from hydra_suite.trackerkit.gui.widgets.arena_style import (
     CLICK_DRAG_THRESHOLD_PX,
     TEXT_ALPHA,
@@ -379,6 +379,17 @@ class ArenaCanvas(QWidget):
             painter.setBrush(Qt.NoBrush)
             painter.drawPath(boundary_path)
 
+            box = boundary_path.boundingRect()
+            paint_arena_number(
+                painter,
+                str(arena_id + 1),
+                box.center(),
+                glyph_size_px(min(box.width(), box.height()) / 2.0),
+                palette.glyph,
+                palette.halo,
+                TEXT_ALPHA,
+            )
+
         # Individual zone outlines -- thin, uniform, no per-arena emphasis (the
         # boundary above already shows which arena is current).
         zone_width = zone_line_width_px(min(self.parentWidth(), self.parentHeight()))
@@ -400,22 +411,6 @@ class ArenaCanvas(QWidget):
             painter.setPen(QPen(QColor(*palette.line_preview), self._line_width()))
             painter.setBrush(Qt.NoBrush)
             painter.drawPath(self._shape_path(self._preview_shape))
-
-        for arena_id in sorted({int(s.get("arena_id", 0)) for s in include}):
-            members = [s for s in include if int(s.get("arena_id", 0)) == arena_id]
-            centroids = [shape_centroid(s) for s in members]
-            center_x = sum(c[0] for c in centroids) / len(centroids)
-            center_y = sum(c[1] for c in centroids) / len(centroids)
-            box = self._shape_path(members[0]).boundingRect()
-            paint_arena_number(
-                painter,
-                str(arena_id + 1),
-                self.to_viewport(center_x, center_y),
-                glyph_size_px(min(box.width(), box.height()) / 2.0),
-                palette.glyph,
-                palette.halo,
-                TEXT_ALPHA,
-            )
 
         if self._toast_text:
             painter.save()

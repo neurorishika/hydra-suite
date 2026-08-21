@@ -291,9 +291,17 @@ def build_arena_labels(
 ) -> tuple[np.ndarray | None, int]:
     """Rasterize ROI shapes into a uint16 arena-label image.
 
-    Pixel value is ``arena_id + 1``; 0 means outside every arena. The set
-    ``labels > 0`` is pixel-identical to ``build_roi_mask`` on the same shapes,
-    so detection gating semantics are unchanged.
+    Pixel value is ``arena_id + 1``; 0 means outside every arena. Excludes
+    are scoped per-arena -- an exclude shape only removes area from its OWN
+    arena_id's label, matching the visual overlay (ArenaCanvas.render_overlay)
+    exactly. This is a deliberate DIVERGENCE from the legacy, pre-arena
+    ``build_roi_mask`` (which folds every exclude into one global mask,
+    regardless of which arena it was drawn for) -- multi-arena projects now
+    get per-arena exclude semantics; the ``(labels > 0) == (build_roi_mask > 0)``
+    invariant no longer holds when a project has more than one arena AND at
+    least one exclude shape (single-arena projects, where every shape shares
+    arena_id 0, are unaffected -- see the updated test file for the exact
+    boundary of this change).
 
     Shapes without an ``arena_id`` key map to arena 0 -- a legacy project that
     drew several shapes as one region keeps single-arena behavior exactly.
@@ -302,10 +310,11 @@ def build_arena_labels(
     if not roi_shapes or not width or not height:
         return None, 1
 
-    # Mirror build_roi_mask EXACTLY: it partitions three ways, rendering a shape
-    # only on `== "include"` / `== "exclude"` and silently dropping any other
-    # mode string.  Selecting includes with `!= "exclude"` would render unknown
-    # modes here that the ROI mask drops, breaking the union invariant.
+    # Mirror build_roi_mask EXACTLY for the include side: it partitions three
+    # ways, rendering a shape only on `== "include"` / `== "exclude"` and
+    # silently dropping any other mode string.  Selecting includes with
+    # `!= "exclude"` would render unknown modes here that the ROI mask drops,
+    # breaking the union invariant.
     includes = [s for s in roi_shapes if s.get("mode", "include") == "include"]
     raw_ids = sorted({int(s.get("arena_id", 0)) for s in includes}) or [0]
     dense = {raw: i for i, raw in enumerate(raw_ids)}
@@ -316,7 +325,19 @@ def build_arena_labels(
         _fill_shape(labels, shape, value)
     for shape in roi_shapes:
         if shape.get("mode", "include") == "exclude":
-            _fill_shape(labels, shape, 0)
+            raw_arena_id = int(shape.get("arena_id", 0))
+            if raw_arena_id not in dense:
+                # An exclude shape whose arena_id has no matching include
+                # shape at all (e.g. a stray/orphaned exclude) has nothing
+                # to scope against -- skip it rather than crash or guess.
+                continue
+            value = dense[raw_arena_id] + 1
+            # Only clear pixels that currently belong to THIS SAME arena --
+            # an exclude must never remove area that belongs to a
+            # different arena's label, even if their raw shapes overlap.
+            mask = np.zeros((height, width), np.uint8)
+            _fill_shape(mask, shape, 255)
+            labels[(mask > 0) & (labels == value)] = 0
     return labels, len(raw_ids)
 
 

@@ -245,3 +245,98 @@ def test_update_roi_preview_restores_shapes_after_tracking_cleared_them(window):
     window._session_orch.update_roi_preview()
 
     assert window.video_label._shapes == window.roi_shapes
+
+
+# ---------------------------------------------------------------------------
+# Fix Wave 14, Fix 3: _on_zoom_changed must route through
+# _display_roi_with_zoom whenever roi_shapes are present, even when
+# roi_base_frame was never populated (e.g. ROIs restored from a loaded
+# config, which never touches roi_base_frame at all).
+# ---------------------------------------------------------------------------
+
+
+def _write_test_video(path, width=64, height=48, n_frames=5):
+    import cv2
+    import numpy as np
+
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    writer = cv2.VideoWriter(str(path), fourcc, 10, (width, height))
+    for _ in range(n_frames):
+        writer.write(np.zeros((height, width, 3), dtype=np.uint8))
+    writer.release()
+
+
+def test_zoom_changed_routes_through_roi_display_when_config_restored_rois_have_no_base_frame(
+    tmp_path,
+):
+    """The exact user-reported regression: a video opens with a saved
+    config's roi_shapes (roi_base_frame is NEVER set by config restoration),
+    then the user moves the zoom slider. Before the fix, this fell through
+    to `_update_preview_display`, which resets canvas._zoom to 1.0
+    regardless of the slider -- producing the "ROI mispositioned with weird
+    zoom scaling" symptom. After the fix, roi_shapes alone routes zoom
+    changes through `_display_roi_with_zoom`, which keeps canvas._zoom in
+    sync with the slider.
+    """
+    import json
+
+    from PySide6.QtWidgets import QApplication
+
+    from hydra_suite.trackerkit.gui.main_window import MainWindow
+
+    QApplication.instance() or QApplication([])
+
+    video_path = tmp_path / "sample.mp4"
+    _write_test_video(video_path)
+
+    config_path = tmp_path / "sample_config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "roi_shapes": [
+                    {
+                        "type": "circle",
+                        "params": [20, 20, 10],
+                        "mode": "include",
+                        "arena_id": 0,
+                    }
+                ]
+            }
+        )
+    )
+
+    win = MainWindow()
+    win._setup_video_file(str(video_path), skip_config_load=False)
+
+    assert win.roi_shapes, "config-restored roi_shapes must be present"
+    assert (
+        getattr(win, "roi_base_frame", None) is None
+    ), "roi_base_frame must NOT be set by config restoration -- that's the root cause"
+
+    # _display_roi_with_zoom reads the slider's own value, not the signal's
+    # `value` argument -- set both, matching what the real valueChanged
+    # signal wiring does (the slider is already at its new value by the
+    # time the connected slot runs).
+    win.slider_zoom.setValue(150)
+    win._detection_panel._on_zoom_changed(150)
+
+    assert win.video_label._zoom == pytest.approx(1.5)
+
+
+def test_zoom_changed_still_routes_through_roi_display_when_roi_base_frame_is_set(
+    window,
+):
+    """No regression on the case that already worked: when roi_base_frame
+    IS populated (e.g. via start_roi_selection during manual ROI drawing),
+    zoom changes must still route through _display_roi_with_zoom."""
+    from PySide6.QtGui import QImage
+
+    window.roi_base_frame = QImage(640, 480, QImage.Format_RGB888)
+    window.roi_shapes = [
+        {"type": "circle", "params": [20, 20, 10], "mode": "include", "arena_id": 0}
+    ]
+    window.detection_test_result = None
+
+    window._detection_panel._on_zoom_changed(150)
+
+    assert window.video_label._zoom == pytest.approx(1.5)

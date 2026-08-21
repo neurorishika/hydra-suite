@@ -1600,9 +1600,7 @@ class DetectionPanel(QWidget):
 
         if self._main_window.detection_test_result is not None:
             self._redisplay_detection_test()
-        elif getattr(self._main_window, "roi_base_frame", None) is not None and getattr(
-            self._main_window, "roi_shapes", None
-        ):
+        elif getattr(self._main_window, "roi_shapes", None):
             self._main_window._display_roi_with_zoom()
         else:
             self._update_preview_display()

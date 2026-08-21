@@ -246,3 +246,63 @@ def test_current_arena_boundary_is_heavier(app):
     plain = canvas._boundary_width_for(0)
     canvas.set_current_arena(0)
     assert canvas._boundary_width_for(0) > plain
+
+
+def test_arena_number_centres_on_net_region_not_raw_include_centroid(app, monkeypatch):
+    """Fix Wave 14, Fix 1: the number must be placed at the centre of the NET
+    (union-of-includes minus union-of-excludes) region -- not the average of
+    the raw include shapes' own centroids, which ignores excludes entirely.
+
+    Geometry: one large include circle centred at (100, 100) with an exclude
+    circle offset to the left that eats roughly the left half of it. The net
+    visible region is the right-hand crescent, so the glyph must land
+    meaningfully to the RIGHT of the raw include circle's own centre (x=100
+    in image space / viewport space, since zoom is 1.0 and there's no pan).
+    """
+    import hydra_suite.trackerkit.gui.widgets.arena_canvas as arena_canvas_module
+
+    canvas = ArenaCanvas()
+    canvas.set_frame(_frame(app, 200))
+    canvas.set_shapes(
+        [
+            {
+                "type": "circle",
+                "params": (100, 100, 50),
+                "mode": "include",
+                "arena_id": 0,
+            },
+            {
+                "type": "circle",
+                "params": (60, 100, 50),
+                "mode": "exclude",
+                "arena_id": 0,
+            },
+        ]
+    )
+
+    captured_positions = []
+    real_paint_arena_number = arena_canvas_module.paint_arena_number
+
+    def _spy(painter, text, pos, *args, **kwargs):
+        captured_positions.append(pos)
+        return real_paint_arena_number(painter, text, pos, *args, **kwargs)
+
+    monkeypatch.setattr(arena_canvas_module, "paint_arena_number", _spy)
+
+    out = QImage(canvas.width(), canvas.height(), QImage.Format_RGB888)
+    out.fill(QColor(255, 255, 255))
+    painter = QPainter(out)
+    painter.drawPixmap(0, 0, canvas._scaled)
+    canvas.render_overlay(painter)
+    painter.end()
+
+    assert len(captured_positions) == 1
+    glyph_pos = captured_positions[0]
+    # The raw include circle's own centre is x=100. The net (post-exclusion)
+    # region's centre must sit meaningfully to its right, not on top of it
+    # and not to the left (which would put the number back inside the
+    # excluded/removed area).
+    assert glyph_pos.x() > 100 + 5, (
+        f"glyph placed at x={glyph_pos.x()}, expected meaningfully right of "
+        "the raw include circle's own centre (x=100)"
+    )

@@ -2084,28 +2084,22 @@ class SessionOrchestrator:
             QTimer.singleShot(50, self._mw._display_roi_with_zoom)
 
     def _generate_combined_roi_mask(self, height, width):
-        """Generate a combined mask from all ROI shapes with inclusion/exclusion support."""
+        """Generate a combined mask from all ROI shapes with inclusion/exclusion support.
+
+        Delegates to ``engine_params.build_arena_labels`` so this preview mask
+        (which feeds "Test Detection on Preview") can never drift from real
+        tracking's own per-arena include/exclude semantics -- an exclude shape
+        only removes area from its own arena_id, not every arena's.
+        """
         if not self._mw.roi_shapes:
             self._mw.roi_mask = None
             return
-        combined_mask = np.zeros((height, width), np.uint8)
-        for shape in self._mw.roi_shapes:
-            if shape.get("mode", "include") == "include":
-                if shape["type"] == "circle":
-                    cx, cy, radius = shape["params"]
-                    cv2.circle(combined_mask, (int(cx), int(cy)), int(radius), 255, -1)
-                elif shape["type"] == "polygon":
-                    pts = np.array(shape["params"], dtype=np.int32)
-                    cv2.fillPoly(combined_mask, [pts], 255)
-        for shape in self._mw.roi_shapes:
-            if shape.get("mode", "include") == "exclude":
-                if shape["type"] == "circle":
-                    cx, cy, radius = shape["params"]
-                    cv2.circle(combined_mask, (int(cx), int(cy)), int(radius), 0, -1)
-                elif shape["type"] == "polygon":
-                    pts = np.array(shape["params"], dtype=np.int32)
-                    cv2.fillPoly(combined_mask, [pts], 0)
-        self._mw.roi_mask = combined_mask
+        from hydra_suite.trackerkit.engine_params import build_arena_labels
+
+        labels, _n_arenas = build_arena_labels(self._mw.roi_shapes, width, height)
+        self._mw.roi_mask = (
+            (labels > 0).astype(np.uint8) * 255 if labels is not None else None
+        )
         logger.info(
             f"Generated combined ROI mask from {len(self._mw.roi_shapes)} shape(s)"
         )
