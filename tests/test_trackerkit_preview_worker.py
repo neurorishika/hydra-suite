@@ -257,18 +257,22 @@ def test_preview_yolo_branch_drives_inference_runner(monkeypatch) -> None:
         "obb_compute_runtime": "cpu",
     }
 
-    detected_dimensions, out_frame = preview_worker._preview_run_yolo_branch(
-        test_frame,
-        test_frame.copy(),
-        context,
-        1.0,
-        False,
+    detected_dimensions, detections, out_frame, raw_frame = (
+        preview_worker._preview_run_yolo_branch(
+            test_frame,
+            test_frame.copy(),
+            context,
+            1.0,
+            False,
+        )
     )
 
     assert built["ran"] is True
     assert built["closed"] is True
     assert len(detected_dimensions) == 1
+    assert len(detections) == 1
     assert out_frame.shape == test_frame.shape
+    assert raw_frame.shape == test_frame.shape
 
 
 def test_preview_yolo_branch_empty_frame_result_returns_no_dimensions(
@@ -290,11 +294,15 @@ def test_preview_yolo_branch_empty_frame_result_returns_no_dimensions(
     )
 
     test_frame = np.zeros((32, 32, 3), dtype=np.uint8)
-    detected_dimensions, out_frame = preview_worker._preview_run_yolo_branch(
-        test_frame, test_frame.copy(), {"yolo_model_path": "d.pt"}, 1.0, False
+    detected_dimensions, detections, out_frame, raw_frame = (
+        preview_worker._preview_run_yolo_branch(
+            test_frame, test_frame.copy(), {"yolo_model_path": "d.pt"}, 1.0, False
+        )
     )
     assert detected_dimensions == []
+    assert detections == []
     assert out_frame.shape == test_frame.shape
+    assert raw_frame.shape == test_frame.shape
 
 
 def test_preview_yolo_branch_forwards_headtail_hints_to_draw(monkeypatch) -> None:
