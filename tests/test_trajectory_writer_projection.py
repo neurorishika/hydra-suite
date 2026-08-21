@@ -246,3 +246,36 @@ def test_empty_final_and_empty_smoothed_keeps_final_confidence():
     df[C.FINAL_SMOOTHED_CONFIDENCE] = [0.1, 0.9]
     out = project_user_tracks(df, fps=10.0)
     assert out["identity_confidence"].tolist() == [0.7, 0.0]
+
+
+def test_heading_is_directed_travels_with_heading():
+    """`heading_deg` mixes true headings and body axes; the flag separates them."""
+    df = _base_df()
+    df["HeadingIsDirected"] = [True, False]
+    out = project_user_tracks(df, fps=10.0)
+    cols = list(out.columns)
+    assert cols[cols.index("heading_deg") + 1] == "heading_is_directed"
+    assert out["heading_is_directed"].tolist() == [True, False]
+    assert str(out["heading_is_directed"].dtype) == "boolean"
+
+
+def test_heading_is_directed_absent_without_head_tail():
+    out = project_user_tracks(_base_df(), fps=10.0)
+    assert "heading_is_directed" not in out.columns
+
+
+def test_heading_is_directed_keeps_na_for_detectionless_rows():
+    """No detection = no evidence; that must not read as "not directed"."""
+    df = _base_df()
+    df["HeadingIsDirected"] = [True, float("nan")]
+    out = project_user_tracks(df, fps=10.0)
+    assert out["heading_is_directed"].tolist()[0] is True
+    assert pd.isna(out["heading_is_directed"].tolist()[1])
+
+
+def test_heading_is_directed_survives_a_csv_round_trip():
+    """Strings must map by value: any non-empty string is truthy to bool()."""
+    df = _base_df()
+    df["HeadingIsDirected"] = ["True", "False"]
+    out = project_user_tracks(df, fps=10.0)
+    assert out["heading_is_directed"].tolist() == [True, False]

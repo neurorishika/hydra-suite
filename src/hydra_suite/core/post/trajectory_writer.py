@@ -67,6 +67,29 @@ def _non_identity_classifier_columns(df: pd.DataFrame, cnn_classifiers) -> list:
     return pairs
 
 
+def _directed_flag(series: pd.Series) -> pd.Series:
+    """Coerce a ``HeadingIsDirected`` column to a nullable boolean.
+
+    Rows with no detection carry no head-tail evidence at all, and those
+    must stay ``<NA>`` rather than collapse to ``False`` -- "no direction
+    was resolved here" and "we never looked" are different claims. A plain
+    ``astype(bool)`` cannot express that, and on a CSV round-trip (where the
+    column arrives as the strings ``"True"``/``"False"``) it would report
+    every row as directed, since any non-empty string is truthy.
+    """
+    out = pd.Series(pd.NA, index=series.index, dtype="boolean")
+    known = series.notna()
+    if not known.any():
+        return out
+    values = series[known]
+    if values.dtype == object or pd.api.types.is_string_dtype(values):
+        text = values.astype("string").str.strip().str.lower()
+        out[known] = text.map({"true": True, "false": False}).astype("boolean")
+    else:
+        out[known] = values.astype(bool)
+    return out
+
+
 def project_user_tracks(
     df: pd.DataFrame,
     *,
@@ -104,6 +127,21 @@ def project_user_tracks(
     out["y"] = df["Y"]
     theta = pd.to_numeric(df["Theta"], errors="coerce")
     out["heading_deg"] = np.mod(np.degrees(theta), 360.0)
+    # Is `heading_deg` a real head-forward direction, or only a body axis?
+    # `Theta` already carries the pose/head-tail resolution when one was
+    # available (the directed angle is substituted for the OBB axis before
+    # the Kalman update), but where no model resolved a direction it stays
+    # the axis -- meaningful mod 180, not 360. Both kinds land in the same
+    # column, indistinguishable, so a turning-rate or mean-heading
+    # calculation over the undirected rows silently averages nonsense.
+    #
+    # Per-row semantics: "a model resolved head-vs-tail on THIS row".
+    # Post-processing's global flip-fixer propagates direction along a whole
+    # trajectory, so an undirected row can still inherit a correct heading
+    # -- this flag therefore under-reports rather than over-reports. Group
+    # by `id` for a per-track answer.
+    if "HeadingIsDirected" in df.columns:
+        out["heading_is_directed"] = _directed_flag(df["HeadingIsDirected"])
     out["state"] = df["State"]
     out["detection_confidence"] = df.get("DetectionConfidence")
 
