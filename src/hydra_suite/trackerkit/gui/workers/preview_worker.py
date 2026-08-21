@@ -144,6 +144,29 @@ def _preview_build_bgsub_params(context: dict, use_detection_filters: bool) -> d
 # ---------------------------------------------------------------------------
 
 
+def _obb_center_major_minor_angle(
+    corners: np.ndarray,
+) -> tuple[float, float, float, float, float]:
+    """Derive ``(cx, cy, major, minor, angle_deg)`` from 4 OBB corners.
+
+    ``angle_deg`` always describes the MAJOR axis direction (matches ``cv2``'s
+    ellipse-angle convention: 0 deg = +x, clockwise in image coordinates),
+    independent of which corner-to-corner edge happened to be longer.
+    """
+    pts = np.asarray(corners, dtype=np.float32).reshape(4, 2)
+    cx, cy = float(pts[:, 0].mean()), float(pts[:, 1].mean())
+    edge1 = pts[1] - pts[0]
+    edge2 = pts[2] - pts[1]
+    len1 = float(np.linalg.norm(edge1))
+    len2 = float(np.linalg.norm(edge2))
+    if len1 >= len2:
+        major, minor, major_edge = len1, len2, edge1
+    else:
+        major, minor, major_edge = len2, len1, edge2
+    angle_deg = math.degrees(math.atan2(major_edge[1], major_edge[0]))
+    return cx, cy, major, minor, angle_deg
+
+
 def _preview_class_label(names: dict[int, str], class_id: object) -> str:
     """Return a readable class label for one prediction."""
     try:
@@ -286,6 +309,7 @@ def _preview_run_bg_subtraction(
     frame_to_process, test_frame = _preview_resize_frame(
         frame_bgr, test_frame, resize_f
     )
+    raw_frame_bgr = test_frame.copy()
 
     params = _preview_build_bgsub_params(context, use_detection_filters)
     cfg = InferenceConfig(
@@ -325,8 +349,8 @@ def _preview_run_bg_subtraction(
             if major_axis < minor_axis:
                 major_axis, minor_axis = minor_axis, major_axis
             ang = float(np.degrees(obb.angles[i]))
-            area = float(obb.sizes[i])
-            detections.append(((cx, cy), (major_axis, minor_axis), ang, area))
+            _, _, _, _, major_angle_deg = _obb_center_major_minor_angle(corners)
+            detections.append((cx, cy, major_axis, minor_axis, major_angle_deg))
             detected_dimensions.append((major_axis, minor_axis))
             cv2.ellipse(
                 test_frame,
@@ -359,7 +383,7 @@ def _preview_run_bg_subtraction(
             (0, 255, 255),
             2,
         )
-        return detections, detected_dimensions, test_frame
+        return detections, detected_dimensions, test_frame, raw_frame_bgr
     finally:
         try:
             runner.close()
@@ -855,6 +879,7 @@ def _preview_run_yolo_branch(
     frame_to_process, test_frame = _preview_resize_frame(
         frame_bgr, test_frame, resize_f
     )
+    raw_frame_bgr = test_frame.copy()
     params = _preview_build_inference_params(context, resize_f, use_detection_filters)
 
     roi_for_yolo = context.get("roi_mask")
@@ -907,14 +932,15 @@ def _preview_run_yolo_branch(
             filtered_headtail.append((heading, ht_conf, directed))
 
         detected_dimensions = []
+        detections = []
         label_anchors = []
         label_stacks = [[] for _ in range(num_dets)]
         for corners in filtered_corners:
-            major_axis = float(np.linalg.norm(corners[1] - corners[0]))
-            minor_axis = float(np.linalg.norm(corners[2] - corners[1]))
-            if major_axis < minor_axis:
-                major_axis, minor_axis = minor_axis, major_axis
+            cx, cy, major_axis, minor_axis, angle_deg = _obb_center_major_minor_angle(
+                corners
+            )
             detected_dimensions.append((major_axis, minor_axis))
+            detections.append((cx, cy, major_axis, minor_axis, angle_deg))
             label_anchors.append(_preview_label_anchor(corners, test_frame.shape))
 
         pose_keypoints_by_det: dict[int, np.ndarray] = {}
@@ -944,7 +970,7 @@ def _preview_run_yolo_branch(
             context,
             filtered_headtail=filtered_headtail,
         )
-        return detected_dimensions, test_frame
+        return detected_dimensions, detections, test_frame, raw_frame_bgr
     finally:
         try:
             runner.close()
@@ -964,16 +990,22 @@ def _run_preview_detection_job(
     test_frame = frame_bgr.copy()
 
     if is_background_subtraction:
-        _detections, detected_dimensions, test_frame = _preview_run_bg_subtraction(
-            frame_bgr, test_frame, context, resize_f, use_detection_filters
+        detections, detected_dimensions, test_frame, raw_frame = (
+            _preview_run_bg_subtraction(
+                frame_bgr, test_frame, context, resize_f, use_detection_filters
+            )
         )
     else:
-        detected_dimensions, test_frame = _preview_run_yolo_branch(
-            frame_bgr, test_frame, context, resize_f, use_detection_filters
+        detected_dimensions, detections, test_frame, raw_frame = (
+            _preview_run_yolo_branch(
+                frame_bgr, test_frame, context, resize_f, use_detection_filters
+            )
         )
 
     return {
         "test_frame_rgb": cv2.cvtColor(test_frame, cv2.COLOR_BGR2RGB),
+        "raw_frame_rgb": cv2.cvtColor(raw_frame, cv2.COLOR_BGR2RGB),
         "resize_factor": resize_f,
         "detected_dimensions": detected_dimensions,
+        "detections": detections,
     }

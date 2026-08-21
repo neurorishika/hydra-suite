@@ -33,6 +33,9 @@ from PySide6.QtWidgets import (
 )
 
 from hydra_suite.trackerkit.config.schemas import TrackerConfig
+from hydra_suite.trackerkit.gui.panels.reference_scale_preview import (
+    ReferenceScalePreviewWidget,
+)
 from hydra_suite.utils.batch_policy import is_realtime_workflow
 from hydra_suite.utils.gpu_utils import MPS_AVAILABLE, TORCH_CUDA_AVAILABLE
 from hydra_suite.widgets.workers import BaseWorker
@@ -1254,6 +1257,13 @@ class DetectionPanel(QWidget):
         btn_layout.addWidget(self.btn_auto_set_margin)
         vl_ref_scale.addLayout(btn_layout)
 
+        preview_row = QHBoxLayout()
+        preview_row.addStretch(1)
+        self.reference_scale_preview = ReferenceScalePreviewWidget()
+        preview_row.addWidget(self.reference_scale_preview)
+        preview_row.addStretch(1)
+        vl_ref_scale.addLayout(preview_row)
+
         vbox.addWidget(g_ref_scale)
 
         # ============================================================
@@ -1348,6 +1358,32 @@ class DetectionPanel(QWidget):
 
         vl_filters.addLayout(f_filters)
         vbox.addWidget(g_filters)
+
+        self.spin_reference_body_size.valueChanged.connect(
+            self._refresh_reference_scale_preview
+        )
+        self.spin_reference_aspect_ratio.valueChanged.connect(
+            self._refresh_reference_scale_preview
+        )
+        self.spin_canonical_margin.valueChanged.connect(
+            self._refresh_reference_scale_preview
+        )
+        self.chk_size_filtering.toggled.connect(self._refresh_reference_scale_preview)
+        self.spin_min_object_size.valueChanged.connect(
+            self._refresh_reference_scale_preview
+        )
+        self.spin_max_object_size.valueChanged.connect(
+            self._refresh_reference_scale_preview
+        )
+        self.chk_enable_aspect_ratio_filtering.toggled.connect(
+            self._refresh_reference_scale_preview
+        )
+        self.spin_min_ar_multiplier.valueChanged.connect(
+            self._refresh_reference_scale_preview
+        )
+        self.spin_max_ar_multiplier.valueChanged.connect(
+            self._refresh_reference_scale_preview
+        )
 
         scroll.setWidget(content)
         layout.addWidget(scroll)
@@ -1517,6 +1553,7 @@ class DetectionPanel(QWidget):
         """Handle brightness slider change."""
         self.label_brightness_val.setText(str(value))
         self._main_window.detection_test_result = None
+        self.reference_scale_preview.clear()
         self._update_preview_display()
 
     def _on_contrast_changed(self, value):
@@ -1524,6 +1561,7 @@ class DetectionPanel(QWidget):
         contrast_val = value / 100.0
         self.label_contrast_val.setText(f"{contrast_val:.2f}")
         self._main_window.detection_test_result = None
+        self.reference_scale_preview.clear()
         self._update_preview_display()
 
     def _on_gamma_changed(self, value):
@@ -1531,6 +1569,7 @@ class DetectionPanel(QWidget):
         gamma_val = value / 100.0
         self.label_gamma_val.setText(f"{gamma_val:.2f}")
         self._main_window.detection_test_result = None
+        self.reference_scale_preview.clear()
         self._update_preview_display()
 
     def _on_zoom_changed(self, value):
@@ -1660,6 +1699,28 @@ class DetectionPanel(QWidget):
         self.btn_auto_set_body_size.setEnabled(True)
         self.btn_auto_set_aspect_ratio.setEnabled(True)
         self.btn_auto_set_margin.setEnabled(True)
+
+    def _refresh_reference_scale_preview(self) -> None:
+        """Push current Reference Scale / Detection Filters values to the preview."""
+        size_filter = None
+        if self.chk_size_filtering.isChecked():
+            size_filter = (
+                self.spin_min_object_size.value(),
+                self.spin_max_object_size.value(),
+            )
+        aspect_filter = None
+        if self.chk_enable_aspect_ratio_filtering.isChecked():
+            aspect_filter = (
+                self.spin_min_ar_multiplier.value(),
+                self.spin_max_ar_multiplier.value(),
+            )
+        self.reference_scale_preview.set_box_params(
+            reference_body_px=self.spin_reference_body_size.value(),
+            reference_aspect_ratio=self.spin_reference_aspect_ratio.value(),
+            canonical_margin=self.spin_canonical_margin.value(),
+            size_filter=size_filter,
+            aspect_filter=aspect_filter,
+        )
 
     # =========================================================================
     # PREVIEW DISPLAY (moved from MainWindow)
@@ -1974,13 +2035,21 @@ class DetectionPanel(QWidget):
     def _on_preview_detection_finished(self, result: dict):
         """Handle successful async preview detection completion."""
         test_frame_rgb = result.get("test_frame_rgb")
+        raw_frame_rgb = result.get("raw_frame_rgb")
         resize_f = float(result.get("resize_factor", 1.0))
         detected_dimensions = result.get("detected_dimensions") or []
+        detections = result.get("detections") or []
         if test_frame_rgb is None:
             logger.warning("Preview detection completed without image result")
             return
         self._update_detection_stats(detected_dimensions, resize_f)
         self._main_window.detection_test_result = (test_frame_rgb.copy(), resize_f)
+        self.reference_scale_preview.set_detections(
+            (raw_frame_rgb if raw_frame_rgb is not None else test_frame_rgb).copy(),
+            resize_f,
+            detections,
+        )
+        self._refresh_reference_scale_preview()
         h, w, ch = test_frame_rgb.shape
         bytes_per_line = ch * w
         qimg = QImage(test_frame_rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
