@@ -52,12 +52,21 @@ def _synthetic_batch_window():
                     with span(N.BACKEND_FORWARD, units=4, gpu=True):
                         pass
             # pose's stage-level structure diverges from headtail/cnn: the
-            # real run_pose_batch (stages/pose.py) wraps the per-crop prep
-            # loop (affine inversion + apply_fit) in PREP_LOOP, then runs
-            # BACKEND_FORWARD as a sibling -- there is no crop_extract span
-            # and apply_fit is called undecorated inside the prep loop, so no
-            # APPLY_FIT span exists under pose either.
+            # crop_extract span is NOT inside run_pose_batch (stages/pose.py)
+            # -- it is opened one frame up, in pipeline.py, around the call
+            # to extract_canonical_crops_batch, and is a SIBLING of
+            # run_pose_batch's own spans. run_pose_batch then wraps the
+            # per-crop prep loop (affine inversion + apply_fit) in PREP_LOOP,
+            # then runs BACKEND_FORWARD as a sibling. apply_fit is called
+            # undecorated inside the prep loop, so no APPLY_FIT span exists
+            # under pose (that part does diverge from headtail/cnn).
             with span(N.POSE, units=4):
+                with span(N.CROP_EXTRACT):
+                    with span(N.AFFINE_LOOP):
+                        pass
+                    with span(N.WARP_BATCH, units=4, gpu=True):
+                        with span(N.FRAME_TO_CHW, units=4):
+                            pass
                 with span(N.PREP_LOOP, units=4):
                     pass
                 with span(N.BACKEND_FORWARD, units=4, gpu=True):
@@ -97,16 +106,15 @@ def test_crop_extract_and_backend_forward_are_siblings():
     with prof.armed():
         _synthetic_batch_window()
     paths = _paths(prof.spans.snapshot())
-    for stage in ("headtail", "cnn"):
+    for stage in ("headtail", "cnn", "pose"):
         base = f"inference/batch_pass/window/{stage}"
         assert f"{base}/crop_extract" in paths
         assert f"{base}/backend_forward" in paths
         assert f"{base}/backend_forward/crop_extract" not in paths
 
-    # pose has no crop_extract span (see _synthetic_batch_window): its
-    # analogous guard is that prep_loop and backend_forward are siblings,
-    # not that prep_loop nests under backend_forward.
+    # pose additionally has prep_loop as a sibling of crop_extract and
+    # backend_forward (see _synthetic_batch_window) -- guard that it never
+    # nests under backend_forward either.
     pose_base = "inference/batch_pass/window/pose"
     assert f"{pose_base}/prep_loop" in paths
-    assert f"{pose_base}/backend_forward" in paths
     assert f"{pose_base}/backend_forward/prep_loop" not in paths

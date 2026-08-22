@@ -27,5 +27,9 @@
   "inference/batch_pass/window/materialize",
   "inference/batch_pass/window/pose",
   "inference/batch_pass/window/pose/backend_forward",
+  "inference/batch_pass/window/pose/crop_extract",
+  "inference/batch_pass/window/pose/crop_extract/affine_loop",
+  "inference/batch_pass/window/pose/crop_extract/warp_batch",
+  "inference/batch_pass/window/pose/crop_extract/warp_batch/frame_to_chw",
   "inference/batch_pass/window/pose/prep_loop"
 ]
