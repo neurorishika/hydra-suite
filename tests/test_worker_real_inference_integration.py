@@ -7,6 +7,8 @@ rather than now-deleted stub methods.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 import numpy as np
 import pytest
 
@@ -260,6 +262,10 @@ class _StopAfterDispatch(RuntimeError):
 class _FakeProfiler:
     def __init__(self, enabled: bool = False):
         self.enabled = enabled
+
+    @contextmanager
+    def armed(self):
+        yield self
 
     def __getattr__(self, _name):  # any phase_*/tick/tock/etc. is a no-op
         return lambda *a, **k: None

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import types
+from contextlib import contextmanager
 
 import cv2
 import numpy as np
@@ -16,6 +17,10 @@ class _StopAtAssociation(RuntimeError):
 class _FakeProfiler:
     def __init__(self, enabled: bool = False):
         self.enabled = enabled
+
+    @contextmanager
+    def armed(self):
+        yield self
 
     def phase_start(self, *_args, **_kwargs):
         return None

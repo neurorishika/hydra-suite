@@ -1,8 +1,6 @@
 import re
 from pathlib import Path
 
-import pytest
-
 import hydra_suite
 from hydra_suite.utils import profiling_names
 from hydra_suite.utils.profiling import SpanRecorder
@@ -48,10 +46,6 @@ def test_decorator_is_transparent_when_disarmed():
     assert work(1, b=3) == 4
 
 
-@pytest.mark.xfail(
-    reason="arms once instrumentation lands (Task 12 removes this marker)",
-    strict=False,
-)
 def test_every_constant_is_used_somewhere_in_src():
     """A refactor that drops a span must fail a test, not go silent.
 

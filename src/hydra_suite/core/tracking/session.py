@@ -32,12 +32,15 @@ from hydra_suite.core.post.trajectory_writer import (
     write_base_final_csv,
 )
 from hydra_suite.core.tracking.errors import TrackingSessionError
+from hydra_suite.core.tracking.profiler import TrackingProfiler
 from hydra_suite.core.tracking.session_policy import (
     should_export_final_canonical_images,
     should_export_final_media_videos,
     should_run_interpolated_postpass,
 )
 from hydra_suite.core.tracking.session_summary import build_session_summary_lines
+from hydra_suite.utils import profiling_names as N
+from hydra_suite.utils.profiling import span
 from hydra_suite.utils.video_artifacts import build_inference_cache_dir
 
 logger = logging.getLogger(__name__)
@@ -170,6 +173,13 @@ class TrackingSessionCore:
             inference_cache_dir=str(build_inference_cache_dir(video_path)),
         )
 
+        # Session-scoped span profiler. The merge / interpolated_crops
+        # profilers nested below defer to this one (equal priority), so their
+        # subtrees stay in the session tree instead of being split out.
+        self._profiler = TrackingProfiler(
+            enabled=bool(self.params.get("ENABLE_PROFILING", False))
+        )
+
     def _stopped_result(self) -> SessionResult:
         return SessionResult(False, None, None, [], None, [], None)
 
@@ -182,9 +192,10 @@ class TrackingSessionCore:
             effective_params["MAX_VELOCITY_ZSCORE"] = 0.0
         else:
             effective_params = self.params
-        processed, _ = process_trajectories_from_csv(
-            csv_path, effective_params, should_stop=self.callbacks.should_stop
-        )
+        with span(N.TRAJECTORY_POSTPROC):
+            processed, _ = process_trajectories_from_csv(
+                csv_path, effective_params, should_stop=self.callbacks.should_stop
+            )
         return processed
 
     def _interpolate_and_scale(self, df):
@@ -530,113 +541,146 @@ class TrackingSessionCore:
     ) -> SessionResult:
         cb = self.callbacks
         try:
-            if cb.should_stop():
-                return self._stopped_result()
+            with self._profiler.armed(), span(N.SESSION):
+                if cb.should_stop():
+                    return self._stopped_result()
 
-            raw_csv = self.paths.get("raw_csv_path")
-            detection_cache = self.paths.get("detection_cache_path", "")
-            base, ext = os.path.splitext(raw_csv) if raw_csv else ("", ".csv")
-            backward_enabled = bool(self.config.get("enable_backward_tracking"))
+                raw_csv = self.paths.get("raw_csv_path")
+                detection_cache = self.paths.get("detection_cache_path", "")
+                base, ext = os.path.splitext(raw_csv) if raw_csv else ("", ".csv")
+                backward_enabled = bool(self.config.get("enable_backward_tracking"))
 
-            cb.stage_changed("postprocess")
-            if raw_csv and detection_cache:
-                enforce_nonempty_forward(
-                    (f"{base}_forward{ext}" if backward_enabled else raw_csv),
-                    detection_cache,
-                )
-            forward_csv = f"{base}_forward{ext}" if backward_enabled else raw_csv
-            forward_processed = self._postprocess_csv(forward_csv)
-
-            if cb.should_stop():
-                return self._stopped_result()
-
-            if backward_enabled:
-                cb.stage_changed("backward_postprocess")
-                backward_processed = self._postprocess_csv(f"{base}_backward{ext}")
-                cb.stage_changed("merge")
-                final_df = self._merge(forward_processed, backward_processed)
-                final_csv = f"{base}_final{ext}"
-            else:
-                final_df = self._interpolate_and_scale(forward_processed)
-                final_csv = f"{base}_forward_processed{ext}"
-
-            if final_df is None or cb.should_stop():
-                return self._stopped_result()
-            _save_trajectories_to_csv(final_df, final_csv)
-
-            cb.stage_changed("rich_export")
-            rich_path = self._export_rich(final_csv)
-
-            if should_run_interpolated_postpass(self.config) and not cb.should_stop():
-                cb.stage_changed("interpolated_crops")
-                self._run_interp_crops(final_csv)
-                rich_path = self._relink_export_rich(final_csv) or rich_path
-
-            # --- Slice 3 export chain ---
-            dataset_result = None
-            media_paths: list[str] = []
-            if not self.callbacks.should_stop():
-                dataset_result = self._run_dataset_generation(final_csv)
-            if not self.callbacks.should_stop():
-                media_paths.extend(self._run_final_media_export(final_csv))
-            if not self.callbacks.should_stop():
-                annotated = self._run_annotated_video(final_csv)
-                if annotated:
-                    media_paths.append(annotated)
-
-            result = SessionResult(
-                success=True,
-                final_csv_path=final_csv,
-                rich_export_path=rich_path,
-                media_paths=media_paths,
-                dataset_result=dataset_result,
-                summary_lines=[],
-                error=None,
-            )
-            try:
-                traj_count = int(
-                    pd.read_csv(final_csv, usecols=["TrajectoryID"])[
-                        "TrajectoryID"
-                    ].nunique()
-                )
-            except Exception:
-                traj_count = None
-            summary_result = {
-                "video_path": self.video_path,
-                "csv_path": final_csv,
-                "trajectory_count": traj_count,
-                "dataset": dataset_result,
-            }
-            result.summary_lines = build_session_summary_lines(
-                self.config, summary_result
-            )
-
-            # User mode: intermediates are no longer needed once dataset
-            # generation, media export, and the annotated video (all of which
-            # read the base-final CSV) have finished -- clean them up so only
-            # the clean tracks.csv + annotated video remain. NO-OP in debug
-            # mode (and thus a no-op for the equivalence gate).
-            if not bool(self.params.get("DEBUG_MODE", True)):
-                _expected_tracks_csv = user_tracks_path(final_csv)
-                if os.path.exists(_expected_tracks_csv):
-                    for _p in _user_mode_intermediate_paths(base, ext):
-                        try:
-                            if os.path.exists(_p):
-                                os.remove(_p)
-                        except OSError:
-                            logger.warning(
-                                "Failed to remove intermediate %s",
-                                _p,
-                                exc_info=True,
-                            )
-                else:
-                    logger.warning(
-                        "User-mode cleanup skipped: expected clean output %s "
-                        "was not found. Keeping intermediates as a fallback.",
-                        _expected_tracks_csv,
+                cb.stage_changed("postprocess")
+                if raw_csv and detection_cache:
+                    enforce_nonempty_forward(
+                        (f"{base}_forward{ext}" if backward_enabled else raw_csv),
+                        detection_cache,
                     )
+                forward_csv = f"{base}_forward{ext}" if backward_enabled else raw_csv
+                with span(N.POSTPROCESS):
+                    forward_processed = self._postprocess_csv(forward_csv)
 
-            cb.stage_changed("done")
-            return result
+                if cb.should_stop():
+                    return self._stopped_result()
+
+                if backward_enabled:
+                    cb.stage_changed("backward_postprocess")
+                    with span(N.BACKWARD_POSTPROCESS):
+                        backward_processed = self._postprocess_csv(
+                            f"{base}_backward{ext}"
+                        )
+                    cb.stage_changed("merge")
+                    with span(N.MERGE):
+                        final_df = self._merge(forward_processed, backward_processed)
+                    final_csv = f"{base}_final{ext}"
+                else:
+                    with span(N.INTERPOLATE_AND_SCALE):
+                        final_df = self._interpolate_and_scale(forward_processed)
+                    final_csv = f"{base}_forward_processed{ext}"
+
+                if final_df is None or cb.should_stop():
+                    return self._stopped_result()
+                with span(N.WRITE):
+                    _save_trajectories_to_csv(final_df, final_csv)
+
+                cb.stage_changed("rich_export")
+                with span(N.RICH_EXPORT):
+                    rich_path = self._export_rich(final_csv)
+
+                if (
+                    should_run_interpolated_postpass(self.config)
+                    and not cb.should_stop()
+                ):
+                    cb.stage_changed("interpolated_crops")
+                    with span(N.INTERP_CROPS):
+                        self._run_interp_crops(final_csv)
+                    with span(N.RELINK):
+                        rich_path = self._relink_export_rich(final_csv) or rich_path
+
+                # --- Slice 3 export chain ---
+                dataset_result = None
+                media_paths: list[str] = []
+                if not self.callbacks.should_stop():
+                    with span(N.DATASET_GENERATION):
+                        dataset_result = self._run_dataset_generation(final_csv)
+                if not self.callbacks.should_stop():
+                    with span(N.MEDIA_EXPORT):
+                        media_paths.extend(self._run_final_media_export(final_csv))
+                if not self.callbacks.should_stop():
+                    with span(N.ANNOTATED_VIDEO):
+                        annotated = self._run_annotated_video(final_csv)
+                    if annotated:
+                        media_paths.append(annotated)
+
+                self._profiler.end_frame()
+                self._profiler.log_final_summary()
+                # Wire the HYDRA_PROFILE dump location -- without this call
+                # `profiling_process.set_log_dir` is dead code and the spec's
+                # "<video>_logs/ when a session supplies one" clause never
+                # holds.
+                from hydra_suite.utils.profiling_process import set_log_dir
+                from hydra_suite.utils.video_artifacts import build_video_log_dir
+
+                set_log_dir(build_video_log_dir(self.video_path, create=True))
+                self._profiler.export_summary(
+                    build_video_log_dir(self.video_path, create=True)
+                    / "tracking_profile_session.json"
+                )
+
+                result = SessionResult(
+                    success=True,
+                    final_csv_path=final_csv,
+                    rich_export_path=rich_path,
+                    media_paths=media_paths,
+                    dataset_result=dataset_result,
+                    summary_lines=[],
+                    error=None,
+                )
+                try:
+                    traj_count = int(
+                        pd.read_csv(final_csv, usecols=["TrajectoryID"])[
+                            "TrajectoryID"
+                        ].nunique()
+                    )
+                except Exception:
+                    traj_count = None
+                summary_result = {
+                    "video_path": self.video_path,
+                    "csv_path": final_csv,
+                    "trajectory_count": traj_count,
+                    "dataset": dataset_result,
+                }
+                result.summary_lines = build_session_summary_lines(
+                    self.config, summary_result
+                )
+
+                # User mode: intermediates are no longer needed once dataset
+                # generation, media export, and the annotated video (all of
+                # which read the base-final CSV) have finished -- clean them
+                # up so only the clean tracks.csv + annotated video remain.
+                # NO-OP in debug mode (and thus a no-op for the equivalence
+                # gate).
+                if not bool(self.params.get("DEBUG_MODE", True)):
+                    _expected_tracks_csv = user_tracks_path(final_csv)
+                    if os.path.exists(_expected_tracks_csv):
+                        for _p in _user_mode_intermediate_paths(base, ext):
+                            try:
+                                if os.path.exists(_p):
+                                    os.remove(_p)
+                            except OSError:
+                                logger.warning(
+                                    "Failed to remove intermediate %s",
+                                    _p,
+                                    exc_info=True,
+                                )
+                    else:
+                        logger.warning(
+                            "User-mode cleanup skipped: expected clean output %s "
+                            "was not found. Keeping intermediates as a fallback.",
+                            _expected_tracks_csv,
+                        )
+
+                cb.stage_changed("done")
+                return result
         except TrackingSessionError as e:
             return SessionResult(False, None, None, [], None, [], str(e))

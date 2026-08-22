@@ -13,7 +13,9 @@ import threading
 
 import cv2
 
-from .profiling import bind_target
+from hydra_suite.utils import profiling_names as N
+
+from .profiling import bind_target, span
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +116,8 @@ class FramePrefetcher:
         """Background thread loop that reads frames ahead of time."""
         try:
             while not self.stop_requested.is_set():
-                ret, frame = self.cap.read()
+                with span(N.READ):
+                    ret, frame = self.cap.read()
                 self._last_read_ok = ret
 
                 if not _enqueue_with_retry(
@@ -278,9 +281,10 @@ class SparseFramePrefetcher:
             for f in self.frame_indices:
                 if self.stop_requested.is_set():
                     break
-                if f != current_pos:
-                    self.cap.set(cv2.CAP_PROP_POS_FRAMES, f)
-                ret, frame = self.cap.read()
+                with span(N.READ):
+                    if f != current_pos:
+                        self.cap.set(cv2.CAP_PROP_POS_FRAMES, f)
+                    ret, frame = self.cap.read()
                 current_pos = f + 1
                 _enqueue_with_retry(
                     self.frame_queue, (f, ret, frame), self.stop_requested
@@ -373,7 +377,8 @@ class SequentialScanPrefetcher:
             for f in range(self.first_frame, self.last_frame + 1):
                 if self.stop_requested.is_set():
                     break
-                ret, frame = self.cap.read()
+                with span(N.READ):
+                    ret, frame = self.cap.read()
                 if not ret:
                     break
                 if f not in self.needed:
