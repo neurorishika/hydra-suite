@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -60,31 +58,6 @@ from .stages.obb import OBBModels, _RawOBBTensors, materialize_tensors, run_obb
 from .stages.pose import PoseModel, run_pose
 
 logger = logging.getLogger(__name__)
-
-# Opt-in realtime per-stage profiler (HYDRA_RT_PROFILE=1). Accumulates wall-clock
-# per stage across run_realtime calls and logs a steady-state breakdown every
-# 100 frames. Zero overhead when the env var is unset.
-_RT_PROF_ACC: dict[str, float] = {}
-
-
-def _rt_prof_on() -> bool:
-    return bool(os.environ.get("HYDRA_RT_PROFILE"))
-
-
-def _rt_prof_add(section: str, dt: float) -> None:
-    _RT_PROF_ACC[section] = _RT_PROF_ACC.get(section, 0.0) + dt
-
-
-def _rt_prof_flush() -> None:
-    n = _RT_PROF_ACC.get("frames", 0.0)
-    if n <= 0 or n % 100 != 0:
-        return
-    parts = " ".join(
-        f"{k}={1000 * v / n:.1f}ms/f"
-        for k, v in sorted(_RT_PROF_ACC.items())
-        if k != "frames"
-    )
-    logger.warning("RT_PROFILE after %d frames: %s", int(n), parts)
 
 
 @dataclass
@@ -651,6 +624,10 @@ class InferenceRunner:
         roi_mask: "np.ndarray | None" = None,
         identity_evidence: "IdentityEvidenceRunConfig | None" = None,
     ) -> None:
+        from hydra_suite.utils.profiling_process import maybe_arm_process_recorder
+
+        maybe_arm_process_recorder()
+
         self.config = config
         self.cache_dir = cache_dir
         self.cache_only = cache_only
@@ -774,8 +751,6 @@ class InferenceRunner:
             self._caches_writable = True
         caches = self._caches if self._caches_writable else None
 
-        _prof = _rt_prof_on()
-        _ts = time.perf_counter() if _prof else 0.0
         if self.config.detection_source == "bgsub":
             if self._models.bgsub is None:
                 raise RuntimeError(
@@ -828,17 +803,9 @@ class InferenceRunner:
         if caches is not None and caches.detection is not None:
             caches.detection.write_frame(frame_idx, result=raw_obb)
 
-        if _prof:
-            _now = time.perf_counter()
-            _rt_prof_add("obb", _now - _ts)
-            _ts = _now
-
         filtered_obb, det_indices = filter_for_source(self.config, raw_obb, roi_mask)
 
         if filtered_obb.num_detections == 0:
-            if _prof:
-                _rt_prof_add("frames", 1)
-                _rt_prof_flush()
             empty_result = _build_frame_result(
                 frame_idx, filtered_obb, np.zeros(0, np.int32), None, [], None, None
             )
@@ -909,11 +876,6 @@ class InferenceRunner:
             else []
         )
 
-        if _prof:
-            _now = time.perf_counter()
-            _rt_prof_add("crops", _now - _ts)
-            _ts = _now
-
         def _do_ht() -> HeadTailResult | None:
             if not self._models.headtail:
                 return None
@@ -966,11 +928,6 @@ class InferenceRunner:
         cnn_results = _do_cnn()
         pose_result = _do_pose()
         at_result = _do_at()
-
-        if _prof:
-            _now = time.perf_counter()
-            _rt_prof_add("individual", _now - _ts)
-            _ts = _now
 
         # Persist downstream results (keyed by det_indices) so the backward pass
         # can replay them via load_frame -- mirrors _run_batch's cache writes.
@@ -1048,11 +1005,6 @@ class InferenceRunner:
             )
         except Exception:
             pass  # streaming_payload is optional; failures are non-fatal
-
-        if _prof:
-            _rt_prof_add("finalize", time.perf_counter() - _ts)
-            _rt_prof_add("frames", 1)
-            _rt_prof_flush()
 
         return frame_result
 
