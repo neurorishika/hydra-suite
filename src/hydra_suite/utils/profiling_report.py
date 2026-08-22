@@ -12,7 +12,7 @@ marker so a subtree that is 43% of its thread but 4% of the pass reads as both.
 
 from __future__ import annotations
 
-SPAN_TREE_HEADER = "  {:<38} {:>9} {:>7} {:>8} {:>9} {:>9}".format(
+SPAN_TREE_HEADER = "  {:<38} {:>9} {:>7} {:>8} {:>8} {:>8}".format(
     "SPAN", "total", "% par", "n", "ms/call", "max ms"
 )
 
