@@ -77,6 +77,7 @@ ASSEMBLE_SCATTER = "assemble_scatter"
 # -- realtime tree --------------------------------------------------------
 REALTIME = "realtime"
 RT_OBB = "obb"
+RT_FILTER = "filter"
 RT_CROPS = "crops"
 RT_INDIVIDUAL = "individual"
 RT_CACHE = "cache"

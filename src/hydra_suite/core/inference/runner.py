@@ -743,272 +743,291 @@ class InferenceRunner:
         roi_mask: np.ndarray | None = None,
         roi_mask_cuda: Any = None,
     ) -> FrameResult:
-        # Lazily open the caches for WRITING so the realtime forward pass persists
-        # detections + downstream results. Backward tracking replays them via
-        # load_frame; without this, realtime + backward gets an empty backward pass.
-        if self._caches is None and self.cache_dir is not None:
-            self._caches = _open_caches(
-                self.config, self.cache_dir, self._video_sig, self._roi_mask
-            )
-            self._caches_writable = True
-        caches = self._caches if self._caches_writable else None
-
-        if self.config.detection_source == "bgsub":
-            if self._models.bgsub is None:
-                raise RuntimeError(
-                    "run_realtime() requires a loaded bg-sub model, but this runner "
-                    "was constructed with cache_only=True (replay only). Construct "
-                    "without cache_only to run detection."
+        with span(N.REALTIME):
+            # Lazily open the caches for WRITING so the realtime forward pass persists
+            # detections + downstream results. Backward tracking replays them via
+            # load_frame; without this, realtime + backward gets an empty backward pass.
+            if self._caches is None and self.cache_dir is not None:
+                self._caches = _open_caches(
+                    self.config, self.cache_dir, self._video_sig, self._roi_mask
                 )
-            # bg-sub is CPU numpy end to end: it never produces _RawOBBTensors, so
-            # the materialize / raw-cap step does not apply. It is also strictly
-            # sequential — safe here because run_realtime is driven in frame order.
-            raw_obb = run_bgsub(
-                frame,
-                frame_idx,
-                self._models.bgsub,
-                self.config.bgsub,
-                self.runtime,
-                roi_mask=roi_mask,
-            )
-        else:
-            # roi_mask is frame-space (the caller passes the mask matching this
-            # exact frame's geometry); it enables ROI tile gating on the sliced
-            # path and is ignored on the non-sliced path (see run_obb).
-            raw_list = run_obb(
-                [frame],
-                self._models.obb,
-                self.config.obb,
-                self.runtime,
-                roi_mask=roi_mask,
-            )
-            raw = raw_list[0]
-            if isinstance(raw, _RawOBBTensors):
-                raw_obb = materialize_tensors(raw, self.config.obb.raw_detection_cap)
-            else:
-                raw_obb = raw
-        # Re-stamp detection_ids with the real frame_idx (materialize_tensors / the
-        # CPU OBB path generate them at frame 0) so cached ids are unique per frame.
-        raw_obb = OBBResult(
-            frame_idx=frame_idx,
-            centroids=raw_obb.centroids,
-            angles=raw_obb.angles,
-            sizes=raw_obb.sizes,
-            shapes=raw_obb.shapes,
-            confidences=raw_obb.confidences,
-            corners=raw_obb.corners,
-            detection_ids=OBBResult.make_detection_ids(
-                frame_idx, raw_obb.num_detections
-            ),
-            class_ids=raw_obb.class_ids,
-        )
-        if caches is not None and caches.detection is not None:
-            caches.detection.write_frame(frame_idx, result=raw_obb)
+                self._caches_writable = True
+            caches = self._caches if self._caches_writable else None
 
-        filtered_obb, det_indices = filter_for_source(self.config, raw_obb, roi_mask)
+            with span(N.RT_OBB, units=1):
+                if self.config.detection_source == "bgsub":
+                    if self._models.bgsub is None:
+                        raise RuntimeError(
+                            "run_realtime() requires a loaded bg-sub model, but this runner "
+                            "was constructed with cache_only=True (replay only). Construct "
+                            "without cache_only to run detection."
+                        )
+                    # bg-sub is CPU numpy end to end: it never produces _RawOBBTensors, so
+                    # the materialize / raw-cap step does not apply. It is also strictly
+                    # sequential — safe here because run_realtime is driven in frame order.
+                    raw_obb = run_bgsub(
+                        frame,
+                        frame_idx,
+                        self._models.bgsub,
+                        self.config.bgsub,
+                        self.runtime,
+                        roi_mask=roi_mask,
+                    )
+                else:
+                    # roi_mask is frame-space (the caller passes the mask matching this
+                    # exact frame's geometry); it enables ROI tile gating on the sliced
+                    # path and is ignored on the non-sliced path (see run_obb).
+                    raw_list = run_obb(
+                        [frame],
+                        self._models.obb,
+                        self.config.obb,
+                        self.runtime,
+                        roi_mask=roi_mask,
+                    )
+                    raw = raw_list[0]
+                    if isinstance(raw, _RawOBBTensors):
+                        raw_obb = materialize_tensors(
+                            raw, self.config.obb.raw_detection_cap
+                        )
+                    else:
+                        raw_obb = raw
+                # Re-stamp detection_ids with the real frame_idx (materialize_tensors / the
+                # CPU OBB path generate them at frame 0) so cached ids are unique per frame.
+                raw_obb = OBBResult(
+                    frame_idx=frame_idx,
+                    centroids=raw_obb.centroids,
+                    angles=raw_obb.angles,
+                    sizes=raw_obb.sizes,
+                    shapes=raw_obb.shapes,
+                    confidences=raw_obb.confidences,
+                    corners=raw_obb.corners,
+                    detection_ids=OBBResult.make_detection_ids(
+                        frame_idx, raw_obb.num_detections
+                    ),
+                    class_ids=raw_obb.class_ids,
+                )
+                if caches is not None and caches.detection is not None:
+                    caches.detection.write_frame(frame_idx, result=raw_obb)
 
-        if filtered_obb.num_detections == 0:
-            empty_result = _build_frame_result(
-                frame_idx, filtered_obb, np.zeros(0, np.int32), None, [], None, None
-            )
-            # Task 11 fix: surface the bg-sub masks here too, exactly like the
-            # non-empty path below (646-648). last_bg_u8 is the source of
-            # truth for "was the background established" -- it is None ONLY
-            # during the true first-frame warmup (see bgsub.py:167-170) and a
-            # real array on every frame after, even with zero detections.
-            # worker.py:2314 uses `bg_u8 is None` as its warmup sentinel; if
-            # this early return skipped the assignment, a post-warmup
-            # zero-detection frame (occlusion, animal left, threshold blip)
-            # would be misread as still-warming-up and silently drop Kalman
-            # aging + the CSV row for that frame.
-            if (
-                self.config.detection_source == "bgsub"
-                and self._models.bgsub is not None
-            ):
-                empty_result.fg_mask = self._models.bgsub.last_fg_mask
-                empty_result.bg_u8 = self._models.bgsub.last_bg_u8
-            return empty_result
+            with span(N.RT_FILTER):
+                filtered_obb, det_indices = filter_for_source(
+                    self.config, raw_obb, roi_mask
+                )
 
-        geometry = self.config.canonical
-        # F1 guard: every detection that will be canonicalized by ANY consumer
-        # (headtail, cnn, pose all warp through this one geometry -- see the
-        # comment below) gets its overflow_ratio recorded here, once, in the
-        # single place that already has both `filtered_obb` and `geometry` in
-        # scope -- rather than duplicating this at each of the many internal
-        # canonical_affine call sites (which would double-count a detection
-        # once per consumer stage).
-        if (
-            self._models.headtail is not None
-            or self._models.cnn
-            or self._models.pose is not None
-        ):
-            for _corners in filtered_obb.corners:
-                self.clipping_stats.record(_corners, geometry)
-        # Canonical (native-extent) crops are now only consumed by the pose stage;
-        # head-tail / CNN warp directly from the frame. Skip the extraction
-        # entirely when there is no pose model (e.g. OBB-only / identity clips).
-        # Foreign-ant masking (suppress_foreign_regions) mirrors legacy's
-        # unconditional suppress_foreign_obb: legacy has no realtime/batch
-        # split and always masks, so the realtime path must too.
-        pose_cfg = self.config.pose
-        suppress_foreign = (
-            pose_cfg.suppress_foreign_regions if pose_cfg is not None else False
-        )
-        # PoseConfig.background_color was deleted: it was never populated by
-        # from_parameters (always (0, 0, 0)), a dead second home for the fill
-        # colour. Zero is now the one honest fill value everywhere.
-        background_color = (0, 0, 0)
-        canonical_crops = (
-            extract_canonical_crops(
-                frame,
-                filtered_obb,
-                geometry,
-                self.runtime,
-                suppress_foreign=suppress_foreign,
-                background_color=background_color,
-            )
-            if self._models.pose is not None
-            else None
-        )
-        aabb_crops = (
-            extract_aabb_crops(
-                frame, filtered_obb, padding=self.config.apriltag.crop_padding
-            )
-            if self._models.apriltag
-            else []
-        )
+            if filtered_obb.num_detections == 0:
+                empty_result = _build_frame_result(
+                    frame_idx, filtered_obb, np.zeros(0, np.int32), None, [], None, None
+                )
+                # Task 11 fix: surface the bg-sub masks here too, exactly like the
+                # non-empty path below (646-648). last_bg_u8 is the source of
+                # truth for "was the background established" -- it is None ONLY
+                # during the true first-frame warmup (see bgsub.py:167-170) and a
+                # real array on every frame after, even with zero detections.
+                # worker.py:2314 uses `bg_u8 is None` as its warmup sentinel; if
+                # this early return skipped the assignment, a post-warmup
+                # zero-detection frame (occlusion, animal left, threshold blip)
+                # would be misread as still-warming-up and silently drop Kalman
+                # aging + the CSV row for that frame.
+                if (
+                    self.config.detection_source == "bgsub"
+                    and self._models.bgsub is not None
+                ):
+                    empty_result.fg_mask = self._models.bgsub.last_fg_mask
+                    empty_result.bg_u8 = self._models.bgsub.last_bg_u8
+                return empty_result
 
-        def _do_ht() -> HeadTailResult | None:
-            if not self._models.headtail:
-                return None
-            return run_headtail(
-                frame,
-                filtered_obb,
-                self._models.headtail,
-                self.config.headtail,
-                self.runtime,
-                geometry,
-            )
+            with span(N.RT_CROPS, units=filtered_obb.num_detections):
+                geometry = self.config.canonical
+                # F1 guard: every detection that will be canonicalized by ANY consumer
+                # (headtail, cnn, pose all warp through this one geometry -- see the
+                # comment below) gets its overflow_ratio recorded here, once, in the
+                # single place that already has both `filtered_obb` and `geometry` in
+                # scope -- rather than duplicating this at each of the many internal
+                # canonical_affine call sites (which would double-count a detection
+                # once per consumer stage).
+                if (
+                    self._models.headtail is not None
+                    or self._models.cnn
+                    or self._models.pose is not None
+                ):
+                    for _corners in filtered_obb.corners:
+                        self.clipping_stats.record(_corners, geometry)
+                # Canonical (native-extent) crops are now only consumed by the pose stage;
+                # head-tail / CNN warp directly from the frame. Skip the extraction
+                # entirely when there is no pose model (e.g. OBB-only / identity clips).
+                # Foreign-ant masking (suppress_foreign_regions) mirrors legacy's
+                # unconditional suppress_foreign_obb: legacy has no realtime/batch
+                # split and always masks, so the realtime path must too.
+                pose_cfg = self.config.pose
+                suppress_foreign = (
+                    pose_cfg.suppress_foreign_regions if pose_cfg is not None else False
+                )
+                # PoseConfig.background_color was deleted: it was never populated by
+                # from_parameters (always (0, 0, 0)), a dead second home for the fill
+                # colour. Zero is now the one honest fill value everywhere.
+                background_color = (0, 0, 0)
+                canonical_crops = (
+                    extract_canonical_crops(
+                        frame,
+                        filtered_obb,
+                        geometry,
+                        self.runtime,
+                        suppress_foreign=suppress_foreign,
+                        background_color=background_color,
+                    )
+                    if self._models.pose is not None
+                    else None
+                )
+                aabb_crops = (
+                    extract_aabb_crops(
+                        frame, filtered_obb, padding=self.config.apriltag.crop_padding
+                    )
+                    if self._models.apriltag
+                    else []
+                )
 
-        def _do_cnn() -> list[CNNResult]:
-            return [
-                run_cnn(frame, filtered_obb, mdl, cfg, self.runtime, geometry)
-                for cfg, mdl in zip(self.config.cnn_phases, self._models.cnn)
-            ]
+            with span(N.RT_INDIVIDUAL, units=filtered_obb.num_detections):
 
-        def _do_pose() -> PoseResult | None:
-            if not self._models.pose:
-                return None
-            return run_pose(
-                canonical_crops,
-                filtered_obb,
-                self._models.pose,
-                self.config.pose,
-                self.runtime,
-                geometry,
-            )
+                def _do_ht() -> HeadTailResult | None:
+                    if not self._models.headtail:
+                        return None
+                    return run_headtail(
+                        frame,
+                        filtered_obb,
+                        self._models.headtail,
+                        self.config.headtail,
+                        self.runtime,
+                        geometry,
+                    )
 
-        def _do_at() -> AprilTagResult | None:
-            if not self._models.apriltag:
-                return None
-            return run_apriltag(
-                aabb_crops,
-                filtered_obb,
-                self._models.apriltag,
-                self.config.apriltag,
-            )
+                def _do_cnn() -> list[CNNResult]:
+                    return [
+                        run_cnn(frame, filtered_obb, mdl, cfg, self.runtime, geometry)
+                        for cfg, mdl in zip(self.config.cnn_phases, self._models.cnn)
+                    ]
 
-        # Run the individual-analysis stages SEQUENTIALLY, not in a per-frame
-        # ThreadPoolExecutor. Profiling on CUDA (RT_PROFILE) showed the per-frame
-        # pool cost ~834 ms/frame vs ~37 ms/frame sequential (a 22x regression):
-        # spinning up a fresh 4-thread pool every frame and driving CUDA / the
-        # onnxruntime SLEAP backend from short-lived worker threads serialises on
-        # the GIL and the default CUDA stream while paying thread + context setup
-        # each frame, with no real parallelism on a single GPU. Sequential brings
-        # realtime back to legacy parity (~137 ms/frame total incl. frame read).
-        ht_result = _do_ht()
-        cnn_results = _do_cnn()
-        pose_result = _do_pose()
-        at_result = _do_at()
+                def _do_pose() -> PoseResult | None:
+                    if not self._models.pose:
+                        return None
+                    return run_pose(
+                        canonical_crops,
+                        filtered_obb,
+                        self._models.pose,
+                        self.config.pose,
+                        self.runtime,
+                        geometry,
+                    )
 
-        # Persist downstream results (keyed by det_indices) so the backward pass
-        # can replay them via load_frame -- mirrors _run_batch's cache writes.
-        if caches is not None:
-            if caches.headtail is not None and ht_result is not None:
-                caches.headtail.write_frame(
+                def _do_at() -> AprilTagResult | None:
+                    if not self._models.apriltag:
+                        return None
+                    return run_apriltag(
+                        aabb_crops,
+                        filtered_obb,
+                        self._models.apriltag,
+                        self.config.apriltag,
+                    )
+
+                # Run the individual-analysis stages SEQUENTIALLY, not in a per-frame
+                # ThreadPoolExecutor. Profiling on CUDA (RT_PROFILE) showed the per-frame
+                # pool cost ~834 ms/frame vs ~37 ms/frame sequential (a 22x regression):
+                # spinning up a fresh 4-thread pool every frame and driving CUDA / the
+                # onnxruntime SLEAP backend from short-lived worker threads serialises on
+                # the GIL and the default CUDA stream while paying thread + context setup
+                # each frame, with no real parallelism on a single GPU. Sequential brings
+                # realtime back to legacy parity (~137 ms/frame total incl. frame read).
+                ht_result = _do_ht()
+                cnn_results = _do_cnn()
+                pose_result = _do_pose()
+                at_result = _do_at()
+
+            with span(N.RT_CACHE):
+                # Persist downstream results (keyed by det_indices) so the backward pass
+                # can replay them via load_frame -- mirrors _run_batch's cache writes.
+                if caches is not None:
+                    if caches.headtail is not None and ht_result is not None:
+                        caches.headtail.write_frame(
+                            frame_idx,
+                            det_indices=det_indices,
+                            heading_hints=ht_result.heading_hints,
+                            heading_confidences=ht_result.heading_confidences,
+                            directed_mask=ht_result.directed_mask,
+                        )
+                    for cache, cnn_result in zip(caches.cnn, cnn_results):
+                        if cnn_result is not None:
+                            cache.write_frame(
+                                frame_idx, predictions=cnn_result.predictions
+                            )
+                    if caches.pose is not None and pose_result is not None:
+                        caches.pose.write_frame(
+                            frame_idx,
+                            det_indices=det_indices,
+                            keypoints=pose_result.keypoints,
+                            valid_mask=pose_result.valid_mask,
+                        )
+                    if caches.apriltag is not None and at_result is not None:
+                        caches.apriltag.write_frame(frame_idx, result=at_result)
+
+                # Identity Phase 3, Task 4 (realtime seam): build + persist this
+                # frame's identity evidence inline, from the SAME in-hand
+                # filtered_obb/cnn_results/at_result -- no read-back needed (unlike
+                # the batch seam, which re-derives det_ids from a disk read-back
+                # after the pass). Identical evidence contract to the batch path:
+                # det_ids come from filtered_obb.detection_ids (stable ids, aligned
+                # by position with CNN/AprilTag det_index, both 0..N-1 over this same
+                # filtered_obb). Only runs when caches are open for writing -- a pure
+                # in-memory/preview realtime call (cache_dir=None) writes nothing.
+                if caches is not None and self._identity_stage is not None:
+                    self._write_identity_evidence_realtime(
+                        frame_idx, filtered_obb, cnn_results, at_result
+                    )
+
+            with span(N.RT_FINALIZE):
+                frame_result = _build_frame_result(
                     frame_idx,
-                    det_indices=det_indices,
-                    heading_hints=ht_result.heading_hints,
-                    heading_confidences=ht_result.heading_confidences,
-                    directed_mask=ht_result.directed_mask,
+                    filtered_obb,
+                    det_indices,
+                    ht_result,
+                    cnn_results,
+                    pose_result,
+                    at_result,
                 )
-            for cache, cnn_result in zip(caches.cnn, cnn_results):
-                if cnn_result is not None:
-                    cache.write_frame(frame_idx, predictions=cnn_result.predictions)
-            if caches.pose is not None and pose_result is not None:
-                caches.pose.write_frame(
-                    frame_idx,
-                    det_indices=det_indices,
-                    keypoints=pose_result.keypoints,
-                    valid_mask=pose_result.valid_mask,
-                )
-            if caches.apriltag is not None and at_result is not None:
-                caches.apriltag.write_frame(frame_idx, result=at_result)
 
-        # Identity Phase 3, Task 4 (realtime seam): build + persist this
-        # frame's identity evidence inline, from the SAME in-hand
-        # filtered_obb/cnn_results/at_result -- no read-back needed (unlike
-        # the batch seam, which re-derives det_ids from a disk read-back
-        # after the pass). Identical evidence contract to the batch path:
-        # det_ids come from filtered_obb.detection_ids (stable ids, aligned
-        # by position with CNN/AprilTag det_index, both 0..N-1 over this same
-        # filtered_obb). Only runs when caches are open for writing -- a pure
-        # in-memory/preview realtime call (cache_dir=None) writes nothing.
-        if caches is not None and self._identity_stage is not None:
-            self._write_identity_evidence_realtime(
-                frame_idx, filtered_obb, cnn_results, at_result
-            )
+                # Task 10b: surface the bg-sub masks for the SHOW_FG / SHOW_BG preview
+                # overlays. Realtime-only, like streaming_payload below: run_bgsub just
+                # stashed these on the (strictly sequential) model, so "last" is this
+                # frame's. Left None on the OBB path, which has no such masks.
+                if (
+                    self.config.detection_source == "bgsub"
+                    and self._models.bgsub is not None
+                ):
+                    frame_result.fg_mask = self._models.bgsub.last_fg_mask
+                    frame_result.bg_u8 = self._models.bgsub.last_bg_u8
 
-        frame_result = _build_frame_result(
-            frame_idx,
-            filtered_obb,
-            det_indices,
-            ht_result,
-            cnn_results,
-            pose_result,
-            at_result,
-        )
+                # Task 17g: build StreamingAnalysisPayload for legacy identity consumers.
+                try:
+                    from hydra_suite.core.tracking.ingest.streaming_payload import (
+                        StreamingAnalysisPayload,
+                    )
 
-        # Task 10b: surface the bg-sub masks for the SHOW_FG / SHOW_BG preview
-        # overlays. Realtime-only, like streaming_payload below: run_bgsub just
-        # stashed these on the (strictly sequential) model, so "last" is this
-        # frame's. Left None on the OBB path, which has no such masks.
-        if self.config.detection_source == "bgsub" and self._models.bgsub is not None:
-            frame_result.fg_mask = self._models.bgsub.last_fg_mask
-            frame_result.bg_u8 = self._models.bgsub.last_bg_u8
+                    resolved = resolved_backend_for(self.runtime)
+                    if resolved.backend == "tensorrt":
+                        runtime_family = "tensorrt"
+                    elif resolved.backend == "coreml":
+                        runtime_family = "coreml"
+                    else:
+                        runtime_family = resolved.device
+                    frame_result.streaming_payload = (
+                        StreamingAnalysisPayload.from_frame_result(
+                            frame_result,
+                            runtime_family=runtime_family,
+                            input_is_bgr=True,
+                        )
+                    )
+                except Exception:
+                    pass  # streaming_payload is optional; failures are non-fatal
 
-        # Task 17g: build StreamingAnalysisPayload for legacy identity consumers.
-        try:
-            from hydra_suite.core.tracking.ingest.streaming_payload import (
-                StreamingAnalysisPayload,
-            )
-
-            resolved = resolved_backend_for(self.runtime)
-            if resolved.backend == "tensorrt":
-                runtime_family = "tensorrt"
-            elif resolved.backend == "coreml":
-                runtime_family = "coreml"
-            else:
-                runtime_family = resolved.device
-            frame_result.streaming_payload = StreamingAnalysisPayload.from_frame_result(
-                frame_result,
-                runtime_family=runtime_family,
-                input_is_bgr=True,
-            )
-        except Exception:
-            pass  # streaming_payload is optional; failures are non-fatal
-
-        return frame_result
+                return frame_result
 
     def _identity_evidence_sidecar_path(self, source_name: str) -> Path:
         """`<cache_dir>/detection.npz`-based sidecar path for `source_name` ("batch"/"live").
