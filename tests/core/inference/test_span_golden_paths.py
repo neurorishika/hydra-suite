@@ -39,7 +39,7 @@ def _synthetic_batch_window():
                         pass
             with span(N.MATERIALIZE, units=1):
                 pass
-            for stage in (N.HEADTAIL, N.CNN, N.POSE):
+            for stage in (N.HEADTAIL, N.CNN):
                 with span(stage, units=4):
                     with span(N.CROP_EXTRACT):
                         with span(N.AFFINE_LOOP):
@@ -51,6 +51,17 @@ def _synthetic_batch_window():
                         pass
                     with span(N.BACKEND_FORWARD, units=4, gpu=True):
                         pass
+            # pose's stage-level structure diverges from headtail/cnn: the
+            # real run_pose_batch (stages/pose.py) wraps the per-crop prep
+            # loop (affine inversion + apply_fit) in PREP_LOOP, then runs
+            # BACKEND_FORWARD as a sibling -- there is no crop_extract span
+            # and apply_fit is called undecorated inside the prep loop, so no
+            # APPLY_FIT span exists under pose either.
+            with span(N.POSE, units=4):
+                with span(N.PREP_LOOP, units=4):
+                    pass
+                with span(N.BACKEND_FORWARD, units=4, gpu=True):
+                    pass
             with span(N.CACHE_WRITE):
                 with span(N.ENQUEUE):
                     pass
@@ -86,8 +97,16 @@ def test_crop_extract_and_backend_forward_are_siblings():
     with prof.armed():
         _synthetic_batch_window()
     paths = _paths(prof.spans.snapshot())
-    for stage in ("headtail", "cnn", "pose"):
+    for stage in ("headtail", "cnn"):
         base = f"inference/batch_pass/window/{stage}"
         assert f"{base}/crop_extract" in paths
         assert f"{base}/backend_forward" in paths
         assert f"{base}/backend_forward/crop_extract" not in paths
+
+    # pose has no crop_extract span (see _synthetic_batch_window): its
+    # analogous guard is that prep_loop and backend_forward are siblings,
+    # not that prep_loop nests under backend_forward.
+    pose_base = "inference/batch_pass/window/pose"
+    assert f"{pose_base}/prep_loop" in paths
+    assert f"{pose_base}/backend_forward" in paths
+    assert f"{pose_base}/backend_forward/prep_loop" not in paths

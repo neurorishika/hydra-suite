@@ -612,21 +612,6 @@ class TrackingSessionCore:
                     if annotated:
                         media_paths.append(annotated)
 
-                self._profiler.end_frame()
-                self._profiler.log_final_summary()
-                # Wire the HYDRA_PROFILE dump location -- without this call
-                # `profiling_process.set_log_dir` is dead code and the spec's
-                # "<video>_logs/ when a session supplies one" clause never
-                # holds.
-                from hydra_suite.utils.profiling_process import set_log_dir
-                from hydra_suite.utils.video_artifacts import build_video_log_dir
-
-                set_log_dir(build_video_log_dir(self.video_path, create=True))
-                self._profiler.export_summary(
-                    build_video_log_dir(self.video_path, create=True)
-                    / "tracking_profile_session.json"
-                )
-
                 result = SessionResult(
                     success=True,
                     final_csv_path=final_csv,
@@ -681,6 +666,22 @@ class TrackingSessionCore:
                         )
 
                 cb.stage_changed("done")
-                return result
+
+            self._profiler.end_frame()
+            self._profiler.log_final_summary()
+            # Wire the HYDRA_PROFILE dump location -- without this call
+            # `profiling_process.set_log_dir` is dead code and the spec's
+            # "<video>_logs/ when a session supplies one" clause never
+            # holds.
+            from hydra_suite.utils.profiling_process import set_log_dir
+            from hydra_suite.utils.video_artifacts import build_video_log_dir
+
+            set_log_dir(build_video_log_dir(self.video_path, create=True))
+            self._profiler.export_summary(
+                build_video_log_dir(self.video_path, create=True)
+                / "tracking_profile_session.json"
+            )
+
+            return result
         except TrackingSessionError as e:
             return SessionResult(False, None, None, [], None, [], str(e))
