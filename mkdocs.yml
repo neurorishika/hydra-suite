@@ -119,6 +119,7 @@ nav:
   - Tracking Optimization: developer-guide/tracking-optimization.md
   - GPU Backends: developer-guide/gpu-backends.md
   - Runtime Integration: developer-guide/runtime-integration.md
+  - Profiling: developer-guide/profiling.md
   - CUDA Dependency Updates: developer-guide/dependency-cuda-updates.md
   - Performance Tuning: developer-guide/performance-tuning.md
   - Inference Fast Mode: developer-guide/inference-fast-mode.md
