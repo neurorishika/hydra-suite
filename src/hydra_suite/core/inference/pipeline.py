@@ -48,6 +48,7 @@ from typing import Any, Callable, Iterable, Iterator
 import numpy as np
 
 from hydra_suite.core.canonicalization.geometry import ClippingStats
+from hydra_suite.utils.profiling import bind_target
 
 from .result import FrameResult, OBBResult
 from .stages.apriltag import run_apriltag
@@ -553,7 +554,11 @@ class Pipeline:
                 handoff_q.put(None)  # sentinel (always, even on error)
 
         producer_thread = threading.Thread(
-            target=producer, name="pipeline-obb-producer", daemon=True
+            # A new thread starts with a fresh context, so an unbound producer
+            # would report zero OBB time at depth>=2.
+            target=bind_target(producer),
+            name="pipeline-obb-producer",
+            daemon=True,
         )
         producer_thread.start()
 

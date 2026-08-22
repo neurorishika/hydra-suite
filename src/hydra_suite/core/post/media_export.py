@@ -22,6 +22,7 @@ from hydra_suite.utils.pose_visualization import (
     is_renderable_pose_keypoint,
     normalize_pose_render_min_conf,
 )
+from hydra_suite.utils.profiling import bind_target
 from hydra_suite.utils.video_encoder import VideoEncoder
 
 logger = logging.getLogger(__name__)
@@ -602,7 +603,7 @@ def render_annotated_video_frames(
                 break
             out.write(_item)
 
-    _writer = _threading.Thread(target=_writer_thread, daemon=True)
+    _writer = _threading.Thread(target=bind_target(_writer_thread), daemon=True)
     _writer.start()
     cancelled = False
 

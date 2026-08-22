@@ -24,6 +24,9 @@ import queue
 import threading
 from typing import Any
 
+from hydra_suite.utils import profiling_names as N
+from hydra_suite.utils.profiling import bind_target, span
+
 
 class CacheWriter:
     """FIFO cache writer supporting sync (inline) and async (threaded) modes.
@@ -60,7 +63,9 @@ class CacheWriter:
 
         if async_mode:
             self._queue: queue.Queue = queue.Queue()
-            self._worker = threading.Thread(target=self._worker_loop, daemon=True)
+            self._worker = threading.Thread(
+                target=bind_target(self._worker_loop), daemon=True
+            )
             self._worker.start()
 
     # --- public write API --------------------------------------------------
@@ -126,12 +131,13 @@ class CacheWriter:
     # --- internal ----------------------------------------------------------
 
     def _enqueue_or_write(self, item: dict) -> None:
-        if self._closed:
-            raise RuntimeError("CacheWriter is closed")
-        if self._async_mode:
-            self._queue.put(item)
-        else:
-            self._apply(item)
+        with span(N.ENQUEUE):
+            if self._closed:
+                raise RuntimeError("CacheWriter is closed")
+            if self._async_mode:
+                self._queue.put(item)
+            else:
+                self._apply(item)
 
     def _apply(self, item: dict) -> None:
         """Execute a single write item against the handles."""
@@ -199,8 +205,9 @@ class CacheWriter:
             try:
                 if item is None:  # sentinel: time to exit
                     break
-                self._apply(item)
-            except BaseException as exc:  # noqa: BLE001
+                with span(N.FLUSH):
+                    self._apply(item)
+            except BaseException as exc:  # noqa: BLE001,B036
                 if self._worker_error is None:
                     self._worker_error = exc
             finally:

@@ -13,6 +13,8 @@ import threading
 
 import cv2
 
+from .profiling import bind_target
+
 logger = logging.getLogger(__name__)
 
 
@@ -101,7 +103,9 @@ class FramePrefetcher:
             return
 
         self.stop_requested.clear()
-        self.thread = threading.Thread(target=self._prefetch_loop, daemon=True)
+        self.thread = threading.Thread(
+            target=bind_target(self._prefetch_loop), daemon=True
+        )
         self.thread.start()
         self._started = True
         logger.debug("FramePrefetcher started with buffer_size=%d", self.buffer_size)
@@ -262,7 +266,9 @@ class SparseFramePrefetcher:
         if self._started:
             return
         self.stop_requested.clear()
-        self.thread = threading.Thread(target=self._prefetch_loop, daemon=True)
+        self.thread = threading.Thread(
+            target=bind_target(self._prefetch_loop), daemon=True
+        )
         self.thread.start()
         self._started = True
 
@@ -354,7 +360,7 @@ class SequentialScanPrefetcher:
         if self._started:
             return
         self.stop_requested.clear()
-        self.thread = threading.Thread(target=self._scan_loop, daemon=True)
+        self.thread = threading.Thread(target=bind_target(self._scan_loop), daemon=True)
         self.thread.start()
         self._started = True
 
