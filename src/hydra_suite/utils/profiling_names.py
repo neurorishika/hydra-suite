@@ -51,7 +51,12 @@ MODEL_EXECUTE = "model_execute"
 EXTRACT_RAW = "extract_raw"
 MATERIALIZE = "materialize"
 RUN_BGSUB_BATCH = "run_bgsub_batch"
-FILTER = "filter"
+# NOTE: the spec map draws `filter` as a sibling under `window/`. It is
+# omitted deliberately: `filter_for_source` was folded into the MATERIALIZE
+# span (pipeline.py's per-frame materialize/filter loop) rather than getting
+# its own node, so no `filter` span is ever opened on the batch tree. The
+# realtime tree gets its own separate `filter`-named span where it lands
+# (Task 10, unrelated to this constant).
 HEADTAIL = "headtail"
 CNN = "cnn"
 POSE = "pose"

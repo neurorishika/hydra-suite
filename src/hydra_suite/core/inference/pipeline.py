@@ -250,10 +250,8 @@ class Pipeline:
                         self.runtime,
                     )
             with span(N.RUN_OBB, units=len(window.frames)):
-                # DECODE goes on the producer side: `_stream_windows` is the
-                # generator that reads frames, and at depth>=2 it runs on the
-                # bound producer thread. Wrap its per-window `next()` in
-                # `_stream_windows` itself with `with span(N.DECODE):`.
+                # DECODE is spanned in `_stream_windows`, the producer-side
+                # frame source that feeds this window.
                 raw_list = run_obb(
                     window.frames,
                     self.stages.obb_models,
@@ -641,19 +639,30 @@ class Pipeline:
         (which the runner guarantees is ascending frame index), identical to
         ``_iter_windows`` over a fully materialized list.
         """
-        frames_buf: list = []
-        indices_buf: list[int] = []
-        for frame_idx, frame in frame_source:
-            frames_buf.append(frame)
-            indices_buf.append(int(frame_idx))
-            if len(frames_buf) == w:
-                yield BatchWindow(
-                    frames=list(frames_buf), frame_indices=list(indices_buf)
-                )
-                frames_buf.clear()
-                indices_buf.clear()
-        if frames_buf:
+        it = iter(frame_source)
+        while True:
+            frames_buf: list = []
+            indices_buf: list[int] = []
+            # The actual video-decode cost lives in pulling from ``frame_source``
+            # (the underlying reader/prefetcher), not in this generator's own
+            # bookkeeping. At depth>=2 this generator runs on the bound producer
+            # thread (see module docstring), so this is where DECODE must be
+            # spanned. Bounded to one window's worth of pulls, matching every
+            # other span under ``window/``.
+            with span(N.DECODE) as decode_span:
+                for _ in range(w):
+                    try:
+                        frame_idx, frame = next(it)
+                    except StopIteration:
+                        break
+                    frames_buf.append(frame)
+                    indices_buf.append(int(frame_idx))
+                decode_span.add_units(len(frames_buf))
+            if not frames_buf:
+                break
             yield BatchWindow(frames=list(frames_buf), frame_indices=list(indices_buf))
+            if len(frames_buf) < w:
+                break
 
     @staticmethod
     def _emit_progress(
