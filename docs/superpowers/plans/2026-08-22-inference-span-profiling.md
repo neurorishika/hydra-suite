@@ -18,10 +18,29 @@
 - `utils/` must not import from `core/`, `data/`, or any app layer. `utils/profiling.py` imports only the standard library.
 - CLAUDE.md design principles: no god objects, no copy-pasted boilerplate. Span names are constants, never duplicated string literals.
 - **Implementation rule 1:** take the timers from `instrumentation.patch`, take **none** of the memoization (`_CHW_MEMO`, `reset_chw_memo`, `HYDRA_CHW_MEMO`). That is a functional change riding in the same diff and would break byte-identity.
-- **Implementation rule 2:** every hunk in the final diff against `main` is a `with span(...)` / `@spanned` wrapper, an import, or a new module. No logic edits.
+- **Implementation rule 2:** every hunk in the **instrumentation** commits (Tasks 9-11) is a `with span(...)` / `@spanned` wrapper, an import, or an indentation change from one of those. No logic edits. Two sanctioned exceptions live in earlier, separately-reviewable commits: Task 6's `_effective_depth` depth clamp (behavior change, but only under `HYDRA_PROFILE_GPU=1`) and Task 7's deletion of the `HYDRA_RT_PROFILE` machinery.
 - **Implementation rule 3:** spans wrap loops, never loop bodies. The "no measurable cost" claim depends on it.
 - Commit as the configured git user (Rishika Mohanta). Do **not** add a `Co-Authored-By: Claude` trailer.
 - All work happens on branch `feat/inference-span-profiling` in worktree `.worktrees/span-profiling`.
+
+## Revision history
+
+**Revision 2** (this document). Three adversarial reviews ran against revision 1 and found the plan substantially defective. The corrections, so a reviewer can check them rather than take them on trust:
+
+| Defect in revision 1 | Correction |
+|---|---|
+| Self-proving run used `ant_obb_sleap`, which has `enable_pose_extractor: false` and `cnn_classifiers: []` — 2 of its 3 compared nodes do not exist | Moved to `ant_cnn_identity`, the only fixture with pose + CNN + head-tail; spec amended to rev 3; Task 14 Step 8 now machine-asserts non-vacuousness |
+| Debug-OFF gate injected `debug_mode: false`, which fires the User-mode cleanup (`session.py:619-637`) and **deletes the two CSVs the gate compares** — it would have reported success having compared nothing | Clears `enable_profiling` instead, leaving `DEBUG_MODE` at its `True` default |
+| Every `runner.py` invocation used `--config` / `--out` and omitted the required `--video`; the real args are `--orig-config`, `--video`, `--outdir` | All five commands corrected |
+| `BACKEND_FORWARD` decorated `run_headtail_batch` / `run_cnn_batch`, nesting crop cost **under** model cost — the 24.0 s majority share of the originating defect would have blended into one `self_s` | Spans placed inside both functions as siblings, on the calls those functions actually make |
+| Realtime tree never armed in Debug Mode (`run_batch_pass` is gated on `not effective_realtime_tracking_mode`) — a capability regression versus the deleted `HYDRA_RT_PROFILE` | Task 11 Step 6 arms the realtime loop too, which also activates the `worker.py:448` prefetcher binding |
+| The spec's golden span-path test was absent; its substitute matched constant names as raw substrings (`CNN` ⊂ `CNNModel` in 79 files) | Golden test added (Task 11 Steps 7-8); registry test matches `N.<CONST>` tokens |
+| `main_thread="MainThread"` hardcoded — `TrackingWorker` is a QThread, so every GUI node would read `concurrent` while headless gates looked clean | Recorder records its own arming thread |
+| `_start` stamped at construction, diluting every depth-1 percentage by however long setup ran | Reset at first arm |
+| Ten constants declared with no placement; `READ` wrapped `cap.read()` but not the `cap.set()` seek that *is* the 12 s cost | Placements added, `TRACK_FORWARD`/`TRACK_BACKWARD`/`WARP` deleted with reasons, `READ` wraps seek+read |
+| `runner.py` used `span`/`N` with no import step; identity-pop drained the live stack when `self` was absent; process recorder armed only the first calling thread | All fixed in place |
+
+Also corrected: the `caplog` reconstruction crashed on `%`-bearing lines, the rule-3 grep heuristic flagged the plan's own compliant code, and Task 16 wrote a merge SHA before the merge and ran `git checkout main` from a worktree where it cannot succeed.
 
 ## Two spec corrections this plan makes
 
@@ -44,7 +63,8 @@ Both were found by reading the code the spec cites. They are resolved here rathe
 | `tests/utils/test_profiling.py` | Recorder semantics: nesting, `self_s`, `max_s`/`first_call_s`, units, disarmed cost, exceptions. |
 | `tests/utils/test_profiling_threads.py` | `bind_target`, two-thread concurrent nesting, per-thread percentages. |
 | `tests/utils/test_profiling_report.py` | Rendering: JSON shape, tree ordering, `ms/unit`. |
-| `tests/utils/test_profiling_registry.py` | Static guard: every name constant is used; every span call site uses a constant. |
+| `tests/utils/test_profiling_registry.py` | Static complement: every name constant is referenced; every span call site uses a constant. |
+| `tests/core/inference/test_span_golden_paths.py` | The golden span-path set — the runtime guard against a silently-dropped span. |
 | `tests/utils/test_profiling_process.py` | `HYDRA_PROFILE=1` arming, precedence, dump location. |
 | `tests/core/tracking/test_profiler_spans.py` | `TrackingProfiler.spans` / `armed()` / priority deferral / JSON `spans` key. |
 
@@ -359,12 +379,19 @@ class _Span:
 
     def __exit__(self, *_exc) -> bool:
         dt = time.perf_counter() - self._t0
-        # Identity pop: an exception may have skipped inner __exit__ calls.
+        # Identity pop: an exception may have skipped inner __exit__ calls, so
+        # pop through them. Guarded by a membership check — if `self` is NOT on
+        # the stack (a leaked span already cleared at disarm, or a late __exit__
+        # from a GC'd generator) an unguarded loop would drain the thread's LIVE
+        # stack and orphan every open span.
         stack = self._stack
-        while stack:
-            top = stack.pop()
-            if top is self:
-                break
+        if any(s is self for s in stack):
+            while stack:
+                top = stack.pop()
+                if top is self:
+                    break
+        else:
+            return False
         if stack:
             stack[-1]._child_s += dt
         node = self._node
@@ -395,7 +422,13 @@ class SpanRecorder:
         # protects counters, not stack coherence.
         self._thread_stacks: dict[int, list] = {}
         self._start = time.perf_counter()
+        self._armed_once = False
         self._end: float | None = None
+        # Name of the thread that armed first — the renderer's reference for
+        # deciding which subtrees are "concurrent". Hardcoding "MainThread" is
+        # wrong: TrackingWorker is a QThread, so on the GUI path EVERY node
+        # would be flagged concurrent while headless gate runs looked fine.
+        self.root_thread: str = threading.current_thread().name
 
     # -- lifecycle ------------------------------------------------------
 
@@ -412,6 +445,14 @@ class SpanRecorder:
             yield self
             return
         token = _ACTIVE.set(self)
+        # Reset the clock at the FIRST arm, not at construction: the profiler is
+        # built early (worker.py:699, before model loading) but armed much
+        # later, and the root total_s is the denominator for every depth-1
+        # percentage. Without this, minutes of un-spanned setup dilute them all.
+        if not self._armed_once:
+            self._armed_once = True
+            self._start = time.perf_counter()
+            self.root_thread = threading.current_thread().name
         try:
             yield self
         finally:
@@ -485,7 +526,7 @@ class SpanRecorder:
             "units": 0.0,
             "max_s": round(self.wall_clock_s, 6),
             "first_call_s": round(self.wall_clock_s, 6),
-            "thread": threading.current_thread().name,
+            "thread": self.root_thread,
             "children": children,
         }
 
@@ -755,15 +796,26 @@ def test_decorator_is_transparent_when_disarmed():
 
 
 def test_every_constant_is_used_somewhere_in_src():
-    """A refactor that drops a span must fail a test, not go silent."""
+    """A refactor that drops a span must fail a test, not go silent.
+
+    Matches the ATTRIBUTE REFERENCE (``N.CNN`` / ``profiling_names.CNN``), not
+    the bare name. A raw substring check is vacuous: ``CNN`` occurs in 79 files
+    via ``CNNModel``, ``POSE`` in 29 via ``ENABLE_POSE_EXTRACTOR``, ``WARP``
+    via ``WARP_BATCH``, ``WRITE`` via ``CACHE_WRITE``. Every one of those spans
+    could be deleted wholesale and a substring test would stay green.
+    """
     sources = [
         p.read_text()
         for p in SRC.rglob("*.py")
         if p.name != "profiling_names.py"
     ]
     blob = "\n".join(sources)
-    unused = [k for k in _constants() if k not in blob]
-    assert not unused, f"span names declared but never used: {unused}"
+    unused = [
+        k
+        for k in _constants()
+        if not re.search(rf"(?:\bN|profiling_names)\.{k}\b", blob)
+    ]
+    assert not unused, f"span names declared but never placed: {unused}"
 
 
 def test_span_call_sites_use_constants_not_literals():
@@ -810,10 +862,17 @@ from .profiling import span
 
 # -- session tree ---------------------------------------------------------
 SESSION = "session"
-TRACK_FORWARD = "track_forward"
-TRACK_BACKWARD = "track_backward"
+# NOTE: the spec map lists track_forward / track_backward here. They are
+# omitted deliberately: the session profiler arms inside run_post_tracking
+# (session.py:528), which runs AFTER both tracking passes complete, so there is
+# no scope in which those spans could be opened. The passes are already
+# profiled separately by worker.py's own profiler.
 POSTPROCESS = "postprocess"
 BACKWARD_POSTPROCESS = "backward_postprocess"
+POSE_QUALITY = "pose_quality"
+TEMPORAL_POSE = "temporal_pose"
+TRAJECTORY_POSTPROC = "trajectory_postproc"
+INTERPOLATE_AND_SCALE = "interpolate_and_scale"
 MERGE = "merge"
 RICH_EXPORT = "rich_export"
 BUILD_DATAFRAME = "build_dataframe"
@@ -1167,7 +1226,10 @@ def test_enabled_profiler_collects_spans():
     assert stage["children"][0]["name"] == "substage"
 
 
-def test_summary_carries_spans_and_gpu_mode():
+def test_summary_carries_spans_and_gpu_mode(monkeypatch):
+    # A lingering exported HYDRA_PROFILE_GPU would fail this AND silently force
+    # pipeline_depth=1 on every run in that shell.
+    monkeypatch.delenv("HYDRA_PROFILE_GPU", raising=False)
     prof = TrackingProfiler(enabled=True)
     with prof.armed():
         with span("stage"):
@@ -1223,7 +1285,11 @@ def test_log_final_summary_emits_a_span_tree(caplog):
     prof.end_frame()
     with caplog.at_level(logging.INFO):
         prof.log_final_summary()
-    text = "\n".join(r.message % r.args if r.args else r.message for r in caplog.records)
+    # getMessage(), NOT `r.message % r.args`: pytest's capture handler already
+    # formats the record, so re-applying args raises TypeError on the
+    # "(gpu_mode=%s)" line and ValueError on any line containing a literal `%`
+    # (the renderer's "% par" column).
+    text = "\n".join(r.getMessage() for r in caplog.records)
     assert "SPAN TREE" in text
 ```
 
@@ -1330,7 +1396,7 @@ In `log_final_summary`, immediately before the final `logger.info("=" * 60)` (pr
             logger.info("  SPAN TREE  (gpu_mode=%s)", summary.get("gpu_mode", "off"))
             logger.info(SPAN_TREE_HEADER)
             logger.info("-" * 60)
-            for line in render_tree_lines(spans, main_thread="MainThread"):
+            for line in render_tree_lines(spans, main_thread=spans["thread"]):
                 logger.info("%s", line)
 ```
 
@@ -1720,9 +1786,14 @@ def maybe_arm_process_recorder() -> SpanRecorder | None:
     with _lock:
         if _recorder is None:
             _recorder = SpanRecorder(priority=PRIORITY_PROCESS)
-            _ACTIVE.set(_recorder)
             atexit.register(dump)
-        return _recorder
+    # Arm on EVERY call, not just at creation: contextvars do not cross
+    # threads, so a runner constructed on the GUI thread and driven from a
+    # worker thread would otherwise record nothing. `is None` preserves the
+    # spec's precedence — a TrackingProfiler armed here keeps the context.
+    if _ACTIVE.get() is None:
+        _ACTIVE.set(_recorder)
+    return _recorder
 
 
 def dump() -> None:
@@ -1737,7 +1808,7 @@ def dump() -> None:
         logger.info("Span profile written to %s", path)
     except Exception:  # noqa: BLE001
         logger.warning("Failed to write span profile", exc_info=True)
-    for line in render_tree_lines(snap, main_thread="MainThread"):
+    for line in render_tree_lines(snap, main_thread=snap["thread"]):
         logger.info("%s", line)
 
 
@@ -1833,7 +1904,11 @@ to:
         )
 ```
 
-- [ ] **Step 2: Bind the cache writer worker**
+- [ ] **Step 2: Bind the cache writer worker and span its loop**
+
+Also add `ENQUEUE` and `FLUSH` spans, or the bound writer thread carries no spans at all: wrap the body of `_enqueue_or_write` in `with span(N.ENQUEUE):` and the actual disk write inside `_worker_loop` in `with span(N.FLUSH):`. Both are per-item, so they are the one sanctioned rule-3 exception on this thread — the writer's whole purpose is per-item I/O and there is no enclosing loop to hoist to. Note the exception in the commit message.
+
+- [ ] **Step 2b: Bind the cache writer worker**
 
 In `src/hydra_suite/core/inference/cache/writer.py`, add `from hydra_suite.utils.profiling import bind_target` to the imports and change line 63 from:
 
@@ -2000,22 +2075,59 @@ Wrap the sub-slice conversion loop (lines 194-200) — the loop, not its body:
                 subs.append(None)
 ```
 
-- [ ] **Step 3: Instrument the stage entry points**
+- [ ] **Step 3: Instrument the stage internals — crop_extract and backend_forward as SIBLINGS**
 
-Add `from hydra_suite.utils import profiling_names as N` to each stage module and decorate:
+Add `from hydra_suite.utils import profiling_names as N` and `from hydra_suite.utils.profiling import span` to each stage module.
 
-- `stages/obb.py:466` — `@N.spanned(N.MODEL_EXECUTE, gpu=True)` on `run_obb`
-- `stages/obb.py:1476` — `@N.spanned(N.MATERIALIZE, gpu=True)` on `materialize_tensors`
-- `stages/filtering.py:318` — `@N.spanned(N.FILTER)` on `filter_for_source`
-- `stages/headtail.py:248` — `@N.spanned(N.BACKEND_FORWARD, gpu=True)` on `run_headtail_batch`
-- `stages/cnn.py:132` — `@N.spanned(N.BACKEND_FORWARD, gpu=True)` on `run_cnn_batch`
-- `stages/pose.py:385` — `@N.spanned(N.BACKEND_FORWARD, gpu=True)` on `run_pose_batch`
+**Do not decorate `run_headtail_batch` / `run_cnn_batch` with `BACKEND_FORWARD`.** Those functions extract crops *and* run the model, so a decorator makes `crop_extract` a child of `backend_forward` and blends the two costs into one `self_s` — which is how the 24.0 s head-tail + CNN majority share of the originating defect would stay unlocalized. The spec's map draws them as siblings; place them as siblings.
+
+In `stages/headtail.py:280-313` and `stages/cnn.py:170-196` (the two have identical structure, a CUDA branch and a CPU/MPS branch):
+
+```python
+    if frames_on_cuda(runtime, frames):
+        from hydra_suite.core.canonicalization.resample import letterbox_fit
+
+        from .crops import extract_canonical_crops_batch
+
+        with span(N.CROP_EXTRACT):
+            batch = extract_canonical_crops_batch(frames, obb_results, geometry, runtime)
+        n_total = batch.crops.shape[0]
+        if n_total:
+            with span(N.APPLY_FIT, units=n_total):
+                fitted = letterbox_fit(batch.crops, fit.model_wh)
+                cuda_crops = [
+                    (fitted[i] * 255.0).floor().clamp(0, 255) for i in range(n_total)
+                ]
+            with span(N.BACKEND_FORWARD, units=n_total, gpu=True):
+                all_probs = model.backend.predict_batch_cuda(cuda_crops, input_is_bgr=False)
+        else:
+            all_probs = []
+    else:
+        from .crops import apply_fit_batch, extract_classifier_crops_batch_np
+
+        with span(N.CROP_EXTRACT):
+            batch = extract_classifier_crops_batch_np(frames, obb_results, geometry)
+        if batch.crops:
+            np_crops: list[np.ndarray] = apply_fit_batch(batch.crops, fit)
+            with span(N.BACKEND_FORWARD, units=len(np_crops), gpu=True):
+                all_probs = model.backend.predict_batch(np_crops)
+        else:
+            all_probs = []
+```
+
+(`apply_fit_batch` carries its own `APPLY_FIT` span from Step 1, so the CPU branch needs no extra wrapper.)
+
+In `stages/pose.py:385`, do **not** decorate `run_pose_batch` either. Wrap its per-crop preparation loop (the `for i in range(n_total):` at ~:429) in `with span(N.PREP_LOOP, units=n_total):`, the host↔device crop transfer inside it in `with span(N.TRANSPORT):` **hoisted above the loop** if the transfer is batched — otherwise omit `TRANSPORT` and delete the constant rather than putting a span in a per-crop body — and the `model.backend.predict_batch*` call in `with span(N.BACKEND_FORWARD, units=n_total, gpu=True):`.
+
+In `stages/obb.py`, wrap the model call inside `run_obb` in `with span(N.MODEL_EXECUTE, gpu=True):` and the raw-tensor extraction that follows it in `with span(N.EXTRACT_RAW):` — decorating the whole of `run_obb` would collapse the spec map's `run_obb/{model_execute, extract_raw}` into one node. Read `obb.py:466+` and place both inside.
+
+`materialize_tensors` (`obb.py:1476`) is called from `_process_obb_results`' per-frame loop on the **consumer** thread, so it is NOT decorated — Step 4 wraps the loop instead. `filter_for_source` (`filtering.py:318`) is likewise not decorated; both call sites (batch and realtime) wrap it, so a decorator would produce `filter/filter`.
 
 `BACKEND_FORWARD` repeats deliberately: names are local to their parent, so the three land under `headtail/`, `cnn/` and `pose/` as distinct nodes.
 
 - [ ] **Step 4: Instrument the pipeline window**
 
-In `src/hydra_suite/core/inference/pipeline.py`, add `from hydra_suite.utils import profiling_names as N` and `from hydra_suite.utils.profiling import span`.
+In `src/hydra_suite/core/inference/pipeline.py`, add `from hydra_suite.utils import profiling_names as N` and `from hydra_suite.utils.profiling import span`. **Add the same two imports to `src/hydra_suite/core/inference/runner.py`** — Step 5 and all of Task 10 use `span` and `N` there, and Task 7 added only a function-local import of `maybe_arm_process_recorder`.
 
 In `_run_detection_for_window` (line 209), wrap the body:
 
@@ -2032,6 +2144,10 @@ In `_run_detection_for_window` (line 209), wrap the body:
                         self.runtime,
                     )
             with span(N.RUN_OBB, units=len(window.frames)):
+                # DECODE goes on the producer side: `_stream_windows` is the
+                # generator that reads frames, and at depth>=2 it runs on the
+                # bound producer thread. Wrap its per-window `next()` in
+                # `_stream_windows` itself with `with span(N.DECODE):`.
                 raw_list = run_obb(
                     window.frames,
                     self.stages.obb_models,
@@ -2063,7 +2179,7 @@ In `_process_obb_results` (line 258), wrap the four downstream stage blocks. The
                 )
 ```
 
-Wrap the CNN phase loop (the loop, not its body) in `with span(N.CNN, units=sum(o.num_detections for o in nonempty_obbs)):`, the pose block in `with span(N.POSE, units=sum(o.num_detections for o in nonempty_obbs)):`, the AprilTag loop in `with span(N.APRILTAG):`, the per-type cache-write loop in `with span(N.CACHE_WRITE):`, and the closing `return scatter(...)` in `with span(N.ASSEMBLE_SCATTER):`.
+Wrap the per-frame materialize/filter loop (`for frame, frame_idx, raw in zip(...)`, ~:293) in `with span(N.MATERIALIZE, units=len(frames)):` — the loop, so `materialize_tensors` and `filter_for_source` are counted once per window rather than once per frame. Wrap the CNN phase loop (the loop, not its body) in `with span(N.CNN, units=sum(o.num_detections for o in nonempty_obbs)):`, the pose block in `with span(N.POSE, units=sum(o.num_detections for o in nonempty_obbs)):`, the AprilTag loop in `with span(N.APRILTAG):`, the per-type cache-write loop in `with span(N.CACHE_WRITE):`, and the closing `return scatter(...)` in `with span(N.ASSEMBLE_SCATTER):`.
 
 Inside the pose block, wrap `extract_canonical_crops_batch` in `with span(N.CROP_EXTRACT):` so `AFFINE_LOOP` / `WARP_BATCH` / `FRAME_TO_CHW` from Steps 1-2 nest under it. Do the same inside `run_headtail_batch` and `run_cnn_batch` — each calls `extract_classifier_crops_batch`; wrap that call in `with span(N.CROP_EXTRACT):`.
 
@@ -2085,13 +2201,22 @@ and in `Pipeline._run_sync` / `_run_double_buffer`, wrap each per-window consume
 
 - [ ] **Step 6: Verify no span sits inside a per-detection loop body**
 
-Run:
+A grep heuristic does not work here — it flags the legitimate wrap-the-loop pattern's neighbors and misses violations whose loop header is more than a few lines up. Do a targeted read instead. List every span call site and check each one's enclosing scope by hand:
 
 ```bash
-git diff main -- src/hydra_suite/core src/hydra_suite/utils | grep -n "span(" -B 4 | grep -E "for .* in |while "
+git diff main -- src/hydra_suite | grep -n "span(N\.\|@N.spanned" | sed 's/^/  /'
 ```
 
-Expected: no `span(` appears inside a loop body. Any hit is an implementation-rule-3 violation — hoist the span above the loop.
+For each, open the file and answer: *what is the cadence of this span — per run, per pass, per window, per frame, or per detection?* Per-detection is a violation; hoist it above the loop and use `units` instead.
+
+Three per-frame spans are **sanctioned exceptions**, and they are the complete list — anything else per-frame or finer is a defect:
+
+| Span | Site | Why |
+|---|---|---|
+| `READ` | prefetcher decode loops | the decode *is* the unit of work; there is no enclosing loop to hoist to |
+| `ENQUEUE` / `FLUSH` | cache-writer loop | the writer's whole purpose is per-item I/O |
+
+At 100k frames these run ~100k times each, not 5M. Record the count you expect in the commit message.
 
 - [ ] **Step 7: Verify the diff is wrappers only**
 
@@ -2131,22 +2256,28 @@ The realtime tree mirrors `run_realtime`'s own structure, **not** the batch chil
 
 - [ ] **Step 1: Wrap the four sections**
 
-In `run_realtime`, at the point where `_prof`/`_ts` were deleted (former line 777), open the root and the OBB section:
+**Wrap, do not restructure.** The real function has an `if self.config.detection_source == "bgsub": ... else: ...` at `runner.py:779-813`, with the `detection_ids` re-stamp and the `caches.detection.write_frame` call **outside both branches**. Open the spans around the existing statements and re-indent; do not move any statement into or out of a branch. Identify the `_prof` blocks to delete **by content** (`if _prof:` … `_rt_prof_add(...)`), never by the line numbers in Task 7 — those drift as soon as the first edit lands.
+
+Shape:
 
 ```python
         with span(N.REALTIME):
             with span(N.RT_OBB, units=1):
-                if self.config.detection_source == "bgsub":
-                    ...  # existing bg-sub / run_obb / materialize / re-stamp block
-                    if caches is not None and caches.detection is not None:
-                        caches.detection.write_frame(frame_idx, result=raw_obb)
+                # ENTIRE existing block verbatim, one indent level deeper:
+                #   if detection_source == "bgsub": ... else: ...
+                #   raw_obb = OBBResult(... re-stamped detection_ids ...)
+                #   if caches is not None and caches.detection is not None:
+                #       caches.detection.write_frame(frame_idx, result=raw_obb)
+                ...
 
-            with span(N.FILTER):
+            with span(N.RT_FILTER):
                 filtered_obb, det_indices = filter_for_source(
                     self.config, raw_obb, roi_mask
                 )
             ...
 ```
+
+Use `RT_FILTER = "filter"` (a realtime-tree constant), not the batch tree's `N.FILTER` — the spec is explicit that the realtime tree mirrors `run_realtime`'s structure and does not share the batch child names. Add `RT_FILTER` to `profiling_names.py`.
 
 Wrap the crop-extraction block that ended at former line 914 in `with span(N.RT_CROPS, units=filtered_obb.num_detections):`, the `_do_ht()/_do_cnn()/_do_pose()/_do_at()` block that ended at former line 972 in `with span(N.RT_INDIVIDUAL, units=filtered_obb.num_detections):`, the cache-persist block that follows it in `with span(N.RT_CACHE):`, and the streaming-payload block that ended at former line 1053 in `with span(N.RT_FINALIZE):`.
 
@@ -2210,7 +2341,8 @@ and at the end of `__init__` (line 156-172):
 
 Wrap the body of `run_post_tracking` (line 528) in `with self._profiler.armed(), span(N.SESSION):` and wrap each stage call in its span:
 
-- `self._postprocess_csv(forward_csv)` → `with span(N.POSTPROCESS):`
+- `self._postprocess_csv(forward_csv)` → `with span(N.POSTPROCESS):`, and inside `_postprocess_csv` (session.py:176-189) wrap its stages in `N.POSE_QUALITY`, `N.TEMPORAL_POSE` and `N.TRAJECTORY_POSTPROC`. Read the method and place them on whatever it actually calls — without children this span is a single stage-level bucket over the ~28%-of-wall pandas hotspot, i.e. the session-scope reprise of the `batched_detection` failure this feature exists to fix.
+- `self._interpolate_and_scale(forward_processed)` (the `else` branch, taken on every non-backward run) → `with span(N.INTERPOLATE_AND_SCALE):` — omitted from the first draft, leaving single-pass runs with an unmeasured stage
 - `self._postprocess_csv(f"{base}_backward{ext}")` → `with span(N.BACKWARD_POSTPROCESS):`
 - `self._merge(forward_processed, backward_processed)` → `with span(N.MERGE):`
 - `self._export_rich(final_csv)` → `with span(N.RICH_EXPORT):`
@@ -2228,16 +2360,12 @@ At the end of `run_post_tracking`, before building `SessionResult`:
 ```python
             self._profiler.end_frame()
             self._profiler.log_final_summary()
-            _profile_dir = self.paths.get("log_dir")
-            if _profile_dir:
-                self._profiler.export_summary(
-                    Path(_profile_dir) / "tracking_profile_session.json"
-                )
-```
+            # Wire the HYDRA_PROFILE dump location — without this call
+            # `profiling_process.set_log_dir` is dead code and the spec's
+            # "<video>_logs/ when a session supplies one" clause never holds.
+            from hydra_suite.utils.profiling_process import set_log_dir
 
-If `self.paths` carries no `log_dir` key, derive it the same way `worker._resolve_profile_path` does:
-
-```python
+            set_log_dir(build_video_log_dir(self.video_path, create=True))
             from hydra_suite.utils.video_artifacts import build_video_log_dir
 
             self._profiler.export_summary(
@@ -2246,7 +2374,9 @@ If `self.paths` carries no `log_dir` key, derive it the same way `worker._resolv
             )
 ```
 
-Confirm the import path with `grep -rn "def build_video_log_dir" src/` and use whatever module it actually lives in.
+There is **no** `"log_dir"` key in `self.paths` (`grep -rn '"log_dir"' src/` is empty), so `build_video_log_dir` — confirmed at `src/hydra_suite/utils/video_artifacts.py:112` — is the only route, the same one `worker._resolve_profile_path` uses.
+
+The export is skipped on every `_stopped_result()` early return and on `TrackingSessionError` (`session.py:641-642`). That is correct for a cancelled run, but state it so a missing file does not read as a bug.
 
 - [ ] **Step 4: Instrument the post tree**
 
@@ -2271,28 +2401,182 @@ In `src/hydra_suite/core/post/interpolated_crops.py`, wrap the body from line 14
 - the CNN-inference call → `with span(N.CNN_INFERENCE):`
 - the finalize/save block → `with span(N.FINALIZE):`
 
-The `READ` and `WARP` spans go **inside** the prefetcher decode loops bound in Task 8 (`frame_prefetcher.py` `_prefetch_loop` / `_scan_loop`) — wrap the `cap.read()` call there in `with span(N.READ):`. A span on the consumer side of the queue would measure queue-wait, not decode.
+The `READ` span goes **inside** the prefetcher decode loops bound in Task 8 (`frame_prefetcher.py` `_prefetch_loop` / `_scan_loop`). A span on the consumer side of the queue would measure queue-wait, not decode.
 
-- [ ] **Step 6: Arm around the runner pass**
+**It must wrap the seek together with the read.** `SparseFramePrefetcher._prefetch_loop` (`frame_prefetcher.py:269-277`) does `self.cap.set(cv2.CAP_PROP_POS_FRAMES, f)` **then** `cap.read()`, and the file's own comment at `:336` puts the per-frame seek at ~5-50 ms — the seek *is* the ~12 s measured in `project_sleap_roundtrip_audit`. Wrapping `cap.read()` alone reports near-zero exactly where the cost lives, the same class of lie the spec's Threading section warns about, one line lower down:
+
+```python
+        with span(N.READ):
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, f)
+            ret, frame = self.cap.read()
+```
+
+Apply the same pairing in all three prefetcher classes (`:109-113`, `:269-277`, `:361-370`), matching whatever each one's seek/read pair actually is.
+
+`WARP` would land in the interpolated-crop warp call inside a per-crop loop body — a rule-3 violation. **Delete the `WARP` constant** and rely on `crop_extraction`'s inclusive total plus its `units`; note the deletion in the commit message.
+
+- [ ] **Step 6: Arm around the runner pass AND the realtime loop**
 
 In `src/hydra_suite/core/tracking/worker.py`, wrap the `inference_runner.run_batch_pass(...)` call at line 1239 in `with profiler.armed():` so the `inference/` tree lands in the forward/backward pass profile that `worker.py:4158` already exports.
 
-- [ ] **Step 7: Arm the registry coverage test**
+**This is not sufficient on its own.** `run_batch_pass` is guarded at `worker.py:1229-1232` by `and not effective_realtime_tracking_mode`, so in realtime mode that arm never executes and every span from Task 10 hits the null singleton. Since Task 7 deleted `HYDRA_RT_PROFILE` — which *did* work in a GUI realtime run — leaving it there would be exactly the capability regression Task 7's rationale promises to avoid.
+
+So also wrap the **per-frame tracking loop** (not each frame — one `armed()` at the phase boundary enclosing the loop) in `with profiler.armed():`. Find it by locating the `run_realtime` call sites:
+
+```bash
+grep -n "run_realtime(" src/hydra_suite/core/tracking/worker.py
+```
+
+Arm at the nearest enclosing phase boundary above them. This also activates the `worker.py:448-452` `FramePrefetcher` binding from Task 8 — `bind_target` returns the target unchanged when nothing is armed, so without this arm that binding is a no-op and the spec's sixth threading row stays uncovered.
+
+- [ ] **Step 6b: Verify both trees actually populate**
+
+```bash
+grep -n "profiler.armed()" src/hydra_suite/core/tracking/worker.py
+```
+
+Expected: two occurrences — one around `run_batch_pass`, one around the realtime loop. One occurrence means the realtime tree is dead.
+
+- [ ] **Step 7: Add the golden span-path test**
+
+The spec names this "the **only** test that catches 'a span silently disappeared in a refactor' — the failure mode the whole feature exists to prevent". The registry test in Task 3 is a weaker, static complement: it proves a constant is *referenced*, not that a span is *reached at runtime* under the right parent.
+
+Create `tests/core/inference/test_span_golden_paths.py`:
+
+```python
+"""Golden span-path set: the durable guard against a silently-dropped span."""
+
+import json
+from pathlib import Path
+
+from hydra_suite.core.tracking.profiler import TrackingProfiler
+from hydra_suite.utils import profiling_names as N
+from hydra_suite.utils.profiling import span
+
+GOLDEN = Path(__file__).parent / "span_golden_paths.json"
+
+
+def _paths(node, prefix=()):
+    """Flatten a snapshot to the set of slash-joined span paths."""
+    out = set()
+    for child in node["children"]:
+        path = prefix + (child["name"],)
+        out.add("/".join(path))
+        out |= _paths(child, path)
+    return out
+
+
+def _synthetic_batch_window():
+    """Mirror the real nesting of one batch window without loading models.
+
+    Every `with span(...)` here must correspond to a real placement in
+    pipeline.py / crops.py / the stage modules. When the two drift, this test
+    fails -- which is the entire point.
+    """
+    with span(N.INFERENCE), span(N.BATCH_PASS):
+        with span(N.OPEN_CACHES):
+            pass
+        with span(N.WINDOW, units=1):
+            with span(N.DETECT, units=1):
+                with span(N.RUN_OBB, units=1):
+                    with span(N.MODEL_EXECUTE, gpu=True):
+                        pass
+                    with span(N.EXTRACT_RAW):
+                        pass
+            with span(N.MATERIALIZE, units=1):
+                pass
+            for stage in (N.HEADTAIL, N.CNN, N.POSE):
+                with span(stage, units=4):
+                    with span(N.CROP_EXTRACT):
+                        with span(N.AFFINE_LOOP):
+                            pass
+                        with span(N.WARP_BATCH, units=4, gpu=True):
+                            with span(N.FRAME_TO_CHW, units=4):
+                                pass
+                    with span(N.APPLY_FIT, units=4):
+                        pass
+                    with span(N.BACKEND_FORWARD, units=4, gpu=True):
+                        pass
+            with span(N.CACHE_WRITE):
+                with span(N.ENQUEUE):
+                    pass
+            with span(N.ASSEMBLE_SCATTER):
+                pass
+
+
+def test_golden_span_paths():
+    prof = TrackingProfiler(enabled=True)
+    with prof.armed():
+        _synthetic_batch_window()
+    actual = _paths(prof.spans.snapshot())
+    expected = set(json.loads(GOLDEN.read_text()))
+
+    missing = sorted(expected - actual)
+    extra = sorted(actual - expected)
+    assert not missing, (
+        f"span paths disappeared: {missing}\n"
+        "A refactor dropped a span. Restore it, or update the golden set "
+        "DELIBERATELY with a note in the commit message."
+    )
+    assert not extra, f"new span paths not in the golden set: {extra}"
+
+
+def test_crop_extract_and_backend_forward_are_siblings():
+    """Regression guard for the head-tail/CNN blending defect.
+
+    24.0s of the 34.4s originating defect lived in the head-tail + CNN crop
+    path. If crop_extract nests UNDER backend_forward, that cost blends with
+    model time in one self_s and the tree indicts the wrong function.
+    """
+    prof = TrackingProfiler(enabled=True)
+    with prof.armed():
+        _synthetic_batch_window()
+    paths = _paths(prof.spans.snapshot())
+    for stage in ("headtail", "cnn", "pose"):
+        base = f"inference/batch_pass/window/{stage}"
+        assert f"{base}/crop_extract" in paths
+        assert f"{base}/backend_forward" in paths
+        assert f"{base}/backend_forward/crop_extract" not in paths
+```
+
+- [ ] **Step 8: Generate the golden file and check it in**
+
+```bash
+python - <<'EOF'
+import json, sys
+sys.path.insert(0, "tests/core/inference")
+from test_span_golden_paths import _paths, _synthetic_batch_window, GOLDEN
+from hydra_suite.core.tracking.profiler import TrackingProfiler
+
+prof = TrackingProfiler(enabled=True)
+with prof.armed():
+    _synthetic_batch_window()
+GOLDEN.write_text(json.dumps(sorted(_paths(prof.spans.snapshot())), indent=2))
+print(GOLDEN.read_text())
+EOF
+```
+
+Read the generated set and confirm by eye that it matches the spec's span map before committing it. A golden file generated from a wrong implementation locks in the wrong tree.
+
+Run: `python -m pytest tests/core/inference/test_span_golden_paths.py -v`
+Expected: PASS (2 tests)
+
+- [ ] **Step 9: Arm the registry coverage test**
 
 Remove the `@pytest.mark.xfail` marker added in Task 3 Step 5 from `test_every_constant_is_used_somewhere_in_src`.
 
 Run: `python -m pytest tests/utils/test_profiling_registry.py -v`
 Expected: PASS. Any constant reported as unused is a span the plan declared but never placed — either place it or delete the constant; do not silence the test.
 
-- [ ] **Step 8: Run the tests**
+- [ ] **Step 10: Run the tests**
 
-Run: `python -m pytest tests/ -k "session or merge or post or interp or profil" -q`
+Run: `python -m pytest tests/ -k "session or merge or post or interp or profil or span" -q`
 Expected: no new failures.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
-git add src/hydra_suite tests/utils/test_profiling_registry.py
+git add src/hydra_suite tests/utils/test_profiling_registry.py tests/core/inference/
 git commit -m "feat(profiling): instrument the session, post and interp_crops trees"
 ```
 
@@ -2484,21 +2768,30 @@ pgrep -af "sleap|hydra" | grep -v "$$" | grep -v pgrep
 
 - [ ] **Step 1: Establish the baseline BEFORE the change**
 
-From the worktree, with `conda activate hydra-mps` and fixtures present:
+**Do not stash.** By this point Tasks 1-13 are all committed, so there is nothing to stash — and the stash stack is shared with the main checkout and every other worktree. The matrix's baseline is supplied by `MAIN_SRC` (the legacy worktree); nothing needs un-applying.
+
+If a pre-change run is wanted for attribution, it should have been run from `main` (`09a14c33`) **before Task 1**, per CLAUDE.md's "run this BEFORE and AFTER a risky slice with the same baseline". If that was skipped, run it now from a detached checkout of `09a14c33` in a separate worktree rather than perturbing this one.
+
+Setup, once per machine, with `conda activate hydra-mps` active:
 
 ```bash
 cd /Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker/.worktrees/span-profiling
-bash tools/equivalence/fixtures/fetch_fixtures.sh    # once per machine
+bash tools/equivalence/fixtures/fetch_fixtures.sh
 git fetch origin --tags
 git worktree add --detach .worktrees/equiv-legacy legacy/main
-git stash push -u -m "span-profiling-baseline-$$"    # capture SHA per CLAUDE.md
 ```
 
-Prefer a temporary WIP commit over stash — the stash stack is shared across worktrees. Simpler: run the baseline from a detached checkout of `09a14c33` instead of un-applying the branch.
+- [ ] **Step 2: Kill stale processes**
 
-- [ ] **Step 2: Run the equivalence matrix with Debug Mode ON**
+```bash
+pgrep -af "sleap|hydra" | grep -v pgrep
+```
 
-All nine fixture configs already set `"enable_profiling": true`, and the default matrix runs eight of them (`ant_cnn_identity_marked` is excluded at `run_matrix.sh:56-75`), so the instrumented path is hot by default:
+Kill only dead/stale **sleap/hydra** processes. Never interfere with a process that is not sleap/hydra. The `grep -v pgrep` matters — a bare `pgrep` self-matches and hangs a poll loop.
+
+- [ ] **Step 3: Run the equivalence matrix with profiling ON (the default)**
+
+All nine fixture configs set `"enable_profiling": true` and the default matrix runs eight of them (`ant_cnn_identity_marked` is excluded at `run_matrix.sh:56-75`), so the instrumented path is hot without any config edit:
 
 ```bash
 export KMP_DUPLICATE_LIB_OK=TRUE
@@ -2508,7 +2801,7 @@ REPO=$PWD WT=$PWD \
   bash tools/equivalence/run_matrix.sh
 ```
 
-- [ ] **Step 3: Verify the CSVs are not empty before trusting any verdict**
+- [ ] **Step 4: Verify the CSVs are not empty before trusting any verdict**
 
 ```bash
 find /tmp/equiv_spans_on -name "*.csv" -exec sh -c 'echo "$(wc -l < "$1") $1"' _ {} \;
@@ -2516,68 +2809,135 @@ find /tmp/equiv_spans_on -name "*.csv" -exec sh -c 'echo "$(wc -l < "$1") $1"' _
 
 Expected: every row count `> 1`. A bare shell (conda not active) yields EMPTY CSVs that falsely compare "EQUIVALENT". If conda was not active, re-run.
 
-- [ ] **Step 4: Record the Debug-ON verdict**
-
 Acceptance: every clip's EQUIVALENCE at or near its DETERMINISM floor — positions p99 ≈ 0, θ max ≈ 0, identical row counts, 0 unmatched, for **both** `_forward.csv` and `_tracking_final.csv`. Known baseline noise: bistable head/tail π-flips on head/tail clips.
 
-- [ ] **Step 5: Run the matrix with Debug Mode OFF**
+- [ ] **Step 5: Run the matrix with profiling OFF**
 
-Inject `"debug_mode": false` into each fixture config into a scratch copy, then re-run:
+**Clear `enable_profiling`, NOT `debug_mode`.** Setting `debug_mode: false` derives `DEBUG_MODE=False`, which fires the User-mode cleanup at `session.py:619-637` and **deletes `_forward.csv` and `_tracking_final.csv`** via `_user_mode_intermediate_paths` (`session.py:102-113`) — the exact two files this gate compares. The code comment says so: *"NO-OP in debug mode (and thus a no-op for the equivalence gate)."* The comparison would then find nothing and report success. Clearing `enable_profiling` while leaving `debug_mode` absent keeps `DEBUG_MODE` at its `True` default, so the debug CSVs are still written, and disarms every span — which isolates exactly the variable this change introduces.
+
+`run_matrix.sh` hardcodes config paths inside its `VIDEOS` array (`$FX/configs/*.json`, `FX="$WT/tools/equivalence/fixtures"`), so there is no config-directory knob. Edit the fixtures in place and revert afterwards:
 
 ```bash
-mkdir -p /tmp/cfg_off && for f in tools/equivalence/fixtures/configs/*.json; do
-  python -c "
-import json,sys,os
-p=sys.argv[1]; d=json.load(open(p)); d['debug_mode']=False
-json.dump(d, open(os.path.join('/tmp/cfg_off', os.path.basename(p)),'w'), indent=2)
-" "$f"
-done
+python - <<'EOF'
+import json, glob
+for f in glob.glob("tools/equivalence/fixtures/configs/*.json"):
+    d = json.load(open(f))
+    d["enable_profiling"] = False
+    json.dump(d, open(f, "w"), indent=2)
+EOF
+
+REPO=$PWD WT=$PWD \
+  MAIN_SRC=$PWD/.worktrees/equiv-legacy/src WT_SRC=$PWD/src \
+  OUT=/tmp/equiv_spans_off RUNTIME=mps \
+  bash tools/equivalence/run_matrix.sh
+
+git checkout -- tools/equivalence/fixtures/configs/
 ```
 
-Then re-run `run_matrix.sh` pointed at `/tmp/cfg_off`. This proves the off-path is identical, which is the constraint that matters most.
+Verify row counts `> 1` again, then record the verdict. This is the constraint that matters most — byte-identical with profiling disarmed.
 
 - [ ] **Step 6: Overhead measurement — N=5 alternating**
 
 **Current src vs current src, `enable_profiling` true vs false.** One variable, same tree, same models. A single on/off pair cannot resolve the ≤2% target: this box has a measured ~30% wall-clock swing under load that once produced a bogus `1.65x SLOWER` verdict on a code path the change never touched.
 
+`runner.py` has no `--enable-profiling` flag, so build two config copies. Its real arguments are `--orig-config` (required), `--video` (required), `--outdir` (required), plus `--runtime`, `--label`, `--skeleton`, `--detection-batch-size` (`runner.py:211-241`):
+
 ```bash
+python - <<'EOF'
+import json
+src = "tools/equivalence/fixtures/configs/fly_obb.json"
+for state in (True, False):
+    d = json.load(open(src))
+    d["enable_profiling"] = state
+    json.dump(d, open(f"/tmp/fly_obb_{'on' if state else 'off'}.json", "w"), indent=2)
+EOF
+
 for i in 1 2 3 4 5; do
   for mode in on off; do
     /usr/bin/time -p python tools/equivalence/runner.py \
-      --config tools/equivalence/fixtures/configs/fly_obb.json \
-      --enable-profiling $mode --out /tmp/ovh_${mode}_${i} 2>> /tmp/ovh.log
+      --orig-config /tmp/fly_obb_${mode}.json \
+      --video tools/equivalence/fixtures/clips/fly_obb.mp4 \
+      --outdir /tmp/ovh_${mode}_${i} \
+      --runtime mps --label ovh_${mode}_${i} 2>> /tmp/ovh.log
   done
 done
 ```
-
-If `runner.py` has no `--enable-profiling` flag, generate two config copies differing only in that key and pass `--config`.
 
 Report **median and IQR per condition**. Pass criterion: the on/off median delta is ≤2% **and** smaller than the within-condition IQR. If the noise floor exceeds the effect, report "below noise floor" — that is a valid outcome, not a fake pass.
 
 - [ ] **Step 7: The self-proving run**
 
-`ant_obb_sleap` (it has a pose model; `ant_cnn_identity` does **not** — head-tail + CNN only) at stock `detection_batch_size=1` versus 25:
+Use **`ant_cnn_identity`**, the only fixture with all three consumers enabled. Verified against the configs:
+
+| fixture | `enable_pose_extractor` | `pose_model_dir` | `cnn_classifiers` | headtail |
+|---|---|---|---|---|
+| `ant_obb_sleap` | `false` | — | `[]` | yes |
+| `ant_cnn_identity` | `true` | SLEAP unet | 1 model | yes |
+
+`is_pose_inference_enabled` (`session_policy.py:29`) requires both `enable_pose_extractor` and a non-empty `pose_model_dir`, so **`ant_obb_sleap` runs neither pose nor CNN** — two of the three `backend_forward` nodes would not exist there. Spec revision 2 named `ant_obb_sleap` on an inverted reading of the fixtures; revision 3 corrects it.
 
 ```bash
-python tools/equivalence/runner.py --config tools/equivalence/fixtures/configs/ant_obb_sleap.json --out /tmp/sp_b1
-python tools/equivalence/runner.py --config tools/equivalence/fixtures/configs/ant_obb_sleap.json --detection-batch-size 25 --out /tmp/sp_b25
+python tools/equivalence/runner.py \
+  --orig-config tools/equivalence/fixtures/configs/ant_cnn_identity.json \
+  --video tools/equivalence/fixtures/clips/ant_cnn_identity.mp4 \
+  --outdir /tmp/sp_b1 --runtime mps \
+  --skeleton tools/equivalence/fixtures/ooceraea_biroi.json
+
+python tools/equivalence/runner.py \
+  --orig-config tools/equivalence/fixtures/configs/ant_cnn_identity.json \
+  --video tools/equivalence/fixtures/clips/ant_cnn_identity.mp4 \
+  --outdir /tmp/sp_b25 --runtime mps --detection-batch-size 25 \
+  --skeleton tools/equivalence/fixtures/ooceraea_biroi.json
 ```
 
-Compare `n_calls` and `ms/unit` on `pose/backend_forward`, `cnn/backend_forward` and `headtail/backend_forward` between the two `"spans"` trees.
+Confirm the clip and skeleton filenames against `run_matrix.sh:56-75` before running; correct them if they differ.
 
-This is a **profiling experiment, not a byte-identity gate** — changing the window size changes decode and crop batching, so a tracking diff is expected and is not evidence of a profiler bug.
+- [ ] **Step 8: Assert the criterion is not vacuous, then evaluate it**
+
+Machine-check that all three nodes exist with `n_calls > 0` before comparing — the vacuousness bug has now been shipped twice by hand:
+
+```bash
+python - <<'EOF'
+import json, glob, sys
+
+def find(node, path):
+    for name in path:
+        node = next((c for c in node["children"] if c["name"] == name), None)
+        if node is None:
+            return None
+    return node
+
+for out in ("/tmp/sp_b1", "/tmp/sp_b25"):
+    f = glob.glob(f"{out}/**/tracking_profile_forward.json", recursive=True)
+    assert f, f"no profile JSON under {out}"
+    spans = json.load(open(f[0]))["spans"]
+    for stage in ("headtail", "cnn", "pose"):
+        node = find(spans, ["inference", "batch_pass", "window", stage, "backend_forward"])
+        if node is None or node["n_calls"] == 0:
+            sys.exit(f"VACUOUS: {stage}/backend_forward absent or n_calls=0 in {out}")
+        print(out, stage, "n_calls=", node["n_calls"],
+              "ms/unit=", round(node["total_s"] / max(node["units"], 1) * 1000, 3))
+EOF
+```
+
+Adjust the span path if the tree shape differs (at `pipeline_depth=2` the detect-side spans root on the producer thread — see Task 9 Step 5).
 
 **If the per-call overhead of a 1-frame window against 25-frame windows is not readable from those two JSON files alone, the profiler has not earned its keep. Report that as a failure, not a caveat.**
 
-- [ ] **Step 8: Clean up the baseline worktree**
+This is a **profiling experiment, not a byte-identity gate** — changing the window size changes decode and crop batching, so a tracking diff is expected and is not evidence of a profiler bug.
+
+- [ ] **Step 9: Clean up the baseline worktree**
 
 ```bash
 git worktree remove --force .worktrees/equiv-legacy && git worktree prune
+git status --porcelain tools/equivalence/fixtures/configs/
 ```
 
-- [ ] **Step 9: Commit the evidence**
+The second command must print nothing — if Step 5's `git checkout --` was skipped, the fixture configs are still modified.
 
-Write the four verdicts (Debug-ON equivalence, Debug-OFF equivalence, overhead median/IQR, self-proving comparison) into `docs/superpowers/specs/2026-08-21-inference-span-profiling-design.md` under a new `## Gate results` section, and commit:
+- [ ] **Step 10: Commit the evidence**
+
+Write the four verdicts (profiling-ON equivalence, profiling-OFF equivalence, overhead median/IQR, self-proving comparison) into the spec under a new `## Gate results` section, and commit:
 
 ```bash
 git add docs/superpowers/specs/2026-08-21-inference-span-profiling-design.md
@@ -2636,7 +2996,9 @@ Not a gate — the deep pass deliberately changes the schedule — but it must n
 
 ```bash
 HYDRA_PROFILE_GPU=1 python tools/equivalence/runner.py \
-  --config tools/equivalence/fixtures/configs/fly_obb.json --out /tmp/deepgpu
+  --orig-config tools/equivalence/fixtures/configs/fly_obb.json \
+  --video tools/equivalence/fixtures/clips/fly_obb.mp4 \
+  --outdir /tmp/deepgpu --runtime cuda
 python -c "
 import json,glob
 d=json.load(open(glob.glob('/tmp/deepgpu/**/tracking_profile_forward.json', recursive=True)[0]))
@@ -2665,11 +3027,11 @@ Add the CUDA verdict to the `## Gate results` section of the spec and commit.
 
 If any step is unchecked, the docs stay active — CLAUDE.md's rule is explicit that an incomplete checklist keeps a doc out of `done/`.
 
-- [ ] **Step 2: Update the spec status header**
+- [ ] **Step 2: Move both docs, then merge, then stamp the SHA**
 
-Change `**Status:** pending implementation plan` to `**Status:** Shipped — merged to main (<sha>)` once the merge SHA is known. This is the only content edit permitted alongside the move.
+The `Shipped — merged to main (<sha>)` header cannot be written before the merge that creates that SHA exists — the `de7ed06e` convention it follows was a post-merge amendment. Order: move the docs, merge, then amend the header with the real SHA.
 
-- [ ] **Step 3: Move both docs in the merge commit**
+- [ ] **Step 3: Move both docs**
 
 ```bash
 git mv docs/superpowers/specs/2026-08-21-inference-span-profiling-design.md docs/superpowers/specs/done/
@@ -2677,20 +3039,34 @@ git mv docs/superpowers/plans/2026-08-22-inference-span-profiling.md docs/superp
 git commit -m "docs: move span profiler spec and plan to done/"
 ```
 
-- [ ] **Step 4: Merge to local main**
+- [ ] **Step 4: Merge to local main — from the PRIMARY repo, not this worktree**
+
+`main` is checked out in the primary repo, so `git checkout main` fails inside this worktree. Change directory first:
 
 ```bash
-git checkout main
+cd /Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker
 git merge --no-ff feat/inference-span-profiling -m "Merge branch 'feat/inference-span-profiling'"
+```
+
+- [ ] **Step 4b: Stamp the merge SHA into the spec header**
+
+```bash
+SHA=$(git rev-parse --short HEAD)
+sed -i '' "s/\*\*Status:\*\* pending implementation plan/**Status:** Shipped — merged to main ($SHA)/" \
+  docs/superpowers/specs/done/2026-08-21-inference-span-profiling-design.md
+git add -A && git commit --amend --no-edit
 ```
 
 - [ ] **Step 5: Write the memory file**
 
 Create `~/.claude/projects/-Users-neurorishika-Projects-Rockefeller-Kronauer-multi-animal-tracker/memory/project_span_profiling_done.md` recording: the merge SHA, both gate verdicts, the overhead median/IQR, the self-proving result, the two spec corrections (no `SessionRunner`; warp pool deliberately unbound), and that `HYDRA_PROFILE=1` is the User-mode profiling route. Add the one-line pointer to `MEMORY.md`.
 
-- [ ] **Step 6: Clean up the worktree**
+- [ ] **Step 6: Clean up the worktree — from the primary repo**
+
+You must already be in the primary repo (Step 4). Removing the worktree while sitting inside it fails:
 
 ```bash
+cd /Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker
 git worktree remove .worktrees/span-profiling
 git branch -d feat/inference-span-profiling
 ```
