@@ -10,6 +10,9 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from hydra_suite.utils import profiling_names as N
+from hydra_suite.utils.profiling import span
+
 from ....utils.obb_from_mask import letterbox_gain_pad, rotated_rect_from_masks
 from ..config import OBBConfig
 from ..result import OBBResult
@@ -493,33 +496,37 @@ def run_obb(
 
     source = select_region_source(config)
     per_frame_regions = source.plan(frames, models, config, runtime, roi_mask=roi_mask)
-    per_frame_results = source.execute(per_frame_regions, models, config, runtime)
+    with span(N.MODEL_EXECUTE, gpu=True):
+        per_frame_results = source.execute(per_frame_regions, models, config, runtime)
     task = source.task(config)
     seg_source = source.seg_source(config)
 
     out: list[OBBResult | _RawOBBTensors] = []
-    for fi, (regions, results) in enumerate(zip(per_frame_regions, per_frame_results)):
-        if not regions:
-            out.append(_empty_obb_result(fi))
-            continue
-        parts = [
-            extract_with_transform(
-                res,
-                fi,
-                task,
-                region.affine,
-                config,
-                runtime,
-                seg_source=seg_source,
-                force_numpy=source.force_numpy,
+    with span(N.EXTRACT_RAW):
+        for fi, (regions, results) in enumerate(
+            zip(per_frame_regions, per_frame_results)
+        ):
+            if not regions:
+                out.append(_empty_obb_result(fi))
+                continue
+            parts = [
+                extract_with_transform(
+                    res,
+                    fi,
+                    task,
+                    region.affine,
+                    config,
+                    runtime,
+                    seg_source=seg_source,
+                    force_numpy=source.force_numpy,
+                )
+                for region, res in zip(regions, results)
+            ]
+            out.append(
+                merge_per_frame(
+                    parts, source.merge_policy, source.merge_plan(fi), config, runtime
+                )
             )
-            for region, res in zip(regions, results)
-        ]
-        out.append(
-            merge_per_frame(
-                parts, source.merge_policy, source.merge_plan(fi), config, runtime
-            )
-        )
     return out
 
 

@@ -23,6 +23,8 @@ import torch.nn.functional as F
 
 from hydra_suite.core.canonicalization.fit import fit_to_model_input
 from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
+from hydra_suite.utils import profiling_names as N
+from hydra_suite.utils.profiling import span
 
 
 def _theta_from_m_align(
@@ -193,11 +195,17 @@ def canonical_warp_batch_from_frame(
 
     boxes = [_canvas_footprint_aabb(m, geometry, (h_in, w_in)) for m in m_aligns]
     subs: List[torch.Tensor | None] = []
-    for x0, y0, x1, y1 in boxes:
-        if x1 > x0 and y1 > y0:
-            subs.append(to_chw_float(_slice_frame_view(view, layout, x0, y0, x1, y1)))
-        else:
-            subs.append(None)
+    # Separated from WARP_BATCH because this cost is O(sum of crop footprints)
+    # and the warp scales with n — the signature that identifies an O(frame
+    # area) conversion regression.
+    with span(N.FRAME_TO_CHW, units=len(boxes)):
+        for x0, y0, x1, y1 in boxes:
+            if x1 > x0 and y1 > y0:
+                subs.append(
+                    to_chw_float(_slice_frame_view(view, layout, x0, y0, x1, y1))
+                )
+            else:
+                subs.append(None)
 
     ref = next((s for s in subs if s is not None), None)
     if ref is None:

@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from hydra_suite.core.canonicalization.geometry import ClippingStats
+from hydra_suite.utils import profiling_names as N
+from hydra_suite.utils.profiling import span
 
 if TYPE_CHECKING:
     from hydra_suite.core.individual.identity.cache import IdentityEvidenceCache
@@ -1235,72 +1237,74 @@ class InferenceRunner:
 
         if self.cache_dir is None:
             raise RuntimeError("cache_dir must be set before calling run_batch_pass")
+        with span(N.INFERENCE), span(N.BATCH_PASS):
 
-        # An explicit roi_mask overrides the construction-time one so the cache
-        # key (opened below) and the tile gating both use the same mask -- and so
-        # a separate backward run built with the same construction-time mask
-        # reproduces the identical key. Passing it only at construction is the
-        # recommended path; this override keeps the two in lockstep either way.
-        if roi_mask is not None:
-            self._roi_mask = roi_mask
+            # An explicit roi_mask overrides the construction-time one so the cache
+            # key (opened below) and the tile gating both use the same mask -- and so
+            # a separate backward run built with the same construction-time mask
+            # reproduces the identical key. Passing it only at construction is the
+            # recommended path; this override keeps the two in lockstep either way.
+            if roi_mask is not None:
+                self._roi_mask = roi_mask
 
-        # make_frame_source selects NvdecFrameReader when runtime.use_nvdec is True
-        # and the decoder is available; otherwise falls back to CpuFrameReader.
-        # Clamping and seeking are handled inside each reader implementation.
-        frame_source = make_frame_source(
-            video_path, self.runtime, start_frame, end_frame
-        )
-
-        caches = _open_caches(
-            self.config, self.cache_dir, self._video_sig, self._roi_mask
-        )
-        self._caches = caches
-
-        # Recover the clamped bounds from the reader so range_total matches.
-        start_frame = frame_source.start_frame
-        end_frame = frame_source.end_frame
-        range_total = frame_source.frame_count
-
-        # The whole pass is now driven by Pipeline.run: it owns the windowing and
-        # (at depth>=2) the producer/consumer double buffer. The video decode is
-        # the producer's first stage and is fed in as a lazy (frame_idx, frame)
-        # generator so frames are never all buffered at once. Range clamping,
-        # progress cadence, signature binding, and the final cache close are
-        # preserved; only the orchestration moved into the Pipeline.
-        # Resample the ROI mask to the native frame geometry for tile gating
-        # (the cache key above already folded the mask by content, independent
-        # of this resample).
-        pipeline = self._build_pipeline(
-            caches, roi_mask=self._frame_space_roi_mask(video_path)
-        )
-        try:
-            pipeline.run(
-                frame_source,
-                range(start_frame, end_frame + 1),
-                progress_cb=progress_cb,
-                range_total=range_total,
-                should_stop=should_stop,
+            # make_frame_source selects NvdecFrameReader when runtime.use_nvdec is True
+            # and the decoder is available; otherwise falls back to CpuFrameReader.
+            # Clamping and seeking are handled inside each reader implementation.
+            frame_source = make_frame_source(
+                video_path, self.runtime, start_frame, end_frame
             )
-        finally:
-            frame_source.close()
-            # depth>=2 uses an async CacheWriter; flush/close it before closing the
-            # handles so all queued writes land (Pipeline.run already does this on
-            # its own teardown path, but a pre-run failure may skip it).
-            try:
-                pipeline.cache_writer.close()
-            except Exception:
-                pass
-            for h in caches.all_handles():
-                h.close()
 
-        # Identity Phase 3, Task 4 (batch seam): write the evidence sidecar
-        # AFTER the raw caches above are flushed to disk -- and only on a
-        # successful pass (an exception in `pipeline.run` propagates out of
-        # the `try/finally` above and this line is never reached, matching
-        # the raw caches' own "no sidecar from a failed pass" behavior).
-        # `_write_identity_evidence_batch` is itself a no-op when no identity
-        # config was passed to this runner.
-        self._write_identity_evidence_batch(start_frame, end_frame)
+            with span(N.OPEN_CACHES):
+                caches = _open_caches(
+                    self.config, self.cache_dir, self._video_sig, self._roi_mask
+                )
+            self._caches = caches
+
+            # Recover the clamped bounds from the reader so range_total matches.
+            start_frame = frame_source.start_frame
+            end_frame = frame_source.end_frame
+            range_total = frame_source.frame_count
+
+            # The whole pass is now driven by Pipeline.run: it owns the windowing and
+            # (at depth>=2) the producer/consumer double buffer. The video decode is
+            # the producer's first stage and is fed in as a lazy (frame_idx, frame)
+            # generator so frames are never all buffered at once. Range clamping,
+            # progress cadence, signature binding, and the final cache close are
+            # preserved; only the orchestration moved into the Pipeline.
+            # Resample the ROI mask to the native frame geometry for tile gating
+            # (the cache key above already folded the mask by content, independent
+            # of this resample).
+            pipeline = self._build_pipeline(
+                caches, roi_mask=self._frame_space_roi_mask(video_path)
+            )
+            try:
+                pipeline.run(
+                    frame_source,
+                    range(start_frame, end_frame + 1),
+                    progress_cb=progress_cb,
+                    range_total=range_total,
+                    should_stop=should_stop,
+                )
+            finally:
+                frame_source.close()
+                # depth>=2 uses an async CacheWriter; flush/close it before closing the
+                # handles so all queued writes land (Pipeline.run already does this on
+                # its own teardown path, but a pre-run failure may skip it).
+                try:
+                    pipeline.cache_writer.close()
+                except Exception:
+                    pass
+                for h in caches.all_handles():
+                    h.close()
+
+            # Identity Phase 3, Task 4 (batch seam): write the evidence sidecar
+            # AFTER the raw caches above are flushed to disk -- and only on a
+            # successful pass (an exception in `pipeline.run` propagates out of
+            # the `try/finally` above and this line is never reached, matching
+            # the raw caches' own "no sidecar from a failed pass" behavior).
+            # `_write_identity_evidence_batch` is itself a no-op when no identity
+            # config was passed to this runner.
+            self._write_identity_evidence_batch(start_frame, end_frame)
 
     def _run_batch(
         self,

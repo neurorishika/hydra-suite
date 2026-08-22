@@ -10,6 +10,8 @@ import torch
 
 from hydra_suite.core.canonicalization.fit import apply_fit, fit_to_model_input
 from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
+from hydra_suite.utils import profiling_names as N
+from hydra_suite.utils.profiling import span
 
 from ..config import HeadTailConfig
 from ..result import HeadTailResult, OBBResult
@@ -286,16 +288,23 @@ def run_headtail_batch(
 
         from .crops import extract_canonical_crops_batch
 
-        batch = extract_canonical_crops_batch(frames, obb_results, geometry, runtime)
+        with span(N.CROP_EXTRACT):
+            batch = extract_canonical_crops_batch(
+                frames, obb_results, geometry, runtime
+            )
         n_total = batch.crops.shape[0]
         if n_total:
             # NVDEC frames (the only CUDA frame source) are RGB -> input_is_bgr=False
             # so the model sees RGB, matching the CPU path's BGR->RGB flip.
-            fitted = letterbox_fit(batch.crops, fit.model_wh)
-            cuda_crops = [
-                (fitted[i] * 255.0).floor().clamp(0, 255) for i in range(n_total)
-            ]
-            all_probs = model.backend.predict_batch_cuda(cuda_crops, input_is_bgr=False)
+            with span(N.APPLY_FIT, units=n_total):
+                fitted = letterbox_fit(batch.crops, fit.model_wh)
+                cuda_crops = [
+                    (fitted[i] * 255.0).floor().clamp(0, 255) for i in range(n_total)
+                ]
+            with span(N.BACKEND_FORWARD, units=n_total, gpu=True):
+                all_probs = model.backend.predict_batch_cuda(
+                    cuda_crops, input_is_bgr=False
+                )
         else:
             all_probs = []
     else:
@@ -306,10 +315,12 @@ def run_headtail_batch(
         # the old ``stack -> /255 -> permute -> cpu -> *255 -> clip -> astype``
         # detour was exactly value-preserving and therefore pure overhead
         # (four full-batch float32 passes per window).
-        batch = extract_classifier_crops_batch_np(frames, obb_results, geometry)
+        with span(N.CROP_EXTRACT):
+            batch = extract_classifier_crops_batch_np(frames, obb_results, geometry)
         if batch.crops:
             np_crops: list[np.ndarray] = apply_fit_batch(batch.crops, fit)
-            all_probs = model.backend.predict_batch(np_crops)
+            with span(N.BACKEND_FORWARD, units=len(np_crops), gpu=True):
+                all_probs = model.backend.predict_batch(np_crops)
         else:
             all_probs = []
 
