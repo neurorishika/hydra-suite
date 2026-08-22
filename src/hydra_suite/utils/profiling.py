@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import contextvars
 import logging
+import os
 import threading
 import time
 from contextlib import contextmanager
@@ -31,6 +32,30 @@ PRIORITY_SESSION = 1
 _ACTIVE: contextvars.ContextVar["SpanRecorder | None"] = contextvars.ContextVar(
     "hydra_span_recorder", default=None
 )
+
+
+def deep_gpu_enabled() -> bool:
+    """``HYDRA_PROFILE_GPU=1`` — the opt-in deep-GPU diagnostic pass.
+
+    Deep mode syncs on ``gpu=True`` spans AND forces ``pipeline_depth=1`` (see
+    ``pipeline._effective_depth``), so there is no producer thread whose queue
+    a device-wide sync could drain. The run is explicitly NOT the production
+    schedule; that is the price of device attribution.
+    """
+    return bool(os.environ.get("HYDRA_PROFILE_GPU"))
+
+
+def _synchronize() -> None:
+    """Device-wide sync. Only ever called from a gpu_sync recorder."""
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+            torch.mps.synchronize()
+    except Exception:  # noqa: BLE001 — profiling must never break a run
+        logger.debug("Span profiler: device synchronize failed", exc_info=True)
 
 
 class _NullSpan:
@@ -81,14 +106,17 @@ class _Node:
 class _Span:
     """Live span. Pops by identity, never by name, and never swallows."""
 
-    __slots__ = ("_rec", "_node", "_stack", "_t0", "_child_s")
+    __slots__ = ("_rec", "_node", "_stack", "_t0", "_child_s", "_sync")
 
-    def __init__(self, rec: "SpanRecorder", node: _Node, stack: list) -> None:
+    def __init__(
+        self, rec: "SpanRecorder", node: _Node, stack: list, sync: bool = False
+    ) -> None:
         self._rec = rec
         self._node = node
         self._stack = stack
         self._t0 = 0.0
         self._child_s = 0.0
+        self._sync = sync
 
     def __enter__(self) -> "_Span":
         self._stack.append(self)
@@ -96,6 +124,8 @@ class _Span:
         return self
 
     def __exit__(self, *_exc) -> bool:
+        if self._sync:
+            _synchronize()
         dt = time.perf_counter() - self._t0
         # Identity pop: an exception may have skipped inner __exit__ calls, so
         # pop through them. Guarded by a membership check — if `self` is NOT on
@@ -131,8 +161,11 @@ class _Span:
 class SpanRecorder:
     """Collects a span tree. One per profiled scope."""
 
-    def __init__(self, priority: int = PRIORITY_SESSION) -> None:
+    def __init__(
+        self, priority: int = PRIORITY_SESSION, gpu_sync: bool | None = None
+    ) -> None:
         self.priority = int(priority)
+        self.gpu_sync = deep_gpu_enabled() if gpu_sync is None else bool(gpu_sync)
         self._lock = threading.Lock()
         self._roots: dict[str, _Node] = {}
         # Stacks are thread-local: a single shared stack would interleave
@@ -222,7 +255,7 @@ class SpanRecorder:
                 table[name] = node
             if units is not None:
                 node.units += float(units)
-        return _Span(self, node, stack)
+        return _Span(self, node, stack, gpu and self.gpu_sync)
 
     # -- output ---------------------------------------------------------
 

@@ -128,6 +128,18 @@ class _TestFrame:
     index: int
 
 
+def _effective_depth(depth: int) -> int:
+    """``pipeline_depth``, clamped to 1 under the deep-GPU profiling pass.
+
+    A device-wide sync taken on the consumer thread drains the producer's
+    in-flight OBB kernels, so deep-GPU mode removes the producer rather than
+    reporting cross-stage misattribution as fact.
+    """
+    from hydra_suite.utils.profiling import deep_gpu_enabled
+
+    return 1 if deep_gpu_enabled() else int(depth)
+
+
 class Pipeline:
     """Inference orchestrator over frame-indexed windows.
 
@@ -165,8 +177,10 @@ class Pipeline:
         self.runtime = runtime
         self.cache_writer = cache_writer
         # Effective execution model: 1 (sync) or N>=2 (deep prefetch). depth
-        # takes effect directly — no clamping.
-        self.depth = depth
+        # takes effect directly — no clamping, except under the opt-in
+        # deep-GPU profiling pass (HYDRA_PROFILE_GPU), which forces 1 so a
+        # device-wide sync never drains a producer thread's in-flight work.
+        self.depth = _effective_depth(depth)
         # Bounded hand-off queue size for depth>=2. The default scales with depth:
         # ``maxsize = depth - 1`` lets the producer run up to ``depth-1`` windows
         # ahead of the single consumer (depth=2 -> 1, the classic double buffer;
