@@ -38,11 +38,27 @@ import json
 import logging
 import time
 from collections import defaultdict
+from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
 
+from hydra_suite.utils.profiling import PRIORITY_SESSION, SpanRecorder
+from hydra_suite.utils.profiling_report import SPAN_TREE_HEADER, render_tree_lines
+
 logger = logging.getLogger(__name__)
+
+
+def _gpu_mode() -> str:
+    """``"deep"`` when HYDRA_PROFILE_GPU=1 (see Task 6), else ``"off"``.
+
+    Stamped into the JSON so nobody compares a serialized depth=1 tree
+    against a production depth=2 one.
+    """
+    import os
+
+    return "deep" if os.environ.get("HYDRA_PROFILE_GPU") else "off"
+
 
 # Canonical ordering for display / export.
 CATEGORY_ORDER = [
@@ -140,6 +156,11 @@ class TrackingProfiler:
 
     def __init__(self, enabled: bool = False):
         self.enabled = enabled
+        # The span recorder is the ONLY thing built before the early return, so
+        # `.spans` is always a valid attribute (None when disabled).
+        self.spans: SpanRecorder | None = (
+            SpanRecorder(priority=PRIORITY_SESSION) if enabled else None
+        )
         if not enabled:
             return
 
@@ -190,6 +211,28 @@ class TrackingProfiler:
         if not self.enabled:
             return
         self._config.update(kwargs)
+
+    # ------------------------------------------------------------------
+    # Span profiling
+    # ------------------------------------------------------------------
+    @contextmanager
+    def armed(self):
+        """Arm the span recorder for the duration of the block.
+
+        Every consumer (the runner pass, ``TrackingSessionCore``, ``merge``,
+        ``interpolated_crops``) wraps its work in this. Nested arms defer to
+        the outermost profiler of equal priority, so a session-scoped tree
+        keeps its ``merge`` and ``interp_crops`` subtrees instead of having
+        them split into a separate recorder.
+
+        A no-op when disabled — ``span()`` then returns the shared null
+        singleton and nothing is recorded.
+        """
+        if self.spans is None:
+            yield self
+            return
+        with self.spans.armed():
+            yield self
 
     # ------------------------------------------------------------------
     # Phase / interval boundary helpers
@@ -503,6 +546,8 @@ class TrackingProfiler:
             ),
             "phases": phases,
             "categories": categories,
+            "gpu_mode": _gpu_mode(),
+            "spans": self.spans.snapshot() if self.spans is not None else None,
         }
         if self._config:
             summary["config"] = self._config
@@ -601,6 +646,15 @@ class TrackingProfiler:
                 "TOTAL",
                 summary["avg_frame_ms"],
             )
+
+        spans = summary.get("spans")
+        if spans and spans.get("children"):
+            logger.info("-" * 60)
+            logger.info("  SPAN TREE  (gpu_mode=%s)", summary.get("gpu_mode", "off"))
+            logger.info(SPAN_TREE_HEADER)
+            logger.info("-" * 60)
+            for line in render_tree_lines(spans, main_thread=spans["thread"]):
+                logger.info("%s", line)
         logger.info("=" * 60)
 
     # ------------------------------------------------------------------
