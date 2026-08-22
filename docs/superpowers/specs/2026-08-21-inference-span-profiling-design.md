@@ -3,7 +3,8 @@
 **Status:** pending implementation plan
 **Date:** 2026-08-21
 **Branch:** `feat/inference-span-profiling`
-**Revision:** 2 — reworked after adversarial review (see Review Corrections)
+**Revision:** 3 — plan-stage adversarial review corrected the self-proving
+fixture (revision 2 had it inverted) and the Debug-OFF gate mechanism
 
 ## Problem
 
@@ -360,7 +361,15 @@ Byte-identical tracking output, Debug on **and** off, via
 `tools/equivalence/run_matrix.sh` — MPS on this box, CUDA on mehek. Baseline
 `legacy/main`. The matrix is run **before** the change with the same baseline so
 the slice's effect is attributable. Fixtures already profile hot; one additional
-run with `debug_mode: false` injected proves the off-path is identical. Row
+run with **`enable_profiling: false`** injected proves the off-path is
+identical. It must **not** be done by setting `debug_mode: false`: that
+derives `DEBUG_MODE=False`, which triggers the User-mode cleanup at
+`session.py:619-637` and **deletes `_forward.csv` and `_tracking_final.csv`** —
+the two files the acceptance criterion compares. The code says so itself
+("NO-OP in debug mode (and thus a no-op for the equivalence gate)"). Clearing
+`enable_profiling` while leaving `debug_mode` absent keeps DEBUG_MODE at its
+`True` default, so the debug CSVs are still written, and disarms every span —
+which isolates exactly the variable under test. Row
 counts verified `> 1`; conda active throughout. Known baseline noise: bistable
 head/tail pi-flips on head/tail clips.
 
@@ -388,10 +397,22 @@ that deliberately changes the schedule.
 
 ### Self-proving run
 
-Revision 1 named `pose/backend_forward` on `ant_cnn_identity`, which **has no
-pose model** (head-tail + CNN only) — that criterion was vacuous. Corrected:
+Revision 2 moved this run to `ant_obb_sleap` on the claim that
+`ant_cnn_identity` "has no pose model". **That was backwards and is corrected
+here.** Verified against the fixture configs:
 
-`ant_obb_sleap` (pose + SLEAP) at stock `detection_batch_size=1` versus the same
+| fixture | `enable_pose_extractor` | `pose_model_dir` | `cnn_classifiers` | headtail |
+|---|---|---|---|---|
+| `ant_obb_sleap` | `false` | — | `[]` | yes |
+| `ant_cnn_identity` | `true` | SLEAP unet | 1 model | yes |
+
+`is_pose_inference_enabled` (`session_policy.py:29`) requires both
+`enable_pose_extractor` and a non-empty `pose_model_dir`, so **`ant_obb_sleap`
+runs neither pose nor CNN** — two of the three `backend_forward` nodes the
+criterion compares do not exist there. `ant_cnn_identity` is the only fixture
+carrying all three consumers. Revision 1's clip was right; revision 2 broke it.
+
+`ant_cnn_identity` at stock `detection_batch_size=1` versus the same
 clip at 25 via `tools/equivalence/runner.py --detection-batch-size`
 (`:143,156-157,240`, flowing to `window_size` at `pipeline.py:178-189`),
 comparing `n_calls` and `ms/unit` on `pose/backend_forward`,
@@ -473,7 +494,9 @@ Three adversarial reviews ran against revision 1. Substantive corrections:
 - **Three off-thread sites were missed**, including the prefetcher directly
   under `interp_crops/crop_extraction/read`.
 - **`run_bgsub` → `run_bgsub_batch`** in the batch tree (`pipeline.py:227`).
-- **Self-proving fixture had no pose model**; moved to `ant_obb_sleap`.
+- **Self-proving fixture** was moved to `ant_obb_sleap` on an inverted reading
+  of the configs; **revision 3 moves it back to `ant_cnn_identity`**, the only
+  fixture with pose + CNN + head-tail all enabled.
 - **Overhead protocol** strengthened from one pair to N=5 median/IQR.
 - **Added:** `max_s`/`first_call_s`, name registry + golden test, thread-local
   stacks made explicit, `HYDRA_PROFILE` precedence/dump/User-mode specified,
