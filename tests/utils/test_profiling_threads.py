@@ -106,4 +106,8 @@ def test_concurrent_totals_may_exceed_wall_clock():
         t.join()
     snap = rec.snapshot()
     summed = sum(c["total_s"] for c in snap["children"])
-    assert summed > 0.08  # ~0.10 of span time inside ~0.05 of wall-clock
+    # summed span time exceeding the recorder's own wall-clock is only
+    # possible when the two spans genuinely overlapped in time — a
+    # threshold against an absolute constant would pass even if the
+    # implementation regressed to running the two spans sequentially.
+    assert summed > snap["total_s"]
