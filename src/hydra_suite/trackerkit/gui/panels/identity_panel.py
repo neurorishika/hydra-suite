@@ -218,19 +218,12 @@ class IdentityPanel(QWidget):
         )
         self.lbl_individual_batch_notice.setVisible(False)
         vl_cnn.addWidget(self.lbl_individual_batch_notice)
-        self.cnn_scroll_area = QScrollArea()
-        self.cnn_scroll_area.setWidgetResizable(True)
-        self.cnn_scroll_area.setFrameShape(QFrame.NoFrame)
+        self.cnn_scroll_area = QWidget()
         self.cnn_scroll_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-        self.cnn_scroll_area.setMinimumHeight(0)
-        self.cnn_scroll_area.setMaximumHeight(200)
         self.cnn_scroll_area.setVisible(False)
-        cnn_scroll_widget = QWidget()
-        cnn_scroll_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-        self.cnn_rows_layout = QVBoxLayout(cnn_scroll_widget)
+        self.cnn_rows_layout = QVBoxLayout(self.cnn_scroll_area)
         self.cnn_rows_layout.setSpacing(6)
         self.cnn_rows_layout.setContentsMargins(0, 0, 0, 0)
-        self.cnn_scroll_area.setWidget(cnn_scroll_widget)
         vl_cnn.addWidget(self.cnn_scroll_area)
         identity_content_layout.addWidget(self.g_cnn_classifiers)
 
@@ -374,9 +367,6 @@ class IdentityPanel(QWidget):
             "Minimum classifier confidence for a head-tail assignment to be accepted (0–1).\n"
             "Lower = more assignments accepted; higher = fewer but more reliable."
         )
-        fl_headtail.addRow(
-            "Head-tail min classifier confidence", self.spin_yolo_headtail_conf
-        )
 
         self.spin_yolo_headtail_detect_conf = QDoubleSpinBox()
         self.spin_yolo_headtail_detect_conf.setRange(0.0, 1.0)
@@ -388,8 +378,13 @@ class IdentityPanel(QWidget):
             "Detections below this threshold are not re-run and remain unknown."
         )
         fl_headtail.addRow(
-            "Head-tail min detection confidence",
-            self.spin_yolo_headtail_detect_conf,
+            "Head-tail confidence",
+            self._build_inline_fields_row(
+                [
+                    ("Classifier min", self.spin_yolo_headtail_conf, 1),
+                    ("Detection min", self.spin_yolo_headtail_detect_conf, 1),
+                ]
+            ),
         )
 
         self.spin_headtail_batch = QSpinBox()
@@ -406,15 +401,6 @@ class IdentityPanel(QWidget):
         self.spin_headtail_batch.valueChanged.connect(
             self._sync_realtime_individual_batch_ui
         )
-
-        self.chk_pose_overrides_headtail = QCheckBox(
-            "Pose orientation overrides head-tail"
-        )
-        self.chk_pose_overrides_headtail.setChecked(True)
-        self.chk_pose_overrides_headtail.setToolTip(
-            "When enabled, valid pose heading takes precedence over head-tail heading."
-        )
-        fl_headtail.addRow("", self.chk_pose_overrides_headtail)
 
         headtail_content_layout.addLayout(fl_headtail)
         vl_headtail.addWidget(self.headtail_content)
@@ -544,6 +530,15 @@ class IdentityPanel(QWidget):
         h_pose_skeleton.addWidget(self.line_pose_skeleton_file)
         h_pose_skeleton.addWidget(self.btn_browse_pose_skeleton_file)
         fl_pose.addRow("Skeleton file", h_pose_skeleton)
+
+        self.chk_pose_overrides_headtail = QCheckBox(
+            "Pose orientation overrides head-tail"
+        )
+        self.chk_pose_overrides_headtail.setChecked(True)
+        self.chk_pose_overrides_headtail.setToolTip(
+            "When enabled, valid pose heading takes precedence over head-tail heading."
+        )
+        fl_pose.addRow("", self.chk_pose_overrides_headtail)
 
         self.list_pose_ignore_keypoints = QListWidget()
         self.list_pose_ignore_keypoints.setSelectionMode(
@@ -822,12 +817,33 @@ class IdentityPanel(QWidget):
             self.lbl_input_size = QLabel("\u2014")
             self.lbl_label = QLabel("\u2014")
             self.lbl_recommended_confidence = QLabel("\u2014")
-            form.addRow("Architecture", self.lbl_arch)
-            form.addRow("Num classes", self.lbl_num_classes)
-            form.addRow("Class names", self.lbl_class_names)
-            form.addRow("Input size", self.lbl_input_size)
-            form.addRow("Classification label", self.lbl_label)
-            form.addRow("Recommended threshold", self.lbl_recommended_confidence)
+            form.addRow(
+                "Model info",
+                IdentityPanel._build_inline_fields_row(
+                    [
+                        ("Architecture", self.lbl_arch, 1),
+                        ("Num classes", self.lbl_num_classes, 1),
+                    ]
+                ),
+            )
+            form.addRow(
+                "",
+                IdentityPanel._build_inline_fields_row(
+                    [
+                        ("Class names", self.lbl_class_names, 1),
+                        ("Input size", self.lbl_input_size, 1),
+                    ]
+                ),
+            )
+            form.addRow(
+                "",
+                IdentityPanel._build_inline_fields_row(
+                    [
+                        ("Classification label", self.lbl_label, 1),
+                        ("Recommended threshold", self.lbl_recommended_confidence, 1),
+                    ]
+                ),
+            )
             self.chk_unique_identifier = QCheckBox(
                 "Treat this classifier as a unique identifier"
             )
@@ -843,7 +859,6 @@ class IdentityPanel(QWidget):
                 "but it has no effect on identity assignment or tracking.\n"
                 "Enable this only for classifiers whose classes uniquely identify individuals."
             )
-            form.addRow("Unique identifier", self.chk_unique_identifier)
             self.chk_unique_identifier.toggled.connect(
                 lambda _checked: self._sync_calibration_status()
             )
@@ -857,7 +872,13 @@ class IdentityPanel(QWidget):
             )
             self.btn_non_identifying.setEnabled(self.chk_unique_identifier.isChecked())
             self.btn_non_identifying.clicked.connect(self._edit_non_identifying)
-            form.addRow("", self.btn_non_identifying)
+            unique_id_row = QWidget()
+            unique_id_row_layout = QHBoxLayout(unique_id_row)
+            unique_id_row_layout.setContentsMargins(0, 0, 0, 0)
+            unique_id_row_layout.setSpacing(8)
+            unique_id_row_layout.addWidget(self.chk_unique_identifier, 1)
+            unique_id_row_layout.addWidget(self.btn_non_identifying, 0)
+            form.addRow("Unique identifier", unique_id_row)
             self.chk_unique_identifier.toggled.connect(
                 self.btn_non_identifying.setEnabled
             )
@@ -886,11 +907,18 @@ class IdentityPanel(QWidget):
             self.spin_confidence.setRange(0.0, 1.0)
             self.spin_confidence.setSingleStep(0.05)
             self.spin_confidence.setValue(0.5)
-            form.addRow("Confidence threshold", self.spin_confidence)
             self.spin_window = QSpinBox()
             self.spin_window.setRange(1, 100)
             self.spin_window.setValue(10)
-            form.addRow("History window", self.spin_window)
+            form.addRow(
+                "",
+                IdentityPanel._build_inline_fields_row(
+                    [
+                        ("Confidence threshold", self.spin_confidence, 1),
+                        ("History window", self.spin_window, 1),
+                    ]
+                ),
+            )
             self.spin_batch = QSpinBox()
             self.spin_batch.setRange(1, 256)
             self.spin_batch.setValue(64)

@@ -693,6 +693,72 @@ class MainWindow(QMainWindow):
 
         left_layout.addWidget(self.scroll, stretch=1)
 
+        # Floating zoom control, overlaid on the video canvas (not laid out
+        # alongside it) -- anchored to the right edge, vertically centered,
+        # spanning ~50% of the canvas height.
+        self.zoom_overlay = QFrame(self.scroll.viewport())
+        self.zoom_overlay.setStyleSheet(
+            "QFrame { background-color: rgba(37, 37, 38, 210); border-radius: 8px; }"
+        )
+        self.zoom_overlay.setFixedWidth(44)
+        zoom_layout = QVBoxLayout(self.zoom_overlay)
+        zoom_layout.setContentsMargins(4, 8, 4, 8)
+        zoom_layout.setSpacing(4)
+
+        zoom_label = QLabel("Zoom")
+        zoom_label.setAlignment(Qt.AlignCenter)
+        zoom_label.setStyleSheet("font-weight: bold; color: #cccccc; font-size: 10px;")
+
+        self.slider_zoom = QSlider(Qt.Vertical)
+        self.slider_zoom.setRange(10, 500)  # 0.1x to 5.0x, scaled by 100
+        self.slider_zoom.setValue(100)  # 1.0x
+        self.slider_zoom.setTickPosition(QSlider.NoTicks)
+        self.slider_zoom.setMinimumHeight(60)
+        self.slider_zoom.valueChanged.connect(
+            lambda v: (
+                self._detection_panel._on_zoom_changed(v)
+                if hasattr(self, "_detection_panel")
+                else None
+            )
+        )
+
+        self.label_zoom_val = QLabel("1.00x")
+        self.label_zoom_val.setAlignment(Qt.AlignCenter)
+        self.label_zoom_val.setStyleSheet(
+            "color: #4fc1ff; font-weight: bold; font-size: 10px;"
+        )
+
+        zoom_layout.addWidget(zoom_label)
+        zoom_layout.addWidget(self.slider_zoom, stretch=1, alignment=Qt.AlignHCenter)
+        zoom_layout.addWidget(self.label_zoom_val)
+
+        self.zoom_overlay.raise_()
+
+        def _position_zoom_overlay():
+            viewport = self.scroll.viewport()
+            margin = 12
+            height = max(int(viewport.height() * 0.5), 140)
+            height = min(height, max(viewport.height() - 2 * margin, 60))
+            x = viewport.width() - self.zoom_overlay.width() - margin
+            y = (viewport.height() - height) // 2
+            self.zoom_overlay.setGeometry(
+                max(x, 0), max(y, 0), self.zoom_overlay.width(), height
+            )
+
+        self._position_zoom_overlay = _position_zoom_overlay
+
+        # self.scroll is Python-instantiated so its resizeEvent can be
+        # monkey-patched directly; its internal viewport() widget is created
+        # by the C++ side and does NOT support per-instance event overrides.
+        _orig_scroll_resize_event = self.scroll.resizeEvent
+
+        def _scroll_resize_event(event):
+            _orig_scroll_resize_event(event)
+            self._position_zoom_overlay()
+
+        self.scroll.resizeEvent = _scroll_resize_event
+        self._position_zoom_overlay()
+
         # Interactive instructions
         self.interaction_help = QLabel(
             "Double-click: Fit to screen  •  Drag: Pan  •  Ctrl+Scroll/Pinch: Zoom"
@@ -705,39 +771,6 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(self.interaction_help)
 
         left_layout.addWidget(roi_frame)
-
-        # Zoom control under video
-        zoom_frame = QFrame()
-        zoom_frame.setStyleSheet("background-color: #252526; border-radius: 6px;")
-        zoom_layout = QHBoxLayout(zoom_frame)
-        zoom_layout.setContentsMargins(8, 4, 8, 4)
-
-        zoom_label = QLabel("Zoom")
-        zoom_label.setStyleSheet("font-weight: bold; color: #cccccc;")
-
-        self.slider_zoom = QSlider(Qt.Horizontal)
-        self.slider_zoom.setRange(10, 500)  # 0.1x to 5.0x, scaled by 100
-        self.slider_zoom.setValue(100)  # 1.0x
-        self.slider_zoom.setTickPosition(QSlider.TicksBelow)
-        self.slider_zoom.setTickInterval(50)
-        self.slider_zoom.valueChanged.connect(
-            lambda v: (
-                self._detection_panel._on_zoom_changed(v)
-                if hasattr(self, "_detection_panel")
-                else None
-            )
-        )
-
-        self.label_zoom_val = QLabel("1.00x")
-        self.label_zoom_val.setStyleSheet(
-            "color: #4fc1ff; font-weight: bold; min-width: 50px;"
-        )
-
-        zoom_layout.addWidget(zoom_label)
-        zoom_layout.addWidget(self.slider_zoom, stretch=1)
-        zoom_layout.addWidget(self.label_zoom_val)
-
-        left_layout.addWidget(zoom_frame)
 
         # Preview detection button (uses current player frame)
         preview_frame = QFrame()

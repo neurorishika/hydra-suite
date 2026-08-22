@@ -194,7 +194,7 @@ class TrackingPanel(QWidget):
                     self.chk_enable_backward,
                     self.chk_enable_confidence_density_map,
                 ],
-                columns=1,
+                columns=2,
             )
         )
         vl_core.addLayout(f_core)
