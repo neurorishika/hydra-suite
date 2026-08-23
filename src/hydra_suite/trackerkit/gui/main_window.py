@@ -1694,7 +1694,28 @@ class MainWindow(QMainWindow):
         finally:
             self._setup_panel.list_batch_videos.setEnabled(True)
 
-        self._setup_video_file(fp, skip_config_load=False, _probe=probe)
+        from hydra_suite.trackerkit.gui.orchestrators.config import (
+            _get_video_config_path,
+        )
+        from hydra_suite.trackerkit.session_plan import resolve_video_plan
+
+        plan = resolve_video_plan(
+            fp,
+            keystone_config_path=_get_video_config_path(self.batch_videos[0]),
+            keystone_override=self._setup_panel.chk_batch_keystone_override.isChecked(),
+        )
+        # NOTE: `_setup_video_file` unconditionally clears the ROI/arena state
+        # near its top (`clear_roi()`), so a keystone-config load must happen
+        # AFTER it, not before -- loading first would just be wiped out again
+        # by the clear inside `_setup_video_file`. (Confirmed via a live
+        # repro during Fix Wave 16; see the fix-wave report.)
+        self._setup_video_file(
+            fp,
+            skip_config_load=plan.use_keystone_baseline or not plan.has_own_config,
+            _probe=probe,
+        )
+        if plan.use_keystone_baseline and plan.config_path:
+            self._config_orch._load_config_from_file(plan.config_path)
         self._session_orch._refresh_batch_list_current_video(previous_video_path, fp)
 
     def _remove_from_batch(self):

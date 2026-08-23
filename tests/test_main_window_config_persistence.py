@@ -720,6 +720,175 @@ def test_video_autoload_with_saved_roi_produces_correctly_fit_non_compounded_fra
     window.close()
 
 
+def _make_batch_pair_videos(tmp_path: Path) -> tuple[Path, Path]:
+    """Create two tiny real videos (matching the established VideoWriter
+    pattern in this file) to use as a keystone (A) + non-keystone (B) pair
+    for batch double-click switching tests."""
+    import cv2
+
+    width, height = 64, 48
+    videos = []
+    for name in ("a.mp4", "b.mp4"):
+        video_path = tmp_path / name
+        writer = cv2.VideoWriter(
+            str(video_path), cv2.VideoWriter_fourcc(*"mp4v"), 10.0, (width, height)
+        )
+        for _ in range(3):
+            writer.write(np.zeros((height, width, 3), dtype=np.uint8))
+        writer.release()
+        videos.append(video_path)
+    return videos[0], videos[1]
+
+
+def test_batch_video_double_click_switch_inherits_keystone_roi_when_own_config_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    """Fix Wave 16 regression guard: manually double-clicking a batch video
+    with no saved config of its own must inherit the keystone's arena/ROI
+    shapes, not silently clear them to empty.
+
+    Reproduces the exact scenario from the root-cause investigation: video A
+    (keystone) has a saved sidecar config with ``roi_shapes``; video B has no
+    sidecar config at all. Selecting B's row and double-clicking it must
+    leave ``window.roi_shapes``/``window.video_label._shapes`` equal to A's
+    shapes, not ``[]``.
+    """
+    video_a, video_b = _make_batch_pair_videos(tmp_path)
+
+    keystone_shapes = [
+        {"type": "circle", "params": [30, 20, 10], "mode": "include", "arena_id": 0},
+    ]
+
+    window = _make_main_window(monkeypatch)
+    window._setup_video_file(str(video_a), skip_config_load=True)
+    qapp.processEvents()
+    qapp.processEvents()
+
+    window.roi_shapes = list(keystone_shapes)
+    window.video_label.set_shapes(list(keystone_shapes))
+    assert window.save_config(prompt_if_exists=False)
+
+    window._setup_panel.g_batch.setChecked(True)
+    window.batch_videos = [str(video_a), str(video_b)]
+    window._sync_batch_list_ui()
+    window._setup_panel.list_batch_videos.setCurrentRow(1)
+
+    window._on_batch_video_double_clicked()
+    qapp.processEvents()
+    qapp.processEvents()
+
+    assert window.roi_shapes == keystone_shapes
+    assert window.video_label._shapes == keystone_shapes
+
+    window.close()
+
+
+def test_batch_video_double_click_switch_prefers_own_config_over_keystone(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    """Fix Wave 16: the keystone-inherit fix must not force EVERY batch video
+    onto the keystone baseline -- a video with its OWN saved config must
+    still win, matching ``resolve_video_plan``'s own-config-wins precedence.
+    """
+    video_a, video_b = _make_batch_pair_videos(tmp_path)
+
+    keystone_shapes = [
+        {"type": "circle", "params": [30, 20, 10], "mode": "include", "arena_id": 0},
+    ]
+    own_shapes = [
+        {"type": "circle", "params": [40, 15, 8], "mode": "include", "arena_id": 0},
+    ]
+
+    window = _make_main_window(monkeypatch)
+    window._setup_video_file(str(video_a), skip_config_load=True)
+    qapp.processEvents()
+    qapp.processEvents()
+
+    window.roi_shapes = list(keystone_shapes)
+    window.video_label.set_shapes(list(keystone_shapes))
+    assert window.save_config(prompt_if_exists=False)
+
+    window._setup_panel.g_batch.setChecked(True)
+    window.batch_videos = [str(video_a), str(video_b)]
+    window._sync_batch_list_ui()
+
+    # Give video B its own saved config with DIFFERENT shapes before
+    # switching to it.
+    cfg_b = window.get_parameters_dict()
+    cfg_b.pop("ROI_MASK", None)
+    cfg_b.pop("ARENA_LABELS", None)
+    cfg_b["roi_shapes"] = own_shapes
+    cfg_b["file_path"] = str(video_b)
+    config_path_b = tmp_path / "b_config.json"
+    config_path_b.write_text(json.dumps(cfg_b), encoding="utf-8")
+
+    window._setup_panel.list_batch_videos.setCurrentRow(1)
+    window._on_batch_video_double_clicked()
+    qapp.processEvents()
+    qapp.processEvents()
+
+    assert window.roi_shapes == own_shapes
+    assert window.video_label._shapes == own_shapes
+
+    window.close()
+
+
+def test_batch_video_double_click_keystone_override_forces_keystone_baseline(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    """Fix Wave 16: with ``chk_batch_keystone_override`` checked, even a
+    batch video WITH its own saved config must end up using the KEYSTONE's
+    shapes instead of its own after a double-click switch, matching
+    ``resolve_video_plan``'s documented override semantics.
+    """
+    video_a, video_b = _make_batch_pair_videos(tmp_path)
+
+    keystone_shapes = [
+        {"type": "circle", "params": [30, 20, 10], "mode": "include", "arena_id": 0},
+    ]
+    own_shapes = [
+        {"type": "circle", "params": [40, 15, 8], "mode": "include", "arena_id": 0},
+    ]
+
+    window = _make_main_window(monkeypatch)
+    window._setup_video_file(str(video_a), skip_config_load=True)
+    qapp.processEvents()
+    qapp.processEvents()
+
+    window.roi_shapes = list(keystone_shapes)
+    window.video_label.set_shapes(list(keystone_shapes))
+    assert window.save_config(prompt_if_exists=False)
+
+    window._setup_panel.g_batch.setChecked(True)
+    window.batch_videos = [str(video_a), str(video_b)]
+    window._sync_batch_list_ui()
+
+    cfg_b = window.get_parameters_dict()
+    cfg_b.pop("ROI_MASK", None)
+    cfg_b.pop("ARENA_LABELS", None)
+    cfg_b["roi_shapes"] = own_shapes
+    cfg_b["file_path"] = str(video_b)
+    config_path_b = tmp_path / "b_config.json"
+    config_path_b.write_text(json.dumps(cfg_b), encoding="utf-8")
+
+    window._setup_panel.chk_batch_keystone_override.setChecked(True)
+    window._setup_panel.list_batch_videos.setCurrentRow(1)
+    window._on_batch_video_double_clicked()
+    qapp.processEvents()
+    qapp.processEvents()
+
+    assert window.roi_shapes == keystone_shapes
+    assert window.video_label._shapes == keystone_shapes
+
+    window.close()
+
+
 def test_remove_buttons_delete_only_the_selected_tracker_models(
     monkeypatch: pytest.MonkeyPatch,
     qapp: QApplication,
