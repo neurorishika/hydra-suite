@@ -16,6 +16,7 @@ pytest.importorskip("PySide6")
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from hydra_suite.trackerkit.gui.main_window import MainWindow
+from hydra_suite.trackerkit.gui.orchestrators import tracking as tracking_module
 from hydra_suite.trackerkit.gui.orchestrators.config import ConfigOrchestrator
 
 
@@ -885,6 +886,124 @@ def test_batch_video_double_click_keystone_override_forces_keystone_baseline(
 
     assert window.roi_shapes == keystone_shapes
     assert window.video_label._shapes == keystone_shapes
+
+    window.close()
+
+
+def test_batch_continuation_finalize_inherits_keystone_roi_when_own_config_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    """Fix Wave 17 regression guard: the AUTOMATED batch-continuation block
+    inside ``_finalize_tracking_session_ui`` (reached when an unattended,
+    multi-video batch tracking run finishes one video and advances to the
+    next) must inherit the keystone's arena/ROI shapes for a video without
+    its own saved config -- not silently clear them to ``[]``/``roi_mask =
+    None``, which would track the whole frame with no arena restriction.
+
+    Reproduces the exact scenario from the root-cause investigation: video A
+    (keystone) has a saved sidecar config with ``roi_shapes``; video B (the
+    next video in ``batch_videos``) has no sidecar config at all. Finishing
+    video A and letting ``_finalize_tracking_session_ui`` advance the batch
+    index to B must leave ``window.roi_shapes`` equal to A's shapes (not
+    ``[]``) and ``window.roi_mask is not None``.
+    """
+    video_a, video_b = _make_batch_pair_videos(tmp_path)
+
+    keystone_shapes = [
+        {"type": "circle", "params": [30, 20, 10], "mode": "include", "arena_id": 0},
+    ]
+
+    window = _make_main_window(monkeypatch)
+    window._setup_video_file(str(video_a), skip_config_load=True)
+    qapp.processEvents()
+    qapp.processEvents()
+
+    window.roi_shapes = list(keystone_shapes)
+    window.video_label.set_shapes(list(keystone_shapes))
+    assert window.save_config(prompt_if_exists=False)
+
+    window._setup_panel.g_batch.setChecked(True)
+    window.batch_videos = [str(video_a), str(video_b)]
+    window._sync_batch_list_ui()
+    window.current_batch_index = 0
+    window._setup_panel.list_batch_videos.setCurrentRow(0)
+
+    # Suppress the QTimer.singleShot(1000, ...) auto-start of the next
+    # video's tracking pass -- irrelevant to this test and would otherwise
+    # leave a live tracking worker running after the test returns.
+    monkeypatch.setattr(
+        tracking_module.QTimer, "singleShot", lambda *args, **kwargs: None
+    )
+
+    window._tracking_orch._finalize_tracking_session_ui()
+    qapp.processEvents()
+    qapp.processEvents()
+
+    assert window.current_batch_index == 1
+    assert window.roi_shapes == keystone_shapes
+    assert window.roi_mask is not None
+
+    window.close()
+
+
+def test_batch_continuation_finalize_prefers_own_config_over_keystone(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    """Fix Wave 17 mirror-image test: the automated batch-continuation block
+    must not force EVERY batch video onto the keystone baseline -- a video
+    with its OWN saved config must still win, matching
+    ``resolve_video_plan``'s own-config-wins precedence (already proven for
+    the manual double-click path by Fix Wave 16).
+    """
+    video_a, video_b = _make_batch_pair_videos(tmp_path)
+
+    keystone_shapes = [
+        {"type": "circle", "params": [30, 20, 10], "mode": "include", "arena_id": 0},
+    ]
+    own_shapes = [
+        {"type": "circle", "params": [40, 15, 8], "mode": "include", "arena_id": 0},
+    ]
+
+    window = _make_main_window(monkeypatch)
+    window._setup_video_file(str(video_a), skip_config_load=True)
+    qapp.processEvents()
+    qapp.processEvents()
+
+    window.roi_shapes = list(keystone_shapes)
+    window.video_label.set_shapes(list(keystone_shapes))
+    assert window.save_config(prompt_if_exists=False)
+
+    window._setup_panel.g_batch.setChecked(True)
+    window.batch_videos = [str(video_a), str(video_b)]
+    window._sync_batch_list_ui()
+    window.current_batch_index = 0
+    window._setup_panel.list_batch_videos.setCurrentRow(0)
+
+    # Give video B its own saved config with DIFFERENT shapes before
+    # finalize advances the batch index to it.
+    cfg_b = window.get_parameters_dict()
+    cfg_b.pop("ROI_MASK", None)
+    cfg_b.pop("ARENA_LABELS", None)
+    cfg_b["roi_shapes"] = own_shapes
+    cfg_b["file_path"] = str(video_b)
+    config_path_b = tmp_path / "b_config.json"
+    config_path_b.write_text(json.dumps(cfg_b), encoding="utf-8")
+
+    monkeypatch.setattr(
+        tracking_module.QTimer, "singleShot", lambda *args, **kwargs: None
+    )
+
+    window._tracking_orch._finalize_tracking_session_ui()
+    qapp.processEvents()
+    qapp.processEvents()
+
+    assert window.current_batch_index == 1
+    assert window.roi_shapes == own_shapes
+    assert window.roi_mask is not None
 
     window.close()
 

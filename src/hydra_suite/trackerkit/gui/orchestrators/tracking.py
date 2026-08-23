@@ -981,13 +981,19 @@ class TrackingOrchestrator:
                     ),
                     keystone_override=self._panels.setup.chk_batch_keystone_override.isChecked(),
                 )
-                if plan.use_keystone_baseline and plan.config_path:
-                    self._mw._config_orch._load_config_from_file(plan.config_path)
+                # NOTE: _setup_video_file unconditionally clears the ROI/arena
+                # state near its top (clear_roi()), so a keystone-config load
+                # must happen AFTER it, not before -- loading first would just
+                # be wiped out again by the clear inside _setup_video_file.
+                # (Confirmed via a live repro; see Fix Wave 16 and Fix Wave 17
+                # reports for the root cause and verification.)
                 self._mw._setup_video_file(
                     fp,
                     skip_config_load=plan.use_keystone_baseline
                     or not plan.has_own_config,
                 )
+                if plan.use_keystone_baseline and plan.config_path:
+                    self._mw._config_orch._load_config_from_file(plan.config_path)
 
                 # Small delay to ensure UI updates before starting next
                 logger.info(
