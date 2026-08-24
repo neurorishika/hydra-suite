@@ -350,3 +350,79 @@ def test_process_obb_results_applies_roi_mask_filter(tmp_path):
         f"{results[0].obb.num_detections} surviving"
     )
     np.testing.assert_allclose(results[0].obb.centroids[0], [5.0, 5.0])
+
+
+# ---------------------------------------------------------------------------
+# Follow-up fix (task-review finding on the roi_mask fix above):
+# InferenceRunner._frame_space_roi_mask() is called once PER FRAME by
+# load_frame() during cached-replay (both forward cache-reuse and the whole
+# backward pass). It previously re-probed the video's frame geometry via a
+# fresh cv2.VideoCapture open on every single call, even though the mask and
+# the video's geometry never change within one pass. It is now memoized per
+# (video_path, id(self._roi_mask)).
+# ---------------------------------------------------------------------------
+
+
+def test_frame_space_roi_mask_memoized_across_calls(tmp_path):
+    """_frame_space_roi_mask() must probe the video's frame geometry only
+    ONCE across repeated calls with the same video_path and roi_mask, not
+    once per call."""
+    from hydra_suite.core.inference.runner import InferenceRunner
+
+    cfg = _cfg()
+    roi_mask = _small_topleft_roi_mask()
+
+    with (
+        patch("hydra_suite.core.inference.runner._load_all_models"),
+        patch(
+            "hydra_suite.core.inference.runner._probe_frame_hw",
+            return_value=(640, 640),
+        ) as mock_probe,
+    ):
+        runner = InferenceRunner(
+            cfg, cache_dir=tmp_path, video_path="fake.mp4", roi_mask=roi_mask
+        )
+        first = runner._frame_space_roi_mask("fake.mp4")
+        second = runner._frame_space_roi_mask("fake.mp4")
+
+    assert mock_probe.call_count == 1, (
+        "_frame_space_roi_mask() must memoize its result; the underlying "
+        f"frame-geometry probe was called {mock_probe.call_count} times "
+        "across 2 calls, expected 1"
+    )
+    np.testing.assert_array_equal(first, second)
+    assert first is second
+
+
+def test_frame_space_roi_mask_invalidates_on_roi_mask_reassignment(tmp_path):
+    """Reassigning self._roi_mask to a DIFFERENT mask object (as
+    run_batch_pass's optional roi_mask override does) must invalidate the
+    memoization cache rather than silently returning the stale resample."""
+    from hydra_suite.core.inference.runner import InferenceRunner
+
+    cfg = _cfg()
+    roi_mask_a = _small_topleft_roi_mask()
+    roi_mask_b = _small_topleft_roi_mask()  # different object, same content
+
+    with (
+        patch("hydra_suite.core.inference.runner._load_all_models"),
+        patch(
+            "hydra_suite.core.inference.runner._probe_frame_hw",
+            return_value=(640, 640),
+        ) as mock_probe,
+    ):
+        runner = InferenceRunner(
+            cfg, cache_dir=tmp_path, video_path="fake.mp4", roi_mask=roi_mask_a
+        )
+        first = runner._frame_space_roi_mask("fake.mp4")
+        assert mock_probe.call_count == 1
+
+        runner._roi_mask = roi_mask_b
+        second = runner._frame_space_roi_mask("fake.mp4")
+
+    assert mock_probe.call_count == 2, (
+        "reassigning self._roi_mask to a different object must force a "
+        f"fresh resample; probe was called {mock_probe.call_count} times, "
+        "expected 2"
+    )
+    assert first is not second

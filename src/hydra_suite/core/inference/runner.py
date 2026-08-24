@@ -667,6 +667,11 @@ class InferenceRunner:
         # backward/replay run reproduce the exact same cache key via
         # caches_all_valid() and read the forward run's cache.
         self._roi_mask = roi_mask
+        # Memoizes _frame_space_roi_mask's result, keyed by (video_path,
+        # id(self._roi_mask)) so a later `self._roi_mask` reassignment (see
+        # run_batch_pass's optional roi_mask override) naturally invalidates
+        # the cache instead of silently reusing a stale resample.
+        self._frame_space_roi_mask_cache: dict = {}
         # Fingerprint of the source video; folded into every cache key so caches
         # are only reused for the exact file they were computed from.
         self._video_path = str(video_path) if video_path else None
@@ -1214,20 +1219,36 @@ class InferenceRunner:
         returned unchanged -- and ``plan_slices``' own coordinate-space guard is
         the final safety net (a shape mismatch degrades to no gating, never a
         mis-gate).
+
+        Memoized per (video_path, id(self._roi_mask)): ``load_frame`` calls
+        this once per frame during cached-replay (forward reuse and the
+        whole backward pass), and re-probing the video file's dimensions via
+        a fresh VideoCapture open on every single frame would be a real,
+        avoidable per-frame cost over a long session. The mask and the
+        video's geometry are both fixed for the life of one pass, so this is
+        safe to cache; a later `self._roi_mask` reassignment (a different
+        object) changes the cache key and forces a fresh resample rather
+        than reusing a stale one.
         """
         mask = self._roi_mask
         if mask is None:
             return None
+        cache_key = (str(video_path) if video_path else None, id(mask))
+        if cache_key in self._frame_space_roi_mask_cache:
+            return self._frame_space_roi_mask_cache[cache_key]
         frame_hw = _probe_frame_hw(str(video_path) if video_path else None)
         if frame_hw is None or mask.shape[:2] == frame_hw:
-            return mask
-        import cv2
+            resolved = mask
+        else:
+            import cv2
 
-        return cv2.resize(
-            mask,
-            (frame_hw[1], frame_hw[0]),  # cv2 wants (w, h)
-            interpolation=cv2.INTER_NEAREST,
-        )
+            resolved = cv2.resize(
+                mask,
+                (frame_hw[1], frame_hw[0]),  # cv2 wants (w, h)
+                interpolation=cv2.INTER_NEAREST,
+            )
+        self._frame_space_roi_mask_cache[cache_key] = resolved
+        return resolved
 
     def _build_pipeline(
         self, caches: _CacheSet, roi_mask: "np.ndarray | None" = None
