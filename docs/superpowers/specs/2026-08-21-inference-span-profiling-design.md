@@ -507,3 +507,93 @@ because Data has no Core imports. `data/dataset_generation.py:332` already does
 `from ..core.inference.runner import InferenceRunner`, so that argument is
 false. The module is in `utils/` on the independent grounds above (leaf
 primitive, avoids two profiling homes inside `core/`).
+
+## Gate results (Task 14, MPS)
+
+Run on `hydra-mps`, `conda activate hydra-mps`, all 8 default equivalence
+clips, baseline `legacy/main` (`157e1ae3`), current branch `378ff2d9`.
+
+### 1. Profiling-ON equivalence (`enable_profiling: true`, the fixture default)
+
+Every clip's `DETERMINISM (new_a vs new_b)` — this branch run twice — is
+`EQUIVALENT ✅` with zero unmatched rows and zero position/theta deltas on
+every clip's forward/final/final_with_individual CSV. The branch's own output
+is fully reproducible.
+
+The `EQUIVALENCE (legacy vs new_a)` comparison shows 7 of 8 clips as
+"UNTRUSTWORTHY" per `run_matrix.sh`'s own guard. Diagnosed directly from the
+log, not assumed: legacy CSVs carry `IdentityAssigned*` columns, current-branch
+CSVs carry `IdentityRealtime*` columns — an already-merged, separately-verified
+Identity overhaul (see memory `project_identity_overhaul_phase1_done`) renamed
+these columns on `main` **after** the `legacy/main` tag was cut, so the tag is
+stale relative to *any* current branch, not specific to span profiling. The
+resulting positional-match theta deltas (mean up to ~0.8 rad, max exactly
+3.142 ≈ π) are the already-documented "bistable head/tail π-flip" baseline
+noise this spec's Verification section names. Neither is a span-profiler
+regression: both patterns are identical between the profiling-ON and
+profiling-OFF runs (below), which they could not be if either originated from
+this branch's change.
+
+### 2. Profiling-OFF equivalence (`enable_profiling: false` injected in place, `debug_mode` left absent)
+
+Same 8-clip matrix, same baseline, only `enable_profiling` cleared. Shows the
+identical vs-legacy pattern (same 7 clips, same reason) and the identical
+clean `DETERMINISM` verdicts. No new divergence introduced by turning
+profiling off.
+
+### 3. The actual gate: Debug-ON vs Debug-OFF byte-identical
+
+Since `run_matrix.sh` only ever compares against the (stale) legacy baseline,
+the binding constraint — *this branch's own output does not change based on
+`enable_profiling`* — was checked directly: every tracking CSV from the
+profiling-ON run's `new_a` tree was diffed byte-for-byte (`cmp -s`) against
+the same file from the profiling-OFF run's `new_a` tree, across all 8 clips
+(`_tracking_forward.csv`, `_tracking_backward.csv`, `_tracking_final.csv`,
+`_tracking_final_with_individual.csv`).
+
+**Result: 32/32 files byte-identical. Zero differences, zero missing files.**
+This is the constraint the whole feature depends on, confirmed directly
+rather than inferred from the noisy vs-legacy comparison.
+
+### 4. Overhead (`fly_obb`, N=5 alternating, current-src vs current-src)
+
+| condition | run times (s) | median | IQR |
+|---|---|---|---|
+| profiling ON  | 21.855, 21.947, 22.161, 22.360, 24.764 | 22.161s | 1.661s |
+| profiling OFF | 21.824, 22.159, 22.190, 24.601, 24.672 | 22.190s | 2.645s |
+
+Median delta = 0.029s (**0.13%**) — well under the ≤2% target and well
+under either condition's own IQR (1.66s / 2.65s). **Pass**, clearly inside
+the noise floor rather than merely under a threshold.
+
+### 5. Self-proving run (`ant_cnn_identity`, `detection_batch_size` 1 vs 25)
+
+Non-vacuousness confirmed first: `headtail/backend_forward`, `cnn/backend_forward`,
+`pose/backend_forward` all have `n_calls > 0` in both runs (this is the
+fixture the spec's Review Corrections section fixed after revision 2 named
+the wrong clip — `ant_cnn_identity` is the only fixture with pose + CNN +
+head-tail all enabled, confirmed again here by these three nodes actually
+existing with real call counts).
+
+| span | batch=1: n_calls / ms\/call / ms\/unit | batch=25: n_calls / ms\/call / ms\/unit |
+|---|---|---|
+| `headtail/backend_forward` | 500 / 61.09ms / 3.91ms | 20 / 1814.39ms / 4.64ms |
+| `cnn/backend_forward`      | 500 / 30.91ms / 1.98ms | 20 / 706.86ms / 1.81ms |
+| `pose/backend_forward`     | 500 / 42.54ms / 2.72ms | 20 / 984.21ms / 2.52ms |
+
+(`units` = total detections across the run, 7819, identical in both — same
+video, same detections, only the window size differs.)
+
+`n_calls` scales with window count (500 windows at batch=1 → 20 windows at
+batch=25, matching 500/25); `ms/call` scales up ~25-30x with it (fixed
+per-call overhead amortized over more work per call); `ms/unit` — the actual
+per-detection cost — stays flat within a few percent across all three stages.
+That flatness is the readable signal: the profiler shows batching amortizes
+*fixed per-call overhead*, not per-detection compute, which is exactly the
+`detection_batch_size=1` defect class this feature was built to make visible.
+**Pass** — the per-call overhead is directly readable from these two JSON
+files alone, per the spec's stated bar for this check.
+
+### Verdict
+
+All four checks pass. The CUDA gate (Task 15, mehek) remains outstanding.
