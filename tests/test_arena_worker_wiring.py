@@ -782,7 +782,7 @@ class _FakeYoloRunner:
     def run_batch_pass(self, *_a, **_k):
         pass
 
-    def run_realtime(self, frame, frame_idx):
+    def run_realtime(self, frame, frame_idx, roi_mask=None):
         return _make_mismatch_frame_result(frame_idx)
 
     def load_frame(self, frame_idx):
@@ -805,9 +805,9 @@ def _make_traced_yolo_runner_cls():
     class _TracedYoloRunner(_FakeYoloRunner):
         call_log: list[str] = []
 
-        def run_realtime(self, frame, frame_idx):
+        def run_realtime(self, frame, frame_idx, roi_mask=None):
             self.call_log.append("run_realtime")
-            return super().run_realtime(frame, frame_idx)
+            return super().run_realtime(frame, frame_idx, roi_mask=roi_mask)
 
         def load_frame(self, frame_idx):
             self.call_log.append("load_frame")

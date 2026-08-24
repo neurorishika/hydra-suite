@@ -24,13 +24,20 @@ Four fixture choices that the oracle's power depends on
 1. ``worm_bgsub``. The reference construction needs detections restricted to
    one tile, i.e. a working ROI gate. Background subtraction honours
    ``ROI_MASK`` (``core/inference/stages/bgsub.py`` intersects it with the
-   foreground mask). The batched YOLO OBB path does **not**:
-   ``core/tracking/worker.py`` calls ``InferenceRunner.load_frame`` with no
-   mask, so ``filter_for_source`` gates on ``roi_mask=None`` and every
-   detection in the frame survives. That is pre-existing ``main`` behaviour --
-   no equivalence fixture sets ``roi_shapes``, so nothing covers it -- but it
-   does mean a per-region reference run is only constructible on the bg-sub
-   path today. Consequence, stated plainly: this oracle covers arena-blocked
+   foreground mask).
+
+   Historical note: at the time this file was written, the batched/cached
+   YOLO OBB path did **not** honour ``ROI_MASK`` either -- ``InferenceRunner
+   .load_frame`` and ``Pipeline._process_obb_results`` both called
+   ``filter_for_source`` with no ``roi_mask`` at all, so every detection in
+   the frame survived regardless of any configured ROI. That gap has since
+   been fixed (see ``fix/yolo-obb-realtime-roi-mask``: both call sites now
+   thread the frame-space ROI mask through). This file still uses
+   ``worm_bgsub`` rather than switching to a YOLO clip, since points 2-4
+   below (identical tile pixel statistics, the mirror-tiling gutter, and the
+   widened assignment gate) are about bg-sub-specific properties independent
+   of the ROI gate, and reworking the oracle to a YOLO fixture is a separate
+   effort. Consequence, stated plainly: this oracle covers arena-blocked
    assignment, arena-gated respawn/bootstrap and arena-grouped
    post-processing, but NOT the per-arena identity decoder registry, because
    bg-sub runs cannot enable identity analysis at all ("Individual analysis
@@ -70,11 +77,11 @@ task report for the numbers). At the widened gate it catches:
 
 It does NOT catch a leak in the per-arena identity decoder registry, and
 cannot: ``worm_bgsub`` runs with ``identity_method: none_disabled`` so no
-decoder is ever built, and covering it needs a YOLO clip -- whose ROI is
-ignored (point 1), so the "arena alone" reference is not constructible there at
-all. Until that ROI bug is fixed, the registry is covered only by its unit
-tests. Forcing a single global decoder leaves this file green; do not read that
-as evidence.
+decoder is ever built, and covering it needs a YOLO clip. The ROI gap that
+previously made a YOLO "arena alone" reference unconstructible (point 1) is
+now fixed, but this oracle has not yet been reworked to a YOLO fixture, so
+the registry is still covered only by its unit tests. Forcing a single global
+decoder leaves this file green; do not read that as evidence.
 
 All five comparisons are live. Two of them (the backward pass and the
 post-processed output) were ``xfail(strict=True)`` between commits 39aacd22 and

@@ -472,3 +472,80 @@ def test_forward_valid_caches_skips_batch_pass(monkeypatch, tmp_path):
     assert (
         raised is not None
     ), "cached forward run must reach the load_frame replay path"
+
+
+# ---------------------------------------------------------------------------
+# Regression: realtime yolo_obb detection must thread ROI_mask_current into
+# InferenceRunner.run_realtime(), mirroring the background_subtraction
+# branch's own `roi_mask=ROI_mask_current` call. Before the fix, the yolo_obb
+# realtime branch called `inference_runner.run_realtime(frame,
+# actual_frame_index)` with no roi_mask at all, so `filter_for_source()`
+# silently skipped ROI filtering for every YOLO-OBB detection (confirmed
+# against a real user's tracking output: 33.6% of tracked positions fell
+# outside their configured ROI).
+# ---------------------------------------------------------------------------
+
+
+def test_realtime_yolo_obb_threads_roi_mask_into_run_realtime(monkeypatch, tmp_path):
+    """Real run_tracking(): realtime yolo_obb dispatch must call
+    inference_runner.run_realtime(frame, frame_idx, roi_mask=ROI_mask_current).
+
+    This must FAIL against the pre-fix code (missing `roi_mask` kwarg, which
+    defaults to `None` and disables ROI filtering) and PASS after the fix.
+    """
+    import hydra_suite.core.tracking.worker as worker_mod
+
+    calls: dict = {}
+
+    class _RoiProbeRunner:
+        def __init__(self, *_a, **_k):
+            pass
+
+        def caches_all_valid(self):
+            return False
+
+        def detection_cache_covers_range(self, *_a, **_k):
+            return False
+
+        def run_realtime(self, frame, frame_idx=0, roi_mask=None, roi_mask_cuda=None):
+            calls["called"] = calls.get("called", 0) + 1
+            calls["roi_mask"] = roi_mask
+            calls["frame_idx"] = frame_idx
+            raise _StopAfterDispatch("run_realtime reached")
+
+        def close(self):
+            pass
+
+    # A non-trivial ROI mask (left half in-ROI, right half excluded) matching
+    # the 8x8 fake-video-capture frame size used by _FakeVideoCapture, so
+    # `_resolve_resized_roi_mask` returns it unchanged (no resample needed).
+    roi_mask = np.zeros((8, 8), dtype=np.uint8)
+    roi_mask[:, :4] = 255
+
+    monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
+    monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _FakeVideoCapture)
+    monkeypatch.setattr(worker_mod, "InferenceRunner", _RoiProbeRunner)
+
+    worker = worker_mod.TrackingEngineCore(
+        str(tmp_path / "video.mp4"),
+        on_finished=lambda *_a, **_k: None,
+        use_cached_detections=False,
+    )
+    worker.set_parameters(
+        _dispatch_params(
+            TRACKING_REALTIME_MODE=True,
+            TRACKING_WORKFLOW_MODE="realtime",
+            ROI_MASK=roi_mask,
+        )
+    )
+
+    try:
+        worker.run_tracking()
+    except _StopAfterDispatch:
+        pass
+
+    assert calls.get("called") == 1, "realtime yolo_obb dispatch must call run_realtime"
+    assert (
+        calls.get("roi_mask") is not None
+    ), "run_realtime must be called with a non-None roi_mask when ROI_MASK is configured"
+    np.testing.assert_array_equal(calls["roi_mask"], roi_mask)
