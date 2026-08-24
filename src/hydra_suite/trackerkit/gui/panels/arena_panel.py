@@ -27,7 +27,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from hydra_suite.trackerkit.arena_geometry import overlapping_arena_pairs
+from hydra_suite.trackerkit.arena_geometry import (
+    non_contiguous_arena_ids,
+    overlapping_arena_pairs,
+)
 
 
 class ArenaPanel(QWidget):
@@ -325,17 +328,33 @@ class ArenaPanel(QWidget):
             return []
         return overlapping_arena_pairs(self._shapes, width, height)
 
+    def disconnected_arena_ids(self) -> list[int]:
+        width, height = self._frame_size
+        if not width or not height:
+            return []
+        return non_contiguous_arena_ids(self._shapes, width, height)
+
     def can_track(self) -> tuple[bool, str]:
         """Whether tracking may start, and why not if it may not."""
         pairs = self.blocking_pairs()
-        if not pairs:
-            return (True, "")
-        listed = ", ".join(f"Arena {a + 1} and Arena {b + 1}" for a, b in pairs)
-        return (
-            False,
-            f"Arenas overlap: {listed}. Each animal must belong to exactly one "
-            "arena, so tracking cannot start until the overlaps are resolved.",
-        )
+        if pairs:
+            listed = ", ".join(f"Arena {a + 1} and Arena {b + 1}" for a, b in pairs)
+            return (
+                False,
+                f"Arenas overlap: {listed}. Each animal must belong to exactly one "
+                "arena, so tracking cannot start until the overlaps are resolved.",
+            )
+        disconnected = self.disconnected_arena_ids()
+        if disconnected:
+            listed = ", ".join(f"Arena {a + 1}" for a in disconnected)
+            return (
+                False,
+                f"Arena(s) {listed} contain disconnected regions. Each arena must "
+                "be one connected region -- shapes that don't touch belong to "
+                'SEPARATE arenas (click "+ Add new arena" before drawing the '
+                "next one), so tracking cannot start until this is resolved.",
+            )
+        return (True, "")
 
     def refresh(self) -> None:
         ids = self.arena_ids()
@@ -360,6 +379,7 @@ class ArenaPanel(QWidget):
             }
         )
         current_blocked = bool(conflicts)
+        current_disconnected = self._current in self.disconnected_arena_ids()
         current_empty = self._current not in ids
 
         if current_blocked:
@@ -369,9 +389,15 @@ class ArenaPanel(QWidget):
                 "Resolve the overlap before moving on -- an animal in the shared "
                 "region cannot be assigned to a single arena."
             )
-        elif pairs:
+        elif current_disconnected:
+            self.lbl_warning.setText(
+                f"Arena {self._current + 1} has disconnected regions. Shapes "
+                "that don't touch belong to SEPARATE arenas -- click \"+ Add new "
+                'arena" before drawing the next one.'
+            )
+        elif pairs or self.disconnected_arena_ids():
             self.lbl_warning.setText(self.can_track()[1])
-        self.lbl_warning.setVisible(bool(pairs))
+        self.lbl_warning.setVisible(bool(pairs) or bool(self.disconnected_arena_ids()))
 
         nav_locked = current_blocked or self._drawing_active
         index = ids.index(self._current) if self._current in ids else -1

@@ -3,7 +3,10 @@
 import numpy as np
 import pytest
 
-from hydra_suite.trackerkit.arena_geometry import overlapping_arena_pairs
+from hydra_suite.trackerkit.arena_geometry import (
+    non_contiguous_arena_ids,
+    overlapping_arena_pairs,
+)
 
 
 def _circle(cx, cy, r, arena_id, mode="include"):
@@ -112,3 +115,53 @@ def test_fast_path_agrees_with_brute_force(seed):
     assert overlapping_arena_pairs(shapes, width, height) == _brute_force_pairs(
         shapes, width, height
     )
+
+
+def test_disconnected_far_apart_circles_same_arena_are_flagged():
+    shapes = [_circle(50, 50, 20, 0), _circle(2850, 50, 20, 0)]
+    assert non_contiguous_arena_ids(shapes, 3000, 200) == [0]
+
+
+def test_touching_circles_same_arena_are_not_flagged():
+    shapes = [_circle(100, 100, 30, 0), _circle(160, 100, 30, 0)]
+    assert non_contiguous_arena_ids(shapes, 400, 300) == []
+
+
+def test_far_apart_circles_in_different_arenas_are_not_flagged():
+    """Cross-arena separation is fine -- each arena still has one piece.
+
+    Cross-arena OVERLAP is ``overlapping_arena_pairs``'s job, not this
+    function's -- distant shapes in different arenas should trip neither
+    check.
+    """
+    shapes = [_circle(50, 50, 20, 0), _circle(2850, 50, 20, 1)]
+    assert non_contiguous_arena_ids(shapes, 3000, 200) == []
+    assert overlapping_arena_pairs(shapes, 3000, 200) == []
+
+
+def test_exclude_that_bisects_an_arena_is_flagged():
+    """A wide exclude splitting one large include region into two pieces."""
+    shapes = [
+        _square(100, 100, 90, 0),
+        {
+            "type": "polygon",
+            "params": [[95, 5], [105, 5], [105, 195], [95, 195]],
+            "mode": "exclude",
+            "arena_id": 0,
+        },
+    ]
+    assert non_contiguous_arena_ids(shapes, 300, 300) == [0]
+
+
+def test_small_edge_notch_exclude_does_not_disconnect():
+    """An exclude that only nibbles one edge leaves a single connected piece."""
+    shapes = [
+        _circle(100, 100, 80, 0),
+        _circle(175, 100, 15, 0, mode="exclude"),
+    ]
+    assert non_contiguous_arena_ids(shapes, 300, 300) == []
+
+
+def test_empty_shapes_returns_empty_list():
+    assert non_contiguous_arena_ids([], 300, 300) == []
+    assert non_contiguous_arena_ids(None, 300, 300) == []

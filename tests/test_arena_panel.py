@@ -109,6 +109,38 @@ def test_tracking_allowed_when_nothing_overlaps(panel):
     assert allowed is True
 
 
+def test_tracking_blocked_by_a_disconnected_arena(panel):
+    panel.set_shapes([_circle(50, 50, 20, 0), _circle(350, 50, 20, 0)])
+    allowed, reason = panel.can_track()
+    assert allowed is False
+    assert "1" in reason
+    assert "disconnected" in reason.lower()
+
+
+def test_overlap_message_wins_when_both_overlap_and_disconnected_exist(panel):
+    """Overlap is the pre-existing, higher-priority gate: when both an
+    overlap and a disconnected arena exist simultaneously, the overlap
+    message is what the user sees first."""
+    shapes = [
+        _circle(100, 100, 50, 0),
+        _circle(130, 100, 50, 1),
+        _circle(50, 350, 20, 2),
+        _circle(350, 350, 20, 2),
+    ]
+    panel.set_shapes(shapes)
+    allowed, reason = panel.can_track()
+    assert allowed is False
+    assert "overlap" in reason.lower()
+    assert "disconnected" not in reason.lower()
+
+
+def test_refresh_warns_when_current_arena_is_disconnected(panel):
+    panel.set_shapes([_circle(50, 50, 20, 0), _circle(350, 50, 20, 0)])
+    panel.set_current_arena(0)
+    assert "disconnected" in panel.lbl_warning.text().lower()
+    assert "1" in panel.lbl_warning.text()
+
+
 def test_clear_arena_keeps_the_arena_and_its_number(panel):
     shapes = [_circle(50, 50, 20, 0), _circle(300, 300, 20, 1)]
     panel.set_shapes(shapes)

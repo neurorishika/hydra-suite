@@ -180,6 +180,55 @@ def overlapping_arena_pairs(
     return pairs
 
 
+def non_contiguous_arena_ids(
+    shapes: list[dict[str, Any]] | None,
+    width: int,
+    height: int,
+) -> list[int]:
+    """Every arena id whose own net region (includes minus excludes) forms
+    more than one disconnected piece.
+
+    An arena made of two circles that don't touch is exactly the failure
+    mode this catches: nothing else in the pipeline treats "one arena" as
+    "one connected region" today, so a user can silently create two
+    physically separate zones that share an arena id -- which the engine
+    then tracks as ONE arena with no gating between the two pieces at all.
+
+    Rasterized per-arena, cropped to that arena's own bounding box (same
+    perf rationale as ``overlapping_arena_pairs``: full-frame rasterization
+    per arena is not viable at 4512x4512 with many arenas).
+    """
+    if not shapes:
+        return []
+    by_arena: dict[int, list[dict[str, Any]]] = {}
+    for shape in shapes:
+        by_arena.setdefault(int(shape.get("arena_id", 0)), []).append(shape)
+    arena_ids = sorted(
+        aid
+        for aid, group in by_arena.items()
+        if any(s.get("mode", "include") == "include" for s in group)
+    )
+
+    disconnected: list[int] = []
+    for aid in arena_ids:
+        group = by_arena[aid]
+        box = _arena_bbox(group)
+        x0 = int(math.floor(max(box[0], 0)))
+        y0 = int(math.floor(max(box[1], 0)))
+        x1 = int(math.ceil(min(box[2], width - 1)))
+        y1 = int(math.ceil(min(box[3], height - 1)))
+        crop_w, crop_h = x1 - x0 + 1, y1 - y0 + 1
+        if crop_w <= 0 or crop_h <= 0:
+            continue
+        mask = _rasterize(group, x0, y0, crop_w, crop_h)
+        n_components, _ = cv2.connectedComponents(mask.astype(np.uint8))
+        # connectedComponents always counts background (label 0) as one
+        # component, so >1 include region means n_components > 2.
+        if n_components > 2:
+            disconnected.append(aid)
+    return disconnected
+
+
 def min_pitch(shape_type: str, size: int, size_y: int | None = None) -> tuple[int, int]:
     """Tightest centre-to-centre pitch that cannot produce overlap.
 
