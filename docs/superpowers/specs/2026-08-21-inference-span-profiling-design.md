@@ -585,10 +585,13 @@ existing with real call counts).
 video, same detections, only the window size differs.)
 
 `n_calls` scales with window count (500 windows at batch=1 → 20 windows at
-batch=25, matching 500/25); `ms/call` scales up ~25-30x with it (fixed
-per-call overhead amortized over more work per call); `ms/unit` — the actual
-per-detection cost — stays flat within a few percent across all three stages.
-That flatness is the readable signal: the profiler shows batching amortizes
+batch=25, matching 500/25); `ms/call` scales up 23-30x with it (fixed
+per-call overhead amortized over more work per call). `ms/unit` — the actual
+per-detection cost — is far more stable than `ms/call`: cnn and pose drift
+7-9% (1.98→1.81, 2.72→2.52), while headtail drifts 19% (3.91→4.64), a real
+divergence worth a closer look in a follow-up but small next to `ms/call`'s
+23-30x swing. That contrast is the readable signal: the profiler shows
+batching amortizes
 *fixed per-call overhead*, not per-detection compute, which is exactly the
 `detection_batch_size=1` defect class this feature was built to make visible.
 **Pass** — the per-call overhead is directly readable from these two JSON
