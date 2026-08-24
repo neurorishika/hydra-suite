@@ -9,7 +9,7 @@ try:
     from hydra_suite.trackerkit.gui.widgets.stacked_page import CurrentPageStackedWidget
     from hydra_suite.trackerkit.gui.widgets.tooltip_button import ImmediateTooltipButton
 except (
-    Exception
+    ImportError
 ):  # pragma: no cover - allows lightweight metadata imports without GUI deps
     AccordionContainer = None
     CollapsibleGroupBox = None

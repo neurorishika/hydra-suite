@@ -50,7 +50,7 @@
 - Consumes: nothing.
 - Produces: `shape_centroid(shape) -> tuple[float, float]`, `point_in_shape(shape, x, y) -> bool`, `arena_at_point(shapes, x, y) -> int | None`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 """Hit-testing for arena shapes. Pure geometry, no Qt import."""
@@ -135,12 +135,12 @@ def test_overlap_resolves_by_draw_order():
     assert arena_at_point(shapes, 105, 100) == 1
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `conda run -n hydra-mps python -m pytest tests/test_arena_geometry_hittest.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'hydra_suite.trackerkit.arena_geometry'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 ```python
 """Pure arena geometry: hit-testing, overlap detection, grid generation.
@@ -205,12 +205,12 @@ def arena_at_point(
     return found
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `conda run -n hydra-mps python -m pytest tests/test_arena_geometry_hittest.py -v`
 Expected: PASS (11 tests)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/hydra_suite/trackerkit/arena_geometry.py tests/test_arena_geometry_hittest.py
@@ -231,7 +231,7 @@ git commit -m "feat(arena): pure hit-testing geometry for arena shapes"
 
 **Why staged:** a 96-well plate is 4560 candidate pairs and the reference fixture is 4512x4512, so full-frame mask intersection per pair is not viable. Analytic and bounding-box filters reject the vast majority; rasterization runs only on survivors, cropped to the intersection box.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 """Overlap detection between arenas, including fast-path/brute-force agreement."""
@@ -350,12 +350,12 @@ def test_fast_path_agrees_with_brute_force(seed):
     )
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `conda run -n hydra-mps python -m pytest tests/test_arena_overlap.py -v`
 Expected: FAIL — `ImportError: cannot import name 'overlapping_arena_pairs'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Append to `arena_geometry.py`:
 
@@ -480,12 +480,12 @@ def overlapping_arena_pairs(
     return pairs
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `conda run -n hydra-mps python -m pytest tests/test_arena_overlap.py -v`
 Expected: PASS (27 tests, including 20 parametrized agreement cases)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/hydra_suite/trackerkit/arena_geometry.py tests/test_arena_overlap.py
@@ -513,7 +513,7 @@ git commit -m "feat(arena): staged overlap detection with brute-force agreement 
 
 **Cap rule:** all centres lie in the convex hull of the four *corner* centres — `(0,0)`, `(0, cols-1)`, `(rows-1, 0)`, `(rows-1, cols-1)` — because a rotated lattice is an affine image of a rectangular one. The frame is convex, so if the four corners are inside, every centre is. That makes the check O(1) per candidate instead of O(rows*cols).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 """Grid generation under rotation, non-overlapping pitch floors, and extent caps."""
@@ -624,12 +624,12 @@ def test_capped_grid_has_every_centre_in_frame():
         assert 0 <= cx < 640 and 0 <= cy < 480
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `conda run -n hydra-mps python -m pytest tests/test_arena_grid_geometry.py -v`
 Expected: FAIL — `ImportError: cannot import name 'generate_grid_shapes'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Append to `arena_geometry.py`:
 
@@ -767,7 +767,7 @@ def max_grid_extent(
     return (max_rows, max_cols)
 ```
 
-- [ ] **Step 4: Move the old copy and repoint its importers**
+- [x] **Step 4: Move the old copy and repoint its importers**
 
 Delete `generate_grid_shapes` from `arena_grid_dialog.py` entirely (the whole `def generate_grid_shapes(...)` block and its docstring). Replace it with an import at the top of the file:
 
@@ -782,12 +782,12 @@ from hydra_suite.trackerkit.arena_geometry import generate_grid_shapes
 from hydra_suite.trackerkit.gui.dialogs.arena_grid_dialog import ArenaGridDialog
 ```
 
-- [ ] **Step 5: Run both test files to verify they pass**
+- [x] **Step 5: Run both test files to verify they pass**
 
 Run: `conda run -n hydra-mps env QT_QPA_PLATFORM=offscreen python -m pytest tests/test_arena_grid_geometry.py tests/test_arena_grid_dialog.py -v`
 Expected: PASS. The pre-existing `test_arena_grid_dialog.py` cases must all still pass unchanged — the new keyword-only parameters default to the old behaviour, so the positional calls are unaffected.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/hydra_suite/trackerkit/arena_geometry.py \
@@ -808,7 +808,7 @@ git commit -m "feat(arena): grid rotation, rectangle sizing, pitch floors and ex
 - Consumes: nothing.
 - Produces: `ArenaPalette` dataclass with fields `line_include`, `line_exclude`, `line_preview`, `veil`, `glyph`, `halo` (each an `(r, g, b)` int tuple); `frame_palette(mean_luminance: float) -> ArenaPalette`; `line_width_px(viewport_min_dim: int) -> int`; `glyph_size_px(on_screen_radius: float) -> int`; constants `VEIL_ALPHA = 0.15`, `TEXT_ALPHA = 0.70`, `CLICK_DRAG_THRESHOLD_PX = 3`, `GLYPH_MIN_PX = 10`, `GLYPH_MAX_PX = 64`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 """Overlay styling rules. Qt-free: returns plain RGB tuples and ints."""
@@ -879,12 +879,12 @@ def test_alpha_and_threshold_constants_match_the_spec():
     assert CLICK_DRAG_THRESHOLD_PX == 3
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `conda run -n hydra-mps python -m pytest tests/test_arena_style.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'hydra_suite.trackerkit.gui.widgets.arena_style'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 ```python
 """Arena overlay styling: palette, sizing, alpha constants.
@@ -970,12 +970,12 @@ def glyph_size_px(on_screen_radius: float) -> int:
     return int(max(GLYPH_MIN_PX, min(GLYPH_MAX_PX, raw)))
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `conda run -n hydra-mps python -m pytest tests/test_arena_style.py -v`
 Expected: PASS (10 tests)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/hydra_suite/trackerkit/gui/widgets/arena_style.py tests/test_arena_style.py
@@ -996,7 +996,7 @@ git commit -m "feat(arena): luminance-driven overlay palette and device-pixel si
 
 This is the task that fixes the reported bug. The round-trip test is the regression guard: if `to_image(to_viewport(p)) != p` at any zoom, clicks land in the wrong place, which is why zoom is currently force-disabled during selection.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 """ArenaCanvas coordinate transform and click/drag disambiguation.
@@ -1067,12 +1067,12 @@ def test_threshold_boundary_counts_as_a_drag(canvas):
     assert canvas._is_click(0, 0, 3, 0) is False
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `conda run -n hydra-mps env QT_QPA_PLATFORM=offscreen python -m pytest tests/test_arena_canvas_transform.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'hydra_suite.trackerkit.gui.widgets.arena_canvas'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 ```python
 """ArenaCanvas: the video preview widget that owns arena drawing.
@@ -1239,12 +1239,12 @@ class ArenaCanvas(QWidget):
         painter.end()
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `conda run -n hydra-mps env QT_QPA_PLATFORM=offscreen python -m pytest tests/test_arena_canvas_transform.py -v`
 Expected: PASS (10 tests: 6 parametrized round-trips plus 4 others)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/hydra_suite/trackerkit/gui/widgets/arena_canvas.py tests/test_arena_canvas_transform.py
@@ -1265,7 +1265,7 @@ git commit -m "feat(arena): ArenaCanvas with viewport-space transform and click/
 
 The glyph and its halo render into an offscreen full-opacity ARGB layer that composites once. Stroking and filling separately at partial alpha would double-composite where they overlap and let the halo bleed through the glyph edge.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 """Overlay painting: veil polarity, zoom-invariant weight, halo compositing."""
@@ -1428,12 +1428,12 @@ def test_current_arena_outline_is_heavier(app):
     assert canvas._outline_width_for(0) > plain
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `conda run -n hydra-mps env QT_QPA_PLATFORM=offscreen python -m pytest tests/test_arena_canvas_paint.py -v`
 Expected: FAIL — `ImportError: cannot import name 'paint_arena_number'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Add these imports to `arena_canvas.py`:
 
@@ -1632,12 +1632,12 @@ In `__init__`, add `self._luminance: float | None = None`, and in `set_frame` se
 
 In `paintEvent`, call `self.render_overlay(painter)` after `drawPixmap` and before `painter.end()`.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `conda run -n hydra-mps env QT_QPA_PLATFORM=offscreen python -m pytest tests/test_arena_canvas_paint.py -v`
 Expected: PASS (9 tests)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/hydra_suite/trackerkit/gui/widgets/arena_canvas.py tests/test_arena_canvas_paint.py
@@ -1656,7 +1656,7 @@ git commit -m "feat(arena): viewport-space overlay with veil, zoom-invariant out
 - Consumes: `overlapping_arena_pairs` (Task 2), `next_free_arena_id` from `hydra_suite.trackerkit.engine_params`.
 - Produces: `ArenaPanel(QWidget)` with `set_shapes(list)`, `set_frame_size(width, height)`, `current_arena -> int`, `arena_ids() -> list[int]`, `refresh()`, `blocking_pairs() -> list[tuple[int,int]]`, `can_track() -> tuple[bool, str]`; signals `arena_changed = Signal(int)`, `add_single_requested = Signal()`, `add_grid_requested = Signal()`, `clear_arena_requested = Signal(int)`, `draw_requested = Signal(str, str)` (shape type, zone mode), `finish_requested = Signal()`, `undo_requested = Signal()`, `clear_all_requested = Signal()`, `crop_requested = Signal()`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 """Arena bar: two-state machine and the overlap lock's enable/disable matrix."""
@@ -1787,12 +1787,12 @@ def test_finish_disabled_until_a_shape_is_valid(panel):
     assert panel.btn_finish.isEnabled() is True
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `conda run -n hydra-mps env QT_QPA_PLATFORM=offscreen python -m pytest tests/test_arena_panel.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'hydra_suite.trackerkit.gui.panels.arena_panel'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 ```python
 """The arena bar: an arena-centric replacement for the old ROI toolbar.
@@ -2091,12 +2091,12 @@ class ArenaPanel(QWidget):
         self.btn_undo.setEnabled(bool(self._shapes))
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `conda run -n hydra-mps env QT_QPA_PLATFORM=offscreen python -m pytest tests/test_arena_panel.py -v`
 Expected: PASS (14 tests)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/hydra_suite/trackerkit/gui/panels/arena_panel.py tests/test_arena_panel.py
@@ -2123,7 +2123,7 @@ git commit -m "feat(arena): arena bar state machine with non-stranding overlap l
 
 Lines 2184 and 2294 re-enable the slider; those become unnecessary but are harmless to leave. Delete them for clarity.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 """The main window's preview is an ArenaCanvas and zoom survives ROI drawing."""
@@ -2168,12 +2168,12 @@ def test_source_has_no_remaining_roi_zoom_locks():
     assert "slider_zoom.setEnabled(False)" not in source
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `conda run -n hydra-mps env QT_QPA_PLATFORM=offscreen python -m pytest tests/test_arena_canvas_wiring.py -v`
 Expected: FAIL — `assert isinstance(...)` fails, `video_label` is still a `QLabel`
 
-- [ ] **Step 3: Replace the widget in `main_window.py`**
+- [x] **Step 3: Replace the widget in `main_window.py`**
 
 Replace lines 553-570 (from `self.video_label = QLabel("")` through `self.video_label.event = self._handle_video_event`) with:
 
@@ -2234,7 +2234,7 @@ Replace `_set_video_pixmap` (line 2770) so it drives the canvas rather than a la
         self.video_label.set_frame(pixmap.toImage())
 ```
 
-- [ ] **Step 4: Rework the drawing methods in `session.py`**
+- [x] **Step 4: Rework the drawing methods in `session.py`**
 
 Replace `record_roi_click` (line 1950) with two coordinate-space-explicit methods, and drop the double-click-to-finish handling from it (the canvas forwards `mouseDoubleClickEvent` to `_handle_video_double_click`, which now finishes a polygon when drawing):
 
@@ -2312,17 +2312,17 @@ Delete `_display_roi_with_zoom`'s rasterizing body (line 1897) and replace it wi
 
 Delete `_draw_roi_overlay` and `_apply_roi_mask_to_image` from `session.py` (lines 2395-2423) and their delegating wrappers in `main_window.py` (lines 2803-2810). Both are superseded by `ArenaCanvas.render_overlay`. Then remove the three zoom locks listed above.
 
-- [ ] **Step 5: Run test to verify it passes**
+- [x] **Step 5: Run test to verify it passes**
 
 Run: `conda run -n hydra-mps env QT_QPA_PLATFORM=offscreen python -m pytest tests/test_arena_canvas_wiring.py -v`
 Expected: PASS (3 tests)
 
-- [ ] **Step 6: Run the whole arena suite for regressions**
+- [x] **Step 6: Run the whole arena suite for regressions**
 
 Run: `conda run -n hydra-mps env QT_QPA_PLATFORM=offscreen python -m pytest tests/ -k arena -v`
 Expected: PASS. The 166 arena tests that passed on `main` at `a2c9838f` must still pass, plus the new ones.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/hydra_suite/trackerkit/gui/main_window.py \
@@ -2350,7 +2350,7 @@ The deleted widgets are `combo_roi_mode`, `combo_roi_zone`, `btn_start_roi`, `bt
 grep -rn "combo_roi_mode\|combo_roi_zone\|btn_start_roi\|btn_finish_roi\|btn_undo_roi\|btn_new_arena\|btn_generate_grid\|btn_clear_roi\|btn_crop_video\|roi_instructions" src/ tests/
 ```
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 """The main window hosts an ArenaPanel and no longer has the old ROI toolbar."""
@@ -2410,12 +2410,12 @@ def test_panel_starts_in_the_empty_state(window):
     )
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `conda run -n hydra-mps env QT_QPA_PLATFORM=offscreen python -m pytest tests/test_arena_panel_wiring.py -v`
 Expected: FAIL — `AttributeError: 'MainWindow' object has no attribute 'arena_panel'`
 
-- [ ] **Step 3: Replace the toolbar block**
+- [x] **Step 3: Replace the toolbar block**
 
 In `main_window.py`, replace everything from `roi_layout = QHBoxLayout()` (line 582) through `roi_main_layout.addLayout(roi_layout)` (line 673) with:
 
@@ -2471,7 +2471,7 @@ Add the new handlers:
         self.start_roi_selection()
 ```
 
-- [ ] **Step 4: Repoint the orchestrator**
+- [x] **Step 4: Repoint the orchestrator**
 
 In `session.py`, delete every reference to a removed widget. Specifically:
 
@@ -2491,7 +2491,7 @@ Then apply the two deferred lines Task 8 left behind:
 - In `set_current_arena`, add `self._panels.arena.set_current_arena(arena_id)` before the `self._mw.video_label.set_current_arena(arena_id)` call.
 - In `update_roi_preview`, replace `self._mw.btn_finish_roi.setEnabled(valid)` with `self._panels.arena.set_shape_valid(valid)`.
 
-- [ ] **Step 5: Verify no dangling references remain**
+- [x] **Step 5: Verify no dangling references remain**
 
 Run:
 ```bash
@@ -2499,12 +2499,12 @@ grep -rn "combo_roi_mode\|combo_roi_zone\|btn_start_roi\|btn_finish_roi\|btn_und
 ```
 Expected: no output.
 
-- [ ] **Step 6: Run the tests**
+- [x] **Step 6: Run the tests**
 
 Run: `conda run -n hydra-mps env QT_QPA_PLATFORM=offscreen python -m pytest tests/test_arena_panel_wiring.py tests/ -k arena -v`
 Expected: PASS
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/hydra_suite/trackerkit/gui/main_window.py \
@@ -2525,7 +2525,7 @@ git commit -m "feat(arena): replace the ROI toolbar with the arena-centric panel
 - Consumes: `generate_grid_shapes`, `min_pitch`, `max_grid_extent` (Task 3); `ArenaCanvas.render_overlay` (Task 6), used as a renderer so the dialog preview and the main preview cannot drift.
 - Produces: `ArenaGridDialog` with `spin_rows`, `spin_cols`, `spin_origin_x`, `spin_origin_y`, `spin_pitch_x`, `spin_pitch_y`, `spin_radius`, `spin_width`, `spin_height`, `slider_rotation`, `spin_rotation`, `combo_shape_type`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `tests/test_arena_grid_dialog.py`:
 
@@ -2648,12 +2648,12 @@ def qt_app():
     return QApplication.instance() or QApplication([])
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `conda run -n hydra-mps env QT_QPA_PLATFORM=offscreen python -m pytest tests/test_arena_grid_dialog.py -v`
 Expected: FAIL — `AttributeError: 'ArenaGridDialog' object has no attribute 'spin_radius'`
 
-- [ ] **Step 3: Rebuild the dialog widgets**
+- [x] **Step 3: Rebuild the dialog widgets**
 
 Replace the `__init__` form-building block in `ArenaGridDialog` with:
 
@@ -2731,7 +2731,7 @@ Replace the `__init__` form-building block in `ArenaGridDialog` with:
 
 Add the imports `QDoubleSpinBox`, `QSlider` from `PySide6.QtWidgets`.
 
-- [ ] **Step 4: Add the coupling logic**
+- [x] **Step 4: Add the coupling logic**
 
 ```python
     def _shape_key(self) -> str:
@@ -2866,7 +2866,7 @@ Replace `_current_shapes`:
         )
 ```
 
-- [ ] **Step 5: Route the preview through the shared renderer**
+- [x] **Step 5: Route the preview through the shared renderer**
 
 Replace the painting block in `_update_preview` (the `painter.setPen(QPen(Qt.cyan, 2))` loop) with a call into an `ArenaCanvas` used purely as a renderer, so the dialog and the main preview cannot drift:
 
@@ -2887,12 +2887,12 @@ Replace the painting block in `_update_preview` (the `painter.setPen(QPen(Qt.cya
         self.preview_label.setPixmap(pixmap)
 ```
 
-- [ ] **Step 6: Run the tests**
+- [x] **Step 6: Run the tests**
 
 Run: `conda run -n hydra-mps env QT_QPA_PLATFORM=offscreen python -m pytest tests/test_arena_grid_dialog.py -v`
 Expected: PASS — the twelve new tests plus every pre-existing case in the file
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/hydra_suite/trackerkit/gui/dialogs/arena_grid_dialog.py tests/test_arena_grid_dialog.py
@@ -2911,7 +2911,7 @@ git commit -m "feat(arena): grid builder with rotation, shape sizing, pitch floo
 - Consumes: `ArenaPanel.can_track()` (Task 7).
 - Produces: `TrackingOrchestrator._validate_arena_overlaps(mode_label) -> bool`, following the existing `_validate_identity_requirements` / `_validate_yolo_model_requirements` pattern at lines 1584 and 1608.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 """Tracking refuses to start while any two arenas overlap."""
@@ -2983,12 +2983,12 @@ def test_gate_passes_with_no_arenas_at_all(window, monkeypatch):
     assert window._tracking_orch._validate_arena_overlaps("Forward") is True
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `conda run -n hydra-mps env QT_QPA_PLATFORM=offscreen python -m pytest tests/test_arena_tracking_gate.py -v`
 Expected: FAIL — `AttributeError: ... has no attribute '_validate_arena_overlaps'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Add to `tracking.py`, beside the other validators:
 
@@ -3010,12 +3010,12 @@ Add to `tracking.py`, beside the other validators:
 
 Call it in `start_tracking` immediately after the existing validators run, returning early when it fails.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `conda run -n hydra-mps env QT_QPA_PLATFORM=offscreen python -m pytest tests/test_arena_tracking_gate.py -v`
 Expected: PASS (4 tests)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/hydra_suite/trackerkit/gui/orchestrators/tracking.py tests/test_arena_tracking_gate.py
@@ -3030,7 +3030,7 @@ git commit -m "feat(arena): refuse to start tracking while arenas overlap"
 - Modify: `docs/user-guide/` — the TrackerKit ROI/arena page
 - Test: the full arena suite plus the MPS equivalence matrix
 
-- [ ] **Step 1: Find and update the user-facing docs**
+- [x] **Step 1: Find and update the user-facing docs**
 
 ```bash
 grep -rln "ROI\|arena" docs/user-guide/ | head
@@ -3038,7 +3038,7 @@ grep -rln "ROI\|arena" docs/user-guide/ | head
 
 Update the page describing ROI setup to the new flow: the empty state, the two add buttons, arena navigation, the `+`/`-` zone buttons replacing the Include/Exclude dropdown, the overlap warning and what it blocks, the grid builder's controls, and that drawing now works at any zoom. State explicitly that one arena is exactly a plain ROI and produces no `arena_id` column.
 
-- [ ] **Step 2: Run formatting and lint**
+- [x] **Step 2: Run formatting and lint**
 
 ```bash
 make commit-prep
@@ -3046,12 +3046,12 @@ make lint-moderate
 ```
 Expected: clean. Fix anything reported.
 
-- [ ] **Step 3: Run the full arena suite**
+- [x] **Step 3: Run the full arena suite**
 
 Run: `conda run -n hydra-mps env QT_QPA_PLATFORM=offscreen python -m pytest tests/ -k arena -v`
 Expected: PASS. Baseline on `main` at `a2c9838f` was 166 passing; the count must be higher and nothing previously passing may fail.
 
-- [ ] **Step 4: Run the batched wider suite**
+- [x] **Step 4: Run the batched wider suite**
 
 Do NOT run `pytest tests/` in one go — a classkit modal-dialog hang and a SIGABRT make it never finish (memory `project_main_suite_blockers`). Run per-file batches and compare failures against `main`:
 
@@ -3064,7 +3064,7 @@ done
 ```
 Expected: the same failure set as `main`. A delta gate, not an absolute one — `main` carries pre-existing failures.
 
-- [ ] **Step 5: Kill stale processes, then run the equivalence matrix**
+- [x] **Step 5: Kill stale processes, then run the equivalence matrix**
 
 Per `CLAUDE.md`, kill dead/stale sleap/hydra processes first, and never touch anything else:
 
@@ -3087,13 +3087,13 @@ Verify row counts are non-zero before trusting any verdict, and count verdicts w
 
 Expected: every clip EQUIVALENT at its determinism floor. This work is display and shape authoring only, and `roi_shapes` is unchanged in format, so any difference is a real regression.
 
-- [ ] **Step 6: Clean up the equivalence worktree**
+- [x] **Step 6: Clean up the equivalence worktree**
 
 ```bash
 git worktree remove --force .worktrees/equiv-legacy && git worktree prune
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add docs/

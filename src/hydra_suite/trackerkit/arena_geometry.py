@@ -42,21 +42,29 @@ def arena_at_point(
 ) -> int | None:
     """The arena owning (x, y), or ``None`` if no arena does.
 
-    Ties resolve by draw order -- the LAST include shape containing the point
-    wins, matching ``build_arena_labels``' last-writer-wins rasterization, so
-    clicking to select an arena agrees with the label image the tracker uses.
-    Exclude zones are subtracted last, again mirroring the engine, so a point
-    inside an exclude hole belongs to no arena.
+    Ties resolve by draw order -- the LAST include shape containing the
+    point wins, matching ``build_arena_labels``' last-writer-wins
+    rasterization. Excludes are scoped per-arena, exactly like
+    ``build_arena_labels``: only an exclude shape whose OWN ``arena_id``
+    matches the point's candidate arena can null it out -- a different
+    arena's exclude zone that happens to geometrically overlap this point
+    must not affect it, even if their raw shapes overlap.
     """
     if not shapes:
         return None
-    for shape in shapes:
-        if shape.get("mode", "include") == "exclude" and point_in_shape(shape, x, y):
-            return None
     found: int | None = None
     for shape in shapes:
         if shape.get("mode", "include") == "include" and point_in_shape(shape, x, y):
             found = int(shape.get("arena_id", 0))
+    if found is None:
+        return None
+    for shape in shapes:
+        if (
+            shape.get("mode", "include") == "exclude"
+            and int(shape.get("arena_id", 0)) == found
+            and point_in_shape(shape, x, y)
+        ):
+            return None
     return found
 
 

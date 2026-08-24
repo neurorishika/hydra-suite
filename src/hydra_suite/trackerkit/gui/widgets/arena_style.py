@@ -11,6 +11,9 @@ from dataclasses import dataclass
 
 from hydra_suite.utils.arena_overlay_style import BOUNDARY_COLOR_RGB
 from hydra_suite.utils.arena_overlay_style import (
+    LINE_WIDTH_DIVISOR as _LINE_WIDTH_DIVISOR,
+)
+from hydra_suite.utils.arena_overlay_style import (
     boundary_line_width_px as _shared_boundary_line_width_px,
 )
 
@@ -24,7 +27,8 @@ GLYPH_MAX_PX = 64
 _LUMINANCE_MIDPOINT = 0.5
 # Divisor turning the viewport's short edge into a line width. 260 gives 2 px
 # on a 520 px viewport and 4 px on a 1080 px one -- visible without being fat.
-_LINE_WIDTH_DIVISOR = 260
+# Imported from utils/arena_overlay_style.py (single source of truth) rather
+# than duplicated here.
 
 
 @dataclass(frozen=True)

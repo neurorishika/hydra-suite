@@ -23,11 +23,12 @@ BOUNDARY_COLOR_BGR = (
     BOUNDARY_COLOR_RGB[0],
 )
 
-# Divisor turning an image's shortest edge into a line width. Matches
-# arena_style.py's _LINE_WIDTH_DIVISOR (260 -> 2px @ 520px short edge,
-# ~4px @ 1080px, ~8px @ 2160px) so boundary thickness stays visible
-# instead of a fixed pixel count vanishing on high-resolution frames.
-_LINE_WIDTH_DIVISOR = 260
+# Divisor turning an image's shortest edge into a line width (260 -> 2px @
+# 520px short edge, ~4px @ 1080px, ~8px @ 2160px) so boundary thickness
+# stays visible instead of a fixed pixel count vanishing on high-resolution
+# frames. Public (no leading underscore): arena_style.py imports this value
+# rather than keeping its own copy, so the two never drift out of sync.
+LINE_WIDTH_DIVISOR = 260
 
 
 def boundary_line_width_px(min_dim: int) -> int:
@@ -35,5 +36,5 @@ def boundary_line_width_px(min_dim: int) -> int:
     shortest edge. Mirrors arena_style.py's boundary_line_width_px (2x the
     base line width) so the preview boundary is at least as thick as the
     setup canvas's, never a bare hardcoded ``2``."""
-    base = max(2, int(round(int(min_dim) / _LINE_WIDTH_DIVISOR)))
+    base = max(2, int(round(int(min_dim) / LINE_WIDTH_DIVISOR)))
     return base * 2

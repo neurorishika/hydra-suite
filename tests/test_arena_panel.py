@@ -276,3 +276,21 @@ def test_editing_bar_is_split_into_two_rows(panel):
     assert _layout_containing(tools_row, panel.lbl_hint) is tools_row
     assert _layout_containing(nav_row, panel.lbl_hint) is None
     assert _layout_containing(tools_row, panel.lbl_current) is None
+
+
+def test_editing_overflow_menu_offers_add_grid_of_arenas(panel):
+    """Finding 4 (fix wave 20): a user who already has at least one arena
+    must still be able to bulk-generate a grid without destroying their
+    existing work via "Remove All Arenas" first."""
+    panel.set_shapes([_circle(100, 100, 30, 0)])
+    menu = panel.btn_overflow.menu()
+    action_texts = [action.text() for action in menu.actions()]
+    assert "Add Grid of Arenas" in action_texts
+
+    received = []
+    panel.add_grid_requested.connect(lambda: received.append(True))
+    add_grid_action = next(
+        a for a in menu.actions() if a.text() == "Add Grid of Arenas"
+    )
+    add_grid_action.trigger()
+    assert received == [True]

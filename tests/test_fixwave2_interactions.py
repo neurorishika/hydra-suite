@@ -107,9 +107,16 @@ def test_fix2_grid_dialog_has_a_reference_frame_from_the_empty_state(
 
 
 def test_fix3_overflow_menu_has_no_grid_action(window):
+    """Superseded by Fix Wave 20 Finding 4: a user who already has at least
+    one arena had no way to bulk-generate a grid without first destroying
+    their existing work via "Remove All Arenas". The overflow menu now DOES
+    carry "Add Grid of Arenas" (see tests/test_arena_panel.py::
+    test_editing_overflow_menu_offers_add_grid_of_arenas for the full
+    regression test) -- this test is kept, inverted, to document the
+    reversal rather than silently deleting the old contract."""
     menu = window.arena_panel.btn_overflow.menu()
     labels = [a.text() for a in menu.actions()]
-    assert "Add Grid of Arenas" not in labels
+    assert "Add Grid of Arenas" in labels
     assert "Remove All Arenas" in labels
     assert "Crop Video to ROI" in labels
 

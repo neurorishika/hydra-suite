@@ -128,6 +128,27 @@ def test_exclude_zone_is_scoped_per_arena_not_global():
     assert labels[20, 90] == 3
 
 
+def test_roi_mask_exclude_zone_is_scoped_per_arena_not_global():
+    """Finding 1 (fix wave 20): build_roi_mask is now a thin (labels > 0)
+    derived view of build_arena_labels, so it must inherit the SAME
+    per-arena exclude scoping -- not the old global-exclude semantics.
+
+    Same three-arena scenario as test_exclude_zone_is_scoped_per_arena_not_
+    global, but asserting through build_roi_mask directly: arena 1's exclude
+    zone overlaps arena 2's include region, and those overlap pixels must be
+    INCLUDED (> 0) in the ROI mask, not erased.
+    """
+    shapes = [
+        _circle(20, 20, 15, arena_id=0),
+        _circle(60, 20, 15, arena_id=1),
+        _circle(60, 20, 25, arena_id=1, mode="exclude"),  # overlaps arena 2 below
+        _circle(90, 20, 15, arena_id=2),
+    ]
+    roi = build_roi_mask(shapes, 120, 40)
+    assert roi[20, 80] > 0
+    assert roi[20, 90] > 0
+
+
 def test_exclude_with_no_matching_include_arena_is_skipped():
     """An orphaned exclude (arena_id with no matching include shape) has
     nothing to scope against and must be skipped rather than crash."""

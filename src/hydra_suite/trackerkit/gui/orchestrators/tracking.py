@@ -1638,17 +1638,26 @@ class TrackingOrchestrator:
         return False
 
     def _validate_arena_overlaps(self, mode_label: str) -> bool:
-        """Refuse to start while any two arenas share a pixel.
+        """Refuse to start while any two arenas share a pixel, or any single
+        arena's shapes form disconnected regions.
 
         Overlapping arenas are not merely a UI blemish:
         ``engine_params.build_arena_labels`` resolves them by last-writer-wins
         in shape draw order, silently, so an animal in the shared region is
-        assigned to whichever arena happened to rasterize last.
+        assigned to whichever arena happened to rasterize last. Disconnected
+        regions are refused for the same reason Fix Wave 18 introduced the
+        check: two separate physical regions sharing one arena_id makes
+        cross-region tracks possible, which is never the intended semantics.
         """
         allowed, reason = self._mw.arena_panel.can_track()
         if allowed:
             return True
-        QMessageBox.warning(self._mw, f"{mode_label}: Overlapping Arenas", reason)
+        title = (
+            f"{mode_label}: Overlapping Arenas"
+            if self._mw.arena_panel.blocking_pairs()
+            else f"{mode_label}: Disconnected Arena Regions"
+        )
+        QMessageBox.warning(self._mw, title, reason)
         return False
 
     def _get_detection_size(self, detection_cache, frame_id, detection_id, params):

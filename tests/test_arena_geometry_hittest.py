@@ -78,3 +78,22 @@ def test_overlap_resolves_by_draw_order():
     """Last-writer-wins, matching engine_params.build_arena_labels."""
     shapes = [_circle(100, 100, 40, arena_id=0), _circle(110, 100, 40, arena_id=1)]
     assert arena_at_point(shapes, 105, 100) == 1
+
+
+def test_exclude_zone_is_scoped_per_arena_not_global():
+    """Finding 2 (fix wave 20): a different arena's exclude zone that
+    geometrically overlaps this point must not null it out -- only an
+    exclude whose OWN arena_id matches the candidate arena counts.
+
+    Mirrors engine_params/test_arena_mask_build.py's
+    test_exclude_zone_is_scoped_per_arena_not_global scenario: three arenas,
+    arena 1's exclude zone overlaps arena 2's include region. Clicking in
+    the overlap must select arena 2, not None.
+    """
+    shapes = [
+        _circle(20, 20, 15, arena_id=0),
+        _circle(60, 20, 15, arena_id=1),
+        _circle(60, 20, 25, arena_id=1, mode="exclude"),  # overlaps arena 2 below
+        _circle(90, 20, 15, arena_id=2),
+    ]
+    assert arena_at_point(shapes, 80, 20) == 2

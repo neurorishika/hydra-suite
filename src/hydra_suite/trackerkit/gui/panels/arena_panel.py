@@ -16,7 +16,6 @@ from typing import Any
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QFrame,
     QHBoxLayout,
     QLabel,
     QMenu,
@@ -167,6 +166,7 @@ class ArenaPanel(QWidget):
         self.btn_overflow.setText("...")
         self.btn_overflow.setPopupMode(QToolButton.InstantPopup)
         menu = QMenu(self.btn_overflow)
+        menu.addAction("Add Grid of Arenas", self.add_grid_requested.emit)
         menu.addAction("Remove All Arenas", self.clear_all_requested.emit)
         menu.addAction("Crop Video to ROI", self.crop_requested.emit)
         self.btn_overflow.setMenu(menu)
@@ -226,13 +226,6 @@ class ArenaPanel(QWidget):
         self._done = True
         self.refresh()
         self.done_requested.emit()
-
-    @staticmethod
-    def _separator() -> QFrame:
-        line = QFrame()
-        line.setFrameShape(QFrame.VLine)
-        line.setStyleSheet("color: #3e3e42;")
-        return line
 
     # -- state ------------------------------------------------------------
 
