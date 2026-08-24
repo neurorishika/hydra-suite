@@ -60,6 +60,10 @@ from hydra_suite.core.tracking.features.tag_features import (
 )
 from hydra_suite.core.tracking.profiler import TrackingProfiler
 from hydra_suite.data.tag_observation_cache import TagObservationCache
+from hydra_suite.utils.arena_overlay_style import (
+    BOUNDARY_COLOR_BGR,
+    boundary_line_width_px,
+)
 from hydra_suite.utils.frame_prefetcher import FramePrefetcher
 from hydra_suite.utils.geometry import estimate_detection_crop_quality
 from hydra_suite.utils.video_artifacts import (
@@ -1850,6 +1854,10 @@ class TrackingEngineCore:
         _roi_contours_cache = None
         _roi_mask_cache_key = None
         _roi_mask_resized = None
+        # Boundary stroke thickness (derived from frame size, which is
+        # constant for the run) -- cached alongside the contours so it is
+        # not recomputed every frame.
+        _roi_boundary_thickness_cache = None
 
         # === Identity Overhaul Phase 1: Online Identity Decoder ===
         # Instantiate the decoder whenever individual_pipeline_enabled is set and labels exist.
@@ -2166,6 +2174,7 @@ class TrackingEngineCore:
                 _roi_mask_resized = ROI_mask_current
                 if roi_mask_changed:
                     _roi_contours_cache = None
+                    _roi_boundary_thickness_cache = None
 
                 if frame is not None and roi_fill_color is None:
                     mask_inv = ROI_mask_current == 0
@@ -2781,9 +2790,20 @@ class TrackingEngineCore:
                             ROI_mask_current, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
                         )
                     if _roi_contours_cache:
-                        # Draw cyan boundary (BGR: 255, 255, 0)
+                        # Color + resolution-aware width come from the shared
+                        # arena_overlay_style module so this preview boundary
+                        # matches the arena-setup canvas's boundary stroke.
+                        if _roi_boundary_thickness_cache is None:
+                            _roi_boundary_thickness_cache = boundary_line_width_px(
+                                min(frame.shape[0], frame.shape[1])
+                            )
                         cv2.drawContours(
-                            overlay, _roi_contours_cache, -1, (255, 255, 0), 2
+                            overlay,
+                            _roi_contours_cache,
+                            -1,
+                            BOUNDARY_COLOR_BGR,
+                            _roi_boundary_thickness_cache,
+                            lineType=cv2.LINE_AA,
                         )
             else:
                 overlay = None
@@ -3986,9 +4006,21 @@ class TrackingEngineCore:
                                 cv2.CHAIN_APPROX_SIMPLE,
                             )
                         if _roi_contours_cache:
-                            # Draw cyan boundary
+                            # Color + resolution-aware width come from the
+                            # shared arena_overlay_style module so this
+                            # preview boundary matches the arena-setup
+                            # canvas's boundary stroke.
+                            if _roi_boundary_thickness_cache is None:
+                                _roi_boundary_thickness_cache = boundary_line_width_px(
+                                    min(frame.shape[0], frame.shape[1])
+                                )
                             cv2.drawContours(
-                                overlay, _roi_contours_cache, -1, (0, 255, 255), 2
+                                overlay,
+                                _roi_contours_cache,
+                                -1,
+                                BOUNDARY_COLOR_BGR,
+                                _roi_boundary_thickness_cache,
+                                lineType=cv2.LINE_AA,
                             )
 
                     self.emit_frame(overlay)

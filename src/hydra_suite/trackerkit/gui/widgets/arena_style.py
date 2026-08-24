@@ -9,6 +9,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from hydra_suite.utils.arena_overlay_style import BOUNDARY_COLOR_RGB
+from hydra_suite.utils.arena_overlay_style import (
+    boundary_line_width_px as _shared_boundary_line_width_px,
+)
+
 VEIL_ALPHA = 0.15
 TEXT_ALPHA = 0.70
 CLICK_DRAG_THRESHOLD_PX = 3
@@ -41,8 +46,8 @@ class ArenaPalette:
 _LINE_INCLUDE = (0, 160, 60)  # green
 _LINE_EXCLUDE = (210, 30, 30)  # red
 _LINE_PREVIEW = (255, 140, 0)  # orange -- distinct from committed include (green)
-_LINE_BOUNDARY = (20, 100, 220)  # blue -- the combined-ROI outline
-_VEIL = (20, 100, 220)  # same blue as the boundary, filled at VEIL_ALPHA
+_LINE_BOUNDARY = BOUNDARY_COLOR_RGB  # blue -- the combined-ROI outline
+_VEIL = BOUNDARY_COLOR_RGB  # same blue as the boundary, filled at VEIL_ALPHA
 
 
 def frame_palette(mean_luminance: float) -> ArenaPalette:
@@ -87,7 +92,7 @@ def zone_line_width_px(viewport_min_dim: int) -> int:
 
 def boundary_line_width_px(viewport_min_dim: int) -> int:
     """Thick outline width for an arena's combined-ROI boundary stroke."""
-    return line_width_px(viewport_min_dim) * 2
+    return _shared_boundary_line_width_px(viewport_min_dim)
 
 
 def glyph_size_px(on_screen_radius: float) -> int:
