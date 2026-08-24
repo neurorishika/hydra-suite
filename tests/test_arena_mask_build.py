@@ -1,3 +1,5 @@
+import logging
+
 import numpy as np
 
 from hydra_suite.trackerkit.engine_params import build_arena_labels, build_roi_mask
@@ -149,17 +151,26 @@ def test_roi_mask_exclude_zone_is_scoped_per_arena_not_global():
     assert roi[20, 90] > 0
 
 
-def test_exclude_with_no_matching_include_arena_is_skipped():
+def test_exclude_with_no_matching_include_arena_is_skipped(caplog):
     """An orphaned exclude (arena_id with no matching include shape) has
-    nothing to scope against and must be skipped rather than crash."""
+    nothing to scope against and must be skipped rather than crash.
+
+    Fix Wave 21 Finding C: this skip now also applies to build_roi_mask
+    (Fix Wave 20 unified it onto build_arena_labels), so it must be
+    OBSERVABLE via a warning log rather than silent."""
     shapes = [
         _circle(20, 20, 15, arena_id=0),
         _circle(20, 20, 5, arena_id=7, mode="exclude"),  # no include with id 7
     ]
-    labels, n_arenas = build_arena_labels(shapes, 100, 100)
+    with caplog.at_level(logging.WARNING):
+        labels, n_arenas = build_arena_labels(shapes, 100, 100)
     assert n_arenas == 1
     # The orphaned exclude must not remove arena 0's pixels.
     assert labels[20, 20] == 1
+    assert any(
+        "arena_id=7" in record.getMessage() and record.levelno == logging.WARNING
+        for record in caplog.records
+    )
 
 
 def test_generate_combined_roi_mask_matches_build_arena_labels(qtbot=None):

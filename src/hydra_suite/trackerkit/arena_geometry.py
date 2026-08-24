@@ -105,6 +105,25 @@ def _boxes_disjoint(a, b) -> bool:
     return a[2] < b[0] or b[2] < a[0] or a[3] < b[1] or b[3] < a[1]
 
 
+def _paint_shape(
+    canvas: np.ndarray, shape: dict[str, Any], x0: int, y0: int, value: int
+) -> None:
+    """Rasterize one shape onto *canvas* (already offset-cropped) with *value*."""
+    if shape.get("type") == "circle":
+        center_x, center_y, radius = shape["params"]
+        cv2.circle(
+            canvas,
+            (int(center_x) - x0, int(center_y) - y0),
+            int(radius),
+            value,
+            -1,
+        )
+    else:
+        offset = np.asarray([x0, y0], dtype=np.int32)
+        points = np.asarray(shape["params"], dtype=np.int32) - offset
+        cv2.fillPoly(canvas, [points], value)
+
+
 def _rasterize(
     shapes: list[dict[str, Any]],
     x0: int,
@@ -112,23 +131,26 @@ def _rasterize(
     width: int,
     height: int,
 ) -> np.ndarray:
-    """Boolean mask of one arena, cropped to the (x0, y0, width, height) box."""
+    """Boolean mask of one arena, cropped to the (x0, y0, width, height) box.
+
+    Paints ALL include shapes first, then ALL exclude shapes second,
+    regardless of the input list's order -- mirroring
+    ``engine_params.build_arena_labels``'s own two-pass structure exactly,
+    so this UI-facing geometry check can never disagree with the real
+    engine rasterization about which pixels an arena actually owns. A
+    single draw-order pass (paint whichever mode each shape happens to be,
+    in list order) is WRONG: an exclude shape that appears before its
+    arena's include shape in the list would paint 0 onto an already-zero
+    canvas (no effect), then get overwritten entirely by the include's 255
+    fill -- silently losing the hole. See Fix Wave 21 Finding B.
+    """
     canvas = np.zeros((height, width), np.uint8)
-    offset = np.asarray([x0, y0], dtype=np.int32)
     for shape in shapes:
-        value = 255 if shape.get("mode", "include") == "include" else 0
-        if shape.get("type") == "circle":
-            center_x, center_y, radius = shape["params"]
-            cv2.circle(
-                canvas,
-                (int(center_x) - x0, int(center_y) - y0),
-                int(radius),
-                value,
-                -1,
-            )
-        else:
-            points = np.asarray(shape["params"], dtype=np.int32) - offset
-            cv2.fillPoly(canvas, [points], value)
+        if shape.get("mode", "include") == "include":
+            _paint_shape(canvas, shape, x0, y0, 255)
+    for shape in shapes:
+        if shape.get("mode", "include") != "include":
+            _paint_shape(canvas, shape, x0, y0, 0)
     return canvas > 0
 
 
@@ -241,14 +263,20 @@ def min_pitch(shape_type: str, size: int, size_y: int | None = None) -> tuple[in
     """Tightest centre-to-centre pitch that cannot produce overlap.
 
     Circles of radius r avoid overlap only when spacing is at least 2r, i.e.
-    the full diameter -- ``size`` already IS the diameter. Rectangles need the
-    full width in x and the full height in y. (The original brief specified
-    half these values, which guarantees overlap rather than preventing it.)
+    the full diameter -- ``size`` already IS the diameter, and exact
+    tangency is safe here because ``overlapping_arena_pairs``' analytic
+    circle-circle fast path treats distance ``>= r_a + r_b`` as non-
+    overlapping without ever rasterizing. Rectangles have no such fast
+    path -- they always go through ``_rasterize``'s boundary-inclusive
+    ``cv2.fillPoly``, where an EXACT width/height pitch still shares one
+    column/row of pixels at the touching edge. Add a 1-pixel margin so a
+    rectangle grid at its own floor/default spacing can never be flagged
+    as overlapping by the exact rasterizer that checks it.
     """
     height = int(size if size_y is None else size_y)
     if shape_type == "circle":
         return (int(size), int(size))
-    return (int(size), height)
+    return (int(size) + 1, height + 1)
 
 
 def _rotate(dx: float, dy: float, cos_t: float, sin_t: float) -> tuple[float, float]:

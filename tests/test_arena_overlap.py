@@ -153,6 +153,32 @@ def test_exclude_that_bisects_an_arena_is_flagged():
     assert non_contiguous_arena_ids(shapes, 300, 300) == [0]
 
 
+def test_exclude_that_bisects_an_arena_is_flagged_regardless_of_shape_order():
+    """Fix Wave 21 Finding B regression: _rasterize must paint ALL includes
+    first, then ALL excludes, mirroring build_arena_labels' two-pass
+    structure -- NOT whatever order the shapes happen to appear in the
+    list. Reachable in the GUI: the arena panel's zone buttons let a user
+    draw an exclude zone before that arena has any include shape at all.
+
+    Before the fix, _rasterize painted shapes in list order: with the
+    exclude listed first, it painted 0 onto an all-zero canvas (no
+    effect), then the include painted 255 straight over that same area
+    afterward -- the hole never got punched, the region read as fully
+    connected, and this test would have failed (asserting [] instead of
+    [0]).
+    """
+    shapes = [
+        {
+            "type": "polygon",
+            "params": [[95, 5], [105, 5], [105, 195], [95, 195]],
+            "mode": "exclude",
+            "arena_id": 0,
+        },
+        _square(100, 100, 90, 0),
+    ]
+    assert non_contiguous_arena_ids(shapes, 300, 300) == [0]
+
+
 def test_small_edge_notch_exclude_does_not_disconnect():
     """An exclude that only nibbles one edge leaves a single connected piece."""
     shapes = [

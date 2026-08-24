@@ -68,7 +68,12 @@ def test_min_pitch_for_circles_is_the_diameter():
 
 
 def test_min_pitch_for_rectangles_is_width_and_height():
-    assert min_pitch("polygon", 40, size_y=20) == (40, 20)
+    # Fix Wave 21 Finding A: an EXACT width/height pitch is tangent, and the
+    # rasterizer that ultimately validates it (cv2.fillPoly, via _rasterize)
+    # is boundary-inclusive, so exact tangency still reads as overlapping.
+    # Rectangles get a 1px margin (unlike circles, which have an analytic
+    # tangency fast path in overlapping_arena_pairs).
+    assert min_pitch("polygon", 40, size_y=20) == (41, 21)
 
 
 def test_min_pitch_grid_produces_no_overlap():
@@ -77,6 +82,25 @@ def test_min_pitch_grid_produces_no_overlap():
     px, py = min_pitch("circle", 40)
     shapes = generate_grid_shapes(3, 3, 60, 60, px, py, 40)
     assert overlapping_arena_pairs(shapes, 400, 400) == []
+
+
+def test_min_pitch_rectangle_grid_produces_no_overlap():
+    """Fix Wave 21 Finding A regression: the grid dialog's own default
+    rectangle spacing (min_pitch's return value) must not be flagged as
+    overlapping by the exact rasterizer that overlapping_arena_pairs uses.
+    Before the fix, min_pitch("polygon", 40, size_y=20) returned the EXACT
+    (40, 20) tangent pitch, and adjacent rectangles' shared edge column of
+    pixels got painted by both arenas under cv2.fillPoly's boundary-
+    inclusive fill -- this test would have failed against that old code.
+    """
+    from hydra_suite.trackerkit.arena_geometry import overlapping_arena_pairs
+
+    w, h = 40, 20
+    px, py = min_pitch("polygon", w, size_y=h)
+    shapes = generate_grid_shapes(
+        1, 2, 60, 60, px, py, w, shape_type="polygon", size_y=h
+    )
+    assert overlapping_arena_pairs(shapes, 400, 200) == []
 
 
 def test_extent_cap_keeps_every_centre_inside():

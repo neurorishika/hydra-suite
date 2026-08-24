@@ -300,6 +300,12 @@ def build_arena_labels(
                 # An exclude shape whose arena_id has no matching include
                 # shape at all (e.g. a stray/orphaned exclude) has nothing
                 # to scope against -- skip it rather than crash or guess.
+                logger.warning(
+                    "ROI exclude shape references arena_id=%s with no "
+                    "matching include shape -- skipping it (this exclude "
+                    "zone will have NO effect on detection gating).",
+                    raw_arena_id,
+                )
                 continue
             value = dense[raw_arena_id] + 1
             # Only clear pixels that currently belong to THIS SAME arena --

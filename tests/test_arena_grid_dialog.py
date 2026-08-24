@@ -475,8 +475,11 @@ def test_rectangle_spacing_uses_width_and_height_separately(qt_app):
     dialog.spin_height.setValue(20)
     dialog.spin_rows.setValue(2)
     dialog.spin_cols.setValue(2)
-    assert dialog.spin_pitch_x.minimum() == 40
-    assert dialog.spin_pitch_y.minimum() == 20
+    # Fix Wave 21 Finding A: min_pitch adds a 1px margin for rectangles so
+    # the dialog's own default/floor spacing can't be flagged as
+    # overlapping by the boundary-inclusive rasterizer.
+    assert dialog.spin_pitch_x.minimum() == 41
+    assert dialog.spin_pitch_y.minimum() == 21
 
 
 def test_circle_shows_radius_only(qt_app):
