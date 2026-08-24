@@ -16,6 +16,7 @@ pytest.importorskip("PySide6")
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from hydra_suite.trackerkit.gui.main_window import MainWindow
+from hydra_suite.trackerkit.gui.orchestrators import tracking as tracking_module
 from hydra_suite.trackerkit.gui.orchestrators.config import ConfigOrchestrator
 
 
@@ -531,6 +532,480 @@ def test_video_autoload_restores_pose_keypoint_groups_and_headtail_model(
     ]
     assert reloaded_window._parse_pose_direction_posterior_keypoints() == ["tail"]
     reloaded_window.close()
+
+
+def test_loading_a_config_with_roi_shapes_restores_them_onto_the_canvas_and_done_state(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    """Fix Wave 12 end-to-end regression guard: opening a video whose saved
+    config already has fully-configured ROIs must (a) push those shapes onto
+    the canvas (``video_label._shapes``), not just onto ``roi_shapes``/the
+    panel's own state, and (b) land the arena panel in its "done" state
+    (Modify Existing Arenas / Start Fresh) rather than the editing bar, since
+    there's nothing left to actively drastically edit yet.
+
+    This must fail against the pre-Fix-Wave-12 code (canvas never received
+    the shapes; the panel never entered the done state) and pass after it.
+    """
+    import cv2
+
+    video_path = tmp_path / "sample.mp4"
+    width, height = 64, 48
+    writer = cv2.VideoWriter(
+        str(video_path), cv2.VideoWriter_fourcc(*"mp4v"), 10.0, (width, height)
+    )
+    for _ in range(3):
+        writer.write(np.zeros((height, width, 3), dtype=np.uint8))
+    writer.release()
+
+    roi_shapes = [
+        {"type": "circle", "params": [30, 20, 10], "mode": "include", "arena_id": 0},
+    ]
+
+    window = _make_main_window(monkeypatch)
+    window._setup_video_file(str(video_path), skip_config_load=True)
+
+    cfg = window.get_parameters_dict()
+    cfg["roi_shapes"] = roi_shapes
+    cfg["file_path"] = str(video_path)
+    config_path = tmp_path / "sample_config.json"
+    config_path.write_text(json.dumps(cfg), encoding="utf-8")
+
+    window._load_config_from_file(str(config_path))
+
+    assert window.roi_shapes == roi_shapes
+    assert window.video_label._shapes == roi_shapes
+    assert window.arena_panel.stack.currentWidget() is window.arena_panel.done_widget
+
+    window.close()
+
+
+def test_opening_video_with_saved_roi_config_autoloads_shapes_onto_canvas(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    """Fix Wave 13 end-to-end regression guard: opening a video via the REAL
+    single-call auto-load path (``_setup_video_file(..., skip_config_load=False)``,
+    which drives ``_init_video_player`` -> ``_update_preview_display`` for the
+    very first frame, then auto-loads a matching ``<video>_config.json`` found
+    next to the video) must leave the saved ROI shapes visible on the canvas
+    afterward.
+
+    Fix Wave 10 added an unconditional ``video_label.set_shapes([])`` at the
+    top of ``_update_preview_display`` (the shared "show current frame"
+    method used for both normal display and detection-test re-render) to fix
+    a real bug (stale overlay during detection-test rendering), but that
+    clear fired on every normal frame display too and nothing re-populated
+    the shapes afterward on this path -- wiping a legitimately auto-loaded
+    ROI overlay the instant a video with saved ROIs opened.
+
+    The previous Fix Wave 12 regression test used a two-step
+    ``skip_config_load=True`` + separate ``_load_config_from_file`` call,
+    which happened not to re-invoke ``_update_preview_display`` after the
+    shapes were pushed onto the canvas, so it did not expose this. This test
+    drives the single-call auto-load path instead, which does.
+    """
+    import cv2
+
+    video_path = tmp_path / "sample.mp4"
+    width, height = 64, 48
+    writer = cv2.VideoWriter(
+        str(video_path), cv2.VideoWriter_fourcc(*"mp4v"), 10.0, (width, height)
+    )
+    for _ in range(3):
+        writer.write(np.zeros((height, width, 3), dtype=np.uint8))
+    writer.release()
+
+    roi_shapes = [
+        {"type": "circle", "params": [30, 20, 10], "mode": "include", "arena_id": 0},
+    ]
+
+    window = _make_main_window(monkeypatch)
+
+    # Build the config that `_setup_video_file`'s auto-detection will find:
+    # it must sit next to the video as `<video_name>_config.json`.
+    cfg = window.get_parameters_dict()
+    cfg["roi_shapes"] = roi_shapes
+    cfg["file_path"] = str(video_path)
+    config_path = tmp_path / "sample_config.json"
+    config_path.write_text(json.dumps(cfg), encoding="utf-8")
+
+    # The real auto-load-on-open path: a single call, config load NOT skipped.
+    window._setup_video_file(str(video_path), skip_config_load=False)
+
+    # `_init_video_player` schedules `_fit_image_to_screen` via
+    # `QTimer.singleShot(0, ...)`, deferred to the next event-loop tick. That
+    # callback chain is what actually re-enters `_update_preview_display` via
+    # `_on_zoom_changed` and is where the real Fix Wave 10/13 bug bit -- so the
+    # assertion below must only run after pumping the event loop enough to
+    # drain that queued callback, or it can't observe the regression either
+    # way.
+    qapp.processEvents()
+    qapp.processEvents()
+
+    assert window.roi_shapes == roi_shapes
+    assert window.video_label._shapes == roi_shapes
+
+    window.close()
+
+
+def test_video_autoload_with_saved_roi_produces_correctly_fit_non_compounded_frame(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    """Fix Wave 15 end-to-end regression guard: opening a video with a saved
+    ``roi_shapes`` config via the REAL auto-load path
+    (``_setup_video_file(..., skip_config_load=False)``) must leave
+    ``video_label._zoom``/``._scaled`` reflecting a genuinely NATIVE frame
+    scaled by whatever zoom ``_fit_image_to_screen`` computed -- not a
+    compounded/baked scale. Before the fix, ``_update_preview_display``
+    baked the (stale, previous-video) zoom into ``canvas._frame`` and reset
+    ``canvas._zoom`` to 1.0 on the first frame push, corrupting every
+    zoom-slider move (routed through ``_display_roi_with_zoom`` once
+    ``roi_shapes`` is populated) that followed, including the
+    ``_fit_image_to_screen`` call scheduled during video load.
+    """
+    import cv2
+
+    video_path = tmp_path / "sample.mp4"
+    width, height = 64, 48
+    writer = cv2.VideoWriter(
+        str(video_path), cv2.VideoWriter_fourcc(*"mp4v"), 10.0, (width, height)
+    )
+    for _ in range(3):
+        writer.write(np.zeros((height, width, 3), dtype=np.uint8))
+    writer.release()
+
+    roi_shapes = [
+        {"type": "circle", "params": [30, 20, 10], "mode": "include", "arena_id": 0},
+    ]
+
+    window = _make_main_window(monkeypatch)
+
+    cfg = window.get_parameters_dict()
+    cfg["roi_shapes"] = roi_shapes
+    cfg["file_path"] = str(video_path)
+    config_path = tmp_path / "sample_config.json"
+    config_path.write_text(json.dumps(cfg), encoding="utf-8")
+
+    # Simulate a zoom value left over from a previously opened video, the
+    # most likely real-world trigger the brief calls out.
+    window.slider_zoom.setValue(50)
+
+    window._setup_video_file(str(video_path), skip_config_load=False)
+
+    # `_init_video_player` schedules `_fit_image_to_screen` via
+    # `QTimer.singleShot(0, ...)` -- pump the event loop to drain it.
+    qapp.processEvents()
+    qapp.processEvents()
+
+    viewport_width = window.scroll.viewport().width()
+    viewport_height = window.scroll.viewport().height()
+    zoom_w = viewport_width / width
+    zoom_h = viewport_height / height
+    expected_zoom_fit = min(zoom_w, zoom_h) * 0.95
+    expected_zoom_fit = max(0.1, min(5.0, expected_zoom_fit))
+    # `_fit_image_to_screen` stores the zoom via
+    # `slider_zoom.setValue(int(expected_zoom_fit * 100))`, an integer
+    # percent, so recover the same truncated value it actually applied.
+    expected_zoom = int(expected_zoom_fit * 100) / 100.0
+
+    assert window.video_label._zoom == pytest.approx(expected_zoom)
+    assert window.video_label._scaled.width() == int(width * expected_zoom)
+    assert window.video_label._scaled.height() == int(height * expected_zoom)
+
+    window.close()
+
+
+def _make_batch_pair_videos(tmp_path: Path) -> tuple[Path, Path]:
+    """Create two tiny real videos (matching the established VideoWriter
+    pattern in this file) to use as a keystone (A) + non-keystone (B) pair
+    for batch double-click switching tests."""
+    import cv2
+
+    width, height = 64, 48
+    videos = []
+    for name in ("a.mp4", "b.mp4"):
+        video_path = tmp_path / name
+        writer = cv2.VideoWriter(
+            str(video_path), cv2.VideoWriter_fourcc(*"mp4v"), 10.0, (width, height)
+        )
+        for _ in range(3):
+            writer.write(np.zeros((height, width, 3), dtype=np.uint8))
+        writer.release()
+        videos.append(video_path)
+    return videos[0], videos[1]
+
+
+def test_batch_video_double_click_switch_inherits_keystone_roi_when_own_config_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    """Fix Wave 16 regression guard: manually double-clicking a batch video
+    with no saved config of its own must inherit the keystone's arena/ROI
+    shapes, not silently clear them to empty.
+
+    Reproduces the exact scenario from the root-cause investigation: video A
+    (keystone) has a saved sidecar config with ``roi_shapes``; video B has no
+    sidecar config at all. Selecting B's row and double-clicking it must
+    leave ``window.roi_shapes``/``window.video_label._shapes`` equal to A's
+    shapes, not ``[]``.
+    """
+    video_a, video_b = _make_batch_pair_videos(tmp_path)
+
+    keystone_shapes = [
+        {"type": "circle", "params": [30, 20, 10], "mode": "include", "arena_id": 0},
+    ]
+
+    window = _make_main_window(monkeypatch)
+    window._setup_video_file(str(video_a), skip_config_load=True)
+    qapp.processEvents()
+    qapp.processEvents()
+
+    window.roi_shapes = list(keystone_shapes)
+    window.video_label.set_shapes(list(keystone_shapes))
+    assert window.save_config(prompt_if_exists=False)
+
+    window._setup_panel.g_batch.setChecked(True)
+    window.batch_videos = [str(video_a), str(video_b)]
+    window._sync_batch_list_ui()
+    window._setup_panel.list_batch_videos.setCurrentRow(1)
+
+    window._on_batch_video_double_clicked()
+    qapp.processEvents()
+    qapp.processEvents()
+
+    assert window.roi_shapes == keystone_shapes
+    assert window.video_label._shapes == keystone_shapes
+
+    window.close()
+
+
+def test_batch_video_double_click_switch_prefers_own_config_over_keystone(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    """Fix Wave 16: the keystone-inherit fix must not force EVERY batch video
+    onto the keystone baseline -- a video with its OWN saved config must
+    still win, matching ``resolve_video_plan``'s own-config-wins precedence.
+    """
+    video_a, video_b = _make_batch_pair_videos(tmp_path)
+
+    keystone_shapes = [
+        {"type": "circle", "params": [30, 20, 10], "mode": "include", "arena_id": 0},
+    ]
+    own_shapes = [
+        {"type": "circle", "params": [40, 15, 8], "mode": "include", "arena_id": 0},
+    ]
+
+    window = _make_main_window(monkeypatch)
+    window._setup_video_file(str(video_a), skip_config_load=True)
+    qapp.processEvents()
+    qapp.processEvents()
+
+    window.roi_shapes = list(keystone_shapes)
+    window.video_label.set_shapes(list(keystone_shapes))
+    assert window.save_config(prompt_if_exists=False)
+
+    window._setup_panel.g_batch.setChecked(True)
+    window.batch_videos = [str(video_a), str(video_b)]
+    window._sync_batch_list_ui()
+
+    # Give video B its own saved config with DIFFERENT shapes before
+    # switching to it.
+    cfg_b = window.get_parameters_dict()
+    cfg_b.pop("ROI_MASK", None)
+    cfg_b.pop("ARENA_LABELS", None)
+    cfg_b["roi_shapes"] = own_shapes
+    cfg_b["file_path"] = str(video_b)
+    config_path_b = tmp_path / "b_config.json"
+    config_path_b.write_text(json.dumps(cfg_b), encoding="utf-8")
+
+    window._setup_panel.list_batch_videos.setCurrentRow(1)
+    window._on_batch_video_double_clicked()
+    qapp.processEvents()
+    qapp.processEvents()
+
+    assert window.roi_shapes == own_shapes
+    assert window.video_label._shapes == own_shapes
+
+    window.close()
+
+
+def test_batch_video_double_click_keystone_override_forces_keystone_baseline(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    """Fix Wave 16: with ``chk_batch_keystone_override`` checked, even a
+    batch video WITH its own saved config must end up using the KEYSTONE's
+    shapes instead of its own after a double-click switch, matching
+    ``resolve_video_plan``'s documented override semantics.
+    """
+    video_a, video_b = _make_batch_pair_videos(tmp_path)
+
+    keystone_shapes = [
+        {"type": "circle", "params": [30, 20, 10], "mode": "include", "arena_id": 0},
+    ]
+    own_shapes = [
+        {"type": "circle", "params": [40, 15, 8], "mode": "include", "arena_id": 0},
+    ]
+
+    window = _make_main_window(monkeypatch)
+    window._setup_video_file(str(video_a), skip_config_load=True)
+    qapp.processEvents()
+    qapp.processEvents()
+
+    window.roi_shapes = list(keystone_shapes)
+    window.video_label.set_shapes(list(keystone_shapes))
+    assert window.save_config(prompt_if_exists=False)
+
+    window._setup_panel.g_batch.setChecked(True)
+    window.batch_videos = [str(video_a), str(video_b)]
+    window._sync_batch_list_ui()
+
+    cfg_b = window.get_parameters_dict()
+    cfg_b.pop("ROI_MASK", None)
+    cfg_b.pop("ARENA_LABELS", None)
+    cfg_b["roi_shapes"] = own_shapes
+    cfg_b["file_path"] = str(video_b)
+    config_path_b = tmp_path / "b_config.json"
+    config_path_b.write_text(json.dumps(cfg_b), encoding="utf-8")
+
+    window._setup_panel.chk_batch_keystone_override.setChecked(True)
+    window._setup_panel.list_batch_videos.setCurrentRow(1)
+    window._on_batch_video_double_clicked()
+    qapp.processEvents()
+    qapp.processEvents()
+
+    assert window.roi_shapes == keystone_shapes
+    assert window.video_label._shapes == keystone_shapes
+
+    window.close()
+
+
+def test_batch_continuation_finalize_inherits_keystone_roi_when_own_config_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    """Fix Wave 17 regression guard: the AUTOMATED batch-continuation block
+    inside ``_finalize_tracking_session_ui`` (reached when an unattended,
+    multi-video batch tracking run finishes one video and advances to the
+    next) must inherit the keystone's arena/ROI shapes for a video without
+    its own saved config -- not silently clear them to ``[]``/``roi_mask =
+    None``, which would track the whole frame with no arena restriction.
+
+    Reproduces the exact scenario from the root-cause investigation: video A
+    (keystone) has a saved sidecar config with ``roi_shapes``; video B (the
+    next video in ``batch_videos``) has no sidecar config at all. Finishing
+    video A and letting ``_finalize_tracking_session_ui`` advance the batch
+    index to B must leave ``window.roi_shapes`` equal to A's shapes (not
+    ``[]``) and ``window.roi_mask is not None``.
+    """
+    video_a, video_b = _make_batch_pair_videos(tmp_path)
+
+    keystone_shapes = [
+        {"type": "circle", "params": [30, 20, 10], "mode": "include", "arena_id": 0},
+    ]
+
+    window = _make_main_window(monkeypatch)
+    window._setup_video_file(str(video_a), skip_config_load=True)
+    qapp.processEvents()
+    qapp.processEvents()
+
+    window.roi_shapes = list(keystone_shapes)
+    window.video_label.set_shapes(list(keystone_shapes))
+    assert window.save_config(prompt_if_exists=False)
+
+    window._setup_panel.g_batch.setChecked(True)
+    window.batch_videos = [str(video_a), str(video_b)]
+    window._sync_batch_list_ui()
+    window.current_batch_index = 0
+    window._setup_panel.list_batch_videos.setCurrentRow(0)
+
+    # Suppress the QTimer.singleShot(1000, ...) auto-start of the next
+    # video's tracking pass -- irrelevant to this test and would otherwise
+    # leave a live tracking worker running after the test returns.
+    monkeypatch.setattr(
+        tracking_module.QTimer, "singleShot", lambda *args, **kwargs: None
+    )
+
+    window._tracking_orch._finalize_tracking_session_ui()
+    qapp.processEvents()
+    qapp.processEvents()
+
+    assert window.current_batch_index == 1
+    assert window.roi_shapes == keystone_shapes
+    assert window.roi_mask is not None
+
+    window.close()
+
+
+def test_batch_continuation_finalize_prefers_own_config_over_keystone(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    """Fix Wave 17 mirror-image test: the automated batch-continuation block
+    must not force EVERY batch video onto the keystone baseline -- a video
+    with its OWN saved config must still win, matching
+    ``resolve_video_plan``'s own-config-wins precedence (already proven for
+    the manual double-click path by Fix Wave 16).
+    """
+    video_a, video_b = _make_batch_pair_videos(tmp_path)
+
+    keystone_shapes = [
+        {"type": "circle", "params": [30, 20, 10], "mode": "include", "arena_id": 0},
+    ]
+    own_shapes = [
+        {"type": "circle", "params": [40, 15, 8], "mode": "include", "arena_id": 0},
+    ]
+
+    window = _make_main_window(monkeypatch)
+    window._setup_video_file(str(video_a), skip_config_load=True)
+    qapp.processEvents()
+    qapp.processEvents()
+
+    window.roi_shapes = list(keystone_shapes)
+    window.video_label.set_shapes(list(keystone_shapes))
+    assert window.save_config(prompt_if_exists=False)
+
+    window._setup_panel.g_batch.setChecked(True)
+    window.batch_videos = [str(video_a), str(video_b)]
+    window._sync_batch_list_ui()
+    window.current_batch_index = 0
+    window._setup_panel.list_batch_videos.setCurrentRow(0)
+
+    # Give video B its own saved config with DIFFERENT shapes before
+    # finalize advances the batch index to it.
+    cfg_b = window.get_parameters_dict()
+    cfg_b.pop("ROI_MASK", None)
+    cfg_b.pop("ARENA_LABELS", None)
+    cfg_b["roi_shapes"] = own_shapes
+    cfg_b["file_path"] = str(video_b)
+    config_path_b = tmp_path / "b_config.json"
+    config_path_b.write_text(json.dumps(cfg_b), encoding="utf-8")
+
+    monkeypatch.setattr(
+        tracking_module.QTimer, "singleShot", lambda *args, **kwargs: None
+    )
+
+    window._tracking_orch._finalize_tracking_session_ui()
+    qapp.processEvents()
+    qapp.processEvents()
+
+    assert window.current_batch_index == 1
+    assert window.roi_shapes == own_shapes
+    assert window.roi_mask is not None
+
+    window.close()
 
 
 def test_remove_buttons_delete_only_the_selected_tracker_models(

@@ -1583,6 +1583,7 @@ class DetectionPanel(QWidget):
         if tracking_worker is not None and tracking_worker.isRunning():
             last_rgb = getattr(self._main_window, "_last_tracking_frame_rgb", None)
             if last_rgb is not None:
+                self._main_window.video_label.set_shapes([])
                 from PySide6.QtCore import Qt
                 from PySide6.QtGui import QImage, QPixmap
 
@@ -1592,14 +1593,14 @@ class DetectionPanel(QWidget):
                 scaled = qimg.scaled(
                     int(w * z), int(h * z), Qt.KeepAspectRatio, Qt.SmoothTransformation
                 )
-                self._main_window._set_video_pixmap(QPixmap.fromImage(scaled))
+                self._main_window._set_video_pixmap(
+                    QPixmap.fromImage(scaled), already_scaled=True
+                )
             return
 
         if self._main_window.detection_test_result is not None:
             self._redisplay_detection_test()
-        elif getattr(self._main_window, "roi_base_frame", None) is not None and getattr(
-            self._main_window, "roi_shapes", None
-        ):
+        elif getattr(self._main_window, "roi_shapes", None):
             self._main_window._display_roi_with_zoom()
         else:
             self._update_preview_display()
@@ -1757,22 +1758,22 @@ class DetectionPanel(QWidget):
         bytes_per_line = ch * w
         qimg = QImage(adjusted_rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
 
-        if self._main_window.roi_mask is not None:
-            qimg = self._main_window._apply_roi_mask_to_image(qimg)
-
+        # NOTE(arena-canvas wiring): the cyan-dashed ROI boundary overlay this
+        # used to bake into the preview pixmap (_apply_roi_mask_to_image) was
+        # retired with the ROI-drawing rasterizer -- ArenaCanvas now owns ROI
+        # overlay rendering, but this detection-preview path renders through
+        # _set_video_pixmap directly rather than the canvas's shape/point
+        # state, so it no longer draws the ROI boundary. Not part of Task 8's
+        # scope; flagged for a follow-up if this preview needs the boundary
+        # back.
         zoom_val = max(self._main_window.slider_zoom.value() / 100.0, 0.1)
-        if zoom_val != 1.0:
-            scaled_w = int(w * zoom_val)
-            scaled_h = int(h * zoom_val)
-            qimg = qimg.scaled(
-                scaled_w, scaled_h, Qt.KeepAspectRatio, Qt.FastTransformation
-            )
-
+        self._main_window.video_label.set_zoom(zoom_val)
         pixmap = QPixmap.fromImage(qimg)
-        self._main_window._set_video_pixmap(pixmap)
+        self._main_window._set_video_pixmap(pixmap, already_scaled=False)
 
     def _redisplay_detection_test(self):
         """Redisplay the stored detection test result with current zoom."""
+        self._main_window.video_label.set_shapes([])
         if self._main_window.detection_test_result is None:
             return
 
@@ -1792,7 +1793,7 @@ class DetectionPanel(QWidget):
             )
 
         pixmap = QPixmap.fromImage(qimg)
-        self._main_window._set_video_pixmap(pixmap)
+        self._main_window._set_video_pixmap(pixmap, already_scaled=True)
 
     # =========================================================================
     # PREVIEW DETECTION TEST (moved from MainWindow)
@@ -2034,6 +2035,7 @@ class DetectionPanel(QWidget):
     @Slot(dict)
     def _on_preview_detection_finished(self, result: dict):
         """Handle successful async preview detection completion."""
+        self._main_window.video_label.set_shapes([])
         test_frame_rgb = result.get("test_frame_rgb")
         raw_frame_rgb = result.get("raw_frame_rgb")
         resize_f = float(result.get("resize_factor", 1.0))
@@ -2065,7 +2067,9 @@ class DetectionPanel(QWidget):
             qimg = qimg.scaled(
                 scaled_w, scaled_h, Qt.KeepAspectRatio, Qt.SmoothTransformation
             )
-        self._main_window._set_video_pixmap(QPixmap.fromImage(qimg))
+        self._main_window._set_video_pixmap(
+            QPixmap.fromImage(qimg), already_scaled=True
+        )
         self._main_window._fit_image_to_screen()
         logger.info("Detection test completed on preview frame")
 

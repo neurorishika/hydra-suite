@@ -13,11 +13,10 @@ from pathlib import Path
 
 import cv2
 from PySide6.QtCore import Qt, QTimer, Signal, Slot
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
-    QComboBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -49,6 +48,8 @@ from hydra_suite.core.inference.model_paths import (
     resolve_pose_model_path,
 )
 from hydra_suite.trackerkit.config.schemas import TrackerConfig
+from hydra_suite.trackerkit.gui.panels.arena_panel import ArenaPanel
+from hydra_suite.trackerkit.gui.widgets.arena_canvas import ArenaCanvas
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
 from hydra_suite.utils.geometry import wrap_angle_degs
 from hydra_suite.widgets.status_log import StatusLogTail
@@ -370,14 +371,6 @@ class MainWindow(QMainWindow):
 
         # ROI display caching (for performance)
         self._roi_masked_cache = {}  # Cache: {(frame_id, roi_hash): masked_image}
-        # Interactive pan/zoom state
-        self._is_panning = False
-        self._pan_start_pos = None
-        self._scroll_start_h = 0
-        self._scroll_start_v = 0
-        self._pan_start_pos = None
-        self._scroll_start_h = 0
-        self._scroll_start_v = 0
 
         # Track first frame for auto-fit during tracking
         self._tracking_first_frame = True
@@ -550,23 +543,25 @@ class MainWindow(QMainWindow):
         self.scroll.setAlignment(Qt.AlignCenter)
         self.scroll.setStyleSheet("background-color: #121212; border: none;")
         self.scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.video_label = QLabel("")
-        self.video_label.setAlignment(Qt.AlignCenter)
-        self.video_label.setStyleSheet("color: #6a6a6a; font-size: 16px;")
-        self.video_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self.video_label.setMinimumSize(320, 240)
+        self.video_label = ArenaCanvas()
+        # Tracks whether the canvas currently shows rasterized placeholder
+        # text (via _set_video_message) rather than a real video/logo frame
+        # (via _set_video_pixmap) -- ArenaCanvas has no QLabel text()/pixmap()
+        # to query, so this is tracked explicitly for the visualization-free
+        # toggle's "restore previous message" logic.
+        self._video_is_placeholder_text = False
+        self._video_placeholder_text = None
         self.scroll.setWidget(self.video_label)
         self._show_video_logo_placeholder()
 
-        # Enable mouse tracking and events for interactive pan/zoom
-        self.video_label.setMouseTracking(True)
-        self.video_label.mousePressEvent = self._handle_video_mouse_press
-        self.video_label.mouseMoveEvent = self._handle_video_mouse_move
-        self.video_label.mouseReleaseEvent = self._handle_video_mouse_release
-        self.video_label.mouseDoubleClickEvent = self._handle_video_double_click
+        # Pan is driven by the canvas: it reports a delta only for gestures it
+        # classified as drags, so a point-marking click never scrolls.
+        self.video_label.pan_delta.connect(self._on_canvas_pan)
+        self.video_label.point_added.connect(self._on_canvas_point_added)
+        self.video_label.point_removed.connect(self._on_canvas_point_removed)
+        self.video_label.arena_clicked.connect(self._on_canvas_arena_clicked)
         self.video_label.wheelEvent = self._handle_video_wheel
-
-        # Enable pinch-to-zoom gesture
+        self.video_label.mouseDoubleClickEvent = self._handle_video_double_click
         self.video_label.setAttribute(Qt.WA_AcceptTouchEvents, True)
         self.video_label.grabGesture(Qt.PinchGesture)
         self.video_label.event = self._handle_video_event
@@ -578,99 +573,23 @@ class MainWindow(QMainWindow):
         roi_main_layout.setContentsMargins(8, 4, 8, 4)
         roi_main_layout.setSpacing(4)
 
-        # Top row: mode selection and controls
-        roi_layout = QHBoxLayout()
-        roi_label = QLabel("ROI controls")
-        roi_label.setStyleSheet("font-weight: bold; color: #cccccc;")
-
-        # Mode selector
-        self.combo_roi_mode = QComboBox()
-        self.combo_roi_mode.addItems(["Circle", "Polygon"])
-        self.combo_roi_mode.setToolTip("Select shape type for ROI")
-        self.combo_roi_mode.currentIndexChanged.connect(self._on_roi_mode_changed)
-
-        # Zone type selector (Include/Exclude)
-        self.combo_roi_zone = QComboBox()
-        self.combo_roi_zone.addItems(["Include Zone", "Exclude Zone"])
-        self.combo_roi_zone.setToolTip(
-            "Include: Area where tracking is active\n"
-            "Exclude: Area to remove from tracking (applied after inclusions)"
-        )
-        self.combo_roi_zone.currentIndexChanged.connect(self._on_roi_zone_changed)
-
-        self.btn_start_roi = QPushButton("Add Shape")
-        self.btn_start_roi.clicked.connect(self.start_roi_selection)
-        self.btn_start_roi.setShortcut("Ctrl+R")
-        self.btn_start_roi.setToolTip("Start adding ROI shape (Ctrl+R)")
-
-        self.btn_finish_roi = QPushButton("Confirm Shape")
-        self.btn_finish_roi.clicked.connect(self.finish_roi_selection)
-        self.btn_finish_roi.setEnabled(False)
-        self.btn_finish_roi.setShortcut("Ctrl+F")
-        self.btn_finish_roi.setToolTip("Finish current shape (Ctrl+F)")
-
-        self.btn_undo_roi = QPushButton("Undo Last")
-        self.btn_undo_roi.clicked.connect(self.undo_last_roi_shape)
-        self.btn_undo_roi.setEnabled(False)
-        self.btn_undo_roi.setToolTip("Remove last added shape")
-
-        # A new shape joins the CURRENT arena by default -- one arena is
-        # often several shapes (an include circle plus an exclude hole
-        # punched in it), so shape count is not arena count. "New Arena"
-        # is the only thing that advances current_arena_id.
-        self.btn_new_arena = QPushButton("New Arena")
-        self.btn_new_arena.clicked.connect(self._on_new_arena_clicked)
-        self.btn_new_arena.setToolTip(
-            "Start a new arena: shapes added after this join a fresh arena.\n"
-            "Use this only when moving on to a physically separate arena --\n"
-            "an include zone plus its exclude hole belong in the SAME arena."
-        )
-
-        # Bulk-entry convenience for many identical arenas (e.g. a 96-well
-        # plate) -- generates ordinary roi_shapes, indistinguishable from
-        # hand-drawn ones and just as editable afterwards. See task-9 brief.
-        self.btn_generate_grid = QPushButton("Generate Grid")
-        self.btn_generate_grid.clicked.connect(self._on_generate_grid_clicked)
-        self.btn_generate_grid.setToolTip(
-            "Bulk-add a rows x cols grid of arena shapes (e.g. a well plate)\n"
-            "instead of drawing each one by hand. Generated shapes are\n"
-            "ordinary, individually-editable ROI shapes."
-        )
-
-        self.btn_clear_roi = QPushButton("Clear All")
-        self.btn_clear_roi.clicked.connect(self.clear_roi)
-        self.btn_clear_roi.setShortcut("Ctrl+C")
-        self.btn_clear_roi.setToolTip("Clear all ROI shapes (Ctrl+C)")
-
-        self.btn_crop_video = QPushButton("Crop Video to ROI")
-        self.btn_crop_video.clicked.connect(self.crop_video_to_roi)
-        self.btn_crop_video.setEnabled(False)
-        self.btn_crop_video.setToolTip(
-            "Generate a cropped video containing only the ROI area\n"
-            "This can significantly improve tracking performance"
-        )
-        self.btn_crop_video.setStyleSheet(
-            "QPushButton { background-color: #2d7a3e; }"
-            "QPushButton:hover { background-color: #3a9150; }"
-            "QPushButton:disabled { background-color: #3e3e42; color: #777777; }"
-        )
-
+        # Top row: arena-centric panel (Task 9)
         self.roi_status_label = QLabel("No ROI")
         self.roi_status_label.setStyleSheet("color: #6a6a6a; margin-left: 10px;")
 
-        roi_layout.addWidget(roi_label)
-        roi_layout.addWidget(self.combo_roi_mode)
-        roi_layout.addWidget(self.combo_roi_zone)
-        roi_layout.addWidget(self.btn_start_roi)
-        roi_layout.addWidget(self.btn_finish_roi)
-        roi_layout.addWidget(self.btn_undo_roi)
-        roi_layout.addWidget(self.btn_new_arena)
-        roi_layout.addWidget(self.btn_generate_grid)
-        roi_layout.addWidget(self.btn_clear_roi)
-        roi_layout.addWidget(self.btn_crop_video)
-        roi_layout.addStretch()
-
-        roi_main_layout.addLayout(roi_layout)
+        self.arena_panel = ArenaPanel()
+        self.arena_panel.add_single_requested.connect(self._on_add_single_arena)
+        self.arena_panel.add_grid_requested.connect(self._on_generate_grid_clicked)
+        self.arena_panel.arena_changed.connect(self._on_arena_changed)
+        self.arena_panel.clear_arena_requested.connect(self._on_clear_arena)
+        self.arena_panel.draw_requested.connect(self._on_draw_requested)
+        self.arena_panel.finish_requested.connect(self.finish_roi_selection)
+        self.arena_panel.undo_requested.connect(self.undo_last_roi_shape)
+        self.arena_panel.clear_all_requested.connect(self._on_remove_all_arenas)
+        self.arena_panel.crop_requested.connect(self.crop_video_to_roi)
+        self.arena_panel.done_requested.connect(self._on_arena_done)
+        self.arena_panel.modify_requested.connect(self._on_modify_existing_arenas)
+        roi_main_layout.addWidget(self.arena_panel)
 
         # Second row: status and optimization info
         roi_status_layout = QHBoxLayout()
@@ -681,15 +600,6 @@ class MainWindow(QMainWindow):
         )
         roi_status_layout.addWidget(self.roi_optimization_label)
         roi_main_layout.addLayout(roi_status_layout)
-
-        # Instructions (Hidden unless active)
-        self.roi_instructions = QLabel("")
-        self.roi_instructions.setWordWrap(True)
-        self.roi_instructions.setStyleSheet(
-            "color: #4fc1ff; font-size: 11px; font-weight: bold; "
-            "padding: 6px; background-color: #0d3354; border-radius: 4px;"
-        )
-        roi_main_layout.addWidget(self.roi_instructions)
 
         left_layout.addWidget(self.scroll, stretch=1)
 
@@ -1034,6 +944,7 @@ class MainWindow(QMainWindow):
         ns.postprocess = self._postprocess_panel
         ns.dataset = self._dataset_panel
         ns.identity = self._identity_panel
+        ns.arena = self.arena_panel
         return ns
 
     def _make_welcome_page(self):
@@ -1783,7 +1694,28 @@ class MainWindow(QMainWindow):
         finally:
             self._setup_panel.list_batch_videos.setEnabled(True)
 
-        self._setup_video_file(fp, skip_config_load=False, _probe=probe)
+        from hydra_suite.trackerkit.gui.orchestrators.config import (
+            _get_video_config_path,
+        )
+        from hydra_suite.trackerkit.session_plan import resolve_video_plan
+
+        plan = resolve_video_plan(
+            fp,
+            keystone_config_path=_get_video_config_path(self.batch_videos[0]),
+            keystone_override=self._setup_panel.chk_batch_keystone_override.isChecked(),
+        )
+        # NOTE: `_setup_video_file` unconditionally clears the ROI/arena state
+        # near its top (`clear_roi()`), so a keystone-config load must happen
+        # AFTER it, not before -- loading first would just be wiped out again
+        # by the clear inside `_setup_video_file`. (Confirmed via a live
+        # repro during Fix Wave 16; see the fix-wave report.)
+        self._setup_video_file(
+            fp,
+            skip_config_load=plan.use_keystone_baseline or not plan.has_own_config,
+            _probe=probe,
+        )
+        if plan.use_keystone_baseline and plan.config_path:
+            self._config_orch._load_config_from_file(plan.config_path)
         self._session_orch._refresh_batch_list_current_video(previous_video_path, fp)
 
     def _remove_from_batch(self):
@@ -2108,23 +2040,6 @@ class MainWindow(QMainWindow):
         """Lock/unlock UI while async preview detection is running."""
         self._session_orch._set_preview_test_running(running)
 
-    def _on_roi_mode_changed(self, index):
-        """Handle ROI mode selection change."""
-        self._session_orch._on_roi_mode_changed(index)
-
-    def _on_roi_zone_changed(self, index):
-        """Handle ROI zone type selection change."""
-        self._session_orch._on_roi_zone_changed(index)
-
-    def _on_new_arena_clicked(self):
-        """Advance to a new arena; subsequent shapes join it."""
-        new_id = self._session_orch.start_new_arena()
-        self.roi_status_label.setText(
-            f"Started arena {new_id + 1} -- new shapes join it until "
-            "'New Arena' is pressed again."
-        )
-        self._update_animals_per_arena_total_label()
-
     def _on_generate_grid_clicked(self):
         """Open the bulk arena-grid dialog and merge its output into roi_shapes.
 
@@ -2137,6 +2052,9 @@ class MainWindow(QMainWindow):
         Generated shapes are ordinary shapes: no marker, no separate
         storage, fully editable afterwards.
         """
+        if not self._session_orch._ensure_roi_base_frame():
+            return
+
         from PySide6.QtWidgets import QDialog
 
         from hydra_suite.trackerkit.engine_params import next_free_arena_id
@@ -2154,13 +2072,24 @@ class MainWindow(QMainWindow):
         new_shapes = dialog.accepted_shapes()
         if not new_shapes:
             return
+        had_existing_shapes = bool(self.roi_shapes)
         self.roi_shapes.extend(new_shapes)
 
         if self.roi_base_frame:
             fh, fw = self.roi_base_frame.height(), self.roi_base_frame.width()
             self._generate_combined_roi_mask(fh, fw)
-        self.btn_undo_roi.setEnabled(len(self.roi_shapes) > 0)
-        self.btn_crop_video.setEnabled(True)
+        self.arena_panel.set_shapes(self.roi_shapes)
+        if had_existing_shapes:
+            # roi_shapes already had other (e.g. hand-drawn) arenas before
+            # this grid was appended -- the resulting set is now a MIX of
+            # grid and non-grid origin, so "Modify Existing Arenas" must
+            # fall back to the plain editor rather than risk replacing the
+            # pre-existing shapes with just the grid's regenerated output.
+            self.arena_panel.mark_hand_drawn()
+        else:
+            grid_params = dialog.current_params()
+            grid_params["first_arena_id"] = next_id
+            self.arena_panel.mark_grid_generated(grid_params)
         # Display-only count over ALL shapes (include + exclude); intentionally
         # differs from the engine's authoritative count,
         # `engine_params.n_arenas_from_shapes` (include-shapes only) -- an
@@ -2178,6 +2107,62 @@ class MainWindow(QMainWindow):
         self.update_roi_preview()
         if self.roi_base_frame:
             self._display_roi_with_zoom()
+
+    def _on_arena_done(self):
+        """Nothing else to do -- the panel already switched to its done
+        state; this hook exists for any future cross-cutting behavior
+        (e.g. auto-saving) that finishing ROI editing should trigger."""
+
+    def _on_modify_existing_arenas(self):
+        """Route to the grid dialog (prefilled) if the current arenas were
+        last generated by it, else just resume the ordinary arena editor."""
+        if (
+            self.arena_panel.made_via_grid
+            and self.arena_panel.last_grid_params is not None
+        ):
+            self._reopen_grid_dialog_for_modification()
+        else:
+            self.arena_panel.resume_editing()
+
+    def _reopen_grid_dialog_for_modification(self):
+        """Reopen the grid dialog prefilled with the parameters last used to
+        generate the current arenas, and REPLACE roi_shapes with whatever
+        it produces this time (not append -- the whole current arena set
+        IS the grid's last output, so regenerating replaces it outright)."""
+        if not self._session_orch._ensure_roi_base_frame():
+            return
+        from PySide6.QtWidgets import QDialog
+
+        from hydra_suite.trackerkit.gui.dialogs.arena_grid_dialog import ArenaGridDialog
+
+        params = self.arena_panel.last_grid_params
+        dialog = ArenaGridDialog(
+            parent=self,
+            reference_frame=self.roi_base_frame,
+            first_arena_id=int(params.get("first_arena_id", 0)),
+            initial_params=params,
+        )
+        if dialog.exec() != QDialog.Accepted:
+            self.arena_panel.resume_editing()
+            return
+        new_shapes = dialog.accepted_shapes()
+        self.roi_shapes = new_shapes
+        if self.roi_base_frame:
+            fh, fw = self.roi_base_frame.height(), self.roi_base_frame.width()
+            self._generate_combined_roi_mask(fh, fw)
+        self.arena_panel.set_shapes(self.roi_shapes)
+        new_params = dialog.current_params()
+        new_params["first_arena_id"] = params.get("first_arena_id", 0)
+        self.arena_panel.mark_grid_generated(new_params)
+        self.arena_panel.resume_editing()
+        arena_count = len({int(s.get("arena_id", 0)) for s in self.roi_shapes})
+        self.roi_status_label.setText(
+            f"Regenerated {len(new_shapes)} arena shape(s) "
+            f"({arena_count} arena(s) total)"
+        )
+        self._update_roi_optimization_info()
+        self._update_animals_per_arena_total_label()
+        self.update_roi_preview()
 
     def _update_animals_per_arena_total_label(self):
         """Keep the derived-total label next to "Animals per arena" live.
@@ -2212,17 +2197,67 @@ class MainWindow(QMainWindow):
         else:
             self._setup_panel.lbl_animals_per_arena_total.setText("")
 
-    def _handle_video_mouse_press(self, evt):
-        """Handle mouse press on video - either ROI selection or pan/zoom."""
-        self._session_orch._handle_video_mouse_press(evt)
+    def _on_add_single_arena(self):
+        """Start the first (or a fresh) arena; the user must still choose a
+        zone tool before any points can be placed."""
+        self.arena_panel.begin_new_arena()
+        self._session_orch.current_arena_id = self.arena_panel.current_arena
 
-    def _handle_video_mouse_move(self, evt):
-        """Handle mouse move - update pan if active."""
-        self._session_orch._handle_video_mouse_move(evt)
+    def _on_remove_all_arenas(self):
+        """Confirm, then remove every arena and return to the empty state."""
+        reply = QMessageBox.question(
+            self,
+            "Remove All Arenas",
+            "This removes every arena and its ROI shapes, returning to the "
+            "default state where the whole video is used. This cannot be "
+            "undone. Continue?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply == QMessageBox.Yes:
+            self.clear_roi()
 
-    def _handle_video_mouse_release(self, evt):
-        """Handle mouse release - end pan."""
-        self._session_orch._handle_video_mouse_release(evt)
+    def _on_arena_changed(self, arena_id: int):
+        self._session_orch.set_current_arena(arena_id)
+
+    def _on_clear_arena(self, arena_id: int):
+        """Empty an arena's shapes; the arena and its number remain."""
+        self.roi_shapes = self.arena_panel.shapes_after_clearing(arena_id)
+        self.arena_panel.set_shapes(self.roi_shapes)
+        self.arena_panel.mark_hand_drawn()
+        if self.roi_base_frame:
+            self._generate_combined_roi_mask(
+                self.roi_base_frame.height(), self.roi_base_frame.width()
+            )
+        self._update_animals_per_arena_total_label()
+        self.update_roi_preview()
+
+    def _on_draw_requested(self, shape_type: str, zone_mode: str):
+        """Begin drawing a shape of the requested type and zone role."""
+        self.roi_current_mode = shape_type
+        self.roi_current_zone_type = zone_mode
+        self.start_roi_selection()
+
+    def _on_canvas_pan(self, dx: int, dy: int) -> None:
+        """Scroll by a drag delta the canvas already classified as a pan."""
+        self.scroll.horizontalScrollBar().setValue(
+            self.scroll.horizontalScrollBar().value() - dx
+        )
+        self.scroll.verticalScrollBar().setValue(
+            self.scroll.verticalScrollBar().value() - dy
+        )
+
+    def _on_canvas_point_added(self, x: float, y: float) -> None:
+        """A left-click while drawing: append an ROI point in IMAGE coordinates."""
+        self._session_orch.add_roi_point(x, y)
+
+    def _on_canvas_point_removed(self) -> None:
+        """A right-click while drawing: drop the most recent ROI point."""
+        self._session_orch.remove_last_roi_point()
+
+    def _on_canvas_arena_clicked(self, arena_id: int) -> None:
+        """A left-click outside drawing mode: make that arena current."""
+        self._session_orch.set_current_arena(arena_id)
 
     def _handle_video_double_click(self, evt):
         """Handle double-click on video to fit to screen."""
@@ -2253,10 +2288,6 @@ class MainWindow(QMainWindow):
         """Fit the image to the available screen space."""
         self._session_orch._fit_image_to_screen()
 
-    def record_roi_click(self, evt):
-        """Record an ROI click from the video label."""
-        self._session_orch.record_roi_click(evt)
-
     def update_roi_preview(self):
         """Render current ROI shapes + in-progress points onto the video label."""
         self._session_orch.update_roi_preview()
@@ -2277,9 +2308,9 @@ class MainWindow(QMainWindow):
         """Remove the last added ROI shape."""
         self._session_orch.undo_last_roi_shape()
 
-    def clear_roi(self):
+    def clear_roi(self, show_toast: bool = True):
         """Clear all ROI shapes and reset state."""
-        self._session_orch.clear_roi()
+        self._session_orch.clear_roi(show_toast=show_toast)
 
     def keyPressEvent(self, event) -> None:
         """Handle key press events."""
@@ -2800,25 +2831,54 @@ class MainWindow(QMainWindow):
         # Fallback during early init before orchestrators exist
         self._set_video_message("HYDRA\n\nLoad a video to begin...")
 
-    def _set_video_pixmap(self, pixmap: QPixmap):
-        """Display a pixmap and resize the video label to match it."""
-        self.video_label.setText("")
-        self.video_label.setPixmap(pixmap)
-        if pixmap is not None and not pixmap.isNull():
-            self.video_label.resize(pixmap.width(), pixmap.height())
+    def _set_video_pixmap(self, pixmap: QPixmap, already_scaled: bool = False):
+        """Display a pixmap on the canvas.
+
+        Some callers (tracking playback, detection-test preview, the
+        placeholder-text message) pre-scale the image themselves before
+        calling this -- sometimes combining the zoom slider with an unrelated
+        content-resize factor. ArenaCanvas scales by its own `_zoom` state on
+        every set_frame() call, so pushing an already-scaled pixmap without
+        resetting zoom would double-apply the zoom factor. Pass
+        already_scaled=True for any pixmap the caller has already sized for
+        display; this resets canvas zoom to 1.0 so it is not scaled again.
+        """
+        if already_scaled:
+            self.video_label.set_zoom(1.0)
+        self.video_label.set_frame(pixmap.toImage())
+        self._video_is_placeholder_text = False
+        self._video_placeholder_text = None
 
     def _set_video_message(
-        self, text: str, minimum_width: int = 320, minimum_height: int = 240
+        self,
+        text: str,
+        minimum_width: int = 320,
+        minimum_height: int = 240,
+        color: str = "#6a6a6a",
+        font_size: int = 16,
     ):
-        """Display centered text in the video area with a stable minimum size."""
-        self.video_label.setPixmap(QPixmap())
-        self.video_label.setText(text)
-        width_hint = self.video_label.sizeHint().width()
-        height_hint = self.video_label.sizeHint().height()
-        self.video_label.resize(
-            max(minimum_width, width_hint),
-            max(minimum_height, height_hint),
-        )
+        """Rasterize *text* onto a pixmap and display it on the canvas.
+
+        ArenaCanvas is a plain QWidget with no QLabel-style setText/setPixmap
+        API, so placeholder/status text is drawn onto a pixmap and pushed
+        through the same set_frame() path a real video frame uses.
+        """
+        self.video_label.set_shapes([])
+        width = max(minimum_width, self.scroll.viewport().width())
+        height = max(minimum_height, self.scroll.viewport().height())
+        pixmap = QPixmap(width, height)
+        pixmap.fill(QColor("#121212"))
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setPen(QColor(color))
+        font = painter.font()
+        font.setPixelSize(font_size)
+        painter.setFont(font)
+        painter.drawText(pixmap.rect(), Qt.AlignCenter | Qt.TextWordWrap, text)
+        painter.end()
+        self._set_video_pixmap(pixmap, already_scaled=True)
+        self._video_is_placeholder_text = True
+        self._video_placeholder_text = text
 
     def _is_visualization_enabled(self) -> bool:
         # Preview should always render frames regardless of visualization-free toggle
@@ -2832,14 +2892,6 @@ class MainWindow(QMainWindow):
 
     def _apply_ui_state(self, state: str):
         self._session_orch._apply_ui_state(state)
-
-    def _draw_roi_overlay(self, qimage):
-        """Draw ROI shapes overlay on a QImage."""
-        return self._session_orch._draw_roi_overlay(qimage)
-
-    def _apply_roi_mask_to_image(self, qimage):
-        """Apply ROI visualization - draw boundary overlay for all detection methods."""
-        return self._session_orch._apply_roi_mask_to_image(qimage)
 
     @Slot(int, str)
     def on_progress_update(

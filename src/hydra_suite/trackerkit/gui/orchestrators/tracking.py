@@ -672,6 +672,7 @@ class TrackingOrchestrator:
 
     def on_new_frame(self, rgb):
         """on_new_frame method documentation."""
+        self._mw.video_label.set_shapes([])
         z = max(self._mw.slider_zoom.value() / 100.0, 0.1)
         h, w, _ = rgb.shape
 
@@ -687,7 +688,7 @@ class TrackingOrchestrator:
         scaled = qimg.scaled(
             int(w * z), int(h * z), Qt.KeepAspectRatio, Qt.SmoothTransformation
         )
-        self._mw._set_video_pixmap(QPixmap.fromImage(scaled))
+        self._mw._set_video_pixmap(QPixmap.fromImage(scaled), already_scaled=True)
 
         # Auto-fit to screen on first frame of tracking
         if self._mw._tracking_first_frame:
@@ -980,13 +981,19 @@ class TrackingOrchestrator:
                     ),
                     keystone_override=self._panels.setup.chk_batch_keystone_override.isChecked(),
                 )
-                if plan.use_keystone_baseline and plan.config_path:
-                    self._mw._config_orch._load_config_from_file(plan.config_path)
+                # NOTE: _setup_video_file unconditionally clears the ROI/arena
+                # state near its top (clear_roi()), so a keystone-config load
+                # must happen AFTER it, not before -- loading first would just
+                # be wiped out again by the clear inside _setup_video_file.
+                # (Confirmed via a live repro; see Fix Wave 16 and Fix Wave 17
+                # reports for the root cause and verification.)
                 self._mw._setup_video_file(
                     fp,
                     skip_config_load=plan.use_keystone_baseline
                     or not plan.has_own_config,
                 )
+                if plan.use_keystone_baseline and plan.config_path:
+                    self._mw._config_orch._load_config_from_file(plan.config_path)
 
                 # Small delay to ensure UI updates before starting next
                 logger.info(
@@ -1098,6 +1105,8 @@ class TrackingOrchestrator:
         ):
             return
         if not self._validate_identity_requirements("tracking preview"):
+            return
+        if not self._validate_arena_overlaps("tracking preview"):
             return
 
         preview_fps = self._mw._resolve_source_video_fps()
@@ -1479,6 +1488,8 @@ class TrackingOrchestrator:
             return
         if not self._validate_identity_requirements("tracking"):
             return
+        if not self._validate_arena_overlaps("tracking"):
+            return
 
         csv_dir = (
             os.path.dirname(self._panels.setup.csv_line.text())
@@ -1624,6 +1635,29 @@ class TrackingOrchestrator:
                 "and a crop OBB model."
             ),
         )
+        return False
+
+    def _validate_arena_overlaps(self, mode_label: str) -> bool:
+        """Refuse to start while any two arenas share a pixel, or any single
+        arena's shapes form disconnected regions.
+
+        Overlapping arenas are not merely a UI blemish:
+        ``engine_params.build_arena_labels`` resolves them by last-writer-wins
+        in shape draw order, silently, so an animal in the shared region is
+        assigned to whichever arena happened to rasterize last. Disconnected
+        regions are refused for the same reason Fix Wave 18 introduced the
+        check: two separate physical regions sharing one arena_id makes
+        cross-region tracks possible, which is never the intended semantics.
+        """
+        allowed, reason = self._mw.arena_panel.can_track()
+        if allowed:
+            return True
+        title = (
+            f"{mode_label}: Overlapping Arenas"
+            if self._mw.arena_panel.blocking_pairs()
+            else f"{mode_label}: Disconnected Arena Regions"
+        )
+        QMessageBox.warning(self._mw, title, reason)
         return False
 
     def _get_detection_size(self, detection_cache, frame_id, detection_id, params):

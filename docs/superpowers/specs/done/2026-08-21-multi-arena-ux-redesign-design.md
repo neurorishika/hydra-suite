@@ -1,6 +1,6 @@
 # Multi-Arena UI/UX Redesign — Design Spec
 
-**Status:** Design approved, pending spec review
+**Status:** Shipped — merged to main (46d1c0bb).
 **Date:** 2026-08-21
 **Supersedes UI portions of:** `docs/superpowers/specs/done/2026-08-18-multi-arena-tracking-design.md`
 
@@ -230,7 +230,7 @@ arena's conflicts, the user can always reach a conflicting arena to fix it.
 ## Grid builder
 
 - **Shape:** Circle (Radius) or Rectangle (Width, Height).
-- **Top-Left Position X / Y:** the centre of the first arena.
+- **Arena 1 Centre X / Y:** the centre of the first arena.
 - **Rows / Columns:** start at 1 x 1. X-spacing and Y-spacing spinboxes appear
   only once rows or columns exceed 1.
 - **Spacing defaults and minimums:** `2*radius` for circles; `width` in x and

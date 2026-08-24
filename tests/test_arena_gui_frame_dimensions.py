@@ -271,3 +271,111 @@ def test_init_video_player_writes_real_frame_dimensions_onto_main_window(tmp_pat
         cap = mw.video_cap
         if cap is not None and hasattr(cap, "release"):
             cap.release()
+
+
+# ---------------------------------------------------------------------------
+# Fix wave 8, round 2, finding 2: loading a saved config replaces roi_shapes
+# wholesale (``self._mw.roi_shapes = cfg.get("roi_shapes", [])`` in
+# ``ConfigOrchestrator._load_config_individual_analysis``), which must also
+# flip the arena panel's ``made_via_grid`` to False -- otherwise reopening
+# the grid dialog to "modify" arenas loaded from a config file would
+# silently regenerate/replace them from a stale grid definition that has
+# nothing to do with what was actually loaded. Driven against a REAL
+# ArenaPanel (not a MagicMock stand-in for ``panels.arena``), per the
+# reviewer's note that a mocked arena panel hides broken wiring. Everything
+# else this large method touches (identity/tracking/dataset/setup panel
+# widgets) is stubbed with a permissive fake since none of it is under
+# test here.
+# ---------------------------------------------------------------------------
+
+
+class _AnyWidget:
+    """A widget double that accepts any call/attribute and stays chainable.
+
+    ``findText`` must return an int (compared with ``>= 0``/``max(0, ...)``
+    in the loader), ``isChecked``/``currentText`` must return the right
+    type -- everything else (including arbitrarily nested sub-widgets, e.g.
+    ``identity.g_identity.setChecked(...)``) is a harmless no-op that stays
+    an ``_AnyWidget`` all the way down, and is also directly callable so a
+    chain like ``.setChecked(...)`` resolves to nothing.
+    """
+
+    def __init__(self):
+        self.__dict__["_children"] = {}
+
+    def findText(self, *a, **k):
+        return 0
+
+    def isChecked(self, *a, **k):
+        return False
+
+    def currentText(self, *a, **k):
+        return ""
+
+    def __call__(self, *a, **k):
+        return None
+
+    def __getattr__(self, name):
+        children = self.__dict__["_children"]
+        if name not in children:
+            children[name] = _AnyWidget()
+        return children[name]
+
+
+class _AutoPanel:
+    """Any attribute access yields a permissive widget double (cached per
+    name, so repeated access -- e.g. set then read -- sees the same
+    object)."""
+
+    def __init__(self):
+        self.__dict__["_children"] = {}
+
+    def __getattr__(self, name):
+        children = self.__dict__["_children"]
+        if name not in children:
+            children[name] = _AnyWidget()
+        return children[name]
+
+
+def _make_get_cfg(cfg):
+    def get_cfg(*keys, default=None):
+        for key in keys:
+            if key in cfg:
+                return cfg[key]
+        return default
+
+    return get_cfg
+
+
+def test_config_load_marks_hand_drawn_even_if_previously_grid_generated(tmp_path):
+    from unittest.mock import MagicMock
+
+    from hydra_suite.trackerkit.gui.orchestrators.config import ConfigOrchestrator
+    from hydra_suite.trackerkit.gui.panels.arena_panel import ArenaPanel
+
+    video_path = tmp_path / "tiny.mp4"
+    _write_tiny_video(video_path, width=64, height=48)
+
+    loaded_shapes = [
+        {"type": "circle", "params": [10, 10, 5], "mode": "include", "arena_id": 0},
+    ]
+    cfg = {"roi_shapes": loaded_shapes, "file_path": str(video_path)}
+
+    mw = MagicMock()
+    mw.advanced_config = {}
+
+    arena_panel = ArenaPanel()
+    arena_panel.set_frame_size(64, 48)
+    # Pretend the PREVIOUS in-session arena set was grid-generated, so the
+    # config load below has something stale to clear.
+    arena_panel.mark_grid_generated({"first_arena_id": 0})
+    assert arena_panel.made_via_grid is True
+
+    panels = _AutoPanel()
+    panels.arena = arena_panel
+
+    orch = ConfigOrchestrator(mw, config={}, panels=panels)
+    orch._load_config_individual_analysis(cfg, _make_get_cfg(cfg))
+
+    assert mw.roi_shapes == loaded_shapes
+    assert arena_panel.made_via_grid is False

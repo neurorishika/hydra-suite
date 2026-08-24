@@ -197,46 +197,19 @@ def build_roi_mask(
 ) -> np.ndarray | None:
     """Rasterize saved ROI shapes into a mask, or ``None`` if there is none.
 
-    Moved from ``cli_config._build_roi_mask`` (which took ``width``/``height``
-    as keyword-only args); ``build_roi_mask`` takes them positionally per the
-    shared-builder interface.
+    Thin derived view of ``build_arena_labels``: ``(labels > 0)`` as a uint8
+    0/255 mask, so this function and ``build_arena_labels`` can never
+    disagree on which pixels belong to SOME arena (the per-arena exclude
+    scoping ``build_arena_labels`` implements is inherited automatically --
+    see that function's docstring for the semantics). Kept as its own
+    top-level function because ``build_engine_params``'s CLI/no-live-mask
+    fallback and ``cli_config``'s re-export both call it by this name; the
+    two are one algorithm now, not two independently-maintained ones.
     """
-    if not roi_shapes or not width or not height:
+    labels, _n_arenas = build_arena_labels(roi_shapes, width, height)
+    if labels is None:
         return None
-    combined_mask = np.zeros((height, width), np.uint8)
-    for shape in roi_shapes:
-        if shape.get("mode", "include") != "include":
-            continue
-        if shape.get("type") == "circle":
-            center_x, center_y, radius = shape.get("params", [0, 0, 0])
-            cv2.circle(
-                combined_mask,
-                (int(center_x), int(center_y)),
-                int(radius),
-                255,
-                -1,
-            )
-        elif shape.get("type") == "polygon":
-            points = np.array(shape.get("params", []), dtype=np.int32)
-            if len(points) > 0:
-                cv2.fillPoly(combined_mask, [points], 255)
-    for shape in roi_shapes:
-        if shape.get("mode", "include") != "exclude":
-            continue
-        if shape.get("type") == "circle":
-            center_x, center_y, radius = shape.get("params", [0, 0, 0])
-            cv2.circle(
-                combined_mask,
-                (int(center_x), int(center_y)),
-                int(radius),
-                0,
-                -1,
-            )
-        elif shape.get("type") == "polygon":
-            points = np.array(shape.get("params", []), dtype=np.int32)
-            if len(points) > 0:
-                cv2.fillPoly(combined_mask, [points], 0)
-    return combined_mask
+    return (labels > 0).astype(np.uint8) * 255
 
 
 def n_arenas_from_shapes(roi_shapes: list[dict[str, Any]] | None) -> int:
@@ -270,11 +243,13 @@ def next_free_arena_id(roi_shapes: list[dict[str, Any]] | None) -> int:
     exclude hole belonging to arena 3 means arena 3 is in use -- so this
     scans ALL shapes, not just includes, and returns ``max(used ids) + 1``
     (or ``0`` for an empty/legacy list). This is the single source of truth
-    for "what id does the next arena get": both
-    ``SessionOrchestrator.start_new_arena`` (advancing past a "New Arena"
-    click) and the bulk grid generator (``MainWindow._on_generate_grid_clicked``,
-    appending a whole grid alongside any existing shapes) must agree on it,
-    or a generated grid could collide with a hand-drawn arena's id.
+    for "what id does the next arena get": ``ArenaPanel.begin_new_arena``
+    (the current GUI-facing path for a "New Arena" click;
+    ``SessionOrchestrator.start_new_arena`` performs the same allocation and
+    remains directly unit-tested, but the GUI no longer calls it) and the
+    bulk grid generator (``MainWindow._on_generate_grid_clicked``, appending
+    a whole grid alongside any existing shapes) must agree on it, or a
+    generated grid could collide with a hand-drawn arena's id.
     """
     if not roi_shapes:
         return 0
@@ -289,9 +264,13 @@ def build_arena_labels(
 ) -> tuple[np.ndarray | None, int]:
     """Rasterize ROI shapes into a uint16 arena-label image.
 
-    Pixel value is ``arena_id + 1``; 0 means outside every arena. The set
-    ``labels > 0`` is pixel-identical to ``build_roi_mask`` on the same shapes,
-    so detection gating semantics are unchanged.
+    Pixel value is ``arena_id + 1``; 0 means outside every arena. Excludes
+    are scoped per-arena -- an exclude shape only removes area from its OWN
+    arena_id's label, matching the visual overlay (ArenaCanvas.render_overlay)
+    exactly. ``build_roi_mask`` is now literally ``(labels > 0)`` derived from
+    this function (see its docstring), so the two can never diverge -- the
+    ``(labels > 0) == (build_roi_mask > 0)`` invariant holds unconditionally,
+    by construction, regardless of arena count or exclude shapes.
 
     Shapes without an ``arena_id`` key map to arena 0 -- a legacy project that
     drew several shapes as one region keeps single-arena behavior exactly.
@@ -300,10 +279,12 @@ def build_arena_labels(
     if not roi_shapes or not width or not height:
         return None, 1
 
-    # Mirror build_roi_mask EXACTLY: it partitions three ways, rendering a shape
-    # only on `== "include"` / `== "exclude"` and silently dropping any other
-    # mode string.  Selecting includes with `!= "exclude"` would render unknown
-    # modes here that the ROI mask drops, breaking the union invariant.
+    # Partition shapes three ways by mode: `== "include"` shapes contribute
+    # arena ids and get filled with their arena's label value below; `==
+    # "exclude"` shapes (handled further down) carve area back out of their
+    # OWN arena's label; any other/unrecognized mode string contributes no
+    # pixels to either side, matching build_roi_mask's mask (which is now
+    # derived from this function's own output).
     includes = [s for s in roi_shapes if s.get("mode", "include") == "include"]
     raw_ids = sorted({int(s.get("arena_id", 0)) for s in includes}) or [0]
     dense = {raw: i for i, raw in enumerate(raw_ids)}
@@ -314,7 +295,25 @@ def build_arena_labels(
         _fill_shape(labels, shape, value)
     for shape in roi_shapes:
         if shape.get("mode", "include") == "exclude":
-            _fill_shape(labels, shape, 0)
+            raw_arena_id = int(shape.get("arena_id", 0))
+            if raw_arena_id not in dense:
+                # An exclude shape whose arena_id has no matching include
+                # shape at all (e.g. a stray/orphaned exclude) has nothing
+                # to scope against -- skip it rather than crash or guess.
+                logger.warning(
+                    "ROI exclude shape references arena_id=%s with no "
+                    "matching include shape -- skipping it (this exclude "
+                    "zone will have NO effect on detection gating).",
+                    raw_arena_id,
+                )
+                continue
+            value = dense[raw_arena_id] + 1
+            # Only clear pixels that currently belong to THIS SAME arena --
+            # an exclude must never remove area that belongs to a
+            # different arena's label, even if their raw shapes overlap.
+            mask = np.zeros((height, width), np.uint8)
+            _fill_shape(mask, shape, 255)
+            labels[(mask > 0) & (labels == value)] = 0
     return labels, len(raw_ids)
 
 

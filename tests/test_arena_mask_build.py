@@ -1,3 +1,5 @@
+import logging
+
 import numpy as np
 
 from hydra_suite.trackerkit.engine_params import build_arena_labels, build_roi_mask
@@ -95,3 +97,112 @@ def test_arena_ids_are_densified():
     labels, n_arenas = build_arena_labels(shapes, 100, 100)
     assert n_arenas == 3
     assert sorted(np.unique(labels).tolist()) == [0, 1, 2, 3]
+
+
+def test_exclude_zone_is_scoped_per_arena_not_global():
+    """Fix Wave 14, Fix 2: an exclude drawn for one arena must not erase a
+    NEIGHBOURING arena's pixels, even where their raw shapes overlap.
+
+    Three arenas. Arena 1's exclude zone is deliberately drawn so it
+    geometrically overlaps arena 2's include region. Under the OLD (global)
+    semantics this exclude would zero out that overlap in arena 2's label
+    too; under the correct per-arena semantics, arena 2's label must be
+    completely unaffected.
+    """
+    shapes = [
+        _circle(20, 20, 15, arena_id=0),
+        _circle(60, 20, 15, arena_id=1),
+        _circle(60, 20, 25, arena_id=1, mode="exclude"),  # overlaps arena 2 below
+        _circle(90, 20, 15, arena_id=2),
+    ]
+    labels, n_arenas = build_arena_labels(shapes, 120, 40)
+    assert n_arenas == 3
+    # Arena 0 is untouched by any exclude.
+    assert labels[20, 20] == 1
+    # Arena 1's own include is punched out by its own exclude (radius 25 >
+    # radius 15, so the entire arena-1 circle is inside the exclude).
+    assert labels[20, 60] == 0
+    # Arena 2's pixels inside the overlap with arena 1's exclude (exclude
+    # centred at (60, 20) r=25 reaches to x=85, arena 2 centred at (90, 20)
+    # r=15 starts at x=75 -- they overlap in x in [75, 85]) must STILL be
+    # labeled 3 (arena 2 + 1), not erased by arena 1's exclude.
+    assert labels[20, 80] == 3
+    assert labels[20, 90] == 3
+
+
+def test_roi_mask_exclude_zone_is_scoped_per_arena_not_global():
+    """Finding 1 (fix wave 20): build_roi_mask is now a thin (labels > 0)
+    derived view of build_arena_labels, so it must inherit the SAME
+    per-arena exclude scoping -- not the old global-exclude semantics.
+
+    Same three-arena scenario as test_exclude_zone_is_scoped_per_arena_not_
+    global, but asserting through build_roi_mask directly: arena 1's exclude
+    zone overlaps arena 2's include region, and those overlap pixels must be
+    INCLUDED (> 0) in the ROI mask, not erased.
+    """
+    shapes = [
+        _circle(20, 20, 15, arena_id=0),
+        _circle(60, 20, 15, arena_id=1),
+        _circle(60, 20, 25, arena_id=1, mode="exclude"),  # overlaps arena 2 below
+        _circle(90, 20, 15, arena_id=2),
+    ]
+    roi = build_roi_mask(shapes, 120, 40)
+    assert roi[20, 80] > 0
+    assert roi[20, 90] > 0
+
+
+def test_exclude_with_no_matching_include_arena_is_skipped(caplog):
+    """An orphaned exclude (arena_id with no matching include shape) has
+    nothing to scope against and must be skipped rather than crash.
+
+    Fix Wave 21 Finding C: this skip now also applies to build_roi_mask
+    (Fix Wave 20 unified it onto build_arena_labels), so it must be
+    OBSERVABLE via a warning log rather than silent."""
+    shapes = [
+        _circle(20, 20, 15, arena_id=0),
+        _circle(20, 20, 5, arena_id=7, mode="exclude"),  # no include with id 7
+    ]
+    with caplog.at_level(logging.WARNING):
+        labels, n_arenas = build_arena_labels(shapes, 100, 100)
+    assert n_arenas == 1
+    # The orphaned exclude must not remove arena 0's pixels.
+    assert labels[20, 20] == 1
+    assert any(
+        "arena_id=7" in record.getMessage() and record.levelno == logging.WARNING
+        for record in caplog.records
+    )
+
+
+def test_generate_combined_roi_mask_matches_build_arena_labels(qtbot=None):
+    """SessionOrchestrator._generate_combined_roi_mask must produce a mask
+    consistent with build_arena_labels' own `labels > 0` for the same
+    shapes -- the new shared-implementation invariant (replacing the old
+    'pixel-identical to build_roi_mask' one, which no longer universally
+    holds now that excludes are per-arena)."""
+    import os
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from types import SimpleNamespace
+
+    from PySide6.QtWidgets import QApplication
+
+    from hydra_suite.trackerkit.gui.orchestrators.session import SessionOrchestrator
+
+    QApplication.instance() or QApplication([])
+
+    shapes = [
+        _circle(20, 20, 15, arena_id=0),
+        _circle(60, 20, 15, arena_id=1),
+        _circle(60, 20, 25, arena_id=1, mode="exclude"),
+        _circle(90, 20, 15, arena_id=2),
+    ]
+    mw = SimpleNamespace(roi_shapes=shapes, roi_mask=None)
+    mw._invalidate_roi_cache = lambda: None
+
+    orch = SessionOrchestrator.__new__(SessionOrchestrator)
+    orch._mw = mw
+    orch._generate_combined_roi_mask(height=40, width=120)
+
+    labels, _n_arenas = build_arena_labels(shapes, 120, 40)
+    expected = (labels > 0).astype(np.uint8) * 255
+    np.testing.assert_array_equal(mw.roi_mask, expected)

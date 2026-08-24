@@ -8,10 +8,15 @@ dialogs in tests" rule (some GUI tests crash the interpreter).
 
 import pytest
 
-from hydra_suite.trackerkit.gui.dialogs.arena_grid_dialog import (
-    ArenaGridDialog,
-    generate_grid_shapes,
-)
+from hydra_suite.trackerkit.arena_geometry import generate_grid_shapes
+from hydra_suite.trackerkit.gui.dialogs.arena_grid_dialog import ArenaGridDialog
+
+
+@pytest.fixture(scope="module")
+def qt_app():
+    from PySide6.QtWidgets import QApplication
+
+    return QApplication.instance() or QApplication([])
 
 
 def test_grid_produces_rows_times_cols_shapes():
@@ -126,14 +131,16 @@ def qapp():
 
 def test_dialog_accepted_shapes_matches_pure_function(qapp):
     dialog = ArenaGridDialog(parent=None, reference_frame=None, first_arena_id=3)
+    dialog.spin_radius.setValue(4)  # diameter 8, matching the old spin_size=8
     dialog.spin_rows.setValue(2)
     dialog.spin_cols.setValue(4)
     dialog.spin_origin_x.setValue(20)
     dialog.spin_origin_y.setValue(30)
     dialog.spin_pitch_x.setValue(15)
     dialog.spin_pitch_y.setValue(12)
-    dialog.spin_size.setValue(8)
 
+    # The dialog's "Arena 1 Centre" field is passed straight through to
+    # generate_grid_shapes, which also wants the CENTRE -- no conversion.
     expected = generate_grid_shapes(2, 4, 20, 30, 15, 12, 8, first_arena_id=3)
     assert dialog.accepted_shapes() == expected
 
@@ -148,7 +155,7 @@ def test_dialog_shape_type_combo_switches_geometry(qapp):
     dialog = ArenaGridDialog(parent=None, reference_frame=None, first_arena_id=0)
     dialog.spin_rows.setValue(1)
     dialog.spin_cols.setValue(1)
-    dialog.combo_shape_type.setCurrentText("polygon")
+    dialog.combo_shape_type.setCurrentText("Rectangle")
     shapes = dialog.accepted_shapes()
     assert shapes[0]["type"] == "polygon"
     assert isinstance(shapes[0]["params"][0], list)
@@ -207,6 +214,9 @@ def test_generate_grid_handler_offsets_past_existing_arenas_and_merges(
                 1, 2, 50, 50, 100, 100, 40, first_arena_id=self._first_arena_id
             )
 
+        def current_params(self):
+            return {"shape_type": "Circle", "radius": 40}
+
     monkeypatch.setattr(
         "hydra_suite.trackerkit.gui.dialogs.arena_grid_dialog.ArenaGridDialog",
         _FakeDialog,
@@ -231,7 +241,640 @@ def test_generate_grid_handler_offsets_past_existing_arenas_and_merges(
     assert n_arenas_from_shapes(mw.roi_shapes) == 3
 
     mw._generate_combined_roi_mask.assert_not_called()  # no roi_base_frame
-    mw.btn_undo_roi.setEnabled.assert_called_with(True)
-    mw.btn_crop_video.setEnabled.assert_called_with(True)
+    mw.arena_panel.set_shapes.assert_called_with(mw.roi_shapes)
     mw._update_animals_per_arena_total_label.assert_called_once()
     mw.update_roi_preview.assert_called_once()
+
+
+# --- Fix wave 8, round 2 (findings 1-4): the "Modify Existing Arenas" /
+# "Done" workflow's canvas-repaint bug and grid-origin-tracking honesty. All
+# driven the same way as the test above: unbound-method calls against a
+# MagicMock stand-in for MainWindow, with ArenaGridDialog patched out. ---
+
+
+class _FakeModifyDialog:
+    """Stand-in for ArenaGridDialog used by _reopen_grid_dialog_for_modification.
+
+    Captures constructor kwargs so tests can assert the dialog was reopened
+    prefilled with the right params, and lets each test control accept vs.
+    reject without ever calling the real (modal) ``exec()``.
+    """
+
+    last_instance = None
+
+    def __init__(
+        self, parent=None, reference_frame=None, first_arena_id=0, initial_params=None
+    ):
+        self.first_arena_id = first_arena_id
+        self.initial_params = initial_params
+        self._accept = True
+        self._shapes = [
+            {
+                "type": "circle",
+                "params": [9, 9, 9],
+                "mode": "include",
+                "arena_id": first_arena_id,
+            }
+        ]
+        self._params = {"shape_type": "Circle", "radius": 9}
+        _FakeModifyDialog.last_instance = self
+
+    def exec(self):
+        from PySide6.QtWidgets import QDialog
+
+        return QDialog.Accepted if self._accept else QDialog.Rejected
+
+    def accepted_shapes(self):
+        return list(self._shapes)
+
+    def current_params(self):
+        return dict(self._params)
+
+
+def test_on_modify_existing_arenas_reopens_grid_dialog_when_made_via_grid(qapp):
+    """made_via_grid True + last_grid_params set -> route to the grid dialog,
+    never straight to the plain editor."""
+    from hydra_suite.trackerkit.gui.main_window import MainWindow
+
+    mw = _make_mock_main_window([])
+    mw.arena_panel.made_via_grid = True
+    mw.arena_panel.last_grid_params = {"first_arena_id": 0}
+
+    MainWindow._on_modify_existing_arenas(mw)
+
+    mw._reopen_grid_dialog_for_modification.assert_called_once()
+    mw.arena_panel.resume_editing.assert_not_called()
+
+
+def test_on_modify_existing_arenas_resumes_editing_when_not_made_via_grid(qapp):
+    """made_via_grid False (hand-drawn / mixed-origin set) -> straight to the
+    plain arena editor, the grid dialog is never involved."""
+    from hydra_suite.trackerkit.gui.main_window import MainWindow
+
+    mw = _make_mock_main_window([])
+    mw.arena_panel.made_via_grid = False
+    mw.arena_panel.last_grid_params = None
+
+    MainWindow._on_modify_existing_arenas(mw)
+
+    mw.arena_panel.resume_editing.assert_called_once()
+    mw._reopen_grid_dialog_for_modification.assert_not_called()
+
+
+def test_reopen_grid_dialog_accepted_replaces_shapes_and_repaints(qapp, monkeypatch):
+    """Finding 1 + part of Finding 4: on accept, roi_shapes is REPLACED (not
+    extended), the panel is resumed, and the canvas/labels are actually
+    repainted (update_roi_preview + the optimization/animals-per-arena
+    labels), which was the Critical bug -- previously only the mask/panel
+    updated and the video overlay kept showing the OLD arenas."""
+    from hydra_suite.trackerkit.gui.main_window import MainWindow
+
+    existing = [
+        {"type": "circle", "params": [1, 1, 1], "mode": "include", "arena_id": 0},
+        {"type": "circle", "params": [2, 2, 2], "mode": "include", "arena_id": 1},
+    ]
+    mw = _make_mock_main_window(existing)
+    mw.arena_panel.last_grid_params = {"first_arena_id": 0, "rows": 2, "cols": 1}
+
+    monkeypatch.setattr(
+        "hydra_suite.trackerkit.gui.dialogs.arena_grid_dialog.ArenaGridDialog",
+        _FakeModifyDialog,
+    )
+
+    MainWindow._reopen_grid_dialog_for_modification(mw)
+
+    # Replaced, not extended: the fake dialog's accepted_shapes() is exactly
+    # ONE shape, so the resulting list must be exactly 1, not 2 + 1.
+    assert len(mw.roi_shapes) == 1
+    assert mw.roi_shapes == _FakeModifyDialog.last_instance.accepted_shapes()
+
+    mw.arena_panel.set_shapes.assert_called_with(mw.roi_shapes)
+    mw.arena_panel.resume_editing.assert_called_once()
+    mw._update_roi_optimization_info.assert_called_once()
+    mw._update_animals_per_arena_total_label.assert_called_once()
+    mw.update_roi_preview.assert_called_once()
+    mw.roi_status_label.setText.assert_called_once()
+    (status_text,), _ = mw.roi_status_label.setText.call_args
+    assert "Regenerated" in status_text
+
+
+def test_reopen_grid_dialog_rejected_leaves_shapes_untouched(qapp, monkeypatch):
+    """Cancel: roi_shapes must be byte-identical to before, but the panel is
+    still resumed (the user isn't stuck in a dead dialog-less state)."""
+    from hydra_suite.trackerkit.gui.main_window import MainWindow
+
+    existing = [
+        {"type": "circle", "params": [1, 1, 1], "mode": "include", "arena_id": 0},
+    ]
+    mw = _make_mock_main_window(existing)
+    mw.arena_panel.last_grid_params = {"first_arena_id": 0}
+
+    class _RejectingDialog(_FakeModifyDialog):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            self._accept = False
+
+    monkeypatch.setattr(
+        "hydra_suite.trackerkit.gui.dialogs.arena_grid_dialog.ArenaGridDialog",
+        _RejectingDialog,
+    )
+
+    MainWindow._reopen_grid_dialog_for_modification(mw)
+
+    assert mw.roi_shapes == existing
+    mw.arena_panel.resume_editing.assert_called_once()
+    mw.arena_panel.set_shapes.assert_not_called()
+    mw.update_roi_preview.assert_not_called()
+
+
+def test_generate_grid_into_empty_shapes_marks_grid_generated(qapp, monkeypatch):
+    """Finding 3: generating a grid into an EMPTY roi_shapes marks the
+    result as grid-made (safe to blindly regenerate later)."""
+    from hydra_suite.trackerkit.gui.main_window import MainWindow
+
+    mw = _make_mock_main_window([])
+
+    monkeypatch.setattr(
+        "hydra_suite.trackerkit.gui.dialogs.arena_grid_dialog.ArenaGridDialog",
+        _FakeModifyDialog,
+    )
+
+    MainWindow._on_generate_grid_clicked(mw)
+
+    mw.arena_panel.mark_grid_generated.assert_called_once()
+    mw.arena_panel.mark_hand_drawn.assert_not_called()
+
+
+def test_generate_grid_into_nonempty_shapes_marks_hand_drawn(qapp, monkeypatch):
+    """Finding 3: generating a grid ON TOP of pre-existing (e.g. hand-drawn)
+    shapes must NOT mark the whole set grid-made -- that would let a later
+    "Modify Existing Arenas" silently replace-and-destroy the pre-existing
+    arenas. Falls back to mark_hand_drawn() for this mixed-origin set."""
+    from hydra_suite.trackerkit.gui.main_window import MainWindow
+
+    existing = [
+        {"type": "circle", "params": [1, 1, 1], "mode": "include", "arena_id": 0},
+    ]
+    mw = _make_mock_main_window(existing)
+
+    monkeypatch.setattr(
+        "hydra_suite.trackerkit.gui.dialogs.arena_grid_dialog.ArenaGridDialog",
+        _FakeModifyDialog,
+    )
+
+    MainWindow._on_generate_grid_clicked(mw)
+
+    mw.arena_panel.mark_hand_drawn.assert_called_once()
+    mw.arena_panel.mark_grid_generated.assert_not_called()
+
+
+# --- Task 10: shape choice, rotation, spacing floors, extent caps, shared
+# preview renderer ---
+
+
+def _dialog(app, width=640, height=480):
+    from PySide6.QtGui import QImage
+
+    frame = QImage(width, height, QImage.Format_RGB888)
+    frame.fill(0)
+    return ArenaGridDialog(reference_frame=frame, first_arena_id=0)
+
+
+def test_dialog_starts_at_one_by_one(qt_app):
+    dialog = _dialog(qt_app)
+    assert dialog.spin_rows.value() == 1
+    assert dialog.spin_cols.value() == 1
+
+
+def test_spacing_controls_hidden_at_one_by_one(qt_app):
+    """Spacing is meaningless with a single arena, so it must not be shown."""
+    dialog = _dialog(qt_app)
+    assert dialog.spin_pitch_x.isVisibleTo(dialog) is False
+    assert dialog.spin_pitch_y.isVisibleTo(dialog) is False
+
+
+def test_spacing_controls_appear_once_a_column_is_added(qt_app):
+    dialog = _dialog(qt_app)
+    dialog.spin_cols.setValue(2)
+    assert dialog.spin_pitch_x.isVisibleTo(dialog) is True
+
+
+def test_spacing_defaults_to_the_non_overlapping_minimum(qt_app):
+    dialog = _dialog(qt_app)
+    dialog.combo_shape_type.setCurrentText("Circle")
+    dialog.spin_radius.setValue(30)
+    dialog.spin_cols.setValue(2)
+    assert dialog.spin_pitch_x.value() == 60
+    assert dialog.spin_pitch_x.minimum() == 60
+
+
+def test_rectangle_spacing_uses_width_and_height_separately(qt_app):
+    dialog = _dialog(qt_app)
+    dialog.combo_shape_type.setCurrentText("Rectangle")
+    dialog.spin_width.setValue(40)
+    dialog.spin_height.setValue(20)
+    dialog.spin_rows.setValue(2)
+    dialog.spin_cols.setValue(2)
+    # Fix Wave 21 Finding A: min_pitch adds a 1px margin for rectangles so
+    # the dialog's own default/floor spacing can't be flagged as
+    # overlapping by the boundary-inclusive rasterizer.
+    assert dialog.spin_pitch_x.minimum() == 41
+    assert dialog.spin_pitch_y.minimum() == 21
+
+
+def test_circle_shows_radius_only(qt_app):
+    dialog = _dialog(qt_app)
+    dialog.combo_shape_type.setCurrentText("Circle")
+    assert dialog.spin_radius.isVisibleTo(dialog) is True
+    assert dialog.spin_width.isVisibleTo(dialog) is False
+
+
+def test_rectangle_shows_width_and_height(qt_app):
+    dialog = _dialog(qt_app)
+    dialog.combo_shape_type.setCurrentText("Rectangle")
+    assert dialog.spin_width.isVisibleTo(dialog) is True
+    assert dialog.spin_height.isVisibleTo(dialog) is True
+    assert dialog.spin_radius.isVisibleTo(dialog) is False
+
+
+def test_rotation_range_and_step(qt_app):
+    dialog = _dialog(qt_app)
+    assert dialog.spin_rotation.minimum() == -45.0
+    assert dialog.spin_rotation.maximum() == 45.0
+    assert dialog.spin_rotation.singleStep() == 0.5
+
+
+def test_rotation_slider_and_spinbox_stay_in_sync(qt_app):
+    dialog = _dialog(qt_app)
+    dialog.spin_rotation.setValue(12.5)
+    assert dialog.slider_rotation.value() == 25  # half-degree ticks
+    dialog.slider_rotation.setValue(-30)
+    assert dialog.spin_rotation.value() == -15.0
+
+
+def test_rows_and_cols_capped_so_centres_stay_in_frame(qt_app):
+    dialog = _dialog(qt_app, width=400, height=300)
+    # Fix Wave 6 gives this 400x300 frame a much bigger default circle
+    # (radius ~70, so a default 140px min-pitch floor) than this test's
+    # pitch=100 wants -- pin a small radius explicitly so the floor doesn't
+    # clamp the pitch values this test is actually exercising.
+    dialog.spin_radius.setValue(10)
+    dialog.spin_origin_x.setValue(50)
+    dialog.spin_origin_y.setValue(50)
+    dialog.spin_cols.setValue(2)
+    dialog.spin_pitch_x.setValue(100)
+    dialog.spin_pitch_y.setValue(100)
+    assert dialog.spin_cols.maximum() == 4
+    assert dialog.spin_rows.maximum() == 3
+
+
+def test_generated_grid_never_overlaps_at_default_spacing(qt_app):
+    from hydra_suite.trackerkit.arena_geometry import overlapping_arena_pairs
+
+    dialog = _dialog(qt_app)
+    dialog.combo_shape_type.setCurrentText("Circle")
+    dialog.spin_radius.setValue(20)
+    dialog.spin_rows.setValue(3)
+    dialog.spin_cols.setValue(3)
+    shapes = dialog.accepted_shapes()
+    assert overlapping_arena_pairs(shapes, 640, 480) == []
+
+
+def test_accepted_shapes_carry_the_rotation(qt_app):
+    dialog = _dialog(qt_app)
+    dialog.spin_cols.setValue(2)
+    dialog.spin_rotation.setValue(45.0)
+    shapes = dialog.accepted_shapes()
+    assert shapes[0]["params"][1] != shapes[1]["params"][1]
+
+
+# --- Fix Wave 5: "Arena 1 Centre" is the arena's CENTRE, not its bounding-box
+# corner -- generate_grid_shapes/max_grid_extent already want the centre, so
+# the dialog passes the spinbox values straight through with no conversion.
+# (Fix Wave 3 had this backwards based on a misreading of the original bug
+# report; the user has since confirmed centre semantics are correct.) ---
+
+
+def test_top_left_position_zero_puts_circle_bounding_box_at_origin(qt_app):
+    """Radius=20 (diameter 40) at Centre=(0, 0), 1x1 grid: the circle's
+    centre must be exactly (0, 0)."""
+    dialog = _dialog(qt_app)
+    dialog.combo_shape_type.setCurrentText("Circle")
+    dialog.spin_radius.setValue(20)
+    dialog.spin_origin_x.setValue(0)
+    dialog.spin_origin_y.setValue(0)
+    shapes = dialog.accepted_shapes()
+    assert shapes[0]["params"] == [0, 0, 20]
+
+
+def test_top_left_position_zero_puts_rectangle_bounding_box_at_origin(qt_app):
+    """Width=40, Height=20 at Centre=(0, 0): the polygon's min-x/min-y
+    vertex must be half the width/height back from the centre."""
+    dialog = _dialog(qt_app)
+    dialog.combo_shape_type.setCurrentText("Rectangle")
+    dialog.spin_width.setValue(40)
+    dialog.spin_height.setValue(20)
+    dialog.spin_origin_x.setValue(0)
+    dialog.spin_origin_y.setValue(0)
+    shapes = dialog.accepted_shapes()
+    polygon = shapes[0]["params"]
+    min_x = min(pt[0] for pt in polygon)
+    min_y = min(pt[1] for pt in polygon)
+    assert (min_x, min_y) == (-20, -10)
+
+
+def test_top_left_position_nonzero_offset_carries_through_circle(qt_app):
+    """Centre=(100, 50), Radius=20 (diameter 40): a non-zero centre must
+    pass straight through unchanged, not just the zero case."""
+    dialog = _dialog(qt_app)
+    dialog.combo_shape_type.setCurrentText("Circle")
+    dialog.spin_radius.setValue(20)
+    dialog.spin_origin_x.setValue(100)
+    dialog.spin_origin_y.setValue(50)
+    shapes = dialog.accepted_shapes()
+    assert shapes[0]["params"] == [100, 50, 20]
+
+
+def test_top_left_position_nonzero_offset_carries_through_rectangle(qt_app):
+    """Centre=(100, 50), Width=40, Height=20: the polygon's min-x/min-y
+    vertex must be half the width/height back from the centre."""
+    dialog = _dialog(qt_app)
+    dialog.combo_shape_type.setCurrentText("Rectangle")
+    dialog.spin_width.setValue(40)
+    dialog.spin_height.setValue(20)
+    dialog.spin_origin_x.setValue(100)
+    dialog.spin_origin_y.setValue(50)
+    shapes = dialog.accepted_shapes()
+    polygon = shapes[0]["params"]
+    min_x = min(pt[0] for pt in polygon)
+    min_y = min(pt[1] for pt in polygon)
+    assert (min_x, min_y) == (80, 40)
+
+
+# --- Fix Wave 6 ---
+#
+# Fix 1: the preview must fit BOTH width and height (a dialog window wider
+# than the reference frame's own aspect ratio previously cropped the
+# top/bottom, since the zoom was computed from width alone), and a
+# resizeEvent handler must re-fit the preview on resize.
+#
+# Fix 2: default radius/width/height/origin must derive from the reference
+# frame's own size (20% of its average dimension), not hardcoded 20/40/50px.
+#
+# Fix 3: every numeric field (radius, width, height, centre X/Y, rows,
+# columns, X/Y spacing) gets a slider alongside its spinbox, like Rotation.
+
+
+def test_preview_fits_the_full_height_of_a_tall_narrow_frame(qt_app):
+    """A reference frame much taller than it is wide, relative to the
+    preview label's fixed minimum size (320x240), forces the height to be
+    the binding constraint. Under the old width-only zoom calculation this
+    frame would render at full scale (zoom clamped to 1.0 because
+    target_w / image.width() > 1), producing a scaled image far taller than
+    the label -- cropped top/bottom. The new fit-both-dimensions zoom must
+    keep the whole frame inside the label's height.
+    """
+    dialog = _dialog(qt_app, width=100, height=2000)
+    dialog._update_preview()
+    pixmap = dialog.preview_label.pixmap()
+    assert pixmap is not None
+    assert pixmap.height() <= dialog.preview_label.height()
+    assert pixmap.width() <= dialog.preview_label.width()
+
+
+def test_resize_event_refits_the_preview(qt_app):
+    """There was previously no resizeEvent override at all, so the preview
+    never re-fit after the window was resized."""
+    dialog = _dialog(qt_app, width=100, height=2000)
+    assert hasattr(dialog, "resizeEvent")
+    from PySide6.QtCore import QSize
+    from PySide6.QtGui import QResizeEvent
+
+    event = QResizeEvent(QSize(500, 500), QSize(320, 240))
+    dialog.resizeEvent(event)
+    pixmap = dialog.preview_label.pixmap()
+    assert pixmap is not None
+    assert pixmap.height() <= dialog.preview_label.height()
+    assert pixmap.width() <= dialog.preview_label.width()
+
+
+def test_default_radius_derives_from_reference_frame_average_dimension(qt_app):
+    """1000x1000 reference frame: default radius = round(0.20 * 1000) = 200,
+    and the default centre (Arena 1 Centre X/Y) equals that same radius so
+    arena 1's edge is tangent to the frame's top-left corner."""
+    dialog = _dialog(qt_app, width=1000, height=1000)
+    assert dialog.spin_radius.value() == 200
+    assert dialog.spin_origin_x.value() == 200
+    assert dialog.spin_origin_y.value() == 200
+
+
+def test_default_radius_scales_with_a_different_frame_size(qt_app):
+    """2000x500 reference frame: average dimension 1250, default radius =
+    round(0.20 * 1250) = 250 -- proportional to the frame, not a fixed
+    number."""
+    dialog = _dialog(qt_app, width=2000, height=500)
+    assert dialog.spin_radius.value() == 250
+    assert dialog.spin_origin_x.value() == 250
+    assert dialog.spin_origin_y.value() == 250
+
+
+def test_default_width_and_height_match_the_radius_based_footprint(qt_app):
+    dialog = _dialog(qt_app, width=1000, height=1000)
+    assert dialog.spin_width.value() == 400
+    assert dialog.spin_height.value() == 400
+
+
+def test_slider_radius_moves_the_spinbox(qt_app):
+    dialog = _dialog(qt_app)
+    assert hasattr(dialog, "slider_radius")
+    dialog.slider_radius.setValue(75)
+    assert dialog.spin_radius.value() == 75
+
+
+def test_spinbox_radius_moves_the_slider(qt_app):
+    dialog = _dialog(qt_app)
+    dialog.spin_radius.setValue(50)
+    assert dialog.slider_radius.value() == 50
+
+
+def test_spinbox_radius_beyond_slider_range_clamps_the_slider(qt_app):
+    """Typing a value outside the slider's range must still work in the
+    spinbox -- the slider just clamps to its own end."""
+    dialog = _dialog(qt_app, width=1000, height=1000)
+    dialog.spin_radius.setValue(dialog.spin_radius.maximum())
+    assert dialog.spin_radius.value() == dialog.spin_radius.maximum()
+    assert dialog.slider_radius.value() == dialog.slider_radius.maximum()
+
+
+def test_raising_the_pitch_floor_past_the_slider_max_does_not_clobber_the_spinbox(
+    qt_app,
+):
+    """Regression: _sync_pitch_floors' slider.setMinimum(...) for the pitch
+    sliders used to run unblocked. When the new floor exceeds the slider's
+    CURRENT maximum, Qt's QSlider.setMinimum raises both the maximum and the
+    current value to the new minimum -- which fires valueChanged into the
+    paired spinbox (slider.valueChanged is connected to spin.setValue) and
+    silently knocks a larger user-typed spinbox value down to the floor.
+
+    Reproduction (1000x1000 frame, 2-column grid): set pitch_x to an
+    arbitrarily large 5000, then raise the radius to 900 so the circle
+    min-pitch floor becomes 1800 (comfortably above the slider's prior
+    maximum). The spinbox must keep the user's 5000 -- only the slider's own
+    minimum/value may visibly clamp to the floor.
+    """
+    dialog = _dialog(qt_app, width=1000, height=1000)
+    dialog.spin_cols.setValue(2)
+    dialog.spin_pitch_x.setValue(5000)
+    assert dialog.spin_pitch_x.value() == 5000
+
+    dialog.spin_radius.setValue(900)  # circle min-pitch floor -> 1800
+
+    assert dialog.spin_pitch_x.value() == 5000
+    assert dialog.slider_pitch_x.minimum() == 1800
+
+
+def test_slider_rows_moves_the_spinbox(qt_app):
+    dialog = _dialog(qt_app)
+    assert hasattr(dialog, "slider_rows")
+    # Small radius/origin so the extent cap doesn't clamp rows.maximum()
+    # below the value this test wants to set.
+    dialog.spin_radius.setValue(5)
+    dialog.spin_origin_x.setValue(0)
+    dialog.spin_origin_y.setValue(0)
+    dialog.slider_rows.setValue(4)
+    assert dialog.spin_rows.value() == 4
+
+
+def test_spinbox_rows_moves_the_slider(qt_app):
+    dialog = _dialog(qt_app)
+    dialog.spin_radius.setValue(5)
+    dialog.spin_origin_x.setValue(0)
+    dialog.spin_origin_y.setValue(0)
+    dialog.spin_rows.setValue(6)
+    assert dialog.slider_rows.value() == 6
+
+
+def test_slider_rows_maximum_tracks_the_extent_cap(qt_app):
+    """slider_rows.maximum() must move in lockstep with spin_rows.maximum()
+    when _sync_extent_caps shrinks it (mirroring
+    test_rows_and_cols_capped_so_centres_stay_in_frame)."""
+    dialog = _dialog(qt_app, width=400, height=300)
+    dialog.spin_radius.setValue(10)  # see test_rows_and_cols_capped... above
+    dialog.spin_origin_x.setValue(50)
+    dialog.spin_origin_y.setValue(50)
+    dialog.spin_cols.setValue(2)
+    dialog.spin_pitch_x.setValue(100)
+    dialog.spin_pitch_y.setValue(100)
+    assert dialog.spin_cols.maximum() == 4
+    assert dialog.spin_rows.maximum() == 3
+    assert dialog.slider_cols.maximum() == 4
+    assert dialog.slider_rows.maximum() == 3
+
+
+@pytest.mark.parametrize(
+    "dialog_w, dialog_h, frame_w, frame_h",
+    [
+        (1200, 700, 2000, 2000),  # wide dialog, square frame
+        (700, 1200, 2000, 2000),  # tall/narrow dialog, square frame
+        (1400, 900, 3000, 1200),  # wide dialog, wide/rectangular frame
+        (900, 1400, 1200, 3000),  # tall dialog, tall/rectangular frame
+    ],
+)
+def test_preview_pixmap_never_exceeds_the_labels_settled_size(
+    qt_app, dialog_w, dialog_h, frame_w, frame_h
+):
+    """Regression test for Fix Wave 7: the previous fix round set
+    preview_label's size policy to Ignored/Ignored (to solve a resize
+    hysteresis bug) but gave neither preview_col nor preview_label any
+    stretch factor, so the label never actually claimed the extra space a
+    QSizePolicy of Ignored merely permits it to take. Combined with
+    _update_preview() running at construction time -- before the layout had
+    settled into its final geometry -- this produced a pixmap sized for a
+    box the label never actually grew into, and QLabel (with no
+    setScaledContents) silently clipped the overflow.
+
+    The fix gives preview_col/preview_label real stretch factors and defers
+    the first _update_preview() call by one event-loop tick via
+    QTimer.singleShot(0, ...). This asserts the exact invariant that was
+    violated: the rendered pixmap must fit inside the label's own settled
+    width/height in both dimensions, across dialog sizes and reference
+    frame aspect ratios.
+    """
+    from PySide6.QtGui import QImage
+
+    frame = QImage(frame_w, frame_h, QImage.Format_RGB888)
+    frame.fill(200)
+    dialog = ArenaGridDialog(reference_frame=frame, first_arena_id=0)
+    dialog.resize(dialog_w, dialog_h)
+    dialog.show()
+    # Flush the event loop so the deferred singleShot(0, self._update_preview)
+    # from __init__ actually runs against the layout's real, settled geometry
+    # (not a mid-construction snapshot).
+    qt_app.processEvents()
+    qt_app.processEvents()
+
+    pixmap = dialog.preview_label.pixmap()
+    assert pixmap is not None
+    assert pixmap.width() <= dialog.preview_label.width()
+    assert pixmap.height() <= dialog.preview_label.height()
+
+    dialog.close()
+
+
+# --- Fix Wave 8: initial_params prefill + current_params() reporter ---
+
+
+def test_initial_params_prefill_overrides_frame_derived_defaults(qapp):
+    initial_params = {
+        "radius": 77,
+        "origin_x": 10,
+        "origin_y": 20,
+        "rows": 3,
+        "cols": 2,
+    }
+    dialog = ArenaGridDialog(
+        parent=None,
+        reference_frame=None,
+        first_arena_id=0,
+        initial_params=initial_params,
+    )
+    assert dialog.spin_radius.value() == 77
+    assert dialog.spin_origin_x.value() == 10
+    assert dialog.spin_origin_y.value() == 20
+    assert dialog.spin_rows.value() == 3
+    assert dialog.spin_cols.value() == 2
+
+
+def test_current_params_round_trips_into_a_second_dialog(qapp):
+    dialog = ArenaGridDialog(parent=None, reference_frame=None, first_arena_id=0)
+    dialog.spin_radius.setValue(33)
+    dialog.spin_rows.setValue(4)
+    dialog.spin_cols.setValue(5)
+    dialog.spin_origin_x.setValue(12)
+    dialog.spin_origin_y.setValue(34)
+    dialog.spin_pitch_x.setValue(50)
+    dialog.spin_pitch_y.setValue(60)
+    dialog.spin_rotation.setValue(5.5)
+
+    params = dialog.current_params()
+
+    dialog2 = ArenaGridDialog(
+        parent=None,
+        reference_frame=None,
+        first_arena_id=0,
+        initial_params=params,
+    )
+    assert dialog2.current_params() == params
+    assert (
+        dialog2.combo_shape_type.currentText() == dialog.combo_shape_type.currentText()
+    )
+    assert dialog2.spin_radius.value() == dialog.spin_radius.value()
+    assert dialog2.spin_width.value() == dialog.spin_width.value()
+    assert dialog2.spin_height.value() == dialog.spin_height.value()
+    assert dialog2.spin_origin_x.value() == dialog.spin_origin_x.value()
+    assert dialog2.spin_origin_y.value() == dialog.spin_origin_y.value()
+    assert dialog2.spin_rows.value() == dialog.spin_rows.value()
+    assert dialog2.spin_cols.value() == dialog.spin_cols.value()
+    assert dialog2.spin_pitch_x.value() == dialog.spin_pitch_x.value()
+    assert dialog2.spin_pitch_y.value() == dialog.spin_pitch_y.value()
+    assert dialog2.spin_rotation.value() == dialog.spin_rotation.value()
