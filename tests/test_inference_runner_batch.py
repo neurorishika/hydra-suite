@@ -239,3 +239,190 @@ def test_run_batch_iterates_frames_and_writes_caches(tmp_path):
         assert result.detection_ids.shape == (2,)
         # IDs follow frame_idx * STRIDE + slot
         assert result.detection_ids[0] == call_idx * 10000
+
+
+# ---------------------------------------------------------------------------
+# Regression: the batch/cached YOLO-OBB path must ROI-filter detections.
+#
+# Two independent call sites re-derive the filtered detection set from the
+# raw detection cache, and BOTH were missing `roi_mask` entirely:
+#   - Pipeline._process_obb_results() (core/inference/pipeline.py) -- used
+#     during the live batch pass (run_batch_pass).
+#   - InferenceRunner.load_frame() (core/inference/runner.py) -- used by
+#     worker.py's cached-replay branch (both forward cache-reuse AND the
+#     backward pass) to read tracked positions back out.
+# Confirmed against a real user's tracking output (33.6% of positions
+# outside their configured ROI) and via tests/test_arena_tiling_oracle.py's
+# own module docstring, which documented this exact gap.
+# ---------------------------------------------------------------------------
+
+
+def _obb_two_detections(frame_idx: int = 0) -> OBBResult:
+    """One detection inside a small top-left ROI, one far outside it."""
+    return OBBResult(
+        frame_idx=frame_idx,
+        centroids=np.array([[5.0, 5.0], [500.0, 500.0]], dtype=np.float32),
+        angles=np.zeros(2, dtype=np.float32),
+        sizes=np.full(2, 100.0, dtype=np.float32),
+        shapes=np.ones((2, 2), dtype=np.float32),
+        confidences=np.full(2, 0.9, dtype=np.float32),
+        corners=np.zeros((2, 4, 2), dtype=np.float32),
+        detection_ids=OBBResult.make_detection_ids(frame_idx, 2),
+    )
+
+
+def _small_topleft_roi_mask() -> np.ndarray:
+    mask = np.zeros((640, 640), dtype=np.uint8)
+    mask[:20, :20] = 255
+    return mask
+
+
+def test_load_frame_applies_roi_mask_filter(tmp_path):
+    """InferenceRunner.load_frame() must filter cached detections by the
+    roi_mask configured at construction. Must FAIL pre-fix (both detections
+    survive) and PASS post-fix (only the in-ROI one survives)."""
+    from hydra_suite.core.inference.runner import InferenceRunner
+
+    cfg = _cfg()
+    obb = _obb_two_detections()
+    roi_mask = _small_topleft_roi_mask()
+
+    with (
+        patch("hydra_suite.core.inference.runner._load_all_models"),
+        patch("hydra_suite.core.inference.runner._open_caches") as mock_open,
+    ):
+        mock_caches = MagicMock()
+        mock_caches.detection.read_frame.return_value = obb
+        mock_caches.cnn = []
+        mock_caches.headtail = None
+        mock_caches.pose = None
+        mock_caches.apriltag = None
+        mock_caches.all_handles.return_value = [mock_caches.detection]
+        mock_open.return_value = mock_caches
+        # video_path=None -> _frame_space_roi_mask can't probe frame geometry
+        # and returns roi_mask unchanged (no resample needed for this test).
+        runner = InferenceRunner(
+            cfg, cache_dir=tmp_path, video_path=None, roi_mask=roi_mask
+        )
+        result = runner.load_frame(0)
+
+    assert result.obb.num_detections == 1, (
+        "load_frame() must drop the out-of-ROI detection; got "
+        f"{result.obb.num_detections} surviving"
+    )
+    np.testing.assert_allclose(result.obb.centroids[0], [5.0, 5.0])
+
+
+def test_process_obb_results_applies_roi_mask_filter(tmp_path):
+    """Pipeline._process_obb_results() (the batch-pass consumer stage) must
+    filter detections by self.stages.roi_mask. Must FAIL pre-fix (both
+    detections survive) and PASS post-fix (only the in-ROI one survives)."""
+    from hydra_suite.core.inference.pipeline import BatchWindow
+    from hydra_suite.core.inference.runner import InferenceRunner, _CacheSet
+
+    cfg = _cfg()
+    roi_mask = _small_topleft_roi_mask()
+
+    def fake_run_obb(frames, models, obb_config, runtime, roi_mask=None):
+        return [_obb_two_detections(frame_idx=i) for i in range(len(frames))]
+
+    detection_cache = MagicMock()
+    detection_cache.is_valid.return_value = False
+    caches = _CacheSet(detection=detection_cache)
+
+    with (
+        patch("hydra_suite.core.inference.runner._load_all_models") as ml,
+        patch("hydra_suite.core.inference.pipeline.run_obb", side_effect=fake_run_obb),
+    ):
+        ml.return_value = MagicMock(
+            obb=MagicMock(), headtail=None, cnn=[], pose=None, apriltag=None
+        )
+        runner = InferenceRunner(cfg, cache_dir=tmp_path)
+        pipeline = runner._build_pipeline(caches, roi_mask=roi_mask)
+        window = BatchWindow(
+            frames=[np.zeros((480, 640, 3), dtype=np.uint8)], frame_indices=[0]
+        )
+        results = pipeline._process_window(window)
+
+    assert len(results) == 1
+    assert results[0].obb.num_detections == 1, (
+        "_process_obb_results() must drop the out-of-ROI detection; got "
+        f"{results[0].obb.num_detections} surviving"
+    )
+    np.testing.assert_allclose(results[0].obb.centroids[0], [5.0, 5.0])
+
+
+# ---------------------------------------------------------------------------
+# Follow-up fix (task-review finding on the roi_mask fix above):
+# InferenceRunner._frame_space_roi_mask() is called once PER FRAME by
+# load_frame() during cached-replay (both forward cache-reuse and the whole
+# backward pass). It previously re-probed the video's frame geometry via a
+# fresh cv2.VideoCapture open on every single call, even though the mask and
+# the video's geometry never change within one pass. It is now memoized per
+# (video_path, id(self._roi_mask)).
+# ---------------------------------------------------------------------------
+
+
+def test_frame_space_roi_mask_memoized_across_calls(tmp_path):
+    """_frame_space_roi_mask() must probe the video's frame geometry only
+    ONCE across repeated calls with the same video_path and roi_mask, not
+    once per call."""
+    from hydra_suite.core.inference.runner import InferenceRunner
+
+    cfg = _cfg()
+    roi_mask = _small_topleft_roi_mask()
+
+    with (
+        patch("hydra_suite.core.inference.runner._load_all_models"),
+        patch(
+            "hydra_suite.core.inference.runner._probe_frame_hw",
+            return_value=(640, 640),
+        ) as mock_probe,
+    ):
+        runner = InferenceRunner(
+            cfg, cache_dir=tmp_path, video_path="fake.mp4", roi_mask=roi_mask
+        )
+        first = runner._frame_space_roi_mask("fake.mp4")
+        second = runner._frame_space_roi_mask("fake.mp4")
+
+    assert mock_probe.call_count == 1, (
+        "_frame_space_roi_mask() must memoize its result; the underlying "
+        f"frame-geometry probe was called {mock_probe.call_count} times "
+        "across 2 calls, expected 1"
+    )
+    np.testing.assert_array_equal(first, second)
+    assert first is second
+
+
+def test_frame_space_roi_mask_invalidates_on_roi_mask_reassignment(tmp_path):
+    """Reassigning self._roi_mask to a DIFFERENT mask object (as
+    run_batch_pass's optional roi_mask override does) must invalidate the
+    memoization cache rather than silently returning the stale resample."""
+    from hydra_suite.core.inference.runner import InferenceRunner
+
+    cfg = _cfg()
+    roi_mask_a = _small_topleft_roi_mask()
+    roi_mask_b = _small_topleft_roi_mask()  # different object, same content
+
+    with (
+        patch("hydra_suite.core.inference.runner._load_all_models"),
+        patch(
+            "hydra_suite.core.inference.runner._probe_frame_hw",
+            return_value=(640, 640),
+        ) as mock_probe,
+    ):
+        runner = InferenceRunner(
+            cfg, cache_dir=tmp_path, video_path="fake.mp4", roi_mask=roi_mask_a
+        )
+        first = runner._frame_space_roi_mask("fake.mp4")
+        assert mock_probe.call_count == 1
+
+        runner._roi_mask = roi_mask_b
+        second = runner._frame_space_roi_mask("fake.mp4")
+
+    assert mock_probe.call_count == 2, (
+        "reassigning self._roi_mask to a different object must force a "
+        f"fresh resample; probe was called {mock_probe.call_count} times, "
+        "expected 2"
+    )
+    assert first is not second

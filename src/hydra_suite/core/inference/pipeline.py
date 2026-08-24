@@ -311,7 +311,9 @@ class Pipeline:
             )
             self.cache_writer.write_detection(frame_idx, obb_result)
 
-            filtered_obb, det_indices = filter_for_source(cfg, obb_result)
+            filtered_obb, det_indices = filter_for_source(
+                cfg, obb_result, self.stages.roi_mask
+            )
             if filtered_obb.num_detections == 0:
                 # _run_batch ``continue``s: no downstream stage / cache writes.
                 continue

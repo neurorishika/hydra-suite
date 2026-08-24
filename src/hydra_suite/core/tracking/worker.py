@@ -2420,7 +2420,9 @@ class TrackingEngineCore:
                 # returns a FrameResult.  No legacy detector is used here.  The
                 # frame index is passed so detections are cached per-frame for the
                 # backward pass to replay (realtime + backward support).
-                _frame_result = inference_runner.run_realtime(frame, actual_frame_index)
+                _frame_result = inference_runner.run_realtime(
+                    frame, actual_frame_index, roi_mask=ROI_mask_current
+                )
                 _current_frame_result = _frame_result
                 if _frame_result is not None and _frame_result.obb.num_detections > 0:
                     _obb = _frame_result.obb

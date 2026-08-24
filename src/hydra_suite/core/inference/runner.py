@@ -444,20 +444,25 @@ def write_identity_evidence_sidecar(
     frame_range: "range",
     out_path: Path,
     catalog_labels: "tuple[str, ...]",
+    roi_mask: "np.ndarray | None" = None,
 ) -> None:
     """Read back raw per-frame caches over `frame_range` and write the evidence sidecar.
 
     The batch seam Task 4 wires into ``run_batch_pass``: for each frame, reads
     the raw (pre-filter) detection cache, re-derives the SAME filtered
     detection set + order the pipeline used when it ran HeadTail/CNN/AprilTag
-    for that frame (``filter_for_source(config, raw_obb)`` -- deterministic,
-    no ``roi_mask``, exactly mirroring ``Pipeline._process_window``'s
-    ``filter_for_source(cfg, obb_result)`` call and ``InferenceRunner.load_frame``'s
-    own re-filter), and uses the resulting ``filtered_obb.detection_ids`` as the
-    stable ``det_ids`` list `IdentityEvidenceStage` expects -- aligned by
-    position with the CNN/AprilTag stages' own ``det_index`` (both are
-    sequential 0..N-1 over that SAME filtered set, since CNN/AprilTag ran
-    against the pipeline's filtered_obb, not the raw one).
+    for that frame (``filter_for_source(config, raw_obb, roi_mask)`` --
+    deterministic, exactly mirroring ``Pipeline._process_window``'s
+    ``filter_for_source(cfg, obb_result, self.stages.roi_mask)`` call and
+    ``InferenceRunner.load_frame``'s own re-filter), and uses the resulting
+    ``filtered_obb.detection_ids`` as the stable ``det_ids`` list
+    `IdentityEvidenceStage` expects -- aligned by position with the
+    CNN/AprilTag stages' own ``det_index`` (both are sequential 0..N-1 over
+    that SAME filtered set, since CNN/AprilTag ran against the pipeline's
+    filtered_obb, not the raw one). ``roi_mask`` must be the SAME frame-space
+    mask the batch pass used (see ``InferenceRunner._write_identity_evidence_batch``),
+    or this sidecar's det_ids silently diverge from what CNN/AprilTag actually
+    ran against.
 
     ``caches`` must already be flushed to disk (``read_frame`` is disk-backed
     only -- it never sees an unflushed in-memory write buffer), so this is
@@ -482,7 +487,7 @@ def write_identity_evidence_sidecar(
         raw_obb = caches.detection.read_frame(frame_idx)
         if raw_obb is None:
             continue
-        filtered_obb, _ = filter_for_source(config, raw_obb)
+        filtered_obb, _ = filter_for_source(config, raw_obb, roi_mask)
         if filtered_obb.num_detections == 0:
             continue
         det_ids = [int(d) for d in filtered_obb.detection_ids]
@@ -662,6 +667,11 @@ class InferenceRunner:
         # backward/replay run reproduce the exact same cache key via
         # caches_all_valid() and read the forward run's cache.
         self._roi_mask = roi_mask
+        # Memoizes _frame_space_roi_mask's result, keyed by (video_path,
+        # id(self._roi_mask)) so a later `self._roi_mask` reassignment (see
+        # run_batch_pass's optional roi_mask override) naturally invalidates
+        # the cache instead of silently reusing a stale resample.
+        self._frame_space_roi_mask_cache: dict = {}
         # Fingerprint of the source video; folded into every cache key so caches
         # are only reused for the exact file they were computed from.
         self._video_path = str(video_path) if video_path else None
@@ -1153,6 +1163,7 @@ class InferenceRunner:
             range(start_frame, end_frame + 1),
             out_path,
             self._identity_catalog.labels,
+            roi_mask=self._frame_space_roi_mask(self._video_path),
         )
 
     def detect_batch(
@@ -1208,20 +1219,36 @@ class InferenceRunner:
         returned unchanged -- and ``plan_slices``' own coordinate-space guard is
         the final safety net (a shape mismatch degrades to no gating, never a
         mis-gate).
+
+        Memoized per (video_path, id(self._roi_mask)): ``load_frame`` calls
+        this once per frame during cached-replay (forward reuse and the
+        whole backward pass), and re-probing the video file's dimensions via
+        a fresh VideoCapture open on every single frame would be a real,
+        avoidable per-frame cost over a long session. The mask and the
+        video's geometry are both fixed for the life of one pass, so this is
+        safe to cache; a later `self._roi_mask` reassignment (a different
+        object) changes the cache key and forces a fresh resample rather
+        than reusing a stale one.
         """
         mask = self._roi_mask
         if mask is None:
             return None
+        cache_key = (str(video_path) if video_path else None, id(mask))
+        if cache_key in self._frame_space_roi_mask_cache:
+            return self._frame_space_roi_mask_cache[cache_key]
         frame_hw = _probe_frame_hw(str(video_path) if video_path else None)
         if frame_hw is None or mask.shape[:2] == frame_hw:
-            return mask
-        import cv2
+            resolved = mask
+        else:
+            import cv2
 
-        return cv2.resize(
-            mask,
-            (frame_hw[1], frame_hw[0]),  # cv2 wants (w, h)
-            interpolation=cv2.INTER_NEAREST,
-        )
+            resolved = cv2.resize(
+                mask,
+                (frame_hw[1], frame_hw[0]),  # cv2 wants (w, h)
+                interpolation=cv2.INTER_NEAREST,
+            )
+        self._frame_space_roi_mask_cache[cache_key] = resolved
+        return resolved
 
     def _build_pipeline(
         self, caches: _CacheSet, roi_mask: "np.ndarray | None" = None
@@ -1395,7 +1422,17 @@ class InferenceRunner:
         # Cache-only by construction: bg-sub carries cross-frame state and must
         # never be re-run for random access — filter_for_source is the identity
         # on the bg-sub branch, so this stays a pure cache read.
-        filtered_obb, det_indices = filter_for_source(self.config, raw_obb)
+        #
+        # roi_mask: cached frames are read back at native video-frame geometry
+        # (the batch pass never resizes), so the mask must be resampled into
+        # that same space -- exactly the transform run_batch_pass already
+        # applies via _frame_space_roi_mask() before handing it to the
+        # pipeline. Without this, ROI filtering silently never applied to any
+        # cached/replayed YOLO-OBB read (forward cache reuse AND the backward
+        # pass), regardless of the ROI configured at construction.
+        filtered_obb, det_indices = filter_for_source(
+            self.config, raw_obb, self._frame_space_roi_mask(self._video_path)
+        )
 
         ht_result = _load_headtail_for_indices(
             self._caches.headtail, frame_idx, det_indices, filtered_obb
