@@ -600,3 +600,58 @@ files alone, per the spec's stated bar for this check.
 ### Verdict
 
 All four checks pass. The CUDA gate (Task 15, mehek) remains outstanding.
+
+## Gate results (Task 15, CUDA — mehek)
+
+Run on `mehek.taild08eb9.ts.net`, `conda activate hydra-cuda`, branch
+`feat/inference-span-profiling` @ `29c7f7b9` transferred via `git bundle`
+(no network access to this box's git remotes from the branch worktree), same
+8-clip fixture set, baseline `legacy/main` @ `157e1ae3` (an existing
+`.worktrees/equiv-legacy` on the shared box, already at the correct SHA —
+reused rather than recreated; several other in-progress worktrees on this
+box belong to other work and were left untouched).
+
+### 1. Equivalence matrix (`RUNTIME=cuda`)
+
+Every clip's `DETERMINISM (new_a vs new_b)` verdict is `EQUIVALENT ✅` — 24/24
+checks (positional + final + final_with_individual per clip), zero unmatched,
+zero deltas. Identical shape to the MPS run's own-branch reproducibility.
+
+The `EQUIVALENCE (legacy vs new_a)` comparison shows the same
+"UNTRUSTWORTHY" pattern as MPS — 7 of 8 clips, same reason (`IdentityAssigned*`
+→ `IdentityRealtime*` column rename predating the `legacy/main` tag, per the
+diagnosis in the MPS Gate results section above), 17/17 `EQUIVALENCE`
+sub-verdicts reading `DIFFERENCES` for that same, pre-existing, cross-platform
+reason. That the exact same clips fail for the exact same diagnosed reason on
+a second, independent device confirms the cause is the stale baseline tag,
+not anything platform- or profiler-specific.
+
+All CSV row counts verified `> 1` (minimum observed: 1048 rows) before
+trusting any verdict.
+
+### 2. Deep-GPU mode crash check (`HYDRA_PROFILE_GPU=1`, `fly_obb`, CUDA)
+
+Not a byte-identity gate — deliberately runs a different (`pipeline_depth=1`,
+synchronized) schedule. Ran to completion, exit code 0, produced all four
+tracking CSVs. Exported `tracking_profile_forward.json` has `"gpu_mode":
+"deep"`, confirming the CUDA sync path (`torch.cuda.synchronize()`) executes
+without error — the MPS gate could only exercise the MPS branch of
+`_synchronize()`; this is the first real exercise of the CUDA branch.
+
+(Gotcha hit and resolved: invoking `runner.py` directly, outside
+`run_matrix.sh`, requires `PYTHONPATH=<repo>/src` set explicitly — an
+unset `PYTHONPATH` silently imports whatever `hydra_suite` is on the
+environment's default path rather than this branch's `src/`, and without it
+the run fails outright with `ModuleNotFoundError` rather than silently using
+the wrong tree. Documented here per the project's existing PYTHONPATH gotcha
+memory.)
+
+### Verdict
+
+Both gates pass. MPS and CUDA together: the plan's binding constraint
+(Debug-ON vs Debug-OFF byte-identical) is confirmed on MPS by direct CSV
+diff; DETERMINISM is clean `EQUIVALENT` on both MPS and CUDA; the vs-legacy
+noise is diagnosed, pre-existing, and now confirmed cross-platform (same
+clips, same reason, both devices) rather than device- or profiler-specific;
+the CUDA-only deep-GPU sync path runs without error. Span profiler
+verification is complete.
