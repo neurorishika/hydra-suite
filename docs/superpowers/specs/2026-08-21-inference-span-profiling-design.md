@@ -238,14 +238,15 @@ inference/                      (armed for the runner pass)
     window/                     units=frames
       decode                             <- producer thread at depth>=2
       detect/
-        run_obb/  model_execute[gpu]  extract_raw  materialize[gpu]
+        run_obb/  model_execute[gpu]  extract_raw
         run_bgsub_batch
+      materialize[gpu]                    <- window/ level, sibling of detect/, not nested under run_obb/
       filter
-      headtail/  crop_extract/ frame_to_chw  affine_loop  warp_batch[gpu]
+      headtail/  crop_extract/ affine_loop  warp_batch[gpu]/ frame_to_chw
                  apply_fit  backend_forward[gpu]              units=dets
-      cnn/       crop_extract/ frame_to_chw  affine_loop  warp_batch[gpu]
+      cnn/       crop_extract/ affine_loop  warp_batch[gpu]/ frame_to_chw
                  apply_fit  backend_forward[gpu]              units=dets
-      pose/      crop_extract/ frame_to_chw  affine_loop  warp_batch[gpu]
+      pose/      crop_extract/ affine_loop  warp_batch[gpu]/ frame_to_chw
                                foreign_mask
                  prep_loop  transport  backend_forward[gpu]   units=crops
       apriltag
@@ -460,9 +461,16 @@ and that is reported as a failure.
    `542ce736`.
 2. Every hunk in the final diff against `main` is a `with span(...)` / `@spanned`
    wrapper, an import, or the new module. No logic edits. Verified by reading
-   the diff before the gate is run.
+   the diff before the gate is run. Sanctioned exception: a fix round on
+   `pipeline.py`'s `_stream_windows` was a genuine, disclosed,
+   output-equivalent restructure (needed to place the `DECODE` span
+   correctly), not a wrapper insertion.
 3. Spans wrap loops, never loop bodies. Checked during diff review — the
-   "no measurable cost when off" claim depends on it.
+   "no measurable cost when off" claim depends on it. Sanctioned per-frame
+   exception: `READ` (`frame_prefetcher.py`, all three prefetcher classes) and
+   `FLUSH` (`cache/writer.py`) deliberately open one span per frame inside a
+   loop body — wrapping from outside the loop would measure queue-wait
+   instead of decode/flush cost.
 
 ## Risks
 

@@ -48,6 +48,21 @@ children), `n_calls`, `units`, `max_s` and `first_call_s`.
   the pass is both — do not read the first number as a speedup ceiling. This is
   the distortion behind the refuted SLEAP-batching premise: pose measured 4.6%
   of wall and batching returned ~0 end-to-end gain.
+- **The tree shape is depth-dependent.** At the default `pipeline_depth=2` the
+  video-reading loop runs on a separate, bound producer thread, and
+  `bind_thread()` deliberately gives that thread a fresh, empty span stack (to
+  avoid corrupting parentage across threads). The practical effect: the
+  producer's whole subtree — `decode`, `detect`, `run_obb`, `model_execute`,
+  `extract_raw` — re-roots at the **top level** of the tree instead of nesting
+  under `inference/batch_pass/window/`. No span is lost; each re-rooted node is
+  marked `concurrent` and stamped with the producer thread's name, so you can
+  still tell which pass it belongs to. A depth=2 tree therefore looks like
+  `root/decode`, `root/detect`, `root/detect/run_obb`, `root/inference`,
+  `root/inference/batch_pass`, `root/inference/batch_pass/window`, not the
+  fully-nested shape implied elsewhere in this doc's span map. The nested
+  shape only holds at `pipeline_depth=1` — either set explicitly, or forced by
+  `HYDRA_PROFILE_GPU=1` (below), where there is no separate producer thread to
+  re-root onto.
 
 ## Device time
 

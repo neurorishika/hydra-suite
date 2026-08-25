@@ -647,8 +647,18 @@ class Pipeline:
             # (the underlying reader/prefetcher), not in this generator's own
             # bookkeeping. At depth>=2 this generator runs on the bound producer
             # thread (see module docstring), so this is where DECODE must be
-            # spanned. Bounded to one window's worth of pulls, matching every
-            # other span under ``window/``.
+            # spanned. Bounded to one window's worth of pulls.
+            #
+            # NOTE: at depth>=2 this span (and DETECT/RUN_OBB/etc., all opened
+            # on this same bound producer thread) roots at the TOP LEVEL of the
+            # span tree, not under ``window/`` — ``bind_thread()`` deliberately
+            # gives the producer thread a fresh, empty span stack to avoid
+            # cross-thread parentage corruption, so there is no live parent to
+            # nest under here. The renderer marks these nodes ``concurrent`` and
+            # stamps them with the producer thread's name; no span is lost, only
+            # re-rooted. Only at depth=1 (no separate producer thread) does this
+            # span actually nest under ``window/``. See
+            # ``docs/developer-guide/profiling.md``.
             with span(N.DECODE) as decode_span:
                 for _ in range(w):
                     try:
