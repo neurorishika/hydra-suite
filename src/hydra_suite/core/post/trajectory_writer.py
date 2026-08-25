@@ -225,14 +225,33 @@ def write_final_trajectories(
 ) -> str | None:
     """Terminal trajectory writer. Debug → `_with_individual.csv`; User → `<stem>_tracks.csv`.
 
+    User mode ALSO writes the rich `_with_individual.csv` as a short-lived
+    intermediate the annotated-video exporter reads for identity/pose; the
+    session deletes it during User-mode cleanup, after every consumer has run.
+
     ``identity_ran`` is forwarded to `project_user_tracks` for the User
     branch only; the Debug branch's rich export always includes every
     resolved column regardless of whether identity actually ran.
     """
-    if debug_mode:
-        from hydra_suite.core.post.rich_export import write_rich_export_csv
+    from hydra_suite.core.post.rich_export import write_rich_export_csv
 
+    if debug_mode:
         return write_rich_export_csv(rich_df, final_csv_path)
+
+    # User mode still needs the rich CSV on disk, as an INTERMEDIATE: it is the
+    # only artifact carrying the identity columns and the ``PoseKpt_*`` columns
+    # that `media_export.load_video_trajectories` reads to label, colour and
+    # pose-annotate the exported video. Without it that loader falls back to the
+    # *base* final CSV, which has neither -- so every track was labelled with
+    # its TrajectoryID and the pose overlay silently vanished.
+    #
+    # It is not a User-mode deliverable: `_user_mode_intermediate_paths` already
+    # enumerates `<stem>_final_with_individual.csv` for deletion, and that
+    # cleanup runs strictly AFTER the dataset / media / annotated-video stages
+    # (see `TrackingSessionCore.run_post_tracking`), so the clean
+    # `<stem>_tracks.csv` remains the only file the run leaves behind.
+    write_rich_export_csv(rich_df, final_csv_path)
+
     clean = project_user_tracks(
         rich_df,
         fps=fps,
