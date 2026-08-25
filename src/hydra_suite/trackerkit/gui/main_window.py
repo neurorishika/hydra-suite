@@ -36,9 +36,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from hydra_suite.core.individual.dataset.oriented_video import (
-    resolve_individual_dataset_dir,
-)
 from hydra_suite.core.inference import model_paths as _model_utils
 from hydra_suite.core.inference.model_paths import (
     _sanitize_model_token,
@@ -2942,34 +2939,6 @@ class MainWindow(QMainWindow):
         if fps <= 0.0 and hasattr(self, "_setup_panel"):
             fps = float(self._setup_panel.spin_fps.value() or 0.0)
         return max(1.0, fps or 1.0)
-
-    def _resolve_current_individual_dataset_dir(self):
-        """Resolve the active per-session individual dataset directory."""
-        params = self.get_parameters_dict()
-        dataset_dir = resolve_individual_dataset_dir(
-            params.get("INDIVIDUAL_DATASET_OUTPUT_DIR"),
-            params.get("INDIVIDUAL_DATASET_NAME"),
-            self._individual_dataset_run_id,
-        )
-        if dataset_dir is None:
-            return None
-        return Path(dataset_dir).expanduser()
-
-    def _resolve_current_final_media_video_dir(self):
-        """Resolve the active per-session final-media video output directory."""
-        from hydra_suite.core.individual.dataset.oriented_video import (
-            resolve_oriented_track_video_dir,
-        )
-
-        params = self.get_parameters_dict()
-        output_dir = resolve_oriented_track_video_dir(
-            params.get("FINAL_MEDIA_EXPORT_VIDEO_OUTPUT_DIR")
-            or params.get("ORIENTED_TRACK_VIDEO_OUTPUT_DIR"),
-            self._individual_dataset_run_id,
-        )
-        if output_dir is None:
-            return None
-        return Path(output_dir).expanduser()
 
     def on_tracking_finished(
         self: object, finished_normally: object, fps_list: object, full_traj: object
