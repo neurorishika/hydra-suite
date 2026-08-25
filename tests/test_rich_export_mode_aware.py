@@ -24,12 +24,24 @@ def _rich_df():
     )
 
 
-def test_user_mode_writes_tracks_csv_only(tmp_path):
+def test_user_mode_returns_the_clean_tracks_csv(tmp_path):
+    """User mode's deliverable is `<stem>_tracks.csv`, in the clean schema.
+
+    The rich `_with_individual.csv` is ALSO written here, but as a short-lived
+    intermediate: `media_export.load_video_trajectories` is the only reader
+    that can supply the annotated video with identity labels, identity-stable
+    colours and the pose overlay, and it needs those columns on disk. The
+    session deletes it during User-mode cleanup once the dataset / media /
+    annotated-video stages have run (see `_user_mode_intermediate_paths`,
+    which already enumerates it), exactly as it does for the base
+    `_final.csv`. So the invariant this test guards is what SURVIVES a run --
+    asserted end-to-end in test_session_user_mode_cleanup.py -- not what the
+    low-level writer touches.
+    """
     final_csv = str(tmp_path / "clip_final.csv")
     path = write_final_trajectories(_rich_df(), final_csv, debug_mode=False, fps=10.0)
     assert path.endswith("_tracks.csv")
     assert os.path.exists(path)
-    assert not os.path.exists(str(tmp_path / "clip_final_with_individual.csv"))
     cols = pd.read_csv(path).columns.tolist()
     assert cols == [
         "id",

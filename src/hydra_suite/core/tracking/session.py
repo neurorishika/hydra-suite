@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 
 import cv2
@@ -12,6 +13,10 @@ import numpy as np
 import pandas as pd
 
 from hydra_suite.core.canonicalization.geometry import canonical_geometry_from_params
+from hydra_suite.core.individual.dataset.oriented_video import (
+    resolve_individual_dataset_dir,
+    resolve_oriented_track_video_dir,
+)
 from hydra_suite.core.post import dataset_export, media_export
 from hydra_suite.core.post.interpolated_crops import run_interpolated_crops
 from hydra_suite.core.post.merge import merge_trajectories, rescale_coordinates
@@ -103,17 +108,36 @@ def enforce_nonempty_forward(raw_csv_path, detection_cache_path) -> None:
 
 
 def _user_mode_intermediate_paths(base: str, ext: str) -> list[str]:
-    """Intermediate CSVs to delete after a User-mode run (never the clean tracks.csv)."""
-    return [
-        f"{base}_final{ext}",
-        f"{base}_forward{ext}",
-        f"{base}_backward{ext}",
-        f"{base}_forward_processed{ext}",
-        f"{base}_final_with_individual{ext}",
-        f"{base}_tracking_forward{ext}",
-        f"{base}_tracking_backward{ext}",
-        f"{base}_tracking_final{ext}",
+    """Intermediate CSVs to delete after a User-mode run (never the clean tracks.csv).
+
+    Each stem also contributes its rich-export siblings. The rich CSV is
+    written in User mode too -- it is the only artifact carrying the identity
+    and ``PoseKpt_*`` columns the annotated-video exporter reads -- so every
+    stem that can be a rich export's base must have that sibling cleaned up.
+    Hardcoding only ``_final_with_individual`` leaked
+    ``_forward_processed_with_individual.csv``; the legacy ``_with_pose``
+    alias is swept for the same reason.
+    """
+    from hydra_suite.core.post.rich_export import (
+        LEGACY_RICH_EXPORT_SUFFIX,
+        RICH_EXPORT_SUFFIX,
+    )
+
+    stems = [
+        "_final",
+        "_forward",
+        "_backward",
+        "_forward_processed",
+        "_tracking_forward",
+        "_tracking_backward",
+        "_tracking_final",
     ]
+    paths = []
+    for stem in stems:
+        paths.append(f"{base}{stem}{ext}")
+        for suffix in (RICH_EXPORT_SUFFIX, LEGACY_RICH_EXPORT_SUFFIX):
+            paths.append(f"{base}{stem}{suffix}{ext}")
+    return paths
 
 
 def _save_trajectories_to_csv(trajectories, output_path: str) -> bool:
@@ -172,6 +196,10 @@ class TrackingSessionCore:
             ),
             inference_cache_dir=str(build_inference_cache_dir(video_path)),
         )
+
+        # Set by _run_interp_crops; consumed by _run_final_media_export when the
+        # caller did not supply an explicit "interpolated_roi_npz_path".
+        self._interpolated_roi_npz_path = None
 
         # Session-scoped span profiler. The merge / interpolated_crops
         # profilers nested below defer to this one (equal priority), so their
@@ -332,6 +360,14 @@ class TrackingSessionCore:
             should_stop=self.callbacks.should_stop,
         )
 
+        # The interpolated ROI npz feeds the final-media exporter so occluded /
+        # interpolated frames still get crops. It used to be captured by the GUI
+        # (`current_interpolated_roi_npz_path`); after the Slice-5 cutover
+        # nothing read it out of the payload at all.
+        roi_npz = str(payload.get("roi_npz_path") or "").strip()
+        if roi_npz:
+            self._interpolated_roi_npz_path = roi_npz
+
         pose_csv = payload.get("pose_csv_path")
         pose_rows = payload.get("pose_rows")
         if pose_csv:
@@ -467,6 +503,60 @@ class TrackingSessionCore:
             dedup_threshold=int(self.params.get("DATASET_DEDUP_THRESHOLD", 8)),
         )
 
+    def _resolve_image_root(self):
+        """Per-run directory for final canonical stills.
+
+        Resolved from ``self.params`` -- which every caller already builds via
+        ``build_engine_params`` -- so the GUI and the CLI need no extra wiring.
+        An explicit ``paths["individual_dataset_dir"]`` still wins.
+
+        Before the Slice-5 cutover the GUI computed this in
+        ``main_window._resolve_current_individual_dataset_dir()``; the cutover
+        dropped the call and left the ``paths`` key unwritten by every caller,
+        so the export silently skipped on every run.
+        """
+        explicit = self.paths.get("individual_dataset_dir")
+        if explicit:
+            return Path(explicit).expanduser()
+        resolved = resolve_individual_dataset_dir(
+            self.params.get("INDIVIDUAL_DATASET_OUTPUT_DIR"),
+            self.params.get("INDIVIDUAL_DATASET_NAME"),
+            self.params.get("INDIVIDUAL_DATASET_RUN_ID"),
+        )
+        return Path(resolved).expanduser() if resolved else None
+
+    def _resolve_video_root(self):
+        """Per-run directory for orientation-fixed per-track videos.
+
+        Mirrors ``_resolve_image_root``; replaces the dropped
+        ``main_window._resolve_current_final_media_video_dir()``.
+        """
+        explicit = self.paths.get("final_media_video_dir")
+        if explicit:
+            return Path(explicit).expanduser()
+        resolved = resolve_oriented_track_video_dir(
+            self.params.get("FINAL_MEDIA_EXPORT_VIDEO_OUTPUT_DIR")
+            or self.params.get("ORIENTED_TRACK_VIDEO_OUTPUT_DIR"),
+            self.params.get("INDIVIDUAL_DATASET_RUN_ID"),
+        )
+        return Path(resolved).expanduser() if resolved else None
+
+    def _resolve_source_fps(self):
+        """Source-video FPS for the exported per-track videos.
+
+        ``paths["source_video_fps"]`` is never written by any caller, and the
+        exporter turns a ``None`` into ``max(0.1, 0.0)`` -- i.e. 0.1 FPS videos.
+        Fall back to the ``FPS`` params key the engine builder always emits.
+        """
+        explicit = self.paths.get("source_video_fps")
+        if explicit:
+            return float(explicit)
+        try:
+            fps = float(self.params.get("FPS") or 0.0)
+        except (TypeError, ValueError):
+            fps = 0.0
+        return fps if fps > 0 else None
+
     def _run_final_media_export(self, final_csv_path):
         """Export canonical stills / oriented per-track videos; return written media paths."""
         if self.callbacks.should_stop():
@@ -475,8 +565,8 @@ class TrackingSessionCore:
         export_videos = should_export_final_media_videos(self.config)
         if not export_images and not export_videos:
             return []
-        image_root = self.paths.get("individual_dataset_dir") if export_images else None
-        video_root = self.paths.get("final_media_video_dir") if export_videos else None
+        image_root = self._resolve_image_root() if export_images else None
+        video_root = self._resolve_video_root() if export_videos else None
 
         self.callbacks.stage_changed("final_media_export")
         result = media_export.export_final_media(
@@ -484,8 +574,11 @@ class TrackingSessionCore:
             config=self.config,
             video_path=self.video_path,
             detection_cache_path=self.paths.get("detection_cache_path"),
-            interpolated_roi_npz_path=self.paths.get("interpolated_roi_npz_path"),
-            fps=self.paths.get("source_video_fps"),
+            interpolated_roi_npz_path=(
+                self.paths.get("interpolated_roi_npz_path")
+                or self._interpolated_roi_npz_path
+            ),
+            fps=self._resolve_source_fps(),
             image_root=image_root,
             video_root=video_root,
             export_images=export_images,

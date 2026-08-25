@@ -334,8 +334,10 @@ def generate_active_learning_dataset(
     except Exception as e:
         logger.exception("Error during dataset generation")
         return {"success": False, "error": str(e)}
-    # No `finally: detection_cache.close()` -- unlike the legacy DetectionCache
-    # (whose read-mode close() is a harmless mmap release), DetectionCacheHandle
-    # is write-oriented: close() flushes `_buffer` and, for a reader that never
-    # buffered a write, that means clobbering the on-disk cache with an empty
-    # frame set. This handle is opened read-only above and must never be closed.
+    # No `finally: detection_cache.close()` -- nothing here needs flushing.
+    # Closing is now SAFE regardless: handles from `open_detection_cache_reader`
+    # carry `read_only=True`, and `DetectionCacheHandle.close()` returns early
+    # for those instead of clobbering the on-disk cache with an empty frame set
+    # keyed by the reader's placeholder key. That clobbering is exactly what
+    # `interpolated_crops._cleanup_backends` used to do on every run, wiping
+    # detection.npz and forcing a full re-inference on the next run.

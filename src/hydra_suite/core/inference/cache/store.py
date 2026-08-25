@@ -58,6 +58,14 @@ class DetectionCacheHandle(CacheHandle):
     path: Path
     key: CacheKey
     require_key: bool = True
+    # Read-only handles (see cache/reader.py) carry a PLACEHOLDER key and never
+    # buffer a write. `close()` flushes unconditionally when `_buffer` is empty,
+    # so closing such a handle would overwrite a fully populated detection.npz
+    # with a zero-detection cache stamped with that placeholder -- destroying
+    # every cached detection AND making the key unmatchable, so the next run
+    # re-runs full inference no matter what "reuse cache" is set to. Guard it
+    # here rather than relying on every caller remembering not to close.
+    read_only: bool = False
     _buffer: list[OBBResult] = field(default_factory=list, repr=False)
     _data: dict | None = field(default=None, repr=False)
     _valid: bool | None = field(default=None, repr=False)
@@ -152,6 +160,10 @@ class DetectionCacheHandle(CacheHandle):
         )
 
     def close(self) -> None:
+        if self.read_only:
+            # Nothing to flush, and flushing would clobber the file. See the
+            # `read_only` field comment above.
+            return
         if not self._buffer:
             _npz_save(
                 self.path,

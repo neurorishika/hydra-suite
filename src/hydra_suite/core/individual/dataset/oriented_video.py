@@ -15,6 +15,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
+from hydra_suite.core.canonicalization.crop import extract_canonical_crop
 from hydra_suite.core.canonicalization.geometry import (
     CanonicalGeometry,
     ClippingStats,
@@ -56,7 +57,6 @@ class FrameTask:
     height: float
     theta: float
     corners: np.ndarray
-    expanded_corners: np.ndarray
     polygon_index: int
     detection_id: int | None = None
     interpolated: bool = False
@@ -1040,7 +1040,6 @@ class OrientedTrackVideoExporter:
             height=float(box_h),
             theta=self._normalize_theta(float(theta)),
             corners=np.asarray(corners, dtype=np.float32),
-            expanded_corners=self._expand_corners(corners, self._geometry.margin - 1.0),
             polygon_index=int(polygon_index),
             detection_id=(int(detection_id) if detection_id is not None else None),
             interpolated=bool(interpolated),
@@ -1278,42 +1277,52 @@ class OrientedTrackVideoExporter:
         canvas: Optional[np.ndarray] = None,
         suppress_foreign_obb: Optional[bool] = None,
     ) -> Optional[np.ndarray]:
-        warped = cv2.warpAffine(
-            frame,
-            task.affine,
-            (task.out_w, task.out_h),
-            flags=getattr(cv2, "INTER_LINEAR", 1),
-            borderMode=cv2.BORDER_CONSTANT,
-            borderValue=0,
-        )
-        if warped is None or warped.size == 0:
-            return None
-
-        mask = np.zeros((task.out_h, task.out_w), dtype=np.uint8)
-        target_poly = self._transform_polygon(
-            task.expanded_corners, task.affine, task.out_w, task.out_h
-        )
-        if target_poly is None:
-            return None
-        cv2.fillPoly(mask, [target_poly], 255)
-
+        # THE shared canonical crop kernel -- the same single call every other
+        # crop consumer (head-tail, CNN, pose, the crop-dataset exporter) goes
+        # through, including its foreign-OBB masking. It warps via torch
+        # ``F.grid_sample`` and returns the FULL canonical canvas.
+        #
+        # This used to be a hand-rolled ``cv2.warpAffine`` plus a bespoke mask,
+        # left behind when the crop path migrated off the OpenCV affine kernel.
+        # The two resamplers do NOT agree -- on a rotated OBB they differ by
+        # several levels across ~9% of the crop -- and the bespoke mask painted
+        # everything outside an expanded-OBB polygon with the background
+        # colour, so a video frame was neither the same pixels nor the same
+        # framing as the canonical crop the models saw for that detection.
+        #
+        # ``own_corners`` is what stops a touching neighbour's OBB from
+        # punching a hole through the subject's own body: only the parts of a
+        # foreign region OUTSIDE this detection's own OBB are suppressed.
         if suppress_foreign_obb is None:
             suppress_foreign_obb = self.suppress_foreign_obb
 
+        foreign_corners = None
         if suppress_foreign_obb and len(frame_polygons) > 1:
-            for idx, corners in enumerate(frame_polygons):
-                if idx == task.polygon_index:
-                    continue
-                foreign_poly = self._transform_polygon(
-                    corners, task.affine, task.out_w, task.out_h
-                )
-                if foreign_poly is None:
-                    continue
-                cv2.fillPoly(mask, [foreign_poly], 0)
+            foreign_corners = [
+                corners
+                for idx, corners in enumerate(frame_polygons)
+                if idx != task.polygon_index
+            ]
 
-        masked = np.full_like(warped, self.background_color, dtype=np.uint8)
-        valid = mask > 0
-        masked[valid] = warped[valid]
+        masked = extract_canonical_crop(
+            frame,
+            task.affine,
+            geometry=self._geometry,
+            bg_color=self.background_color,
+            foreign_corners=foreign_corners,
+            own_corners=task.corners,
+        )
+        if masked is None or masked.size == 0:
+            return None
+        if masked.shape[0] != task.out_h or masked.shape[1] != task.out_w:
+            # Every task is built against self._geometry, so this cannot
+            # happen; bail rather than silently render a mismatched frame.
+            logger.error(
+                "Canonical crop shape %s does not match task canvas %s; skipping.",
+                masked.shape[:2],
+                (task.out_h, task.out_w),
+            )
+            return None
 
         canvas_w, canvas_h = canvas_size
         if masked.shape[1] == canvas_w and masked.shape[0] == canvas_h:
@@ -1382,33 +1391,6 @@ class OrientedTrackVideoExporter:
         if record:
             self._clipping_stats.record(corners, self._geometry)
         return m_align, canvas_w, canvas_h
-
-    @staticmethod
-    def _expand_corners(corners: np.ndarray, padding_fraction: float) -> np.ndarray:
-        arr = np.asarray(corners, dtype=np.float32)
-        if arr.shape != (4, 2):
-            return arr
-        centroid = arr.mean(axis=0)
-        expanded = arr.copy()
-        for idx in range(4):
-            direction = arr[idx] - centroid
-            expanded[idx] = centroid + direction * (1.0 + float(padding_fraction))
-        return expanded.astype(np.float32)
-
-    @staticmethod
-    def _transform_polygon(
-        corners: np.ndarray,
-        affine: np.ndarray,
-        out_w: int,
-        out_h: int,
-    ) -> Optional[np.ndarray]:
-        arr = np.asarray(corners, dtype=np.float32)
-        if arr.shape != (4, 2):
-            return None
-        pts = cv2.transform(arr.reshape(1, 4, 2), affine).reshape(4, 2)
-        pts[:, 0] = np.clip(pts[:, 0], 0, max(0, out_w - 1))
-        pts[:, 1] = np.clip(pts[:, 1], 0, max(0, out_h - 1))
-        return pts.astype(np.int32)
 
     @staticmethod
     def _edge_lengths(corners: np.ndarray) -> tuple[float, float]:
