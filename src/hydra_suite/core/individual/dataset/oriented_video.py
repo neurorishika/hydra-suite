@@ -15,6 +15,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
+from hydra_suite.core.canonicalization.crop import extract_canonical_crop
 from hydra_suite.core.canonicalization.geometry import (
     CanonicalGeometry,
     ClippingStats,
@@ -1278,15 +1279,29 @@ class OrientedTrackVideoExporter:
         canvas: Optional[np.ndarray] = None,
         suppress_foreign_obb: Optional[bool] = None,
     ) -> Optional[np.ndarray]:
-        warped = cv2.warpAffine(
-            frame,
-            task.affine,
-            (task.out_w, task.out_h),
-            flags=getattr(cv2, "INTER_LINEAR", 1),
-            borderMode=cv2.BORDER_CONSTANT,
-            borderValue=0,
-        )
+        # THE shared canonical crop kernel -- the same one every other
+        # crop consumer (head-tail, CNN, pose, the crop-dataset exporter)
+        # samples through. It warps via torch ``F.grid_sample``
+        # (``padding_mode="zeros"``, matching the old ``borderValue=0``) and
+        # slices the canvas footprint out of the raw frame first.
+        #
+        # This used to be a hand-rolled ``cv2.warpAffine``, left behind when
+        # the crop path migrated off the OpenCV affine kernel. The two
+        # resamplers do NOT agree: on a rotated OBB they differ by several
+        # levels across ~9% of the crop, so an oriented-video frame was not
+        # the same pixels as the canonical crop the models saw for that exact
+        # detection.
+        warped = extract_canonical_crop(frame, task.affine, geometry=self._geometry)
         if warped is None or warped.size == 0:
+            return None
+        if warped.shape[0] != task.out_h or warped.shape[1] != task.out_w:
+            # Every task is built against self._geometry, so this cannot
+            # happen; bail rather than silently render a mismatched frame.
+            logger.error(
+                "Canonical crop shape %s does not match task canvas %s; skipping.",
+                warped.shape[:2],
+                (task.out_h, task.out_w),
+            )
             return None
 
         mask = np.zeros((task.out_h, task.out_w), dtype=np.uint8)
@@ -1310,6 +1325,17 @@ class OrientedTrackVideoExporter:
                 if foreign_poly is None:
                     continue
                 cv2.fillPoly(mask, [foreign_poly], 0)
+            # Restore the subject's OWN OBB. When two animals touch, a
+            # neighbour's OBB spills into this detection's own box and the
+            # fills above punched a hole straight through the subject's body.
+            # The shared canonical masker takes ``own_corners`` for exactly
+            # this reason (`_apply_foreign_mask_canonical`): only the parts of
+            # a foreign region OUTSIDE the subject's own OBB are suppressed.
+            own_poly = self._transform_polygon(
+                task.corners, task.affine, task.out_w, task.out_h
+            )
+            if own_poly is not None:
+                cv2.fillPoly(mask, [own_poly], 255)
 
         masked = np.full_like(warped, self.background_color, dtype=np.uint8)
         valid = mask > 0
