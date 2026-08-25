@@ -18,4 +18,11 @@ def open_detection_cache_reader(path: str | Path) -> DetectionCacheHandle:
     produced it.
     """
     key = CacheKey(schema_version=0, model_path="", model_mtime=0.0, config_hash="")
-    return DetectionCacheHandle(path=Path(path), key=key, require_key=False)
+    return DetectionCacheHandle(
+        path=Path(path),
+        key=key,
+        require_key=False,
+        # Without this, closing the returned handle overwrites the cache with an
+        # empty one keyed by the placeholder above.
+        read_only=True,
+    )
