@@ -103,7 +103,7 @@ Both were found by reading the code the spec cites. They are resolved here rathe
   - `PRIORITY_PROCESS = 0`, `PRIORITY_SESSION = 1`
   - Snapshot node dict keys: `name`, `total_s`, `self_s`, `n_calls`, `units`, `max_s`, `first_call_s`, `thread`, `children` (list)
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/utils/test_profiling.py`:
 
@@ -270,12 +270,12 @@ def test_unbalanced_stack_warns_at_disarm(caplog):
     assert any("unbalanced" in r.message.lower() for r in caplog.records)
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `python -m pytest tests/utils/test_profiling.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'hydra_suite.utils.profiling'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `src/hydra_suite/utils/profiling.py`:
 
@@ -579,12 +579,12 @@ def bind_target(fn):
     return _wrapped
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `python -m pytest tests/utils/test_profiling.py -v`
 Expected: PASS (11 tests)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/hydra_suite/utils/profiling.py tests/utils/test_profiling.py
@@ -602,7 +602,7 @@ git commit -m "feat(profiling): span recorder primitive"
 - Consumes: `SpanRecorder`, `bind_target`, `span` from Task 1.
 - Produces: no new API — this task proves the Task 1 threading contract and fixes it if the tests expose a defect. The spec calls the missing-binding failure "the single most likely silent bug in the design", so it gets its own gate.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/utils/test_profiling_threads.py`:
 
@@ -718,12 +718,12 @@ def test_concurrent_totals_may_exceed_wall_clock():
     assert summed > 0.08  # ~0.10 of span time inside ~0.05 of wall-clock
 ```
 
-- [ ] **Step 2: Run the tests**
+- [x] **Step 2: Run the tests**
 
 Run: `python -m pytest tests/utils/test_profiling_threads.py -v`
 Expected: all PASS (6 tests). If `test_two_threads_nest_without_corrupting_parentage` or `test_nodes_are_stamped_with_their_thread` fails, `_stack_for_thread` is inserting into `_thread_stacks` without the lock — re-check that Task 1's `with self._lock: setdefault(...)` guard is present, then re-run.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add tests/utils/test_profiling_threads.py
@@ -742,7 +742,7 @@ git commit -m "test(profiling): thread binding and concurrent nesting"
 - Consumes: `span` from Task 1.
 - Produces: one `str` constant per span (names listed below, used verbatim by Tasks 7–12), plus `spanned(name, units=None, gpu=False)` — a decorator wrapping a function in a span.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/utils/test_profiling_registry.py`:
 
@@ -831,12 +831,12 @@ def test_span_call_sites_use_constants_not_literals():
     assert not bad, "span() called with a string literal; use a NAMES constant:\n" + "\n".join(bad)
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `python -m pytest tests/utils/test_profiling_registry.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'hydra_suite.utils.profiling_names'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `src/hydra_suite/utils/profiling_names.py`:
 
@@ -959,12 +959,12 @@ def spanned(name: str, units: float | None = None, gpu: bool = False):
     return _decorate
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `python -m pytest tests/utils/test_profiling_registry.py -v`
 Expected: `test_every_constant_is_used_somewhere_in_src` FAILS (nothing uses them yet); the other four PASS.
 
-- [ ] **Step 5: Make the coverage test pass by deferring it until instrumentation lands**
+- [x] **Step 5: Make the coverage test pass by deferring it until instrumentation lands**
 
 Mark it so the suite is green now and the guard arms in Task 12:
 
@@ -981,7 +981,7 @@ def test_every_constant_is_used_somewhere_in_src():
 Run: `python -m pytest tests/utils/test_profiling_registry.py -v`
 Expected: 4 PASS, 1 XFAIL
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/hydra_suite/utils/profiling_names.py tests/utils/test_profiling_registry.py
@@ -1002,7 +1002,7 @@ git commit -m "feat(profiling): span-name registry and spanned decorator"
   - `render_tree_lines(snapshot: dict, main_thread: str) -> list[str]`
   - `SPAN_TREE_HEADER: str`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/utils/test_profiling_report.py`:
 
@@ -1096,12 +1096,12 @@ def test_depth_is_indented():
     assert len(cnn) - len(cnn.lstrip()) > len(window) - len(window.lstrip())
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `python -m pytest tests/utils/test_profiling_report.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'hydra_suite.utils.profiling_report'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `src/hydra_suite/utils/profiling_report.py`:
 
@@ -1163,12 +1163,12 @@ def _render(
         _render(child, node["total_s"], depth + 1, main_thread, out)
 ```
 
-- [ ] **Step 4: Run the test**
+- [x] **Step 4: Run the test**
 
 Run: `python -m pytest tests/utils/test_profiling_report.py -v`
 Expected: PASS (6 tests)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/hydra_suite/utils/profiling_report.py tests/utils/test_profiling_report.py
@@ -1190,7 +1190,7 @@ git commit -m "feat(profiling): span tree renderer"
   - `TrackingProfiler.armed() -> ContextManager` — the context manager every consumer wraps its work in
   - `get_summary()` gains keys `"spans"` (nested tree) and `"gpu_mode"` (`"off"` / `"deep"`)
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/core/tracking/test_profiler_spans.py`:
 
@@ -1293,12 +1293,12 @@ def test_log_final_summary_emits_a_span_tree(caplog):
     assert "SPAN TREE" in text
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `python -m pytest tests/core/tracking/test_profiler_spans.py -v`
 Expected: FAIL — `AttributeError: 'TrackingProfiler' object has no attribute 'spans'`
 
-- [ ] **Step 3: Add the recorder to `__init__`**
+- [x] **Step 3: Add the recorder to `__init__`**
 
 In `src/hydra_suite/core/tracking/profiler.py`, add to the imports at the top (after `import numpy as np`):
 
@@ -1330,7 +1330,7 @@ to:
             return
 ```
 
-- [ ] **Step 4: Add `armed()`**
+- [x] **Step 4: Add `armed()`**
 
 Insert immediately after `set_config` (which ends around line 190) in `profiler.py`:
 
@@ -1360,7 +1360,7 @@ Insert immediately after `set_config` (which ends around line 190) in `profiler.
 
 and add `from contextlib import contextmanager` to the imports.
 
-- [ ] **Step 5: Add the summary keys**
+- [x] **Step 5: Add the summary keys**
 
 In `get_summary` (profiler.py:495), change the `summary = {...}` literal to append two keys after `"categories": categories,`:
 
@@ -1385,7 +1385,7 @@ def _gpu_mode() -> str:
     return "deep" if os.environ.get("HYDRA_PROFILE_GPU") else "off"
 ```
 
-- [ ] **Step 6: Add the SPAN TREE log block**
+- [x] **Step 6: Add the SPAN TREE log block**
 
 In `log_final_summary`, immediately before the final `logger.info("=" * 60)` (profiler.py:604):
 
@@ -1400,12 +1400,12 @@ In `log_final_summary`, immediately before the final `logger.info("=" * 60)` (pr
                 logger.info("%s", line)
 ```
 
-- [ ] **Step 7: Run the tests**
+- [x] **Step 7: Run the tests**
 
 Run: `python -m pytest tests/core/tracking/test_profiler_spans.py tests/test_tracking_profiler.py tests/core/tracking/test_profile_output_path.py -v`
 Expected: PASS — including the pre-existing profiler tests, which have no strict key-set assertions.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/hydra_suite/core/tracking/profiler.py tests/core/tracking/test_profiler_spans.py
@@ -1429,7 +1429,7 @@ git commit -m "feat(profiling): wire span recorder into TrackingProfiler"
 
 **Why this is opt-in:** `torch.cuda.synchronize()` / `torch.mps.synchronize()` are **device-wide**, not stream-scoped, and `pipeline_depth` defaults to 2, so a sync on the consumer thread drains the *producer's* in-flight OBB kernels and bills OBB's device time to CNN. Measured on `hydra-mps`: `torch.mps.synchronize()` costs 318 µs with one pending op versus 8.5 µs unsynced — a ~37x penalty, ~1.8 ms/frame at ~6 gpu spans/frame, which alone breaks the ≤2% target. The default profiled path therefore does **not** sync.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/utils/test_profiling_gpu.py`:
 
@@ -1482,12 +1482,12 @@ def test_pipeline_depth_is_forced_to_one_in_deep_mode(monkeypatch):
     assert _effective_depth(4) == 1
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `python -m pytest tests/utils/test_profiling_gpu.py -v`
 Expected: FAIL — `ImportError: cannot import name 'deep_gpu_enabled'`
 
-- [ ] **Step 3: Add the sync path to `profiling.py`**
+- [x] **Step 3: Add the sync path to `profiling.py`**
 
 Add near the top of `src/hydra_suite/utils/profiling.py`, after the `_ACTIVE` definition:
 
@@ -1555,7 +1555,7 @@ In `_Span`, add `_sync` to `__slots__`, accept it in `__init__`, and sync as the
         ...  # rest unchanged
 ```
 
-- [ ] **Step 4: Force depth 1 in deep mode**
+- [x] **Step 4: Force depth 1 in deep mode**
 
 In `src/hydra_suite/core/inference/pipeline.py`, add a module-level helper next to the other module functions:
 
@@ -1580,12 +1580,12 @@ and in `Pipeline.__init__` (line 139), wrap the stored depth:
 
 (replace whatever the current `self.depth = ...` assignment is with this, leaving the parameter name unchanged).
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `python -m pytest tests/utils/test_profiling_gpu.py tests/test_inference_pipeline_depth1.py tests/test_inference_pipeline_stop.py -v`
 Expected: PASS
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/hydra_suite/utils/profiling.py src/hydra_suite/core/inference/pipeline.py tests/utils/test_profiling_gpu.py
@@ -1609,7 +1609,7 @@ git commit -m "feat(profiling): opt-in deep-GPU mode (HYDRA_PROFILE_GPU)"
 
 **Why:** naive deletion of `HYDRA_RT_PROFILE` is a capability regression — `core/inference` is also driven by DetectKit and PoseKit, which have no `TrackingProfiler`, and the env var was the only way to profile those paths. `HYDRA_PROFILE=1` replaces it with the same recorder and renderer. It is also the supported way to profile **without changing what the run does**: Debug Mode is not observation-only (it changes intermediate cleanup and CSV outputs at `session.py:614-621`), so "turn on Debug and re-run" profiles a different run than the one that was slow.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/utils/test_profiling_process.py`:
 
@@ -1711,12 +1711,12 @@ def test_detectkit_and_posekit_paths_arm_the_recorder(monkeypatch):
     assert rec.snapshot()["children"][0]["name"] == "kit_driven_work"
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `python -m pytest tests/utils/test_profiling_process.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'hydra_suite.utils.profiling_process'`
 
-- [ ] **Step 3: Write the process recorder**
+- [x] **Step 3: Write the process recorder**
 
 Create `src/hydra_suite/utils/profiling_process.py`:
 
@@ -1820,7 +1820,7 @@ def reset_for_test() -> None:
     _ACTIVE.set(None)
 ```
 
-- [ ] **Step 4: Delete the `HYDRA_RT_PROFILE` machinery**
+- [x] **Step 4: Delete the `HYDRA_RT_PROFILE` machinery**
 
 In `src/hydra_suite/core/inference/runner.py`, delete lines 64-87 in their entirety (the comment block, `_RT_PROF_ACC`, `_rt_prof_on`, `_rt_prof_add`, `_rt_prof_flush`). Then delete these statements:
 
@@ -1833,7 +1833,7 @@ In `src/hydra_suite/core/inference/runner.py`, delete lines 64-87 in their entir
 
 Task 9 replaces them with spans at the same boundaries, so verify with `grep -n "_rt_prof\|_prof\b" src/hydra_suite/core/inference/runner.py` returning nothing.
 
-- [ ] **Step 5: Arm the process recorder at the two entry points**
+- [x] **Step 5: Arm the process recorder at the two entry points**
 
 In `src/hydra_suite/core/inference/runner.py`, at the top of `InferenceRunner.__init__`, add:
 
@@ -1843,7 +1843,7 @@ In `src/hydra_suite/core/inference/runner.py`, at the top of `InferenceRunner.__
         maybe_arm_process_recorder()
 ```
 
-- [ ] **Step 6: Run the tests**
+- [x] **Step 6: Run the tests**
 
 Run: `python -m pytest tests/utils/test_profiling_process.py -v`
 Expected: PASS (8 tests)
@@ -1851,7 +1851,7 @@ Expected: PASS (8 tests)
 Run: `python -m pytest tests/ -k "inference or runner" -x -q`
 Expected: no new failures versus the pre-change baseline.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/hydra_suite/utils/profiling_process.py src/hydra_suite/core/inference/runner.py tests/utils/test_profiling_process.py
@@ -1876,7 +1876,7 @@ git commit -m "feat(profiling): HYDRA_PROFILE process recorder; retire HYDRA_RT_
 
 The spec's sixth row — the `crops.py:164` warp `ThreadPoolExecutor` — is **deliberately not bound**. The only work inside those workers is a per-detection `apply_fit` body; a span there would violate implementation rule 3 (5M calls at 50 detections × 100k frames), and the parent `apply_fit` span already bounds the pool's cost inclusively because the caller blocks on it.
 
-- [ ] **Step 1: Bind the pipeline producer**
+- [x] **Step 1: Bind the pipeline producer**
 
 In `src/hydra_suite/core/inference/pipeline.py`, add to the imports:
 
@@ -1904,11 +1904,11 @@ to:
         )
 ```
 
-- [ ] **Step 2: Bind the cache writer worker and span its loop**
+- [x] **Step 2: Bind the cache writer worker and span its loop**
 
 Also add `ENQUEUE` and `FLUSH` spans, or the bound writer thread carries no spans at all: wrap the body of `_enqueue_or_write` in `with span(N.ENQUEUE):` and the actual disk write inside `_worker_loop` in `with span(N.FLUSH):`. Both are per-item, so they are the one sanctioned rule-3 exception on this thread — the writer's whole purpose is per-item I/O and there is no enclosing loop to hoist to. Note the exception in the commit message.
 
-- [ ] **Step 2b: Bind the cache writer worker**
+- [x] **Step 2b: Bind the cache writer worker**
 
 In `src/hydra_suite/core/inference/cache/writer.py`, add `from hydra_suite.utils.profiling import bind_target` to the imports and change line 63 from:
 
@@ -1924,7 +1924,7 @@ to:
             )
 ```
 
-- [ ] **Step 3: Bind the three frame prefetchers**
+- [x] **Step 3: Bind the three frame prefetchers**
 
 In `src/hydra_suite/utils/frame_prefetcher.py`, add `from .profiling import bind_target` to the imports, then change all three thread constructions:
 
@@ -1934,7 +1934,7 @@ In `src/hydra_suite/utils/frame_prefetcher.py`, add `from .profiling import bind
 
 This is the most consequential binding: `interp_crops/crop_extraction/read` sits directly over these threads, so an unbound version would report near-zero frame-read cost against ~12 s of measured video seek. Note the span must go **inside** the decode loop — a span wrapped around `.read()` on the consumer side measures queue-wait, not decode.
 
-- [ ] **Step 4: Bind the media-export writer**
+- [x] **Step 4: Bind the media-export writer**
 
 In `src/hydra_suite/core/post/media_export.py`, add `from hydra_suite.utils.profiling import bind_target` to the imports and change line 605 from:
 
@@ -1948,7 +1948,7 @@ to:
     _writer = _threading.Thread(target=bind_target(_writer_thread), daemon=True)
 ```
 
-- [ ] **Step 5: Verify no thread site was missed**
+- [x] **Step 5: Verify no thread site was missed**
 
 Run:
 
@@ -1958,12 +1958,12 @@ grep -rn "threading.Thread(\|_threading.Thread(" src/hydra_suite/core src/hydra_
 
 Expected: every hit either wraps its target in `bind_target(...)` or is a Qt/GUI thread outside the profiled scope. Record any newly-found site in the commit message rather than leaving it silent.
 
-- [ ] **Step 6: Run the tests**
+- [x] **Step 6: Run the tests**
 
 Run: `python -m pytest tests/utils/test_profiling_threads.py tests/test_inference_pipeline_depth1.py tests/test_inference_pipeline_stop.py -v`
 Expected: PASS
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/hydra_suite/core/inference/pipeline.py src/hydra_suite/core/inference/cache/writer.py src/hydra_suite/utils/frame_prefetcher.py src/hydra_suite/core/post/media_export.py
@@ -1987,7 +1987,7 @@ git commit -m "feat(profiling): bind off-thread sites to the span recorder"
 
 **This is the task the whole feature exists for.** The 34.4 s defect was **24.0 s in the head-tail + CNN consumers and 10.4 s in pose** — so head-tail and CNN get the same `crop_extract` children as pose, not pose alone. The tell is that the frame→CHW conversion is O(frame area) and independent of detection count while the warp scales with `units`; that signature is only visible when the two are separate spans.
 
-- [ ] **Step 1: Instrument the crop seam (the defect's location)**
+- [x] **Step 1: Instrument the crop seam (the defect's location)**
 
 In `src/hydra_suite/core/inference/stages/crops.py`, add:
 
@@ -2050,7 +2050,7 @@ Wrap `apply_fit_batch` (line 339) with the decorator — it blocks on the warp p
 def apply_fit_batch(crops: list, fit: FitResult) -> list:
 ```
 
-- [ ] **Step 2: Split out the frame→CHW conversion**
+- [x] **Step 2: Split out the frame→CHW conversion**
 
 In `src/hydra_suite/core/canonicalization/resample.py`, add:
 
@@ -2075,7 +2075,7 @@ Wrap the sub-slice conversion loop (lines 194-200) — the loop, not its body:
                 subs.append(None)
 ```
 
-- [ ] **Step 3: Instrument the stage internals — crop_extract and backend_forward as SIBLINGS**
+- [x] **Step 3: Instrument the stage internals — crop_extract and backend_forward as SIBLINGS**
 
 Add `from hydra_suite.utils import profiling_names as N` and `from hydra_suite.utils.profiling import span` to each stage module.
 
@@ -2125,7 +2125,7 @@ In `stages/obb.py`, wrap the model call inside `run_obb` in `with span(N.MODEL_E
 
 `BACKEND_FORWARD` repeats deliberately: names are local to their parent, so the three land under `headtail/`, `cnn/` and `pose/` as distinct nodes.
 
-- [ ] **Step 4: Instrument the pipeline window**
+- [x] **Step 4: Instrument the pipeline window**
 
 In `src/hydra_suite/core/inference/pipeline.py`, add `from hydra_suite.utils import profiling_names as N` and `from hydra_suite.utils.profiling import span`. **Add the same two imports to `src/hydra_suite/core/inference/runner.py`** — Step 5 and all of Task 10 use `span` and `N` there, and Task 7 added only a function-local import of `maybe_arm_process_recorder`.
 
@@ -2183,7 +2183,7 @@ Wrap the per-frame materialize/filter loop (`for frame, frame_idx, raw in zip(..
 
 Inside the pose block, wrap `extract_canonical_crops_batch` in `with span(N.CROP_EXTRACT):` so `AFFINE_LOOP` / `WARP_BATCH` / `FRAME_TO_CHW` from Steps 1-2 nest under it. Do the same inside `run_headtail_batch` and `run_cnn_batch` — each calls `extract_classifier_crops_batch`; wrap that call in `with span(N.CROP_EXTRACT):`.
 
-- [ ] **Step 5: Open the batch-pass root**
+- [x] **Step 5: Open the batch-pass root**
 
 In `src/hydra_suite/core/inference/runner.py`, in `run_batch_pass` (line 1273), wrap the body after the `cache_dir` guard:
 
@@ -2199,7 +2199,7 @@ In `src/hydra_suite/core/inference/runner.py`, in `run_batch_pass` (line 1273), 
 
 and in `Pipeline._run_sync` / `_run_double_buffer`, wrap each per-window consumer call in `with span(N.WINDOW, units=len(window)):` — the loop iteration boundary, one span per window, which is what makes `detection_batch_size=1` versus 25 readable as `ms/unit`.
 
-- [ ] **Step 6: Verify no span sits inside a per-detection loop body**
+- [x] **Step 6: Verify no span sits inside a per-detection loop body**
 
 A grep heuristic does not work here — it flags the legitimate wrap-the-loop pattern's neighbors and misses violations whose loop header is more than a few lines up. Do a targeted read instead. List every span call site and check each one's enclosing scope by hand:
 
@@ -2218,7 +2218,7 @@ Three per-frame spans are **sanctioned exceptions**, and they are the complete l
 
 At 100k frames these run ~100k times each, not 5M. Record the count you expect in the commit message.
 
-- [ ] **Step 7: Verify the diff is wrappers only**
+- [x] **Step 7: Verify the diff is wrappers only**
 
 Run: `git diff main --stat -- src/hydra_suite/core`
 Read the full diff and confirm every hunk is a `with span(...)` / `@spanned` wrapper, an import, or an indentation change from one of those. Any logic edit is implementation-rule-2 violation. Confirm no `_CHW_MEMO`, `reset_chw_memo`, or `HYDRA_CHW_MEMO` appears anywhere:
@@ -2229,12 +2229,12 @@ git diff main | grep -c "CHW_MEMO"
 
 Expected: `0`
 
-- [ ] **Step 8: Run the tests**
+- [x] **Step 8: Run the tests**
 
 Run: `python -m pytest tests/ -k "inference or crop or canonical or pipeline" -q`
 Expected: no new failures versus the pre-change baseline.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add src/hydra_suite/core
@@ -2254,7 +2254,7 @@ git commit -m "feat(profiling): instrument the inference batch tree"
 
 The realtime tree mirrors `run_realtime`'s own structure, **not** the batch child names — the two paths do different work and a shared vocabulary would imply a comparability that does not hold. These spans replace the `_rt_prof_add` calls deleted in Task 7, at the same four boundaries plus `finalize`.
 
-- [ ] **Step 1: Wrap the four sections**
+- [x] **Step 1: Wrap the four sections**
 
 **Wrap, do not restructure.** The real function has an `if self.config.detection_source == "bgsub": ... else: ...` at `runner.py:779-813`, with the `detection_ids` re-stamp and the `caches.detection.write_frame` call **outside both branches**. Open the spans around the existing statements and re-indent; do not move any statement into or out of a branch. Identify the `_prof` blocks to delete **by content** (`if _prof:` … `_rt_prof_add(...)`), never by the line numbers in Task 7 — those drift as soon as the first edit lands.
 
@@ -2283,17 +2283,17 @@ Wrap the crop-extraction block that ended at former line 914 in `with span(N.RT_
 
 The zero-detection early return at former line 839 sits inside the `REALTIME` span and needs no special handling — `_Span.__exit__` runs on the `return`.
 
-- [ ] **Step 2: Verify the deleted machinery left nothing behind**
+- [x] **Step 2: Verify the deleted machinery left nothing behind**
 
 Run: `grep -n "_rt_prof\|_RT_PROF\|_prof\b" src/hydra_suite/core/inference/runner.py`
 Expected: no output.
 
-- [ ] **Step 3: Run the tests**
+- [x] **Step 3: Run the tests**
 
 Run: `python -m pytest tests/ -k "realtime or runner" -q`
 Expected: no new failures.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/hydra_suite/core/inference/runner.py
@@ -2316,7 +2316,7 @@ git commit -m "feat(profiling): instrument the realtime tree"
 
 **Why this task exists:** `SessionRunner` does not exist — the class is `TrackingSessionCore` and `session.py` builds no profiler at all today. Its stages (`postprocess`, `rich_export`, `interpolated_crops`, `dataset_generation`, `media_export`, `annotated_video`) are ~28% of wall in pandas code plus dataset-generation seeks, and no armed consumer wrapped any of it. Without this task the design reproduces, at session scope, the "one opaque bucket" failure the whole feature exists to fix.
 
-- [ ] **Step 1: Give `TrackingSessionCore` a profiler**
+- [x] **Step 1: Give `TrackingSessionCore` a profiler**
 
 In `src/hydra_suite/core/tracking/session.py`, add the imports:
 
@@ -2337,7 +2337,7 @@ and at the end of `__init__` (line 156-172):
         )
 ```
 
-- [ ] **Step 2: Arm and span `run_post_tracking`**
+- [x] **Step 2: Arm and span `run_post_tracking`**
 
 Wrap the body of `run_post_tracking` (line 528) in `with self._profiler.armed(), span(N.SESSION):` and wrap each stage call in its span:
 
@@ -2353,7 +2353,7 @@ Wrap the body of `run_post_tracking` (line 528) in `with self._profiler.armed(),
 - `self._run_annotated_video(final_csv)` → `with span(N.ANNOTATED_VIDEO):`
 - `_save_trajectories_to_csv(final_df, final_csv)` → `with span(N.WRITE):`
 
-- [ ] **Step 3: Export the session tree**
+- [x] **Step 3: Export the session tree**
 
 At the end of `run_post_tracking`, before building `SessionResult`:
 
@@ -2378,7 +2378,7 @@ There is **no** `"log_dir"` key in `self.paths` (`grep -rn '"log_dir"' src/` is 
 
 The export is skipped on every `_stopped_result()` early return and on `TrackingSessionError` (`session.py:641-642`). That is correct for a cancelled run, but state it so a missing file does not read as a bug.
 
-- [ ] **Step 4: Instrument the post tree**
+- [x] **Step 4: Instrument the post tree**
 
 In `src/hydra_suite/core/post/merge.py`, the profiler at line 122 keeps its existing `phase_start`/`phase_end` calls untouched. Add `from hydra_suite.utils.profiling import span` and `from hydra_suite.utils import profiling_names as N`, wrap the function body in `with profiler.armed(), span(N.POST):`, and add a span beside each existing phase pair:
 
@@ -2390,7 +2390,7 @@ In `src/hydra_suite/core/post/merge.py`, the profiler at line 122 keeps its exis
 
 The `armed()` here defers when the session profiler is already armed (Task 5's priority rule), which is the normal path; it still arms when `merge` is called standalone.
 
-- [ ] **Step 5: Instrument the interp_crops tree**
+- [x] **Step 5: Instrument the interp_crops tree**
 
 In `src/hydra_suite/core/post/interpolated_crops.py`, wrap the body from line 1421 in `with profiler.armed(), span(N.INTERP_CROPS):` and add spans at:
 
@@ -2415,7 +2415,7 @@ Apply the same pairing in all three prefetcher classes (`:109-113`, `:269-277`, 
 
 `WARP` would land in the interpolated-crop warp call inside a per-crop loop body — a rule-3 violation. **Delete the `WARP` constant** and rely on `crop_extraction`'s inclusive total plus its `units`; note the deletion in the commit message.
 
-- [ ] **Step 6: Arm around the runner pass AND the realtime loop**
+- [x] **Step 6: Arm around the runner pass AND the realtime loop**
 
 In `src/hydra_suite/core/tracking/worker.py`, wrap the `inference_runner.run_batch_pass(...)` call at line 1239 in `with profiler.armed():` so the `inference/` tree lands in the forward/backward pass profile that `worker.py:4158` already exports.
 
@@ -2429,7 +2429,7 @@ grep -n "run_realtime(" src/hydra_suite/core/tracking/worker.py
 
 Arm at the nearest enclosing phase boundary above them. This also activates the `worker.py:448-452` `FramePrefetcher` binding from Task 8 — `bind_target` returns the target unchanged when nothing is armed, so without this arm that binding is a no-op and the spec's sixth threading row stays uncovered.
 
-- [ ] **Step 6b: Verify both trees actually populate**
+- [x] **Step 6b: Verify both trees actually populate**
 
 ```bash
 grep -n "profiler.armed()" src/hydra_suite/core/tracking/worker.py
@@ -2437,7 +2437,7 @@ grep -n "profiler.armed()" src/hydra_suite/core/tracking/worker.py
 
 Expected: two occurrences — one around `run_batch_pass`, one around the realtime loop. One occurrence means the realtime tree is dead.
 
-- [ ] **Step 7: Add the golden span-path test**
+- [x] **Step 7: Add the golden span-path test**
 
 The spec names this "the **only** test that catches 'a span silently disappeared in a refactor' — the failure mode the whole feature exists to prevent". The registry test in Task 3 is a weaker, static complement: it proves a constant is *referenced*, not that a span is *reached at runtime* under the right parent.
 
@@ -2539,7 +2539,7 @@ def test_crop_extract_and_backend_forward_are_siblings():
         assert f"{base}/backend_forward/crop_extract" not in paths
 ```
 
-- [ ] **Step 8: Generate the golden file and check it in**
+- [x] **Step 8: Generate the golden file and check it in**
 
 ```bash
 python - <<'EOF'
@@ -2561,19 +2561,19 @@ Read the generated set and confirm by eye that it matches the spec's span map be
 Run: `python -m pytest tests/core/inference/test_span_golden_paths.py -v`
 Expected: PASS (2 tests)
 
-- [ ] **Step 9: Arm the registry coverage test**
+- [x] **Step 9: Arm the registry coverage test**
 
 Remove the `@pytest.mark.xfail` marker added in Task 3 Step 5 from `test_every_constant_is_used_somewhere_in_src`.
 
 Run: `python -m pytest tests/utils/test_profiling_registry.py -v`
 Expected: PASS. Any constant reported as unused is a span the plan declared but never placed — either place it or delete the constant; do not silence the test.
 
-- [ ] **Step 10: Run the tests**
+- [x] **Step 10: Run the tests**
 
 Run: `python -m pytest tests/ -k "session or merge or post or interp or profil or span" -q`
 Expected: no new failures.
 
-- [ ] **Step 11: Commit**
+- [x] **Step 11: Commit**
 
 ```bash
 git add src/hydra_suite tests/utils/test_profiling_registry.py tests/core/inference/
@@ -2592,7 +2592,7 @@ git commit -m "feat(profiling): instrument the session, post and interp_crops tr
 - Consumes: everything above.
 - Produces: the page a future investigator reads instead of writing ad-hoc timers.
 
-- [ ] **Step 1: Write the page**
+- [x] **Step 1: Write the page**
 
 Create `docs/developer-guide/profiling.md`:
 
@@ -2701,16 +2701,16 @@ bound: the only work in those workers is a per-detection body, and the parent
 blocks on it.
 ```
 
-- [ ] **Step 2: Add the nav entry**
+- [x] **Step 2: Add the nav entry**
 
 In `mkdocs.yml`, add `- Profiling: developer-guide/profiling.md` under the Developer Guide section, alongside the existing `runtime-integration.md` entry.
 
-- [ ] **Step 3: Build the docs**
+- [x] **Step 3: Build the docs**
 
 Run: `make docs-check`
 Expected: strict build passes; terminology check clean.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/developer-guide/profiling.md mkdocs.yml
@@ -2723,16 +2723,16 @@ git commit -m "docs: span profiler guide"
 
 **Files:** all touched above.
 
-- [ ] **Step 1: Format**
+- [x] **Step 1: Format**
 
 Run: `make commit-prep`
 
-- [ ] **Step 2: Lint**
+- [x] **Step 2: Lint**
 
 Run: `make lint-moderate`
 Expected: no new findings versus `main`. Compare with `git stash`-free method — run the same target on a clean `main` checkout if the count is ambiguous.
 
-- [ ] **Step 3: Run the test suite per-file**
+- [x] **Step 3: Run the test suite per-file**
 
 `pytest tests/` never finishes on this repo — a ClassKit modal-dialog hang plus a SIGABRT. Batch instead:
 
@@ -2745,7 +2745,7 @@ python -m pytest tests/test_tracking_profiler.py tests/core/tracking/ tests/util
 
 Expected: all new test files pass; pre-existing failures unchanged. Record the delta, not the absolute count — `main` carries ~24 known pre-existing failures.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add -A
@@ -2766,7 +2766,7 @@ pgrep -af "sleap|hydra" | grep -v "$$" | grep -v pgrep
 
 (the `grep -v "$$"` matters — a bare `pgrep` self-matches and hangs a poll loop.)
 
-- [ ] **Step 1: Establish the baseline BEFORE the change**
+- [x] **Step 1: Establish the baseline BEFORE the change**
 
 **Do not stash.** By this point Tasks 1-13 are all committed, so there is nothing to stash — and the stash stack is shared with the main checkout and every other worktree. The matrix's baseline is supplied by `MAIN_SRC` (the legacy worktree); nothing needs un-applying.
 
@@ -2781,7 +2781,7 @@ git fetch origin --tags
 git worktree add --detach .worktrees/equiv-legacy legacy/main
 ```
 
-- [ ] **Step 2: Kill stale processes**
+- [x] **Step 2: Kill stale processes**
 
 ```bash
 pgrep -af "sleap|hydra" | grep -v pgrep
@@ -2789,7 +2789,7 @@ pgrep -af "sleap|hydra" | grep -v pgrep
 
 Kill only dead/stale **sleap/hydra** processes. Never interfere with a process that is not sleap/hydra. The `grep -v pgrep` matters — a bare `pgrep` self-matches and hangs a poll loop.
 
-- [ ] **Step 3: Run the equivalence matrix with profiling ON (the default)**
+- [x] **Step 3: Run the equivalence matrix with profiling ON (the default)**
 
 All nine fixture configs set `"enable_profiling": true` and the default matrix runs eight of them (`ant_cnn_identity_marked` is excluded at `run_matrix.sh:56-75`), so the instrumented path is hot without any config edit:
 
@@ -2801,7 +2801,7 @@ REPO=$PWD WT=$PWD \
   bash tools/equivalence/run_matrix.sh
 ```
 
-- [ ] **Step 4: Verify the CSVs are not empty before trusting any verdict**
+- [x] **Step 4: Verify the CSVs are not empty before trusting any verdict**
 
 ```bash
 find /tmp/equiv_spans_on -name "*.csv" -exec sh -c 'echo "$(wc -l < "$1") $1"' _ {} \;
@@ -2811,7 +2811,7 @@ Expected: every row count `> 1`. A bare shell (conda not active) yields EMPTY CS
 
 Acceptance: every clip's EQUIVALENCE at or near its DETERMINISM floor — positions p99 ≈ 0, θ max ≈ 0, identical row counts, 0 unmatched, for **both** `_forward.csv` and `_tracking_final.csv`. Known baseline noise: bistable head/tail π-flips on head/tail clips.
 
-- [ ] **Step 5: Run the matrix with profiling OFF**
+- [x] **Step 5: Run the matrix with profiling OFF**
 
 **Clear `enable_profiling`, NOT `debug_mode`.** Setting `debug_mode: false` derives `DEBUG_MODE=False`, which fires the User-mode cleanup at `session.py:619-637` and **deletes `_forward.csv` and `_tracking_final.csv`** via `_user_mode_intermediate_paths` (`session.py:102-113`) — the exact two files this gate compares. The code comment says so: *"NO-OP in debug mode (and thus a no-op for the equivalence gate)."* The comparison would then find nothing and report success. Clearing `enable_profiling` while leaving `debug_mode` absent keeps `DEBUG_MODE` at its `True` default, so the debug CSVs are still written, and disarms every span — which isolates exactly the variable this change introduces.
 
@@ -2836,7 +2836,7 @@ git checkout -- tools/equivalence/fixtures/configs/
 
 Verify row counts `> 1` again, then record the verdict. This is the constraint that matters most — byte-identical with profiling disarmed.
 
-- [ ] **Step 6: Overhead measurement — N=5 alternating**
+- [x] **Step 6: Overhead measurement — N=5 alternating**
 
 **Current src vs current src, `enable_profiling` true vs false.** One variable, same tree, same models. A single on/off pair cannot resolve the ≤2% target: this box has a measured ~30% wall-clock swing under load that once produced a bogus `1.65x SLOWER` verdict on a code path the change never touched.
 
@@ -2865,7 +2865,7 @@ done
 
 Report **median and IQR per condition**. Pass criterion: the on/off median delta is ≤2% **and** smaller than the within-condition IQR. If the noise floor exceeds the effect, report "below noise floor" — that is a valid outcome, not a fake pass.
 
-- [ ] **Step 7: The self-proving run**
+- [x] **Step 7: The self-proving run**
 
 Use **`ant_cnn_identity`**, the only fixture with all three consumers enabled. Verified against the configs:
 
@@ -2892,7 +2892,7 @@ python tools/equivalence/runner.py \
 
 Confirm the clip and skeleton filenames against `run_matrix.sh:56-75` before running; correct them if they differ.
 
-- [ ] **Step 8: Assert the criterion is not vacuous, then evaluate it**
+- [x] **Step 8: Assert the criterion is not vacuous, then evaluate it**
 
 Machine-check that all three nodes exist with `n_calls > 0` before comparing — the vacuousness bug has now been shipped twice by hand:
 
@@ -2926,7 +2926,7 @@ Adjust the span path if the tree shape differs (at `pipeline_depth=2` the detect
 
 This is a **profiling experiment, not a byte-identity gate** — changing the window size changes decode and crop batching, so a tracking diff is expected and is not evidence of a profiler bug.
 
-- [ ] **Step 9: Clean up the baseline worktree**
+- [x] **Step 9: Clean up the baseline worktree**
 
 ```bash
 git worktree remove --force .worktrees/equiv-legacy && git worktree prune
@@ -2935,7 +2935,7 @@ git status --porcelain tools/equivalence/fixtures/configs/
 
 The second command must print nothing — if Step 5's `git checkout --` was skipped, the fixture configs are still modified.
 
-- [ ] **Step 10: Commit the evidence**
+- [x] **Step 10: Commit the evidence**
 
 Write the four verdicts (profiling-ON equivalence, profiling-OFF equivalence, overhead median/IQR, self-proving comparison) into the spec under a new `## Gate results` section, and commit:
 
@@ -2950,14 +2950,14 @@ git commit -m "docs: MPS gate results for the span profiler"
 
 **Files:** none modified — evidence only.
 
-- [ ] **Step 1: Get the branch onto mehek**
+- [x] **Step 1: Get the branch onto mehek**
 
 ```bash
 git bundle create /tmp/span-profiling.bundle main..feat/inference-span-profiling
 scp /tmp/span-profiling.bundle rutalab@mehek.taild08eb9.ts.net:/tmp/
 ```
 
-- [ ] **Step 2: Set up on the box**
+- [x] **Step 2: Set up on the box**
 
 ```bash
 ssh rutalab@mehek.taild08eb9.ts.net
@@ -2970,7 +2970,7 @@ git fetch origin --tags
 git worktree add --detach .worktrees/equiv-legacy legacy/main
 ```
 
-- [ ] **Step 3: Kill stale processes, then run**
+- [x] **Step 3: Kill stale processes, then run**
 
 ```bash
 pgrep -af "sleap|hydra" | grep -v pgrep
@@ -2981,7 +2981,7 @@ REPO=$PWD WT=$PWD MAIN_SRC=$PWD/.worktrees/equiv-legacy/src WT_SRC=$PWD/src \
 
 Pose/SLEAP clips **require** the `sleap` conda env on the box and conda on PATH.
 
-- [ ] **Step 4: Verify row counts, then read the verdict**
+- [x] **Step 4: Verify row counts, then read the verdict**
 
 ```bash
 find /tmp/equiv_spans_cuda -name "*.csv" -exec sh -c 'echo "$(wc -l < "$1") $1"' _ {} \;
@@ -2990,7 +2990,7 @@ grep -E "EQUIVALENT|DIFFERENT|DETERMINISM|PERFORMANCE" /tmp/equiv_cuda.log
 
 Expected: byte-identical on every clip, at the determinism floor.
 
-- [ ] **Step 5: Confirm the deep-GPU path runs on CUDA**
+- [x] **Step 5: Confirm the deep-GPU path runs on CUDA**
 
 Not a gate — the deep pass deliberately changes the schedule — but it must not crash:
 
@@ -3007,7 +3007,7 @@ assert d['gpu_mode'] == 'deep'
 "
 ```
 
-- [ ] **Step 6: Clean up and record**
+- [x] **Step 6: Clean up and record**
 
 ```bash
 git worktree remove --force .worktrees/equiv-legacy && git worktree prune
@@ -3023,7 +3023,7 @@ Add the CUDA verdict to the `## Gate results` section of the spec and commit.
 - Move: `docs/superpowers/specs/2026-08-21-inference-span-profiling-design.md` → `docs/superpowers/specs/done/`
 - Move: `docs/superpowers/plans/2026-08-22-inference-span-profiling.md` → `docs/superpowers/plans/done/`
 
-- [ ] **Step 1: Verify every checkbox in this plan is checked**
+- [x] **Step 1: Verify every checkbox in this plan is checked**
 
 If any step is unchecked, the docs stay active — CLAUDE.md's rule is explicit that an incomplete checklist keeps a doc out of `done/`.
 
