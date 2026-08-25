@@ -3027,11 +3027,11 @@ Add the CUDA verdict to the `## Gate results` section of the spec and commit.
 
 If any step is unchecked, the docs stay active — CLAUDE.md's rule is explicit that an incomplete checklist keeps a doc out of `done/`.
 
-- [ ] **Step 2: Move both docs, then merge, then stamp the SHA**
+- [x] **Step 2: Move both docs, then merge, then stamp the SHA**
 
 The `Shipped — merged to main (<sha>)` header cannot be written before the merge that creates that SHA exists — the `de7ed06e` convention it follows was a post-merge amendment. Order: move the docs, merge, then amend the header with the real SHA.
 
-- [ ] **Step 3: Move both docs**
+- [x] **Step 3: Move both docs**
 
 ```bash
 git mv docs/superpowers/specs/2026-08-21-inference-span-profiling-design.md docs/superpowers/specs/done/
@@ -3039,7 +3039,7 @@ git mv docs/superpowers/plans/2026-08-22-inference-span-profiling.md docs/superp
 git commit -m "docs: move span profiler spec and plan to done/"
 ```
 
-- [ ] **Step 4: Merge to local main — from the PRIMARY repo, not this worktree**
+- [x] **Step 4: Merge to local main — from the PRIMARY repo, not this worktree**
 
 `main` is checked out in the primary repo, so `git checkout main` fails inside this worktree. Change directory first:
 
@@ -3048,7 +3048,7 @@ cd /Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker
 git merge --no-ff feat/inference-span-profiling -m "Merge branch 'feat/inference-span-profiling'"
 ```
 
-- [ ] **Step 4b: Stamp the merge SHA into the spec header**
+- [x] **Step 4b: Stamp the merge SHA into the spec header**
 
 ```bash
 SHA=$(git rev-parse --short HEAD)
@@ -3057,11 +3057,11 @@ sed -i '' "s/\*\*Status:\*\* pending implementation plan/**Status:** Shipped —
 git add -A && git commit --amend --no-edit
 ```
 
-- [ ] **Step 5: Write the memory file**
+- [x] **Step 5: Write the memory file**
 
 Create `~/.claude/projects/-Users-neurorishika-Projects-Rockefeller-Kronauer-multi-animal-tracker/memory/project_span_profiling_done.md` recording: the merge SHA, both gate verdicts, the overhead median/IQR, the self-proving result, the two spec corrections (no `SessionRunner`; warp pool deliberately unbound), and that `HYDRA_PROFILE=1` is the User-mode profiling route. Add the one-line pointer to `MEMORY.md`.
 
-- [ ] **Step 6: Clean up the worktree — from the primary repo**
+- [x] **Step 6: Clean up the worktree — from the primary repo**
 
 You must already be in the primary repo (Step 4). Removing the worktree while sitting inside it fails:
 
