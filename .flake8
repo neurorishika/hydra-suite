@@ -38,7 +38,7 @@ max-complexity = 100
 # Per-file ignores
 per-file-ignores =
     __init__.py:F401,E402
-    tests/*:D100,D101,D102,D103,S101
+    tests/*:D100,D101,D102,D103,S101,SIM117
     conftest.py:E402
 
 # Enable specific checks

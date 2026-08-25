@@ -14,6 +14,9 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+from hydra_suite.utils import profiling_names as N
+from hydra_suite.utils.profiling import span
+
 logger = logging.getLogger(__name__)
 
 
@@ -343,42 +346,44 @@ def apply_pose_quality_postprocessing(
             )
             edge_length_priors = None
 
-    try:
-        with_pose_df = apply_quality_to_dataframe(
-            with_pose_df,
-            pose_labels,
-            params,
-            body_length_prior=body_length_prior,
-            anterior_indices=anterior_indices if anterior_indices else None,
-            posterior_indices=posterior_indices if posterior_indices else None,
-            skeleton_edges=skeleton_edges if skeleton_edges else None,
-            edge_length_priors=edge_length_priors,
-        )
-    except Exception:
-        logger.exception("Pose quality gating failed; using unfiltered pose.")
+    with span(N.POSE_QUALITY):
+        try:
+            with_pose_df = apply_quality_to_dataframe(
+                with_pose_df,
+                pose_labels,
+                params,
+                body_length_prior=body_length_prior,
+                anterior_indices=anterior_indices if anterior_indices else None,
+                posterior_indices=posterior_indices if posterior_indices else None,
+                skeleton_edges=skeleton_edges if skeleton_edges else None,
+                edge_length_priors=edge_length_priors,
+            )
+        except Exception:
+            logger.exception("Pose quality gating failed; using unfiltered pose.")
 
     max_gap = int(params.get("POSE_POSTPROC_MAX_GAP", 5))
     z_threshold = float(params.get("POSE_TEMPORAL_OUTLIER_ZSCORE", 3.0))
     if z_threshold > 0.0 and "TrajectoryID" in with_pose_df.columns:
-        try:
-            parts = []
-            for _, traj_group in with_pose_df.groupby("TrajectoryID", sort=False):
-                parts.append(
-                    apply_temporal_pose_postprocessing(
-                        traj_group,
-                        pose_labels,
-                        max_gap=max_gap,
-                        z_score_threshold=z_threshold,
+        with span(N.TEMPORAL_POSE):
+            try:
+                parts = []
+                for _, traj_group in with_pose_df.groupby("TrajectoryID", sort=False):
+                    parts.append(
+                        apply_temporal_pose_postprocessing(
+                            traj_group,
+                            pose_labels,
+                            max_gap=max_gap,
+                            z_score_threshold=z_threshold,
+                        )
                     )
+                if parts:
+                    with_pose_df = (
+                        pd.concat(parts, ignore_index=True)
+                        .sort_values(["TrajectoryID", "FrameID"], kind="stable")
+                        .reset_index(drop=True)
+                    )
+            except Exception:
+                logger.exception(
+                    "Pose temporal post-processing failed; using unfiltered pose."
                 )
-            if parts:
-                with_pose_df = (
-                    pd.concat(parts, ignore_index=True)
-                    .sort_values(["TrajectoryID", "FrameID"], kind="stable")
-                    .reset_index(drop=True)
-                )
-        except Exception:
-            logger.exception(
-                "Pose temporal post-processing failed; using unfiltered pose."
-            )
     return with_pose_df

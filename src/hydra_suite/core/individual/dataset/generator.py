@@ -26,6 +26,7 @@ from hydra_suite.core.individual.geometry import (
     ellipse_to_obb_corners,
     resolve_directed_angle,
 )
+from hydra_suite.utils.profiling import bind_target
 
 logger = logging.getLogger(__name__)
 
@@ -218,7 +219,9 @@ class IndividualDatasetGenerator:
         if self._write_thread is not None and self._write_thread.is_alive():
             return
         self._write_thread = threading.Thread(
-            target=self._write_worker, daemon=True, name="IndivDatasetWriter"
+            target=bind_target(self._write_worker),
+            daemon=True,
+            name="IndivDatasetWriter",
         )
         self._write_thread.start()
 

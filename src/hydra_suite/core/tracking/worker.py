@@ -1240,17 +1240,18 @@ class TrackingEngineCore:
             logger.info("PHASE 1: InferenceRunner batch pass")
             logger.info("=" * 80)
             try:
-                inference_runner.run_batch_pass(
-                    Path(self.video_path),
-                    progress_cb=self._emit_inference_progress,
-                    start_frame=int(p.get("START_FRAME", 0)),
-                    end_frame=(
-                        int(p.get("END_FRAME", -1))
-                        if int(p.get("END_FRAME", -1)) >= 0
-                        else None
-                    ),
-                    should_stop=lambda: self._stop_requested,
-                )
+                with profiler.armed():
+                    inference_runner.run_batch_pass(
+                        Path(self.video_path),
+                        progress_cb=self._emit_inference_progress,
+                        start_frame=int(p.get("START_FRAME", 0)),
+                        end_frame=(
+                            int(p.get("END_FRAME", -1))
+                            if int(p.get("END_FRAME", -1)) >= 0
+                            else None
+                        ),
+                        should_stop=lambda: self._stop_requested,
+                    )
             except Exception as _bp_err:
                 profiler.phase_end("batched_detection")
                 logger.exception(
@@ -2067,375 +2068,349 @@ class TrackingEngineCore:
         profiler.phase_start("tracking_loop")
         frame_iterator = iter(frame_iterator)
 
-        while True:
+        with profiler.armed():
+            while True:
 
-            params = self.get_current_params()
-            detection_method = params.get("DETECTION_METHOD", "background_subtraction")
-            resize_f = params["RESIZE_FACTOR"]
+                params = self.get_current_params()
+                detection_method = params.get(
+                    "DETECTION_METHOD", "background_subtraction"
+                )
+                resize_f = params["RESIZE_FACTOR"]
 
-            try:
-                frame, _ = next(frame_iterator)
-            except StopIteration:
-                break
-
-            self.frame_count += 1
-            actual_frame_index = self._actual_frame_index_for_count(
-                self.frame_count,
-                start_frame,
-                end_frame,
-            )
-            profiler.notify_frame_index(actual_frame_index)
-
-            if self.backward_mode:
-                if actual_frame_index < start_frame:
-                    logger.info(
-                        f"Reached start frame {start_frame}, stopping backward tracking"
-                    )
-                    break
-            else:
-                if actual_frame_index > end_frame:
-                    logger.info(f"Reached end frame {end_frame}, stopping tracking")
+                try:
+                    frame, _ = next(frame_iterator)
+                except StopIteration:
                     break
 
-            preprocessing_started = time.perf_counter()
-            if frame is not None:
-                if individual_generator:
-                    original_frame = frame if resize_f >= 1.0 else frame.copy()
+                self.frame_count += 1
+                actual_frame_index = self._actual_frame_index_for_count(
+                    self.frame_count,
+                    start_frame,
+                    end_frame,
+                )
+                profiler.notify_frame_index(actual_frame_index)
+
+                if self.backward_mode:
+                    if actual_frame_index < start_frame:
+                        logger.info(
+                            f"Reached start frame {start_frame}, stopping backward tracking"
+                        )
+                        break
+                else:
+                    if actual_frame_index > end_frame:
+                        logger.info(f"Reached end frame {end_frame}, stopping tracking")
+                        break
+
+                preprocessing_started = time.perf_counter()
+                if frame is not None:
+                    if individual_generator:
+                        original_frame = frame if resize_f >= 1.0 else frame.copy()
+                    else:
+                        original_frame = None
                 else:
                     original_frame = None
-            else:
-                original_frame = None
-            profiler.add_sample(
-                "preprocessing",
-                time.perf_counter() - preprocessing_started,
-            )
-
-            if frame is not None and resize_f < 1.0:
-                resize_started = time.perf_counter()
-                frame = self._resize_tracking_frame(
-                    frame,
-                    resize_f,
-                    detection_method,
-                )
                 profiler.add_sample(
-                    "frame_resize", time.perf_counter() - resize_started
+                    "preprocessing",
+                    time.perf_counter() - preprocessing_started,
                 )
 
-            ROI_mask = params.get("ROI_MASK", None)
-            ROI_mask_current = None
-
-            # Profiler boundary preserved at its original (pre-arena) spot:
-            # `main`'s "roi_prepare" sample included the target_w/target_h
-            # probe (it lived inside this same block), so keep it timed here
-            # rather than only around the ROI-mask-specific work below --
-            # this key stays comparable to `main`'s baseline.
-            roi_prepare_started = time.perf_counter()
-
-            # `target_w`/`target_h` is the current tracking frame's resolution --
-            # after RESIZE_FACTOR has scaled it (worker._resize_tracking_frame,
-            # above) -- needed so both the ROI mask resize (below) and the
-            # per-frame arena lookup (at each meas construction site) resolve
-            # coordinates in the SAME space as the detections. Left `None`
-            # (and never touched) when neither consumer needs it: a
-            # single-arena run with no ROI mask configured must not pick up
-            # the extra `cap.get()` calls below -- that would be a behavior
-            # change on the single-arena hot path this feature must leave
-            # byte-identical. `meas_arena` sites pass `frame_size=None` when
-            # `target_w` is `None`; `ArenaLayout.arena_of_points` never
-            # touches `frame_size` when there is no label image (single
-            # arena), so this is always safe.
-            target_w = target_h = None
-            if ROI_mask is not None or not self.arena_layout.is_single_arena:
-                # Cached-detection modes never populate `frame`, so we fall
-                # back to the capture's native size scaled by RESIZE_FACTOR,
-                # mirroring the resized-frame space bg-sub detects in
-                # (frame_result_to_meas centroids are in this same space; see
-                # worker.py detection sites).
-                if frame is not None:
-                    target_w, target_h = frame.shape[1], frame.shape[0]
-                else:
-                    base_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                    base_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                    target_w = max(1, int(base_w * resize_f))
-                    target_h = max(1, int(base_h * resize_f))
-
-            if ROI_mask is not None:
-                (
-                    ROI_mask_current,
-                    _roi_mask_cache_key,
-                    roi_mask_changed,
-                ) = self._resolve_resized_roi_mask(
-                    ROI_mask,
-                    target_w,
-                    target_h,
-                    cache_key=_roi_mask_cache_key,
-                    cached_mask=_roi_mask_resized,
-                )
-                _roi_mask_resized = ROI_mask_current
-                if roi_mask_changed:
-                    _roi_contours_cache = None
-                    _roi_boundary_thickness_cache = None
-
-                if frame is not None and roi_fill_color is None:
-                    mask_inv = ROI_mask_current == 0
-                    outside_pixels = frame[mask_inv]
-                    if len(outside_pixels) > 0:
-                        roi_fill_color = np.mean(outside_pixels, axis=0).astype(
-                            np.uint8
-                        )
-                    else:
-                        roi_fill_color = np.array([0, 0, 0], dtype=np.uint8)
-            profiler.add_sample(
-                "roi_prepare",
-                time.perf_counter() - roi_prepare_started,
-            )
-
-            detection_sample_started = time.perf_counter()
-            profiler.tick("detection")
-
-            # Initialize detection-related variables (in case no detection occurs)
-            detection_ids = []
-            raw_detection_ids = []
-            filtered_obb_corners = []
-            detection_confidences = []
-            pose_directed_mask = np.zeros(0, dtype=np.uint8)
-            detection_headtail_heading = np.full(0, np.nan, dtype=np.float32)
-            headtail_directed_mask = np.zeros(0, dtype=np.uint8)
-            raw_meas, raw_sizes, raw_shapes, raw_confidences, raw_obb_corners = (
-                [],
-                [],
-                [],
-                [],
-                [],
-            )
-            raw_heading_hints = []
-            raw_heading_confidences = []
-            raw_directed_mask = []
-            # Initialized here so the streaming-payload block can reference them
-            # via the "x in locals()" guard on the background-subtraction path.
-            filtered_heading_hints: list = []
-            filtered_heading_confidences: list = []
-            filtered_directed_mask: list = []
-            yolo_results = None
-            fg_mask = None
-            bg_u8 = None
-            _current_frame_result = (
-                None  # FrameResult from InferenceRunner (yolo_obb path)
-            )
-
-            # Get detections either from cache or by detection
-            if use_cached_detections and inference_runner is not None:
-                # Load per-frame results from InferenceRunner caches (YOLO OBB path).
-                # All filtering (ROI, confidence, IOU) was applied during the batch pass.
-                _frame_result = inference_runner.load_frame(actual_frame_index)
-                if _frame_result is not None and _frame_result.obb.num_detections > 0:
-                    _obb = _frame_result.obb
-                    # meas carries the OBB axis angle (legacy convention, [0, pi));
-                    # downstream resolve_tracking_theta picks between theta and
-                    # theta+pi using motion history + headtail heading_hints.
-                    meas = frame_result_to_meas(_obb.centroids, _obb.angles)
-                    meas_arena = self.arena_layout.arena_of_points(
-                        _obb.centroids,
-                        frame_size=(
-                            (target_w, target_h) if target_w is not None else None
-                        ),
+                if frame is not None and resize_f < 1.0:
+                    resize_started = time.perf_counter()
+                    frame = self._resize_tracking_frame(
+                        frame,
+                        resize_f,
+                        detection_method,
                     )
-                    assert isinstance(meas_arena, np.ndarray) and len(
-                        meas_arena
-                    ) == len(meas)
-                    sizes = [float(_obb.sizes[i]) for i in range(_obb.num_detections)]
-                    shapes = [
-                        (float(_obb.shapes[i, 0]), float(_obb.shapes[i, 1]))
-                        for i in range(_obb.num_detections)
-                    ]
-                    detection_confidences = [
-                        float(_obb.confidences[i]) for i in range(_obb.num_detections)
-                    ]
-                    filtered_obb_corners = [
-                        _obb.corners[i] for i in range(_obb.num_detections)
-                    ]
-                    detection_ids = [
-                        int(_obb.detection_ids[i]) for i in range(_obb.num_detections)
-                    ]
-                    raw_detection_ids = detection_ids
-                    raw_meas = meas
-                    raw_sizes = sizes
-                    raw_shapes = shapes
-                    raw_confidences = detection_confidences
-                    raw_obb_corners = filtered_obb_corners
-                    if _frame_result.headtail is not None:
-                        detection_headtail_heading = np.asarray(
-                            _frame_result.headtail.heading_hints, dtype=np.float32
-                        )
-                        detection_headtail_confidence = np.asarray(
-                            _frame_result.headtail.heading_confidences, dtype=np.float32
-                        )
-                        headtail_directed_mask = np.asarray(
-                            _frame_result.headtail.directed_mask, dtype=np.uint8
-                        )
-                        raw_heading_hints = list(detection_headtail_heading)
-                        raw_heading_confidences = list(detection_headtail_confidence)
-                        raw_directed_mask = list(headtail_directed_mask)
-                    else:
-                        detection_headtail_heading = np.asarray([], dtype=np.float32)
-                        detection_headtail_confidence = np.asarray([], dtype=np.float32)
-                        headtail_directed_mask = np.asarray([], dtype=np.uint8)
-                        raw_heading_hints = []
-                        raw_heading_confidences = []
-                        raw_directed_mask = []
-                    raw_canonical_affines = None
-                    # Store FrameResult for Site F (live store population)
-                    _current_frame_result = _frame_result
-                else:
-                    # Empty frame — no detections this frame
-                    meas = []
-                    meas_arena = np.zeros(0, dtype=np.int32)
-                    sizes = []
-                    shapes = []
-                    detection_confidences = []
-                    filtered_obb_corners = []
-                    detection_ids = []
-                    raw_detection_ids = []
-                    raw_meas = []
-                    raw_sizes = []
-                    raw_shapes = []
-                    raw_confidences = []
-                    raw_obb_corners = []
-                    detection_headtail_heading = np.asarray([], dtype=np.float32)
-                    detection_headtail_confidence = np.asarray([], dtype=np.float32)
-                    headtail_directed_mask = np.asarray([], dtype=np.uint8)
-                    raw_heading_hints = []
-                    raw_heading_confidences = []
-                    raw_directed_mask = []
-                    raw_canonical_affines = None
-                    _current_frame_result = _frame_result
-
-            elif (
-                use_cached_detections
-                and detection_method == "background_subtraction"
-                and bgsub_runner is not None
-            ):
-                # Backward pass: replay cached bg-sub detections (no live frame).
-                _fr = bgsub_runner.load_frame(actual_frame_index)
-                _obb = _fr.obb if _fr is not None else None
-                if _obb is not None and _obb.num_detections > 0:
-                    meas = frame_result_to_meas(_obb.centroids, _obb.angles)
-                    meas_arena = self.arena_layout.arena_of_points(
-                        _obb.centroids,
-                        frame_size=(
-                            (target_w, target_h) if target_w is not None else None
-                        ),
+                    profiler.add_sample(
+                        "frame_resize", time.perf_counter() - resize_started
                     )
-                    assert isinstance(meas_arena, np.ndarray) and len(
-                        meas_arena
-                    ) == len(meas)
-                    sizes = [float(_obb.sizes[i]) for i in range(_obb.num_detections)]
-                    shapes = [
-                        (float(_obb.shapes[i, 0]), float(_obb.shapes[i, 1]))
-                        for i in range(_obb.num_detections)
-                    ]
-                    detection_confidences = [
-                        float(_obb.confidences[i]) for i in range(_obb.num_detections)
-                    ]
-                    detection_ids = [
-                        int(_obb.detection_ids[i]) for i in range(_obb.num_detections)
-                    ]
-                else:
-                    meas, sizes, shapes, detection_confidences, detection_ids = (
-                        [],
-                        [],
-                        [],
-                        [],
-                        [],
-                    )
-                    meas_arena = np.zeros(0, dtype=np.int32)
-                filtered_obb_corners = []
-                raw_meas = meas
-                raw_sizes = sizes
-                raw_shapes = shapes
-                raw_confidences = detection_confidences
-                raw_obb_corners = filtered_obb_corners
-                raw_detection_ids = detection_ids
-                raw_heading_hints = []
-                raw_heading_confidences = []
-                raw_directed_mask = []
-                raw_canonical_affines = None
 
-            elif detection_method == "background_subtraction" and frame is not None:
-                # Background subtraction detection pipeline. The InferenceRunner
-                # bg-sub stage owns the whole sequence the worker used to inline:
-                # grayscale + image adjustments, lighting stabilization, adaptive
-                # background update, foreground mask, ROI intersection,
-                # conservative split, and contour measurement. The frame MUST
-                # already be scaled by RESIZE_FACTOR (done at frame_resize above),
-                # and ROI_mask_current is already in that resized space, so the
-                # stage's ROI resolver is a shape no-op. bg-sub is strictly
-                # sequential; this loop feeds frames in ascending order.
-                _bgsub_result = bgsub_runner.run_realtime(
-                    frame, actual_frame_index, roi_mask=ROI_mask_current
-                )
-                # SHOW_FG / SHOW_BG overlays read these (realtime-only; the stage
-                # stashes the exact mask detection ran on).
-                fg_mask = _bgsub_result.fg_mask
-                bg_u8 = _bgsub_result.bg_u8
-                if bg_u8 is None:
-                    # First frame(s): the background model has no history yet, so
-                    # there are no detections. Emit the raw frame and skip the
-                    # rest of the loop, matching the legacy warmup behavior.
+                ROI_mask = params.get("ROI_MASK", None)
+                ROI_mask_current = None
+
+                # Profiler boundary preserved at its original (pre-arena) spot:
+                # `main`'s "roi_prepare" sample included the target_w/target_h
+                # probe (it lived inside this same block), so keep it timed here
+                # rather than only around the ROI-mask-specific work below --
+                # this key stays comparable to `main`'s baseline.
+                roi_prepare_started = time.perf_counter()
+
+                # `target_w`/`target_h` is the current tracking frame's resolution --
+                # after RESIZE_FACTOR has scaled it (worker._resize_tracking_frame,
+                # above) -- needed so both the ROI mask resize (below) and the
+                # per-frame arena lookup (at each meas construction site) resolve
+                # coordinates in the SAME space as the detections. Left `None`
+                # (and never touched) when neither consumer needs it: a
+                # single-arena run with no ROI mask configured must not pick up
+                # the extra `cap.get()` calls below -- that would be a behavior
+                # change on the single-arena hot path this feature must leave
+                # byte-identical. `meas_arena` sites pass `frame_size=None` when
+                # `target_w` is `None`; `ArenaLayout.arena_of_points` never
+                # touches `frame_size` when there is no label image (single
+                # arena), so this is always safe.
+                target_w = target_h = None
+                if ROI_mask is not None or not self.arena_layout.is_single_arena:
+                    # Cached-detection modes never populate `frame`, so we fall
+                    # back to the capture's native size scaled by RESIZE_FACTOR,
+                    # mirroring the resized-frame space bg-sub detects in
+                    # (frame_result_to_meas centroids are in this same space; see
+                    # worker.py detection sites).
                     if frame is not None:
-                        self.emit_frame(frame)
-                    continue
+                        target_w, target_h = frame.shape[1], frame.shape[0]
+                    else:
+                        base_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                        base_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                        target_w = max(1, int(base_w * resize_f))
+                        target_h = max(1, int(base_h * resize_f))
 
-                _obb = _bgsub_result.obb
-                # meas carries the OBB axis angle in [0, pi); downstream
-                # resolve_tracking_theta disambiguates theta vs theta+pi.
-                meas = frame_result_to_meas(_obb.centroids, _obb.angles)
-                meas_arena = self.arena_layout.arena_of_points(
-                    _obb.centroids,
-                    frame_size=((target_w, target_h) if target_w is not None else None),
+                if ROI_mask is not None:
+                    (
+                        ROI_mask_current,
+                        _roi_mask_cache_key,
+                        roi_mask_changed,
+                    ) = self._resolve_resized_roi_mask(
+                        ROI_mask,
+                        target_w,
+                        target_h,
+                        cache_key=_roi_mask_cache_key,
+                        cached_mask=_roi_mask_resized,
+                    )
+                    _roi_mask_resized = ROI_mask_current
+                    if roi_mask_changed:
+                        _roi_contours_cache = None
+                        _roi_boundary_thickness_cache = None
+
+                    if frame is not None and roi_fill_color is None:
+                        mask_inv = ROI_mask_current == 0
+                        outside_pixels = frame[mask_inv]
+                        if len(outside_pixels) > 0:
+                            roi_fill_color = np.mean(outside_pixels, axis=0).astype(
+                                np.uint8
+                            )
+                        else:
+                            roi_fill_color = np.array([0, 0, 0], dtype=np.uint8)
+                profiler.add_sample(
+                    "roi_prepare",
+                    time.perf_counter() - roi_prepare_started,
                 )
-                assert isinstance(meas_arena, np.ndarray) and len(meas_arena) == len(
-                    meas
-                )
-                sizes = [float(_obb.sizes[i]) for i in range(_obb.num_detections)]
-                shapes = [
-                    (float(_obb.shapes[i, 0]), float(_obb.shapes[i, 1]))
-                    for i in range(_obb.num_detections)
-                ]
-                # bg-sub confidences are NaN by design (legacy); do NOT gate on them.
-                detection_confidences = [
-                    float(_obb.confidences[i]) for i in range(_obb.num_detections)
-                ]
-                # No OBB corners are drawn for background subtraction.
+
+                detection_sample_started = time.perf_counter()
+                profiler.tick("detection")
+
+                # Initialize detection-related variables (in case no detection occurs)
+                detection_ids = []
+                raw_detection_ids = []
                 filtered_obb_corners = []
-                # detection_ids match legacy (frame_idx * STRIDE + slot).
-                detection_ids = [int(did) for did in _obb.detection_ids]
-                raw_meas = meas
-                raw_sizes = sizes
-                raw_shapes = shapes
-                raw_confidences = detection_confidences
-                raw_obb_corners = filtered_obb_corners
-                raw_detection_ids = detection_ids
+                detection_confidences = []
+                pose_directed_mask = np.zeros(0, dtype=np.uint8)
+                detection_headtail_heading = np.full(0, np.nan, dtype=np.float32)
+                headtail_directed_mask = np.zeros(0, dtype=np.uint8)
+                raw_meas, raw_sizes, raw_shapes, raw_confidences, raw_obb_corners = (
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                )
                 raw_heading_hints = []
                 raw_heading_confidences = []
                 raw_directed_mask = []
-                raw_canonical_affines = None
-
-            elif (
-                detection_method == "yolo_obb" and frame is not None
-            ):  # YOLO OBB realtime detection (non-cached)
-                # InferenceRunner.run_realtime() runs the full inference stack
-                # (OBB + headtail + CNN + pose + AprilTag) on a single frame and
-                # returns a FrameResult.  No legacy detector is used here.  The
-                # frame index is passed so detections are cached per-frame for the
-                # backward pass to replay (realtime + backward support).
-                _frame_result = inference_runner.run_realtime(
-                    frame, actual_frame_index, roi_mask=ROI_mask_current
+                # Initialized here so the streaming-payload block can reference them
+                # via the "x in locals()" guard on the background-subtraction path.
+                filtered_heading_hints: list = []
+                filtered_heading_confidences: list = []
+                filtered_directed_mask: list = []
+                yolo_results = None
+                fg_mask = None
+                bg_u8 = None
+                _current_frame_result = (
+                    None  # FrameResult from InferenceRunner (yolo_obb path)
                 )
-                _current_frame_result = _frame_result
-                if _frame_result is not None and _frame_result.obb.num_detections > 0:
-                    _obb = _frame_result.obb
-                    # meas carries the OBB axis angle (see cached path above).
+
+                # Get detections either from cache or by detection
+                if use_cached_detections and inference_runner is not None:
+                    # Load per-frame results from InferenceRunner caches (YOLO OBB path).
+                    # All filtering (ROI, confidence, IOU) was applied during the batch pass.
+                    _frame_result = inference_runner.load_frame(actual_frame_index)
+                    if (
+                        _frame_result is not None
+                        and _frame_result.obb.num_detections > 0
+                    ):
+                        _obb = _frame_result.obb
+                        # meas carries the OBB axis angle (legacy convention, [0, pi));
+                        # downstream resolve_tracking_theta picks between theta and
+                        # theta+pi using motion history + headtail heading_hints.
+                        meas = frame_result_to_meas(_obb.centroids, _obb.angles)
+                        meas_arena = self.arena_layout.arena_of_points(
+                            _obb.centroids,
+                            frame_size=(
+                                (target_w, target_h) if target_w is not None else None
+                            ),
+                        )
+                        assert isinstance(meas_arena, np.ndarray) and len(
+                            meas_arena
+                        ) == len(meas)
+                        sizes = [
+                            float(_obb.sizes[i]) for i in range(_obb.num_detections)
+                        ]
+                        shapes = [
+                            (float(_obb.shapes[i, 0]), float(_obb.shapes[i, 1]))
+                            for i in range(_obb.num_detections)
+                        ]
+                        detection_confidences = [
+                            float(_obb.confidences[i])
+                            for i in range(_obb.num_detections)
+                        ]
+                        filtered_obb_corners = [
+                            _obb.corners[i] for i in range(_obb.num_detections)
+                        ]
+                        detection_ids = [
+                            int(_obb.detection_ids[i])
+                            for i in range(_obb.num_detections)
+                        ]
+                        raw_detection_ids = detection_ids
+                        raw_meas = meas
+                        raw_sizes = sizes
+                        raw_shapes = shapes
+                        raw_confidences = detection_confidences
+                        raw_obb_corners = filtered_obb_corners
+                        if _frame_result.headtail is not None:
+                            detection_headtail_heading = np.asarray(
+                                _frame_result.headtail.heading_hints, dtype=np.float32
+                            )
+                            detection_headtail_confidence = np.asarray(
+                                _frame_result.headtail.heading_confidences,
+                                dtype=np.float32,
+                            )
+                            headtail_directed_mask = np.asarray(
+                                _frame_result.headtail.directed_mask, dtype=np.uint8
+                            )
+                            raw_heading_hints = list(detection_headtail_heading)
+                            raw_heading_confidences = list(
+                                detection_headtail_confidence
+                            )
+                            raw_directed_mask = list(headtail_directed_mask)
+                        else:
+                            detection_headtail_heading = np.asarray(
+                                [], dtype=np.float32
+                            )
+                            detection_headtail_confidence = np.asarray(
+                                [], dtype=np.float32
+                            )
+                            headtail_directed_mask = np.asarray([], dtype=np.uint8)
+                            raw_heading_hints = []
+                            raw_heading_confidences = []
+                            raw_directed_mask = []
+                        raw_canonical_affines = None
+                        # Store FrameResult for Site F (live store population)
+                        _current_frame_result = _frame_result
+                    else:
+                        # Empty frame — no detections this frame
+                        meas = []
+                        meas_arena = np.zeros(0, dtype=np.int32)
+                        sizes = []
+                        shapes = []
+                        detection_confidences = []
+                        filtered_obb_corners = []
+                        detection_ids = []
+                        raw_detection_ids = []
+                        raw_meas = []
+                        raw_sizes = []
+                        raw_shapes = []
+                        raw_confidences = []
+                        raw_obb_corners = []
+                        detection_headtail_heading = np.asarray([], dtype=np.float32)
+                        detection_headtail_confidence = np.asarray([], dtype=np.float32)
+                        headtail_directed_mask = np.asarray([], dtype=np.uint8)
+                        raw_heading_hints = []
+                        raw_heading_confidences = []
+                        raw_directed_mask = []
+                        raw_canonical_affines = None
+                        _current_frame_result = _frame_result
+
+                elif (
+                    use_cached_detections
+                    and detection_method == "background_subtraction"
+                    and bgsub_runner is not None
+                ):
+                    # Backward pass: replay cached bg-sub detections (no live frame).
+                    _fr = bgsub_runner.load_frame(actual_frame_index)
+                    _obb = _fr.obb if _fr is not None else None
+                    if _obb is not None and _obb.num_detections > 0:
+                        meas = frame_result_to_meas(_obb.centroids, _obb.angles)
+                        meas_arena = self.arena_layout.arena_of_points(
+                            _obb.centroids,
+                            frame_size=(
+                                (target_w, target_h) if target_w is not None else None
+                            ),
+                        )
+                        assert isinstance(meas_arena, np.ndarray) and len(
+                            meas_arena
+                        ) == len(meas)
+                        sizes = [
+                            float(_obb.sizes[i]) for i in range(_obb.num_detections)
+                        ]
+                        shapes = [
+                            (float(_obb.shapes[i, 0]), float(_obb.shapes[i, 1]))
+                            for i in range(_obb.num_detections)
+                        ]
+                        detection_confidences = [
+                            float(_obb.confidences[i])
+                            for i in range(_obb.num_detections)
+                        ]
+                        detection_ids = [
+                            int(_obb.detection_ids[i])
+                            for i in range(_obb.num_detections)
+                        ]
+                    else:
+                        meas, sizes, shapes, detection_confidences, detection_ids = (
+                            [],
+                            [],
+                            [],
+                            [],
+                            [],
+                        )
+                        meas_arena = np.zeros(0, dtype=np.int32)
+                    filtered_obb_corners = []
+                    raw_meas = meas
+                    raw_sizes = sizes
+                    raw_shapes = shapes
+                    raw_confidences = detection_confidences
+                    raw_obb_corners = filtered_obb_corners
+                    raw_detection_ids = detection_ids
+                    raw_heading_hints = []
+                    raw_heading_confidences = []
+                    raw_directed_mask = []
+                    raw_canonical_affines = None
+
+                elif detection_method == "background_subtraction" and frame is not None:
+                    # Background subtraction detection pipeline. The InferenceRunner
+                    # bg-sub stage owns the whole sequence the worker used to inline:
+                    # grayscale + image adjustments, lighting stabilization, adaptive
+                    # background update, foreground mask, ROI intersection,
+                    # conservative split, and contour measurement. The frame MUST
+                    # already be scaled by RESIZE_FACTOR (done at frame_resize above),
+                    # and ROI_mask_current is already in that resized space, so the
+                    # stage's ROI resolver is a shape no-op. bg-sub is strictly
+                    # sequential; this loop feeds frames in ascending order.
+                    _bgsub_result = bgsub_runner.run_realtime(
+                        frame, actual_frame_index, roi_mask=ROI_mask_current
+                    )
+                    # SHOW_FG / SHOW_BG overlays read these (realtime-only; the stage
+                    # stashes the exact mask detection ran on).
+                    fg_mask = _bgsub_result.fg_mask
+                    bg_u8 = _bgsub_result.bg_u8
+                    if bg_u8 is None:
+                        # First frame(s): the background model has no history yet, so
+                        # there are no detections. Emit the raw frame and skip the
+                        # rest of the loop, matching the legacy warmup behavior.
+                        if frame is not None:
+                            self.emit_frame(frame)
+                        continue
+
+                    _obb = _bgsub_result.obb
+                    # meas carries the OBB axis angle in [0, pi); downstream
+                    # resolve_tracking_theta disambiguates theta vs theta+pi.
                     meas = frame_result_to_meas(_obb.centroids, _obb.angles)
                     meas_arena = self.arena_layout.arena_of_points(
                         _obb.centroids,
@@ -2451,1554 +2426,410 @@ class TrackingEngineCore:
                         (float(_obb.shapes[i, 0]), float(_obb.shapes[i, 1]))
                         for i in range(_obb.num_detections)
                     ]
+                    # bg-sub confidences are NaN by design (legacy); do NOT gate on them.
                     detection_confidences = [
                         float(_obb.confidences[i]) for i in range(_obb.num_detections)
                     ]
-                    filtered_obb_corners = [
-                        _obb.corners[i] for i in range(_obb.num_detections)
-                    ]
-                    detection_ids = [
-                        int(_obb.detection_ids[i]) for i in range(_obb.num_detections)
-                    ]
-                    raw_detection_ids = detection_ids
+                    # No OBB corners are drawn for background subtraction.
+                    filtered_obb_corners = []
+                    # detection_ids match legacy (frame_idx * STRIDE + slot).
+                    detection_ids = [int(did) for did in _obb.detection_ids]
                     raw_meas = meas
                     raw_sizes = sizes
                     raw_shapes = shapes
                     raw_confidences = detection_confidences
                     raw_obb_corners = filtered_obb_corners
-                    if _frame_result.headtail is not None:
-                        detection_headtail_heading = np.asarray(
-                            _frame_result.headtail.heading_hints, dtype=np.float32
+                    raw_detection_ids = detection_ids
+                    raw_heading_hints = []
+                    raw_heading_confidences = []
+                    raw_directed_mask = []
+                    raw_canonical_affines = None
+
+                elif (
+                    detection_method == "yolo_obb" and frame is not None
+                ):  # YOLO OBB realtime detection (non-cached)
+                    # InferenceRunner.run_realtime() runs the full inference stack
+                    # (OBB + headtail + CNN + pose + AprilTag) on a single frame and
+                    # returns a FrameResult.  No legacy detector is used here.  The
+                    # frame index is passed so detections are cached per-frame for the
+                    # backward pass to replay (realtime + backward support).
+                    _frame_result = inference_runner.run_realtime(
+                        frame, actual_frame_index, roi_mask=ROI_mask_current
+                    )
+                    _current_frame_result = _frame_result
+                    if (
+                        _frame_result is not None
+                        and _frame_result.obb.num_detections > 0
+                    ):
+                        _obb = _frame_result.obb
+                        # meas carries the OBB axis angle (see cached path above).
+                        meas = frame_result_to_meas(_obb.centroids, _obb.angles)
+                        meas_arena = self.arena_layout.arena_of_points(
+                            _obb.centroids,
+                            frame_size=(
+                                (target_w, target_h) if target_w is not None else None
+                            ),
                         )
-                        detection_headtail_confidence = np.asarray(
-                            _frame_result.headtail.heading_confidences, dtype=np.float32
-                        )
-                        headtail_directed_mask = np.asarray(
-                            _frame_result.headtail.directed_mask, dtype=np.uint8
-                        )
-                        raw_heading_hints = list(detection_headtail_heading)
-                        raw_heading_confidences = list(detection_headtail_confidence)
-                        raw_directed_mask = list(headtail_directed_mask)
+                        assert isinstance(meas_arena, np.ndarray) and len(
+                            meas_arena
+                        ) == len(meas)
+                        sizes = [
+                            float(_obb.sizes[i]) for i in range(_obb.num_detections)
+                        ]
+                        shapes = [
+                            (float(_obb.shapes[i, 0]), float(_obb.shapes[i, 1]))
+                            for i in range(_obb.num_detections)
+                        ]
+                        detection_confidences = [
+                            float(_obb.confidences[i])
+                            for i in range(_obb.num_detections)
+                        ]
+                        filtered_obb_corners = [
+                            _obb.corners[i] for i in range(_obb.num_detections)
+                        ]
+                        detection_ids = [
+                            int(_obb.detection_ids[i])
+                            for i in range(_obb.num_detections)
+                        ]
+                        raw_detection_ids = detection_ids
+                        raw_meas = meas
+                        raw_sizes = sizes
+                        raw_shapes = shapes
+                        raw_confidences = detection_confidences
+                        raw_obb_corners = filtered_obb_corners
+                        if _frame_result.headtail is not None:
+                            detection_headtail_heading = np.asarray(
+                                _frame_result.headtail.heading_hints, dtype=np.float32
+                            )
+                            detection_headtail_confidence = np.asarray(
+                                _frame_result.headtail.heading_confidences,
+                                dtype=np.float32,
+                            )
+                            headtail_directed_mask = np.asarray(
+                                _frame_result.headtail.directed_mask, dtype=np.uint8
+                            )
+                            raw_heading_hints = list(detection_headtail_heading)
+                            raw_heading_confidences = list(
+                                detection_headtail_confidence
+                            )
+                            raw_directed_mask = list(headtail_directed_mask)
+                        else:
+                            detection_headtail_heading = np.asarray(
+                                [], dtype=np.float32
+                            )
+                            detection_headtail_confidence = np.asarray(
+                                [], dtype=np.float32
+                            )
+                            headtail_directed_mask = np.asarray([], dtype=np.uint8)
+                            raw_heading_hints = []
+                            raw_heading_confidences = []
+                            raw_directed_mask = []
+                        raw_canonical_affines = None
                     else:
+                        # Empty frame — no detections this frame
+                        meas = []
+                        meas_arena = np.zeros(0, dtype=np.int32)
+                        sizes = []
+                        shapes = []
+                        detection_confidences = []
+                        filtered_obb_corners = []
+                        detection_ids = []
+                        raw_detection_ids = []
+                        raw_meas = []
+                        raw_sizes = []
+                        raw_shapes = []
+                        raw_confidences = []
+                        raw_obb_corners = []
                         detection_headtail_heading = np.asarray([], dtype=np.float32)
                         detection_headtail_confidence = np.asarray([], dtype=np.float32)
                         headtail_directed_mask = np.asarray([], dtype=np.uint8)
                         raw_heading_hints = []
                         raw_heading_confidences = []
                         raw_directed_mask = []
-                    raw_canonical_affines = None
+                        raw_canonical_affines = None
+
                 else:
-                    # Empty frame — no detections this frame
-                    meas = []
-                    meas_arena = np.zeros(0, dtype=np.int32)
-                    sizes = []
-                    shapes = []
-                    detection_confidences = []
-                    filtered_obb_corners = []
-                    detection_ids = []
-                    raw_detection_ids = []
-                    raw_meas = []
-                    raw_sizes = []
-                    raw_shapes = []
-                    raw_confidences = []
-                    raw_obb_corners = []
-                    detection_headtail_heading = np.asarray([], dtype=np.float32)
-                    detection_headtail_confidence = np.asarray([], dtype=np.float32)
-                    headtail_directed_mask = np.asarray([], dtype=np.uint8)
-                    raw_heading_hints = []
-                    raw_heading_confidences = []
-                    raw_directed_mask = []
-                    raw_canonical_affines = None
-
-            else:
-                # No frame and no cached detections - skip this iteration
-                if not use_cached_detections:
-                    logger.warning(
-                        f"Frame {self.frame_count}: No frame available and no cached detections"
-                    )
-                    continue
-
-            # InferenceRunner writes its own caches during run_batch_pass / run_realtime.
-            # Legacy detection_cache.add_frame() is not used for yolo_obb mode.
-            profiler.tock("detection")
-
-            # === Streaming Phase 1: Build shared analysis payload ===
-            # Constructed from filtered detections + head-tail results so
-            # downstream pose and CNN dispatchers share a single stable index.
-            if (
-                streaming_precompute_enabled
-                and detection_ids
-                and not self.backward_mode
-            ):
-                try:
-                    from hydra_suite.core.tracking.ingest.streaming_payload import (
-                        build_streaming_payload,
-                    )
-
-                    profiler.tick("streaming_payload_build")
-                    _streaming_payload = build_streaming_payload(
-                        frame_idx=actual_frame_index,
-                        raw_meas=meas,
-                        raw_obb_corners=(
-                            filtered_obb_corners
-                            if "filtered_obb_corners" in locals()
-                            else []
-                        ),
-                        raw_heading_hints=(
-                            filtered_heading_hints
-                            if "filtered_heading_hints" in locals()
-                            else []
-                        ),
-                        raw_heading_confidences=(
-                            filtered_heading_confidences
-                            if "filtered_heading_confidences" in locals()
-                            else []
-                        ),
-                        raw_directed_mask=(
-                            filtered_directed_mask
-                            if "filtered_directed_mask" in locals()
-                            else []
-                        ),
-                        raw_canonical_affines=(
-                            raw_canonical_affines
-                            if "raw_canonical_affines" in locals()
-                            else []
-                        ),
-                        detection_ids=detection_ids,
-                        input_is_bgr=True,
-                        runtime_family=str(p.get("RUNTIME_TIER", "cpu")),
-                    )
-                    profiler.tock("streaming_payload_build")
-                except Exception as _spay_err:
-                    logger.debug(
-                        "StreamingAnalysisPayload build failed (non-fatal): %s",
-                        _spay_err,
-                    )
-                    _streaming_payload = None
-            else:
-                _streaming_payload = None
-
-            # === Site F: Populate live stores from FrameResult (YOLO OBB path) ===
-            # For YOLO OBB: push CNN, pose, and AprilTag results from the FrameResult
-            # produced by InferenceRunner (load_frame or run_realtime) into the
-            # corresponding live stores so the tracking loop can look them up by
-            # frame index and detection ID.
-            if inference_runner is not None and _current_frame_result is not None:
-                _fr = _current_frame_result
-                _det_ids_arr = (
-                    np.asarray(detection_ids, dtype=np.int64)
-                    if detection_ids
-                    else np.zeros(0, dtype=np.int64)
-                )
-                if live_pose_props_cache is not None:
-                    populate_live_pose_store(
-                        live_pose_props_cache,
-                        _fr.pose,
-                        _det_ids_arr,
-                        actual_frame_index,
-                    )
-                if live_tag_obs_cache is not None:
-                    populate_live_tag_store(
-                        live_tag_obs_cache,
-                        _fr.apriltag,
-                        _det_ids_arr,
-                        actual_frame_index,
-                    )
-                for _cnn_label, _cnn_store in live_cnn_caches.items():
-                    populate_live_cnn_store(
-                        _cnn_store,
-                        _fr.cnn,
-                        _det_ids_arr,
-                        actual_frame_index,
-                        _cnn_label,
-                    )
-
-            profiler.tick("features")
-            detection_crop_quality = np.zeros(len(meas), dtype=np.float32)
-            detection_pose_heading = np.full(len(meas), np.nan, dtype=np.float32)
-            detection_pose_keypoints = [None] * len(meas)
-            detection_pose_visibility = np.zeros(len(meas), dtype=np.float32)
-            detection_directed_heading = np.full(len(meas), np.nan, dtype=np.float32)
-            detection_directed_mask = np.zeros(len(meas), dtype=np.uint8)
-            detection_headtail_confidence = np.asarray(
-                (
-                    detection_headtail_confidence
-                    if "detection_headtail_confidence" in locals()
-                    else np.zeros(len(meas), dtype=np.float32)
-                ),
-                dtype=np.float32,
-            )
-
-            if meas and shapes:
-                reference_body_size = float(params.get("REFERENCE_BODY_SIZE", 20.0))
-                for det_idx in range(min(len(meas), len(shapes))):
-                    detection_crop_quality[det_idx] = (
-                        self._estimate_detection_crop_quality(
-                            shapes[det_idx], reference_body_size
+                    # No frame and no cached detections - skip this iteration
+                    if not use_cached_detections:
+                        logger.warning(
+                            f"Frame {self.frame_count}: No frame available and no cached detections"
                         )
-                    )
-
-            # Optional pose-based geometry features and direction override.
-            if pose_direction_enabled and meas and detection_ids:
-                if pose_frame_keypoints_map_frame != actual_frame_index:
-                    pose_frame_keypoints_map = _pf_build_keypoint_map(
-                        pose_props_cache, actual_frame_index
-                    )
-                    pose_frame_keypoints_map_frame = actual_frame_index
-
-                pose_directed_mask = np.zeros(len(meas), dtype=np.uint8)
-                n_det = min(len(meas), len(detection_ids))
-                for det_idx in range(n_det):
-                    try:
-                        det_id = int(detection_ids[det_idx])
-                    except Exception:
                         continue
-                    keypoints = pose_frame_keypoints_map.get(det_id)
-                    pose_features = _pf_compute_geometry(
-                        keypoints,
-                        pose_direction_anterior_indices,
-                        pose_direction_posterior_indices,
-                        pose_min_valid_conf,
-                        ignore_indices=pose_ignore_indices,
-                    )
-                    if pose_features is None:
-                        continue
-                    visibility = float(pose_features.get("visibility", 0.0) or 0.0)
-                    detection_pose_visibility[det_idx] = visibility
-                    detection_pose_keypoints[det_idx] = _pf_normalize_keypoints(
-                        keypoints,
-                        pose_min_valid_conf,
-                        ignore_indices=pose_ignore_indices,
-                    )
-                    pose_theta = pose_features.get("heading")
-                    if pose_theta is None:
-                        continue
-                    detection_pose_heading[det_idx] = np.float32(pose_theta)
-                    if _pf_heading_reliable(
-                        detection_pose_keypoints[det_idx],
-                        visibility,
-                        min_visibility=pose_direction_min_visibility,
-                        min_valid_keypoints=pose_direction_min_keypoints,
-                    ):
-                        pose_directed_mask[det_idx] = 1
 
-            pose_overrides_headtail = bool(params.get("POSE_OVERRIDES_HEADTAIL", True))
-            if len(meas) > 0:
-                detection_directed_heading, detection_directed_mask = (
-                    _pf_build_direction_overrides(
-                        len(meas),
-                        detection_pose_heading,
-                        pose_directed_mask,
-                        detection_headtail_heading,
-                        headtail_directed_mask,
-                        pose_overrides_headtail=pose_overrides_headtail,
-                    )
-                )
+                # InferenceRunner writes its own caches during run_batch_pass / run_realtime.
+                # Legacy detection_cache.add_frame() is not used for yolo_obb mode.
+                profiler.tock("detection")
 
-            detection_theta_raw = (
-                np.array([float(m[2]) for m in meas], dtype=np.float32)
-                if meas
-                else np.zeros(0, dtype=np.float32)
-            )
-            detection_theta_resolved = detection_theta_raw.copy()
-            detection_heading_source = ["obb_axis"] * len(meas)
-            for det_idx in range(len(meas)):
-                pose_is_directed = bool(
-                    det_idx < len(pose_directed_mask) and pose_directed_mask[det_idx]
-                )
-                headtail_is_directed = bool(
-                    det_idx < len(headtail_directed_mask)
-                    and headtail_directed_mask[det_idx]
-                )
-                detection_heading_source[det_idx] = self._heading_source_for_detection(
-                    pose_is_directed,
-                    headtail_is_directed,
-                    pose_overrides_headtail,
-                )
+                # === Streaming Phase 1: Build shared analysis payload ===
+                # Constructed from filtered detections + head-tail results so
+                # downstream pose and CNN dispatchers share a single stable index.
                 if (
-                    det_idx < len(detection_directed_mask)
-                    and detection_directed_mask[det_idx]
-                    and det_idx < len(detection_directed_heading)
-                    and np.isfinite(detection_directed_heading[det_idx])
-                ):
-                    detection_theta_resolved[det_idx] = np.float32(
-                        detection_directed_heading[det_idx]
-                    )
-
-            if detected_props_cache is not None and detection_ids:
-                n_dets = len(detection_ids)
-
-                def _pad_to_n(arr, n, fill_value, dtype):
-                    a = np.asarray(arr, dtype=dtype).reshape(-1)
-                    if a.size == n:
-                        return a
-                    out = np.full(n, fill_value, dtype=dtype)
-                    out[: min(a.size, n)] = a[: min(a.size, n)]
-                    return out
-
-                ht_directed = _pad_to_n(headtail_directed_mask, n_dets, 0, np.uint8)
-                ht_heading = _pad_to_n(
-                    detection_headtail_heading, n_dets, np.nan, np.float32
-                )
-                ht_conf = _pad_to_n(
-                    detection_headtail_confidence, n_dets, 0.0, np.float32
-                )
-                detected_props_cache.add_frame(
-                    actual_frame_index,
-                    detection_ids=detection_ids,
-                    theta_raw=detection_theta_raw,
-                    theta_resolved=detection_theta_resolved,
-                    heading_source=detection_heading_source,
-                    heading_directed=detection_directed_mask,
-                    headtail_heading=ht_heading,
-                    headtail_confidence=ht_conf,
-                    headtail_directed=ht_directed,
-                )
-
-            if len(meas) >= params.get("MIN_DETECTIONS_TO_START", 1):
-                detection_counts += 1
-            else:
-                detection_counts = 0
-            if (
-                detection_counts >= max(1, params["MIN_DETECTION_COUNTS"] // 2)
-                and not detection_initialized
-            ):
-                detection_initialized = True
-                logger.info(f"Tracking initialized with {len(meas)} detections.")
-
-            # === VISUALIZATION (Skip in cached detection mode) ===
-            emit_visualization_frame = self._should_emit_visualization_frame(
-                self.frame_count,
-                params,
-            )
-            needs_overlay = (
-                not skip_visualization
-                and frame is not None
-                and (emit_visualization_frame or self.video_writer is not None)
-            )
-
-            # === VISUALIZATION (Skip in cached detection mode) ===
-            if needs_overlay:
-                overlay = frame.copy()
-
-                # Apply ROI visualization - draw cyan boundary for all detection methods
-                # The actual masking for background subtraction happens earlier in the pipeline
-                if ROI_mask_current is not None:
-                    # Compute ROI contours once and cache (mask is static).
-                    if _roi_contours_cache is None:
-                        _roi_contours_cache, _ = cv2.findContours(
-                            ROI_mask_current, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-                        )
-                    if _roi_contours_cache:
-                        # Color + resolution-aware width come from the shared
-                        # arena_overlay_style module so this preview boundary
-                        # matches the arena-setup canvas's boundary stroke.
-                        if _roi_boundary_thickness_cache is None:
-                            _roi_boundary_thickness_cache = boundary_line_width_px(
-                                min(frame.shape[0], frame.shape[1])
-                            )
-                        cv2.drawContours(
-                            overlay,
-                            _roi_contours_cache,
-                            -1,
-                            BOUNDARY_COLOR_BGR,
-                            _roi_boundary_thickness_cache,
-                            lineType=cv2.LINE_AA,
-                        )
-            else:
-                overlay = None
-
-            profiler.tock("features")
-
-            if detection_initialized and meas:
-                # --- Assignment ---
-                profiler.tick("kf_predict")
-                preds = self.kf_manager.get_predictions()
-                profiler.tock("kf_predict")
-
-                profiler.tick("cost_matrix")
-
-                # --- AprilTag detection map for this frame ---
-                _tag_det_map = build_tag_detection_map(
-                    tag_obs_cache, actual_frame_index
-                )
-                _tag_hamming_map = build_tag_detection_hamming_map(
-                    tag_obs_cache, actual_frame_index
-                )
-                _det_tag_ids = build_detection_tag_id_list(_tag_det_map, len(meas))
-
-                # The Assigner now takes the kf_manager directly to access X and S_inv
-                association_data = {
-                    "detection_confidences": detection_confidences,
-                    "detection_crop_quality": detection_crop_quality,
-                    "detection_pose_heading": detection_directed_heading,
-                    "detection_pose_keypoints": detection_pose_keypoints,
-                    "detection_pose_visibility": detection_pose_visibility,
-                    "track_pose_prototypes": track_pose_prototypes,
-                    "track_avg_step": track_avg_step,
-                }
-
-                # Load CNN frame predictions for each phase (used for Bayesian cost
-                # term and post-assignment decoder evidence).
-                _cnn_frame_preds_all = {}
-                for _state in _cnn_phase_states:
-                    _label = _state["label"]
-                    _cache = _state["cache"]
-                    try:
-                        _cnn_frame_preds_all[_label] = _cache.load(actual_frame_index)
-                    except Exception:
-                        _cnn_frame_preds_all[_label] = []
-
-                # Build Bayesian identity cost terms when the online decoder is active.
-                if _identity_online_decoder is not None:
-                    try:
-                        _cat = _identity_online_decoder._catalog
-                        _tag_label_map = {
-                            idx: str(_lbl)
-                            for idx, _lbl in enumerate(
-                                p.get("TAG_IDENTITY_LABELS", []) or []
-                            )
-                            if str(_lbl).strip()
-                        }
-                        _n_dets = len(meas)
-                        _det_log_likes: list = []
-                        for _j in range(_n_dets):
-                            _log_like = None
-                            # AprilTag contribution
-                            _tid = (
-                                _det_tag_ids[_j] if _j < len(_det_tag_ids) else NO_TAG
-                            )
-                            if _tid >= 0 and hasattr(_cat, "apriltag_log_prior"):
-                                _log_like = _cat.apriltag_log_prior(
-                                    _tid, _tag_label_map
-                                )
-                            # CNN contribution (identity-providing phases only, summed in log-space)
-                            for _state in _cnn_phase_states:
-                                if not _state.get("is_identity_provider", False):
-                                    continue
-                                _fps = _cnn_frame_preds_all.get(_state["label"], [])
-                                _pred = _fps[_j] if _j < len(_fps) else None
-                                if _pred is not None and _pred.class_names:
-                                    _cn = _pred.class_names[0]
-                                    if _cn and _cat.contains(_cn):
-                                        _conf = (
-                                            float(_pred.confidences[0])
-                                            if _pred.confidences
-                                            else 0.5
-                                        )
-                                        _known = list(_cat.labels[1:])
-                                        _n_known = max(_cat.num_known - 1, 1)
-                                        _cnn_lp = _cat.cnn_log_prior(
-                                            [
-                                                (
-                                                    _conf
-                                                    if _l == _cn
-                                                    else (1.0 - _conf) / _n_known
-                                                )
-                                                for _l in _known
-                                            ],
-                                            _known,
-                                        )
-                                        _log_like = (
-                                            _cnn_lp
-                                            if _log_like is None
-                                            else _log_like + _cnn_lp
-                                        )
-                            _det_log_likes.append(_log_like)
-                        association_data["identity_detection_log_likelihoods"] = (
-                            _det_log_likes
-                        )
-                        association_data["identity_track_log_posteriors"] = (
-                            _identity_online_decoder.get_slot_log_posteriors(
-                                list(range(N))
-                            )
-                        )
-                    except Exception:
-                        logger.debug(
-                            "Bayesian identity cost term build failed (non-fatal)",
-                            exc_info=True,
-                        )
-
-                # --- Density-aware pre-gate ---
-                # For detections inside a high-density region, apply a tighter
-                # distance threshold in the cost matrix.  This blocks long-range
-                # matches into crowded zones (the track goes occluded instead)
-                # while leaving short-range matches intact.
-                _density_flags = None
-                if self._density_regions and len(meas) > 0:
-                    try:
-                        _density_flags = get_density_region_flags(
-                            meas,
-                            self._density_regions,
-                            frame_idx=actual_frame_index,
-                            # `None` for single-arena keeps the arena tag out
-                            # of the loop entirely (structural inertness);
-                            # multi-arena scopes each region to its own arena.
-                            meas_arena=(
-                                None
-                                if self.arena_layout.is_single_arena
-                                else meas_arena
-                            ),
-                        )
-                    except Exception:
-                        logger.debug(
-                            "Density region flag computation failed (non-fatal)",
-                            exc_info=True,
-                        )
-
-                cost, spatial_candidates = assigner.compute_cost_matrix(
-                    N,
-                    meas,
-                    preds,
-                    shapes,
-                    self.kf_manager,
-                    last_shape_info,
-                    meas_ori_directed=(
-                        detection_directed_mask
-                        if len(detection_directed_mask) == len(meas)
-                        else None
-                    ),
-                    association_data=association_data,
-                    meas_arena=meas_arena,
-                )
-
-                # Tighter distance gate for density-region detections.
-                # Block (track, detection) pairs where the detection is in a
-                # density region AND the raw Euclidean distance from the track's
-                # predicted position exceeds the tighter threshold.  This
-                # prevents long-range jumps into crowded zones without
-                # distorting the cost matrix (which can push assignments to
-                # wrong detections farther away).
-                if _density_flags is not None and np.any(_density_flags):
-                    _density_factor = float(
-                        params.get("DENSITY_CONSERVATIVE_FACTOR", 0.7)
-                    )
-                    if _density_factor < 1.0:
-                        _base_max_dist = float(
-                            assigner.params.get("MAX_DISTANCE_THRESHOLD", 1000.0)
-                        )
-                        _density_max_dist = _base_max_dist * _density_factor
-                        _pred_xy = np.asarray(
-                            self.kf_manager.X[:N, :2], dtype=np.float32
-                        )
-                        _meas_xy = np.array(
-                            [meas[j][:2] for j in range(len(meas))],
-                            dtype=np.float32,
-                        )
-                        _raw_dist = np.linalg.norm(
-                            _pred_xy[:, None, :] - _meas_xy[None, :, :], axis=2
-                        )
-                        # Block long-range matches to density-region detections.
-                        _flagged_cols = np.where(_density_flags)[0]
-                        for _c in _flagged_cols:
-                            cost[_raw_dist[:, _c] >= _density_max_dist, _c] = 1e9
-
-                profiler.tock("cost_matrix")
-                profiler.tick("hungarian")
-
-                # Build committed slot map for identity-first rejoining.
-                # Gated by ASSOCIATION_IDENTITY_HINT_SCALE so that weight=0
-                # means "decoder labels tracks but does not influence which
-                # detections are assigned to which slots" — geometry alone
-                # decides associations, matching the same gate used by the
-                # Bayesian cost term.
-                _committed_slot_identities: "dict | None" = None
-                if (
-                    _identity_online_decoder is not None
-                    and params.get("ENABLE_IDENTITY_ONLINE_DECODER", False)
-                    and float(params.get("ASSOCIATION_IDENTITY_HINT_SCALE", 0.3)) > 0.0
-                ):
-                    _csmap: dict = {}
-                    for _s in range(N):
-                        _bel = _identity_online_decoder.get_belief(_s)
-                        if _bel is not None and _bel.committed_label:
-                            _csmap[_s] = _bel.committed_label
-                    _committed_slot_identities = _csmap if _csmap else None
-
-                rows, cols, free_dets, identity_rejoin_pairs = assigner.assign_tracks(
-                    cost,
-                    N,
-                    len(meas),
-                    meas,
-                    track_states,
-                    tracking_continuity,
-                    self.kf_manager,
-                    spatial_candidates,
-                    association_data=association_data,
-                    committed_slot_identities=_committed_slot_identities,
-                    missed_frames=missed_frames,
-                    meas_arena=meas_arena,
-                )
-                respawned_matches = {r for r in rows if track_states[r] == "lost"}
-                _identity_rejoin_slots = {s for s, _ in identity_rejoin_pairs}
-                profiler.tock("hungarian")
-
-                # --- Diagnostic: log large-distance assignments ---
-                if rows and self.frame_count % 10 == 0:
-                    _body = float(
-                        params.get("REFERENCE_BODY_SIZE", 20.0)
-                        * params.get("RESIZE_FACTOR", 1.0)
-                    )
-                    _max_d = float(
-                        assigner.params.get("MAX_DISTANCE_THRESHOLD", 1000.0)
-                    )
-                    _vel_gate = (
-                        float(params.get("KALMAN_MAX_VELOCITY_MULTIPLIER", 2.0)) * _body
-                    )
-                    for _r, _c in zip(rows, cols):
-                        _det_xy = np.array(meas[_c][:2], dtype=np.float32)
-                        _pred_xy_diag = self.kf_manager.X[_r, :2].copy()
-                        _raw_d = float(np.linalg.norm(_det_xy - _pred_xy_diag))
-                        _last_d = float("nan")
-                        if self.trajectories_full[_r]:
-                            _lp = self.trajectories_full[_r][-1]
-                            _last_d = float(
-                                np.linalg.norm(
-                                    _det_xy
-                                    - np.array([_lp[0], _lp[1]], dtype=np.float32)
-                                )
-                            )
-                        _state = track_states[_r]
-                        _cont = tracking_continuity[_r]
-                        _is_respawn = _r in respawned_matches
-                        if _raw_d > _body * 1.5 or _last_d > _body * 2.0:
-                            logger.warning(
-                                f"JUMP? frame={actual_frame_index} slot={_r} "
-                                f"traj={trajectory_ids[_r]} state={_state} "
-                                f"cont={_cont} respawn={_is_respawn} "
-                                f"raw_dist={_raw_d:.1f} last_dist={_last_d:.1f} "
-                                f"body={_body:.1f} MAX_DIST={_max_d:.1f} "
-                                f"VEL_GATE={_vel_gate:.1f}"
-                            )
-
-                # Confidence metrics are always computed (the opt-out toggle was retired).
-                if True:
-                    # Compute assignment confidence for matched pairs
-                    matched_pairs = list(zip(rows, cols))
-                    assignment_confidences = assigner.compute_assignment_confidence(
-                        cost, matched_pairs
-                    )
-
-                    # Get Kalman filter position uncertainties
-                    position_uncertainties = (
-                        self.kf_manager.get_position_uncertainties()
-                    )
-
-                # --- State Management ---
-                profiler.tick("state_update")
-                # Identity-rejoin slots count as matched (no trajectory reset)
-                matched = set(rows) | _identity_rejoin_slots
-                unmatched = list(set(range(N)) - matched)
-                for r in matched:
-                    missed_frames[r], track_states[r] = 0, "active"
-                for r in unmatched:
-                    missed_frames[r] += 1
-                    if missed_frames[r] >= params["LOST_THRESHOLD_FRAMES"]:
-                        track_states[r], tracking_continuity[r] = "lost", 0
-                    elif track_states[r] != "lost":
-                        track_states[r] = "occluded"
-
-                # === Identity Overhaul Phase 1: Online decoder per-frame update ===
-                # Runs after history updates so head-tail and CNN histories are
-                # current.  Consumes posterior-aware CNN evidence when available,
-                # falling back to compatibility top-1 priors only when needed.
-                if _identity_online_decoder is not None:
-                    try:
-                        from hydra_suite.core.individual.identity.evidence import (
-                            IdentityEvidence,
-                        )
-
-                        # Only clear uncommitted respawns; identity-rejoin slots keep beliefs
-                        for _r in respawned_matches:
-                            _identity_online_decoder.clear_slot(
-                                _r,
-                                reason=f"respawn at frame {actual_frame_index}",
-                                respawn_frame_idx=actual_frame_index,
-                            )
-
-                        # Decay committed beliefs for slots that are still absent
-                        if _committed_slot_identities:
-                            _still_absent_committed = [
-                                _s
-                                for _s in _committed_slot_identities
-                                if _s not in _identity_rejoin_slots
-                                and track_states[_s] == "lost"
-                            ]
-                            if _still_absent_committed:
-                                _identity_online_decoder.decay_absent_slot_beliefs(
-                                    _still_absent_committed
-                                )
-
-                        _visible_slots = [r for r in matched]
-                        _slot_evs: dict = {}
-
-                        # Build AprilTag evidence for matched detections
-                        # (includes identity-rejoin pairs so decoder gets updated)
-                        _all_matched_pairs = list(zip(rows, cols)) + list(
-                            identity_rejoin_pairs
-                        )
-                        if tag_obs_cache is not None:
-                            _tag_label_map = {
-                                idx: str(label)
-                                for idx, label in enumerate(
-                                    p.get("TAG_IDENTITY_LABELS", []) or []
-                                )
-                                if str(label).strip()
-                            }
-                            for _r, _c in _all_matched_pairs:
-                                _tid = (
-                                    _det_tag_ids[_c] if _c < len(_det_tag_ids) else -1
-                                )
-                                if _tid >= 0 and hasattr(
-                                    _identity_online_decoder, "_catalog"
-                                ):
-                                    _cat = _identity_online_decoder._catalog
-                                    if hasattr(_cat, "apriltag_log_prior"):
-                                        _lp = _cat.apriltag_log_prior(
-                                            _tid,
-                                            _tag_label_map,
-                                        )
-                                        _det_id = (
-                                            int(detection_ids[_c])
-                                            if _c < len(detection_ids)
-                                            else int(_c)
-                                        )
-                                        _ev = IdentityEvidence.from_apriltag(
-                                            actual_frame_index, _det_id, _lp
-                                        )
-                                        _slot_evs.setdefault(_r, []).append(_ev)
-
-                        # Build CNN evidence for matched detections (identity-providing
-                        # phases only). Source: the inference-time IdentityEvidenceStage
-                        # sidecar (Identity Phase 3 Task 4/5) -- a single catalog-wide
-                        # evidence cache per pass, not one per CNN phase, so rows are
-                        # filtered by source_name == this phase's label. On-disk "batch"
-                        # cache for backward/replay passes; the runner's in-progress
-                        # "live" cache (read straight from its in-memory buffer, before
-                        # flush) for realtime/streaming passes. No top-1 reconstruction
-                        # fallback: a detection with no sidecar evidence this frame is
-                        # simply skipped, matching the sidecar's own missing-observation
-                        # contract (IdentityEvidenceStage docstring).
-                        for _state in _cnn_phase_states:
-                            if not _state.get("is_identity_provider", False):
-                                continue
-                            _label = _state["label"]
-                            _evidence_cache = _state.get("evidence_cache")
-                            if _evidence_cache is None and inference_runner is not None:
-                                _evidence_cache = (
-                                    inference_runner.identity_evidence_cache
-                                )
-                            if _evidence_cache is None:
-                                continue
-                            _live_evidence_map = {
-                                int(_ev.detection_id): _ev
-                                for _ev in _evidence_cache.load_frame(
-                                    actual_frame_index
-                                )
-                                if _ev.source_name == _label
-                            }
-                            # Phase-local basis for THIS source, not the
-                            # shared global catalog (final-fix wave, CRITICAL):
-                            # each CNN phase's evidence was built against its
-                            # own phase catalog, so the remap below must be
-                            # given that phase's labels to reproduce the old
-                            # emitter's phase->global remap byte-identically.
-                            _source_labels = _evidence_cache.catalog_labels_for_source(
-                                _label
-                            )
-
-                            for _r, _c in _all_matched_pairs:
-                                _det_id = (
-                                    int(detection_ids[_c])
-                                    if _c < len(detection_ids)
-                                    else int(_c)
-                                )
-                                _cached_ev = _live_evidence_map.get(_det_id)
-                                if _cached_ev is not None and hasattr(
-                                    _identity_online_decoder, "_catalog"
-                                ):
-                                    _mapped_lp = _remap_source_log_probs_to_catalog(
-                                        _cached_ev.log_probs,
-                                        _source_labels,
-                                        _label,
-                                    )
-                                    _slot_evs.setdefault(_r, []).append(
-                                        IdentityEvidence.from_cnn(
-                                            actual_frame_index,
-                                            _det_id,
-                                            _label,
-                                            _mapped_lp,
-                                            calibration_signature=_cached_ev.calibration_signature,
-                                            runtime_signature=_cached_ev.runtime_signature,
-                                            observed_mask=_cached_ev.observed_mask,
-                                        )
-                                    )
-
-                        _online_assignments = _identity_online_decoder.update_frame(
-                            actual_frame_index, _visible_slots, _slot_evs
-                        )
-                        _identity_online_assignments = {
-                            a.slot_index: a for a in _online_assignments
-                        }
-                    except Exception as _dec_err:
-                        logger.debug(
-                            "Online identity decoder update failed (non-fatal): %s",
-                            _dec_err,
-                        )
-
-                # --- KF Update & State Update ---
-                profiler.tock("state_update")
-                profiler.tick("kf_update")
-                # Identity-rejoin pairs use the same KF correct path but skip hard reset
-                for r, c in list(zip(rows, cols)) + list(identity_rejoin_pairs):
-                    meas_x = float(meas[c][0])
-                    meas_y = float(meas[c][1])
-                    measured_theta = float(meas[c][2])
-                    directed_heading = bool(
-                        c < len(detection_directed_mask)
-                        and detection_directed_mask[c] == 1
-                    )
-                    theta_for_tracking = _pf_resolve_detection_tracking_theta(
-                        r,
-                        measured_theta,
-                        (
-                            detection_directed_heading[c]
-                            if c < len(detection_directed_heading)
-                            else float("nan")
-                        ),
-                        directed_heading,
-                        orientation_last,
-                        fallback_theta=preds[r, 2] if r < len(preds) else None,
-                    )
-                    if directed_heading:
-                        pose_direction_applied_count += 1
-                    else:
-                        pose_direction_fallback_count += 1
-
-                    if r in respawned_matches:
-                        # Hard KF reset for Phase-3 respawns.  All per-track state
-                        # is cleared here so the new trajectory starts clean.
-                        # Trajectory-ID assignment is done here (single code path with
-                        # the free_dets loop below) — never inside the assigner.
-                        trajectory_ids[r] = next_trajectory_id
-                        next_trajectory_id += 1
-                        self.trajectories_full[r].clear()
-                        trajectories_pruned[r].clear()
-                        position_deques[r].clear()
-                        track_avg_step[r] = 0.0
-                        local_counts[r] = 0
-                        orientation_last[r] = theta_for_tracking
-                        track_pose_prototypes[r] = None
-                        self.kf_manager.initialize_filter(
-                            r,
-                            np.array(
-                                [meas_x, meas_y, theta_for_tracking, 0.0, 0.0],
-                                dtype=np.float32,
-                            ),
-                        )
-                    elif r in _identity_rejoin_slots:
-                        # Soft KF reset for identity-rejoin: snap position to the
-                        # matched detection and clear stale covariance from coasting.
-                        # Trajectory state is preserved (no trajectory-ID reset) since
-                        # identity confirms this is the same animal.  Without this reset
-                        # the large P accumulated during the gap makes S near-singular
-                        # in float32, causing LinAlgError in the correction step.
-                        self.kf_manager.initialize_filter(
-                            r,
-                            np.array(
-                                [meas_x, meas_y, theta_for_tracking, 0.0, 0.0],
-                                dtype=np.float32,
-                            ),
-                        )
-
-                    corrected_meas = np.asarray(
-                        [meas_x, meas_y, theta_for_tracking], dtype=np.float32
-                    )
-                    # Scale theta measurement noise by heading confidence:
-                    # low-confidence headings get inflated R[2,2] so the KF
-                    # trusts its own prediction more than a noisy measurement.
-                    _orient_conf_for_r = 1.0
-                    if directed_heading:
-                        if c < len(pose_directed_mask) and pose_directed_mask[c]:
-                            _orient_conf_for_r = (
-                                float(detection_pose_visibility[c])
-                                if c < len(detection_pose_visibility)
-                                else 1.0
-                            )
-                        else:
-                            _orient_conf_for_r = (
-                                float(detection_headtail_confidence[c])
-                                if c < len(detection_headtail_confidence)
-                                else 1.0
-                            )
-                    _theta_r_scale = 1.0 / max(_orient_conf_for_r, 0.1)
-                    self.kf_manager.correct(
-                        r, corrected_meas, theta_r_scale=_theta_r_scale
-                    )
-                    track_x = float(self.kf_manager.X[r, 0])
-                    track_y = float(self.kf_manager.X[r, 1])
-                    if not (np.isfinite(track_x) and np.isfinite(track_y)):
-                        track_x, track_y = meas_x, meas_y
-
-                    tracking_continuity[r] += 1
-                    # Use raw detection position for the motion-gate reference so
-                    # that hysteresis / flip detection compares against what was
-                    # actually written to output (meas_x/y), not the KF posterior.
-                    position_deques[r].append((meas_x, meas_y, self.frame_count))
-                    if len(position_deques[r]) == 2:
-                        (px1, py1, pf1), (px2, py2, pf2) = position_deques[r]
-                        speed = math.hypot(px2 - px1, py2 - py1) / max(1, pf2 - pf1)
-                    else:
-                        speed = 0
-                    orientation_last[r] = self._smooth_orientation(
-                        r,
-                        theta_for_tracking,
-                        speed,
-                        params,
-                        orientation_last,
-                        position_deques,
-                        directed_heading=directed_heading,
-                    )
-                    # Feed smoothed heading back into the Kalman state so that
-                    # the KF prediction stays consistent with the orientation
-                    # actually used for tracking/display.  Without this, the KF
-                    # state diverges from orientation_last and subsequent
-                    # innovations are computed against a stale reference.
-                    if orientation_last[r] is not None and r < len(self.kf_manager.X):
-                        self.kf_manager.X[r, 2] = float(orientation_last[r])
-                    last_shape_info[r] = shapes[c]
-                    feature_alpha = float(
-                        np.clip(params.get("TRACK_FEATURE_EMA_ALPHA", 0.85), 0.0, 0.999)
-                    )
-                    high_conf_thresh = float(
-                        np.clip(
-                            params.get("ASSOCIATION_HIGH_CONFIDENCE_THRESHOLD", 0.7),
-                            0.0,
-                            1.0,
-                        )
-                    )
-                    det_conf_for_track = (
-                        float(detection_confidences[c])
-                        if c < len(detection_confidences)
-                        else 0.0
-                    )
-                    if det_conf_for_track >= high_conf_thresh:
-                        prev_avg = float(track_avg_step[r])
-                        track_avg_step[r] = (
-                            feature_alpha * prev_avg + (1.0 - feature_alpha) * speed
-                        )
-
-                    det_pose_proto = (
-                        detection_pose_keypoints[c]
-                        if c < len(detection_pose_keypoints)
-                        else None
-                    )
-                    if det_pose_proto is not None:
-                        det_pose_proto = np.asarray(det_pose_proto, dtype=np.float32)
-                        prev_pose_proto = track_pose_prototypes[r]
-                        if prev_pose_proto is None or np.shape(
-                            prev_pose_proto
-                        ) != np.shape(det_pose_proto):
-                            track_pose_prototypes[r] = det_pose_proto.copy()
-                        else:
-                            prev_pose_proto = np.asarray(
-                                prev_pose_proto, dtype=np.float32
-                            )
-                            updated = prev_pose_proto.copy()
-                            for kp_idx in range(len(det_pose_proto)):
-                                det_valid = np.isfinite(
-                                    det_pose_proto[kp_idx, 0]
-                                ) and np.isfinite(det_pose_proto[kp_idx, 1])
-                                prev_valid = np.isfinite(
-                                    updated[kp_idx, 0]
-                                ) and np.isfinite(updated[kp_idx, 1])
-                                if det_valid and prev_valid:
-                                    updated[kp_idx, :2] = (
-                                        feature_alpha * updated[kp_idx, :2]
-                                        + (1.0 - feature_alpha)
-                                        * det_pose_proto[kp_idx, :2]
-                                    )
-                                    updated[kp_idx, 2] = max(
-                                        float(updated[kp_idx, 2]),
-                                        float(det_pose_proto[kp_idx, 2]),
-                                    )
-                                elif det_valid:
-                                    updated[kp_idx] = det_pose_proto[kp_idx]
-                            track_pose_prototypes[r] = updated
-
-                    # Report the actual detection position, not the Kalman posterior or
-                    # smoothed orientation.  The KF state is preserved for internal prediction
-                    # and cost-matrix use, but every x,y,theta written to trajectories and CSV
-                    # must correspond to a real detection measurement.
-                    #
-                    # In backward+undirected mode we expose det_theta_out flipped by pi
-                    # (so the OUTPUT represents head-direction in forward time), but we
-                    # MUST keep orientation_last and the KF theta state aligned with the
-                    # internal theta_for_tracking — feeding the flipped output back into
-                    # orientation_last makes next-frame OBB-axis disambiguation pick the
-                    # opposite representative, producing a 180° per-frame oscillation in
-                    # both stored state and emitted output.
-                    det_theta_out = theta_for_tracking
-                    if self.backward_mode and not directed_heading:
-                        det_theta_out = (det_theta_out + np.pi) % (2 * np.pi)
-
-                    # Update trajectory with actual frame index
-                    pt = (meas_x, meas_y, det_theta_out, actual_frame_index)
-                    self.trajectories_full[r].append(pt)
-                    trajectories_pruned[r].append(pt)
-
-                    # Synchronise orientation_last and the KF theta state to the
-                    # internal theta_for_tracking (the value passed to KF correct()),
-                    # NOT to the emitted det_theta_out — see comment above.
-                    orientation_last[r] = float(theta_for_tracking)
-                    if r < len(self.kf_manager.X):
-                        self.kf_manager.X[r, 2] = float(theta_for_tracking)
-
-                    if self.csv_writer_thread:
-                        # Build base data row with actual frame index
-                        row_data = [
-                            r,
-                            trajectory_ids[r],
-                            local_counts[r],
-                            pt[0],
-                            pt[1],
-                            pt[2],
-                            pt[3],
-                            track_states[r],
-                        ]
-
-                        # Confidence values are always computed and emitted.
-                        det_conf = (
-                            detection_confidences[c]
-                            if c < len(detection_confidences)
-                            else 0.0
-                        )
-                        assign_conf = assignment_confidences.get(r, 0.0)
-                        pos_uncertainty = (
-                            position_uncertainties[r]
-                            if r < len(position_uncertainties)
-                            else 0.0
-                        )
-                        row_data.extend([det_conf, assign_conf, pos_uncertainty])
-
-                        # Add DetectionID (can be NaN for unmatched)
-                        det_id = (
-                            detection_ids[c] if c < len(detection_ids) else float("nan")
-                        )
-                        row_data.append(det_id)
-                        row_data.extend(_online_identity_row_values(r))
-
-                        # Add detection-level AprilTag columns (parallel to CNN)
-                        if tag_obs_cache is not None:
-                            row_data.extend(
-                                get_detection_tag_csv_values(
-                                    c,
-                                    _tag_det_map,
-                                    _tag_hamming_map,
-                                    _tag_label_map_csv,
-                                )
-                            )
-
-                        # Emitted only when n_arenas > 1: `compare.py` bails out
-                        # when the column lists differ, so an unconditional
-                        # column would break the byte-identity gate on schema
-                        # grounds alone, and would change the CSV contract for
-                        # every existing single-arena user.
-                        if not self.arena_layout.is_single_arena:
-                            row_data.append(int(self._slot_arena[r]))
-
-                        self.csv_writer_thread.enqueue(row_data)
-                        local_counts[r] += 1
-
-                # --- CSV for Unmatched & Final Respawn (Identical to Original) ---
-                if self.csv_writer_thread:
-                    for r in unmatched:
-                        # No detection for this track this frame — write NaN for
-                        # position/orientation so the raw CSV never contains values
-                        # that do not correspond to an actual detection.
-                        # Post-processing will interpolate or gap-fill these frames.
-                        row_data = [
-                            r,
-                            trajectory_ids[r],
-                            local_counts[r],
-                            float("nan"),
-                            float("nan"),
-                            float("nan"),
-                            actual_frame_index,
-                            track_states[r],
-                        ]
-
-                        # Confidence values are always computed and emitted (unmatched = 0).
-                        det_conf = 0.0
-                        assign_conf = 0.0
-                        pos_uncertainty = (
-                            position_uncertainties[r]
-                            if r < len(position_uncertainties)
-                            else 0.0
-                        )
-                        row_data.extend([det_conf, assign_conf, pos_uncertainty])
-
-                        # Add DetectionID (NaN for unmatched tracks)
-                        row_data.append(float("nan"))
-                        row_data.extend(_online_identity_row_values(r))
-
-                        # Add detection-level AprilTag columns (NaN — no detection)
-                        if tag_obs_cache is not None:
-                            row_data.extend([float("nan")] * 4)
-
-                        # Emitted only when n_arenas > 1 (see matched-row comment above).
-                        if not self.arena_layout.is_single_arena:
-                            row_data.append(int(self._slot_arena[r]))
-
-                        self.csv_writer_thread.enqueue(row_data)
-                        local_counts[r] += 1
-
-                _committed_slots_set = (
-                    set(_committed_slot_identities.keys())
-                    if _committed_slot_identities
-                    else set()
-                )
-                for d_idx in free_dets:
-                    # Arena gate for the bootstrap loop. This loop takes the
-                    # FIRST lost slot in global slot order, which without a
-                    # gate hands a detection in arena 3 to a slot belonging to
-                    # arena 0. The arena-blocked cost matrix then refuses to
-                    # ever match that track to its own arena's detections, so
-                    # the slot churns (respawn every frame) and the detection's
-                    # real arena is left permanently under-tracked -- the
-                    # single largest cross-arena leak the tiling oracle finds.
-                    # A detection outside every arena (`-1`) matches no slot
-                    # arena and therefore bootstraps nothing, mirroring the
-                    # assigner's treatment of it. Single-arena runs skip the
-                    # gate entirely, so their behaviour is byte-identical.
-                    _det_arena = None
-                    if not self.arena_layout.is_single_arena:
-                        if d_idx >= len(meas_arena):
-                            # `raise`, not a silent fall-through to None: a
-                            # short `meas_arena` would disable this gate and
-                            # silently restore the cross-arena bootstrap it
-                            # exists to prevent. Same contract as the
-                            # slot_arena length check above.
-                            raise RuntimeError(
-                                "meas_arena is shorter than the detection list "
-                                f"({len(meas_arena)} <= d_idx={d_idx}); the "
-                                "free-detection bootstrap cannot be arena-gated "
-                                "and would assign a detection to a foreign "
-                                "arena's slot."
-                            )
-                        _det_arena = int(meas_arena[d_idx])
-                    for track_idx in range(N):
-                        if (
-                            track_states[track_idx] == "lost"
-                            and track_idx not in _committed_slots_set
-                        ):
-                            if (
-                                _det_arena is not None
-                                and int(self._slot_arena[track_idx]) != _det_arena
-                            ):
-                                continue
-                            # Diagnostic: log slot reuse distance
-                            if self.trajectories_full[track_idx]:
-                                _old = self.trajectories_full[track_idx][-1]
-                                _new_xy = meas[d_idx][:2]
-                                _reuse_d = float(
-                                    np.linalg.norm(
-                                        np.array([_old[0], _old[1]])
-                                        - np.array(_new_xy[:2])
-                                    )
-                                )
-                                _body_d = float(
-                                    params.get("REFERENCE_BODY_SIZE", 20.0)
-                                    * params.get("RESIZE_FACTOR", 1.0)
-                                )
-                                if _reuse_d > _body_d * 3.0:
-                                    logger.warning(
-                                        f"SLOT_REUSE frame={actual_frame_index} "
-                                        f"slot={track_idx} old_traj="
-                                        f"{trajectory_ids[track_idx]} "
-                                        f"new_traj={next_trajectory_id} "
-                                        f"reuse_dist={_reuse_d:.1f} "
-                                        f"old=({_old[0]:.0f},{_old[1]:.0f}) "
-                                        f"new=({_new_xy[0]:.0f},"
-                                        f"{_new_xy[1]:.0f})"
-                                    )
-                            directed_heading = bool(
-                                d_idx < len(detection_directed_mask)
-                                and detection_directed_mask[d_idx] == 1
-                            )
-                            theta_measurement = float(meas[d_idx][2])
-                            if directed_heading and d_idx < len(
-                                detection_directed_heading
-                            ):
-                                directed_theta = float(
-                                    detection_directed_heading[d_idx]
-                                )
-                                if np.isfinite(directed_theta):
-                                    theta_measurement = directed_theta
-                            theta_init = self._resolve_tracking_theta(
-                                track_idx,
-                                theta_measurement,
-                                pose_directed=directed_heading,
-                                orientation_last=orientation_last,
-                                fallback_theta=(
-                                    self.kf_manager.X[track_idx, 2]
-                                    if track_idx < len(self.kf_manager.X)
-                                    else None
-                                ),
-                            )
-                            self.kf_manager.initialize_filter(
-                                track_idx,
-                                np.array(
-                                    [
-                                        meas[d_idx][0],
-                                        meas[d_idx][1],
-                                        theta_init,
-                                        0,
-                                        0,
-                                    ],
-                                    np.float32,
-                                ),
-                            )
-                            (
-                                track_states[track_idx],
-                                missed_frames[track_idx],
-                                tracking_continuity[track_idx],
-                            ) = ("active", 0, 0)
-                            self.trajectories_full[track_idx].clear()
-                            trajectories_pruned[track_idx].clear()
-                            trajectory_ids[track_idx] = next_trajectory_id
-                            orientation_last[track_idx] = theta_init
-                            last_shape_info[track_idx] = (
-                                shapes[d_idx] if d_idx < len(shapes) else None
-                            )
-                            track_pose_prototypes[track_idx] = (
-                                np.asarray(
-                                    detection_pose_keypoints[d_idx], dtype=np.float32
-                                ).copy()
-                                if (
-                                    d_idx < len(detection_pose_keypoints)
-                                    and detection_pose_keypoints[d_idx] is not None
-                                )
-                                else None
-                            )
-                            track_avg_step[track_idx] = 0.0
-                            position_deques[track_idx].clear()
-                            position_deques[track_idx].append(
-                                (
-                                    float(meas[d_idx][0]),
-                                    float(meas[d_idx][1]),
-                                    self.frame_count,
-                                )
-                            )
-                            local_counts[track_idx] = 0
-                            next_trajectory_id += 1
-                            break
-
-                profiler.tock("kf_update")
-
-            elif detection_initialized:
-                # No detections this frame — still advance the KF so predictions
-                # don't freeze and costs are computed from a fresh prior on the next
-                # detection frame.  Mark all tracks as occluded/lost and write NaN
-                # CSV rows so every frame has an entry (required by post-processing).
-                profiler.tick("kf_predict")
-                self.kf_manager.predict()
-                profiler.tock("kf_predict")
-
-                for r in range(N):
-                    missed_frames[r] += 1
-                    if missed_frames[r] >= params["LOST_THRESHOLD_FRAMES"]:
-                        track_states[r], tracking_continuity[r] = "lost", 0
-                    elif track_states[r] != "lost":
-                        track_states[r] = "occluded"
-
-                if self.csv_writer_thread:
-                    _pos_unc_zero = self.kf_manager.get_position_uncertainties()
-                    for r in range(N):
-                        row_data = [
-                            r,
-                            trajectory_ids[r],
-                            local_counts[r],
-                            float("nan"),
-                            float("nan"),
-                            float("nan"),
-                            actual_frame_index,
-                            track_states[r],
-                        ]
-                        pos_uncertainty = (
-                            _pos_unc_zero[r] if r < len(_pos_unc_zero) else 0.0
-                        )
-                        row_data.extend([0.0, 0.0, pos_uncertainty])
-                        row_data.append(float("nan"))  # DetectionID
-                        row_data.extend(_online_identity_row_values(r))
-                        # Add detection-level AprilTag columns (NaN — no detection)
-                        if tag_obs_cache is not None:
-                            row_data.extend([float("nan")] * 4)
-                        # Emitted only when n_arenas > 1 (see matched-row comment above).
-                        if not self.arena_layout.is_single_arena:
-                            row_data.append(int(self._slot_arena[r]))
-                        self.csv_writer_thread.enqueue(row_data)
-                        local_counts[r] += 1
-
-            # --- Individual Dataset Generation (supports YOLO OBB and BG subtraction) ---
-            profiler.tick("individual_dataset")
-            if individual_generator is not None and meas:
-                # Get track and trajectory IDs for matched detections
-                # cols contains the detection indices that were matched to tracks (rows)
-                matched_track_ids = []
-                matched_traj_ids = []
-
-                if (
-                    detection_initialized
-                    and meas
-                    and "cols" in locals()
-                    and "rows" in locals()
-                ):
-                    # Create mapping from detection index to track info
-                    det_to_track = {}
-                    for r, c in zip(rows, cols):
-                        det_to_track[c] = (r, trajectory_ids[r])
-
-                    # Build lists in detection order
-                    for det_idx in range(len(meas)):
-                        if det_idx in det_to_track:
-                            track_id, traj_id = det_to_track[det_idx]
-                            matched_track_ids.append(track_id)
-                            matched_traj_ids.append(traj_id)
-                        else:
-                            matched_track_ids.append(-1)
-                            matched_traj_ids.append(-1)
-
-                # Export all detections that already passed filtering
-                # (confidence/IOU/ROI/size), regardless of assignment state.
-                # Track/trajectory IDs are attached when available.
-                track_ids_for_dataset = (
-                    matched_track_ids if len(matched_track_ids) == len(meas) else None
-                )
-                traj_ids_for_dataset = (
-                    matched_traj_ids if len(matched_traj_ids) == len(meas) else None
-                )
-                conf_for_dataset = (
-                    detection_confidences if detection_confidences else None
-                )
-                detection_ids_for_dataset = detection_ids if detection_ids else None
-
-                # Heading hints from head-tail model for directed canonicalization.
-                _ht_hints = (
-                    list(filtered_heading_hints)
-                    if (
-                        "filtered_heading_hints" in locals()
-                        and len(filtered_heading_hints) == len(meas)
-                    )
-                    else None
-                )
-                _ht_directed = (
-                    list(headtail_directed_mask)
-                    if (
-                        "headtail_directed_mask" in locals()
-                        and len(headtail_directed_mask) == len(meas)
-                    )
-                    else None
-                )
-
-                # Motion-based velocity fallback: derive (vx, vy) per detection from
-                # the two most-recent positions stored in each track's position_deque.
-                _velocities_for_dataset = None
-                if matched_track_ids and "position_deques" in locals():
-                    _vel_list = []
-                    for _tid in matched_track_ids:
-                        if (
-                            _tid >= 0
-                            and _tid < len(position_deques)
-                            and len(position_deques[_tid]) == 2
-                        ):
-                            (_x1, _y1, _f1), (_x2, _y2, _f2) = position_deques[_tid]
-                            _dt = _f2 - _f1
-                            if _dt != 0:
-                                _vel_list.append(((_x2 - _x1) / _dt, (_y2 - _y1) / _dt))
-                            else:
-                                _vel_list.append(None)
-                        else:
-                            _vel_list.append(None)
-                    if any(v is not None for v in _vel_list):
-                        _velocities_for_dataset = _vel_list
-
-                # Use original-frame coordinates for crop extraction.
-                coord_scale_factor = 1.0 / resize_f
-
-                # Filter canonical affines to match filtered detections.
-                _canon_for_dataset = None
-                if (
-                    raw_canonical_affines is not None
-                    and raw_detection_ids
+                    streaming_precompute_enabled
                     and detection_ids
+                    and not self.backward_mode
                 ):
-                    _raw_id_map = {}
-                    for _ri, _rid in enumerate(raw_detection_ids):
-                        _raw_id_map[int(_rid)] = _ri
-                    _canon_for_dataset = []
-                    for _did in detection_ids:
-                        _ri2 = _raw_id_map.get(int(_did))
-                        if (
-                            _ri2 is not None
-                            and _ri2 < len(raw_canonical_affines)
-                            and raw_canonical_affines[_ri2] is not None
-                        ):
-                            _canon_for_dataset.append(raw_canonical_affines[_ri2])
-                        else:
-                            _canon_for_dataset.append(None)
-
-                if filtered_obb_corners:
-                    # YOLO OBB detection - use filtered OBB corners directly
-                    individual_generator.process_frame(
-                        frame=original_frame,
-                        frame_id=actual_frame_index,
-                        meas=meas,
-                        obb_corners=filtered_obb_corners,
-                        ellipse_params=None,
-                        confidences=conf_for_dataset,
-                        track_ids=track_ids_for_dataset,
-                        trajectory_ids=traj_ids_for_dataset,
-                        coord_scale_factor=coord_scale_factor,
-                        detection_ids=detection_ids_for_dataset,
-                        heading_hints=_ht_hints,
-                        directed_mask=_ht_directed,
-                        velocities=_velocities_for_dataset,
-                        canonical_affines=_canon_for_dataset,
-                    )
-                elif shapes:
-                    # Background subtraction - compute ellipse params from filtered shapes
-                    ellipse_params = []
-                    for shape in shapes:
-                        area, aspect_ratio = shape[0], shape[1]
-                        if aspect_ratio > 0 and area > 0:
-                            ax2 = np.sqrt(4 * area / (np.pi * aspect_ratio))
-                            ax1 = aspect_ratio * ax2
-                            ellipse_params.append(
-                                [ax1, ax2]
-                            )  # [major_axis, minor_axis]
-                        else:
-                            # Fallback to small circle if invalid
-                            ellipse_params.append([10.0, 10.0])
-
-                    individual_generator.process_frame(
-                        frame=original_frame,
-                        frame_id=actual_frame_index,
-                        meas=meas,
-                        obb_corners=None,
-                        ellipse_params=ellipse_params,
-                        confidences=conf_for_dataset,
-                        track_ids=track_ids_for_dataset,
-                        trajectory_ids=traj_ids_for_dataset,
-                        coord_scale_factor=coord_scale_factor,
-                        detection_ids=detection_ids_for_dataset,
-                        heading_hints=_ht_hints,
-                        directed_mask=_ht_directed,
-                        velocities=_velocities_for_dataset,
-                        canonical_affines=_canon_for_dataset,
-                    )
-
-            profiler.tock("individual_dataset")
-
-            # Emit progress signal periodically to avoid overwhelming the GUI thread
-            # We also check that total_frames is valid
-            if total_frames and total_frames > 0:
-                # Emit more frequently (every 10 frames) to show better progress feedback
-                # Especially important for batched detection where users need ETA
-                if self.frame_count % 10 == 0:
-                    percentage = int((self.frame_count * 100) / total_frames)
-
-                    # Add mode information to status text
-                    if use_cached_detections:
-                        if use_batched_detection:
-                            status_text = (
-                                f"Tracking (batched): Frame {self.frame_count}/{total_frames} "
-                                f"(abs {actual_frame_index})"
-                            )
-                        else:
-                            status_text = (
-                                f"Tracking (cached): Frame {self.frame_count}/{total_frames} "
-                                f"(abs {actual_frame_index})"
-                            )
-                    else:
-                        status_text = (
-                            f"Processing: Frame {self.frame_count}/{total_frames} "
-                            f"(abs {actual_frame_index})"
+                    try:
+                        from hydra_suite.core.tracking.ingest.streaming_payload import (
+                            build_streaming_payload,
                         )
 
-                    self._emit_progress(percentage, status_text)
+                        profiler.tick("streaming_payload_build")
+                        _streaming_payload = build_streaming_payload(
+                            frame_idx=actual_frame_index,
+                            raw_meas=meas,
+                            raw_obb_corners=(
+                                filtered_obb_corners
+                                if "filtered_obb_corners" in locals()
+                                else []
+                            ),
+                            raw_heading_hints=(
+                                filtered_heading_hints
+                                if "filtered_heading_hints" in locals()
+                                else []
+                            ),
+                            raw_heading_confidences=(
+                                filtered_heading_confidences
+                                if "filtered_heading_confidences" in locals()
+                                else []
+                            ),
+                            raw_directed_mask=(
+                                filtered_directed_mask
+                                if "filtered_directed_mask" in locals()
+                                else []
+                            ),
+                            raw_canonical_affines=(
+                                raw_canonical_affines
+                                if "raw_canonical_affines" in locals()
+                                else []
+                            ),
+                            detection_ids=detection_ids,
+                            input_is_bgr=True,
+                            runtime_family=str(p.get("RUNTIME_TIER", "cpu")),
+                        )
+                        profiler.tock("streaming_payload_build")
+                    except Exception as _spay_err:
+                        logger.debug(
+                            "StreamingAnalysisPayload build failed (non-fatal): %s",
+                            _spay_err,
+                        )
+                        _streaming_payload = None
+                else:
+                    _streaming_payload = None
 
-            # --- Visualization, Output & Loop Maintenance ---
-            viz_free_mode = params.get("VISUALIZATION_FREE_MODE", False)
+                # === Site F: Populate live stores from FrameResult (YOLO OBB path) ===
+                # For YOLO OBB: push CNN, pose, and AprilTag results from the FrameResult
+                # produced by InferenceRunner (load_frame or run_realtime) into the
+                # corresponding live stores so the tracking loop can look them up by
+                # frame index and detection ID.
+                if inference_runner is not None and _current_frame_result is not None:
+                    _fr = _current_frame_result
+                    _det_ids_arr = (
+                        np.asarray(detection_ids, dtype=np.int64)
+                        if detection_ids
+                        else np.zeros(0, dtype=np.int64)
+                    )
+                    if live_pose_props_cache is not None:
+                        populate_live_pose_store(
+                            live_pose_props_cache,
+                            _fr.pose,
+                            _det_ids_arr,
+                            actual_frame_index,
+                        )
+                    if live_tag_obs_cache is not None:
+                        populate_live_tag_store(
+                            live_tag_obs_cache,
+                            _fr.apriltag,
+                            _det_ids_arr,
+                            actual_frame_index,
+                        )
+                    for _cnn_label, _cnn_store in live_cnn_caches.items():
+                        populate_live_cnn_store(
+                            _cnn_store,
+                            _fr.cnn,
+                            _det_ids_arr,
+                            actual_frame_index,
+                            _cnn_label,
+                        )
 
-            if not viz_free_mode and overlay is not None:
-                profiler.tick("visualization")
-                # Incrementally prune old trajectory points instead of
-                # rebuilding from trajectories_full every frame.
-                _traj_horizon = int(params["TRAJECTORY_HISTORY_SECONDS"])
-                if _traj_horizon >= 0:
-                    _cutoff = self.frame_count - _traj_horizon
-                    for _tp_list in trajectories_pruned:
-                        while _tp_list and _tp_list[0][3] < _cutoff:
-                            _tp_list.pop(0)
-
-                self._draw_overlays(
-                    overlay,
-                    params,
-                    trajectories_pruned,
-                    track_states,
-                    trajectory_ids,
-                    tracking_continuity,
-                    fg_mask,
-                    bg_u8,
-                    yolo_results,
-                    filtered_obb_corners,  # Pass OBB corners for visualization
-                    # Derive per-slot identity labels for visualization: prefer the
-                    # committed belief label, then the current-frame assignment label.
-                    # Falls back to empty string (→ trajectory ID display) when the
-                    # online decoder is not active or no label has been assigned yet.
-                    identity_labels=(
-                        [
-                            (
-                                (
-                                    _identity_online_decoder.get_belief(
-                                        r
-                                    ).committed_label
-                                    if _identity_online_decoder.get_belief(r)
-                                    is not None
-                                    and _identity_online_decoder.get_belief(
-                                        r
-                                    ).committed_label
-                                    else None
-                                )
-                                or (
-                                    _identity_online_assignments[r].label
-                                    if r in _identity_online_assignments
-                                    and _identity_online_assignments[r].label
-                                    else ""
-                                )
-                            )
-                            for r in range(len(trajectory_ids))
-                        ]
-                        if _identity_online_decoder is not None
-                        else None
-                    ),
+                profiler.tick("features")
+                detection_crop_quality = np.zeros(len(meas), dtype=np.float32)
+                detection_pose_heading = np.full(len(meas), np.nan, dtype=np.float32)
+                detection_pose_keypoints = [None] * len(meas)
+                detection_pose_visibility = np.zeros(len(meas), dtype=np.float32)
+                detection_directed_heading = np.full(
+                    len(meas), np.nan, dtype=np.float32
                 )
-                profiler.tock("visualization")
+                detection_directed_mask = np.zeros(len(meas), dtype=np.uint8)
+                detection_headtail_confidence = np.asarray(
+                    (
+                        detection_headtail_confidence
+                        if "detection_headtail_confidence" in locals()
+                        else np.zeros(len(meas), dtype=np.float32)
+                    ),
+                    dtype=np.float32,
+                )
 
-                profiler.tick("video_write")
-                if self.video_writer:
-                    self.video_writer.write(overlay)
-                profiler.tock("video_write")
+                if meas and shapes:
+                    reference_body_size = float(params.get("REFERENCE_BODY_SIZE", 20.0))
+                    for det_idx in range(min(len(meas), len(shapes))):
+                        detection_crop_quality[det_idx] = (
+                            self._estimate_detection_crop_quality(
+                                shapes[det_idx], reference_body_size
+                            )
+                        )
 
-                if emit_visualization_frame:
-                    profiler.tick("gui_emit")
-                    # For YOLO with ROI, draw boundary overlay before emitting
+                # Optional pose-based geometry features and direction override.
+                if pose_direction_enabled and meas and detection_ids:
+                    if pose_frame_keypoints_map_frame != actual_frame_index:
+                        pose_frame_keypoints_map = _pf_build_keypoint_map(
+                            pose_props_cache, actual_frame_index
+                        )
+                        pose_frame_keypoints_map_frame = actual_frame_index
+
+                    pose_directed_mask = np.zeros(len(meas), dtype=np.uint8)
+                    n_det = min(len(meas), len(detection_ids))
+                    for det_idx in range(n_det):
+                        try:
+                            det_id = int(detection_ids[det_idx])
+                        except Exception:
+                            continue
+                        keypoints = pose_frame_keypoints_map.get(det_id)
+                        pose_features = _pf_compute_geometry(
+                            keypoints,
+                            pose_direction_anterior_indices,
+                            pose_direction_posterior_indices,
+                            pose_min_valid_conf,
+                            ignore_indices=pose_ignore_indices,
+                        )
+                        if pose_features is None:
+                            continue
+                        visibility = float(pose_features.get("visibility", 0.0) or 0.0)
+                        detection_pose_visibility[det_idx] = visibility
+                        detection_pose_keypoints[det_idx] = _pf_normalize_keypoints(
+                            keypoints,
+                            pose_min_valid_conf,
+                            ignore_indices=pose_ignore_indices,
+                        )
+                        pose_theta = pose_features.get("heading")
+                        if pose_theta is None:
+                            continue
+                        detection_pose_heading[det_idx] = np.float32(pose_theta)
+                        if _pf_heading_reliable(
+                            detection_pose_keypoints[det_idx],
+                            visibility,
+                            min_visibility=pose_direction_min_visibility,
+                            min_valid_keypoints=pose_direction_min_keypoints,
+                        ):
+                            pose_directed_mask[det_idx] = 1
+
+                pose_overrides_headtail = bool(
+                    params.get("POSE_OVERRIDES_HEADTAIL", True)
+                )
+                if len(meas) > 0:
+                    detection_directed_heading, detection_directed_mask = (
+                        _pf_build_direction_overrides(
+                            len(meas),
+                            detection_pose_heading,
+                            pose_directed_mask,
+                            detection_headtail_heading,
+                            headtail_directed_mask,
+                            pose_overrides_headtail=pose_overrides_headtail,
+                        )
+                    )
+
+                detection_theta_raw = (
+                    np.array([float(m[2]) for m in meas], dtype=np.float32)
+                    if meas
+                    else np.zeros(0, dtype=np.float32)
+                )
+                detection_theta_resolved = detection_theta_raw.copy()
+                detection_heading_source = ["obb_axis"] * len(meas)
+                for det_idx in range(len(meas)):
+                    pose_is_directed = bool(
+                        det_idx < len(pose_directed_mask)
+                        and pose_directed_mask[det_idx]
+                    )
+                    headtail_is_directed = bool(
+                        det_idx < len(headtail_directed_mask)
+                        and headtail_directed_mask[det_idx]
+                    )
+                    detection_heading_source[det_idx] = (
+                        self._heading_source_for_detection(
+                            pose_is_directed,
+                            headtail_is_directed,
+                            pose_overrides_headtail,
+                        )
+                    )
                     if (
-                        detection_method != "background_subtraction"
-                        and ROI_mask_current is not None
+                        det_idx < len(detection_directed_mask)
+                        and detection_directed_mask[det_idx]
+                        and det_idx < len(detection_directed_heading)
+                        and np.isfinite(detection_directed_heading[det_idx])
                     ):
-                        # Reuse cached ROI contours (computed once above).
+                        detection_theta_resolved[det_idx] = np.float32(
+                            detection_directed_heading[det_idx]
+                        )
+
+                if detected_props_cache is not None and detection_ids:
+                    n_dets = len(detection_ids)
+
+                    def _pad_to_n(arr, n, fill_value, dtype):
+                        a = np.asarray(arr, dtype=dtype).reshape(-1)
+                        if a.size == n:
+                            return a
+                        out = np.full(n, fill_value, dtype=dtype)
+                        out[: min(a.size, n)] = a[: min(a.size, n)]
+                        return out
+
+                    ht_directed = _pad_to_n(headtail_directed_mask, n_dets, 0, np.uint8)
+                    ht_heading = _pad_to_n(
+                        detection_headtail_heading, n_dets, np.nan, np.float32
+                    )
+                    ht_conf = _pad_to_n(
+                        detection_headtail_confidence, n_dets, 0.0, np.float32
+                    )
+                    detected_props_cache.add_frame(
+                        actual_frame_index,
+                        detection_ids=detection_ids,
+                        theta_raw=detection_theta_raw,
+                        theta_resolved=detection_theta_resolved,
+                        heading_source=detection_heading_source,
+                        heading_directed=detection_directed_mask,
+                        headtail_heading=ht_heading,
+                        headtail_confidence=ht_conf,
+                        headtail_directed=ht_directed,
+                    )
+
+                if len(meas) >= params.get("MIN_DETECTIONS_TO_START", 1):
+                    detection_counts += 1
+                else:
+                    detection_counts = 0
+                if (
+                    detection_counts >= max(1, params["MIN_DETECTION_COUNTS"] // 2)
+                    and not detection_initialized
+                ):
+                    detection_initialized = True
+                    logger.info(f"Tracking initialized with {len(meas)} detections.")
+
+                # === VISUALIZATION (Skip in cached detection mode) ===
+                emit_visualization_frame = self._should_emit_visualization_frame(
+                    self.frame_count,
+                    params,
+                )
+                needs_overlay = (
+                    not skip_visualization
+                    and frame is not None
+                    and (emit_visualization_frame or self.video_writer is not None)
+                )
+
+                # === VISUALIZATION (Skip in cached detection mode) ===
+                if needs_overlay:
+                    overlay = frame.copy()
+
+                    # Apply ROI visualization - draw cyan boundary for all detection methods
+                    # The actual masking for background subtraction happens earlier in the pipeline
+                    if ROI_mask_current is not None:
+                        # Compute ROI contours once and cache (mask is static).
                         if _roi_contours_cache is None:
                             _roi_contours_cache, _ = cv2.findContours(
                                 ROI_mask_current,
@@ -4006,10 +2837,9 @@ class TrackingEngineCore:
                                 cv2.CHAIN_APPROX_SIMPLE,
                             )
                         if _roi_contours_cache:
-                            # Color + resolution-aware width come from the
-                            # shared arena_overlay_style module so this
-                            # preview boundary matches the arena-setup
-                            # canvas's boundary stroke.
+                            # Color + resolution-aware width come from the shared
+                            # arena_overlay_style module so this preview boundary
+                            # matches the arena-setup canvas's boundary stroke.
                             if _roi_boundary_thickness_cache is None:
                                 _roi_boundary_thickness_cache = boundary_line_width_px(
                                     min(frame.shape[0], frame.shape[1])
@@ -4022,49 +2852,1298 @@ class TrackingEngineCore:
                                 _roi_boundary_thickness_cache,
                                 lineType=cv2.LINE_AA,
                             )
+                else:
+                    overlay = None
 
-                    self.emit_frame(overlay)
-                    profiler.tock("gui_emit")
+                profiler.tock("features")
 
-            # === Real-time Stats (Always emit, even in viz-free mode) ===
-            current_time = time.time()
-            self.frame_times.append(current_time)
+                if detection_initialized and meas:
+                    # --- Assignment ---
+                    profiler.tick("kf_predict")
+                    preds = self.kf_manager.get_predictions()
+                    profiler.tock("kf_predict")
 
-            # Calculate FPS from recent frames
-            if len(self.frame_times) >= 2:
-                time_span = self.frame_times[-1] - self.frame_times[0]
-                current_fps = (
-                    (len(self.frame_times) - 1) / time_span if time_span > 0 else 0
-                )
-            else:
-                current_fps = 0
+                    profiler.tick("cost_matrix")
 
-            # Calculate elapsed and ETA
-            if self.start_time is None:
-                self.start_time = start_time
-            elapsed = current_time - self.start_time
+                    # --- AprilTag detection map for this frame ---
+                    _tag_det_map = build_tag_detection_map(
+                        tag_obs_cache, actual_frame_index
+                    )
+                    _tag_hamming_map = build_tag_detection_hamming_map(
+                        tag_obs_cache, actual_frame_index
+                    )
+                    _det_tag_ids = build_detection_tag_id_list(_tag_det_map, len(meas))
 
-            if total_frames and self.frame_count > 0:
-                frames_remaining = total_frames - self.frame_count
-                eta = (
-                    (frames_remaining / self.frame_count) * elapsed
-                    if self.frame_count > 0
-                    else 0
-                )
-            else:
-                eta = 0
+                    # The Assigner now takes the kf_manager directly to access X and S_inv
+                    association_data = {
+                        "detection_confidences": detection_confidences,
+                        "detection_crop_quality": detection_crop_quality,
+                        "detection_pose_heading": detection_directed_heading,
+                        "detection_pose_keypoints": detection_pose_keypoints,
+                        "detection_pose_visibility": detection_pose_visibility,
+                        "track_pose_prototypes": track_pose_prototypes,
+                        "track_avg_step": track_avg_step,
+                    }
 
-            # Emit stats every 10 frames to avoid overwhelming the UI
-            if self.frame_count % 10 == 0:
-                self._emit_stats({"fps": current_fps, "elapsed": elapsed, "eta": eta})
+                    # Load CNN frame predictions for each phase (used for Bayesian cost
+                    # term and post-assignment decoder evidence).
+                    _cnn_frame_preds_all = {}
+                    for _state in _cnn_phase_states:
+                        _label = _state["label"]
+                        _cache = _state["cache"]
+                        try:
+                            _cnn_frame_preds_all[_label] = _cache.load(
+                                actual_frame_index
+                            )
+                        except Exception:
+                            _cnn_frame_preds_all[_label] = []
 
-            # Finalize profiling for this frame and log periodically
-            profiler.end_frame()
-            profiler.log_periodic(100)
+                    # Build Bayesian identity cost terms when the online decoder is active.
+                    if _identity_online_decoder is not None:
+                        try:
+                            _cat = _identity_online_decoder._catalog
+                            _tag_label_map = {
+                                idx: str(_lbl)
+                                for idx, _lbl in enumerate(
+                                    p.get("TAG_IDENTITY_LABELS", []) or []
+                                )
+                                if str(_lbl).strip()
+                            }
+                            _n_dets = len(meas)
+                            _det_log_likes: list = []
+                            for _j in range(_n_dets):
+                                _log_like = None
+                                # AprilTag contribution
+                                _tid = (
+                                    _det_tag_ids[_j]
+                                    if _j < len(_det_tag_ids)
+                                    else NO_TAG
+                                )
+                                if _tid >= 0 and hasattr(_cat, "apriltag_log_prior"):
+                                    _log_like = _cat.apriltag_log_prior(
+                                        _tid, _tag_label_map
+                                    )
+                                # CNN contribution (identity-providing phases only, summed in log-space)
+                                for _state in _cnn_phase_states:
+                                    if not _state.get("is_identity_provider", False):
+                                        continue
+                                    _fps = _cnn_frame_preds_all.get(_state["label"], [])
+                                    _pred = _fps[_j] if _j < len(_fps) else None
+                                    if _pred is not None and _pred.class_names:
+                                        _cn = _pred.class_names[0]
+                                        if _cn and _cat.contains(_cn):
+                                            _conf = (
+                                                float(_pred.confidences[0])
+                                                if _pred.confidences
+                                                else 0.5
+                                            )
+                                            _known = list(_cat.labels[1:])
+                                            _n_known = max(_cat.num_known - 1, 1)
+                                            _cnn_lp = _cat.cnn_log_prior(
+                                                [
+                                                    (
+                                                        _conf
+                                                        if _l == _cn
+                                                        else (1.0 - _conf) / _n_known
+                                                    )
+                                                    for _l in _known
+                                                ],
+                                                _known,
+                                            )
+                                            _log_like = (
+                                                _cnn_lp
+                                                if _log_like is None
+                                                else _log_like + _cnn_lp
+                                            )
+                                _det_log_likes.append(_log_like)
+                            association_data["identity_detection_log_likelihoods"] = (
+                                _det_log_likes
+                            )
+                            association_data["identity_track_log_posteriors"] = (
+                                _identity_online_decoder.get_slot_log_posteriors(
+                                    list(range(N))
+                                )
+                            )
+                        except Exception:
+                            logger.debug(
+                                "Bayesian identity cost term build failed (non-fatal)",
+                                exc_info=True,
+                            )
 
-            elapsed = time.time() - start_time
-            if elapsed > 0:
-                fps_list.append(self.frame_count / elapsed)
+                    # --- Density-aware pre-gate ---
+                    # For detections inside a high-density region, apply a tighter
+                    # distance threshold in the cost matrix.  This blocks long-range
+                    # matches into crowded zones (the track goes occluded instead)
+                    # while leaving short-range matches intact.
+                    _density_flags = None
+                    if self._density_regions and len(meas) > 0:
+                        try:
+                            _density_flags = get_density_region_flags(
+                                meas,
+                                self._density_regions,
+                                frame_idx=actual_frame_index,
+                                # `None` for single-arena keeps the arena tag out
+                                # of the loop entirely (structural inertness);
+                                # multi-arena scopes each region to its own arena.
+                                meas_arena=(
+                                    None
+                                    if self.arena_layout.is_single_arena
+                                    else meas_arena
+                                ),
+                            )
+                        except Exception:
+                            logger.debug(
+                                "Density region flag computation failed (non-fatal)",
+                                exc_info=True,
+                            )
+
+                    cost, spatial_candidates = assigner.compute_cost_matrix(
+                        N,
+                        meas,
+                        preds,
+                        shapes,
+                        self.kf_manager,
+                        last_shape_info,
+                        meas_ori_directed=(
+                            detection_directed_mask
+                            if len(detection_directed_mask) == len(meas)
+                            else None
+                        ),
+                        association_data=association_data,
+                        meas_arena=meas_arena,
+                    )
+
+                    # Tighter distance gate for density-region detections.
+                    # Block (track, detection) pairs where the detection is in a
+                    # density region AND the raw Euclidean distance from the track's
+                    # predicted position exceeds the tighter threshold.  This
+                    # prevents long-range jumps into crowded zones without
+                    # distorting the cost matrix (which can push assignments to
+                    # wrong detections farther away).
+                    if _density_flags is not None and np.any(_density_flags):
+                        _density_factor = float(
+                            params.get("DENSITY_CONSERVATIVE_FACTOR", 0.7)
+                        )
+                        if _density_factor < 1.0:
+                            _base_max_dist = float(
+                                assigner.params.get("MAX_DISTANCE_THRESHOLD", 1000.0)
+                            )
+                            _density_max_dist = _base_max_dist * _density_factor
+                            _pred_xy = np.asarray(
+                                self.kf_manager.X[:N, :2], dtype=np.float32
+                            )
+                            _meas_xy = np.array(
+                                [meas[j][:2] for j in range(len(meas))],
+                                dtype=np.float32,
+                            )
+                            _raw_dist = np.linalg.norm(
+                                _pred_xy[:, None, :] - _meas_xy[None, :, :], axis=2
+                            )
+                            # Block long-range matches to density-region detections.
+                            _flagged_cols = np.where(_density_flags)[0]
+                            for _c in _flagged_cols:
+                                cost[_raw_dist[:, _c] >= _density_max_dist, _c] = 1e9
+
+                    profiler.tock("cost_matrix")
+                    profiler.tick("hungarian")
+
+                    # Build committed slot map for identity-first rejoining.
+                    # Gated by ASSOCIATION_IDENTITY_HINT_SCALE so that weight=0
+                    # means "decoder labels tracks but does not influence which
+                    # detections are assigned to which slots" — geometry alone
+                    # decides associations, matching the same gate used by the
+                    # Bayesian cost term.
+                    _committed_slot_identities: "dict | None" = None
+                    if (
+                        _identity_online_decoder is not None
+                        and params.get("ENABLE_IDENTITY_ONLINE_DECODER", False)
+                        and float(params.get("ASSOCIATION_IDENTITY_HINT_SCALE", 0.3))
+                        > 0.0
+                    ):
+                        _csmap: dict = {}
+                        for _s in range(N):
+                            _bel = _identity_online_decoder.get_belief(_s)
+                            if _bel is not None and _bel.committed_label:
+                                _csmap[_s] = _bel.committed_label
+                        _committed_slot_identities = _csmap if _csmap else None
+
+                    rows, cols, free_dets, identity_rejoin_pairs = (
+                        assigner.assign_tracks(
+                            cost,
+                            N,
+                            len(meas),
+                            meas,
+                            track_states,
+                            tracking_continuity,
+                            self.kf_manager,
+                            spatial_candidates,
+                            association_data=association_data,
+                            committed_slot_identities=_committed_slot_identities,
+                            missed_frames=missed_frames,
+                            meas_arena=meas_arena,
+                        )
+                    )
+                    respawned_matches = {r for r in rows if track_states[r] == "lost"}
+                    _identity_rejoin_slots = {s for s, _ in identity_rejoin_pairs}
+                    profiler.tock("hungarian")
+
+                    # --- Diagnostic: log large-distance assignments ---
+                    if rows and self.frame_count % 10 == 0:
+                        _body = float(
+                            params.get("REFERENCE_BODY_SIZE", 20.0)
+                            * params.get("RESIZE_FACTOR", 1.0)
+                        )
+                        _max_d = float(
+                            assigner.params.get("MAX_DISTANCE_THRESHOLD", 1000.0)
+                        )
+                        _vel_gate = (
+                            float(params.get("KALMAN_MAX_VELOCITY_MULTIPLIER", 2.0))
+                            * _body
+                        )
+                        for _r, _c in zip(rows, cols):
+                            _det_xy = np.array(meas[_c][:2], dtype=np.float32)
+                            _pred_xy_diag = self.kf_manager.X[_r, :2].copy()
+                            _raw_d = float(np.linalg.norm(_det_xy - _pred_xy_diag))
+                            _last_d = float("nan")
+                            if self.trajectories_full[_r]:
+                                _lp = self.trajectories_full[_r][-1]
+                                _last_d = float(
+                                    np.linalg.norm(
+                                        _det_xy
+                                        - np.array([_lp[0], _lp[1]], dtype=np.float32)
+                                    )
+                                )
+                            _state = track_states[_r]
+                            _cont = tracking_continuity[_r]
+                            _is_respawn = _r in respawned_matches
+                            if _raw_d > _body * 1.5 or _last_d > _body * 2.0:
+                                logger.warning(
+                                    f"JUMP? frame={actual_frame_index} slot={_r} "
+                                    f"traj={trajectory_ids[_r]} state={_state} "
+                                    f"cont={_cont} respawn={_is_respawn} "
+                                    f"raw_dist={_raw_d:.1f} last_dist={_last_d:.1f} "
+                                    f"body={_body:.1f} MAX_DIST={_max_d:.1f} "
+                                    f"VEL_GATE={_vel_gate:.1f}"
+                                )
+
+                    # Confidence metrics are always computed (the opt-out toggle was retired).
+                    if True:
+                        # Compute assignment confidence for matched pairs
+                        matched_pairs = list(zip(rows, cols))
+                        assignment_confidences = assigner.compute_assignment_confidence(
+                            cost, matched_pairs
+                        )
+
+                        # Get Kalman filter position uncertainties
+                        position_uncertainties = (
+                            self.kf_manager.get_position_uncertainties()
+                        )
+
+                    # --- State Management ---
+                    profiler.tick("state_update")
+                    # Identity-rejoin slots count as matched (no trajectory reset)
+                    matched = set(rows) | _identity_rejoin_slots
+                    unmatched = list(set(range(N)) - matched)
+                    for r in matched:
+                        missed_frames[r], track_states[r] = 0, "active"
+                    for r in unmatched:
+                        missed_frames[r] += 1
+                        if missed_frames[r] >= params["LOST_THRESHOLD_FRAMES"]:
+                            track_states[r], tracking_continuity[r] = "lost", 0
+                        elif track_states[r] != "lost":
+                            track_states[r] = "occluded"
+
+                    # === Identity Overhaul Phase 1: Online decoder per-frame update ===
+                    # Runs after history updates so head-tail and CNN histories are
+                    # current.  Consumes posterior-aware CNN evidence when available,
+                    # falling back to compatibility top-1 priors only when needed.
+                    if _identity_online_decoder is not None:
+                        try:
+                            from hydra_suite.core.individual.identity.evidence import (
+                                IdentityEvidence,
+                            )
+
+                            # Only clear uncommitted respawns; identity-rejoin slots keep beliefs
+                            for _r in respawned_matches:
+                                _identity_online_decoder.clear_slot(
+                                    _r,
+                                    reason=f"respawn at frame {actual_frame_index}",
+                                    respawn_frame_idx=actual_frame_index,
+                                )
+
+                            # Decay committed beliefs for slots that are still absent
+                            if _committed_slot_identities:
+                                _still_absent_committed = [
+                                    _s
+                                    for _s in _committed_slot_identities
+                                    if _s not in _identity_rejoin_slots
+                                    and track_states[_s] == "lost"
+                                ]
+                                if _still_absent_committed:
+                                    _identity_online_decoder.decay_absent_slot_beliefs(
+                                        _still_absent_committed
+                                    )
+
+                            _visible_slots = [r for r in matched]
+                            _slot_evs: dict = {}
+
+                            # Build AprilTag evidence for matched detections
+                            # (includes identity-rejoin pairs so decoder gets updated)
+                            _all_matched_pairs = list(zip(rows, cols)) + list(
+                                identity_rejoin_pairs
+                            )
+                            if tag_obs_cache is not None:
+                                _tag_label_map = {
+                                    idx: str(label)
+                                    for idx, label in enumerate(
+                                        p.get("TAG_IDENTITY_LABELS", []) or []
+                                    )
+                                    if str(label).strip()
+                                }
+                                for _r, _c in _all_matched_pairs:
+                                    _tid = (
+                                        _det_tag_ids[_c]
+                                        if _c < len(_det_tag_ids)
+                                        else -1
+                                    )
+                                    if _tid >= 0 and hasattr(
+                                        _identity_online_decoder, "_catalog"
+                                    ):
+                                        _cat = _identity_online_decoder._catalog
+                                        if hasattr(_cat, "apriltag_log_prior"):
+                                            _lp = _cat.apriltag_log_prior(
+                                                _tid,
+                                                _tag_label_map,
+                                            )
+                                            _det_id = (
+                                                int(detection_ids[_c])
+                                                if _c < len(detection_ids)
+                                                else int(_c)
+                                            )
+                                            _ev = IdentityEvidence.from_apriltag(
+                                                actual_frame_index, _det_id, _lp
+                                            )
+                                            _slot_evs.setdefault(_r, []).append(_ev)
+
+                            # Build CNN evidence for matched detections (identity-providing
+                            # phases only). Source: the inference-time IdentityEvidenceStage
+                            # sidecar (Identity Phase 3 Task 4/5) -- a single catalog-wide
+                            # evidence cache per pass, not one per CNN phase, so rows are
+                            # filtered by source_name == this phase's label. On-disk "batch"
+                            # cache for backward/replay passes; the runner's in-progress
+                            # "live" cache (read straight from its in-memory buffer, before
+                            # flush) for realtime/streaming passes. No top-1 reconstruction
+                            # fallback: a detection with no sidecar evidence this frame is
+                            # simply skipped, matching the sidecar's own missing-observation
+                            # contract (IdentityEvidenceStage docstring).
+                            for _state in _cnn_phase_states:
+                                if not _state.get("is_identity_provider", False):
+                                    continue
+                                _label = _state["label"]
+                                _evidence_cache = _state.get("evidence_cache")
+                                if (
+                                    _evidence_cache is None
+                                    and inference_runner is not None
+                                ):
+                                    _evidence_cache = (
+                                        inference_runner.identity_evidence_cache
+                                    )
+                                if _evidence_cache is None:
+                                    continue
+                                _live_evidence_map = {
+                                    int(_ev.detection_id): _ev
+                                    for _ev in _evidence_cache.load_frame(
+                                        actual_frame_index
+                                    )
+                                    if _ev.source_name == _label
+                                }
+                                # Phase-local basis for THIS source, not the
+                                # shared global catalog (final-fix wave, CRITICAL):
+                                # each CNN phase's evidence was built against its
+                                # own phase catalog, so the remap below must be
+                                # given that phase's labels to reproduce the old
+                                # emitter's phase->global remap byte-identically.
+                                _source_labels = (
+                                    _evidence_cache.catalog_labels_for_source(_label)
+                                )
+
+                                for _r, _c in _all_matched_pairs:
+                                    _det_id = (
+                                        int(detection_ids[_c])
+                                        if _c < len(detection_ids)
+                                        else int(_c)
+                                    )
+                                    _cached_ev = _live_evidence_map.get(_det_id)
+                                    if _cached_ev is not None and hasattr(
+                                        _identity_online_decoder, "_catalog"
+                                    ):
+                                        _mapped_lp = _remap_source_log_probs_to_catalog(
+                                            _cached_ev.log_probs,
+                                            _source_labels,
+                                            _label,
+                                        )
+                                        _slot_evs.setdefault(_r, []).append(
+                                            IdentityEvidence.from_cnn(
+                                                actual_frame_index,
+                                                _det_id,
+                                                _label,
+                                                _mapped_lp,
+                                                calibration_signature=_cached_ev.calibration_signature,
+                                                runtime_signature=_cached_ev.runtime_signature,
+                                                observed_mask=_cached_ev.observed_mask,
+                                            )
+                                        )
+
+                            _online_assignments = _identity_online_decoder.update_frame(
+                                actual_frame_index, _visible_slots, _slot_evs
+                            )
+                            _identity_online_assignments = {
+                                a.slot_index: a for a in _online_assignments
+                            }
+                        except Exception as _dec_err:
+                            logger.debug(
+                                "Online identity decoder update failed (non-fatal): %s",
+                                _dec_err,
+                            )
+
+                    # --- KF Update & State Update ---
+                    profiler.tock("state_update")
+                    profiler.tick("kf_update")
+                    # Identity-rejoin pairs use the same KF correct path but skip hard reset
+                    for r, c in list(zip(rows, cols)) + list(identity_rejoin_pairs):
+                        meas_x = float(meas[c][0])
+                        meas_y = float(meas[c][1])
+                        measured_theta = float(meas[c][2])
+                        directed_heading = bool(
+                            c < len(detection_directed_mask)
+                            and detection_directed_mask[c] == 1
+                        )
+                        theta_for_tracking = _pf_resolve_detection_tracking_theta(
+                            r,
+                            measured_theta,
+                            (
+                                detection_directed_heading[c]
+                                if c < len(detection_directed_heading)
+                                else float("nan")
+                            ),
+                            directed_heading,
+                            orientation_last,
+                            fallback_theta=preds[r, 2] if r < len(preds) else None,
+                        )
+                        if directed_heading:
+                            pose_direction_applied_count += 1
+                        else:
+                            pose_direction_fallback_count += 1
+
+                        if r in respawned_matches:
+                            # Hard KF reset for Phase-3 respawns.  All per-track state
+                            # is cleared here so the new trajectory starts clean.
+                            # Trajectory-ID assignment is done here (single code path with
+                            # the free_dets loop below) — never inside the assigner.
+                            trajectory_ids[r] = next_trajectory_id
+                            next_trajectory_id += 1
+                            self.trajectories_full[r].clear()
+                            trajectories_pruned[r].clear()
+                            position_deques[r].clear()
+                            track_avg_step[r] = 0.0
+                            local_counts[r] = 0
+                            orientation_last[r] = theta_for_tracking
+                            track_pose_prototypes[r] = None
+                            self.kf_manager.initialize_filter(
+                                r,
+                                np.array(
+                                    [meas_x, meas_y, theta_for_tracking, 0.0, 0.0],
+                                    dtype=np.float32,
+                                ),
+                            )
+                        elif r in _identity_rejoin_slots:
+                            # Soft KF reset for identity-rejoin: snap position to the
+                            # matched detection and clear stale covariance from coasting.
+                            # Trajectory state is preserved (no trajectory-ID reset) since
+                            # identity confirms this is the same animal.  Without this reset
+                            # the large P accumulated during the gap makes S near-singular
+                            # in float32, causing LinAlgError in the correction step.
+                            self.kf_manager.initialize_filter(
+                                r,
+                                np.array(
+                                    [meas_x, meas_y, theta_for_tracking, 0.0, 0.0],
+                                    dtype=np.float32,
+                                ),
+                            )
+
+                        corrected_meas = np.asarray(
+                            [meas_x, meas_y, theta_for_tracking], dtype=np.float32
+                        )
+                        # Scale theta measurement noise by heading confidence:
+                        # low-confidence headings get inflated R[2,2] so the KF
+                        # trusts its own prediction more than a noisy measurement.
+                        _orient_conf_for_r = 1.0
+                        if directed_heading:
+                            if c < len(pose_directed_mask) and pose_directed_mask[c]:
+                                _orient_conf_for_r = (
+                                    float(detection_pose_visibility[c])
+                                    if c < len(detection_pose_visibility)
+                                    else 1.0
+                                )
+                            else:
+                                _orient_conf_for_r = (
+                                    float(detection_headtail_confidence[c])
+                                    if c < len(detection_headtail_confidence)
+                                    else 1.0
+                                )
+                        _theta_r_scale = 1.0 / max(_orient_conf_for_r, 0.1)
+                        self.kf_manager.correct(
+                            r, corrected_meas, theta_r_scale=_theta_r_scale
+                        )
+                        track_x = float(self.kf_manager.X[r, 0])
+                        track_y = float(self.kf_manager.X[r, 1])
+                        if not (np.isfinite(track_x) and np.isfinite(track_y)):
+                            track_x, track_y = meas_x, meas_y
+
+                        tracking_continuity[r] += 1
+                        # Use raw detection position for the motion-gate reference so
+                        # that hysteresis / flip detection compares against what was
+                        # actually written to output (meas_x/y), not the KF posterior.
+                        position_deques[r].append((meas_x, meas_y, self.frame_count))
+                        if len(position_deques[r]) == 2:
+                            (px1, py1, pf1), (px2, py2, pf2) = position_deques[r]
+                            speed = math.hypot(px2 - px1, py2 - py1) / max(1, pf2 - pf1)
+                        else:
+                            speed = 0
+                        orientation_last[r] = self._smooth_orientation(
+                            r,
+                            theta_for_tracking,
+                            speed,
+                            params,
+                            orientation_last,
+                            position_deques,
+                            directed_heading=directed_heading,
+                        )
+                        # Feed smoothed heading back into the Kalman state so that
+                        # the KF prediction stays consistent with the orientation
+                        # actually used for tracking/display.  Without this, the KF
+                        # state diverges from orientation_last and subsequent
+                        # innovations are computed against a stale reference.
+                        if orientation_last[r] is not None and r < len(
+                            self.kf_manager.X
+                        ):
+                            self.kf_manager.X[r, 2] = float(orientation_last[r])
+                        last_shape_info[r] = shapes[c]
+                        feature_alpha = float(
+                            np.clip(
+                                params.get("TRACK_FEATURE_EMA_ALPHA", 0.85), 0.0, 0.999
+                            )
+                        )
+                        high_conf_thresh = float(
+                            np.clip(
+                                params.get(
+                                    "ASSOCIATION_HIGH_CONFIDENCE_THRESHOLD", 0.7
+                                ),
+                                0.0,
+                                1.0,
+                            )
+                        )
+                        det_conf_for_track = (
+                            float(detection_confidences[c])
+                            if c < len(detection_confidences)
+                            else 0.0
+                        )
+                        if det_conf_for_track >= high_conf_thresh:
+                            prev_avg = float(track_avg_step[r])
+                            track_avg_step[r] = (
+                                feature_alpha * prev_avg + (1.0 - feature_alpha) * speed
+                            )
+
+                        det_pose_proto = (
+                            detection_pose_keypoints[c]
+                            if c < len(detection_pose_keypoints)
+                            else None
+                        )
+                        if det_pose_proto is not None:
+                            det_pose_proto = np.asarray(
+                                det_pose_proto, dtype=np.float32
+                            )
+                            prev_pose_proto = track_pose_prototypes[r]
+                            if prev_pose_proto is None or np.shape(
+                                prev_pose_proto
+                            ) != np.shape(det_pose_proto):
+                                track_pose_prototypes[r] = det_pose_proto.copy()
+                            else:
+                                prev_pose_proto = np.asarray(
+                                    prev_pose_proto, dtype=np.float32
+                                )
+                                updated = prev_pose_proto.copy()
+                                for kp_idx in range(len(det_pose_proto)):
+                                    det_valid = np.isfinite(
+                                        det_pose_proto[kp_idx, 0]
+                                    ) and np.isfinite(det_pose_proto[kp_idx, 1])
+                                    prev_valid = np.isfinite(
+                                        updated[kp_idx, 0]
+                                    ) and np.isfinite(updated[kp_idx, 1])
+                                    if det_valid and prev_valid:
+                                        updated[kp_idx, :2] = (
+                                            feature_alpha * updated[kp_idx, :2]
+                                            + (1.0 - feature_alpha)
+                                            * det_pose_proto[kp_idx, :2]
+                                        )
+                                        updated[kp_idx, 2] = max(
+                                            float(updated[kp_idx, 2]),
+                                            float(det_pose_proto[kp_idx, 2]),
+                                        )
+                                    elif det_valid:
+                                        updated[kp_idx] = det_pose_proto[kp_idx]
+                                track_pose_prototypes[r] = updated
+
+                        # Report the actual detection position, not the Kalman posterior or
+                        # smoothed orientation.  The KF state is preserved for internal prediction
+                        # and cost-matrix use, but every x,y,theta written to trajectories and CSV
+                        # must correspond to a real detection measurement.
+                        #
+                        # In backward+undirected mode we expose det_theta_out flipped by pi
+                        # (so the OUTPUT represents head-direction in forward time), but we
+                        # MUST keep orientation_last and the KF theta state aligned with the
+                        # internal theta_for_tracking — feeding the flipped output back into
+                        # orientation_last makes next-frame OBB-axis disambiguation pick the
+                        # opposite representative, producing a 180° per-frame oscillation in
+                        # both stored state and emitted output.
+                        det_theta_out = theta_for_tracking
+                        if self.backward_mode and not directed_heading:
+                            det_theta_out = (det_theta_out + np.pi) % (2 * np.pi)
+
+                        # Update trajectory with actual frame index
+                        pt = (meas_x, meas_y, det_theta_out, actual_frame_index)
+                        self.trajectories_full[r].append(pt)
+                        trajectories_pruned[r].append(pt)
+
+                        # Synchronise orientation_last and the KF theta state to the
+                        # internal theta_for_tracking (the value passed to KF correct()),
+                        # NOT to the emitted det_theta_out — see comment above.
+                        orientation_last[r] = float(theta_for_tracking)
+                        if r < len(self.kf_manager.X):
+                            self.kf_manager.X[r, 2] = float(theta_for_tracking)
+
+                        if self.csv_writer_thread:
+                            # Build base data row with actual frame index
+                            row_data = [
+                                r,
+                                trajectory_ids[r],
+                                local_counts[r],
+                                pt[0],
+                                pt[1],
+                                pt[2],
+                                pt[3],
+                                track_states[r],
+                            ]
+
+                            # Confidence values are always computed and emitted.
+                            det_conf = (
+                                detection_confidences[c]
+                                if c < len(detection_confidences)
+                                else 0.0
+                            )
+                            assign_conf = assignment_confidences.get(r, 0.0)
+                            pos_uncertainty = (
+                                position_uncertainties[r]
+                                if r < len(position_uncertainties)
+                                else 0.0
+                            )
+                            row_data.extend([det_conf, assign_conf, pos_uncertainty])
+
+                            # Add DetectionID (can be NaN for unmatched)
+                            det_id = (
+                                detection_ids[c]
+                                if c < len(detection_ids)
+                                else float("nan")
+                            )
+                            row_data.append(det_id)
+                            row_data.extend(_online_identity_row_values(r))
+
+                            # Add detection-level AprilTag columns (parallel to CNN)
+                            if tag_obs_cache is not None:
+                                row_data.extend(
+                                    get_detection_tag_csv_values(
+                                        c,
+                                        _tag_det_map,
+                                        _tag_hamming_map,
+                                        _tag_label_map_csv,
+                                    )
+                                )
+
+                            # Emitted only when n_arenas > 1: `compare.py` bails out
+                            # when the column lists differ, so an unconditional
+                            # column would break the byte-identity gate on schema
+                            # grounds alone, and would change the CSV contract for
+                            # every existing single-arena user.
+                            if not self.arena_layout.is_single_arena:
+                                row_data.append(int(self._slot_arena[r]))
+
+                            self.csv_writer_thread.enqueue(row_data)
+                            local_counts[r] += 1
+
+                    # --- CSV for Unmatched & Final Respawn (Identical to Original) ---
+                    if self.csv_writer_thread:
+                        for r in unmatched:
+                            # No detection for this track this frame — write NaN for
+                            # position/orientation so the raw CSV never contains values
+                            # that do not correspond to an actual detection.
+                            # Post-processing will interpolate or gap-fill these frames.
+                            row_data = [
+                                r,
+                                trajectory_ids[r],
+                                local_counts[r],
+                                float("nan"),
+                                float("nan"),
+                                float("nan"),
+                                actual_frame_index,
+                                track_states[r],
+                            ]
+
+                            # Confidence values are always computed and emitted (unmatched = 0).
+                            det_conf = 0.0
+                            assign_conf = 0.0
+                            pos_uncertainty = (
+                                position_uncertainties[r]
+                                if r < len(position_uncertainties)
+                                else 0.0
+                            )
+                            row_data.extend([det_conf, assign_conf, pos_uncertainty])
+
+                            # Add DetectionID (NaN for unmatched tracks)
+                            row_data.append(float("nan"))
+                            row_data.extend(_online_identity_row_values(r))
+
+                            # Add detection-level AprilTag columns (NaN — no detection)
+                            if tag_obs_cache is not None:
+                                row_data.extend([float("nan")] * 4)
+
+                            # Emitted only when n_arenas > 1 (see matched-row comment above).
+                            if not self.arena_layout.is_single_arena:
+                                row_data.append(int(self._slot_arena[r]))
+
+                            self.csv_writer_thread.enqueue(row_data)
+                            local_counts[r] += 1
+
+                    _committed_slots_set = (
+                        set(_committed_slot_identities.keys())
+                        if _committed_slot_identities
+                        else set()
+                    )
+                    for d_idx in free_dets:
+                        # Arena gate for the bootstrap loop. This loop takes the
+                        # FIRST lost slot in global slot order, which without a
+                        # gate hands a detection in arena 3 to a slot belonging to
+                        # arena 0. The arena-blocked cost matrix then refuses to
+                        # ever match that track to its own arena's detections, so
+                        # the slot churns (respawn every frame) and the detection's
+                        # real arena is left permanently under-tracked -- the
+                        # single largest cross-arena leak the tiling oracle finds.
+                        # A detection outside every arena (`-1`) matches no slot
+                        # arena and therefore bootstraps nothing, mirroring the
+                        # assigner's treatment of it. Single-arena runs skip the
+                        # gate entirely, so their behaviour is byte-identical.
+                        _det_arena = None
+                        if not self.arena_layout.is_single_arena:
+                            if d_idx >= len(meas_arena):
+                                # `raise`, not a silent fall-through to None: a
+                                # short `meas_arena` would disable this gate and
+                                # silently restore the cross-arena bootstrap it
+                                # exists to prevent. Same contract as the
+                                # slot_arena length check above.
+                                raise RuntimeError(
+                                    "meas_arena is shorter than the detection list "
+                                    f"({len(meas_arena)} <= d_idx={d_idx}); the "
+                                    "free-detection bootstrap cannot be arena-gated "
+                                    "and would assign a detection to a foreign "
+                                    "arena's slot."
+                                )
+                            _det_arena = int(meas_arena[d_idx])
+                        for track_idx in range(N):
+                            if (
+                                track_states[track_idx] == "lost"
+                                and track_idx not in _committed_slots_set
+                            ):
+                                if (
+                                    _det_arena is not None
+                                    and int(self._slot_arena[track_idx]) != _det_arena
+                                ):
+                                    continue
+                                # Diagnostic: log slot reuse distance
+                                if self.trajectories_full[track_idx]:
+                                    _old = self.trajectories_full[track_idx][-1]
+                                    _new_xy = meas[d_idx][:2]
+                                    _reuse_d = float(
+                                        np.linalg.norm(
+                                            np.array([_old[0], _old[1]])
+                                            - np.array(_new_xy[:2])
+                                        )
+                                    )
+                                    _body_d = float(
+                                        params.get("REFERENCE_BODY_SIZE", 20.0)
+                                        * params.get("RESIZE_FACTOR", 1.0)
+                                    )
+                                    if _reuse_d > _body_d * 3.0:
+                                        logger.warning(
+                                            f"SLOT_REUSE frame={actual_frame_index} "
+                                            f"slot={track_idx} old_traj="
+                                            f"{trajectory_ids[track_idx]} "
+                                            f"new_traj={next_trajectory_id} "
+                                            f"reuse_dist={_reuse_d:.1f} "
+                                            f"old=({_old[0]:.0f},{_old[1]:.0f}) "
+                                            f"new=({_new_xy[0]:.0f},"
+                                            f"{_new_xy[1]:.0f})"
+                                        )
+                                directed_heading = bool(
+                                    d_idx < len(detection_directed_mask)
+                                    and detection_directed_mask[d_idx] == 1
+                                )
+                                theta_measurement = float(meas[d_idx][2])
+                                if directed_heading and d_idx < len(
+                                    detection_directed_heading
+                                ):
+                                    directed_theta = float(
+                                        detection_directed_heading[d_idx]
+                                    )
+                                    if np.isfinite(directed_theta):
+                                        theta_measurement = directed_theta
+                                theta_init = self._resolve_tracking_theta(
+                                    track_idx,
+                                    theta_measurement,
+                                    pose_directed=directed_heading,
+                                    orientation_last=orientation_last,
+                                    fallback_theta=(
+                                        self.kf_manager.X[track_idx, 2]
+                                        if track_idx < len(self.kf_manager.X)
+                                        else None
+                                    ),
+                                )
+                                self.kf_manager.initialize_filter(
+                                    track_idx,
+                                    np.array(
+                                        [
+                                            meas[d_idx][0],
+                                            meas[d_idx][1],
+                                            theta_init,
+                                            0,
+                                            0,
+                                        ],
+                                        np.float32,
+                                    ),
+                                )
+                                (
+                                    track_states[track_idx],
+                                    missed_frames[track_idx],
+                                    tracking_continuity[track_idx],
+                                ) = ("active", 0, 0)
+                                self.trajectories_full[track_idx].clear()
+                                trajectories_pruned[track_idx].clear()
+                                trajectory_ids[track_idx] = next_trajectory_id
+                                orientation_last[track_idx] = theta_init
+                                last_shape_info[track_idx] = (
+                                    shapes[d_idx] if d_idx < len(shapes) else None
+                                )
+                                track_pose_prototypes[track_idx] = (
+                                    np.asarray(
+                                        detection_pose_keypoints[d_idx],
+                                        dtype=np.float32,
+                                    ).copy()
+                                    if (
+                                        d_idx < len(detection_pose_keypoints)
+                                        and detection_pose_keypoints[d_idx] is not None
+                                    )
+                                    else None
+                                )
+                                track_avg_step[track_idx] = 0.0
+                                position_deques[track_idx].clear()
+                                position_deques[track_idx].append(
+                                    (
+                                        float(meas[d_idx][0]),
+                                        float(meas[d_idx][1]),
+                                        self.frame_count,
+                                    )
+                                )
+                                local_counts[track_idx] = 0
+                                next_trajectory_id += 1
+                                break
+
+                    profiler.tock("kf_update")
+
+                elif detection_initialized:
+                    # No detections this frame — still advance the KF so predictions
+                    # don't freeze and costs are computed from a fresh prior on the next
+                    # detection frame.  Mark all tracks as occluded/lost and write NaN
+                    # CSV rows so every frame has an entry (required by post-processing).
+                    profiler.tick("kf_predict")
+                    self.kf_manager.predict()
+                    profiler.tock("kf_predict")
+
+                    for r in range(N):
+                        missed_frames[r] += 1
+                        if missed_frames[r] >= params["LOST_THRESHOLD_FRAMES"]:
+                            track_states[r], tracking_continuity[r] = "lost", 0
+                        elif track_states[r] != "lost":
+                            track_states[r] = "occluded"
+
+                    if self.csv_writer_thread:
+                        _pos_unc_zero = self.kf_manager.get_position_uncertainties()
+                        for r in range(N):
+                            row_data = [
+                                r,
+                                trajectory_ids[r],
+                                local_counts[r],
+                                float("nan"),
+                                float("nan"),
+                                float("nan"),
+                                actual_frame_index,
+                                track_states[r],
+                            ]
+                            pos_uncertainty = (
+                                _pos_unc_zero[r] if r < len(_pos_unc_zero) else 0.0
+                            )
+                            row_data.extend([0.0, 0.0, pos_uncertainty])
+                            row_data.append(float("nan"))  # DetectionID
+                            row_data.extend(_online_identity_row_values(r))
+                            # Add detection-level AprilTag columns (NaN — no detection)
+                            if tag_obs_cache is not None:
+                                row_data.extend([float("nan")] * 4)
+                            # Emitted only when n_arenas > 1 (see matched-row comment above).
+                            if not self.arena_layout.is_single_arena:
+                                row_data.append(int(self._slot_arena[r]))
+                            self.csv_writer_thread.enqueue(row_data)
+                            local_counts[r] += 1
+
+                # --- Individual Dataset Generation (supports YOLO OBB and BG subtraction) ---
+                profiler.tick("individual_dataset")
+                if individual_generator is not None and meas:
+                    # Get track and trajectory IDs for matched detections
+                    # cols contains the detection indices that were matched to tracks (rows)
+                    matched_track_ids = []
+                    matched_traj_ids = []
+
+                    if (
+                        detection_initialized
+                        and meas
+                        and "cols" in locals()
+                        and "rows" in locals()
+                    ):
+                        # Create mapping from detection index to track info
+                        det_to_track = {}
+                        for r, c in zip(rows, cols):
+                            det_to_track[c] = (r, trajectory_ids[r])
+
+                        # Build lists in detection order
+                        for det_idx in range(len(meas)):
+                            if det_idx in det_to_track:
+                                track_id, traj_id = det_to_track[det_idx]
+                                matched_track_ids.append(track_id)
+                                matched_traj_ids.append(traj_id)
+                            else:
+                                matched_track_ids.append(-1)
+                                matched_traj_ids.append(-1)
+
+                    # Export all detections that already passed filtering
+                    # (confidence/IOU/ROI/size), regardless of assignment state.
+                    # Track/trajectory IDs are attached when available.
+                    track_ids_for_dataset = (
+                        matched_track_ids
+                        if len(matched_track_ids) == len(meas)
+                        else None
+                    )
+                    traj_ids_for_dataset = (
+                        matched_traj_ids if len(matched_traj_ids) == len(meas) else None
+                    )
+                    conf_for_dataset = (
+                        detection_confidences if detection_confidences else None
+                    )
+                    detection_ids_for_dataset = detection_ids if detection_ids else None
+
+                    # Heading hints from head-tail model for directed canonicalization.
+                    _ht_hints = (
+                        list(filtered_heading_hints)
+                        if (
+                            "filtered_heading_hints" in locals()
+                            and len(filtered_heading_hints) == len(meas)
+                        )
+                        else None
+                    )
+                    _ht_directed = (
+                        list(headtail_directed_mask)
+                        if (
+                            "headtail_directed_mask" in locals()
+                            and len(headtail_directed_mask) == len(meas)
+                        )
+                        else None
+                    )
+
+                    # Motion-based velocity fallback: derive (vx, vy) per detection from
+                    # the two most-recent positions stored in each track's position_deque.
+                    _velocities_for_dataset = None
+                    if matched_track_ids and "position_deques" in locals():
+                        _vel_list = []
+                        for _tid in matched_track_ids:
+                            if (
+                                _tid >= 0
+                                and _tid < len(position_deques)
+                                and len(position_deques[_tid]) == 2
+                            ):
+                                (_x1, _y1, _f1), (_x2, _y2, _f2) = position_deques[_tid]
+                                _dt = _f2 - _f1
+                                if _dt != 0:
+                                    _vel_list.append(
+                                        ((_x2 - _x1) / _dt, (_y2 - _y1) / _dt)
+                                    )
+                                else:
+                                    _vel_list.append(None)
+                            else:
+                                _vel_list.append(None)
+                        if any(v is not None for v in _vel_list):
+                            _velocities_for_dataset = _vel_list
+
+                    # Use original-frame coordinates for crop extraction.
+                    coord_scale_factor = 1.0 / resize_f
+
+                    # Filter canonical affines to match filtered detections.
+                    _canon_for_dataset = None
+                    if (
+                        raw_canonical_affines is not None
+                        and raw_detection_ids
+                        and detection_ids
+                    ):
+                        _raw_id_map = {}
+                        for _ri, _rid in enumerate(raw_detection_ids):
+                            _raw_id_map[int(_rid)] = _ri
+                        _canon_for_dataset = []
+                        for _did in detection_ids:
+                            _ri2 = _raw_id_map.get(int(_did))
+                            if (
+                                _ri2 is not None
+                                and _ri2 < len(raw_canonical_affines)
+                                and raw_canonical_affines[_ri2] is not None
+                            ):
+                                _canon_for_dataset.append(raw_canonical_affines[_ri2])
+                            else:
+                                _canon_for_dataset.append(None)
+
+                    if filtered_obb_corners:
+                        # YOLO OBB detection - use filtered OBB corners directly
+                        individual_generator.process_frame(
+                            frame=original_frame,
+                            frame_id=actual_frame_index,
+                            meas=meas,
+                            obb_corners=filtered_obb_corners,
+                            ellipse_params=None,
+                            confidences=conf_for_dataset,
+                            track_ids=track_ids_for_dataset,
+                            trajectory_ids=traj_ids_for_dataset,
+                            coord_scale_factor=coord_scale_factor,
+                            detection_ids=detection_ids_for_dataset,
+                            heading_hints=_ht_hints,
+                            directed_mask=_ht_directed,
+                            velocities=_velocities_for_dataset,
+                            canonical_affines=_canon_for_dataset,
+                        )
+                    elif shapes:
+                        # Background subtraction - compute ellipse params from filtered shapes
+                        ellipse_params = []
+                        for shape in shapes:
+                            area, aspect_ratio = shape[0], shape[1]
+                            if aspect_ratio > 0 and area > 0:
+                                ax2 = np.sqrt(4 * area / (np.pi * aspect_ratio))
+                                ax1 = aspect_ratio * ax2
+                                ellipse_params.append(
+                                    [ax1, ax2]
+                                )  # [major_axis, minor_axis]
+                            else:
+                                # Fallback to small circle if invalid
+                                ellipse_params.append([10.0, 10.0])
+
+                        individual_generator.process_frame(
+                            frame=original_frame,
+                            frame_id=actual_frame_index,
+                            meas=meas,
+                            obb_corners=None,
+                            ellipse_params=ellipse_params,
+                            confidences=conf_for_dataset,
+                            track_ids=track_ids_for_dataset,
+                            trajectory_ids=traj_ids_for_dataset,
+                            coord_scale_factor=coord_scale_factor,
+                            detection_ids=detection_ids_for_dataset,
+                            heading_hints=_ht_hints,
+                            directed_mask=_ht_directed,
+                            velocities=_velocities_for_dataset,
+                            canonical_affines=_canon_for_dataset,
+                        )
+
+                profiler.tock("individual_dataset")
+
+                # Emit progress signal periodically to avoid overwhelming the GUI thread
+                # We also check that total_frames is valid
+                if total_frames and total_frames > 0:
+                    # Emit more frequently (every 10 frames) to show better progress feedback
+                    # Especially important for batched detection where users need ETA
+                    if self.frame_count % 10 == 0:
+                        percentage = int((self.frame_count * 100) / total_frames)
+
+                        # Add mode information to status text
+                        if use_cached_detections:
+                            if use_batched_detection:
+                                status_text = (
+                                    f"Tracking (batched): Frame {self.frame_count}/{total_frames} "
+                                    f"(abs {actual_frame_index})"
+                                )
+                            else:
+                                status_text = (
+                                    f"Tracking (cached): Frame {self.frame_count}/{total_frames} "
+                                    f"(abs {actual_frame_index})"
+                                )
+                        else:
+                            status_text = (
+                                f"Processing: Frame {self.frame_count}/{total_frames} "
+                                f"(abs {actual_frame_index})"
+                            )
+
+                        self._emit_progress(percentage, status_text)
+
+                # --- Visualization, Output & Loop Maintenance ---
+                viz_free_mode = params.get("VISUALIZATION_FREE_MODE", False)
+
+                if not viz_free_mode and overlay is not None:
+                    profiler.tick("visualization")
+                    # Incrementally prune old trajectory points instead of
+                    # rebuilding from trajectories_full every frame.
+                    _traj_horizon = int(params["TRAJECTORY_HISTORY_SECONDS"])
+                    if _traj_horizon >= 0:
+                        _cutoff = self.frame_count - _traj_horizon
+                        for _tp_list in trajectories_pruned:
+                            while _tp_list and _tp_list[0][3] < _cutoff:
+                                _tp_list.pop(0)
+
+                    self._draw_overlays(
+                        overlay,
+                        params,
+                        trajectories_pruned,
+                        track_states,
+                        trajectory_ids,
+                        tracking_continuity,
+                        fg_mask,
+                        bg_u8,
+                        yolo_results,
+                        filtered_obb_corners,  # Pass OBB corners for visualization
+                        # Derive per-slot identity labels for visualization: prefer the
+                        # committed belief label, then the current-frame assignment label.
+                        # Falls back to empty string (→ trajectory ID display) when the
+                        # online decoder is not active or no label has been assigned yet.
+                        identity_labels=(
+                            [
+                                (
+                                    (
+                                        _identity_online_decoder.get_belief(
+                                            r
+                                        ).committed_label
+                                        if _identity_online_decoder.get_belief(r)
+                                        is not None
+                                        and _identity_online_decoder.get_belief(
+                                            r
+                                        ).committed_label
+                                        else None
+                                    )
+                                    or (
+                                        _identity_online_assignments[r].label
+                                        if r in _identity_online_assignments
+                                        and _identity_online_assignments[r].label
+                                        else ""
+                                    )
+                                )
+                                for r in range(len(trajectory_ids))
+                            ]
+                            if _identity_online_decoder is not None
+                            else None
+                        ),
+                    )
+                    profiler.tock("visualization")
+
+                    profiler.tick("video_write")
+                    if self.video_writer:
+                        self.video_writer.write(overlay)
+                    profiler.tock("video_write")
+
+                    if emit_visualization_frame:
+                        profiler.tick("gui_emit")
+                        # For YOLO with ROI, draw boundary overlay before emitting
+                        if (
+                            detection_method != "background_subtraction"
+                            and ROI_mask_current is not None
+                        ):
+                            # Reuse cached ROI contours (computed once above).
+                            if _roi_contours_cache is None:
+                                _roi_contours_cache, _ = cv2.findContours(
+                                    ROI_mask_current,
+                                    cv2.RETR_EXTERNAL,
+                                    cv2.CHAIN_APPROX_SIMPLE,
+                                )
+                            if _roi_contours_cache:
+                                # Color + resolution-aware width come from the
+                                # shared arena_overlay_style module so this
+                                # preview boundary matches the arena-setup
+                                # canvas's boundary stroke.
+                                if _roi_boundary_thickness_cache is None:
+                                    _roi_boundary_thickness_cache = (
+                                        boundary_line_width_px(
+                                            min(frame.shape[0], frame.shape[1])
+                                        )
+                                    )
+                                cv2.drawContours(
+                                    overlay,
+                                    _roi_contours_cache,
+                                    -1,
+                                    BOUNDARY_COLOR_BGR,
+                                    _roi_boundary_thickness_cache,
+                                    lineType=cv2.LINE_AA,
+                                )
+
+                        self.emit_frame(overlay)
+                        profiler.tock("gui_emit")
+
+                # === Real-time Stats (Always emit, even in viz-free mode) ===
+                current_time = time.time()
+                self.frame_times.append(current_time)
+
+                # Calculate FPS from recent frames
+                if len(self.frame_times) >= 2:
+                    time_span = self.frame_times[-1] - self.frame_times[0]
+                    current_fps = (
+                        (len(self.frame_times) - 1) / time_span if time_span > 0 else 0
+                    )
+                else:
+                    current_fps = 0
+
+                # Calculate elapsed and ETA
+                if self.start_time is None:
+                    self.start_time = start_time
+                elapsed = current_time - self.start_time
+
+                if total_frames and self.frame_count > 0:
+                    frames_remaining = total_frames - self.frame_count
+                    eta = (
+                        (frames_remaining / self.frame_count) * elapsed
+                        if self.frame_count > 0
+                        else 0
+                    )
+                else:
+                    eta = 0
+
+                # Emit stats every 10 frames to avoid overwhelming the UI
+                if self.frame_count % 10 == 0:
+                    self._emit_stats(
+                        {"fps": current_fps, "elapsed": elapsed, "eta": eta}
+                    )
+
+                # Finalize profiling for this frame and log periodically
+                profiler.end_frame()
+                profiler.log_periodic(100)
+
+                elapsed = time.time() - start_time
+                if elapsed > 0:
+                    fps_list.append(self.frame_count / elapsed)
 
         profiler.phase_end("tracking_loop")
 

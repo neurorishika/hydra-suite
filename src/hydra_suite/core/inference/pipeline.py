@@ -48,6 +48,8 @@ from typing import Any, Callable, Iterable, Iterator
 import numpy as np
 
 from hydra_suite.core.canonicalization.geometry import ClippingStats
+from hydra_suite.utils import profiling_names as N
+from hydra_suite.utils.profiling import bind_target, span
 
 from .result import FrameResult, OBBResult
 from .stages.apriltag import run_apriltag
@@ -128,6 +130,18 @@ class _TestFrame:
     index: int
 
 
+def _effective_depth(depth: int) -> int:
+    """``pipeline_depth``, clamped to 1 under the deep-GPU profiling pass.
+
+    A device-wide sync taken on the consumer thread drains the producer's
+    in-flight OBB kernels, so deep-GPU mode removes the producer rather than
+    reporting cross-stage misattribution as fact.
+    """
+    from hydra_suite.utils.profiling import deep_gpu_enabled
+
+    return 1 if deep_gpu_enabled() else int(depth)
+
+
 class Pipeline:
     """Inference orchestrator over frame-indexed windows.
 
@@ -165,8 +179,10 @@ class Pipeline:
         self.runtime = runtime
         self.cache_writer = cache_writer
         # Effective execution model: 1 (sync) or N>=2 (deep prefetch). depth
-        # takes effect directly — no clamping.
-        self.depth = depth
+        # takes effect directly — no clamping, except under the opt-in
+        # deep-GPU profiling pass (HYDRA_PROFILE_GPU), which forces 1 so a
+        # device-wide sync never drains a producer thread's in-flight work.
+        self.depth = _effective_depth(depth)
         # Bounded hand-off queue size for depth>=2. The default scales with depth:
         # ``maxsize = depth - 1`` lets the producer run up to ``depth-1`` windows
         # ahead of the single consumer (depth=2 -> 1, the classic double buffer;
@@ -223,29 +239,35 @@ class Pipeline:
         and it walks windows in ascending frame order.
         """
         cfg = self.stages.config
-        if cfg.detection_source == "bgsub":
-            return run_bgsub_batch(
-                window.frames,
-                window.frame_indices,
-                self.stages.bgsub_model,
-                cfg.bgsub,
-                self.runtime,
-            )
-        raw_list = run_obb(
-            window.frames,
-            self.stages.obb_models,
-            cfg.obb,
-            self.runtime,
-            roi_mask=self.stages.roi_mask,
-        )
-        for raw in raw_list:
-            if isinstance(raw, _RawOBBTensors):
-                # Same-object handoff: record a CUDA event keyed by each device
-                # tensor. Do NOT detach/clone — that would create a new key.
-                self.runtime.handoff(raw.xywhr)
-                self.runtime.handoff(raw.corners)
-                self.runtime.handoff(raw.conf)
-        return raw_list
+        with span(N.DETECT, units=len(window.frames)):
+            if cfg.detection_source == "bgsub":
+                with span(N.RUN_BGSUB_BATCH, units=len(window.frames)):
+                    return run_bgsub_batch(
+                        window.frames,
+                        window.frame_indices,
+                        self.stages.bgsub_model,
+                        cfg.bgsub,
+                        self.runtime,
+                    )
+            with span(N.RUN_OBB, units=len(window.frames)):
+                # DECODE is spanned in `_stream_windows`, the producer-side
+                # frame source that feeds this window.
+                raw_list = run_obb(
+                    window.frames,
+                    self.stages.obb_models,
+                    cfg.obb,
+                    self.runtime,
+                    roi_mask=self.stages.roi_mask,
+                )
+                for raw in raw_list:
+                    if isinstance(raw, _RawOBBTensors):
+                        # Same-object handoff: record a CUDA event keyed by
+                        # each device tensor. Do NOT detach/clone — that
+                        # would create a new key.
+                        self.runtime.handoff(raw.xywhr)
+                        self.runtime.handoff(raw.corners)
+                        self.runtime.handoff(raw.conf)
+                return raw_list
 
     def _process_window(self, window: BatchWindow) -> list[FrameResult]:
         """Run OBB → crops → HT/CNN/pose → AprilTag → scatter for one window.
@@ -290,37 +312,38 @@ class Pipeline:
         nonempty_frames: list = []
         nonempty_obbs: list[OBBResult] = []
 
-        for frame, frame_idx, raw in zip(frames, frame_indices, raw_list):
-            obb_result = (
-                materialize_tensors(raw, cfg.obb.raw_detection_cap)
-                if isinstance(raw, _RawOBBTensors)
-                else raw
-            )
-            obb_result = OBBResult(
-                frame_idx=frame_idx,
-                centroids=obb_result.centroids,
-                angles=obb_result.angles,
-                sizes=obb_result.sizes,
-                shapes=obb_result.shapes,
-                confidences=obb_result.confidences,
-                corners=obb_result.corners,
-                detection_ids=OBBResult.make_detection_ids(
-                    frame_idx, obb_result.num_detections
-                ),
-                class_ids=obb_result.class_ids,
-            )
-            self.cache_writer.write_detection(frame_idx, obb_result)
+        with span(N.MATERIALIZE, units=len(frames)):
+            for frame, frame_idx, raw in zip(frames, frame_indices, raw_list):
+                obb_result = (
+                    materialize_tensors(raw, cfg.obb.raw_detection_cap)
+                    if isinstance(raw, _RawOBBTensors)
+                    else raw
+                )
+                obb_result = OBBResult(
+                    frame_idx=frame_idx,
+                    centroids=obb_result.centroids,
+                    angles=obb_result.angles,
+                    sizes=obb_result.sizes,
+                    shapes=obb_result.shapes,
+                    confidences=obb_result.confidences,
+                    corners=obb_result.corners,
+                    detection_ids=OBBResult.make_detection_ids(
+                        frame_idx, obb_result.num_detections
+                    ),
+                    class_ids=obb_result.class_ids,
+                )
+                self.cache_writer.write_detection(frame_idx, obb_result)
 
-            filtered_obb, det_indices = filter_for_source(
-                cfg, obb_result, self.stages.roi_mask
-            )
-            if filtered_obb.num_detections == 0:
-                # _run_batch ``continue``s: no downstream stage / cache writes.
-                continue
-            filtered_by_frame[frame_idx] = filtered_obb
-            det_indices_by_frame[frame_idx] = det_indices
-            nonempty_frames.append(frame)
-            nonempty_obbs.append(filtered_obb)
+                filtered_obb, det_indices = filter_for_source(
+                    cfg, obb_result, self.stages.roi_mask
+                )
+                if filtered_obb.num_detections == 0:
+                    # _run_batch ``continue``s: no downstream stage / cache writes.
+                    continue
+                filtered_by_frame[frame_idx] = filtered_obb
+                det_indices_by_frame[frame_idx] = det_indices
+                nonempty_frames.append(frame)
+                nonempty_obbs.append(filtered_obb)
 
         if not nonempty_obbs:
             return []
@@ -342,95 +365,106 @@ class Pipeline:
         # --- downstream batch stages over the non-empty frames -------------
         headtail: dict[int, Any] | None = None
         if self.stages.headtail_model is not None:
-            headtail = run_headtail_batch(
-                nonempty_frames,
-                nonempty_obbs,
-                self.stages.headtail_model,
-                cfg.headtail,
-                self.runtime,
-                geometry,
-            )
+            with span(N.HEADTAIL, units=sum(o.num_detections for o in nonempty_obbs)):
+                headtail = run_headtail_batch(
+                    nonempty_frames,
+                    nonempty_obbs,
+                    self.stages.headtail_model,
+                    cfg.headtail,
+                    self.runtime,
+                    geometry,
+                )
 
         cnns_by_frame: dict[int, list] = {idx: [] for idx in filtered_by_frame}
         cnn_per_phase: list[dict[int, Any]] = []
-        for cfg_cnn, mdl in zip(cfg.cnn_phases, self.stages.cnn_models):
-            phase = run_cnn_batch(
-                nonempty_frames,
-                nonempty_obbs,
-                mdl,
-                cfg_cnn,
-                self.runtime,
-                geometry,
-            )
-            cnn_per_phase.append(phase)
-            for idx, result in phase.items():
-                cnns_by_frame[idx].append(result)
+        with span(N.CNN, units=sum(o.num_detections for o in nonempty_obbs)):
+            for cfg_cnn, mdl in zip(cfg.cnn_phases, self.stages.cnn_models):
+                phase = run_cnn_batch(
+                    nonempty_frames,
+                    nonempty_obbs,
+                    mdl,
+                    cfg_cnn,
+                    self.runtime,
+                    geometry,
+                )
+                cnn_per_phase.append(phase)
+                for idx, result in phase.items():
+                    cnns_by_frame[idx].append(result)
 
         pose: dict[int, Any] | None = None
         if self.stages.pose_model is not None:
-            suppress_foreign = (
-                cfg.pose.suppress_foreign_regions if cfg.pose is not None else False
-            )
-            # PoseConfig.background_color was deleted: it was never populated
-            # by from_parameters (always (0, 0, 0)), a dead second home for
-            # the fill colour. Zero is now the one honest fill value
-            # everywhere.
-            background_color = (0, 0, 0)
-            crop_batch = extract_canonical_crops_batch(
-                nonempty_frames,
-                nonempty_obbs,
-                geometry,
-                self.runtime,
-                suppress_foreign=suppress_foreign,
-                background_color=background_color,
-            )
-            pose = run_pose_batch(
-                crop_batch, self.stages.pose_model, cfg.pose, self.runtime, geometry
-            )
+            with span(N.POSE, units=sum(o.num_detections for o in nonempty_obbs)):
+                suppress_foreign = (
+                    cfg.pose.suppress_foreign_regions if cfg.pose is not None else False
+                )
+                # PoseConfig.background_color was deleted: it was never populated
+                # by from_parameters (always (0, 0, 0)), a dead second home for
+                # the fill colour. Zero is now the one honest fill value
+                # everywhere.
+                background_color = (0, 0, 0)
+                with span(N.CROP_EXTRACT):
+                    crop_batch = extract_canonical_crops_batch(
+                        nonempty_frames,
+                        nonempty_obbs,
+                        geometry,
+                        self.runtime,
+                        suppress_foreign=suppress_foreign,
+                        background_color=background_color,
+                    )
+                pose = run_pose_batch(
+                    crop_batch,
+                    self.stages.pose_model,
+                    cfg.pose,
+                    self.runtime,
+                    geometry,
+                )
 
         apriltag: dict[int, Any] | None = None
         if self.stages.apriltag_model is not None:
             apriltag = {}
-            for frame, obb in zip(nonempty_frames, nonempty_obbs):
-                aabb_crops = extract_aabb_crops(
-                    frame, obb, padding=cfg.apriltag.crop_padding
-                )
-                apriltag[obb.frame_idx] = run_apriltag(
-                    aabb_crops, obb, self.stages.apriltag_model, cfg.apriltag
-                )
+            with span(N.APRILTAG):
+                for frame, obb in zip(nonempty_frames, nonempty_obbs):
+                    aabb_crops = extract_aabb_crops(
+                        frame, obb, padding=cfg.apriltag.crop_padding
+                    )
+                    apriltag[obb.frame_idx] = run_apriltag(
+                        aabb_crops, obb, self.stages.apriltag_model, cfg.apriltag
+                    )
 
         # --- write RAW per-frame results to the per-type caches ------------
         # Mirrors _run_batch: writes raw stage outputs (no foreign suppression),
         # only for non-empty frames, keyed by that frame's det_indices.
-        for frame_idx in sorted(filtered_by_frame):
-            det_indices = det_indices_by_frame[frame_idx]
-            ht = headtail.get(frame_idx) if headtail is not None else None
-            cnn_results = [
-                phase[frame_idx] for phase in cnn_per_phase if frame_idx in phase
-            ]
-            pose_result = pose.get(frame_idx) if pose is not None else None
-            at_result = apriltag.get(frame_idx) if apriltag is not None else None
-            self.cache_writer.write_downstream(
-                frame_idx,
-                det_indices=det_indices,
-                headtail=ht,
-                cnn_results=cnn_results,
-                pose=pose_result,
-                apriltag=at_result,
-            )
+        with span(N.CACHE_WRITE):
+            for frame_idx in sorted(filtered_by_frame):
+                det_indices = det_indices_by_frame[frame_idx]
+                ht = headtail.get(frame_idx) if headtail is not None else None
+                cnn_results = [
+                    phase[frame_idx] for phase in cnn_per_phase if frame_idx in phase
+                ]
+                pose_result = pose.get(frame_idx) if pose is not None else None
+                at_result = apriltag.get(frame_idx) if apriltag is not None else None
+                self.cache_writer.write_downstream(
+                    frame_idx,
+                    det_indices=det_indices,
+                    headtail=ht,
+                    cnn_results=cnn_results,
+                    pose=pose_result,
+                    apriltag=at_result,
+                )
 
         # In-memory assembled view (foreign suppression applied here, per config).
-        return scatter(
-            filtered_by_frame,
-            headtail,
-            cnns_by_frame,
-            pose,
-            apriltag,
-            cfg,
-            overrides_headtail=(
-                cfg.pose.overrides_headtail if cfg.pose is not None else True
-            ),
-        )
+        with span(N.ASSEMBLE_SCATTER):
+            return scatter(
+                filtered_by_frame,
+                headtail,
+                cnns_by_frame,
+                pose,
+                apriltag,
+                cfg,
+                overrides_headtail=(
+                    cfg.pose.overrides_headtail if cfg.pose is not None else True
+                ),
+            )
 
     # --- production driver ---------------------------------------------
 
@@ -483,7 +517,8 @@ class Pipeline:
             if should_stop is not None and should_stop():
                 break
             result.frames_processed += len(window)
-            result.frame_results.extend(self._process_window(window))
+            with span(N.WINDOW, units=len(window)):
+                result.frame_results.extend(self._process_window(window))
             if progress_cb and range_total > 0:
                 # Mirror the legacy per-frame cadence: emit at each multiple of
                 # ``step`` crossed within this window.
@@ -541,7 +576,11 @@ class Pipeline:
                 handoff_q.put(None)  # sentinel (always, even on error)
 
         producer_thread = threading.Thread(
-            target=producer, name="pipeline-obb-producer", daemon=True
+            # A new thread starts with a fresh context, so an unbound producer
+            # would report zero OBB time at depth>=2.
+            target=bind_target(producer),
+            name="pipeline-obb-producer",
+            daemon=True,
         )
         producer_thread.start()
 
@@ -553,7 +592,10 @@ class Pipeline:
                     break
                 window, raw_list, read_n = item
                 result.frames_processed += len(window)
-                result.frame_results.extend(self._process_obb_results(window, raw_list))
+                with span(N.WINDOW, units=len(window)):
+                    result.frame_results.extend(
+                        self._process_obb_results(window, raw_list)
+                    )
                 if progress_cb and range_total > 0:
                     self._emit_progress(
                         progress_cb,
@@ -599,19 +641,40 @@ class Pipeline:
         (which the runner guarantees is ascending frame index), identical to
         ``_iter_windows`` over a fully materialized list.
         """
-        frames_buf: list = []
-        indices_buf: list[int] = []
-        for frame_idx, frame in frame_source:
-            frames_buf.append(frame)
-            indices_buf.append(int(frame_idx))
-            if len(frames_buf) == w:
-                yield BatchWindow(
-                    frames=list(frames_buf), frame_indices=list(indices_buf)
-                )
-                frames_buf.clear()
-                indices_buf.clear()
-        if frames_buf:
+        it = iter(frame_source)
+        while True:
+            frames_buf: list = []
+            indices_buf: list[int] = []
+            # The actual video-decode cost lives in pulling from ``frame_source``
+            # (the underlying reader/prefetcher), not in this generator's own
+            # bookkeeping. At depth>=2 this generator runs on the bound producer
+            # thread (see module docstring), so this is where DECODE must be
+            # spanned. Bounded to one window's worth of pulls.
+            #
+            # NOTE: at depth>=2 this span (and DETECT/RUN_OBB/etc., all opened
+            # on this same bound producer thread) roots at the TOP LEVEL of the
+            # span tree, not under ``window/`` — ``bind_thread()`` deliberately
+            # gives the producer thread a fresh, empty span stack to avoid
+            # cross-thread parentage corruption, so there is no live parent to
+            # nest under here. The renderer marks these nodes ``concurrent`` and
+            # stamps them with the producer thread's name; no span is lost, only
+            # re-rooted. Only at depth=1 (no separate producer thread) does this
+            # span actually nest under ``window/``. See
+            # ``docs/developer-guide/profiling.md``.
+            with span(N.DECODE) as decode_span:
+                for _ in range(w):
+                    try:
+                        frame_idx, frame = next(it)
+                    except StopIteration:
+                        break
+                    frames_buf.append(frame)
+                    indices_buf.append(int(frame_idx))
+                decode_span.add_units(len(frames_buf))
+            if not frames_buf:
+                break
             yield BatchWindow(frames=list(frames_buf), frame_indices=list(indices_buf))
+            if len(frames_buf) < w:
+                break
 
     @staticmethod
     def _emit_progress(

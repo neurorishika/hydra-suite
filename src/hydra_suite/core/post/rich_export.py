@@ -22,6 +22,8 @@ from hydra_suite.core.post.pose_merge import (
     check_pose_export_sources,
     merge_pose_sources_into_df,
 )
+from hydra_suite.utils import profiling_names as N
+from hydra_suite.utils.profiling import span
 
 logger = logging.getLogger(__name__)
 
@@ -225,89 +227,90 @@ def build_rich_export_dataframe(
     couldn't resolve one (identity post-processing then falls back to
     whatever CSV columns are present).
     """
-    if not final_csv_path or not os.path.exists(final_csv_path):
-        return None
+    with span(N.BUILD_DATAFRAME):
+        if not final_csv_path or not os.path.exists(final_csv_path):
+            return None
 
-    sources = check_pose_export_sources(state)
-    (
-        _has_other_analyses,
-        cache_path,
-        cache_available,
-        interp_pose_path,
-        interp_available,
-        interp_pose_df_mem,
-        interp_mem_available,
-    ) = sources
+        sources = check_pose_export_sources(state)
+        (
+            _has_other_analyses,
+            cache_path,
+            cache_available,
+            interp_pose_path,
+            interp_available,
+            interp_pose_df_mem,
+            interp_mem_available,
+        ) = sources
 
-    if (
-        not cache_available
-        and not interp_available
-        and not interp_mem_available
-        and not _has_other_analyses
-    ):
-        logger.warning(
-            "Rich export skipped: no analysis sources found (pose_cache=%s, interp=%s, in_memory=%s).",
-            cache_path or "<empty>",
-            interp_pose_path or "<empty>",
-            bool(interp_mem_available),
-        )
-        return None
+        if (
+            not cache_available
+            and not interp_available
+            and not interp_mem_available
+            and not _has_other_analyses
+        ):
+            logger.warning(
+                "Rich export skipped: no analysis sources found (pose_cache=%s, interp=%s, in_memory=%s).",
+                cache_path or "<empty>",
+                interp_pose_path or "<empty>",
+                bool(interp_mem_available),
+            )
+            return None
 
-    try:
-        trajectories_df = pd.read_csv(final_csv_path)
-    except Exception:
-        logger.exception(
-            "Rich export skipped: failed to load trajectories CSV: %s",
-            final_csv_path,
-        )
-        return None
+        try:
+            trajectories_df = pd.read_csv(final_csv_path)
+        except Exception:
+            logger.exception(
+                "Rich export skipped: failed to load trajectories CSV: %s",
+                final_csv_path,
+            )
+            return None
 
-    try:
-        with_pose_df = merge_pose_sources_into_df(
-            trajectories_df,
-            sources,
-            state,
-            params=params,
-            min_valid_conf=min_valid_conf,
-            ignore_keypoints=ignore_keypoints,
-        )
-    except Exception:
-        logger.exception(
-            "Rich export skipped: failed while merging sources (pose_cache=%s, interp=%s)",
-            cache_path or "<empty>",
-            interp_pose_path or "<empty>",
-        )
-        return None
+        try:
+            with_pose_df = merge_pose_sources_into_df(
+                trajectories_df,
+                sources,
+                state,
+                params=params,
+                min_valid_conf=min_valid_conf,
+                ignore_keypoints=ignore_keypoints,
+            )
+        except Exception:
+            logger.exception(
+                "Rich export skipped: failed while merging sources (pose_cache=%s, interp=%s)",
+                cache_path or "<empty>",
+                interp_pose_path or "<empty>",
+            )
+            return None
 
-    if with_pose_df is None or with_pose_df.empty:
-        logger.warning(
-            "Rich export skipped: merged dataframe is empty for %s",
-            final_csv_path,
-        )
-        return None
+        if with_pose_df is None or with_pose_df.empty:
+            logger.warning(
+                "Rich export skipped: merged dataframe is empty for %s",
+                final_csv_path,
+            )
+            return None
 
-    _kpt_re = re.compile(r"^PoseKpt_(.+)_X$")
-    pose_labels = [
-        m.group(1) for col in with_pose_df.columns if (m := _kpt_re.match(str(col)))
-    ]
+        _kpt_re = re.compile(r"^PoseKpt_(.+)_X$")
+        pose_labels = [
+            m.group(1) for col in with_pose_df.columns if (m := _kpt_re.match(str(col)))
+        ]
 
-    if pose_labels:
-        with_pose_df = apply_pose_quality_postprocessing(
+        if pose_labels:
+            with_pose_df = apply_pose_quality_postprocessing(
+                with_pose_df,
+                pose_labels,
+                params,
+                individual_properties_cache_path=state.individual_properties_cache_path,
+            )
+
+        with_pose_df = apply_identity_postprocessing_to_df(
             with_pose_df,
-            pose_labels,
             params,
-            individual_properties_cache_path=state.individual_properties_cache_path,
+            identity_evidence_cache_path=identity_evidence_cache_path,
         )
 
-    with_pose_df = apply_identity_postprocessing_to_df(
-        with_pose_df,
-        params,
-        identity_evidence_cache_path=identity_evidence_cache_path,
-    )
+        log_rich_export_summary(with_pose_df)
 
-    log_rich_export_summary(with_pose_df)
-
-    return with_pose_df
+        return with_pose_df
 
 
 def export_rich_csv(

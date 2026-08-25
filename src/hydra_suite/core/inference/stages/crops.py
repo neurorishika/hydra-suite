@@ -14,6 +14,8 @@ from hydra_suite.core.canonicalization.geometry import (
     canonical_affine,
 )
 from hydra_suite.core.canonicalization.resample import canonical_warp_batch_from_frame
+from hydra_suite.utils import profiling_names as N
+from hydra_suite.utils.profiling import span
 
 from ..result import CropBatch, NumpyCropBatch, OBBResult
 from ..runtime import RuntimeContext
@@ -91,23 +93,26 @@ def extract_canonical_crops(
     device = frame.device if isinstance(frame, torch.Tensor) else "cpu"
 
     m_aligns: list[np.ndarray] = []
-    for i in range(n):
-        try:
-            m_align, _theta, _clipped = canonical_affine(
-                obb_result.corners[i], geometry
-            )
-        except ValueError:
-            m_align = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float64)
-        m_aligns.append(m_align)
+    with span(N.AFFINE_LOOP):
+        for i in range(n):
+            try:
+                m_align, _theta, _clipped = canonical_affine(
+                    obb_result.corners[i], geometry
+                )
+            except ValueError:
+                m_align = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float64)
+            m_aligns.append(m_align)
 
-    crops = canonical_warp_batch_from_frame(
-        frame, m_aligns, geometry, lambda sub: _frame_to_chw_float(sub, device)
-    )
+    with span(N.WARP_BATCH, units=n, gpu=True):
+        crops = canonical_warp_batch_from_frame(
+            frame, m_aligns, geometry, lambda sub: _frame_to_chw_float(sub, device)
+        )
 
     if suppress_foreign and n > 1:
-        crops = _apply_foreign_mask_canonical_batch(
-            crops, obb_result, geometry, background_color
-        )
+        with span(N.FOREIGN_MASK, units=n):
+            crops = _apply_foreign_mask_canonical_batch(
+                crops, obb_result, geometry, background_color
+            )
     return crops
 
 
@@ -206,18 +211,20 @@ def extract_classifier_crops(
     device = frame.device if isinstance(frame, torch.Tensor) else "cpu"
 
     m_aligns: list[np.ndarray] = []
-    for i in range(n):
-        try:
-            m_align, _theta, _clipped = canonical_affine(
-                obb_result.corners[i], geometry
-            )
-        except ValueError:
-            m_align = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float64)
-        m_aligns.append(m_align)
+    with span(N.AFFINE_LOOP):
+        for i in range(n):
+            try:
+                m_align, _theta, _clipped = canonical_affine(
+                    obb_result.corners[i], geometry
+                )
+            except ValueError:
+                m_align = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float64)
+            m_aligns.append(m_align)
 
-    crops_t = canonical_warp_batch_from_frame(
-        frame, m_aligns, geometry, lambda sub: _frame_to_chw_float(sub, device)
-    )
+    with span(N.WARP_BATCH, units=n, gpu=True):
+        crops_t = canonical_warp_batch_from_frame(
+            frame, m_aligns, geometry, lambda sub: _frame_to_chw_float(sub, device)
+        )
     crops_u8 = (
         (crops_t * 255.0)
         .round()
@@ -336,6 +343,7 @@ def extract_classifier_crops_batch_np(
     )
 
 
+@N.spanned(N.APPLY_FIT)
 def apply_fit_batch(crops: list, fit: FitResult) -> list:
     """Layer 2 over a whole window's crops, across the shared warp pool.
 

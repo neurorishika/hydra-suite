@@ -35,7 +35,9 @@ from hydra_suite.core.inference.stages.apriltag import run_apriltag
 from hydra_suite.core.inference.stages.crops import extract_aabb_crops
 from hydra_suite.core.post.merge import write_csv_artifact as _write_csv_artifact
 from hydra_suite.core.post.merge import write_roi_npz as _write_roi_npz
+from hydra_suite.utils import profiling_names as N
 from hydra_suite.utils.geometry import wrap_angle_degs
+from hydra_suite.utils.profiling import span
 
 logger = logging.getLogger(__name__)
 
@@ -513,161 +515,167 @@ def _flush_pose_cnn_window(
     if not pending_frames:
         return
 
-    if profiler is not None:
-        profiler.tick("interp_pose_inference")
-    if pose_model is not None:
-        crop_batch = extract_canonical_crops_batch(
-            pending_frames,
-            pending_obbs,
-            geometry,
-            runtime,
-            suppress_foreign=(
-                cfg.pose.suppress_foreign_regions if cfg.pose is not None else False
-            ),
-            # Match `gen.save_interpolated_crop`'s (`_process_single_frame`)
-            # background color -- both paths must agree so the images saved
-            # to disk and the crops actually fed to the pose/CNN models are
-            # the same crop, not two differently-padded versions.
-            background_color=tuple(background_color),
-        )
-        pose_by_frame = run_pose_batch(
-            crop_batch, pose_model, cfg.pose, runtime, geometry
-        )
-        for frame_idx, tasks in zip(
-            (obb.frame_idx for obb in pending_obbs), pending_tasks_by_frame
-        ):
-            pose_result = pose_by_frame.get(frame_idx)
-            if pose_result is None:
-                continue
-            for i, task in enumerate(tasks):
-                kpts = (
-                    pose_result.keypoints[i] if i < len(pose_result.keypoints) else None
-                )
-                # `_assemble_pose_result` (stages/pose.py) pre-allocates a
-                # zero-filled (n, K, 3) array and simply `continue`s past a
-                # detection the backend found nothing for -- it never writes
-                # into that detection's row of the array. So `kpts` here is
-                # NEVER None, even for a genuine backend miss: a miss leaves
-                # the row as the untouched all-zero (x=0, y=0, conf=0)
-                # placeholder, while any real backend result -- however
-                # low-confidence -- overwrites the row with actual values.
-                # `valid_mask[i]` is NOT the right signal to gate row
-                # construction on: it is `n_confident >= min_valid_keypoints`,
-                # an AGGREGATE confidence threshold, so it is also False for
-                # real (non-fabricated) keypoints that just don't individually
-                # or collectively clear that bar. Gating on it would silently
-                # drop genuine low-confidence pose data that the real-
-                # detection export path (`flatten_pose_keypoints_df` in
-                # `properties/export.py`) always writes -- that path only uses
-                # the threshold to compute `PoseNumValid`/`PoseValidFraction`
-                # stats, never to suppress the row. Instead, distinguish "no
-                # data at all" from "real but low-confidence data" by checking
-                # whether the row is still the untouched all-zero placeholder
-                # (`np.any(kpts)`) -- that is true exactly when
-                # `_assemble_pose_result` actually wrote something into this
-                # detection's slot.
-                has_data = kpts is not None and bool(np.any(kpts))
-                pose_wide = {}
-                pose_mean_conf = pose_valid_fraction = 0.0
-                pose_num_valid = pose_num_keypoints = 0
-                pose_source = None
-                if has_data:
-                    conf_col = kpts[:, 2]
-                    pose_num_keypoints = int(kpts.shape[0])
-                    valid_mask = conf_col >= float(cfg.pose.min_keypoint_confidence)
-                    pose_num_valid = int(valid_mask.sum())
-                    pose_mean_conf = (
-                        float(conf_col.mean()) if pose_num_keypoints else 0.0
-                    )
-                    pose_valid_fraction = (
-                        pose_num_valid / pose_num_keypoints
-                        if pose_num_keypoints
-                        else 0.0
-                    )
-                    pose_wide = flatten_pose_keypoints_row(
-                        kpts,
-                        build_pose_keypoint_labels(
-                            pose_model.keypoint_names, pose_num_keypoints
-                        ),
-                    )
-                    pose_source = "interp"
-                pose_row = {
-                    "frame_id": int(task["frame_id"]),
-                    "trajectory_id": int(task["traj_id"]),
-                    # Always empty (unlike the old per-frame `_flush_pose_batch`,
-                    # which had the saved crop's filename in scope): this is a
-                    # windowed batch flush over many frames' tasks, with no
-                    # per-detection filename in scope at flush time. Nothing
-                    # downstream reads this column (verified: no reader of
-                    # interpolated_pose.csv's "filename" grep-hits anywhere in
-                    # src/), so left empty rather than threading it through.
-                    "filename": "",
-                    "PoseMeanConf": pose_mean_conf,
-                    "PoseValidFraction": pose_valid_fraction,
-                    "PoseNumValid": pose_num_valid,
-                    "PoseNumKeypoints": pose_num_keypoints,
-                    "PoseSource": pose_source,
-                }
-                pose_row.update(pose_wide)
-                interp_pose_rows.append(pose_row)
-    if profiler is not None:
-        profiler.tock("interp_pose_inference")
-
-    if profiler is not None:
-        profiler.tick("interp_cnn_inference")
-    for cnn_model, cnn_label, cnn_cfg in zip(cnn_models, cnn_labels, cfg.cnn_phases):
-        try:
-            cnn_by_frame = run_cnn_batch(
-                pending_frames, pending_obbs, cnn_model, cnn_cfg, runtime, geometry
+    with span(N.POSE_INFERENCE):
+        if profiler is not None:
+            profiler.tick("interp_pose_inference")
+        if pose_model is not None:
+            crop_batch = extract_canonical_crops_batch(
+                pending_frames,
+                pending_obbs,
+                geometry,
+                runtime,
+                suppress_foreign=(
+                    cfg.pose.suppress_foreign_regions if cfg.pose is not None else False
+                ),
+                # Match `gen.save_interpolated_crop`'s (`_process_single_frame`)
+                # background color -- both paths must agree so the images saved
+                # to disk and the crops actually fed to the pose/CNN models are
+                # the same crop, not two differently-padded versions.
+                background_color=tuple(background_color),
             )
-        except Exception as exc:
-            logger.warning("Interp CNN '%s' batch failed: %s", cnn_label, exc)
-            continue
-        for frame_idx, tasks in zip(
-            (obb.frame_idx for obb in pending_obbs), pending_tasks_by_frame
-        ):
-            cnn_result = cnn_by_frame.get(frame_idx)
-            if cnn_result is None:
-                continue
-            for i, task in enumerate(tasks):
-                pred = next(
-                    (p for p in cnn_result.predictions if p.det_index == i), None
-                )
-                if pred is None:
+            pose_by_frame = run_pose_batch(
+                crop_batch, pose_model, cfg.pose, runtime, geometry
+            )
+            for frame_idx, tasks in zip(
+                (obb.frame_idx for obb in pending_obbs), pending_tasks_by_frame
+            ):
+                pose_result = pose_by_frame.get(frame_idx)
+                if pose_result is None:
                     continue
-                factor_names = []
-                class_names = []
-                confidences = []
-                for factor in pred.factors:
-                    factor_names.append(factor.factor_name)
-                    probs = np.asarray(factor.raw_probabilities, dtype=np.float32)
-                    if probs.size == 0:
-                        class_names.append(None)
-                        confidences.append(0.0)
-                        continue
-                    best_idx = int(np.argmax(probs))
-                    best_conf = float(probs[best_idx])
-                    if 0 <= best_idx < len(factor.class_names):
-                        class_names.append(factor.class_names[best_idx])
-                    else:
-                        class_names.append(None)
-                    confidences.append(best_conf)
-                row = {
-                    "frame_id": int(task["frame_id"]),
-                    "trajectory_id": int(task["traj_id"]),
-                }
-                row.update(
-                    flatten_cnn_prediction_row(
-                        cnn_label,
-                        factor_names,
-                        class_names,
-                        confidences,
+                for i, task in enumerate(tasks):
+                    kpts = (
+                        pose_result.keypoints[i]
+                        if i < len(pose_result.keypoints)
+                        else None
                     )
+                    # `_assemble_pose_result` (stages/pose.py) pre-allocates a
+                    # zero-filled (n, K, 3) array and simply `continue`s past a
+                    # detection the backend found nothing for -- it never writes
+                    # into that detection's row of the array. So `kpts` here is
+                    # NEVER None, even for a genuine backend miss: a miss leaves
+                    # the row as the untouched all-zero (x=0, y=0, conf=0)
+                    # placeholder, while any real backend result -- however
+                    # low-confidence -- overwrites the row with actual values.
+                    # `valid_mask[i]` is NOT the right signal to gate row
+                    # construction on: it is `n_confident >= min_valid_keypoints`,
+                    # an AGGREGATE confidence threshold, so it is also False for
+                    # real (non-fabricated) keypoints that just don't individually
+                    # or collectively clear that bar. Gating on it would silently
+                    # drop genuine low-confidence pose data that the real-
+                    # detection export path (`flatten_pose_keypoints_df` in
+                    # `properties/export.py`) always writes -- that path only uses
+                    # the threshold to compute `PoseNumValid`/`PoseValidFraction`
+                    # stats, never to suppress the row. Instead, distinguish "no
+                    # data at all" from "real but low-confidence data" by checking
+                    # whether the row is still the untouched all-zero placeholder
+                    # (`np.any(kpts)`) -- that is true exactly when
+                    # `_assemble_pose_result` actually wrote something into this
+                    # detection's slot.
+                    has_data = kpts is not None and bool(np.any(kpts))
+                    pose_wide = {}
+                    pose_mean_conf = pose_valid_fraction = 0.0
+                    pose_num_valid = pose_num_keypoints = 0
+                    pose_source = None
+                    if has_data:
+                        conf_col = kpts[:, 2]
+                        pose_num_keypoints = int(kpts.shape[0])
+                        valid_mask = conf_col >= float(cfg.pose.min_keypoint_confidence)
+                        pose_num_valid = int(valid_mask.sum())
+                        pose_mean_conf = (
+                            float(conf_col.mean()) if pose_num_keypoints else 0.0
+                        )
+                        pose_valid_fraction = (
+                            pose_num_valid / pose_num_keypoints
+                            if pose_num_keypoints
+                            else 0.0
+                        )
+                        pose_wide = flatten_pose_keypoints_row(
+                            kpts,
+                            build_pose_keypoint_labels(
+                                pose_model.keypoint_names, pose_num_keypoints
+                            ),
+                        )
+                        pose_source = "interp"
+                    pose_row = {
+                        "frame_id": int(task["frame_id"]),
+                        "trajectory_id": int(task["traj_id"]),
+                        # Always empty (unlike the old per-frame `_flush_pose_batch`,
+                        # which had the saved crop's filename in scope): this is a
+                        # windowed batch flush over many frames' tasks, with no
+                        # per-detection filename in scope at flush time. Nothing
+                        # downstream reads this column (verified: no reader of
+                        # interpolated_pose.csv's "filename" grep-hits anywhere in
+                        # src/), so left empty rather than threading it through.
+                        "filename": "",
+                        "PoseMeanConf": pose_mean_conf,
+                        "PoseValidFraction": pose_valid_fraction,
+                        "PoseNumValid": pose_num_valid,
+                        "PoseNumKeypoints": pose_num_keypoints,
+                        "PoseSource": pose_source,
+                    }
+                    pose_row.update(pose_wide)
+                    interp_pose_rows.append(pose_row)
+        if profiler is not None:
+            profiler.tock("interp_pose_inference")
+
+    with span(N.CNN_INFERENCE):
+        if profiler is not None:
+            profiler.tick("interp_cnn_inference")
+        for cnn_model, cnn_label, cnn_cfg in zip(
+            cnn_models, cnn_labels, cfg.cnn_phases
+        ):
+            try:
+                cnn_by_frame = run_cnn_batch(
+                    pending_frames, pending_obbs, cnn_model, cnn_cfg, runtime, geometry
                 )
-                row[f"CNN_{cnn_label}_Source"] = "interp"
-                interp_cnn_rows.setdefault(cnn_label, []).append(row)
-    if profiler is not None:
-        profiler.tock("interp_cnn_inference")
+            except Exception as exc:
+                logger.warning("Interp CNN '%s' batch failed: %s", cnn_label, exc)
+                continue
+            for frame_idx, tasks in zip(
+                (obb.frame_idx for obb in pending_obbs), pending_tasks_by_frame
+            ):
+                cnn_result = cnn_by_frame.get(frame_idx)
+                if cnn_result is None:
+                    continue
+                for i, task in enumerate(tasks):
+                    pred = next(
+                        (p for p in cnn_result.predictions if p.det_index == i), None
+                    )
+                    if pred is None:
+                        continue
+                    factor_names = []
+                    class_names = []
+                    confidences = []
+                    for factor in pred.factors:
+                        factor_names.append(factor.factor_name)
+                        probs = np.asarray(factor.raw_probabilities, dtype=np.float32)
+                        if probs.size == 0:
+                            class_names.append(None)
+                            confidences.append(0.0)
+                            continue
+                        best_idx = int(np.argmax(probs))
+                        best_conf = float(probs[best_idx])
+                        if 0 <= best_idx < len(factor.class_names):
+                            class_names.append(factor.class_names[best_idx])
+                        else:
+                            class_names.append(None)
+                        confidences.append(best_conf)
+                    row = {
+                        "frame_id": int(task["frame_id"]),
+                        "trajectory_id": int(task["traj_id"]),
+                    }
+                    row.update(
+                        flatten_cnn_prediction_row(
+                            cnn_label,
+                            factor_names,
+                            class_names,
+                            confidences,
+                        )
+                    )
+                    row[f"CNN_{cnn_label}_Source"] = "interp"
+                    interp_cnn_rows.setdefault(cnn_label, []).append(row)
+        if profiler is not None:
+            profiler.tock("interp_cnn_inference")
 
 
 def _detect_apriltags_in_frame(apriltag_model, cfg, frame, obb, tasks, interp_tag_rows):
@@ -1214,49 +1222,50 @@ def _run_frame_tasks_loop(
 
     _prefetcher = _build_prefetcher(cap, needed_frames, total_frames)
     _prefetcher.start()
-    for idx in range(1, total_frames + 1):
-        if _stop():
-            _prefetcher.stop()
-            return None
-        _pf_item = _prefetcher.read()
-        if _pf_item is None:
-            break
-        f, ret, frame = _pf_item
-        if not ret or frame is None:
-            continue
-        result = _process_single_frame(
-            params,
-            should_stop,
-            progress,
-            f,
-            idx,
-            frame,
-            total_frames,
-            frame_tasks,
-            gen,
-            save_interpolated_outputs,
-            geometry,
-            clipping_stats,
-            apriltag_model,
-            cfg.apriltag,
-            interp_saved,
-            interp_rows,
-            roi_rows,
-            roi_corners,
-            interp_tag_rows,
-            _pending_frames,
-            _pending_obbs,
-            _pending_tasks_by_frame,
-        )
-        # `_process_single_frame` always returns an int (its internal
-        # `_stop()`-based early-return path was removed) -- no None check
-        # needed here.
-        interp_saved = result
-        if len(_pending_frames) >= window_batch_size:
+    with span(N.CROP_EXTRACTION):
+        for idx in range(1, total_frames + 1):
             if _stop():
                 _prefetcher.stop()
                 return None
-            _flush_window()
+            _pf_item = _prefetcher.read()
+            if _pf_item is None:
+                break
+            f, ret, frame = _pf_item
+            if not ret or frame is None:
+                continue
+            result = _process_single_frame(
+                params,
+                should_stop,
+                progress,
+                f,
+                idx,
+                frame,
+                total_frames,
+                frame_tasks,
+                gen,
+                save_interpolated_outputs,
+                geometry,
+                clipping_stats,
+                apriltag_model,
+                cfg.apriltag,
+                interp_saved,
+                interp_rows,
+                roi_rows,
+                roi_corners,
+                interp_tag_rows,
+                _pending_frames,
+                _pending_obbs,
+                _pending_tasks_by_frame,
+            )
+            # `_process_single_frame` always returns an int (its internal
+            # `_stop()`-based early-return path was removed) -- no None check
+            # needed here.
+            interp_saved = result
+            if len(_pending_frames) >= window_batch_size:
+                if _stop():
+                    _prefetcher.stop()
+                    return None
+                _flush_window()
     # Flush any frames still buffered when the loop exits -- whether it ran
     # to completion, `break`-ed out on prefetcher exhaustion, or the last
     # iteration(s) `continue`-ed past a bad read. The old `idx == total_frames`
@@ -1419,195 +1428,204 @@ def run_interpolated_crops(
     # the pass, mirroring TrackingWorker's end-of-run summary.
     clipping_stats = ClippingStats()
     profiler = TrackingProfiler(enabled=enable_profiling)
-    profiler.phase_start("interp_setup")
+    with profiler.armed(), span(N.INTERP_CROPS):
+        profiler.phase_start("interp_setup")
 
-    pose_model = None
-    detection_cache = None
-    cap = None
-    cnn_models = []
-    cnn_labels = []
-    apriltag_model = None
-    headtail_model = None
-    interp_cnn_rows = {}
-    try:
-        setup = _validate_and_setup(
-            csv_path, video_path, detection_cache_path, params, profiler, should_stop
-        )
-        if setup is None:
-            return {"saved": 0, "gaps": 0}
-        (
-            df,
-            cap,
-            detection_cache,
-            gen,
-            output_dir,
-            save_interpolated_outputs,
-            cache_interpolated_artifacts,
-            position_scale,
-            size_scale,
-            geometry,
-        ) = setup
-
-        interp_saved = 0
-        interp_rows = []
-        interp_pose_rows = []
-        interp_tag_rows = []
-        interp_headtail_rows = []
-        roi_rows = []
-        roi_corners = []
-
-        profiler.phase_start("interp_gap_detection")
-
-        gap_result = _detect_interpolation_gaps(
-            params,
-            should_stop,
-            df,
-            detection_cache,
-            position_scale,
-            size_scale,
-        )
-        if gap_result is None:
-            return {"saved": 0, "gaps": 0}
-        frame_tasks, occluded_rows, interp_runs, interp_gaps = gap_result
-
-        logger.info(
-            f"Interpolated occlusion rows: {occluded_rows} "
-            f"(runs: {interp_runs}, gaps: {interp_gaps})"
-        )
-        del df
-        gc.collect()
-
-        eligible_frames = int(len(frame_tasks))
-        eligible_rows = int(sum(len(tasks) for tasks in frame_tasks.values()))
-
-        profiler.phase_end("interp_gap_detection")
-        profiler.phase_start("interp_crop_extraction")
-
-        pose_kpt_labels = []
-        if frame_tasks:
-            (
-                cfg,
-                runtime,
-                pose_model,
-                apriltag_model,
-                cnn_models,
-                cnn_labels,
-                headtail_model,
-            ) = _init_interpolation_backends(params, output_dir, geometry)
-            if pose_model is not None:
-                pose_kpt_labels = build_pose_keypoint_labels(
-                    pose_model.keypoint_names, pose_model.n_keypoints
+        pose_model = None
+        detection_cache = None
+        cap = None
+        cnn_models = []
+        cnn_labels = []
+        apriltag_model = None
+        headtail_model = None
+        interp_cnn_rows = {}
+        try:
+            with span(N.SETUP):
+                setup = _validate_and_setup(
+                    csv_path,
+                    video_path,
+                    detection_cache_path,
+                    params,
+                    profiler,
+                    should_stop,
                 )
-            interp_saved = _run_frame_tasks_loop(
-                params,
-                should_stop,
-                progress,
-                frame_tasks,
-                cap,
-                gen,
-                save_interpolated_outputs,
-                geometry,
-                clipping_stats,
-                cfg,
-                runtime,
-                pose_model,
-                cnn_models,
-                cnn_labels,
-                apriltag_model,
-                headtail_model,
-                interp_saved,
-                interp_rows,
-                roi_rows,
-                roi_corners,
-                interp_pose_rows,
-                interp_tag_rows,
-                interp_cnn_rows,
-                interp_headtail_rows,
-                profiler,
-            )
-            if interp_saved is None:
+            if setup is None:
                 return {"saved": 0, "gaps": 0}
-        else:
-            logger.info(
-                "Interpolated post-pass found no eligible bounded gaps; skipping backend initialization."
-            )
-
-        profiler.phase_end("interp_crop_extraction")
-        profiler.phase_start("interp_finalize")
-
-        artifact_paths = _empty_artifact_paths()
-        if frame_tasks:
-            artifact_paths = _write_interpolation_artifacts(
+            (
+                df,
+                cap,
+                detection_cache,
                 gen,
+                output_dir,
                 save_interpolated_outputs,
                 cache_interpolated_artifacts,
-                interp_rows,
-                roi_rows,
-                roi_corners,
-                interp_pose_rows,
-                interp_tag_rows,
-                interp_cnn_rows,
-                interp_headtail_rows,
-                pose_kpt_labels,
+                position_scale,
+                size_scale,
+                geometry,
+            ) = setup
+
+            interp_saved = 0
+            interp_rows = []
+            interp_pose_rows = []
+            interp_tag_rows = []
+            interp_headtail_rows = []
+            roi_rows = []
+            roi_corners = []
+
+            profiler.phase_start("interp_gap_detection")
+
+            with span(N.GAP_DETECTION):
+                gap_result = _detect_interpolation_gaps(
+                    params,
+                    should_stop,
+                    df,
+                    detection_cache,
+                    position_scale,
+                    size_scale,
+                )
+                if gap_result is None:
+                    return {"saved": 0, "gaps": 0}
+                frame_tasks, occluded_rows, interp_runs, interp_gaps = gap_result
+
+                logger.info(
+                    f"Interpolated occlusion rows: {occluded_rows} "
+                    f"(runs: {interp_runs}, gaps: {interp_gaps})"
+                )
+                del df
+                gc.collect()
+
+                eligible_frames = int(len(frame_tasks))
+                eligible_rows = int(sum(len(tasks) for tasks in frame_tasks.values()))
+
+            profiler.phase_end("interp_gap_detection")
+            profiler.phase_start("interp_crop_extraction")
+
+            pose_kpt_labels = []
+            if frame_tasks:
+                (
+                    cfg,
+                    runtime,
+                    pose_model,
+                    apriltag_model,
+                    cnn_models,
+                    cnn_labels,
+                    headtail_model,
+                ) = _init_interpolation_backends(params, output_dir, geometry)
+                if pose_model is not None:
+                    pose_kpt_labels = build_pose_keypoint_labels(
+                        pose_model.keypoint_names, pose_model.n_keypoints
+                    )
+                interp_saved = _run_frame_tasks_loop(
+                    params,
+                    should_stop,
+                    progress,
+                    frame_tasks,
+                    cap,
+                    gen,
+                    save_interpolated_outputs,
+                    geometry,
+                    clipping_stats,
+                    cfg,
+                    runtime,
+                    pose_model,
+                    cnn_models,
+                    cnn_labels,
+                    apriltag_model,
+                    headtail_model,
+                    interp_saved,
+                    interp_rows,
+                    roi_rows,
+                    roi_corners,
+                    interp_pose_rows,
+                    interp_tag_rows,
+                    interp_cnn_rows,
+                    interp_headtail_rows,
+                    profiler,
+                )
+                if interp_saved is None:
+                    return {"saved": 0, "gaps": 0}
+            else:
+                logger.info(
+                    "Interpolated post-pass found no eligible bounded gaps; skipping backend initialization."
+                )
+
+            profiler.phase_end("interp_crop_extraction")
+            profiler.phase_start("interp_finalize")
+
+            with span(N.FINALIZE):
+                artifact_paths = _empty_artifact_paths()
+                if frame_tasks:
+                    artifact_paths = _write_interpolation_artifacts(
+                        gen,
+                        save_interpolated_outputs,
+                        cache_interpolated_artifacts,
+                        interp_rows,
+                        roi_rows,
+                        roi_corners,
+                        interp_pose_rows,
+                        interp_tag_rows,
+                        interp_cnn_rows,
+                        interp_headtail_rows,
+                        pose_kpt_labels,
+                    )
+                if cache_interpolated_artifacts:
+                    gen.finalize()
+
+            profiler.phase_end("interp_finalize")
+
+            # Report canonical-crop clipping, if any -- mirrors TrackingWorker's
+            # end-of-run clipping_stats summary (core/tracking/worker.py).
+            # ``canonical_margin`` is the operator's only dial against truncated
+            # animals, so this must never be silent.
+            _clip_msg = clipping_stats.summary()
+            if _clip_msg:
+                logger.warning("Canonicalization clipping summary: %s", _clip_msg)
+
+            profiler.log_final_summary()
+            if profile_export_path:
+                profiler.export_summary(profile_export_path)
+
+            if not _stop():
+                return _build_finished_payload(
+                    interp_saved,
+                    interp_gaps,
+                    artifact_paths,
+                    interp_pose_rows,
+                    interp_tag_rows,
+                    interp_cnn_rows,
+                    interp_headtail_rows,
+                    save_interpolated_outputs,
+                    occluded_rows=occluded_rows,
+                    interp_runs=interp_runs,
+                    eligible_frames=eligible_frames,
+                    eligible_rows=eligible_rows,
+                    roi_rows_count=len(roi_rows),
+                    no_work_reason=(
+                        "no_occluded_rows"
+                        if occluded_rows == 0
+                        else "no_eligible_gaps" if eligible_rows == 0 else ""
+                    ),
+                )
+            return {"saved": 0, "gaps": 0}
+        except Exception:
+            # Any future silent-failure class must be visible in logs, even when
+            # graceful degradation isn't possible for it -- this blanket handler
+            # used to swallow everything with zero diagnostic trace, which is
+            # exactly how a whole-pass loss (crops, ROI, pose/tag/cnn/headtail
+            # CSVs -- everything) could vanish silently (see
+            # `_init_interpolation_backends`'s own try/except for the specific
+            # config-build failure this was first found from).
+            logger.exception(
+                "Interpolated post-pass failed; returning an empty payload "
+                "(saved=0, gaps=0)."
             )
-        if cache_interpolated_artifacts:
-            gen.finalize()
-
-        profiler.phase_end("interp_finalize")
-
-        # Report canonical-crop clipping, if any -- mirrors TrackingWorker's
-        # end-of-run clipping_stats summary (core/tracking/worker.py).
-        # ``canonical_margin`` is the operator's only dial against truncated
-        # animals, so this must never be silent.
-        _clip_msg = clipping_stats.summary()
-        if _clip_msg:
-            logger.warning("Canonicalization clipping summary: %s", _clip_msg)
-
-        profiler.log_final_summary()
-        if profile_export_path:
-            profiler.export_summary(profile_export_path)
-
-        if not _stop():
-            return _build_finished_payload(
-                interp_saved,
-                interp_gaps,
-                artifact_paths,
-                interp_pose_rows,
-                interp_tag_rows,
-                interp_cnn_rows,
-                interp_headtail_rows,
-                save_interpolated_outputs,
-                occluded_rows=occluded_rows,
-                interp_runs=interp_runs,
-                eligible_frames=eligible_frames,
-                eligible_rows=eligible_rows,
-                roi_rows_count=len(roi_rows),
-                no_work_reason=(
-                    "no_occluded_rows"
-                    if occluded_rows == 0
-                    else "no_eligible_gaps" if eligible_rows == 0 else ""
-                ),
+            return {"saved": 0, "gaps": 0}
+        finally:
+            _cleanup_backends(
+                cap,
+                detection_cache,
+                pose_model,
+                apriltag_model,
+                cnn_models,
+                headtail_model,
             )
-        return {"saved": 0, "gaps": 0}
-    except Exception:
-        # Any future silent-failure class must be visible in logs, even when
-        # graceful degradation isn't possible for it -- this blanket handler
-        # used to swallow everything with zero diagnostic trace, which is
-        # exactly how a whole-pass loss (crops, ROI, pose/tag/cnn/headtail
-        # CSVs -- everything) could vanish silently (see
-        # `_init_interpolation_backends`'s own try/except for the specific
-        # config-build failure this was first found from).
-        logger.exception(
-            "Interpolated post-pass failed; returning an empty payload "
-            "(saved=0, gaps=0)."
-        )
-        return {"saved": 0, "gaps": 0}
-    finally:
-        _cleanup_backends(
-            cap,
-            detection_cache,
-            pose_model,
-            apriltag_model,
-            cnn_models,
-            headtail_model,
-        )

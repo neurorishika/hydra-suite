@@ -20,6 +20,8 @@ connections, not just that the interfaces exist:
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 import numpy as np
 
 from hydra_suite.trackerkit.engine_params import RuntimeContext, build_engine_params
@@ -139,6 +141,10 @@ def test_csv_header_includes_arena_id_for_multi_arena():
 class _FakeProfiler:
     def __init__(self, enabled: bool = False):
         self.enabled = enabled
+
+    @contextmanager
+    def armed(self):
+        yield self
 
     def __getattr__(self, _name):
         return lambda *a, **k: None

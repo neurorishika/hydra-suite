@@ -12,6 +12,8 @@ from hydra_suite.core.post.processing import (
     interpolate_trajectories,
     resolve_trajectories,
 )
+from hydra_suite.utils import profiling_names as N
+from hydra_suite.utils.profiling import span
 
 logger = logging.getLogger(__name__)
 
@@ -121,66 +123,78 @@ def merge_trajectories(
 
     profiler = TrackingProfiler(enabled=enable_profiling)
 
-    if _stop():
-        return None
-    profiler.phase_start("post_prepare")
-    _emit(10, "Preparing trajectories...")
+    with profiler.armed(), span(N.POST):
+        if _stop():
+            return None
+        profiler.phase_start("post_prepare")
+        _emit(10, "Preparing trajectories...")
 
-    def prepare_trajs_for_merge(trajs):
-        if isinstance(trajs, pd.DataFrame):
-            return [group for _, group in trajs.groupby("TrajectoryID")]
-        return trajs
+        def prepare_trajs_for_merge(trajs):
+            if isinstance(trajs, pd.DataFrame):
+                return [group for _, group in trajs.groupby("TrajectoryID")]
+            return trajs
 
-    forward_prepared = prepare_trajs_for_merge(forward_trajs)
-    backward_prepared = prepare_trajs_for_merge(backward_trajs)
-    profiler.phase_end("post_prepare")
+        with span(N.PREPARE):
+            forward_prepared = prepare_trajs_for_merge(forward_trajs)
+            backward_prepared = prepare_trajs_for_merge(backward_trajs)
+        profiler.phase_end("post_prepare")
 
-    if _stop():
-        return None
-    profiler.phase_start("post_resolve")
-    _emit(30, "Resolving trajectory conflicts...")
-    resolved = resolve_trajectories(
-        forward_prepared, backward_prepared, params=params, should_stop=should_stop
-    )
-    profiler.phase_end("post_resolve")
+        if _stop():
+            return None
+        profiler.phase_start("post_resolve")
+        _emit(30, "Resolving trajectory conflicts...")
+        with span(N.RESOLVE):
+            resolved = resolve_trajectories(
+                forward_prepared,
+                backward_prepared,
+                params=params,
+                should_stop=should_stop,
+            )
+        profiler.phase_end("post_resolve")
 
-    if _stop():
-        return None
-    _emit(60, "Converting to DataFrame...")
-    resolved = convert_resolved_to_dataframe(resolved)
+        if _stop():
+            return None
+        _emit(60, "Converting to DataFrame...")
+        resolved = convert_resolved_to_dataframe(resolved)
 
-    profiler.phase_start("post_interpolate")
-    _emit(75, "Applying interpolation...")
-    if isinstance(resolved, pd.DataFrame) and interp_method != "none":
-        resolved = interpolate_trajectories(
-            resolved,
-            method=interp_method,
-            max_gap=max_gap,
-            heading_flip_max_burst=heading_flip_max_burst,
-            directed_heading_posthoc=directed_heading_posthoc,
-        )
-    profiler.phase_end("post_interpolate")
+        profiler.phase_start("post_interpolate")
+        _emit(75, "Applying interpolation...")
+        with span(N.INTERPOLATE):
+            if isinstance(resolved, pd.DataFrame) and interp_method != "none":
+                resolved = interpolate_trajectories(
+                    resolved,
+                    method=interp_method,
+                    max_gap=max_gap,
+                    heading_flip_max_burst=heading_flip_max_burst,
+                    directed_heading_posthoc=directed_heading_posthoc,
+                )
+        profiler.phase_end("post_interpolate")
 
-    if _stop():
-        return None
-    _emit(90, "Scaling to original space...")
-    profiler.phase_start("post_tag_identity")
-    resolved = resolve_tag_identities(
-        resolved, tag_cache_path=tag_cache_path, params=params, progress=progress
-    )
-    profiler.phase_end("post_tag_identity")
+        if _stop():
+            return None
+        _emit(90, "Scaling to original space...")
+        profiler.phase_start("post_tag_identity")
+        with span(N.TAG_IDENTITY):
+            resolved = resolve_tag_identities(
+                resolved,
+                tag_cache_path=tag_cache_path,
+                params=params,
+                progress=progress,
+            )
+        profiler.phase_end("post_tag_identity")
 
-    profiler.phase_start("post_rescale")
-    resolved = rescale_coordinates(resolved, resize_factor=resize_factor)
-    profiler.phase_end("post_rescale")
+        profiler.phase_start("post_rescale")
+        with span(N.RESCALE):
+            resolved = rescale_coordinates(resolved, resize_factor=resize_factor)
+        profiler.phase_end("post_rescale")
 
-    if _stop():
-        return None
-    profiler.log_final_summary()
-    if profile_export_path:
-        profiler.export_summary(profile_export_path)
-    _emit(100, "Merge complete!")
-    return resolved
+        if _stop():
+            return None
+        profiler.log_final_summary()
+        if profile_export_path:
+            profiler.export_summary(profile_export_path)
+        _emit(100, "Merge complete!")
+        return resolved
 
 
 def write_csv_artifact(path, fieldnames, rows):

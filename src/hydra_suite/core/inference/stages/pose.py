@@ -17,6 +17,8 @@ from hydra_suite.core.canonicalization.geometry import (
     canonical_affine,
 )
 from hydra_suite.core.individual.pose.crop_dtype import to_uint8_image
+from hydra_suite.utils import profiling_names as N
+from hydra_suite.utils.profiling import span
 
 from ..config import PoseConfig
 from ..result import CropBatch, OBBResult, PoseResult
@@ -428,50 +430,52 @@ def run_pose_batch(
     cuda_crops: list[Any] = []
     affines_all: list[np.ndarray | None] = []
 
-    for i in range(n_total):
-        if on_cuda:
-            cuda_crops.append(batch.crops[i])
-        else:
-            hwc = batch.crops[i].permute(1, 2, 0).cpu().numpy()
+    with span(N.PREP_LOOP, units=n_total):
+        for i in range(n_total):
+            if on_cuda:
+                cuda_crops.append(batch.crops[i])
+            else:
+                hwc = batch.crops[i].permute(1, 2, 0).cpu().numpy()
 
-        # Compute inverse affine for this crop using its OBB corners
-        frame_idx = int(batch.frame_index[i])
-        obb = batch.obb_by_frame.get(frame_idx)
-        m_inv = None
-        if obb is not None:
-            rows = batch.select_frame(frame_idx)
-            # local index of crop i within its frame
-            local_idx = int(np.searchsorted(rows, i))
-            # rows is sorted from select_frame; rows[local_idx] == i confirms exact hit
-            if (
-                local_idx < len(rows)
-                and rows[local_idx] == i
-                and local_idx < obb.num_detections
-            ):
-                corners = obb.corners[local_idx]
+            # Compute inverse affine for this crop using its OBB corners
+            frame_idx = int(batch.frame_index[i])
+            obb = batch.obb_by_frame.get(frame_idx)
+            m_inv = None
+            if obb is not None:
+                rows = batch.select_frame(frame_idx)
+                # local index of crop i within its frame
+                local_idx = int(np.searchsorted(rows, i))
+                # rows is sorted from select_frame; rows[local_idx] == i confirms exact hit
+                if (
+                    local_idx < len(rows)
+                    and rows[local_idx] == i
+                    and local_idx < obb.num_detections
+                ):
+                    corners = obb.corners[local_idx]
+                    try:
+                        m_align, _theta, _clipped = canonical_affine(corners, geometry)
+                        if on_cuda and not does_own_letterbox:
+                            m_inv = cv2.invertAffineTransform(m_align)
+                        else:
+                            m_total = compose_affine(fit_m, m_align)
+                            m_inv = cv2.invertAffineTransform(m_total)
+                    except Exception:
+                        m_inv = None
+
+            if not on_cuda:
+                hwc_u8 = to_uint8_image(hwc)
                 try:
-                    m_align, _theta, _clipped = canonical_affine(corners, geometry)
-                    if on_cuda and not does_own_letterbox:
-                        m_inv = cv2.invertAffineTransform(m_align)
-                    else:
-                        m_total = compose_affine(fit_m, m_align)
-                        m_inv = cv2.invertAffineTransform(m_total)
+                    hwc_u8 = apply_fit(hwc_u8, fit)
                 except Exception:
-                    m_inv = None
+                    pass
+                np_crops.append(np.ascontiguousarray(hwc_u8))
+            affines_all.append(m_inv)
 
-        if not on_cuda:
-            hwc_u8 = to_uint8_image(hwc)
-            try:
-                hwc_u8 = apply_fit(hwc_u8, fit)
-            except Exception:
-                pass
-            np_crops.append(np.ascontiguousarray(hwc_u8))
-        affines_all.append(m_inv)
-
-    if on_cuda:
-        raw_results = model.backend.predict_batch_cuda(cuda_crops)
-    else:
-        raw_results = model.backend.predict_batch(np_crops) if np_crops else []
+    with span(N.BACKEND_FORWARD, units=n_total, gpu=True):
+        if on_cuda:
+            raw_results = model.backend.predict_batch_cuda(cuda_crops)
+        else:
+            raw_results = model.backend.predict_batch(np_crops) if np_crops else []
 
     results: dict[int, PoseResult] = {}
     prob_offset = 0
