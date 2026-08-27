@@ -134,7 +134,6 @@ def detect_identity_changepoints(
     rows are returned with no splits.
 
     PELT model is read from params["PELT_MODEL"] (l1 / l2 / rbf; default rbf).
-    Z-scoring is skipped for l1 since l1 is already median-based.
 
     Args:
         smoothed_by_traj: ``{TrajectoryID: [(FrameID, smoothed_log_probs), ...]}``,
@@ -187,12 +186,10 @@ def detect_identity_changepoints(
         probs /= np.clip(probs.sum(axis=1, keepdims=True), 1e-300, None)
         signal = probs[:, 1:]
 
-        # Z-score per column to suppress magnitude drift.
-        # Skipped for l1 which is already median-based and scale-insensitive.
-        if pelt_model != "l1":
-            col_std = signal.std(axis=0)
-            col_std[col_std < 1e-8] = 1.0
-            signal = (signal - signal.mean(axis=0)) / col_std
+        # The signal is a probability simplex slice in [0, 1]; the penalty is in
+        # those units. Per-trajectory z-scoring made the penalty's units
+        # trajectory-dependent and inflated float noise on constant posteriors
+        # into unit-variance "signal" (660 splits on 128 tracks, 2026-08-27).
 
         try:
             splits = (
@@ -1305,7 +1302,7 @@ def run_fragment_solver(
     catalog : IdentityCatalog for the run.
     params : optional overrides. Keys:
         ENABLE_PELT_SPLITTING            bool   default False
-        CHANGEPOINT_PENALTY              float  default 3.0
+        CHANGEPOINT_PENALTY              float  default 3.0 — in probability units (raw, un-normalised signal)
         MIN_FRAGMENT_FRAMES              int    default 5
         PELT_MODEL                       str    default "rbf" (l1 / l2 / rbf)
         FRAGMENT_CNN_WEIGHT              float  default 0.40

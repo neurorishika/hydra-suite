@@ -109,3 +109,42 @@ def test_changepoint_no_ruptures_returns_empty(monkeypatch):
     monkeypatch.setattr(builtins, "__import__", fake_import)
     result = detect_identity_changepoints(smoothed_by_traj, catalog, {})
     assert result == {}
+
+
+def _catalog4() -> IdentityCatalog:
+    """Return a 4-label catalog for testing with 4-column posterior signals."""
+    return IdentityCatalog.from_labels(["a", "b", "c", "d"])
+
+
+def test_constant_posterior_yields_no_changepoints():
+    """Regression: per-trajectory z-scoring turned float noise on a constant
+    posterior into unit-variance signal and PELT split it 5-22 times."""
+    rng = np.random.default_rng(0)
+    seq = []
+    for f in range(400):
+        lp = np.full(4, -20.0)
+        lp[2] = 0.0
+        lp += rng.normal(0, 1e-4, 4)  # float-noise jitter
+        seq.append((f, lp - np.logaddexp.reduce(lp)))
+    out = detect_identity_changepoints(
+        {7: seq},
+        _catalog4(),
+        {"PELT_MODEL": "l2", "CHANGEPOINT_PENALTY": 3.0},
+    )
+    assert out == {}
+
+
+def test_single_clean_switch_yields_one_changepoint():
+    """Clean identity switch from label 1 to label 3 should produce exactly
+    one changepoint near the switch boundary."""
+    seq = []
+    for f in range(400):
+        lp = np.full(4, -20.0)
+        lp[1 if f < 200 else 3] = 0.0
+        seq.append((f, lp - np.logaddexp.reduce(lp)))
+    out = detect_identity_changepoints(
+        {7: seq},
+        _catalog4(),
+        {"PELT_MODEL": "l2", "CHANGEPOINT_PENALTY": 3.0},
+    )
+    assert out == {7: [199]}
