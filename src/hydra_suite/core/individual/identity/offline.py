@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import math
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -1317,6 +1318,62 @@ def merge_same_label_neighbours(
     return out
 
 
+EVIDENCE_CONF_LEVEL = 0.5  # a detection "knows" its label at this posterior
+EVIDENCE_MIN_CONF_FRAC = 0.10  # <10% confident detections → source is uninformative
+EVIDENCE_MIN_DIVERSITY = 0.30  # distinct labels/frame vs achievable → collapsed source
+
+
+@dataclass(frozen=True)
+class EvidenceQuality:
+    conf_frac: float
+    diversity: float
+    n_frames: int
+    ok: bool
+
+
+def assess_evidence_quality(
+    raw_evidence: dict[Any, list[tuple[int, np.ndarray]]], catalog: IdentityCatalog
+) -> EvidenceQuality:
+    """Cheap, source-level sanity check on RAW (unsmoothed) per-frame evidence.
+
+    Guards against a source whose evidence is simply uninformative -- a
+    badly miscalibrated classifier, wrong model loaded, mismatched
+    preprocessing, etc. -- driving trajectory restructuring downstream
+    (PELT splitting + fragment reassignment). Computed on the raw,
+    unsmoothed per-detection posteriors so a broken source can't be masked
+    by forward-backward smoothing before the check runs.
+
+    conf_frac: fraction of (frame, detection) rows whose max KNOWN posterior
+        (excluding the ``unknown`` slot) is >= ``EVIDENCE_CONF_LEVEL``.
+    diversity: mean over frames of distinct argmax labels / min(#known
+        labels, #detections in that frame). Low when the source keeps
+        pointing at the same one or two labels regardless of which
+        detection it's looking at.
+    Both were ~0 / 0.3 on the 2026-08-27 failure (a mis-preprocessed
+    classifier) and >0.8 / >0.7 with correct preprocessing.
+    """
+    per_frame: dict[int, list[int]] = {}
+    conf = 0
+    total = 0
+    for sequence in raw_evidence.values():
+        for frame_id, lp in sequence:
+            p = np.exp(lp - np.logaddexp.reduce(lp))
+            known = p[1:]
+            total += 1
+            if known.max() >= EVIDENCE_CONF_LEVEL:
+                conf += 1
+            per_frame.setdefault(int(frame_id), []).append(int(known.argmax()))
+    if total == 0:
+        return EvidenceQuality(0.0, 0.0, 0, False)
+    n_known = max(1, len(catalog.labels) - 1)
+    diversity = float(
+        np.mean([len(set(v)) / min(n_known, len(v)) for v in per_frame.values()])
+    )
+    conf_frac = conf / total
+    ok = conf_frac >= EVIDENCE_MIN_CONF_FRAC and diversity >= EVIDENCE_MIN_DIVERSITY
+    return EvidenceQuality(conf_frac, diversity, len(per_frame), ok)
+
+
 def run_fragment_solver(
     trajectories_df: pd.DataFrame,
     catalog: IdentityCatalog,
@@ -1435,6 +1492,7 @@ def run_fragment_solver(
         )
 
     smoothed_by_traj: dict[Any, list[tuple[int, np.ndarray]]] | None = None
+    raw_evidence: dict[Any, list[tuple[int, np.ndarray]]] = {}
     if cache is not None:
         try:
             raw_evidence = load_trajectory_evidence(
@@ -1479,6 +1537,27 @@ def run_fragment_solver(
                 "(falls back to any CSV columns present)."
             )
 
+    # Preserve the smoothed posteriors for the raw per-row annotation
+    # (``IdentityFinalSmoothedLabel``/``...Confidence``) regardless of what
+    # the evidence-quality breaker below decides for splitting/assignment --
+    # a human proofreading the run should still see what the (uninformative)
+    # source thought, even when the solver refuses to act on it.
+    smoothed_for_annotation = smoothed_by_traj
+
+    if raw_evidence:
+        quality = assess_evidence_quality(raw_evidence, catalog)
+        if not quality.ok:
+            log.error(
+                "fragment_solver: identity evidence is uninformative "
+                "(confident=%.1f%% of detections, diversity=%.2f over %d "
+                "frames) -- refusing to split or assign identities. Check "
+                "the classifier's fit_policy / preprocessing.",
+                quality.conf_frac * 100,
+                quality.diversity,
+                quality.n_frames,
+            )
+            smoothed_by_traj = None
+
     if params.get("ENABLE_PELT_SPLITTING", False) and smoothed_by_traj:
         changepoints = detect_identity_changepoints(smoothed_by_traj, catalog, params)
         split_df = split_trajectories_at_changepoints(
@@ -1503,9 +1582,9 @@ def run_fragment_solver(
             trajectories_df["TrajectoryID"].nunique(),
         )
 
-    if smoothed_by_traj:
+    if smoothed_for_annotation:
         split_df = _annotate_smoothed_labels(
-            split_df, smoothed_by_traj, catalog, params
+            split_df, smoothed_for_annotation, catalog, params
         )
 
     solved = solve_global_assignment(
