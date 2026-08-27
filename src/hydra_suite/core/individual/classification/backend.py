@@ -102,9 +102,9 @@ class ClassifierMetadata:
     factor_names: list[str]
     class_names_per_factor: list[list[str]]
     monochrome: bool
-    recommended_confidence_threshold: float | None
-    source_path: str
-    fit_policy: str
+    fit_policy: str = "letterbox"
+    recommended_confidence_threshold: float | None = None
+    source_path: str = ""
     calibration_temperature: tuple[float, ...] | None = None
     calibration_signature: str | None = None
     calibration_ece: tuple[float, ...] | None = None
