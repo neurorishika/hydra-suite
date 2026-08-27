@@ -620,15 +620,16 @@ def test_split_trajectories_no_changepoints_unchanged():
     assert len(result) == len(df)
 
 
-def test_split_trajectories_drops_short_segments():
-    """A split that would produce a segment shorter than MIN_FRAGMENT_FRAMES is dropped."""
+def test_split_trajectories_folds_short_segments_instead_of_dropping():
+    """A split that would produce a segment shorter than MIN_FRAGMENT_FRAMES is
+    folded into its neighbour, not dropped -- no rows are lost."""
     df = _make_df_with_prob_cols(n_frames=20, swap_at=20)
     changepoints = {1: [2]}
     result = split_trajectories_at_changepoints(
         df, changepoints, {"MIN_FRAGMENT_FRAMES": 5}
     )
     assert len(result["TrajectoryID"].unique()) == 1
-    assert len(result) == 17
+    assert len(result) == 20
 
 
 def test_split_trajectories_preserves_all_columns():

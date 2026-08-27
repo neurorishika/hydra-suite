@@ -222,7 +222,8 @@ def split_trajectories_at_changepoints(
 
     Each value in changepoints is a list of FrameID values that are the
     *inclusive end* of a segment (same convention as detect_identity_changepoints).
-    Sub-segments shorter than MIN_FRAGMENT_FRAMES rows are dropped.
+    Sub-segments shorter than MIN_FRAGMENT_FRAMES rows are merged into their
+    neighbour (never dropped).
     OriginalTrajectoryID is set to the pre-split TrajectoryID on all rows.
     Trajectories with no changepoints pass through unchanged.
     """
@@ -261,10 +262,22 @@ def split_trajectories_at_changepoints(
                 prev = sf + 1
         boundaries.append((prev, last_frame))
 
+        segments: list[pd.DataFrame] = []
         for start_f, end_f in boundaries:
-            seg = grp[(grp["FrameID"] >= start_f) & (grp["FrameID"] <= end_f)].copy()
-            if len(seg) < min_frames:
+            seg = grp[(grp["FrameID"] >= start_f) & (grp["FrameID"] <= end_f)]
+            if seg.empty:
                 continue
+            if len(seg) < min_frames and segments:
+                segments[-1] = pd.concat([segments[-1], seg])  # fold into previous
+            elif len(seg) < min_frames:
+                segments.append(seg)  # leading remnant: fold into next
+                continue
+            elif segments and len(segments[-1]) < min_frames:
+                segments[-1] = pd.concat([segments[-1], seg])
+            else:
+                segments.append(seg)
+        for seg in segments:
+            seg = seg.copy()
             seg["TrajectoryID"] = next_id
             seg["OriginalTrajectoryID"] = traj_id
             next_id += 1
@@ -1264,6 +1277,46 @@ def _annotate_smoothed_labels(
     return out
 
 
+def merge_same_label_neighbours(
+    df: pd.DataFrame, label_col: str = C.FINAL_LABEL
+) -> pd.DataFrame:
+    """Undo solver cuts that changed nothing: consecutive fragments of the same
+    ``OriginalTrajectoryID`` whose final labels agree (unknown == unknown too)
+    are re-joined under the earlier fragment's TrajectoryID. Relink cannot do
+    this (it rejects gap == 0), so the solver owns it."""
+    if "OriginalTrajectoryID" not in df.columns or label_col not in df.columns:
+        return df
+    out = df.copy()
+    spans = (
+        out.groupby("TrajectoryID")
+        .agg(
+            orig=("OriginalTrajectoryID", "first"),
+            start=("FrameID", "min"),
+            end=("FrameID", "max"),
+            label=(label_col, "first"),
+        )
+        .sort_values(["orig", "start"])
+    )
+    remap: dict = {}
+    prev_tid = prev_orig = prev_label = None
+    prev_end = None
+    for tid, r in spans.iterrows():
+        same = (
+            prev_tid is not None
+            and r.orig == prev_orig
+            and r.start == prev_end + 1
+            and str(r.label) == str(prev_label)
+        )
+        if same:
+            remap[tid] = remap.get(prev_tid, prev_tid)
+        else:
+            prev_tid, prev_orig, prev_label = tid, r.orig, r.label
+        prev_end = r.end
+    if remap:
+        out["TrajectoryID"] = out["TrajectoryID"].map(lambda t: remap.get(t, t))
+    return out
+
+
 def run_fragment_solver(
     trajectories_df: pd.DataFrame,
     catalog: IdentityCatalog,
@@ -1455,6 +1508,13 @@ def run_fragment_solver(
             split_df, smoothed_by_traj, catalog, params
         )
 
-    return solve_global_assignment(
+    solved = solve_global_assignment(
         split_df, catalog, params, evidence_by_traj=smoothed_by_traj
     )
+    merged = merge_same_label_neighbours(solved)
+    log.info(
+        "fragment_solver: re-merged %d → %d trajectories after assignment.",
+        solved["TrajectoryID"].nunique(),
+        merged["TrajectoryID"].nunique(),
+    )
+    return merged
