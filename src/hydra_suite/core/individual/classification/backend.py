@@ -462,7 +462,15 @@ class _ClassifierMultiheadBundleLoader:
                 data.get("recommended_confidence_threshold")
             ),
             source_path=path,
-            fit_policy=resolve_fit_policy(data.get("fit_policy"), path),
+            # YOLO multihead bundles must always resolve to "native" (spec
+            # Sec 3.1) -- ultralytics applies its own letterbox/preprocessing,
+            # Layer 2 must not additionally squash on top of it, regardless
+            # of any stamped/unstamped fit_policy value in the manifest.
+            fit_policy=resolve_fit_policy(
+                data.get("fit_policy"),
+                path,
+                native=(manifest_kind == "yolo_multihead_bundle"),
+            ),
             calibration_temperature=_normalize_calibration_temperature(
                 data.get("calibration_temperature")
             ),

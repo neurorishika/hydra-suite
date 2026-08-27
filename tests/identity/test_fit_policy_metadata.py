@@ -78,3 +78,56 @@ def test_multihead_manifest_fit_policy(tmp_path):
         )
     )
     assert B._select_loader(str(man)).parse_metadata(str(man)).fit_policy == "letterbox"
+
+
+def test_unstamped_yolo_multihead_bundle_resolves_to_native(tmp_path):
+    """Finding I2: YOLO multihead bundles must always resolve to 'native'
+    (spec Sec 3.1), regardless of a missing/stamped fit_policy -- ultralytics
+    applies its own preprocessing and Layer 2 must not touch it.
+    """
+    _tiny_ckpt(tmp_path, fit_policy="letterbox")
+    man = tmp_path / "bundle.multihead.json"
+    man.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "kind": "yolo_multihead_bundle",
+                "factor_names": ["flat", "flat_1"],
+                "factor_models": [
+                    {"factor": "flat", "path": "m.pth", "class_names": ["a", "b"]},
+                    {"factor": "flat_1", "path": "m.pth", "class_names": ["a", "b"]},
+                ],
+                "input_size": [32, 32],
+                "monochrome": False,
+                # no fit_policy key: unstamped
+            }
+        )
+    )
+    meta = B._select_loader(str(man)).parse_metadata(str(man))
+    assert meta.fit_policy == "native"
+
+
+def test_yolo_multihead_bundle_ignores_stamped_fit_policy(tmp_path):
+    """Even an explicitly stamped (e.g. legacy 'letterbox') fit_policy on a
+    yolo_multihead_bundle manifest must be overridden to 'native'.
+    """
+    _tiny_ckpt(tmp_path, fit_policy="letterbox")
+    man = tmp_path / "bundle.multihead.json"
+    man.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "kind": "yolo_multihead_bundle",
+                "factor_names": ["flat", "flat_1"],
+                "factor_models": [
+                    {"factor": "flat", "path": "m.pth", "class_names": ["a", "b"]},
+                    {"factor": "flat_1", "path": "m.pth", "class_names": ["a", "b"]},
+                ],
+                "input_size": [32, 32],
+                "monochrome": False,
+                "fit_policy": "letterbox",
+            }
+        )
+    )
+    meta = B._select_loader(str(man)).parse_metadata(str(man))
+    assert meta.fit_policy == "native"
