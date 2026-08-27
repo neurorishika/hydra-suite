@@ -615,6 +615,7 @@ class ModelHistoryDialog(QDialog):
                 factor_entries = []
                 bundle_input_size: tuple[int, int] | None = None
                 bundle_monochrome = fallback_monochrome
+                bundle_fit_policy: str | None = None
                 for idx, artifact_path in enumerate(copied_artifact_paths):
                     meta = classifier_metadata_for_artifact(
                         artifact_path,
@@ -628,6 +629,13 @@ class ModelHistoryDialog(QDialog):
                             int(input_size_list[1]),
                         )
                     bundle_monochrome = bool(meta.get("monochrome", bundle_monochrome))
+                    if bundle_fit_policy is None:
+                        # Every factor of a bundle is trained together under
+                        # the same pipeline, so all factors report the same
+                        # fit_policy -- use the first non-None one we see.
+                        candidate_fit_policy = meta.get("fit_policy")
+                        if candidate_fit_policy is not None:
+                            bundle_fit_policy = str(candidate_fit_policy)
                     factor_name = str(
                         (meta.get("factor_names") or [f"factor_{idx + 1}"])[0]
                     )
@@ -646,6 +654,7 @@ class ModelHistoryDialog(QDialog):
                     factor_entries=factor_entries,
                     input_size=bundle_input_size or fallback_input_size or (224, 224),
                     monochrome=bundle_monochrome,
+                    fit_policy=bundle_fit_policy,
                 )
                 copied = copied + [trackerkit_manifest]
             except Exception as exc:

@@ -7675,6 +7675,7 @@ class MainWindow(QMainWindow):
         published_factor_entries: list[dict[str, object]] = []
         bundle_input_size: tuple[int, int] | None = None
         bundle_monochrome = fallback_monochrome
+        bundle_fit_policy: str | None = None
         for fi, result in enumerate(results):
             artifact = result.get("artifact_path", "")
             if not artifact:
@@ -7726,6 +7727,13 @@ class MainWindow(QMainWindow):
                 bundle_monochrome = bool(
                     classifier_v2_meta.get("monochrome", bundle_monochrome)
                 )
+                if bundle_fit_policy is None:
+                    # Every factor of a bundle is trained together under the
+                    # same pipeline, so all factors report the same
+                    # fit_policy -- use the first non-None one we see.
+                    candidate_fit_policy = classifier_v2_meta.get("fit_policy")
+                    if candidate_fit_policy is not None:
+                        bundle_fit_policy = str(candidate_fit_policy)
                 factor_name = (
                     scheme.factors[fi].name
                     if (multi_head and scheme and fi < len(scheme.factors))
@@ -7791,6 +7799,7 @@ class MainWindow(QMainWindow):
                     recommended_confidence_threshold=self._normalize_prediction_confidence_threshold(
                         settings.get("prediction_confidence_threshold")
                     ),
+                    fit_policy=bundle_fit_policy,
                 )
                 dialog.append_log(
                     f"Published TrackerKit manifest: {trackerkit_manifest.name}"

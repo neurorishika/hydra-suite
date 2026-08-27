@@ -423,6 +423,17 @@ def test_run_cnn_batch_routes_by_frame_device(monkeypatch):
     monkeypatch.setattr(crops_mod, "extract_classifier_crops_batch_np", _fake_np_batch)
 
     class _Backend:
+        metadata = type(
+            "M",
+            (),
+            {
+                "input_size": (8, 8),
+                "factor_names": ["f"],
+                "class_names_per_factor": [["a", "b"]],
+                "fit_policy": "letterbox",
+            },
+        )()
+
         def predict_batch_cuda(self, crops, input_is_bgr=True):
             used["cuda_fwd"] = True
             return [[np.array([0.5, 0.5], np.float32)]]

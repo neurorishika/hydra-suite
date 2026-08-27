@@ -172,6 +172,7 @@ def _publish_training_artifacts(
     bundle_input_size: tuple[int, int] | None = None
     bundle_monochrome = False
     bundle_confidence_threshold: float | None = recommended_confidence_threshold
+    bundle_fit_policy: str | None = None
 
     for index, artifact_path in enumerate(artifact_paths):
         classifier_meta = classifier_metadata_for_artifact(
@@ -210,6 +211,13 @@ def _publish_training_artifacts(
         if bundle_input_size is None:
             bundle_input_size = (int(input_size[0]), int(input_size[1]))
         bundle_monochrome = bool(classifier_meta.get("monochrome", bundle_monochrome))
+        if bundle_fit_policy is None:
+            # Every factor of a bundle is trained together under the same
+            # pipeline, so all factors report the same fit_policy -- use the
+            # first non-None one we see.
+            candidate_fit_policy = classifier_meta.get("fit_policy")
+            if candidate_fit_policy is not None:
+                bundle_fit_policy = str(candidate_fit_policy)
         recommended_confidence_threshold = classifier_meta.get(
             "recommended_confidence_threshold"
         )
@@ -242,6 +250,7 @@ def _publish_training_artifacts(
         input_size=bundle_input_size or (224, 224),
         monochrome=bundle_monochrome,
         recommended_confidence_threshold=bundle_confidence_threshold,
+        fit_policy=bundle_fit_policy,
     )
     return published_key, str(manifest_path)
 
