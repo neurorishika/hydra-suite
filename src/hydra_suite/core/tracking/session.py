@@ -210,6 +210,13 @@ class TrackingSessionCore:
             enabled=bool(self.params.get("ENABLE_PROFILING", False))
         )
 
+        # Derived once so `relink_and_export_rich_csv` (Task 6) can read it
+        # without importing `config` -- the final densification pass's gap
+        # cap, shared with the forward/merge interpolation passes.
+        self.params["FINAL_INTERPOLATION_MAX_GAP"] = final_interpolation_max_gap(
+            self.config, self.params
+        )
+
     def _stopped_result(self) -> SessionResult:
         return SessionResult(False, None, None, [], None, [], None)
 
@@ -312,7 +319,7 @@ class TrackingSessionCore:
             "",
         )
 
-    def _export_rich(self, final_csv):
+    def _export_rich(self, final_csv, resolve: bool = True):
         return export_rich_csv(
             final_csv,
             self.pose_state,
@@ -323,6 +330,7 @@ class TrackingSessionCore:
             debug_mode=bool(self.params.get("DEBUG_MODE", True)),
             fps=self.params.get("FPS"),
             identity_ran=self._identity_ran(),
+            resolve=resolve,
         )
 
     def _relink_export_rich(self, final_csv):
@@ -670,14 +678,19 @@ class TrackingSessionCore:
                 with span(N.WRITE):
                     _save_trajectories_to_csv(final_df, final_csv)
 
-                cb.stage_changed("rich_export")
-                with span(N.RICH_EXPORT):
-                    rich_path = self._export_rich(final_csv)
-
-                if (
+                # Computed ONCE: whether identity resolution happens here (no
+                # postpass) or is deferred to the relink step below (Task 6 --
+                # the fragment solver must run exactly once per pipeline run).
+                postpass = (
                     should_run_interpolated_postpass(self.config)
                     and not cb.should_stop()
-                ):
+                )
+
+                cb.stage_changed("rich_export")
+                with span(N.RICH_EXPORT):
+                    rich_path = self._export_rich(final_csv, resolve=not postpass)
+
+                if postpass:
                     cb.stage_changed("interpolated_crops")
                     with span(N.INTERP_CROPS):
                         self._run_interp_crops(final_csv)

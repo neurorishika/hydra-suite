@@ -444,3 +444,82 @@ def sort_trajectories_by_identity(df: pd.DataFrame) -> pd.DataFrame:
     sort_cols = ["TrajectoryID", frame_col] if frame_col else ["TrajectoryID"]
     df = df.sort_values(sort_cols, kind="stable").reset_index(drop=True)
     return df
+
+
+_IDENTITY_INVARIANT_COLUMNS = (C.FINAL_LABEL, C.FINAL_ID, C.FINAL_SOURCE)
+
+
+def assert_one_identity_per_trajectory(df: pd.DataFrame) -> list:
+    """Return the sorted ``TrajectoryID``s that carry more than one identity.
+
+    A ``TrajectoryID`` is an offender when any of ``IdentityFinalLabel``,
+    ``IdentityFinalID``, or ``IdentityFinalSource`` takes more than one
+    distinct value (``dropna=False`` -- a mix of a real value and a missing
+    one is also a violation) within that trajectory. Missing Final-family
+    columns (identity never resolved at all) or a missing ``TrajectoryID``
+    column both mean nothing to check, so both return ``[]``.
+
+    This is the last-line invariant guard, called right before every rich
+    -export write (Task 6): relink runs BEFORE identity resolution now, but
+    a bug in either stage -- or a future caller that reorders them again --
+    could still stitch two solver-labelled fragments into one trajectory.
+    """
+    if df is None or df.empty or "TrajectoryID" not in df.columns:
+        return []
+    present_cols = [c for c in _IDENTITY_INVARIANT_COLUMNS if c in df.columns]
+    if not present_cols:
+        return []
+
+    offenders = set()
+    for col in present_cols:
+        nunique = df.groupby("TrajectoryID")[col].nunique(dropna=False)
+        offenders.update(nunique[nunique > 1].index.tolist())
+    return sorted(offenders)
+
+
+def collapse_to_majority_identity(df: pd.DataFrame, offenders) -> pd.DataFrame:
+    """Force each offending trajectory onto its majority identity.
+
+    For every ``TrajectoryID`` in *offenders*: pick the ``IdentityFinalLabel``
+    with the most rows (ties broken by first appearance in ``FrameID``
+    order), take ``IdentityFinalID``/``IdentityFinalSource`` from that
+    label's first row, and set ``IdentityFinalConfidence`` to the MINIMUM
+    confidence across the whole trajectory -- a forced collapse is exactly
+    the situation where the trajectory's identity is least trustworthy, and
+    reporting the min (not the majority label's own confidence) keeps that
+    honest. Trajectories not in *offenders* are returned unchanged.
+    """
+    if df is None or df.empty or not offenders:
+        return df
+
+    offenders_set = set(offenders)
+    out = df.copy()
+    if C.FINAL_LABEL not in out.columns:
+        return out
+
+    sort_col = "FrameID" if "FrameID" in out.columns else None
+    for traj_id in offenders_set:
+        mask = out["TrajectoryID"] == traj_id
+        group = out.loc[mask]
+        if sort_col:
+            group = group.sort_values(sort_col, kind="stable")
+        labels = group[C.FINAL_LABEL]
+        counts = labels.value_counts(dropna=False)
+        if counts.empty:
+            continue
+        max_count = counts.max()
+        top_labels = counts[counts == max_count].index.tolist()
+        # Tie-break by first appearance (FrameID order) among the tied labels.
+        majority_label = next(lbl for lbl in labels.tolist() if lbl in top_labels)
+        first_row = group[labels == majority_label].iloc[0]
+
+        out.loc[mask, C.FINAL_LABEL] = majority_label
+        if C.FINAL_ID in out.columns:
+            out.loc[mask, C.FINAL_ID] = first_row[C.FINAL_ID]
+        if C.FINAL_SOURCE in out.columns:
+            out.loc[mask, C.FINAL_SOURCE] = first_row[C.FINAL_SOURCE]
+        if C.FINAL_CONFIDENCE in out.columns:
+            min_conf = pd.to_numeric(group[C.FINAL_CONFIDENCE], errors="coerce").min()
+            out.loc[mask, C.FINAL_CONFIDENCE] = min_conf
+
+    return out
