@@ -17,7 +17,7 @@ from hydra_suite.core.canonicalization.resample import canonical_warp_batch_from
 from hydra_suite.utils import profiling_names as N
 from hydra_suite.utils.profiling import span
 
-from ..result import CropBatch, NumpyCropBatch, OBBResult
+from ..result import CropBatch, HeadTailResult, NumpyCropBatch, OBBResult
 from ..runtime import RuntimeContext
 
 
@@ -57,6 +57,8 @@ def extract_canonical_crops(
     runtime: RuntimeContext,
     suppress_foreign: bool = False,
     background_color: tuple[int, int, int] = (0, 0, 0),
+    heading_hints: np.ndarray | None = None,
+    directed_mask: np.ndarray | None = None,
 ) -> torch.Tensor:
     """Extract OBB-aligned canonical crops. Returns (N, C, canvas_h, canvas_w) tensor.
 
@@ -82,6 +84,12 @@ def extract_canonical_crops(
     helper ``extract_canonical_crops_batch`` uses — this single-frame entry
     point previously had no masking support at all, a real (unintentional)
     legacy parity gap for any realtime/streaming caller.
+
+    ``heading_hints``/``directed_mask`` (both ``(N,)``) are the same optional
+    head-first override :func:`extract_classifier_crops` supports (R8) --
+    consulted ONLY by the identity CNN's CUDA (NVDEC on-device) crop path via
+    :func:`extract_canonical_crops_batch`; omitted (every other caller,
+    including pose) this is exactly byte-identical to before.
     """
     del runtime  # kept for signature compatibility; device now follows frame
     n = obb_result.num_detections
@@ -101,6 +109,14 @@ def extract_canonical_crops(
                 )
             except ValueError:
                 m_align = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float64)
+                _theta = 0.0
+            m_align = _directed_align(
+                m_align,
+                _theta,
+                heading_hints[i] if heading_hints is not None else None,
+                bool(directed_mask[i]) if directed_mask is not None else False,
+                geometry,
+            )
             m_aligns.append(m_align)
 
     with span(N.WARP_BATCH, units=n, gpu=True):
@@ -182,10 +198,53 @@ def _get_warp_pool(n_workers: int) -> ThreadPoolExecutor | None:
         return _warp_pool
 
 
+def _directed_align(
+    m_align: np.ndarray,
+    theta: float,
+    hint,
+    directed,
+    geometry: CanonicalGeometry,
+) -> np.ndarray:
+    """Rotate a canonical affine by pi about the canvas centre when the
+    head/tail stage says the head points opposite to the OBB major axis (+x
+    after align).
+
+    Consulted ONLY by the identity classifier crop path (Layer 1). Leaves
+    ``m_align`` untouched (byte-identical) whenever the head/tail stage is not
+    directed for this detection -- no hint, non-finite hint, or ``directed``
+    falsy -- which is the case for every caller today (no heading kwargs) and
+    for any detection the head/tail stage is unsure about.
+    """
+    if not directed or hint is None or not np.isfinite(hint):
+        return m_align
+    from hydra_suite.core.individual.geometry import resolve_directed_angle
+
+    angle, is_dir, _ = resolve_directed_angle(float(theta), float(hint), True)
+    if not is_dir:
+        return m_align
+    d = (angle - theta + np.pi) % (2 * np.pi) - np.pi
+    if abs(d) < np.pi / 2:
+        return m_align
+    # NOTE: the canvas coordinate space ``m_align``/``canonical_affine`` and
+    # the ``F.grid_sample`` theta derivation (``align_corners=True``,
+    # ``resample._theta_from_m_align``) share is PIXEL-INDEX space (index 0
+    # is pixel 0's centre, index canvas_w-1 is the last pixel's centre) --
+    # reflecting about the canvas centre in that space is
+    # ``x' = (w - 1) - x``, NOT ``x' = w - x``. Verified empirically against
+    # the resampler (an off-by-one row/col shift with ``w, h`` instead of
+    # ``w - 1, h - 1`` was caught by this task's own visual marker test).
+    w, h = geometry.canvas_w, geometry.canvas_h
+    flip = np.array([[-1.0, 0.0, w - 1.0], [0.0, -1.0, h - 1.0]])
+    m3 = np.vstack([m_align, [0.0, 0.0, 1.0]])
+    return (np.vstack([flip, [0.0, 0.0, 1.0]]) @ m3)[:2]
+
+
 def extract_classifier_crops(
     frame: np.ndarray | torch.Tensor,
     obb_result: OBBResult,
     geometry: CanonicalGeometry,
+    heading_hints: np.ndarray | None = None,
+    directed_mask: np.ndarray | None = None,
 ) -> list[np.ndarray]:
     """Warp each OBB onto the shared canonical canvas (BGR uint8).
 
@@ -203,6 +262,15 @@ def extract_classifier_crops(
     AABB footprint rather than the whole frame), then quantised back to HWC
     uint8 -- there is
     no separate per-crop CPU kernel any more.
+
+    ``heading_hints``/``directed_mask`` (both ``(N,)``, matching
+    ``HeadTailResult.heading_hints``/``.directed_mask``) are optional: when
+    given, and the head/tail stage is directed (confident) for a detection,
+    the identity catalog's ordered classes (R8: ``pink_yellow`` !=
+    ``yellow_pink``) get a head-first crop by rotating the Layer 1 affine 180
+    degrees about the canvas centre when the head/tail heading disagrees with
+    the OBB-derived +x direction. Omitting both (every existing caller today)
+    or leaving a detection undirected is exactly byte-identical to before.
     """
     n = obb_result.num_detections
     if n == 0:
@@ -219,6 +287,14 @@ def extract_classifier_crops(
                 )
             except ValueError:
                 m_align = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float64)
+                _theta = 0.0
+            m_align = _directed_align(
+                m_align,
+                _theta,
+                heading_hints[i] if heading_hints is not None else None,
+                bool(directed_mask[i]) if directed_mask is not None else False,
+                geometry,
+            )
             m_aligns.append(m_align)
 
     with span(N.WARP_BATCH, units=n, gpu=True):
@@ -295,6 +371,7 @@ def extract_classifier_crops_batch_np(
     frames: list,
     obb_results: list[OBBResult],
     geometry: CanonicalGeometry,
+    headtail_by_frame: "dict[int, HeadTailResult] | None" = None,
 ) -> NumpyCropBatch:
     """uint8 sibling of :func:`extract_classifier_crops_batch`.
 
@@ -306,6 +383,10 @@ def extract_classifier_crops_batch_np(
     is byte-identical to ``extract_classifier_crops_batch`` followed by the
     ``permute/cpu/*255/clip/astype`` unpack, minus ~4 full-batch float32
     passes and two N-crop allocations per window.
+
+    ``headtail_by_frame`` (optional, ``{frame_idx: HeadTailResult}``) makes
+    each frame's crops head-first per :func:`extract_classifier_crops` --
+    omitted (every caller before this task) it is exactly byte-identical.
     """
     out_h, out_w = geometry.canvas_h, geometry.canvas_w
     crops: list[np.ndarray] = []
@@ -316,7 +397,18 @@ def extract_classifier_crops_batch_np(
     for frame, obb in zip(frames, obb_results):
         if obb.detection_ids.shape[0] == 0:
             continue
-        crops.extend(extract_classifier_crops(frame, obb, geometry))
+        ht = headtail_by_frame.get(obb.frame_idx) if headtail_by_frame else None
+        heading_hints = ht.heading_hints if ht is not None else None
+        directed_mask = ht.directed_mask if ht is not None else None
+        crops.extend(
+            extract_classifier_crops(
+                frame,
+                obb,
+                geometry,
+                heading_hints=heading_hints,
+                directed_mask=directed_mask,
+            )
+        )
         det_ids.append(obb.detection_ids)
         frame_idx_list.append(
             np.full(obb.detection_ids.shape[0], obb.frame_idx, np.int64)
@@ -462,6 +554,7 @@ def extract_canonical_crops_batch(
     runtime: RuntimeContext,
     suppress_foreign: bool = False,
     background_color: tuple[int, int, int] = (0, 0, 0),
+    headtail_by_frame: "dict[int, HeadTailResult] | None" = None,
 ) -> CropBatch:
     """Window-level canonical pose crops, bit-identical to ``extract_canonical_crops``.
 
@@ -479,6 +572,12 @@ def extract_canonical_crops_batch(
     single-detection frames. On CUDA the masking uses a CPU round-trip
     (on-device polygon rasterisation is non-trivial), documented as a
     follow-up optimisation — same as the old path.
+
+    ``headtail_by_frame`` (optional, ``{frame_idx: HeadTailResult}``): the
+    identity CNN's CUDA (NVDEC on-device) crop path threads this through so
+    its crops are head-first (R8), matching the CPU path's
+    ``extract_classifier_crops_batch_np``. Omitted (pose's call site) this is
+    exactly byte-identical to before.
     """
     per_frame: list[torch.Tensor] = []
     det_ids: list[np.ndarray] = []
@@ -488,7 +587,15 @@ def extract_canonical_crops_batch(
     for frame, obb in zip(frames, obb_results):
         if obb.detection_ids.shape[0] == 0:
             continue
-        crops = extract_canonical_crops(frame, obb, geometry, runtime)
+        ht = headtail_by_frame.get(obb.frame_idx) if headtail_by_frame else None
+        crops = extract_canonical_crops(
+            frame,
+            obb,
+            geometry,
+            runtime,
+            heading_hints=ht.heading_hints if ht is not None else None,
+            directed_mask=ht.directed_mask if ht is not None else None,
+        )
         if suppress_foreign and obb.num_detections > 1:
             crops = _apply_foreign_mask_canonical_batch(
                 crops, obb, geometry, background_color

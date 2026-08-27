@@ -386,6 +386,7 @@ class Pipeline:
                     cfg_cnn,
                     self.runtime,
                     geometry,
+                    headtail_by_frame=headtail,
                 )
                 cnn_per_phase.append(phase)
                 for idx, result in phase.items():

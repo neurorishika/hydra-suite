@@ -139,8 +139,18 @@ def run_cnn_batch(
     config: CNNConfig,
     runtime: RuntimeContext,
     geometry: CanonicalGeometry,
+    headtail_by_frame: "dict[int, Any] | None" = None,
 ) -> "dict[int, CNNResult]":
     """Run CNN classifier over a window; return one CNNResult per frame.
+
+    ``headtail_by_frame`` (optional, ``{frame_idx: HeadTailResult}``): when
+    given, the identity catalog's ordered classes (R8: ``pink_yellow`` !=
+    ``yellow_pink``) get a head-first crop wherever the head/tail stage is
+    confident (directed) for a detection -- threaded into both the CPU crop
+    path (``extract_classifier_crops_batch_np``) and the CUDA/NVDEC crop path
+    (``extract_canonical_crops_batch``) so identity agreement holds
+    regardless of which branch a window takes. Omitted, both branches are
+    exactly byte-identical to before.
 
     Builds classifier crops internally via extract_classifier_crops_batch_np (the
     shared canonical canvas, BGR uint8 -- bit-identical to the per-frame run_cnn
@@ -176,7 +186,11 @@ def run_cnn_batch(
 
         with span(N.CROP_EXTRACT):
             batch = extract_canonical_crops_batch(
-                frames, obb_results, geometry, runtime
+                frames,
+                obb_results,
+                geometry,
+                runtime,
+                headtail_by_frame=headtail_by_frame,
             )
         n_total = batch.crops.shape[0]
         if n_total:
@@ -201,7 +215,9 @@ def run_cnn_batch(
         # trip (it was exactly value-preserving, so removing it is
         # byte-identical; see NumpyCropBatch).
         with span(N.CROP_EXTRACT):
-            batch = extract_classifier_crops_batch_np(frames, obb_results, geometry)
+            batch = extract_classifier_crops_batch_np(
+                frames, obb_results, geometry, headtail_by_frame=headtail_by_frame
+            )
         if batch.crops:
             np_crops: list[np.ndarray] = apply_fit_batch_for_model(
                 batch.crops, model.input_size, policy
