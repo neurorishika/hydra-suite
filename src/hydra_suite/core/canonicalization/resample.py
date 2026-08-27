@@ -350,9 +350,16 @@ def squash_fit(crop_chw: torch.Tensor, model_wh: tuple) -> torch.Tensor:
 def fit_batch_for_model(
     crops_chw: torch.Tensor, model_wh: tuple, policy: str
 ) -> torch.Tensor:
-    """Dispatch Layer 2 by ``policy`` (see ``ClassifierMetadata.fit_policy``)."""
+    """Dispatch Layer 2 by ``policy`` (see ``ClassifierMetadata.fit_policy``).
+
+    ``"native"`` is a no-op: the backend (e.g. ultralytics/YOLO) applies its
+    own transform, so Layer 2 must leave the crops untouched -- mirrors
+    ``fit.fit_crops_for_model``'s ``"native"`` branch.
+    """
     if policy == "letterbox":
         return letterbox_fit(crops_chw, model_wh)
     if policy == "squash":
         return squash_fit(crops_chw, model_wh)
+    if policy == "native":
+        return crops_chw
     raise ValueError(f"unsupported fit_policy for tensor Layer 2: {policy!r}")

@@ -65,6 +65,15 @@ def test_torch_batch_policy_dispatch():
     )
 
 
+def test_torch_batch_native_policy_is_noop():
+    # H, W (66, 148) deliberately differ from model_wh (128, 128) so the
+    # assertion proves this is a true no-op, not an accidental shape match.
+    x = torch.rand(4, 3, 66, 148)
+    out = fit_batch_for_model(x, (128, 128), "native")
+    assert out.shape == x.shape
+    assert torch.equal(out, x)
+
+
 def test_unknown_policy_raises():
     with pytest.raises(ValueError):
         fit_crops_for_model([_crop()], (128, 128), "stretchy")
