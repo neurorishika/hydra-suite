@@ -886,6 +886,21 @@ class PostProcessPanel(QWidget):
         )
         self.lbl_fragment_spatial_veto_threshold = QLabel("Spatial veto threshold")
 
+        self.spin_fragment_min_support = QDoubleSpinBox()
+        self.spin_fragment_min_support.setRange(0.0, 1.0)
+        self.spin_fragment_min_support.setSingleStep(0.05)
+        self.spin_fragment_min_support.setDecimals(2)
+        self.spin_fragment_min_support.setValue(0.5)
+        self.spin_fragment_min_support.setToolTip(
+            "Absolute posterior floor: a label is a candidate for a fragment\n"
+            "only if its normalised support (the convex blend of CNN,\n"
+            "AprilTag, and online-prior evidence) is at least this. Higher →\n"
+            "stricter, more fragments fall through to Unknown; lower → more\n"
+            "permissive.\n"
+            "Recommended: 0.3–0.7."
+        )
+        self.lbl_fragment_min_support = QLabel("Minimum support")
+
         self.refinement_gate_grid = self._build_field_grid(
             [
                 (
@@ -896,6 +911,10 @@ class PostProcessPanel(QWidget):
                 (
                     self.lbl_fragment_spatial_veto_threshold,
                     self.spin_fragment_spatial_veto_threshold,
+                ),
+                (
+                    self.lbl_fragment_min_support,
+                    self.spin_fragment_min_support,
                 ),
             ],
             columns=3,

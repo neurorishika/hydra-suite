@@ -119,6 +119,48 @@ def _build_prior_log_scores(
     }
 
 
+def _combined_support(
+    frag_row: pd.Series, known_labels: list[str], params: dict[str, Any]
+) -> dict[str, float]:
+    """Normalised per-label support from the *informative* sources of one
+    fragment, blended convexly: ``Σ w_s·log_s / Σ w_s``. With one informative
+    source this is that source's geometric-mean posterior itself -- the
+    ``FRAGMENT_*_WEIGHT`` knobs are relative source weights, never a softmax
+    temperature (the 2026-08-27 audit found ``cnn_w=0.1`` flattening 0.99999
+    evidence to 0.2 support).
+
+    A source only counts as "present" when it is actually informative, not
+    merely non-empty: e.g. an online-label prior for a label that is not in
+    ``known_labels`` carries no information and must be excluded from the
+    blend rather than included as an all-zero vector that would otherwise
+    dilute a genuinely informative source's weighted average.
+    """
+    cnn_w = float(params.get("FRAGMENT_CNN_WEIGHT", 0.40))
+    tag_w = float(params.get("FRAGMENT_TAG_WEIGHT", 0.15))
+    prior_w = float(params.get("ONLINE_PRIOR_WEIGHT", 0.25))
+    cnn_log = frag_row.get("CNNLogEvidence") or {}
+    tag_log = frag_row.get("TagLogEvidence") or {}
+    online_lbl = str(frag_row.get("OnlineLabel", "unknown"))
+    online_conf = float(frag_row.get("OnlineConfidence", 0.0))
+    sources: list[tuple[float, dict[str, float]]] = []
+    if cnn_log and cnn_w > 0:
+        sources.append((cnn_w, cnn_log))
+    if tag_log and tag_w > 0:
+        sources.append((tag_w, tag_log))
+    if prior_w > 0 and online_lbl in known_labels and np.isfinite(online_conf):
+        sources.append(
+            (prior_w, _build_prior_log_scores(known_labels, online_lbl, online_conf))
+        )
+    if not sources:
+        return _normalize_support_scores(known_labels, {})
+    total_w = sum(w for w, _ in sources)
+    combined = {
+        label: sum(w * float(src.get(label, 0.0)) for w, src in sources) / total_w
+        for label in known_labels
+    }
+    return _normalize_support_scores(known_labels, combined)
+
+
 def detect_identity_changepoints(
     smoothed_by_traj: dict[Any, list[tuple[int, np.ndarray]]],
     catalog: IdentityCatalog,
@@ -499,9 +541,6 @@ def _iterative_assign(
 
     Returns ``{frag_index: assigned_label_or_None}`` (None means Unknown).
     """
-    cnn_w = float(params.get("FRAGMENT_CNN_WEIGHT", 0.40))
-    prior_w = float(params.get("ONLINE_PRIOR_WEIGHT", 0.25))
-    tag_w = float(params.get("FRAGMENT_TAG_WEIGHT", 0.15))
     length_w = min(1.0, max(0.0, float(params.get("FRAGMENT_LENGTH_WEIGHT", 0.60))))
     max_vel = float(params.get("MAX_VELOCITY_BREAK", 50.0))
     max_bridge_gap = max(1, int(params.get("MAX_BRIDGE_GAP_FRAMES", 30)))
@@ -536,22 +575,10 @@ def _iterative_assign(
     length_factors = 1.0 - length_w * (1.0 - length_scales)
 
     # Pre-compute combined evidence supports (used for candidate ranking + scoring).
-    combined_supports: list[dict[str, float]] = []
-    for _, frag_row in frags.iterrows():
-        cnn_log = frag_row.get("CNNLogEvidence") or {}
-        tag_log = frag_row.get("TagLogEvidence") or {}
-        online_lbl = str(frag_row["OnlineLabel"])
-        online_conf = float(frag_row["OnlineConfidence"])
-        prior_log = _build_prior_log_scores(known_labels, online_lbl, online_conf)
-        combined_log = {
-            label: (
-                cnn_w * float(cnn_log.get(label, 0.0))
-                + tag_w * float(tag_log.get(label, 0.0))
-                + prior_w * float(prior_log[label])
-            )
-            for label in known_labels
-        }
-        combined_supports.append(_normalize_support_scores(known_labels, combined_log))
+    combined_supports: list[dict[str, float]] = [
+        _combined_support(frag_row, known_labels, params)
+        for _, frag_row in frags.iterrows()
+    ]
 
     stabilities = np.array(
         [float(r.get("Stability", 0.0)) for _, r in frags.iterrows()],
@@ -1161,9 +1188,6 @@ def solve_global_assignment(
             continue
         final_schedule.setdefault(lbl, []).append(_seg_from_row(summaries.iloc[i]))
 
-    cnn_w = float(params.get("FRAGMENT_CNN_WEIGHT", 0.40))
-    prior_w = float(params.get("ONLINE_PRIOR_WEIGHT", 0.25))
-    tag_w = float(params.get("FRAGMENT_TAG_WEIGHT", 0.15))
     length_w = min(1.0, max(0.0, float(params.get("FRAGMENT_LENGTH_WEIGHT", 0.60))))
     max_vel = float(params.get("MAX_VELOCITY_BREAK", 50.0))
     max_bridge_gap = max(1, int(params.get("MAX_BRIDGE_GAP_FRAMES", 30)))
@@ -1190,20 +1214,7 @@ def solve_global_assignment(
         if lbl is None or lbl not in known_labels:
             assigned_scores.append(0.0)
             continue
-        cnn_log = summaries.iloc[i].get("CNNLogEvidence") or {}
-        tag_log = summaries.iloc[i].get("TagLogEvidence") or {}
-        online_lbl = str(summaries.iloc[i]["OnlineLabel"])
-        online_conf = float(summaries.iloc[i]["OnlineConfidence"])
-        prior_log = _build_prior_log_scores(known_labels, online_lbl, online_conf)
-        combined_log = {
-            label: (
-                cnn_w * float(cnn_log.get(label, 0.0))
-                + tag_w * float(tag_log.get(label, 0.0))
-                + prior_w * float(prior_log[label])
-            )
-            for label in known_labels
-        }
-        support = _normalize_support_scores(known_labels, combined_log)
+        support = _combined_support(summaries.iloc[i], known_labels, params)
         sched_minus_self = {
             lbl: [
                 seg
@@ -1471,6 +1482,9 @@ def run_fragment_solver(
         FRAGMENT_CNN_WEIGHT              float  default 0.40
         FRAGMENT_TAG_WEIGHT              float  default 0.15
         ONLINE_PRIOR_WEIGHT              float  default 0.25
+        FRAGMENT_MIN_SUPPORT             float  default 0.5 — a label is a candidate
+            for a fragment only if its normalised support ≥ this; absolute posterior
+            floor.
         FRAGMENT_LENGTH_WEIGHT           float  default 0.60
             Multiplicative blend [0,1]: discounts short fragments' evidence relative
             to the longest fragment in the pool.  Prevents a tiny high-confidence

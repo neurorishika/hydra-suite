@@ -963,6 +963,9 @@ class ConfigOrchestrator:
         self._panels.postprocess.spin_fragment_spatial_veto_threshold.setValue(
             float(get_cfg("fragment_spatial_veto_threshold", default=0.05))
         )
+        self._panels.postprocess.spin_fragment_min_support.setValue(
+            float(get_cfg("fragment_min_support", default=0.5))
+        )
 
     def _load_config_visualization(self, get_cfg):
         self._panels.postprocess.check_show_labels.setChecked(
@@ -1837,6 +1840,7 @@ class ConfigOrchestrator:
                 "identity_gates_trajectory_structure": self._panels.postprocess.chk_identity_gates_trajectory_structure.isChecked(),
                 "max_bridge_gap_frames": self._panels.postprocess.spin_max_bridge_gap_frames.value(),
                 "fragment_spatial_veto_threshold": self._panels.postprocess.spin_fragment_spatial_veto_threshold.value(),
+                "fragment_min_support": self._panels.postprocess.spin_fragment_min_support.value(),
                 # === VIDEO VISUALIZATION ===
                 "video_show_labels": self._panels.postprocess.check_show_labels.isChecked(),
                 "video_show_orientation": self._panels.postprocess.check_show_orientation.isChecked(),
