@@ -122,6 +122,41 @@ def test_cache_key_carries_schema_version():
     assert k.schema_version == CACHE_SCHEMA_VERSION
 
 
+def test_cache_schema_version_is_v4_identity_repair_bump():
+    """Finding C1: the identity-subsystem-repair branch changed what
+    cnn/headtail caches produce from unchanged model_path/mtime/geometry
+    inputs (fit-policy-aware Layer-2 dispatch + head-first crop orientation),
+    so CACHE_SCHEMA_VERSION must have been bumped to invalidate old caches.
+    """
+    assert CACHE_SCHEMA_VERSION == 4
+
+
+def test_cnn_and_headtail_keys_differ_across_schema_v3_v4():
+    """A cache written under schema v3 (pre-repair) must not match one
+    written under v4 (post-repair) even with identical model/geometry --
+    the schema_version field alone must invalidate it.
+    """
+    ht_v4 = headtail_cache_key(_ht_config(), _GEOM_A)
+    ht_v3 = CacheKey(
+        schema_version=3,
+        model_path=ht_v4.model_path,
+        model_mtime=ht_v4.model_mtime,
+        config_hash=ht_v4.config_hash,
+    )
+    assert ht_v4.schema_version == 4
+    assert not ht_v4.matches(ht_v3)
+
+    cnn_v4 = cnn_cache_key(_cnn_config(), _GEOM_A)
+    cnn_v3 = CacheKey(
+        schema_version=3,
+        model_path=cnn_v4.model_path,
+        model_mtime=cnn_v4.model_mtime,
+        config_hash=cnn_v4.config_hash,
+    )
+    assert cnn_v4.schema_version == 4
+    assert not cnn_v4.matches(cnn_v3)
+
+
 def test_cache_key_matches_only_when_schema_version_matches():
     a = CacheKey(
         schema_version=2, model_path="/m.pt", model_mtime=12345.0, config_hash="x"

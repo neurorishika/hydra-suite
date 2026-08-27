@@ -11,7 +11,13 @@ from dataclasses import dataclass
 # v3 = bumped for bg-sub: every prior bgsub cache was produced under unseeded
 #      random priming and keyed by a hash that ignored THRESHOLD_VALUE. Those
 #      artifacts are unsound and must not be inherited.
-CACHE_SCHEMA_VERSION = 3
+# v4 = bumped for the identity-subsystem repair (2026-08-27,
+#      docs/superpowers/plans/2026-08-27-identity-subsystem-repair.md): the
+#      Layer-2 fit-policy-aware dispatch (Tasks 1-3) and the head-first crop
+#      orientation fix (Task 4) change what the CNN and head/tail stages
+#      produce from the SAME model_path/mtime/geometry inputs, so old caches
+#      must be invalidated even though none of those fields changed.
+CACHE_SCHEMA_VERSION = 4
 
 
 @dataclass(frozen=True)
