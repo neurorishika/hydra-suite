@@ -3,6 +3,7 @@ import logging
 import numpy as np
 import pandas as pd
 
+from hydra_suite.core.individual.identity import columns as C
 from hydra_suite.core.individual.identity.cache import IdentityEvidenceCache
 from hydra_suite.core.individual.identity.catalog import IdentityCatalog
 from hydra_suite.core.individual.identity.evidence import IdentityEvidence
@@ -107,16 +108,26 @@ def test_run_fragment_solver_refuses_to_act_on_uninformative_evidence(tmp_path, 
     # (a) No split: same two TrajectoryIDs, PELT refused to run.
     assert sorted(out["TrajectoryID"].unique()) == [1, 2]
 
-    # (b) No real identity committed -- solve_global_assignment got no
-    # evidence (evidence_by_traj=None), which is EXACTLY the pre-existing
-    # cache-absent "no evidence, no belief" degrade documented and tested
-    # by test_honesty_fix.py: a uniform low-confidence guess (1 / n_known
-    # labels == 1/3 here), not a real per-trajectory identification. The
-    # breaker's job is only to make sure the solver sees this same
-    # no-sidecar input -- not to itself special-case the output label.
+    # (b) No real identity committed -- run_fragment_solver bypasses
+    # solve_global_assignment entirely when the breaker trips (design spec
+    # section 3.4), so _iterative_assign's Unknown-rescue pass (which would
+    # otherwise commit *some* label to every fragment even with zero
+    # informative evidence -- the correct behavior for the general
+    # cache-absent path, tested by test_honesty_fix.py, but NOT what the
+    # breaker itself is supposed to guarantee) never runs. Every row must be
+    # the literal "no evidence, no belief" outcome.
+    assert (out[C.FINAL_LABEL] == "unknown").all(), (
+        "expected every row's IdentityFinalLabel == 'unknown', got "
+        f"{out[C.FINAL_LABEL].unique().tolist()} -- some label leaked "
+        "through despite the breaker tripping"
+    )
+    assert (out[C.FINAL_SOURCE] == C.IdentityFinalSource.NONE).all(), (
+        "expected every row's IdentityFinalSource == NONE, got "
+        f"{out[C.FINAL_SOURCE].unique().tolist()}"
+    )
     confidences = out.groupby("TrajectoryID")["IdentityFinalConfidence"].first()
-    assert (confidences < 0.4).all(), (
-        "expected the uniform no-evidence guess confidence (~1/3), got "
+    assert (confidences == 0.0).all(), (
+        "expected 0.0 confidence (no evidence, no belief), got "
         f"{confidences.to_dict()} -- evidence may have leaked through "
         "despite the breaker tripping"
     )

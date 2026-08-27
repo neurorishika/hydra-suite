@@ -1,6 +1,21 @@
+import numpy as np
+import pandas as pd
+import pytest
+
+from hydra_suite.core.individual.identity import columns as C
+from hydra_suite.core.individual.identity import substrate
+from hydra_suite.core.individual.identity.catalog import IdentityCatalog
 from hydra_suite.core.individual.identity.resolve import (
     excluded_display_labels,
     resolve_catalog_spec,
+)
+from hydra_suite.core.individual.postprocess_df import (
+    apply_identity_postprocessing_to_df,
+)
+from hydra_suite.core.post.identity_postprocess import (
+    derive_unique_identity_key_series,
+    identity_sources_conflict,
+    parse_identity_key,
 )
 
 
@@ -91,15 +106,6 @@ def test_excluding_a_middle_combination_preserves_survivor_order():
     # either side must keep their original relative order.
     assert spec.labels == ("a_z", "c_z")
 
-
-import numpy as np
-import pandas as pd
-import pytest
-
-from hydra_suite.core.individual.identity import columns as C
-from hydra_suite.core.individual.postprocess_df import (
-    apply_identity_postprocessing_to_df,
-)
 
 _PARAMS = {
     "CNN_CLASSIFIERS": [
@@ -279,13 +285,6 @@ def test_axis_scoped_mark_stamps_only_the_marked_axis_value():
     assert set(out[C.FINAL_ID]) == {0}
 
 
-from hydra_suite.core.post.identity_postprocess import (
-    derive_unique_identity_key_series,
-    identity_sources_conflict,
-    parse_identity_key,
-)
-
-
 def test_notag_is_not_evidence_of_agreement():
     df = pd.DataFrame(
         {
@@ -409,10 +408,6 @@ def test_relink_consumer_treats_notag_as_no_evidence_not_agreement():
     # "agreement" on the notag back axis, so the identity veto fires and the
     # candidate is rejected outright.
     assert result is None
-
-
-from hydra_suite.core.individual.identity import substrate
-from hydra_suite.core.individual.identity.catalog import IdentityCatalog
 
 
 def test_many_untagged_slots_coexist_in_one_hungarian_solve():
@@ -625,9 +620,14 @@ def test_untagged_tracks_coexist_with_the_fragment_solver_enabled(tmp_path):
     )
     assert out["TrajectoryID"].nunique() == 3
     stamped = out[out[C.FINAL_SOURCE] == C.IdentityFinalSource.NON_IDENTIFYING]
-    # The catalog holds exactly one real identity (red_blue); every track the
-    # solver could not place on it is stamped rather than left "unknown".
-    assert stamped["TrajectoryID"].nunique() == 2
+    # The catalog holds exactly one real identity (red_blue), and none of
+    # these 3 tracks carries any evidence for it (their evidence
+    # concentrates on the excluded notag_notag composite) -- the
+    # evidence-quality breaker (identity-subsystem-repair Task 8) correctly
+    # refuses to let the solver commit any label here, so all 3 remain
+    # unresolved and get stamped descriptively rather than one of them
+    # picking up a spurious low-confidence "red_blue" guess.
+    assert stamped["TrajectoryID"].nunique() == 3
 
 
 def test_solver_unknown_sentinel_is_treated_as_unresolved():

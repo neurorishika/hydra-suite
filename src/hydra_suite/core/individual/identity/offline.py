@@ -1044,6 +1044,70 @@ def _build_traj_summaries(
     return pd.DataFrame(rows)
 
 
+def _ensure_final_columns(out: pd.DataFrame) -> pd.DataFrame:
+    """Create/coerce the ``IdentityFinal*`` columns to writable dtypes in-place.
+
+    Shared by ``solve_global_assignment`` and the evidence-quality breaker's
+    "no evidence, no belief" bypass in ``run_fragment_solver`` -- both need
+    the same object-dtype coercion so string label writes don't raise a
+    pandas ``LossySetitemError`` on an all-NaN float64 column. Mutates and
+    returns ``out``.
+    """
+    if C.FINAL_LABEL not in out.columns:
+        # object dtype (not the float64 a bare `np.nan` column init would get)
+        # -- otherwise the string label writes below raise a pandas
+        # LossySetitemError.
+        out[C.FINAL_LABEL] = pd.Series(
+            [np.nan] * len(out), index=out.index, dtype=object
+        )
+    elif out[C.FINAL_LABEL].dtype != object:
+        # The honesty fix's target scenario (ENABLE_IDENTITY_IN_TRACKING off)
+        # leaves this column present but all-NaN float64 (no prior pass wrote
+        # strings). Writing a string label into a float64 column raises a
+        # pandas LossySetitemError (pandas>=3), which the caller's broad
+        # except would swallow, silently reverting the solver to "results
+        # unchanged" -- i.e. exactly re-breaking the honesty fix. Coerce to
+        # object so the per-trajectory writes below can land.
+        out[C.FINAL_LABEL] = out[C.FINAL_LABEL].astype(object)
+    if C.FINAL_SOURCE not in out.columns:
+        out[C.FINAL_SOURCE] = pd.Series(
+            [C.IdentityFinalSource.NONE] * len(out), index=out.index, dtype=object
+        )
+    elif out[C.FINAL_SOURCE].dtype != object:
+        out[C.FINAL_SOURCE] = out[C.FINAL_SOURCE].astype(object)
+    if C.FINAL_ID not in out.columns:
+        out[C.FINAL_ID] = np.nan
+    if C.FINAL_CONFIDENCE not in out.columns:
+        out[C.FINAL_CONFIDENCE] = np.nan
+    if C.FINAL_FRAGMENT_SCORE not in out.columns:
+        out[C.FINAL_FRAGMENT_SCORE] = np.nan
+    return out
+
+
+def _write_no_evidence_outcome(
+    df: pd.DataFrame, catalog: IdentityCatalog
+) -> pd.DataFrame:
+    """Write the "no evidence, no belief" outcome to every row of ``df``.
+
+    Used by ``run_fragment_solver`` when the evidence-quality breaker trips:
+    per the design spec (section 3.4), the solver must not commit any label
+    -- not even via ``_iterative_assign``'s Unknown-rescue pass, which would
+    otherwise assign a uniform-low-confidence label to every fragment even
+    with zero informative evidence. Mirrors the exact per-row values
+    ``solve_global_assignment`` writes when it explicitly decides a fragment
+    is Unknown, applied unconditionally to every row since ALL rows share
+    the same outcome when the breaker trips. Returns a modified copy of df.
+    """
+    out = df.copy()
+    _ensure_final_columns(out)
+    out[C.FINAL_LABEL] = "unknown"
+    out[C.FINAL_ID] = catalog.unknown_index
+    out[C.FINAL_CONFIDENCE] = 0.0
+    out[C.FINAL_FRAGMENT_SCORE] = 0.0
+    out[C.FINAL_SOURCE] = C.IdentityFinalSource.NONE
+    return out
+
+
 def solve_global_assignment(
     df: pd.DataFrame,
     catalog: IdentityCatalog,
@@ -1162,34 +1226,7 @@ def solve_global_assignment(
     # Write one label per trajectory back to every row -- the IdentityFinal*
     # family only. This function must NEVER write an IdentityRealtime* column.
     out = df.copy()
-    if C.FINAL_LABEL not in out.columns:
-        # object dtype (not the float64 a bare `np.nan` column init would get)
-        # -- otherwise the string label writes below raise a pandas
-        # LossySetitemError.
-        out[C.FINAL_LABEL] = pd.Series(
-            [np.nan] * len(out), index=out.index, dtype=object
-        )
-    elif out[C.FINAL_LABEL].dtype != object:
-        # The honesty fix's target scenario (ENABLE_IDENTITY_IN_TRACKING off)
-        # leaves this column present but all-NaN float64 (no prior pass wrote
-        # strings). Writing a string label into a float64 column raises a
-        # pandas LossySetitemError (pandas>=3), which the caller's broad
-        # except would swallow, silently reverting the solver to "results
-        # unchanged" -- i.e. exactly re-breaking the honesty fix. Coerce to
-        # object so the per-trajectory writes below can land.
-        out[C.FINAL_LABEL] = out[C.FINAL_LABEL].astype(object)
-    if C.FINAL_SOURCE not in out.columns:
-        out[C.FINAL_SOURCE] = pd.Series(
-            [C.IdentityFinalSource.NONE] * len(out), index=out.index, dtype=object
-        )
-    elif out[C.FINAL_SOURCE].dtype != object:
-        out[C.FINAL_SOURCE] = out[C.FINAL_SOURCE].astype(object)
-    if C.FINAL_ID not in out.columns:
-        out[C.FINAL_ID] = np.nan
-    if C.FINAL_CONFIDENCE not in out.columns:
-        out[C.FINAL_CONFIDENCE] = np.nan
-    if C.FINAL_FRAGMENT_SCORE not in out.columns:
-        out[C.FINAL_FRAGMENT_SCORE] = np.nan
+    _ensure_final_columns(out)
 
     for i in range(n_trajs):
         label = assigned.get(i)
@@ -1544,6 +1581,7 @@ def run_fragment_solver(
     # source thought, even when the solver refuses to act on it.
     smoothed_for_annotation = smoothed_by_traj
 
+    breaker_tripped = False
     if raw_evidence:
         quality = assess_evidence_quality(raw_evidence, catalog)
         if not quality.ok:
@@ -1557,6 +1595,7 @@ def run_fragment_solver(
                 quality.n_frames,
             )
             smoothed_by_traj = None
+            breaker_tripped = True
 
     if params.get("ENABLE_PELT_SPLITTING", False) and smoothed_by_traj:
         changepoints = detect_identity_changepoints(smoothed_by_traj, catalog, params)
@@ -1587,9 +1626,18 @@ def run_fragment_solver(
             split_df, smoothed_for_annotation, catalog, params
         )
 
-    solved = solve_global_assignment(
-        split_df, catalog, params, evidence_by_traj=smoothed_by_traj
-    )
+    if breaker_tripped:
+        # Design spec section 3.4: on a tripped evidence-quality breaker, the
+        # solver must not commit any label -- bypass solve_global_assignment
+        # entirely so its Unknown-rescue pass (which commits *some* label to
+        # every fragment even with zero informative evidence -- correct
+        # behavior for the general no-cache/no-evidence path, but not what
+        # the breaker is supposed to guarantee) never runs.
+        solved = _write_no_evidence_outcome(split_df, catalog)
+    else:
+        solved = solve_global_assignment(
+            split_df, catalog, params, evidence_by_traj=smoothed_by_traj
+        )
     merged = merge_same_label_neighbours(solved)
     log.info(
         "fragment_solver: re-merged %d → %d trajectories after assignment.",
