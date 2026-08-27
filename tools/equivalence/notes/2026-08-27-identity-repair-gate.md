@@ -179,24 +179,40 @@ named identity clips.
 All divergent + clean clips: `new/legacy` time ratio 0.95x-1.01x, well
 within the 1.25x tolerance. PERFORMANCE: EQUIVALENT ✅ everywhere.
 
-## CUDA
+## Step 4 — CUDA equivalence matrix
 
-**Not run this session.** mehek reachability was not established in this
-environment (prior attempt could not confirm SSH access from this sandbox).
-This is an explicit, honestly-reported gap, not a silent skip — **follow-up
-required**: run
-```
-ssh rutalab@mehek.taild08eb9.ts.net
-cd ~/hydra-suite && git fetch origin --tags && git checkout <this-branch-sha>
-source ~/mambaforge/etc/profile.d/conda.sh && conda activate hydra-cuda
-git worktree add --detach .worktrees/equiv-legacy 930bcdb9   # or efca3d71
-REPO=$PWD WT=$PWD MAIN_SRC=$PWD/.worktrees/equiv-legacy/src WT_SRC=$PWD/src \
-  OUT=/tmp/equiv_idrepair_cuda RUNTIME=cuda bash tools/equivalence/run_matrix.sh
-```
-on the CUDA box before this plan is considered fully gated on both
-platforms. The 5-clip divergence pattern documented above should re-derive
-identically on CUDA (position-invariant, orientation-model-driven — not
-device-specific), but that must be confirmed, not assumed.
+Full log: `/tmp/equiv_idrepair_fixwave_cuda.log` on mehek. Baseline = local `main`
+worktree (baseline SHA `930bcdb9`/`efca3d71` src). Command per CLAUDE.md fast path,
+`RUNTIME=cuda`, all 8 fixture clips (7 standard + `worm_bgsub_scaled`).
+
+### Results summary
+
+The CUDA matrix exhibits the **identical divergence pattern as MPS**: same 3 clips fully
+clean, same 5 clips divergent (root-caused to the shared head/tail orientation model
+re-stamped with `fit_policy=squash` in Step 1), all performance ratios within 1.25x
+tolerance. This **cross-platform consistency** confirms the divergence is a genuine,
+deterministic consequence of the code change, not device-specific noise.
+
+### Clean (fully EQUIVALENT on all measures)
+
+- `fly_obb` (performance 1.00x)
+- `worm_bgsub` (performance 1.00x)
+- `worm_bgsub_scaled` (performance 0.99x)
+
+### Divergent (determinism ✅, legacy-vs-new ❌ on forward/final/final_with_individual; performance ✅ throughout)
+
+| Clip | Performance | Notes |
+|---|---|---|
+| `emi_obb_identity` | 0.99x | Identity clip; divergence expected |
+| `ant_pose_headtail` | 0.99x | forward EQUIVALENT, final/final_with_individual DIFFERENCES (head/tail model re-stamp effect) |
+| `ant_obb_sleap` | 0.99x | forward/final/final_with_individual DIFFERENCES |
+| `ant_obb_sequential` | 1.00x | forward/final/final_with_individual DIFFERENCES |
+| `ant_cnn_identity` | 0.99x | CNN classifier clip; divergence expected |
+
+**Verdict**: exact divergence pattern matches MPS (same clips diverge, same clips clean).
+All performance ratios 0.99x–1.00x, well within tolerance. Positions byte-identical on
+all clips (Kalman/assignment untouched), confirming the spec's position invariant holds
+cross-platform.
 
 ## Overall gate status
 
@@ -205,9 +221,12 @@ device-specific), but that must be confirmed, not assumed.
   (30/36/58) is **1/3 correct** (track 58 only); tracks 30 and 36 both
   mislabel to the same wrong value (`blue_pink`), a possible residual
   identity-confusion pattern worth follow-up investigation.
-- MPS equivalence: **3/7 clips clean**, **4/7 (+1 identity-named = 5 total)
-  diverge**, all divergences root-caused to the fit_policy migration
-  (Tasks 1-3) interacting with a shared, session-restamped orientation
-  checkpoint — expected, not a regression, but broader than spec §3.5's
-  stated scope.
-- CUDA equivalence: **not run** — open follow-up item.
+- MPS equivalence: **3/8 clips clean**, **5/8 diverge**. All divergences
+  root-caused to the fit_policy migration (Tasks 1-3) interacting with a
+  shared, session-restamped orientation checkpoint — expected, not a
+  regression, but broader than spec §3.5's stated scope. Performance
+  equivalent on all clips (0.95x–1.01x).
+- CUDA equivalence: **3/8 clips clean, 5/8 diverge** — **identical pattern to
+  MPS**. Cross-platform consistency confirms the divergence is deterministic
+  and device-agnostic. All performance ratios within tolerance (0.99x–1.00x).
+  Both platforms gated. ✅
