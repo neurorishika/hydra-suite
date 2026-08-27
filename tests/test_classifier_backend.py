@@ -41,6 +41,7 @@ def test_classifier_metadata_fields():
         monochrome=False,
         recommended_confidence_threshold=None,
         source_path="/tmp/model.pth",
+        fit_policy="squash",
     )
     assert meta.arch == "tinyclassifier"
     assert meta.input_size == (224, 224)

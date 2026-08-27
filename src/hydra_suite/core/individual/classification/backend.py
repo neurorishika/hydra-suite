@@ -31,6 +31,35 @@ _IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 _IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 _GENERIC_MULTIHEAD_BUNDLE_KIND = "classifier_multihead_bundle"
 
+FIT_POLICIES: tuple[str, ...] = ("letterbox", "squash", "native")
+_LEGACY_FIT_POLICY = "squash"
+
+
+def resolve_fit_policy(raw: object, source_path: str, *, native: bool = False) -> str:
+    """Return the Layer-2 fit policy an artifact was trained under.
+
+    ``native`` (YOLO classifiers) always returns "native". A missing key
+    means the artifact predates fit-policy stamping (training before
+    commit 3a2163ac, 2026-08-05, used an anisotropic ``Resize((sz, sz))``)
+    → "squash", logged loudly so the drift can never be silent again.
+    """
+    if native:
+        return "native"
+    if raw is None or raw == "":
+        logger.warning(
+            "%s: artifact carries no fit_policy; assuming legacy 'squash' "
+            "preprocessing (pre-2026-08-05 training). Re-publish the model or run "
+            "scripts/stamp_fit_policy.py to stamp it explicitly.",
+            source_path,
+        )
+        return _LEGACY_FIT_POLICY
+    policy = str(raw).strip().lower()
+    if policy not in FIT_POLICIES:
+        raise ClassifierFormatError(
+            f"{source_path!r}: fit_policy must be one of {FIT_POLICIES}, got {raw!r}"
+        )
+    return policy
+
 
 @dataclass(frozen=True)
 class ClassifierMetadata:
@@ -56,6 +85,8 @@ class ClassifierMetadata:
             confidence cutoff for collapsing uncertain predictions to unknown.
         source_path: Absolute path the artifact was loaded from (for display
             and ONNX-derivation peer location).
+        fit_policy: Layer-2 preprocessing the model was trained with
+            ("letterbox" | "squash" | "native").
         calibration_temperature: Optional per-factor temperature-scaling
             values fit during training (one per factor).
         calibration_signature: Optional signature identifying the trained
@@ -73,6 +104,7 @@ class ClassifierMetadata:
     monochrome: bool
     recommended_confidence_threshold: float | None
     source_path: str
+    fit_policy: str
     calibration_temperature: tuple[float, ...] | None = None
     calibration_signature: str | None = None
     calibration_ece: tuple[float, ...] | None = None
@@ -230,6 +262,7 @@ class _TinyLoader:
                 ckpt.get("recommended_confidence_threshold")
             ),
             source_path=path,
+            fit_policy=resolve_fit_policy(ckpt.get("fit_policy"), path),
             calibration_temperature=_normalize_calibration_temperature(
                 ckpt.get("calibration_temperature")
             ),
@@ -295,6 +328,7 @@ class _YoloFlatLoader:
                 sidecar.get("recommended_confidence_threshold")
             ),
             source_path=path,
+            fit_policy=resolve_fit_policy(None, path, native=True),
             calibration_temperature=_normalize_calibration_temperature(
                 sidecar.get("calibration_temperature")
             ),
@@ -334,6 +368,7 @@ class _TorchvisionLoader:
                 ckpt.get("recommended_confidence_threshold")
             ),
             source_path=path,
+            fit_policy=resolve_fit_policy(ckpt.get("fit_policy"), path),
             calibration_temperature=_normalize_calibration_temperature(
                 ckpt.get("calibration_temperature")
             ),
@@ -427,6 +462,7 @@ class _ClassifierMultiheadBundleLoader:
                 data.get("recommended_confidence_threshold")
             ),
             source_path=path,
+            fit_policy=resolve_fit_policy(data.get("fit_policy"), path),
             calibration_temperature=_normalize_calibration_temperature(
                 data.get("calibration_temperature")
             ),
