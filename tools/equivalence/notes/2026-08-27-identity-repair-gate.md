@@ -39,12 +39,36 @@ over it.** It is nonetheless a 4x improvement over OFFLINE's original 689
 trajectories, so the repair work moved the needle substantially even though
 it falls short of the plan's specific numeric bar. The ≥15 distinct
 labels/frame threshold and the "no uninformative-breaker trip" criterion
-both pass. Track-identity spot checks (30/36/58 → expected colour-pair
-labels) were part of the brief's Step 2 script but were not re-derived in
-this pass since the CSV numbers above already establish the accept/reject
-call; if needed they can be pulled from
-`ant_tracking_final_with_individual.csv` with the one-liner in
-`task-9-brief.md`.
+both pass.
+
+### Track-identity spot-check (30/36/58) — MET on 1/3, run and reported below
+
+This spot-check is named explicitly in design spec §3.5 and in the task-9
+brief's Step 2 as part of acceptance. It was skipped in an earlier pass of
+this record ("not re-derived... since the CSV numbers above already
+establish the accept/reject call") — that was wrong to skip; it is
+independent evidence and is reported here on its own, not folded into the
+trajectory-count verdict above.
+
+Method: most-common `IdentityFinalLabel` value per `TrajectoryID`, for
+trajectories 30/36/58, against
+`/Users/neurorishika/Projects/Rockefeller/Ruta/Presentation/DEMO/ID/OFFLINE_v2/ant_tracking_final_with_individual.csv`
+(same file, same approach used in earlier acceptance-diagnosis work in this
+plan).
+
+| Trajectory | Rows | Label(s) found | Expected | Result |
+|---|---|---|---|---|
+| 30 | 6 | `blue_pink` (6/6) | `blue_blue` | **WRONG** |
+| 36 | 7 | `blue_pink` (7/7) | `orange_yellow` | **WRONG** |
+| 58 | 17 | `green_orange` (17/17) | `orange_green` / `green_orange` | **correct** |
+
+**1/3 correct.** Notably, both failing trajectories converge to the exact
+same wrong label, `blue_pink` — not two different wrong answers. That
+convergence pattern (rather than scattered/random mislabeling) is worth
+flagging as a possible residual identity-confusion signature — e.g. a
+label collapsing onto a locally-dominant or over-weighted class — rather
+than simple noise, though root-causing it is out of scope for this gate
+record and is a candidate follow-up.
 
 ## Step 3 — MPS equivalence matrix
 
@@ -120,6 +144,21 @@ named identity clips.
   and `worm_bgsub{,_scaled}` don't use head/tail orientation at all and stay
   clean, which is consistent with this mechanism and not with e.g. a
   general regression in tracking/assignment.
+  **Caveat: this is a strong, config-consistent correlation, not a
+  counterfactually-verified causal test.** All 5 divergent clips use the
+  re-stamped model with `enable_headtail_orientation=True`; the 2 clean
+  clips don't — that pattern is real and was checked directly. But
+  `scripts/stamp_fit_policy.py` stamps checkpoints **in place with no
+  backup**, so there is no unstamped copy of this exact model left to
+  re-run the equivalence matrix against and directly confirm the
+  divergence disappears without the stamp. A more mundane alternative — a
+  different Tasks 1-8 change touching the head/tail Layer-2 path
+  unconditionally, independent of the fit_policy stamp — has not been
+  ruled out by a direct test. Direct verification would require
+  re-running the matrix against an unstamped copy of
+  `20260429-104937_efficientnet_b0_obiroi_train1.pth`, which does not
+  currently exist.
+
   This is **exactly the effect the task-9 brief itself flagged as a risk**
   ("head/tail model in fixtures: if its checkpoint is unstamped it now runs
   under squash → `ant_pose_headtail` θ may change") — it is a
@@ -162,7 +201,10 @@ device-specific), but that must be confirmed, not assumed.
 ## Overall gate status
 
 - DEMO/ID acceptance: **partial** — 4/5 measured criteria pass; trajectory
-  count (171) misses the ≤150 threshold.
+  count (171) misses the ≤150 threshold. Track-identity spot-check
+  (30/36/58) is **1/3 correct** (track 58 only); tracks 30 and 36 both
+  mislabel to the same wrong value (`blue_pink`), a possible residual
+  identity-confusion pattern worth follow-up investigation.
 - MPS equivalence: **3/7 clips clean**, **4/7 (+1 identity-named = 5 total)
   diverge**, all divergences root-caused to the fit_policy migration
   (Tasks 1-3) interacting with a shared, session-restamped orientation
