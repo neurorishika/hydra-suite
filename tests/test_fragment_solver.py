@@ -1236,13 +1236,22 @@ def test_substrate_solver_nonoverlapping_fragments_may_share_label():
     ), f"non-overlapping fragments should both be able to keep 'blue', got t1={label_t1!r}, t2={label_t2!r}"
 
 
-def test_iterative_assign_routes_through_substrate_solve_unique_assignment(
+# 2026-08-27 identity-final-consistency: mass-first assignment replaces the dead
+# component-Hungarian base step -- `_iterative_assign` no longer routes through
+# `substrate.solve_unique_assignment` at all (that solver assumed every fragment
+# handed to it was simultaneously visible, which collapsed to one giant
+# temporal-overlap component -- and therefore one shared label pool -- on any
+# multi-animal clip). This test now asserts the inverse: no call happens, and
+# `offline` no longer even imports the `substrate` module.
+def test_iterative_assign_does_not_route_through_substrate_solve_unique_assignment(
     monkeypatch,
 ):
-    """`_iterative_assign`'s base assignment is literally produced by
-    `substrate.solve_unique_assignment` — not a re-implementation."""
     from hydra_suite.core.individual.identity import offline as offline_mod
     from hydra_suite.core.individual.identity import substrate as substrate_mod
+
+    assert not hasattr(
+        offline_mod, "substrate"
+    ), "offline.py should no longer import the substrate module"
 
     calls = []
     original = substrate_mod.solve_unique_assignment
@@ -1251,7 +1260,7 @@ def test_iterative_assign_routes_through_substrate_solve_unique_assignment(
         calls.append((len(posterior_probs), num_known, display_threshold))
         return original(posterior_probs, num_known, display_threshold, **kwargs)
 
-    monkeypatch.setattr(offline_mod.substrate, "solve_unique_assignment", _spy)
+    monkeypatch.setattr(substrate_mod, "solve_unique_assignment", _spy)
 
     catalog = _make_catalog()
     df = _make_two_trajectory_df()
@@ -1264,4 +1273,6 @@ def test_iterative_assign_routes_through_substrate_solve_unique_assignment(
         list(catalog.labels[1:]),
         {"FRAGMENT_CNN_WEIGHT": 0.7, "ONLINE_PRIOR_WEIGHT": 0.1},
     )
-    assert calls, "solve_unique_assignment was never called by _iterative_assign"
+    assert (
+        not calls
+    ), "solve_unique_assignment must never be called by _iterative_assign"

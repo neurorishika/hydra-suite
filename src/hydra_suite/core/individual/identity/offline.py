@@ -3,11 +3,20 @@
 Identity post-processing pipeline:
 1. PELT changepoint detection on per-trajectory smoothed identity posteriors.
 2. Fragment building from detected changepoints.
-3. Iterative greedy label refinement: walks fragments in order of doubt score
-   (low CNN stability × short length × poor spatial fit + Unknown bonus),
-   evaluates the top-K candidate labels for each, and commits a flip only if
-   it strictly increases a global objective (sum of evidence × spatial × length
-   over all fragments). Iterates to a fixed point. Long fragments with stable
+3. Mass-first seeding + doubt-ordered refinement (``_iterative_assign``):
+   fragments are first seeded in descending evidence-mass order (duration x
+   top support) so long, high-confidence tracks claim their label before
+   short, noisy fragments get a turn (2026-08-27 identity-final-consistency:
+   replaces a dead component-Hungarian base step whose temporal-overlap
+   connected components collapsed to one giant component on any
+   multi-animal clip). Refinement then walks fragments in order of doubt
+   score (low CNN stability × short length × poor spatial fit + Unknown
+   bonus), evaluates the top-K candidate labels for each, and commits a
+   flip -- or a multi-blocker displacement of the label's current
+   occupant(s) -- only if it strictly increases (by at least
+   ``ASSIGNMENT_MARGIN_THRESHOLD``, floored at 1e-3) the exact objective
+   (sum of evidence × spatial × length) over every fragment the move
+   touches. Iterates to a fixed point. Long fragments with stable
    per-frame CNN agreement settle to the bottom of the queue and act as
    anchors; short or jittery fragments yield to the schedule formed by them.
 """
@@ -23,7 +32,6 @@ import numpy as np
 import pandas as pd
 
 from hydra_suite.core.individual.identity import columns as C
-from hydra_suite.core.individual.identity import substrate
 from hydra_suite.core.individual.identity.catalog import IdentityCatalog
 from hydra_suite.core.individual.identity.smoothing import (
     load_trajectory_evidence,
@@ -416,108 +424,15 @@ def _seg_from_row(row: pd.Series) -> dict:
     }
 
 
-def _support_to_slot_posterior(
-    support: dict[str, float],
-    length_factor: float,
-    known_labels: list[str],
-) -> np.ndarray:
-    """Convert a per-fragment normalized evidence support + length factor into a
-    full catalog posterior ``[unknown, k1, ..., kK]`` for the substrate solver.
+def _evidence_mass(duration: float, top_support: float) -> float:
+    """Descending-mass seeding key: duration x top per-label support.
 
-    ``support`` is already normalized to sum to 1 over ``known_labels``
-    (``_normalize_support_scores``). Scaling by ``length_factor`` (the same
-    multiplicative length discount used everywhere else in this module)
-    naturally reserves ``1 - length_factor`` of posterior mass for
-    "unknown" — a short fragment's evidence competes weaker for a slot in
-    the Hungarian assignment than a long fragment's, mirroring the doubt
-    engine below without pre-empting its spatial refinement.
+    A long, confidently-evidenced fragment is seeded (and rescued) before a
+    short, weakly-evidenced one, so it claims its label first rather than
+    losing a race to whichever short fragment the old component-Hungarian
+    step happened to grant a slot to.
     """
-    factor = float(np.clip(length_factor, 0.0, 1.0))
-    known = np.array(
-        [factor * float(support.get(label, 0.0)) for label in known_labels],
-        dtype=np.float64,
-    )
-    known = np.clip(known, 0.0, None)
-    unknown = max(0.0, 1.0 - float(known.sum()))
-    posterior = np.concatenate(([unknown], known))
-    total = float(posterior.sum())
-    if total <= 1e-12:
-        # Degenerate (no evidence at all): uniform over unknown + knowns.
-        return np.full(len(known_labels) + 1, 1.0 / (len(known_labels) + 1))
-    return posterior / total
-
-
-def _base_assignment_via_substrate(
-    frags: pd.DataFrame,
-    known_labels: list[str],
-    combined_supports: list[dict[str, float]],
-    length_factors: np.ndarray,
-    display_threshold: float,
-) -> list[str | None]:
-    """Base injective fragment->label assignment via
-    ``substrate.solve_unique_assignment``, solved independently per
-    temporal-overlap connected component.
-
-    The partial-injective Hungarian solver assumes every slot handed to it
-    is simultaneously visible, so two fragments that never share a frame
-    must NOT be forced to compete for the same catalog label — grouping by
-    temporal-overlap connected components (rather than one global solve)
-    preserves that: fragments in disjoint components may independently
-    receive the same identity, exactly as two non-overlapping trajectories
-    legitimately can. Fragments within one component are made mutually
-    exclusive over the catalog by the solver's uniqueness constraint. This
-    is the *base* assignment; ``_iterative_assign``'s doubt-ordered
-    veto/swap refinement (below) still runs afterward to resolve spatial
-    plausibility that this temporal-only grouping cannot see (e.g. two
-    disjoint-time fragments claiming the same label at implausibly distant
-    positions).
-    """
-    n = len(frags)
-    if n == 0:
-        return []
-
-    starts = [int(frags.iloc[i]["StartFrame"]) for i in range(n)]
-    ends = [int(frags.iloc[i]["EndFrame"]) for i in range(n)]
-
-    parent = list(range(n))
-
-    def _find(x: int) -> int:
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    def _union(a: int, b: int) -> None:
-        ra, rb = _find(a), _find(b)
-        if ra != rb:
-            parent[ra] = rb
-
-    for i in range(n):
-        for j in range(i + 1, n):
-            if starts[i] <= ends[j] and starts[j] <= ends[i]:
-                _union(i, j)
-
-    groups: dict[int, list[int]] = {}
-    for i in range(n):
-        groups.setdefault(_find(i), []).append(i)
-
-    num_known = len(known_labels)
-    result: list[str | None] = [None] * n
-    for members in groups.values():
-        posteriors = [
-            _support_to_slot_posterior(
-                combined_supports[i], float(length_factors[i]), known_labels
-            )
-            for i in members
-        ]
-        assignment = substrate.solve_unique_assignment(
-            posteriors, num_known, display_threshold
-        )
-        for member_idx, cat_idx in zip(members, assignment):
-            if cat_idx is not None and 1 <= cat_idx <= num_known:
-                result[member_idx] = known_labels[cat_idx - 1]
-
-    return result
+    return float(duration) * float(top_support)
 
 
 def _iterative_assign(
@@ -525,19 +440,59 @@ def _iterative_assign(
     known_labels: list[str],
     params: dict[str, Any],
 ) -> dict[int, str | None]:
-    """Iteratively refine fragment-to-label assignment.
+    """Mass-first seeding + doubt-ordered refinement with exact-objective
+    multi-blocker displacement.
 
-    Walks fragments by descending doubt score, evaluates the top-K candidate
-    labels (∪ Unknown ∪ current) for each, and commits a flip only if the
-    delta against the current per-fragment score is at least
-    ``ASSIGNMENT_MARGIN_THRESHOLD``. Iterates to a fixed point (no flips in a
-    pass) or until ``FRAGMENT_MAX_PASSES`` is hit.
+    Replaces the old component-Hungarian base assignment
+    (``_base_assignment_via_substrate``, deleted): on any multi-animal clip
+    the temporal-overlap connected components collapse to one giant
+    component (every fragment overlaps some other fragment transitively),
+    so the base step degenerated into every fragment competing for every
+    label as if simultaneously visible, gated at a display threshold
+    nothing could clear. This function never routes through that solver.
 
-    The schedule of committed labels is updated incrementally after every
-    accepted flip; collision (same-label time overlap) and physical-velocity
-    vetoes are enforced per-evaluation. A final Unknown-rescue pass assigns
-    Unknown fragments their best feasible label even when the score is below
-    the monotone gate, since Unknown contributes 0 to the global objective.
+    Algorithm:
+    1. **Mass-first seeding**: fragments are visited in descending
+       ``_evidence_mass`` (duration x top support) order and each greedily
+       claims its best free, unvetoed label. A label is a *candidate* for a
+       fragment at all only if its normalised support clears
+       ``FRAGMENT_MIN_SUPPORT`` (an absolute posterior floor) and it ranks
+       in the fragment's top ``FRAGMENT_TOP_K`` labels by support. Seeding
+       long/confident fragments first means a 700-frame 0.999-evidence
+       track claims its label before a swarm of short noisy fragments ever
+       gets a turn — the inverse of the old doubt-ordered-only walk, which
+       let short fragments grab labels first via the (broken) base step.
+    2. **Doubt-ordered refinement**: fragments are revisited in descending
+       doubt (low stability x short length x poor spatial fit, plus an
+       Unknown bonus). A direct flip to a free/better label is accepted
+       when it clears ``ASSIGNMENT_MARGIN_THRESHOLD``. When every
+       candidate is blocked, ``_try_displacement`` evaluates evicting the
+       blocker(s) (up to ``FRAGMENT_MAX_BLOCKERS``) and re-homing them to
+       their own best remaining label.
+    3. **Unknown rescue**: any fragment still unassigned after refinement
+       (e.g. it never won its label during seeding) gets one more direct or
+       displacing attempt, again in descending mass order.
+
+    Termination argument (multi-blocker displacement): define the exact
+    objective as ``sum(_score(j, current[j]) for j touched)`` over the
+    finite set of fragments whose assignment or scoring could be affected
+    by a move (the mover, every blocker it displaces, and everyone
+    scheduled under the label(s) involved). ``_try_displacement`` accepts a
+    move iff this exact objective, evaluated over that touched set both
+    before and after, rises by at least ``monotone_eps`` (floored at
+    ``1e-3`` so a caller cannot request ASSIGNMENT_MARGIN_THRESHOLD=0 and
+    accept infinitesimal or floating-point-noise "improvements"). Every
+    per-fragment score is bounded in ``[0, 1]`` (``_score`` returns
+    ``evidence * spatial_factor * length_factor`` — a product of three
+    terms each in ``[0, 1]``), so the whole-schedule objective
+    ``sum(_score(i, current[i]) for i in range(n))`` is bounded above by
+    ``n``. Since every accepted move strictly increases that bounded
+    monotone quantity by a fixed floor, only finitely many
+    (``<= n / monotone_eps``) moves can be accepted in total — the
+    refinement pass cannot cycle or loop forever on its own. Simple flips
+    (no blocker) are gated the same way as single-fragment moves within
+    that same bound. ``FRAGMENT_MAX_PASSES`` remains a hard cap regardless,
+    since a pass can also do no-op work (recomputing without flipping).
 
     Returns ``{frag_index: assigned_label_or_None}`` (None means Unknown).
     """
@@ -546,313 +501,190 @@ def _iterative_assign(
     max_bridge_gap = max(1, int(params.get("MAX_BRIDGE_GAP_FRAMES", 30)))
     no_neighbor_score = float(params.get("SPATIAL_NO_NEIGHBOR_SCORE", 0.3))
     spatial_veto = float(params.get("FRAGMENT_SPATIAL_VETO_THRESHOLD", 0.05))
-    monotone_eps = float(params.get("ASSIGNMENT_MARGIN_THRESHOLD", 0.10))
+    monotone_eps = max(1e-3, float(params.get("ASSIGNMENT_MARGIN_THRESHOLD", 0.10)))
     top_k = max(1, int(params.get("FRAGMENT_TOP_K", 3)))
     max_passes = max(1, int(params.get("FRAGMENT_MAX_PASSES", 10)))
+    min_support = float(params.get("FRAGMENT_MIN_SUPPORT", 0.5))
+    max_blockers = max(1, int(params.get("FRAGMENT_MAX_BLOCKERS", 4)))
     unknown_doubt_bonus = float(params.get("FRAGMENT_UNKNOWN_DOUBT_BONUS", 0.5))
 
-    n_frags = len(frags)
-    if n_frags == 0:
+    n = len(frags)
+    if n == 0:
         return {}
 
-    display_threshold = float(params.get("IDENTITY_DISPLAY_THRESHOLD", 0.6))
-
-    # Pre-compute durations and length factors.
+    rows = [frags.iloc[i] for i in range(n)]
     durations = np.array(
-        [
-            max(1, int(r["EndFrame"]) - int(r["StartFrame"]) + 1)
-            for _, r in frags.iterrows()
-        ],
+        [max(1, int(r["EndFrame"]) - int(r["StartFrame"]) + 1) for r in rows],
         dtype=np.float64,
     )
-    max_duration = float(durations.max())
-    log_max = math.log1p(max_duration)
+    log_max = math.log1p(float(durations.max()))
     length_scales = (
         np.log1p(durations) / log_max
         if log_max > 1e-9
-        else np.ones(n_frags, dtype=np.float64)
+        else np.ones(n, dtype=np.float64)
     )
     length_factors = 1.0 - length_w * (1.0 - length_scales)
-
-    # Pre-compute combined evidence supports (used for candidate ranking + scoring).
-    combined_supports: list[dict[str, float]] = [
-        _combined_support(frag_row, known_labels, params)
-        for _, frag_row in frags.iterrows()
-    ]
-
+    supports = [_combined_support(r, known_labels, params) for r in rows]
     stabilities = np.array(
-        [float(r.get("Stability", 0.0)) for _, r in frags.iterrows()],
-        dtype=np.float64,
+        [float(r.get("Stability", 0.0)) for r in rows], dtype=np.float64
     )
-
-    # Base assignment: the shared substrate uniqueness solver, applied per
-    # temporal-overlap connected component (see `_base_assignment_via_substrate`).
-    # This is the "one uniqueness solver" — collision-free by construction for
-    # simultaneously-visible fragments, while disjoint-time fragments remain
-    # free to share a label. The doubt-ordered refinement below then handles
-    # spatial plausibility this temporal-only base assignment cannot see.
-    current: list[str | None] = _base_assignment_via_substrate(
-        frags, known_labels, combined_supports, length_factors, display_threshold
-    )
-
-    # Schedule: dict[label] -> list of (frag_idx, segment_dict), unordered;
-    # spatial helpers don't require sortedness.
-    schedule: dict[str, list[tuple[int, dict]]] = {lbl: [] for lbl in known_labels}
-    for i in range(n_frags):
-        lbl = current[i]
-        if lbl is not None:
-            schedule[lbl].append((i, _seg_from_row(frags.iloc[i])))
-
-    def _spatial_for(
-        label: str, exclude_idx: int, also_exclude: int | None = None
-    ) -> dict[str, list[dict]]:
-        excludes = {exclude_idx}
-        if also_exclude is not None:
-            excludes.add(also_exclude)
-        return {
-            label: [
-                seg for (idx, seg) in schedule.get(label, []) if idx not in excludes
-            ]
-        }
-
-    def _has_collision(
-        label: str,
-        exclude_idx: int,
-        t0: int,
-        t1: int,
-        also_exclude: int | None = None,
-    ) -> bool:
-        for idx, seg in schedule.get(label, []):
-            if idx in (exclude_idx, also_exclude):
-                continue
-            if seg["start_frame"] <= t1 and t0 <= seg["end_frame"]:
-                return True
-        return False
-
-    def _candidate_score(
-        i: int, label: str, also_exclude: int | None = None
-    ) -> tuple[float, bool]:
-        """Evaluate placing fragment i under ``label``. Returns (score, vetoed).
-
-        ``also_exclude`` lets callers temporarily ignore another fragment in the
-        schedule (used by the swap move to score i under ``label`` as if the
-        blocking neighbor had already been displaced).
-        """
-        row = frags.iloc[i]
-        t0 = int(row["StartFrame"])
-        t1 = int(row["EndFrame"])
-        if _has_collision(label, i, t0, t1, also_exclude):
-            return 0.0, True
-        spatial_s, has_neighbors = _spatial_score_for_fragment(
-            row,
-            label,
-            _spatial_for(label, i, also_exclude),
-            max_vel,
-            no_neighbor_score,
-            max_bridge_gap,
-        )
-        if has_neighbors and spatial_s < spatial_veto:
-            return 0.0, True
-        evidence = float(combined_supports[i].get(label, 0.0))
-        raw = evidence * spatial_s if has_neighbors else evidence
-        return float(raw * float(length_factors[i])), False
-
-    def _find_blocker(i: int, label: str) -> int | None:
-        """Identify the schedule entry whose presence vetoes placing i under
-        ``label``. Returns the blocking fragment index or None if no single
-        blocker is responsible (e.g. when the no-neighbor score is below
-        ``spatial_veto``, which cannot be resolved by displacing one segment).
-
-        Mirrors the veto checks in ``_has_collision`` and
-        ``_spatial_score_for_fragment``.
-        """
-        row = frags.iloc[i]
-        t0 = int(row["StartFrame"])
-        t1 = int(row["EndFrame"])
-        segs_with_idx = [
-            (idx, seg) for (idx, seg) in schedule.get(label, []) if idx != i
-        ]
-        for idx, seg in segs_with_idx:
-            if seg["start_frame"] <= t1 and t0 <= seg["end_frame"]:
-                return idx
-        x0, y0 = float(row["StartX"]), float(row["StartY"])
-        x1, y1 = float(row["EndX"]), float(row["EndY"])
-        cap = max(1, int(max_bridge_gap))
-        prior = max(
-            ((idx, seg) for (idx, seg) in segs_with_idx if seg["end_frame"] < t0),
-            key=lambda x: x[1]["end_frame"],
-            default=None,
-        )
-        if prior is not None:
-            idx, seg = prior
-            if all(math.isfinite(v) for v in [x0, y0, seg["end_X"], seg["end_Y"]]):
-                gap = max(1, t0 - seg["end_frame"])
-                if (
-                    math.hypot(x0 - seg["end_X"], y0 - seg["end_Y"]) / min(gap, cap)
-                    > max_vel
-                ):
-                    return idx
-        following = min(
-            ((idx, seg) for (idx, seg) in segs_with_idx if seg["start_frame"] > t1),
-            key=lambda x: x[1]["start_frame"],
-            default=None,
-        )
-        if following is not None:
-            idx, seg = following
-            if all(math.isfinite(v) for v in [x1, y1, seg["start_X"], seg["start_Y"]]):
-                gap = max(1, seg["start_frame"] - t1)
-                if (
-                    math.hypot(x1 - seg["start_X"], y1 - seg["start_Y"]) / min(gap, cap)
-                    > max_vel
-                ):
-                    return idx
-        return None
-
-    def _best_alt_for(
-        j: int, exclude_label: str, partner: int
-    ) -> tuple[float, str | None]:
-        """Best feasible label for fragment j excluding ``exclude_label``,
-        scored as if ``partner`` were already absent from the schedule.
-
-        Used by the swap move: when i takes ``exclude_label`` and j is the
-        displaced occupant, j must find an alternative — and j scores its
-        candidates as if i had already vacated j's eventual destination
-        (``partner`` was the segment whose presence forced the displacement).
-        Returns (score, label_or_None).
-        """
-        sup = combined_supports[j]
-        ranked = sorted(known_labels, key=lambda lbl: -sup.get(lbl, 0.0))[:top_k]
-        best_s = 0.0  # Unknown is the floor (score 0, never vetoed).
-        best_l: str | None = None
-        for jc in ranked:
-            if jc == exclude_label:
-                continue
-            s, vetoed = _candidate_score(j, jc, also_exclude=partner)
-            if vetoed:
-                continue
-            if s > best_s:
-                best_s = s
-                best_l = jc
-        return best_s, best_l
-
-    def _current_score(i: int) -> float:
-        cur = current[i]
-        if cur is None:
-            return 0.0
-        score, vetoed = _candidate_score(i, cur)
-        return -math.inf if vetoed else score
-
-    def _doubt_score(i: int) -> float:
-        s_norm = 1.0 - float(stabilities[i])
-        l_norm = 1.0 - float(length_scales[i])
-        cur = current[i]
-        if cur is None:
-            return s_norm * l_norm + unknown_doubt_bonus
-        spatial_s, has_neighbors = _spatial_score_for_fragment(
-            frags.iloc[i],
-            cur,
-            _spatial_for(cur, i),
-            max_vel,
-            no_neighbor_score,
-            max_bridge_gap,
-        )
-        fit = float(spatial_s) if has_neighbors else no_neighbor_score
-        return s_norm * l_norm * (1.0 - fit)
-
-    def _commit(i: int, new_label: str | None) -> None:
-        cur = current[i]
-        if cur is not None:
-            schedule[cur] = [(idx, seg) for (idx, seg) in schedule[cur] if idx != i]
-        if new_label is not None:
-            schedule[new_label].append((i, _seg_from_row(frags.iloc[i])))
-        current[i] = new_label
-
-    for pass_idx in range(max_passes):
-        order = sorted(range(n_frags), key=lambda i: -_doubt_score(i))
-        flips = 0
-        for i in order:
-            cur = current[i]
-            cur_score = _current_score(i)
-
-            sup = combined_supports[i]
-            top_evidence = sorted(known_labels, key=lambda lbl: -sup.get(lbl, 0.0))[
+    segs = [_seg_from_row(r) for r in rows]
+    candidates_of: list[list[str]] = [
+        [
+            lbl
+            for lbl in sorted(known_labels, key=lambda lbl: -supports[i].get(lbl, 0.0))[
                 :top_k
             ]
-            seen: set[str | None] = set()
-            candidates: list[str | None] = [None]  # Unknown is always a candidate.
-            seen.add(None)
-            for c in top_evidence:
-                if c not in seen:
-                    candidates.append(c)
-                    seen.add(c)
+            if supports[i].get(lbl, 0.0) >= min_support
+        ]
+        for i in range(n)
+    ]
 
-            best_score = cur_score
-            best_label: str | None = cur
-            best_swap: tuple[int, str | None] | None = None
-            best_delta = 0.0
-            for c in candidates:
+    current: list[str | None] = [None] * n
+    schedule: dict[str, list[int]] = {lbl: [] for lbl in known_labels}
+
+    def _overlaps(i: int, j: int) -> bool:
+        return int(rows[i]["StartFrame"]) <= int(rows[j]["EndFrame"]) and int(
+            rows[j]["StartFrame"]
+        ) <= int(rows[i]["EndFrame"])
+
+    def _blockers(i: int, label: str) -> list[int]:
+        return [j for j in schedule[label] if j != i and _overlaps(i, j)]
+
+    def _score(i: int, label: str | None) -> float:
+        """Score of fragment i under ``label`` given the CURRENT schedule (i
+        excluded). Returns 0.0 when unassigned, blocked (temporal-overlap
+        collision), or spatially vetoed."""
+        if label is None:
+            return 0.0
+        if _blockers(i, label):
+            return 0.0
+        sched = {label: [segs[j] for j in schedule[label] if j != i]}
+        spatial_s, has_nb = _spatial_score_for_fragment(
+            rows[i], label, sched, max_vel, no_neighbor_score, max_bridge_gap
+        )
+        if has_nb and spatial_s < spatial_veto:
+            return 0.0
+        evidence = float(supports[i].get(label, 0.0))
+        raw = evidence * spatial_s if has_nb else evidence
+        return float(raw * length_factors[i])
+
+    def _commit(i: int, label: str | None) -> None:
+        cur = current[i]
+        if cur is not None:
+            schedule[cur].remove(i)
+        if label is not None:
+            schedule[label].append(i)
+        current[i] = label
+
+    def _objective(touched: set[int]) -> float:
+        return sum(_score(j, current[j]) for j in touched)
+
+    def _affected(label_a: str | None, label_b: str | None, extra) -> set[int]:
+        s = set(extra)
+        for lbl in (label_a, label_b):
+            if lbl is not None:
+                s.update(schedule[lbl])
+        return s
+
+    def _best_alternative(j: int, exclude: str | None) -> tuple[float, str | None]:
+        best_s, best_l = 0.0, None
+        for c in candidates_of[j]:
+            if c == exclude:
+                continue
+            s = _score(j, c)
+            if s > best_s:
+                best_s, best_l = s, c
+        return best_s, best_l
+
+    def _try_displacement(i: int, c: str) -> bool:
+        """Tentatively give ``c`` to fragment i, evicting and re-homing its
+        blocker(s). Accept iff the exact objective over every affected
+        fragment (i, each evicted blocker, and every fragment scheduled
+        under any label touched by the move) rises by >= monotone_eps.
+        Reverts to the pre-move state otherwise. See the docstring above
+        for the termination argument this gate is load-bearing for.
+        """
+        blockers = _blockers(i, c)
+        if not blockers or len(blockers) > max_blockers:
+            return False
+        before_assign = {j: current[j] for j in blockers}
+        before_assign[i] = current[i]
+        touched = _affected(current[i], c, blockers)
+        for j in blockers:
+            if current[j] is not None:
+                touched.update(schedule[current[j]])
+        j_before = _objective(touched)
+
+        for j in blockers:
+            _commit(j, None)
+        _commit(i, c)
+        new_labels: dict[int, str | None] = {}
+        for j in blockers:
+            _, alt = _best_alternative(j, c)
+            new_labels[j] = alt
+            _commit(j, alt)
+            if alt is not None:
+                touched.update(schedule[alt])
+        j_after = _objective(touched)
+
+        if j_after - j_before >= monotone_eps and _score(i, c) > 0.0:
+            return True
+
+        # Revert: undo the re-homing, then restore the original assignment.
+        for j in new_labels:
+            _commit(j, None)
+        _commit(i, None)
+        for j, lbl in before_assign.items():
+            _commit(j, lbl)
+        return False
+
+    # --- 1. mass-first seeding ---
+    order = sorted(
+        range(n),
+        key=lambda i: -_evidence_mass(
+            durations[i], max(supports[i].values()) if supports[i] else 0.0
+        ),
+    )
+    for i in order:
+        for c in candidates_of[i]:
+            if _score(i, c) > 0.0:
+                _commit(i, c)
+                break
+
+    # --- 2. doubt-ordered refinement ---
+    def _doubt(i: int) -> float:
+        s_norm = 1.0 - float(stabilities[i])
+        l_norm = 1.0 - float(length_scales[i])
+        if current[i] is None:
+            return s_norm * l_norm + unknown_doubt_bonus
+        sched = {current[i]: [segs[j] for j in schedule[current[i]] if j != i]}
+        spatial_s, has_nb = _spatial_score_for_fragment(
+            rows[i], current[i], sched, max_vel, no_neighbor_score, max_bridge_gap
+        )
+        fit = float(spatial_s) if has_nb else no_neighbor_score
+        return s_norm * l_norm * (1.0 - fit)
+
+    for pass_idx in range(max_passes):
+        flips = 0
+        for i in sorted(range(n), key=lambda i: -_doubt(i)):
+            cur = current[i]
+            cur_s = _score(i, cur) if cur is not None else 0.0
+            best_l, best_s = cur, cur_s
+            for c in candidates_of[i]:
                 if c == cur:
                     continue
-                if c is None:
-                    score = 0.0
-                    vetoed = False
-                else:
-                    score, vetoed = _candidate_score(i, c)
-                if not vetoed:
-                    delta = score - cur_score
-                    if score > best_score and delta > best_delta:
-                        best_score = score
-                        best_label = c
-                        best_swap = None
-                        best_delta = delta
-                    continue
-                # Vetoed simple flip — try a one-step swap with the blocker.
-                if c is None:
-                    continue
-                blocker = _find_blocker(i, c)
-                if blocker is None or blocker == i or current[blocker] != c:
-                    continue
-                score_i_clean, vetoed_i = _candidate_score(i, c, also_exclude=blocker)
-                if vetoed_i:
-                    continue
-                cur_score_j = _current_score(blocker)
-                if not math.isfinite(cur_score_j):
-                    cur_score_j = 0.0
-                alt_score_j, alt_label_j = _best_alt_for(blocker, c, partner=i)
-                # Both fragments must individually be no worse off under the
-                # swap.  Without this guard a high-evidence short fragment
-                # could displace a long anchor whenever the short fragment's
-                # gain exceeds the anchor's loss in joint sum — re-introducing
-                # the very behavior the length factor exists to prevent.
-                cur_score_i_finite = cur_score if math.isfinite(cur_score) else 0.0
-                if score_i_clean < cur_score_i_finite or alt_score_j < cur_score_j:
-                    continue
-                swap_delta = (score_i_clean + alt_score_j) - (
-                    cur_score_i_finite + cur_score_j
-                )
-                if swap_delta < monotone_eps:
-                    continue
-                if swap_delta > best_delta:
-                    best_score = score_i_clean
-                    best_label = c
-                    best_swap = (blocker, alt_label_j)
-                    best_delta = swap_delta
-
-            if best_label == cur and best_swap is None:
-                continue
-            if best_delta < monotone_eps:
-                continue
-            if best_swap is not None:
-                blocker, alt_label_j = best_swap
-                # Free the blocker first so the schedule is consistent when
-                # i's commit re-adds it under best_label.
-                _commit(blocker, alt_label_j)
-                _commit(i, best_label)
-                flips += 2
-            else:
-                _commit(i, best_label)
+                s = _score(i, c)
+                if s > 0.0 and s - cur_s >= monotone_eps and s > best_s:
+                    best_l, best_s = c, s
+            if best_l != cur:
+                _commit(i, best_l)
                 flips += 1
-
+                continue
+            for c in candidates_of[i]:
+                if c != cur and _score(i, c) == 0.0 and _try_displacement(i, c):
+                    flips += 1
+                    break
         log.debug("iterative fragment solver pass %d: %d flips", pass_idx + 1, flips)
         if flips == 0:
             break
@@ -862,27 +694,25 @@ def _iterative_assign(
             max_passes,
         )
 
-    # Unknown-rescue pass: assign any Unknown fragment its best feasible label
-    # even if the score is below the monotone gate (Unknown contributes 0, any
-    # feasible label strictly improves the objective).
-    for i in range(n_frags):
-        if current[i] is not None:
-            continue
-        sup = combined_supports[i]
-        top_evidence = sorted(known_labels, key=lambda lbl: -sup.get(lbl, 0.0))[:top_k]
-        best_score = 0.0
-        best_label: str | None = None
-        for c in top_evidence:
-            score, vetoed = _candidate_score(i, c)
-            if vetoed:
-                continue
-            if score > best_score:
-                best_score = score
-                best_label = c
-        if best_label is not None:
-            _commit(i, best_label)
+    # --- 3. unknown rescue by descending mass (may displace) ---
+    for i in sorted(
+        (i for i in range(n) if current[i] is None),
+        key=lambda i: -_evidence_mass(
+            durations[i], max(supports[i].values()) if supports[i] else 0.0
+        ),
+    ):
+        placed = False
+        for c in candidates_of[i]:
+            if _score(i, c) > 0.0:
+                _commit(i, c)
+                placed = True
+                break
+        if not placed:
+            for c in candidates_of[i]:
+                if _try_displacement(i, c):
+                    break
 
-    return {i: current[i] for i in range(n_frags)}
+    return {i: current[i] for i in range(n)}
 
 
 def _evidence_dicts_for_fragment(
@@ -1495,7 +1325,13 @@ def run_fragment_solver(
             this are marked ineligible for that identity (spatially incompatible).
         ASSIGNMENT_MARGIN_THRESHOLD      float  default 0.10
             Minimum global-objective delta required to accept a fragment relabel
-            during iterative refinement (monotone gate epsilon).
+            during iterative refinement (monotone gate epsilon). Floored at 1e-3
+            regardless of the configured value, so the termination argument for
+            multi-blocker displacement (see ``_iterative_assign``'s docstring)
+            always holds even if a caller passes 0.
+        FRAGMENT_MAX_BLOCKERS            int    default 4
+            Cap on the number of same-label overlapping fragments a single
+            displacement move may evict and re-home in one step.
         MAX_VELOCITY_BREAK               float  default 50.0
         MAX_BRIDGE_GAP_FRAMES            int    default 30
             Cap on the temporal gap (in frames) used when computing the implied
@@ -1522,10 +1358,6 @@ def run_fragment_solver(
             for changepoint detection and assignment. When False, the
             smoothing step is skipped entirely and the raw per-frame cache
             evidence is used directly instead.
-        IDENTITY_DISPLAY_THRESHOLD       float  default 0.6
-            Minimum smoothed-posterior confidence to report a per-row
-            IdentityFinalSmoothedLabel instead of "" (also used by the
-            substrate assignment solver's display gate).
     cache : an open (mode="r") IdentityEvidenceCache, or None. Required for
         the self-sufficient/cache-sourced path; when omitted the solver
         produces the no-sidecar degrade (empty evidence, no reconstruction).
