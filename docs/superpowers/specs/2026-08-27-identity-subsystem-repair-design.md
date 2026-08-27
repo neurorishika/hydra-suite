@@ -57,3 +57,35 @@ Not defects (verified): offline identity does not touch the tracking pass (OFF/O
 - Unit tests per task (see plan).
 - Equivalence matrix (MPS here, CUDA on mehek): non-identity clips byte-identical; identity clips (`ant_cnn_identity`, `emi_obb_identity`) **expected** to diverge in identity columns (and positions if their configs use `identity_weight > 0`) — record the delta explicitly, do not paper over.
 - Manual acceptance on `DEMO/ID/OFFLINE`: rerun post-processing; expect final trajectory count within 1.3× of OFF (≤ ~150), ≥ 15 distinct labels/frame in `IdentityFinalSmoothedLabel`, and the visually verified tracks (30 blue_blue, 36 orange_yellow, 58 orange_green/green_orange) labelled correctly.
+
+> **Note (updated 2026-08-27, post-Task-9 fix wave — this section is now known-stale relative to the measured gate; not rewritten in place per docs-lifecycle convention, corrected here instead):**
+>
+> **Equivalence-divergence scope was wider than stated above.** The measured MPS
+> equivalence matrix (see `tools/equivalence/notes/2026-08-27-identity-repair-gate.md`)
+> found **5** clips diverge, not 2: the 2 named here (`ant_cnn_identity`,
+> `emi_obb_identity`) plus `ant_pose_headtail`, `ant_obb_sleap`, and
+> `ant_obb_sequential`. All 5 share one mechanism, root-caused (with an honest
+> correlation-not-causation caveat — the exact unstamped checkpoint no longer exists
+> to re-run a counterfactual) in the gate record: they all point at the same shared
+> head/tail orientation checkpoint
+> (`classification/orientation/20260429-104937_efficientnet_b0_obiroi_train1.pth`),
+> which Step 1 of the same gating session re-stamped with `fit_policy=squash`. Once
+> stamped, Tasks 1-3's fit-policy-aware Layer-2 dispatch computes head/tail
+> orientation slightly differently from the `main` baseline on borderline frames,
+> producing π-magnitude θ flips that cascade into small forward/final row-count
+> deltas. Positions remain byte-identical (p99 = 0.0) on every clip, confirming the
+> Kalman/assignment/detection geometry itself is untouched. Full per-clip evidence:
+> the gate record above.
+>
+> **Measured outcome (2026-08-27): the DEMO/ID acceptance thresholds stated above
+> were not fully met.** Final trajectory count came in at **171**, not ≤~150 (a real
+> 4.0x improvement over OFFLINE's original 689, but short of the plan's specific
+> numeric bar); the ≥15 distinct-labels/frame threshold was met (17.09 measured);
+> the 30/36/58 track spot-check came in **1/3 correct** (track 58 only — tracks 30
+> and 36 both mislabel, converging on the same wrong value `blue_pink`, a possible
+> residual identity-confusion pattern rather than scattered noise). This is
+> attributed to residual classifier accuracy on the DEMO/ID colortag catalog, not
+> to a mechanism within this plan's scope (fit-policy correctness, PELT calibration,
+> evidence honesty, crop orientation) — retraining the classifier, or a dedicated
+> ground-truth accuracy evaluation, is a follow-up outside this repair. See the gate
+> record for the full measured breakdown and reasoning.
