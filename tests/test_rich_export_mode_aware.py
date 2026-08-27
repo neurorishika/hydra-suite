@@ -121,7 +121,7 @@ def test_relink_without_pose_refreshes_user_mode_tracks_csv(tmp_path, monkeypatc
     result = relink_and_export_rich_csv(
         final_csv,
         state=object(),
-        params={},
+        params={"FINAL_INTERPOLATION_MAX_GAP": 10},
         min_valid_conf=0.2,
         ignore_keypoints=None,
         debug_mode=False,

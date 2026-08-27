@@ -468,7 +468,20 @@ def relink_and_export_rich_csv(
     # the solver (and every downstream consumer) sees the final, gap-filled
     # frame -- not the pre-relink fragments' own frame ranges.
     relinked_with_pose = densify_trajectory_frames(relinked_with_pose)
-    max_gap = int(params.get("FINAL_INTERPOLATION_MAX_GAP", 10))
+    # No magic default here: the real floor is
+    # max(user_gap, MAX_OCCLUSION_GAP + 1), computed by
+    # `final_interpolation_max_gap` (which needs `config`, not just `params`,
+    # so it can't be recomputed from inside this module). The session-level
+    # caller (`TrackingSessionCore._relink_export_rich`) always supplies it;
+    # a caller that omits it fails loudly instead of silently under-filling
+    # gaps with an unrelated constant.
+    if "FINAL_INTERPOLATION_MAX_GAP" not in params:
+        raise KeyError(
+            "relink_and_export_rich_csv requires params['FINAL_INTERPOLATION_MAX_GAP'] "
+            "(compute it via hydra_suite.core.post.processing.final_interpolation_max_gap "
+            "before calling)"
+        )
+    max_gap = int(params["FINAL_INTERPOLATION_MAX_GAP"])
     relinked_with_pose = interpolate_trajectories(
         relinked_with_pose, max_gap=max_gap, fill_all_interior=True
     )

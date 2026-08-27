@@ -210,13 +210,6 @@ class TrackingSessionCore:
             enabled=bool(self.params.get("ENABLE_PROFILING", False))
         )
 
-        # Derived once so `relink_and_export_rich_csv` (Task 6) can read it
-        # without importing `config` -- the final densification pass's gap
-        # cap, shared with the forward/merge interpolation passes.
-        self.params["FINAL_INTERPOLATION_MAX_GAP"] = final_interpolation_max_gap(
-            self.config, self.params
-        )
-
     def _stopped_result(self) -> SessionResult:
         return SessionResult(False, None, None, [], None, [], None)
 
@@ -334,10 +327,19 @@ class TrackingSessionCore:
         )
 
     def _relink_export_rich(self, final_csv):
+        # Computed here (not eagerly in __init__, and not stored back onto the
+        # shared `self.params`) -- the final densification pass's gap cap,
+        # shared with the forward/merge interpolation passes. Passed via a
+        # local dict so this call is the only place that sees the derived
+        # value; `self.params` itself is never mutated as a side effect.
+        params = dict(self.params)
+        params["FINAL_INTERPOLATION_MAX_GAP"] = final_interpolation_max_gap(
+            self.config, self.params
+        )
         return relink_and_export_rich_csv(
             final_csv,
             self.pose_state,
-            params=self.params,
+            params=params,
             min_valid_conf=float(self.params.get("POSE_MIN_KPT_CONF_VALID", 0.2)),
             ignore_keypoints=self.config.get("pose_ignore_keypoints"),
             identity_evidence_cache_path=self._identity_evidence_cache_path(),
