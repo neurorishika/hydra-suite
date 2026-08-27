@@ -19,6 +19,9 @@ import numpy as np
 import pandas as pd
 
 from hydra_suite.core.individual.identity import columns as C
+from hydra_suite.core.individual.identity.columns import (  # noqa: F401
+    normalize_final_source_series,
+)
 
 _KEY_SEP = "|"
 _PAIR_SEP = "="

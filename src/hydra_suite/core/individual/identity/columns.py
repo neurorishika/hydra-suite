@@ -16,6 +16,11 @@ imports from any app layer (trackerkit/classkit/refinekit/detectkit/
 filterkit/integrations). Core must never import upward.
 """
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import pandas as pd
+
 # --- IdentityRealtime* -------------------------------------------------
 REALTIME_ID = "IdentityRealtimeID"
 REALTIME_LABEL = "IdentityRealtimeLabel"
@@ -57,7 +62,21 @@ class IdentityFinalSource:
     The label is descriptive only -- ``IdentityFinalID`` stays at the unknown
     slot (0), so nothing downstream can mistake it for a resolved identity.
     """
-    NONE = ""
+    NONE = "none"
+    """Explicit "no identity was resolved for this row" token.
+
+    Never write ``""``; readers normalise ``""``/NaN to this value
+    (``identity_postprocess.normalize_final_source_series``).
+    """
+
+
+def normalize_final_source_series(source: "pd.Series") -> "pd.Series":
+    """Map NaN / blank ``IdentityFinalSource`` cells (legacy CSVs, columns
+    created before the solver ran) to the explicit ``IdentityFinalSource.NONE``
+    token; strip whitespace from real tokens."""
+
+    token = source.astype(object).where(source.notna(), "").astype(str).str.strip()
+    return token.where(token != "", IdentityFinalSource.NONE)
 
 
 def identity_realtime_columns() -> list:

@@ -1075,12 +1075,15 @@ def _ensure_final_columns(out: pd.DataFrame) -> pd.DataFrame:
         )
     elif out[C.FINAL_SOURCE].dtype != object:
         out[C.FINAL_SOURCE] = out[C.FINAL_SOURCE].astype(object)
+    out[C.FINAL_SOURCE] = C.normalize_final_source_series(out[C.FINAL_SOURCE])
     if C.FINAL_ID not in out.columns:
         out[C.FINAL_ID] = np.nan
     if C.FINAL_CONFIDENCE not in out.columns:
         out[C.FINAL_CONFIDENCE] = np.nan
     if C.FINAL_FRAGMENT_SCORE not in out.columns:
         out[C.FINAL_FRAGMENT_SCORE] = np.nan
+    if C.FINAL_CONFLICT_RESOLVED not in out.columns:
+        out[C.FINAL_CONFLICT_RESOLVED] = False
     return out
 
 

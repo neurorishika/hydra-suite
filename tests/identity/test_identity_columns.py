@@ -46,4 +46,5 @@ def test_final_source_vocabulary():
     assert C.IdentityFinalSource.OFFLINE == "offline"
     assert C.IdentityFinalSource.REALTIME == "realtime"
     assert C.IdentityFinalSource.TAG == "tag"
-    assert C.IdentityFinalSource.NONE == ""
+    # 2026-08-27 identity-final-consistency: explicit denial token
+    assert C.IdentityFinalSource.NONE == "none"

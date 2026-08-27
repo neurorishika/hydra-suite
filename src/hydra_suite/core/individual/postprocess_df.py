@@ -143,7 +143,7 @@ def _stamp_non_identifying_labels(df, params):
         # ship. A row carrying a real source (offline/realtime/tag) is
         # genuinely resolved and stays protected.
         if C.FINAL_SOURCE in df.columns:
-            source_token = df[C.FINAL_SOURCE].fillna("").astype(str).str.strip()
+            source_token = C.normalize_final_source_series(df[C.FINAL_SOURCE])
         else:
             source_token = pd.Series("", index=df.index)
         unresolved = unresolved | (

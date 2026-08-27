@@ -182,7 +182,7 @@ def project_user_tracks(
                 )
             out["identity_confidence"] = confidence
         if C.FINAL_SOURCE in df.columns:
-            out["identity_source"] = df[C.FINAL_SOURCE]
+            out["identity_source"] = C.normalize_final_source_series(df[C.FINAL_SOURCE])
 
     # Non-identity classifier output (behavior, sex, caste, ...). Identity
     # heads are excluded: `identity` above already carries their result.
@@ -234,6 +234,25 @@ def write_final_trajectories(
     resolved column regardless of whether identity actually ran.
     """
     from hydra_suite.core.post.rich_export import write_rich_export_csv
+
+    rich_df = rich_df.copy()
+    if C.FINAL_SOURCE in rich_df.columns:
+        rich_df[C.FINAL_SOURCE] = C.normalize_final_source_series(
+            rich_df[C.FINAL_SOURCE]
+        )
+    if C.FINAL_CONFLICT_RESOLVED in rich_df.columns:
+        rich_df[C.FINAL_CONFLICT_RESOLVED] = (
+            rich_df[C.FINAL_CONFLICT_RESOLVED]
+            .map(
+                lambda v: (
+                    bool(v)
+                    if pd.notna(v)
+                    and str(v).strip().lower() not in ("", "nan", "false", "0")
+                    else False
+                )
+            )
+            .astype(bool)
+        )
 
     if debug_mode:
         return write_rich_export_csv(rich_df, final_csv_path)
