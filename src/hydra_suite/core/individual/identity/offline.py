@@ -1316,13 +1316,27 @@ def _annotate_smoothed_labels(
 
 
 def merge_same_label_neighbours(
-    df: pd.DataFrame, label_col: str = C.FINAL_LABEL
+    df: pd.DataFrame, did_split: bool, label_col: str = C.FINAL_LABEL
 ) -> pd.DataFrame:
     """Undo solver cuts that changed nothing: consecutive fragments of the same
     ``OriginalTrajectoryID`` whose final labels agree (unknown == unknown too)
     are re-joined under the earlier fragment's TrajectoryID. Relink cannot do
-    this (it rejects gap == 0), so the solver owns it."""
-    if "OriginalTrajectoryID" not in df.columns or label_col not in df.columns:
+    this (it rejects gap == 0), so the solver owns it.
+
+    ``did_split`` must be True only when THIS call's ``run_fragment_solver``
+    invocation actually performed a PELT split (Finding M3). The presence of
+    an ``OriginalTrajectoryID`` column alone is not sufficient evidence: a
+    trajectory can carry that column from a prior pass (or from
+    ``split_trajectories_at_changepoints`` passing rows through unchanged
+    when no changepoints were found) with no split having happened on this
+    call, and merging in that case could join trajectories this call never
+    split.
+    """
+    if (
+        not did_split
+        or "OriginalTrajectoryID" not in df.columns
+        or label_col not in df.columns
+    ):
         return df
     out = df.copy()
     spans = (
@@ -1597,12 +1611,14 @@ def run_fragment_solver(
             smoothed_by_traj = None
             breaker_tripped = True
 
+    did_split = False
     if params.get("ENABLE_PELT_SPLITTING", False) and smoothed_by_traj:
         changepoints = detect_identity_changepoints(smoothed_by_traj, catalog, params)
         split_df = split_trajectories_at_changepoints(
             trajectories_df, changepoints, params
         )
         n_splits = sum(len(v) for v in changepoints.values())
+        did_split = n_splits > 0
         log.info(
             "fragment_solver: PELT found %d changepoints; %d → %d trajectories after splitting.",
             n_splits,
@@ -1611,10 +1627,21 @@ def run_fragment_solver(
         )
     else:
         if params.get("ENABLE_PELT_SPLITTING", False):
-            log.info(
-                "fragment_solver: PELT splitting requested but no smoothed "
-                "cache evidence is available; skipping split."
-            )
+            if breaker_tripped:
+                # The ERROR log above already states the real reason
+                # (evidence rejected as uninformative) -- don't say
+                # "no evidence is available", which is misleading: evidence
+                # WAS available, it was rejected by the breaker.
+                log.info(
+                    "fragment_solver: PELT splitting requested but the "
+                    "evidence-quality breaker rejected the evidence "
+                    "(see the ERROR above); skipping split."
+                )
+            else:
+                log.info(
+                    "fragment_solver: PELT splitting requested but no smoothed "
+                    "cache evidence is available; skipping split."
+                )
         split_df = trajectories_df
         log.info(
             "fragment_solver: iteratively assigning labels to %d existing trajectories.",
@@ -1638,7 +1665,7 @@ def run_fragment_solver(
         solved = solve_global_assignment(
             split_df, catalog, params, evidence_by_traj=smoothed_by_traj
         )
-    merged = merge_same_label_neighbours(solved)
+    merged = merge_same_label_neighbours(solved, did_split=did_split)
     log.info(
         "fragment_solver: re-merged %d → %d trajectories after assignment.",
         solved["TrajectoryID"].nunique(),
