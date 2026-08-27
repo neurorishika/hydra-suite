@@ -137,10 +137,11 @@ def build_video_track_label_array(trajectories_df):
     """Precompute one overlay label per row using stable identity when available."""
     if trajectories_df is None or len(trajectories_df) == 0:
         return np.asarray([], dtype=object)
+    # Prioritize resolved final identity over raw per-frame classifier evidence (audit S8).
     identity_columns = [
-        C.UNIQUE_IDENTITY_KEY,
         C.FINAL_LABEL,
         C.FINAL_SMOOTHED_LABEL,
+        C.UNIQUE_IDENTITY_KEY,
     ]
     track_ids = trajectories_df["TrajectoryID"].tolist()
     labels = []
@@ -163,10 +164,11 @@ def build_video_track_color_key_array(trajectories_df):
     """Precompute one color key per row, preferring identity evidence over TrajectoryID."""
     if trajectories_df is None or len(trajectories_df) == 0:
         return np.asarray([], dtype=object)
+    # Prioritize resolved final identity over raw per-frame classifier evidence (audit S8).
     identity_columns = [
-        C.UNIQUE_IDENTITY_KEY,
         C.FINAL_LABEL,
         C.FINAL_SMOOTHED_LABEL,
+        C.UNIQUE_IDENTITY_KEY,
     ]
     track_ids = trajectories_df["TrajectoryID"].tolist()
     color_keys = []

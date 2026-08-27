@@ -661,7 +661,7 @@ def _run_tiny_training_loop(
                 _safe_log(
                     log_cb,
                     f"  * new best val_acc={
-                        val_acc:.4f} at epoch {
+                        val_acc: .4f} at epoch {
                         epoch + 1} — checkpoint saved",
                 )
             else:
@@ -692,7 +692,7 @@ def _run_tiny_training_loop(
         _safe_log(
             log_cb,
             f"Training loop done: best_val_acc={
-                best_val_acc:.4f} @ epoch {best_epoch}/{_final_epoch}, "
+                best_val_acc: .4f} @ epoch {best_epoch} / {_final_epoch}, "
             f"wall_time={_elapsed:.1f}s",
         )
     else:
@@ -1378,10 +1378,10 @@ def _run_torchvision_training_loop(
             log_cb,
             (
                 f"Epoch {
-                    epoch + 1}/{
+                    epoch + 1} / {
                     params.epochs}  loss={
-                    avg_loss:.4f}  val_acc={
-                    val_acc:.4f}"
+                    avg_loss: .4f}  val_acc={
+                    val_acc: .4f}"
                 if val_acc is not None
                 else f"Epoch {epoch + 1}/{params.epochs}  loss={avg_loss:.4f}  val_acc=n/a"
             ),
@@ -1411,7 +1411,7 @@ def _run_torchvision_training_loop(
                 _safe_log(
                     log_cb,
                     f"  * new best val_acc={
-                        val_acc:.4f} at epoch {
+                        val_acc: .4f} at epoch {
                         epoch + 1} — checkpoint saved",
                 )
             else:
@@ -1443,7 +1443,7 @@ def _run_torchvision_training_loop(
         _safe_log(
             log_cb,
             f"Training loop done: best_val_acc={
-                best_val_acc:.4f} @ epoch {best_epoch}/{_final_epoch}, "
+                best_val_acc: .4f} @ epoch {best_epoch} / {_final_epoch}, "
             f"wall_time={_elapsed:.1f}s",
         )
     else:
@@ -2188,8 +2188,8 @@ def _train_multihead_shared_classify(
     elapsed = _time.monotonic() - _t0
     _safe_log(
         log_cb,
-        f"Shared-trunk training done: best_val_acc={best_val_acc} @ epoch {best_epoch} ({
-            elapsed:.1f}s)",
+        f"Shared - trunk training done: best_val_acc={best_val_acc} @ epoch {best_epoch} ({
+            elapsed: .1f}s)",
     )
     return {
         "success": best_ckpt_path.exists(),

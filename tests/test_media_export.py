@@ -72,28 +72,38 @@ def test_color_key_array_prefers_identity_then_trajectory():
     assert keys[1] == "trajectory:1"
 
 
-def test_overlay_priority_is_unique_key_then_final_then_final_smoothed():
-    """Phase 6 Task 5: the overlay reads the IdentityFinal* family (not the
-    retired IdentityAssignedLabel/IdentityOfflineLabel/IdentitySmoothedLabel
-    names), in priority order [UniqueIdentityKey, IdentityFinalLabel,
-    IdentityFinalSmoothedLabel]."""
+def test_overlay_priority_is_final_then_smoothed_then_unique_key():
+    """Identity-final-consistency audit (2026-08-27): exported/rendered media
+    should show the resolved final identity (IdentityFinalLabel), not raw
+    per-frame classifier evidence (UniqueIdentityKey). Priority order:
+    [IdentityFinalLabel, IdentityFinalSmoothedLabel, UniqueIdentityKey]."""
     df = pd.DataFrame(
         {
-            "TrajectoryID": [0, 1, 2],
-            "UniqueIdentityKey": [np.nan, np.nan, np.nan],
-            "IdentityFinalLabel": ["ant_a", np.nan, np.nan],
-            "IdentityFinalSmoothedLabel": ["ant_a_smoothed", "ant_b", np.nan],
+            "TrajectoryID": [0, 1, 2, 3],
+            "UniqueIdentityKey": ["apriltag=3", np.nan, np.nan, np.nan],
+            "IdentityFinalLabel": ["ant_a", np.nan, np.nan, np.nan],
+            "IdentityFinalSmoothedLabel": ["ant_a_smoothed", "ant_b", np.nan, np.nan],
         }
     )
     labels = media_export.build_video_track_label_array(df)
+    # Row 0: IdentityFinalLabel="ant_a" takes priority over UniqueIdentityKey="apriltag=3"
     assert labels[0] == "ant_a"
+    # Row 1: IdentityFinalSmoothedLabel="ant_b" when IdentityFinalLabel is absent
     assert labels[1] == "ant_b"
+    # Row 2: Falls back to UniqueIdentityKey when both Final columns are absent
     assert labels[2] == "ID2"
+    # Row 3: No identity info, defaults to TrajectoryID
+    assert labels[3] == "ID3"
 
     keys = media_export.build_video_track_color_key_array(df)
+    # Row 0: IdentityFinalLabel="ant_a" takes priority over UniqueIdentityKey="apriltag=3"
     assert keys[0] == "identity:ant_a"
+    # Row 1: IdentityFinalSmoothedLabel="ant_b" when IdentityFinalLabel is absent
     assert keys[1] == "identity:ant_b"
+    # Row 2: Falls back to TrajectoryID when no identity info
     assert keys[2] == "trajectory:2"
+    # Row 3: No identity info, defaults to TrajectoryID
+    assert keys[3] == "trajectory:3"
 
 
 def test_precomputed_palette_uses_trajectory_colors_for_plain_tracks():
