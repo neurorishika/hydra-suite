@@ -25,8 +25,10 @@ from hydra_suite.core.post.pose_merge import (
     resolve_current_tag_cache_path,
 )
 from hydra_suite.core.post.processing import (
+    final_interpolation_max_gap,
     interpolate_trajectories,
     process_trajectories_from_csv,
+    trim_positionless_ends,
 )
 from hydra_suite.core.post.rich_export import (
     export_rich_csv,
@@ -229,13 +231,7 @@ class TrackingSessionCore:
     def _interpolate_and_scale(self, df):
         interp_method = str(self.config.get("interpolation_method", "none")).lower()
         if interp_method != "none":
-            max_gap = max(
-                1,
-                round(
-                    float(self.config["interpolation_max_gap_seconds"])
-                    * float(self.params["FPS"])
-                ),
-            )
+            max_gap = final_interpolation_max_gap(self.config, self.params)
             df = interpolate_trajectories(
                 df,
                 method=interp_method,
@@ -244,7 +240,10 @@ class TrackingSessionCore:
                 directed_heading_posthoc=bool(
                     self.params.get("DIRECTED_ORIENT_POSTHOC_CONSISTENCY", False)
                 ),
+                fill_all_interior=True,
             )
+        else:
+            df = trim_positionless_ends(df)
         return rescale_coordinates(
             df, resize_factor=float(self.params.get("RESIZE_FACTOR", 1.0))
         )
@@ -265,13 +264,7 @@ class TrackingSessionCore:
             params=self.params,
             resize_factor=float(self.params.get("RESIZE_FACTOR", 1.0)),
             interp_method=str(self.config.get("interpolation_method", "none")).lower(),
-            max_gap=max(
-                1,
-                round(
-                    float(self.config["interpolation_max_gap_seconds"])
-                    * float(self.params["FPS"])
-                ),
-            ),
+            max_gap=final_interpolation_max_gap(self.config, self.params),
             tag_cache_path=resolve_current_tag_cache_path(
                 self.params, self.paths.get("detection_cache_path")
             ),
@@ -279,6 +272,7 @@ class TrackingSessionCore:
             directed_heading_posthoc=bool(
                 self.params.get("DIRECTED_ORIENT_POSTHOC_CONSISTENCY", False)
             ),
+            fill_all_interior=True,
             enable_profiling=bool(self.params.get("ENABLE_PROFILING", False)),
             progress=self.callbacks.progress,
             should_stop=self.callbacks.should_stop,

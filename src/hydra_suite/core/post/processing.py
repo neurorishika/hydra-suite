@@ -3581,12 +3581,96 @@ def _split_rows_into_segments(rows, max_gap=5, max_spatial_jump=50.0):
     return segments
 
 
+def densify_trajectory_frames(df: pd.DataFrame) -> pd.DataFrame:
+    """Reindex every trajectory to a dense FrameID range. Inserted rows are
+    ``State="occluded"``, ``DetectionID`` NaN, ``DetectionConfidence`` 0.0."""
+    if df is None or df.empty or "TrajectoryID" not in df.columns:
+        return df
+    parts = []
+    inserted = 0
+    for tid, g in df.groupby("TrajectoryID", sort=False):
+        g = g.sort_values("FrameID").drop_duplicates("FrameID", keep="first")
+        lo, hi = int(g["FrameID"].min()), int(g["FrameID"].max())
+        if len(g) == hi - lo + 1:
+            parts.append(g)
+            continue
+        full = g.set_index("FrameID").reindex(np.arange(lo, hi + 1)).reset_index()
+        new = full["TrajectoryID"].isna()
+        inserted += int(new.sum())
+        full.loc[new, "TrajectoryID"] = tid
+        if "State" in full.columns:
+            full.loc[new, "State"] = "occluded"
+        if "DetectionConfidence" in full.columns:
+            full.loc[new, "DetectionConfidence"] = 0.0
+        if "arena_id" in full.columns:
+            vals = g["arena_id"].dropna().unique()
+            if len(vals) == 1:
+                full.loc[new, "arena_id"] = vals[0]
+        full["TrajectoryID"] = full["TrajectoryID"].astype(g["TrajectoryID"].dtype)
+        parts.append(full)
+    if inserted:
+        logger.info(
+            "densify_trajectory_frames: inserted %d occluded rows into frame gaps",
+            inserted,
+        )
+    return (
+        pd.concat(parts, ignore_index=True)
+        .sort_values(["TrajectoryID", "FrameID"], kind="stable")
+        .reset_index(drop=True)
+    )
+
+
+def trim_positionless_ends(df: pd.DataFrame) -> pd.DataFrame:
+    """Drop leading/trailing rows without a position (NaN X or Y) per trajectory:
+    they carry no detection and cannot be interpolated."""
+    if df is None or df.empty or "TrajectoryID" not in df.columns:
+        return df
+    keep = pd.Series(True, index=df.index)
+    dropped = 0
+    for _tid, g in df.groupby("TrajectoryID", sort=False):
+        g = g.sort_values("FrameID")
+        has = g["X"].notna() & g["Y"].notna()
+        if not has.any():
+            keep.loc[g.index] = False
+            dropped += len(g)
+            continue
+        first, last = has.idxmax(), has[::-1].idxmax()
+        pos = g.index.get_indexer([first, last])
+        mask = np.zeros(len(g), bool)
+        mask[pos[0] : pos[1] + 1] = True
+        keep.loc[g.index[~mask]] = False
+        dropped += int((~mask).sum())
+    if dropped:
+        logger.info(
+            "trim_positionless_ends: dropped %d leading/trailing position-less rows",
+            dropped,
+        )
+    return df.loc[keep].reset_index(drop=True)
+
+
+def final_interpolation_max_gap(config, params) -> int:
+    """Compute the interpolation gap cap for the FINAL densification pass:
+    never below the user's configured knob, and always at least large enough
+    to cover the tracker's own occlusion-coasting cap (``MAX_OCCLUSION_GAP``
+    frames), so the final pass never leaves a gap NaN that the tracker itself
+    asserted continuity across."""
+    user_gap = max(
+        1,
+        round(
+            float(config.get("interpolation_max_gap_seconds", 0.0))
+            * float(params["FPS"])
+        ),
+    )
+    return int(max(user_gap, int(params.get("MAX_OCCLUSION_GAP", 30)) + 1))
+
+
 def interpolate_trajectories(
     trajectories_df: object,
     method: object = "linear",
     max_gap: object = 10,
     heading_flip_max_burst: int = 5,
     directed_heading_posthoc: bool = False,
+    fill_all_interior: bool = False,
 ) -> object:
     """
     Interpolate missing values in trajectories using various methods.
@@ -3603,6 +3687,13 @@ def interpolate_trajectories(
             the local burst-based flip correction.  This resolves the minimum
             number of per-frame flips needed to make the entire track
             consistently directed.
+        fill_all_interior: When True, interior gaps longer than *max_gap* are
+            still filled (no cap on interior gap length) and, at the end,
+            leading/trailing position-less rows are dropped via
+            ``trim_positionless_ends`` since they cannot be interpolated.
+            Default False preserves today's exact behavior byte-for-byte —
+            existing callers of this function are out of scope for this
+            change and must not be affected.
 
     Returns:
         DataFrame with interpolated values
@@ -3707,12 +3798,19 @@ def interpolate_trajectories(
             if col not in traj_data.columns:
                 traj_data[col] = np.nan
 
+        effective_max_gap = 10**9 if fill_all_interior else max_gap
+
+        if fill_all_interior:
+            _log_interior_gaps_over_cap(
+                traj_id, traj_data["FrameID"].values, traj_data["X"].values, max_gap
+            )
+
         for col in ["X", "Y"]:
             traj_data[col] = _interpolate_column(
                 traj_data["FrameID"].values,
                 traj_data[col].values,
                 method=method,
-                max_gap=max_gap,
+                max_gap=effective_max_gap,
             )
 
         # Fix heading ambiguities before interpolation so that sin/cos
@@ -3728,7 +3826,7 @@ def interpolate_trajectories(
             traj_data["FrameID"].values,
             traj_data["Theta"].values,
             method=method,
-            max_gap=max_gap,
+            max_gap=effective_max_gap,
         )
 
         interpolated_parts.append(traj_data)
@@ -3737,6 +3835,9 @@ def interpolate_trajectories(
     result_df = result_df.sort_values(["TrajectoryID", "FrameID"]).reset_index(
         drop=True
     )
+
+    if fill_all_interior:
+        result_df = trim_positionless_ends(result_df)
 
     logger.info("Interpolation complete")
     return result_df
@@ -4224,6 +4325,26 @@ def _make_interp_func(method, valid_frames, valid_values, n_valid):
             return _linear()
         return UnivariateSpline(valid_frames, valid_values, s=None, k=3)
     return None
+
+
+def _log_interior_gaps_over_cap(traj_id, frames, values, max_gap):
+    """Log each interior NaN gap in *values* longer than *max_gap* frames.
+    Used only when ``fill_all_interior=True`` fills such gaps anyway, so the
+    operator has visibility into how far beyond the historical cap the final
+    pass actually reached for."""
+    valid_mask = ~np.isnan(values)
+    valid_indices = np.where(valid_mask)[0]
+    if len(valid_indices) < 2:
+        return
+    for i in range(len(valid_indices) - 1):
+        gap_size = valid_indices[i + 1] - valid_indices[i] - 1
+        if gap_size > max_gap:
+            logger.info(
+                "Trajectory %s: filled an interior gap of %d frames (> max_gap %d)",
+                traj_id,
+                gap_size,
+                max_gap,
+            )
 
 
 def _interpolate_column(frames, values, method="linear", max_gap=10):
