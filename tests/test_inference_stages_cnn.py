@@ -38,6 +38,7 @@ def _flat_model_backend(class_names: list[str]) -> MagicMock:
     backend = MagicMock()
     backend.metadata.class_names = [class_names]
     backend.metadata.input_size = (64, 64)
+    backend.metadata.fit_policy = "letterbox"
     n_classes = len(class_names)
     backend.predict_batch.side_effect = lambda crops: [
         [np.ones(n_classes) / n_classes] for _ in crops
@@ -49,6 +50,7 @@ def _multihead_model_backend(factor_classes: list[list[str]]) -> MagicMock:
     backend = MagicMock()
     backend.metadata.class_names = factor_classes
     backend.metadata.input_size = (64, 64)
+    backend.metadata.fit_policy = "letterbox"
     backend.predict_batch.side_effect = lambda crops: [
         [np.ones(len(fc)) / len(fc) for fc in factor_classes] for _ in crops
     ]
@@ -115,6 +117,7 @@ def test_run_cnn_raw_probabilities_not_calibrated():
     backend = MagicMock()
     backend.metadata.class_names = [["a", "b", "c"]]
     backend.metadata.input_size = (64, 64)
+    backend.metadata.fit_policy = "letterbox"
     backend.predict_batch.return_value = [[raw_probs.copy()]]
     model = CNNModel(
         backend=backend,

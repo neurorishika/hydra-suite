@@ -147,6 +147,7 @@ def test_load_headtail_rejects_noncanonical_labels(monkeypatch):
 def test_run_headtail_empty_crops_returns_nan_hints():
     config = HeadTailConfig(model_path="/ht.pt")
     mock_backend = MagicMock()
+    mock_backend.metadata.fit_policy = "letterbox"
     model = HeadTailModel(
         backend=mock_backend,
         input_size=(64, 64),
@@ -168,6 +169,7 @@ def test_run_headtail_empty_crops_returns_nan_hints():
 def test_run_headtail_confident_prediction():
     config = HeadTailConfig(model_path="/ht.pt", confidence_threshold=0.5)
     mock_backend = MagicMock()
+    mock_backend.metadata.fit_policy = "letterbox"
     mock_backend.predict_batch.return_value = [
         [np.array([0.9, 0.1, 0.0, 0.0, 0.0])],
         [np.array([0.1, 0.8, 0.0, 0.0, 0.1])],
@@ -187,13 +189,15 @@ def test_run_headtail_confident_prediction():
     assert result.directed_mask[1] == 1
     assert result.heading_hints[0] == pytest.approx(0.0)
     assert result.heading_hints[1] == pytest.approx(math.pi)
-    # Inference path also returns None for canonical_affines (affines belong to crops stage)
+    # Inference path also returns None for canonical_affines (affines belong
+    # to crops stage)
     assert result.canonical_affines is None
 
 
 def test_run_headtail_below_threshold_not_directed():
     config = HeadTailConfig(model_path="/ht.pt", confidence_threshold=0.9)
     mock_backend = MagicMock()
+    mock_backend.metadata.fit_policy = "letterbox"
     mock_backend.predict_batch.return_value = [
         [np.array([0.6, 0.4, 0.0, 0.0, 0.0])],
     ]
@@ -212,6 +216,7 @@ def test_run_headtail_below_threshold_not_directed():
 def test_run_headtail_unknown_label_not_directed():
     config = HeadTailConfig(model_path="/ht.pt", confidence_threshold=0.5)
     mock_backend = MagicMock()
+    mock_backend.metadata.fit_policy = "letterbox"
     mock_backend.predict_batch.return_value = [
         [np.array([0.0, 0.0, 0.0, 0.0, 0.95])],  # unknown, high conf
     ]
@@ -240,6 +245,7 @@ def test_run_headtail_below_candidate_confidence_skips_classification():
         candidate_confidence_threshold=0.25,
     )
     mock_backend = MagicMock()
+    mock_backend.metadata.fit_policy = "letterbox"
     # Both detections would classify as confidently "right" if asked.
     mock_backend.predict_batch.return_value = [
         [np.array([0.95, 0.0, 0.0, 0.0, 0.05])],
@@ -268,6 +274,7 @@ def test_run_headtail_candidate_confidence_none_classifies_everything():
     behavior: every detection is classified regardless of OBB confidence."""
     config = HeadTailConfig(model_path="/ht.pt", confidence_threshold=0.5)
     mock_backend = MagicMock()
+    mock_backend.metadata.fit_policy = "letterbox"
     mock_backend.predict_batch.return_value = [
         [np.array([0.95, 0.0, 0.0, 0.0, 0.05])],
     ]

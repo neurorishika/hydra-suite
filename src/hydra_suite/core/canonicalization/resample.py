@@ -328,3 +328,31 @@ def letterbox_fit(
             ox, oy = fit.offset_xy
             out[:, :, oy : oy + ih, ox : ox + iw] = resized
     return out.squeeze(0) if single else out
+
+
+def squash_fit(crop_chw: torch.Tensor, model_wh: tuple) -> torch.Tensor:
+    """Anisotropic antialiased-bilinear resize straight to ``model_wh`` (no paste).
+
+    Layer 2 for artifacts trained with torchvision ``Resize((sz, sz))`` on PIL
+    images (every classifier published before 2026-08-05). PIL's Resize is
+    antialiased; ``F.interpolate(antialias=True)`` is the closest torch match.
+    """
+    single = crop_chw.dim() == 3
+    x = crop_chw.unsqueeze(0) if single else crop_chw
+    mw, mh = int(model_wh[0]), int(model_wh[1])
+    with torch.inference_mode():
+        out = F.interpolate(
+            x, size=(mh, mw), mode="bilinear", align_corners=False, antialias=True
+        )
+    return out.squeeze(0) if single else out
+
+
+def fit_batch_for_model(
+    crops_chw: torch.Tensor, model_wh: tuple, policy: str
+) -> torch.Tensor:
+    """Dispatch Layer 2 by ``policy`` (see ``ClassifierMetadata.fit_policy``)."""
+    if policy == "letterbox":
+        return letterbox_fit(crops_chw, model_wh)
+    if policy == "squash":
+        return squash_fit(crops_chw, model_wh)
+    raise ValueError(f"unsupported fit_policy for tensor Layer 2: {policy!r}")

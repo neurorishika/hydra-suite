@@ -361,6 +361,33 @@ def apply_fit_batch(crops: list, fit: FitResult) -> list:
     return list(pool.map(lambda c: apply_fit(c, fit), crops))
 
 
+def apply_fit_batch_for_model(crops: list, model_hw: tuple, policy: str) -> list:
+    """Policy-dispatched Layer 2 over a whole window's crops, chunked across
+    the shared warp pool.
+
+    Mirrors ``apply_fit_batch``'s parallelization, but goes through
+    ``fit_crops_for_model`` so the chosen ``policy`` (letterbox/squash/native)
+    is honoured for every crop.
+    """
+    from hydra_suite.core.canonicalization.fit import fit_crops_for_model
+
+    n = len(crops)
+    pool = _get_warp_pool(_crop_warp_threads()) if n >= _WARP_MIN_PARALLEL else None
+    if pool is None:
+        return fit_crops_for_model(crops, model_hw, policy)
+
+    n_workers = _crop_warp_threads()
+    chunk_size = max(1, -(-n // n_workers))
+    chunks = [crops[i : i + chunk_size] for i in range(0, n, chunk_size)]
+    results = list(
+        pool.map(lambda ch: fit_crops_for_model(ch, model_hw, policy), chunks)
+    )
+    out: list = []
+    for r in results:
+        out.extend(r)
+    return out
+
+
 def frames_on_cuda(runtime, frames) -> bool:
     """Whether the GPU classifier crop path should run for this window.
 

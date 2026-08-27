@@ -7,7 +7,7 @@ from typing import Any
 import numpy as np
 import torch
 
-from hydra_suite.core.canonicalization.fit import apply_fit, fit_to_model_input
+from hydra_suite.core.canonicalization.fit import fit_crops_for_model
 from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
 from hydra_suite.utils import profiling_names as N
 from hydra_suite.utils.profiling import span
@@ -79,9 +79,10 @@ def run_cnn(
 
     Crops are warped onto the shared canonical canvas (extract_classifier_crops,
     Layer 1), then fit to the model's exact input size via Layer 2
-    (``fit_to_model_input`` / ``apply_fit``) -- the classifier crop is no longer
-    warped straight to the model input in one step, so every consumer shares
-    the same rigid Layer 1 transform.
+    (``fit_crops_for_model``, dispatched on the artifact's ``fit_policy`` --
+    letterbox/squash/native) -- the classifier crop is no longer warped
+    straight to the model input in one step, so every consumer shares the
+    same rigid Layer 1 transform.
 
     Per Correction 16 / spec audit: temperature and scoring_mode are applied
     at tracking time inside IdentityEvidenceBuilder, NOT here. Cache writes
@@ -93,9 +94,9 @@ def run_cnn(
     from .crops import extract_classifier_crops
 
     canon_crops = extract_classifier_crops(frame, obb_result, geometry)
-    in_h, in_w = model.input_size  # ClassifierMetadata documents (H, W)
-    fit = fit_to_model_input(geometry.canvas_wh, (in_w, in_h))
-    np_crops = [apply_fit(c, fit) for c in canon_crops]
+    np_crops = fit_crops_for_model(
+        canon_crops, model.input_size, model.backend.metadata.fit_policy
+    )
 
     all_probs = model.backend.predict_batch(np_crops)
 
@@ -148,21 +149,20 @@ def run_cnn_batch(
     per frame via batch.select_frame. Assembly delegates to _assemble_cnn_result
     (DRY with run_cnn).
 
-    Both branches derive their fit from the SAME ``fit_to_model_input(geometry
-    .canvas_wh, (in_w, in_h))`` call, computed once here. The GPU (NVDEC
-    on-device) branch applies that fit on-device via the shared torch seam's
-    ``letterbox_fit`` (``F.interpolate`` + zero-canvas paste) instead of the
-    CPU's ``cv2``-based ``apply_fit`` -- an anisotropic stretch here would
-    silently feed the model a DIFFERENT geometry than the CPU path (a model
-    trained on letterboxed crops fed non-letterboxed ones on CUDA), so both
-    paths must letterbox identically; only the resample kernel differs
-    (grid_sample/interpolate != cv2, so the acceptance gate is identity
-    agreement, not byte-identity).
+    Both branches dispatch Layer 2 on the SAME ``model.backend.metadata
+    .fit_policy`` (letterbox/squash/native). The GPU (NVDEC on-device) branch
+    applies that policy on-device via the shared torch seam's
+    ``resample.fit_batch_for_model`` (``F.interpolate``, letterbox pastes onto
+    a zero canvas / squash stretches straight to the model canvas) instead of
+    the CPU's ``fit_crops_for_model`` -- both paths must apply the SAME policy
+    or a model would silently see a DIFFERENT geometry on CUDA than on CPU;
+    only the resample kernel differs (grid_sample/interpolate != cv2, so the
+    acceptance gate is identity agreement, not byte-identity).
     """
     from .crops import frames_on_cuda
 
     in_h, in_w = model.input_size  # ClassifierMetadata documents (H, W)
-    fit = fit_to_model_input(geometry.canvas_wh, (in_w, in_h))
+    policy = model.backend.metadata.fit_policy
 
     if frames_on_cuda(runtime, frames):
         # Pure-GPU path (NVDEC): warp crops on-device and forward on-device, no
@@ -170,7 +170,7 @@ def run_cnn_batch(
         # tensors; floor-quantize to 8 bits so the input stays in the same regime
         # as the cv2/uint8 reference (grid_sample != cv2, so the acceptance gate
         # is identity agreement, not byte-identity -- see the design spec).
-        from hydra_suite.core.canonicalization.resample import letterbox_fit
+        from hydra_suite.core.canonicalization.resample import fit_batch_for_model
 
         from .crops import extract_canonical_crops_batch
 
@@ -184,7 +184,7 @@ def run_cnn_batch(
             # input_is_bgr=False: the model sees RGB, matching the CPU path where
             # _preprocess flips its BGR crop to RGB.
             with span(N.APPLY_FIT, units=n_total):
-                fitted = letterbox_fit(batch.crops, fit.model_wh)
+                fitted = fit_batch_for_model(batch.crops, (in_w, in_h), policy)
                 cuda_crops = [
                     (fitted[i] * 255.0).floor().clamp(0, 255) for i in range(n_total)
                 ]
@@ -195,7 +195,7 @@ def run_cnn_batch(
         else:
             all_probs = []
     else:
-        from .crops import apply_fit_batch, extract_classifier_crops_batch_np
+        from .crops import apply_fit_batch_for_model, extract_classifier_crops_batch_np
 
         # HWC uint8 BGR crops straight from the warp -- no float32 tensor round
         # trip (it was exactly value-preserving, so removing it is
@@ -203,7 +203,9 @@ def run_cnn_batch(
         with span(N.CROP_EXTRACT):
             batch = extract_classifier_crops_batch_np(frames, obb_results, geometry)
         if batch.crops:
-            np_crops: list[np.ndarray] = apply_fit_batch(batch.crops, fit)
+            np_crops: list[np.ndarray] = apply_fit_batch_for_model(
+                batch.crops, model.input_size, policy
+            )
             with span(N.BACKEND_FORWARD, units=len(np_crops), gpu=True):
                 all_probs = model.backend.predict_batch(np_crops)
         else:
