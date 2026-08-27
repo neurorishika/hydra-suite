@@ -156,11 +156,18 @@ def write_classifier_multihead_manifest(
     calibration_signature: str | None = None,
     calibration_ece: list[float] | None = None,
     kind: str = _TRACKERKIT_MULTIHEAD_KIND,
+    fit_policy: str | None = None,
 ) -> Path:
     """Write a TrackerKit-readable multi-head classifier manifest.
 
     Each factor entry must provide ``factor``, ``path``, and ``class_names``.
     The stored paths are relative to the manifest location when possible.
+
+    ``fit_policy`` should be passed through from the source artifact whenever
+    this manifest is rewritten from an existing bundle (e.g. when copying a
+    classifier into the model repository) -- otherwise the Layer-2 fit policy
+    the factor models were trained under is silently lost and Layer-2
+    dispatch falls back to the legacy "squash" default with a loud warning.
     """
     manifest_abs = Path(manifest_path).expanduser().resolve()
     manifest_abs.parent.mkdir(parents=True, exist_ok=True)
@@ -176,6 +183,8 @@ def write_classifier_multihead_manifest(
         "input_size": [int(input_size[0]), int(input_size[1])],
         "monochrome": bool(monochrome),
     }
+    if fit_policy is not None:
+        payload["fit_policy"] = str(fit_policy)
     if recommended_confidence_threshold is not None:
         payload["recommended_confidence_threshold"] = float(
             min(1.0, max(0.0, recommended_confidence_threshold))
@@ -227,6 +236,9 @@ def _normalize_classifier_meta(meta: dict[str, Any]) -> dict[str, Any]:
         "monochrome": bool(meta.get("monochrome", False)),
         "num_classes": sum(len(names) for names in class_names_per_factor),
     }
+    fit_policy = meta.get("fit_policy")
+    if fit_policy is not None:
+        normalized["fit_policy"] = str(fit_policy)
     recommended_confidence_threshold = meta.get("recommended_confidence_threshold")
     if recommended_confidence_threshold is not None:
         try:
@@ -280,6 +292,7 @@ def classifier_metadata_for_artifact(
                 "class_names_per_factor": meta.class_names_per_factor,
                 "input_size": list(meta.input_size),
                 "monochrome": meta.monochrome,
+                "fit_policy": meta.fit_policy,
                 "recommended_confidence_threshold": meta.recommended_confidence_threshold,
                 "calibration_temperature": meta.calibration_temperature,
                 "calibration_signature": meta.calibration_signature,
@@ -452,9 +465,12 @@ def _copy_classifier_artifact_to_repository(
         ),
         monochrome=bool(bundle_meta.get("monochrome", False)),
         kind=str(data.get("kind") or _TRACKERKIT_MULTIHEAD_KIND),
-        # Preserve calibration/abstention metadata when copying an external
-        # bundle into the repository — otherwise the recommended confidence
-        # threshold and temperature/ECE calibration are silently dropped.
+        # Preserve calibration/abstention/fit-policy metadata when copying an
+        # external bundle into the repository — otherwise the recommended
+        # confidence threshold, temperature/ECE calibration, and the Layer-2
+        # fit policy the factor models were trained under are silently
+        # dropped (the last of which falls back to legacy "squash").
+        fit_policy=bundle_meta.get("fit_policy"),
         recommended_confidence_threshold=bundle_meta.get(
             "recommended_confidence_threshold"
         ),

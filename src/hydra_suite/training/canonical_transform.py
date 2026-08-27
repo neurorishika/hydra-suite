@@ -13,6 +13,13 @@ import numpy as np
 
 from hydra_suite.core.canonicalization.fit import apply_fit, fit_to_model_input
 
+# Layer-2 fit policy every artifact trained through ``CanonicalFitTransform``
+# is stamped with (see ``ClassifierMetadata.fit_policy`` in
+# core/individual/classification/backend.py). Lives here rather than in
+# training/runner.py so training/torchvision_model.py and
+# training/model_publish.py can both import it without a circular import.
+FIT_POLICY_TRAINED = "letterbox"
+
 
 class CanonicalFitTransform:
     """Fit a uint8 BGR image into ``model_hw`` (H, W) by isotropic letterbox.

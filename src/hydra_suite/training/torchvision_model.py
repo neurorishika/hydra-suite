@@ -14,6 +14,8 @@ import torch
 import torch.nn as nn
 import torchvision.models as tvm
 
+from hydra_suite.training.canonical_transform import FIT_POLICY_TRAINED
+
 # ---------------------------------------------------------------------------
 # Backbone registry
 # ---------------------------------------------------------------------------
@@ -402,6 +404,7 @@ def save_torchvision_checkpoint(
         "history": history,
         "trainable_layers": trainable_layers,
         "backbone_lr_scale": backbone_lr_scale,
+        "fit_policy": FIT_POLICY_TRAINED,
         "calibration_temperature": (
             list(calibration_temperature)
             if calibration_temperature is not None

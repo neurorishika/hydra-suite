@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable
 
+from .canonical_transform import FIT_POLICY_TRAINED
 from .contracts import (
     AugmentationProfile,
     CustomCNNParams,
@@ -25,6 +26,41 @@ ProgressCallback = Callable[[int, int], None]
 CancelCheck = Callable[[], bool]
 
 logger = logging.getLogger(__name__)
+
+
+def build_checkpoint_dict(
+    *,
+    arch: str,
+    factor_names: list,
+    class_names_per_factor: list,
+    input_size: tuple,
+    monochrome: bool,
+    state_dict,
+    best_val_acc,
+    history,
+    **extra: Any,
+) -> dict:
+    """Build a v2 classifier-checkpoint dict, stamped with the fit policy
+    every artifact training publishes is trained under.
+
+    ``extra`` carries any additional checkpoint keys a particular training
+    path needs (e.g. ``trainable_layers``, ``hidden_dim``,
+    ``calibration_temperature``); they are merged in as-is.
+    """
+    return {
+        "schema_version": 2,
+        "arch": arch,
+        "factor_names": list(factor_names),
+        "class_names_per_factor": [list(c) for c in class_names_per_factor],
+        "input_size": [int(input_size[0]), int(input_size[1])],
+        "num_classes": sum(len(c) for c in class_names_per_factor),
+        "monochrome": bool(monochrome),
+        "model_state_dict": state_dict,
+        "best_val_acc": best_val_acc,
+        "history": history,
+        "fit_policy": FIT_POLICY_TRAINED,
+        **extra,
+    }
 
 
 def _safe_log(cb: LogCallback | None, message: str) -> None:
@@ -760,32 +796,29 @@ def _save_tiny_checkpoint(
 
     from hydra_suite.training.tiny_model import tiny_model_checkpoint_metadata
 
-    h, w = int(input_size[0]), int(input_size[1])
-    ckpt_dict = {
-        "schema_version": 2,
-        "arch": "tinyclassifier",
-        "input_size": [h, w],
-        "factor_names": ["flat"],
-        "class_names_per_factor": [list(class_names)],
-        "class_names": list(class_names),
-        "num_classes": len(class_names),
-        "monochrome": bool(monochrome),
-        "hidden_layers": int(hidden_layers),
-        "hidden_dim": int(hidden_dim),
-        "dropout": float(dropout),
-        "best_val_acc": (float(best_val_acc) if best_val_acc is not None else None),
-        "history": history if history is not None else [],
-        "model_state_dict": model.state_dict(),
-        "calibration_temperature": (
+    ckpt_dict = build_checkpoint_dict(
+        arch="tinyclassifier",
+        factor_names=["flat"],
+        class_names_per_factor=[list(class_names)],
+        input_size=input_size,
+        monochrome=monochrome,
+        state_dict=model.state_dict(),
+        best_val_acc=(float(best_val_acc) if best_val_acc is not None else None),
+        history=history if history is not None else [],
+        class_names=list(class_names),
+        hidden_layers=int(hidden_layers),
+        hidden_dim=int(hidden_dim),
+        dropout=float(dropout),
+        calibration_temperature=(
             list(calibration_temperature)
             if calibration_temperature is not None
             else None
         ),
-        "calibration_signature": calibration_signature,
-        "calibration_ece": (
+        calibration_signature=calibration_signature,
+        calibration_ece=(
             list(calibration_ece) if calibration_ece is not None else None
         ),
-    }
+    )
     ckpt_dict.update(tiny_model_checkpoint_metadata(model))
     _torch.save(ckpt_dict, str(save_path))
 
@@ -831,6 +864,7 @@ def emit_yolo_multihead_manifest(
         "factor_models": factor_entries,
         "input_size": [int(input_size[0]), int(input_size[1])],
         "monochrome": bool(monochrome),
+        "fit_policy": FIT_POLICY_TRAINED,
     }
     manifest_abs.write_text(_json.dumps(payload, indent=2), encoding="utf-8")
     return manifest_abs
