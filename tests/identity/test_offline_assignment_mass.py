@@ -97,14 +97,70 @@ def test_overlapping_fragments_never_share_a_label():
     assert out[0] == "a"  # the longer/heavier one wins the tie on mass
 
 
+def test_displacement_actually_fires_for_a_single_blocker():
+    """A regression guard for the "seeding already resolved it, displacement
+    never ran" coverage gap: the pre-existing occupant must out-mass the
+    mover at seeding (so it wins the label first), yet the mover's own
+    per-fragment score after eviction must beat the occupant's pre-move
+    score, so the final label can ONLY be reached by an accepted
+    ``_try_displacement`` call, not by mass-first seeding alone. Asserts on
+    the accepted-move count (via ``_debug_counts``) so a future change that
+    quietly makes seeding alone sufficient (silently reducing this back to
+    a seeding-only test) is caught rather than passing by coincidence.
+    """
+    # occupant: a long (701-frame), only-moderately-confident fragment. Its
+    # mass (duration x support = 701 x 0.55 ~= 386) beats the mover's (51 x
+    # 0.9 ~= 46), so it wins the seeding race for label "a" outright.
+    occupant = _frag(0, 0, 700, 0, 0, 0, 700, {"a": 0.55, "b": 0.2, "c": 0.25})
+    # mover: seeds unassigned (blocked by the occupant on its only viable
+    # candidate), but its own per-fragment score at "a" once alone there
+    # (0.9, length-undiscounted since it's short) exceeds the occupant's
+    # length-discounted score there (0.55 x 1.0 = 0.55), so evicting the
+    # occupant (which drops to Unknown -- no other candidate clears the
+    # support floor) raises the true objective and displacement is accepted.
+    mover = _frag(1, 300, 350, 400, 300, 400, 350, {"a": 0.9, "b": 0.05, "c": 0.05})
+    frags = pd.DataFrame([occupant, mover])
+    dbg: dict = {}
+    out = _iterative_assign(frags, LABELS, PARAMS, _debug_counts=dbg)
+    assert out[1] == "a", f"mover should win 'a' via displacement, got {out}"
+    assert out[0] != "a", f"occupant should have been evicted, got {out}"
+    assert out[0] is None, f"occupant has no viable second candidate, got {out}"
+    assert dbg.get("displacements", 0) >= 1, (
+        "expected an accepted displacement -- if this is 0 the conflict was "
+        "resolved by seeding alone and this test no longer covers "
+        "_try_displacement"
+    )
+
+
 def test_displacement_moves_multiple_blockers_when_it_raises_objective():
-    long = _frag(0, 0, 700, 0, 0, 0, 700, {"a": 0.999, "b": 0.0005, "c": 0.0005})
-    b1 = _frag(1, 100, 110, 400, 100, 400, 110, {"a": 0.55, "b": 0.45, "c": 0.0})
-    b2 = _frag(2, 300, 310, 400, 300, 400, 310, {"a": 0.55, "c": 0.45, "b": 0.0})
-    frags = pd.DataFrame([b1, b2, long])  # blockers first in index order on purpose
-    out = _iterative_assign(frags, LABELS, PARAMS)
-    assert out[2] == "a"
-    assert out[0] != "a" and out[1] != "a"
+    """Multi-blocker displacement: two non-overlapping fragments (p1, p2)
+    both claim label "a" at seeding (their combined mass individually beats
+    the mover's), then the mover -- which overlaps both -- evicts BOTH in a
+    single accepted ``_try_displacement`` call because the true objective
+    (mover's gain at "a" plus both blockers' modest gains at their real
+    second-choice "b") exceeds the small loss each blocker takes by giving
+    up its narrow lead ("a" 0.51 vs "b" 0.49) at "a". Neither seeding nor a
+    lone direct flip can produce this outcome (a direct flip from "a" to
+    "b" would LOWER each blocker's own score, since 0.51 > 0.49), so the
+    only path to this assignment is a real multi-blocker displacement --
+    asserted directly via the accepted-move counter.
+    """
+    p1 = _frag(0, 100, 199, 0, 0, 0, 0, {"a": 0.51, "b": 0.49, "c": 1e-6})
+    p2 = _frag(1, 200, 299, 0, 0, 0, 0, {"a": 0.51, "b": 0.49, "c": 1e-6})
+    mover = _frag(2, 150, 249, 0, 0, 0, 0, {"a": 0.45, "b": 0.275, "c": 0.275})
+    frags = pd.DataFrame([p1, p2, mover])
+    dbg: dict = {}
+    out = _iterative_assign(
+        frags, LABELS, {**PARAMS, "FRAGMENT_MIN_SUPPORT": 0.3}, _debug_counts=dbg
+    )
+    assert out[2] == "a", f"mover should win 'a' via displacement, got {out}"
+    assert (
+        out[0] != "a" and out[1] != "a"
+    ), f"both blockers should be evicted, got {out}"
+    assert dbg.get("displacements", 0) >= 1, (
+        "expected an accepted multi-blocker displacement -- if this is 0 the "
+        "conflict was resolved without ever exercising _try_displacement"
+    )
 
 
 def test_terminates_with_zero_margin_threshold():

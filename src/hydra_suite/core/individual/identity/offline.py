@@ -439,6 +439,7 @@ def _iterative_assign(
     frags: pd.DataFrame,
     known_labels: list[str],
     params: dict[str, Any],
+    _debug_counts: dict[str, Any] | None = None,
 ) -> dict[int, str | None]:
     """Mass-first seeding + doubt-ordered refinement with exact-objective
     multi-blocker displacement.
@@ -473,13 +474,23 @@ def _iterative_assign(
        (e.g. it never won its label during seeding) gets one more direct or
        displacing attempt, again in descending mass order.
 
-    Termination argument (multi-blocker displacement): define the exact
-    objective as ``sum(_score(j, current[j]) for j touched)`` over the
-    finite set of fragments whose assignment or scoring could be affected
-    by a move (the mover, every blocker it displaces, and everyone
-    scheduled under the label(s) involved). ``_try_displacement`` accepts a
-    move iff this exact objective, evaluated over that touched set both
-    before and after, rises by at least ``monotone_eps`` (floored at
+    Termination argument (both move types): define the exact objective as
+    ``sum(_score(j, current[j]) for j in touched)`` over a touched set that
+    is FIXED before the tentative move is applied (never recomputed
+    afterward — recomputing it after enlarging the schedule is exactly the
+    asymmetry bug this code used to have: it made ``j_after`` sum over more
+    fragments than ``j_before`` did, inflating the apparent gain). For a
+    direct flip (no blocker), touched is ``schedule[cur] ∪ schedule[c] ∪
+    {i}`` — the mover is always included explicitly, even when
+    ``current[i] is None``, so an unassigned mover's own gain is never
+    dropped. For a displacement, touched is the whole schedule
+    (``range(n)``): the true minimal closure needs each evicted blocker's
+    post-move re-homing (``best_alt_for_j``), which isn't known until the
+    move is tentatively applied, and at this fragment scale (at most a few
+    dozen) using the whole schedule is cheap and trivially a superset of any
+    minimal closure, so it's simplest and still exact for this comparison.
+    Both moves accept iff this fixed-set objective rises by at least
+    ``monotone_eps`` between the before and after evaluations (floored at
     ``1e-3`` so a caller cannot request ASSIGNMENT_MARGIN_THRESHOLD=0 and
     accept infinitesimal or floating-point-noise "improvements"). Every
     per-fragment score is bounded in ``[0, 1]`` (``_score`` returns
@@ -489,10 +500,18 @@ def _iterative_assign(
     ``n``. Since every accepted move strictly increases that bounded
     monotone quantity by a fixed floor, only finitely many
     (``<= n / monotone_eps``) moves can be accepted in total — the
-    refinement pass cannot cycle or loop forever on its own. Simple flips
-    (no blocker) are gated the same way as single-fragment moves within
-    that same bound. ``FRAGMENT_MAX_PASSES`` remains a hard cap regardless,
-    since a pass can also do no-op work (recomputing without flipping).
+    refinement pass cannot cycle or loop forever on its own.
+    ``FRAGMENT_MAX_PASSES`` remains a hard cap regardless, since a pass can
+    also do no-op work (recomputing without flipping) and since this bound
+    guarantees termination of accepted moves within a pass, not of the
+    outer pass loop's fixed-point check ("no flips this pass").
+
+    ``_debug_counts``: test-only observability hook. When given a dict, this
+    function increments ``_debug_counts["displacements"]`` on every accepted
+    multi-blocker displacement and ``_debug_counts["direct_flips"]`` on every
+    accepted direct flip, so tests can assert a specific move type actually
+    fired rather than inferring it indirectly from the final assignment.
+    Production callers pass ``None`` (the default) and pay no cost.
 
     Returns ``{frag_index: assigned_label_or_None}`` (None means Unknown).
     """
@@ -599,21 +618,29 @@ def _iterative_assign(
 
     def _try_displacement(i: int, c: str) -> bool:
         """Tentatively give ``c`` to fragment i, evicting and re-homing its
-        blocker(s). Accept iff the exact objective over every affected
-        fragment (i, each evicted blocker, and every fragment scheduled
-        under any label touched by the move) rises by >= monotone_eps.
-        Reverts to the pre-move state otherwise. See the docstring above
-        for the termination argument this gate is load-bearing for.
+        blocker(s). Accept iff the exact objective, evaluated over a FIXED
+        touched set computed before the move is attempted, rises by
+        >= monotone_eps between the pre-move and post-move states.
+
+        The touched set must be fixed before either state is scored, or the
+        comparison is between two different objectives (asymmetric, and not
+        actually a proof of monotone improvement). Precisely characterising
+        the minimal closure requires knowing the post-move re-homing
+        (``best_alt_for_j`` for each evicted blocker j), which isn't known
+        until the move is tentatively applied -- so, since the fragment
+        count here is at most a few dozen, we just use the whole schedule
+        (every fragment) as the touched set. That's trivially a superset of
+        any minimal closure, still cheap at this scale, and guarantees ``i``
+        itself (the mover) is always included even when it starts
+        unassigned (``current[i] is None``), which a schedule-membership-only
+        closure would silently drop.
         """
         blockers = _blockers(i, c)
         if not blockers or len(blockers) > max_blockers:
             return False
         before_assign = {j: current[j] for j in blockers}
         before_assign[i] = current[i]
-        touched = _affected(current[i], c, blockers)
-        for j in blockers:
-            if current[j] is not None:
-                touched.update(schedule[current[j]])
+        touched = set(range(n))
         j_before = _objective(touched)
 
         for j in blockers:
@@ -624,11 +651,17 @@ def _iterative_assign(
             _, alt = _best_alternative(j, c)
             new_labels[j] = alt
             _commit(j, alt)
-            if alt is not None:
-                touched.update(schedule[alt])
         j_after = _objective(touched)
 
         if j_after - j_before >= monotone_eps and _score(i, c) > 0.0:
+            if _debug_counts is not None:
+                _debug_counts["displacements"] = (
+                    _debug_counts.get("displacements", 0) + 1
+                )
+                # touched is already the whole schedule here, so this IS the
+                # true whole-schedule objective delta -- record it for
+                # external monotonicity stress-checking.
+                _debug_counts.setdefault("gains", []).append(j_after - j_before)
             return True
 
         # Revert: undo the re-homing, then restore the original assignment.
@@ -665,24 +698,54 @@ def _iterative_assign(
         fit = float(spatial_s) if has_nb else no_neighbor_score
         return s_norm * l_norm * (1.0 - fit)
 
+    def _try_direct_flip(i: int) -> str | None:
+        """Find the best free candidate label for fragment i using the exact
+        objective over a fixed touched set (``schedule[cur] ∪ schedule[c] ∪
+        {i}``, computed BEFORE the tentative move -- and always including
+        ``i`` explicitly, even when ``current[i] is None``, so an unassigned
+        mover's own gain is never dropped from the delta). A direct flip
+        only considers labels with no blockers; blocked candidates are left
+        for ``_try_displacement``. Returns the best accepted label, or None
+        if no candidate clears ``monotone_eps``.
+        """
+        cur = current[i]
+        best_l: str | None = None
+        best_gain = 0.0
+        for c in candidates_of[i]:
+            if c == cur or _blockers(i, c):
+                continue
+            touched = _affected(cur, c, {i})
+            j_before = _objective(touched)
+            _commit(i, c)
+            j_after = _objective(touched)
+            _commit(i, cur)
+            gain = j_after - j_before
+            if gain >= monotone_eps and gain > best_gain:
+                best_l, best_gain = c, gain
+        return best_l
+
     for pass_idx in range(max_passes):
         flips = 0
         for i in sorted(range(n), key=lambda i: -_doubt(i)):
             cur = current[i]
-            cur_s = _score(i, cur) if cur is not None else 0.0
-            best_l, best_s = cur, cur_s
-            for c in candidates_of[i]:
-                if c == cur:
-                    continue
-                s = _score(i, c)
-                if s > 0.0 and s - cur_s >= monotone_eps and s > best_s:
-                    best_l, best_s = c, s
-            if best_l != cur:
+            best_l = _try_direct_flip(i)
+            if best_l is not None:
+                whole_before = (
+                    _objective(set(range(n))) if _debug_counts is not None else 0.0
+                )
                 _commit(i, best_l)
                 flips += 1
+                if _debug_counts is not None:
+                    _debug_counts["direct_flips"] = (
+                        _debug_counts.get("direct_flips", 0) + 1
+                    )
+                    whole_after = _objective(set(range(n)))
+                    _debug_counts.setdefault("gains", []).append(
+                        whole_after - whole_before
+                    )
                 continue
             for c in candidates_of[i]:
-                if c != cur and _score(i, c) == 0.0 and _try_displacement(i, c):
+                if c != cur and _blockers(i, c) and _try_displacement(i, c):
                     flips += 1
                     break
         log.debug("iterative fragment solver pass %d: %d flips", pass_idx + 1, flips)
