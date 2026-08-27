@@ -1269,26 +1269,23 @@ def _annotate_smoothed_labels(
     from the forward-backward-smoothed per-frame posterior (Task 2), joined
     on ``(OriginalTrajectoryID or TrajectoryID, FrameID)``.
 
-    This is the raw per-frame smoothed decode, independent of (and written
-    before) the fragment solver's per-fragment committed decision
-    (``IdentityFinalLabel``) -- rows with no matched cache evidence are left
-    with an empty label / 0.0 confidence, same as the fragment-level "no
-    evidence, no belief" convention.
+    This is a **record** of the cache-evidence forward-backward posterior,
+    independent of (and written before) the fragment solver's per-fragment
+    committed decision (``IdentityFinalLabel``): every row with cache
+    evidence gets the argmax known label and its raw posterior, ungated by
+    any display threshold. ``unknown``/0.0 means no cache evidence joined
+    this row (e.g. crop-pass rows with no ``DetectionID``) -- never a
+    thresholded blank.
     """
     out = df.copy()
-    if C.FINAL_SMOOTHED_LABEL not in out.columns:
-        # object dtype -- see the FINAL_LABEL note in solve_global_assignment
-        # for why a bare `""` column init can still land as float64 in some
-        # pandas construction paths and raise LossySetitemError on write.
-        out[C.FINAL_SMOOTHED_LABEL] = pd.Series(
-            [""] * len(out), index=out.index, dtype=object
-        )
-    elif out[C.FINAL_SMOOTHED_LABEL].dtype != object:
-        out[C.FINAL_SMOOTHED_LABEL] = out[C.FINAL_SMOOTHED_LABEL].astype(object)
-    if C.FINAL_SMOOTHED_CONFIDENCE not in out.columns:
-        out[C.FINAL_SMOOTHED_CONFIDENCE] = 0.0
+    # object dtype -- see the FINAL_LABEL note in solve_global_assignment for
+    # why a bare `""`/string column init can still land as float64 in some
+    # pandas construction paths and raise LossySetitemError on write.
+    out[C.FINAL_SMOOTHED_LABEL] = pd.Series(
+        ["unknown"] * len(out), index=out.index, dtype=object
+    )
+    out[C.FINAL_SMOOTHED_CONFIDENCE] = 0.0
 
-    display_threshold = float(params.get("IDENTITY_DISPLAY_THRESHOLD", 0.6))
     id_col = (
         "OriginalTrajectoryID"
         if "OriginalTrajectoryID" in out.columns
@@ -1303,7 +1300,9 @@ def _annotate_smoothed_labels(
             continue
         frame_ids = [f for f, _ in sequence]
         log_probs = [lp for _, lp in sequence]
-        labels_confs = smoothed_label_and_conf(log_probs, catalog, display_threshold)
+        labels_confs = smoothed_label_and_conf(
+            log_probs, catalog, display_threshold=None
+        )
         by_frame = dict(zip(frame_ids, labels_confs))
 
         sub_frames = out.loc[mask, "FrameID"]
