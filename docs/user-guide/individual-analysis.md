@@ -90,6 +90,40 @@ relinking for them falls back to spatial and motion gates alone.
 See the [per-detection processing schematic](../schematics/trackerkit_pipeline.md)
 for how this fits into the wider detection-to-identity pipeline.
 
+## Final-Output Vocabulary
+
+The debug `*_tracking_final_with_individual.csv` export carries a fixed,
+explicit vocabulary for identity provenance -- no blank/NaN values:
+
+- **`IdentityFinalSource`** is never blank. A row that carries no identity
+  provenance (no classifier ran, no cache evidence, no relink veto) reads the
+  literal string `"none"`, not an empty cell -- readers should treat blank as
+  legacy data from before this vocabulary shipped, never as a valid current
+  value.
+- **`IdentityFinalSmoothedLabel` / `IdentityFinalSmoothedConfidence`** are an
+  ungated *record* of the cache's forward-backward smoothed evidence for
+  every row that has any (its argmax label and posterior), not a
+  display value -- they are no longer threshold-gated by
+  `IDENTITY_DISPLAY_THRESHOLD`. A row with no cache evidence (no
+  `DetectionID`, e.g. a filled/interpolated row) reads
+  `IdentityFinalSmoothedLabel="unknown"` with confidence `0.0`, which is a
+  fact about that row lacking evidence, not a low-confidence classification.
+- **`IdentityFinalConflictResolved`** is always boolean (`True`/`False`),
+  never NaN.
+- **Trajectories are dense.** A written trajectory has no interior NaN
+  position/orientation and no gap in its frame sequence -- interior gaps are
+  interpolated and filled (kept as `State="occluded"` rows with empty
+  `DetectionID` so a consumer can still exclude them from evidence). A
+  trajectory's leading and trailing runs that carry no detection and no
+  position are dropped outright rather than left as dangling NaN rows, so
+  every trajectory's first and last row has a real position.
+
+Rendered/exported video overlays label each track by its resolved
+`IdentityFinalLabel` (falling back to `IdentityFinalSmoothedLabel`, then
+`UniqueIdentityKey`, if a row has no final label) -- never by raw per-frame
+classifier evidence directly, so the on-video label always matches what the
+CSV reports for that track.
+
 ## Typical Uses
 
 - Build identity classifier training sets.
