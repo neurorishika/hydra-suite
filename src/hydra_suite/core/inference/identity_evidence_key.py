@@ -18,6 +18,7 @@ def identity_evidence_cache_key(
     catalog_spec: IdentityCatalogSpec,
     per_factor_temps: Mapping[str, tuple[float, ...]],
     base_signature: str,
+    unknown_prior: float = 0.0,
 ) -> str:
     payload = {
         "catalog": catalog_spec.to_dict(),
@@ -26,6 +27,7 @@ def identity_evidence_cache_key(
             for k, v in sorted(per_factor_temps.items())
         },
         "base": str(base_signature),
+        "unknown_prior": round(float(unknown_prior), 6),
     }
     blob = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha1(blob).hexdigest()[:16]

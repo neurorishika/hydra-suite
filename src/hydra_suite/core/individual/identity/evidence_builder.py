@@ -112,6 +112,10 @@ class EvidenceBuilder:
         log-priors.
     calibration_signature, runtime_signature:
         Provenance strings written into each evidence item.
+    unknown_prior:
+        Prior probability mass forced onto the catalog's "unknown" slot
+        after per-factor fusion (spec R6). Default 0.0 is a strict no-op
+        (today's behavior); see ``substrate.map_cnn_to_catalog``.
     """
 
     def __init__(
@@ -122,6 +126,7 @@ class EvidenceBuilder:
         calibration: "CalibrationModel | None" = None,
         calibration_signature: str = "",
         runtime_signature: str = "",
+        unknown_prior: float = 0.0,
     ) -> None:
         self._catalog = catalog
         self._catalog_labels: tuple[str, ...] = catalog.labels
@@ -130,6 +135,7 @@ class EvidenceBuilder:
         self._calibration = calibration
         self._calibration_signature = calibration_signature
         self._runtime_signature = runtime_signature
+        self._unknown_prior = unknown_prior
 
         non_empty_factors = [fl for fl in class_labels_per_factor if fl]
         self._is_composite = len(non_empty_factors) > 1
@@ -298,4 +304,5 @@ class EvidenceBuilder:
             is_composite=self._is_composite,
             catalog_size=len(self._catalog_labels),
             catalog=self._catalog,
+            unknown_prior=self._unknown_prior,
         )

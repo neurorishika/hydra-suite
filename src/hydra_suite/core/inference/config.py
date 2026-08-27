@@ -442,6 +442,12 @@ class InferenceConfig:
     realtime: bool = False
     use_cache: bool = True
     cache_dir: str | None = None
+    # Spec R6 / Task 5: prior probability mass forced onto the identity
+    # catalog's "unknown" slot after per-factor evidence fusion (see
+    # `core/individual/identity/substrate.map_cnn_to_catalog`). 0.0 is a
+    # strict no-op -- today's behavior, where "unknown" is left wherever the
+    # per-factor floor product leaves it.
+    identity_unknown_prior: float = 0.05
 
     @staticmethod
     def from_json(path: str) -> "InferenceConfig":
@@ -564,6 +570,7 @@ def _dict_to_config(d: dict[str, Any]) -> InferenceConfig:
         realtime=d.get("realtime", False),
         use_cache=d.get("use_cache", True),
         cache_dir=d.get("cache_dir"),
+        identity_unknown_prior=float(d.get("identity_unknown_prior", 0.05)),
     )
 
 
@@ -1093,6 +1100,7 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
         realtime=False,
         use_cache=True,
         runtime_tier=runtime_tier,
+        identity_unknown_prior=float(params.get("IDENTITY_UNKNOWN_PRIOR", 0.05)),
     )
 
 

@@ -296,6 +296,7 @@ def map_cnn_to_catalog(
     is_composite: bool,
     catalog_size: int,
     catalog: Optional["IdentityCatalog"] = None,
+    unknown_prior: float = 0.0,
 ) -> tuple[np.ndarray, Optional[np.ndarray]]:
     """CNN per-factor posteriors -> calibrated catalog log-probs.
 
@@ -332,6 +333,13 @@ def map_cnn_to_catalog(
             "unknown" entry).
         catalog: the target `IdentityCatalog`, required by the flat branch's
             `index_of` lookup.
+        unknown_prior: when > 0, the fused posterior is redistributed after
+            fusion so index 0 ("unknown") gets exactly this probability
+            mass and the known labels (indices 1:) share the remaining
+            ``1 - unknown_prior`` in their original fused proportions.
+            Default 0.0 is a strict no-op (today's behavior, where
+            "unknown" is left at whatever the per-factor floor product
+            leaves it -- see spec R6).
 
     Returns:
         ``(log_probs, observed_mask)`` -- `log_probs` has shape
@@ -358,6 +366,16 @@ def map_cnn_to_catalog(
         observed_mask |= factor_observed
 
     combined -= np.logaddexp.reduce(combined)
+
+    if unknown_prior > 0.0:
+        probs = np.exp(combined)
+        known = probs[1:]
+        known_sum = float(known.sum())
+        if known_sum > 0:
+            probs[1:] = known * ((1.0 - unknown_prior) / known_sum)
+        probs[0] = unknown_prior
+        combined = np.log(np.clip(probs, 1e-300, None))
+
     return combined, observed_mask
 
 

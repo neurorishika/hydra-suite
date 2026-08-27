@@ -14,7 +14,7 @@ On-disk layout
 --------------
 Metadata keys (stored once):
 
-    evidence_schema_version         int64 scalar  currently 2
+    evidence_schema_version         int64 scalar  currently 3
     catalog_labels                  U255 (C,)     global catalog label per index
     src_catalog_labels__{source}    U255 (Cs,)    one entry per distinct
                                                    source_name ever saved --
@@ -58,7 +58,11 @@ from hydra_suite.core.individual.identity.evidence import (
 
 log = logging.getLogger(__name__)
 
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
+"""Bumped 2 -> 3 (Identity Phase repair, Task 5): the fused catalog log-probs
+this sidecar stores now depend on `identity_unknown_prior` (previously dead),
+so a v2 sidecar written before the knob went live is not a faithful
+reproduction of a v3 run and must be rebuilt, not silently reused."""
 _SRC_CATALOG_PREFIX = "src_catalog_labels__"
 
 
@@ -224,6 +228,20 @@ class IdentityEvidenceCache:
             self._data = {k: raw[k] for k in raw.files}
         finally:
             raw.close()
+
+        stored_version = int(self._data.get("evidence_schema_version", _SCHEMA_VERSION))
+        if stored_version != _SCHEMA_VERSION:
+            log.info(
+                "identity evidence sidecar schema %d != %d; will be rebuilt",
+                stored_version,
+                _SCHEMA_VERSION,
+            )
+            self._data = {}
+            self._catalog_labels = None
+            self._catalog_labels_by_source = {}
+            self._loaded = True
+            return
+
         if "catalog_labels" in self._data:
             self._catalog_labels = tuple(str(s) for s in self._data["catalog_labels"])
         self._catalog_labels_by_source = {}

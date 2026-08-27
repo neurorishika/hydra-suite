@@ -360,6 +360,7 @@ def _open_caches(
 
 def _build_identity_evidence_stage(
     identity_evidence: "IdentityEvidenceRunConfig",
+    unknown_prior: float = 0.0,
 ) -> tuple["IdentityCatalog", "IdentityEvidenceStage"]:
     """Build the (catalog, stage) pair for one resolved identity-evidence config.
 
@@ -385,6 +386,11 @@ def _build_identity_evidence_stage(
     catalog with the SAME ``1e-300`` floor + renormalize the old emitter
     path relied on, via ``IdentityEvidenceStage.catalog_labels_by_source``
     persisted alongside the sidecar.
+
+    ``unknown_prior`` (spec R6, Task 5): forwarded to every per-phase
+    ``EvidenceBuilder`` so the composite/flat fused posterior redistributes
+    mass onto the catalog's "unknown" slot instead of leaving it pinned at
+    the per-factor floor product. 0.0 (default) is a strict no-op.
     """
     from hydra_suite.core.individual.identity.catalog import IdentityCatalog
     from hydra_suite.core.individual.identity.evidence_builder import (
@@ -407,6 +413,7 @@ def _build_identity_evidence_stage(
             calibration=phase.calibration,
             calibration_signature=phase.calibration_signature,
             runtime_signature=identity_evidence.runtime_signature,
+            unknown_prior=unknown_prior,
         )
     stage = IdentityEvidenceStage(catalog, cnn_builders, identity_evidence.tag_to_label)
     return catalog, stage
@@ -679,7 +686,10 @@ class InferenceRunner:
         self._identity_stage: "IdentityEvidenceStage | None" = None
         if identity_evidence is not None:
             self._identity_catalog, self._identity_stage = (
-                _build_identity_evidence_stage(identity_evidence)
+                _build_identity_evidence_stage(
+                    identity_evidence,
+                    unknown_prior=float(config.identity_unknown_prior),
+                )
             )
         # Realtime-only: the evidence sidecar for the live/streaming pass,
         # opened lazily on the first frame that has caches to write into
@@ -698,7 +708,8 @@ class InferenceRunner:
         """id->name map from the loaded OBB model, for label display. None if no OBB model."""
         if self._models.obb is None:
             return None
-        # direct mode uses direct_model; sequential's classes come from the stage-2 obb_model
+        # direct mode uses direct_model; sequential's classes come from the
+        # stage-2 obb_model
         model = self._models.obb.direct_model or self._models.obb.obb_model
         names = getattr(model, "names", None)
         if names is None:
@@ -774,7 +785,8 @@ class InferenceRunner:
                         )
                     # bg-sub is CPU numpy end to end: it never produces _RawOBBTensors, so
                     # the materialize / raw-cap step does not apply. It is also strictly
-                    # sequential — safe here because run_realtime is driven in frame order.
+                    # sequential — safe here because run_realtime is driven in frame
+                    # order.
                     raw_obb = run_bgsub(
                         frame,
                         frame_idx,
@@ -802,7 +814,8 @@ class InferenceRunner:
                     else:
                         raw_obb = raw
                 # Re-stamp detection_ids with the real frame_idx (materialize_tensors / the
-                # CPU OBB path generate them at frame 0) so cached ids are unique per frame.
+                # CPU OBB path generate them at frame 0) so cached ids are unique per
+                # frame.
                 raw_obb = OBBResult(
                     frame_idx=frame_idx,
                     centroids=raw_obb.centroids,
@@ -1014,7 +1027,8 @@ class InferenceRunner:
                     frame_result.fg_mask = self._models.bgsub.last_fg_mask
                     frame_result.bg_u8 = self._models.bgsub.last_bg_u8
 
-                # Task 17g: build StreamingAnalysisPayload for legacy identity consumers.
+                # Task 17g: build StreamingAnalysisPayload for legacy identity
+                # consumers.
                 try:
                     from hydra_suite.core.tracking.ingest.streaming_payload import (
                         StreamingAnalysisPayload,
@@ -1059,6 +1073,7 @@ class InferenceRunner:
             self._identity_evidence.catalog_spec,
             self._identity_evidence.per_factor_temps(),
             self._video_sig,
+            unknown_prior=float(self.config.identity_unknown_prior),
         )
         return build_evidence_cache_path(
             str(self.cache_dir / "detection.npz"), source_name, key
