@@ -172,6 +172,8 @@ def test_run_cnn_batch_gpu_and_cpu_branches_share_one_fit(monkeypatch):
     monkeypatch.setattr(crops_mod, "frames_on_cuda", lambda r, f: True)
 
     class _Backend:
+        metadata = type("M", (), {"fit_policy": "letterbox"})()
+
         def predict_batch_cuda(self, crops, input_is_bgr=True):
             return [[np.array([0.5, 0.5], np.float32)]]
 

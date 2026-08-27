@@ -110,6 +110,8 @@ def _frame_for_obb(obb: OBBResult, value: int = 128) -> np.ndarray:
 class _FakeHTBackend:
     """Returns prob-array with "up" (index 2) winning at 0.9 for every crop."""
 
+    metadata = type("M", (), {"fit_policy": "letterbox"})()
+
     def predict_batch(self, crops):
         # up is index 2 in [right, left, up, down]
         return [[np.array([0.05, 0.05, 0.9, 0.0], dtype=np.float32)] for _ in crops]
@@ -123,6 +125,8 @@ class _FakeHTModel:
 
 class _FakeCNNBackend:
     """Returns uniform probabilities over 3 classes for every crop."""
+
+    metadata = type("M", (), {"fit_policy": "letterbox"})()
 
     def predict_batch(self, crops):
         probs = np.array([1 / 3, 1 / 3, 1 / 3], dtype=np.float32)
@@ -157,6 +161,8 @@ class _ContentHTBackend:
     confidences, making the test sensitive to crop content.
     """
 
+    metadata = type("M", (), {"fit_policy": "letterbox"})()
+
     def predict_batch(self, crops):
         results = []
         for crop in crops:
@@ -173,6 +179,8 @@ class _ContentCNNBackend:
     Output: [[np.array([mean, (1-mean)/2, (1-mean)/2])]]
     Two crops with different means get different raw_probabilities.
     """
+
+    metadata = type("M", (), {"fit_policy": "letterbox"})()
 
     def predict_batch(self, crops):
         results = []

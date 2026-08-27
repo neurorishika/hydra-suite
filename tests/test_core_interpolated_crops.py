@@ -422,6 +422,8 @@ def test_flush_pose_cnn_window_stamps_cnn_source_interp_with_argmax_class():
     from hydra_suite.core.post.synthetic_detections import build_synthetic_obb_result
 
     class _FakeCNNBackend:
+        metadata = type("M", (), {"fit_policy": "letterbox"})()
+
         def predict_batch(self, crops):
             # one factor ("flat"), two classes; class index 1 ("b") wins.
             return [[[0.1, 0.9]] for _ in crops]
@@ -725,6 +727,8 @@ def test_flush_headtail_window_writes_heading_rows(monkeypatch):
     from hydra_suite.core.post.synthetic_detections import build_synthetic_obb_result
 
     class _FakeBackend:
+        metadata = type("M", (), {"fit_policy": "letterbox"})()
+
         def predict_batch(self, crops):
             return [[np.array([0.9, 0.1])] for _ in crops]
 
