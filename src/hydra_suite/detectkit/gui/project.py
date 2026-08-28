@@ -6,6 +6,7 @@ import copy
 import json
 import logging
 import shutil
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -316,8 +317,11 @@ def make_detectkit_project_portable(project: DetectKitProject) -> dict[str, int]
             import_mode="portable",
             force_import=True,
         )
+        # `replace` (not a fresh OBBSource) so localizing a source does not
+        # drop level/reviewed/derived_from/sam2_variant/pending_escalation.
         localized_sources.append(
-            OBBSource(
+            replace(
+                source,
                 path=str(materialized.canonical_path),
                 name=source.name or materialized.display_name,
                 original_path=str(source.original_path or source.path or ""),
@@ -411,14 +415,14 @@ def _deserialize_history_entry(
 
 def _serialize_project_state_paths(project: DetectKitProject) -> DetectKitProject:
     serialized = copy.deepcopy(project)
+    # `dataclasses.replace` (rather than a hand-listed constructor call) so
+    # every OBBSource field -- present and future -- survives the round trip.
+    # A six-field reconstruction here silently dropped level/reviewed/
+    # derived_from/sam2_variant/pending_escalation on every save.
     serialized.sources = [
-        OBBSource(
+        replace(
+            source,
             path=_serialize_project_owned_path(project.project_dir, source.path),
-            name=source.name,
-            validated=source.validated,
-            original_path=source.original_path,
-            source_kind=source.source_kind,
-            imported=source.imported,
         )
         for source in project.sources
     ]
@@ -434,14 +438,11 @@ def _serialize_project_state_paths(project: DetectKitProject) -> DetectKitProjec
 
 
 def _deserialize_project_state_paths(project: DetectKitProject) -> DetectKitProject:
+    # See _serialize_project_state_paths: `replace` keeps every other field.
     project.sources = [
-        OBBSource(
+        replace(
+            source,
             path=_deserialize_project_owned_path(project.project_dir, source.path),
-            name=source.name,
-            validated=source.validated,
-            original_path=source.original_path,
-            source_kind=source.source_kind,
-            imported=source.imported,
         )
         for source in project.sources
     ]
