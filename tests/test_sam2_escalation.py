@@ -76,6 +76,45 @@ def test_escalation_stages_without_touching_canonical_labels(tmp_path):
     assert (Path(pending.staged_path) / "classes.txt").read_text() == "ant\n"
 
 
+class _BleedingExec:
+    """Returns a full-frame mask for every box -- simulates SAM2 predicting
+    well past the OBB it was prompted with (soft box guidance, not a hard
+    crop)."""
+
+    def set_image(self, img):
+        self._shape = img.shape[:2]
+
+    def segment(self, box, pos, neg):
+        return np.ones(self._shape, bool), 0.9
+
+
+def test_escalation_polygon_stays_within_original_obb_when_sam2_bleeds(tmp_path):
+    """Regression: a full-frame SAM2 mask must be clipped to the source OBB
+    before contour extraction, not written out unbounded."""
+    src = _make_source(tmp_path)
+    project = types.SimpleNamespace(project_dir=str(tmp_path), sources=[src])
+    req = EscalationRequest(
+        project=project, source_names=["orig"], variant="sam2.1-hiera-base_plus"
+    )
+
+    result = run_escalation(req, _BleedingExec())
+
+    assert result.primed == 2
+    staged_label = Path(src.pending_escalation.staged_path) / "labels" / "a.txt"
+    lines = staged_label.read_text().splitlines()
+    assert len(lines) == 2
+
+    # Source OBBs (normalized, 100x100 image): [0.1,0.4]x[0.1,0.4] and
+    # [0.6,0.9]x[0.6,0.9] -- the staged polygon for each detection must stay
+    # within its own OBB's extent, not the full [0,1] frame.
+    expected_bounds = [(0.1, 0.4), (0.6, 0.9)]
+    for line, (lo, hi) in zip(lines, expected_bounds):
+        vals = [float(v) for v in line.split()[1:]]
+        xs, ys = vals[0::2], vals[1::2]
+        assert min(xs) >= lo - 0.02 and max(xs) <= hi + 0.02
+        assert min(ys) >= lo - 0.02 and max(ys) <= hi + 0.02
+
+
 def test_rerun_without_overwrite_skips_existing_pending(tmp_path):
     src = _make_source(tmp_path)
     project = types.SimpleNamespace(project_dir=str(tmp_path), sources=[src])

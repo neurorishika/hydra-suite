@@ -14,7 +14,7 @@ import cv2
 import numpy as np
 from PySide6.QtCore import Signal
 
-from hydra_suite.core.inference.sam2.masks import mask_to_contour
+from hydra_suite.core.inference.sam2.masks import clip_mask_to_polygon, mask_to_contour
 from hydra_suite.data.al.escalation import LabelRecord
 from hydra_suite.data.al.labels import write_label_file
 from hydra_suite.data.project_bundle import ensure_bundle_subdirectory
@@ -243,6 +243,11 @@ def run_escalation(
                     mask, _iou = executor.segment(
                         prompt.box_xyxy, prompt.positive_points, prompt.negative_points
                     )
+                    # SAM2's box prompt is soft guidance, not a hard crop -- the
+                    # predicted mask can extend past the source OBB. Clip to the
+                    # OBB's own polygon (not just its aabb) before contouring so
+                    # a rotated OBB's escalated mask stays bounded correctly.
+                    mask = clip_mask_to_polygon(mask, box.polygon_px)
                     contour = mask_to_contour(mask)
                     if contour is not None:
                         result.primed += 1
