@@ -47,6 +47,83 @@ def test_video_frame_source_read_returns_array(tmp_path):
     assert img.ndim == 3 and img.shape[2] == 3
 
 
+def test_video_frame_source_reuses_single_capture(monkeypatch, tmp_path):
+    video = tmp_path / "synth.mp4"
+    _write_synthetic_video(video, n_frames=10)
+
+    open_count = {"n": 0}
+    real_capture = cv2.VideoCapture
+
+    def counting_capture(*args, **kwargs):
+        open_count["n"] += 1
+        return real_capture(*args, **kwargs)
+
+    monkeypatch.setattr(cv2, "VideoCapture", counting_capture)
+    source = VideoFrameSource(str(video))
+    refs = list(source)[:5]
+    frames = [source.read(ref) for ref in refs]
+    assert all(f is not None for f in frames)
+    assert (
+        open_count["n"] <= 2
+    )  # one for iteration/probing, one for reads -- not one per frame
+    source.close()
+
+
+def test_video_frame_source_sequential_reads_match_baseline(tmp_path):
+    video = tmp_path / "synth.mp4"
+    _write_synthetic_video(video, n_frames=10)
+
+    source = VideoFrameSource(str(video))
+    refs = list(source)[:5]
+    frames = [source.read(ref) for ref in refs]
+    source.close()
+    cap = cv2.VideoCapture(str(video))
+    for ref, frame in zip(refs, frames):
+        cap.set(cv2.CAP_PROP_POS_FRAMES, ref.frame_id)
+        ok, expected = cap.read()
+        assert ok
+        assert np.array_equal(frame, expected)
+    cap.release()
+
+
+def test_video_frame_source_out_of_order_read_still_correct(tmp_path):
+    """Non-sequential reads (e.g. stride skips, random access) must still seek."""
+    video = tmp_path / "synth.mp4"
+    _write_synthetic_video(video, n_frames=10)
+
+    source = VideoFrameSource(str(video))
+    refs = list(source)
+    order = [0, 5, 2, 9, 3]
+    frames = {r: source.read(refs[r]) for r in order}
+    source.close()
+
+    cap = cv2.VideoCapture(str(video))
+    for r in order:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, r)
+        ok, expected = cap.read()
+        assert ok
+        assert np.array_equal(frames[r], expected)
+    cap.release()
+
+
+def test_video_frame_source_context_manager_releases_capture(tmp_path):
+    video = tmp_path / "synth.mp4"
+    _write_synthetic_video(video, n_frames=3)
+
+    with VideoFrameSource(str(video)) as source:
+        ref = next(iter(source))
+        img = source.read(ref)
+        assert img is not None
+        assert source._cap is not None
+    assert source._cap is None
+
+    # close() is idempotent -- calling it again (or on a never-read source)
+    # must not raise.
+    source.close()
+    fresh = VideoFrameSource(str(video))
+    fresh.close()
+
+
 def test_image_folder_frame_source(tmp_path):
     from hydra_suite.data.al.frame_source import ImageFolderFrameSource
 

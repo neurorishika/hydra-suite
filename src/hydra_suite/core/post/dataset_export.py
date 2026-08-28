@@ -83,6 +83,13 @@ def _dedup_selected_frames(video_path, frame_ids, method, threshold):
     cfg = CandidatePoolConfig(
         dedup_method=str(method).strip().lower(),
         dedup_threshold=int(threshold),
+        # Explicitly uncapped. `max_candidates` defaults to a finite value to
+        # bound DetectKit's AL round, which holds every candidate frame in
+        # memory and detects on them as one batch. This call site is a pure
+        # filter over an ALREADY-selected frame list -- it keeps no frame
+        # resident and runs no model -- so a cap here would silently drop the
+        # user's selected frames past the cap instead of deduping them.
+        max_candidates=None,
     )
     kept = build_candidate_pool(source, cfg)
     kept_ids = [ref.frame_id for ref in kept]
@@ -191,6 +198,8 @@ def generate_active_learning_dataset(
         _emit(progress, 20, "Scoring frames...")
         unique_frames = df["FrameID"].unique()
         total_unique = len(unique_frames)
+        # Pre-compute frame grouping to avoid O(n²) per-frame DataFrame scans
+        frames_by_id = {int(fid): sub for fid, sub in df.groupby("FrameID")}
 
         for idx, frame_id in enumerate(unique_frames):
             if _stopped(should_stop):
@@ -199,7 +208,9 @@ def generate_active_learning_dataset(
                 pct = 20 + int((idx / total_unique) * 30) if total_unique else 20
                 _emit(progress, pct, f"Scoring frames ({idx}/{total_unique})...")
 
-            frame_data = df[df["FrameID"] == frame_id]
+            frame_data = frames_by_id.get(int(frame_id))
+            if frame_data is None:
+                continue
             raw_meas, raw_shapes, raw_confidences, raw_obb_corners = [], [], [], []
             used_detection_cache = False
             if detection_cache is not None:

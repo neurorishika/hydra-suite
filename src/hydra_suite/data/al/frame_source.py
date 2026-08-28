@@ -30,7 +30,18 @@ class FrameSource(Protocol):
 
 
 class VideoFrameSource:
-    """FrameSource backed by a video file."""
+    """FrameSource backed by a video file.
+
+    `read()` reuses a single lazily-opened `cv2.VideoCapture` across calls
+    instead of reopening the container per frame. When the requested frame is
+    exactly the next one after the last frame actually read, it calls
+    `cap.read()` directly (no seek) -- the common case for a caller scanning
+    frames in ascending order. Any other request (out-of-order, skipped, or
+    the very first read of a non-zero frame) falls back to
+    `cap.set(CAP_PROP_POS_FRAMES, ...)` first, so random access remains
+    correct. Call `close()` (or use as a context manager) to release the
+    capture once done.
+    """
 
     def __init__(self, video_path: str, stride: int = 1) -> None:
         if stride < 1:
@@ -43,22 +54,49 @@ class VideoFrameSource:
             self._n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         finally:
             cap.release()
+        # The read-side capture is opened lazily on first `read()` -- not
+        # every VideoFrameSource is ever read from (e.g. `__iter__`-only
+        # probing), so there is no reason to hold a second open handle from
+        # construction onward.
+        self._cap: cv2.VideoCapture | None = None
+        self._last_read_index: int | None = None
 
     def __iter__(self) -> Iterator[FrameRef]:
         for fid in range(0, self._n_frames, self._stride):
             yield FrameRef(source_id=self._source_id, frame_id=fid, path=None)
 
     def read(self, ref: FrameRef) -> np.ndarray | None:
-        cap = cv2.VideoCapture(self._video_path)
-        try:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, ref.frame_id)
-            ok, frame = cap.read()
-            return frame if ok else None
-        finally:
-            cap.release()
+        if self._cap is None:
+            self._cap = cv2.VideoCapture(self._video_path)
+            self._last_read_index = None
+
+        is_next_sequential = (
+            ref.frame_id == 0
+            if self._last_read_index is None
+            else ref.frame_id == self._last_read_index + 1
+        )
+        if not is_next_sequential:
+            self._cap.set(cv2.CAP_PROP_POS_FRAMES, ref.frame_id)
+        ok, frame = self._cap.read()
+        if ok:
+            self._last_read_index = ref.frame_id
+        return frame if ok else None
 
     def length(self) -> int:
         return self._n_frames
+
+    def close(self) -> None:
+        """Release the underlying capture, if open. Safe to call more than once."""
+        if self._cap is not None:
+            self._cap.release()
+            self._cap = None
+            self._last_read_index = None
+
+    def __enter__(self) -> "VideoFrameSource":
+        return self
+
+    def __exit__(self, *_exc_info) -> None:
+        self.close()
 
 
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}

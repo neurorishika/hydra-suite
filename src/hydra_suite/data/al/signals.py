@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import dataclasses
 import math
 from dataclasses import dataclass, field
 from itertools import combinations
-from typing import Callable, Sequence
+from typing import Sequence
 
 import numpy as np
 
+from hydra_suite.core.inference.config import OBBConfig
+from hydra_suite.core.inference.result import OBBResult
+from hydra_suite.core.inference.stages.filtering import filter_with_indices
 from hydra_suite.utils.geometry import clamp01 as _clamp01
 from hydra_suite.utils.geometry import (  # noqa: F401
     polygon_overlap_ratio as _polygon_overlap_ratio,
@@ -200,9 +204,37 @@ def _set_iou_greedy(
     return matched / max(union, 1)
 
 
+def detections_from_obb_result(obb: OBBResult) -> list[Detection]:
+    """Build ``(cx, cy, w, h, theta, confidence)`` tuples from an ``OBBResult``.
+
+    ``OBBResult`` stores area and aspect ratio rather than raw width/height;
+    major/minor are reconstructed exactly as
+    ``detectkit/gui/prediction_preview.py::_tuples_from_obb_result`` does:
+    ``major = sqrt(size * aspect)``, ``minor = sqrt(size / aspect)``. Feeding
+    ``(cx, cy, major, minor, angle)`` to ``geometry.obb_corners_from_dims``
+    reproduces ``obb.corners`` byte-for-byte. Duplicated here rather than
+    imported because `data/al` (Data layer) must not import from an app-layer
+    GUI module (`detectkit/gui/`).
+    """
+    out: list[Detection] = []
+    for i in range(obb.num_detections):
+        cx = float(obb.centroids[i][0])
+        cy = float(obb.centroids[i][1])
+        theta = float(obb.angles[i])
+        size = float(obb.sizes[i])
+        aspect = float(obb.shapes[i][1])
+        if aspect > 0:
+            major = math.sqrt(max(size * aspect, 0.0))
+            minor = math.sqrt(max(size / aspect, 0.0))
+        else:
+            major = minor = math.sqrt(max(size, 0.0))
+        out.append((cx, cy, major, minor, theta, float(obb.confidences[i])))
+    return out
+
+
 def score_nms_instability(
-    frame: np.ndarray,
-    detector_fn: Callable[[np.ndarray, float, float], Sequence[Detection]],
+    raw_obb_result: OBBResult,
+    obb_config: OBBConfig,
     base_conf: float,
     base_iou: float,
 ) -> float:
@@ -210,15 +242,29 @@ def score_nms_instability(
 
     Higher score = detection set changes meaningfully under small NMS-threshold
     shifts -> model is unstable on this frame -> good AL pick.
+
+    Operates purely on an already-computed raw ``OBBResult`` -- the base set
+    plus the two perturbed sets are produced by re-running the cheap NumPy
+    `filter_with_indices` gate (confidence/size/aspect/ROI/NMS over the cached
+    raw detections) with 3 different `(confidence_threshold, iou_threshold)`
+    variants of `obb_config`, instead of invoking a detector closure 3 more
+    times. The set-IoU math (`_set_iou_greedy`) is unchanged.
     """
-    base_set = list(detector_fn(frame, base_conf, base_iou))
-    perturbations = [
+    variants = (
+        (base_conf, base_iou),
         (max(base_conf * 0.7, 0.01), base_iou),
         (base_conf, min(base_iou * 1.3, 0.95)),
-    ]
-    ious = []
-    for conf, iou in perturbations:
-        ious.append(_set_iou_greedy(base_set, list(detector_fn(frame, conf, iou))))
+    )
+    filtered_sets = []
+    for conf, iou in variants:
+        variant_config = dataclasses.replace(
+            obb_config, confidence_threshold=conf, iou_threshold=iou
+        )
+        filtered, _ = filter_with_indices(raw_obb_result, variant_config, roi_mask=None)
+        filtered_sets.append(detections_from_obb_result(filtered))
+
+    base_set = filtered_sets[0]
+    ious = [_set_iou_greedy(base_set, other) for other in filtered_sets[1:]]
     if not ious:
         return 0.0
     return float(1.0 - sum(ious) / len(ious))

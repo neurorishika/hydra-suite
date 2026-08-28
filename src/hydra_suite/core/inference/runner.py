@@ -1154,26 +1154,25 @@ class InferenceRunner:
             roi_mask=self._frame_space_roi_mask(self._video_path),
         )
 
-    def detect_batch(
+    def detect_batch_raw(
         self,
         frames: "list[np.ndarray]",
         frame_indices: "list[int] | None" = None,
         roi_mask: "np.ndarray | None" = None,
     ) -> "list[OBBResult]":
-        """Run OBB detection over a list of frames, returning filtered results
-        in memory. No cache is read or written. Mirrors run_realtime's
-        detect+filter prefix; for the dataset-generation batched path.
+        """Run OBB detection over a batch of frames, returning UNFILTERED raw
+        results (pre-``filter_for_source``). No cache is read or written.
         """
         if self._models.obb is None:
             raise RuntimeError(
-                "detect_batch requires an OBB detection config (config.obb)"
+                "detect_batch_raw requires an OBB detection config (config.obb)"
             )
         frames = list(frames)
         if frame_indices is None:
             frame_indices = list(range(len(frames)))
 
         raw_list = run_obb(frames, self._models.obb, self.config.obb, self.runtime)
-        results: list[OBBResult] = []
+        raw_results: list[OBBResult] = []
         for raw, f_idx in zip(raw_list, frame_indices):
             if isinstance(raw, _RawOBBTensors):
                 raw_obb = materialize_tensors(raw, self.config.obb.raw_detection_cap)
@@ -1192,6 +1191,22 @@ class InferenceRunner:
                 ),
                 class_ids=raw_obb.class_ids,
             )
+            raw_results.append(raw_obb)
+        return raw_results
+
+    def detect_batch(
+        self,
+        frames: "list[np.ndarray]",
+        frame_indices: "list[int] | None" = None,
+        roi_mask: "np.ndarray | None" = None,
+    ) -> "list[OBBResult]":
+        """Run OBB detection over a list of frames, returning filtered results
+        in memory. No cache is read or written. Mirrors run_realtime's
+        detect+filter prefix; for the dataset-generation batched path.
+        """
+        raw_results = self.detect_batch_raw(frames, frame_indices, roi_mask)
+        results: list[OBBResult] = []
+        for raw_obb in raw_results:
             filtered_obb, _ = filter_for_source(self.config, raw_obb, roi_mask)
             results.append(filtered_obb)
         return results

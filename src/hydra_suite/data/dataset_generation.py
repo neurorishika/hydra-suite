@@ -10,6 +10,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from hydra_suite.core.inference.cache.reuse import get_or_compute_raw
+from hydra_suite.core.inference.stages.filtering import filter_for_source
 from hydra_suite.data.al.escalation import (
     LabelRecord,
     achievable_levels,
@@ -319,17 +321,25 @@ class FrameQualityScorer:
         return out
 
 
-def _init_detection_runner(params):
+def _init_detection_runner(params, video_path):
     """Build a detection-only InferenceRunner for dataset label extraction.
 
     Unlike the legacy version this supports every detection source, not just
     `yolo_obb`: returning None for bg-sub meant every exported label was a
     fabricated reference-size box.
+
+    `video_path` wires the runner's `cache_dir` to the SAME on-disk
+    `.inference_cache_<stem>/` folder tracking already populated, so
+    `_detect_records_for_frames` can read the existing detection cache
+    instead of always rerunning inference at export time.
     """
     method = str(params.get("DETECTION_METHOD", "background_subtraction")).lower()
     native_level = resolve_native_level(params)
     try:
         from ..core.inference.runner import InferenceRunner
+        from ..utils.video_artifacts import build_inference_cache_dir
+
+        cache_dir = build_inference_cache_dir(video_path)
 
         if method == "background_subtraction":
             # build_inference_config_from_params never builds a BgSubConfig
@@ -394,7 +404,7 @@ def _init_detection_runner(params):
                 extra_params=extra_params,
             )
 
-        runner = InferenceRunner(cfg)
+        runner = InferenceRunner(cfg, cache_dir=cache_dir, video_path=video_path)
         logger.info(
             "Detection runner initialized for dataset export (method=%s, level=%s)",
             method,
@@ -607,7 +617,38 @@ def _detect_records_for_frames(runner, frames, params, native_level):
         if not images:
             continue
         try:
-            results = runner.detect_batch(images, frame_indices=list(valid_chunk))
+            # Reuse the on-disk detection cache the tracking pass already
+            # built (`runner.cache_dir`), instead of always rerunning
+            # inference at export time -- the overwhelming common case is
+            # exporting AFTER tracking has covered the whole video, which
+            # makes this a pure cache read (zero `detect_batch_raw` calls).
+            # `get_or_compute_raw` returns RAW (pre-filter) results, so this
+            # must re-apply the SAME `filter_for_source` gate `detect_batch`
+            # used to apply, mirroring `InferenceRunner.load_frame` -- an
+            # unfiltered raw result includes below-threshold/duplicate/
+            # over-max-targets detections `detect_batch` always excluded.
+            #
+            # `write=False` is mandatory here, not an optimization: this
+            # cache_dir is tracking's OWN `.inference_cache_<stem>/`, and a
+            # cache MISS (a different model mtime, a SAHI-sliced tracking run
+            # whose key this export config cannot reproduce, a partial or
+            # subrange tracking pass) would otherwise have each chunk's
+            # `DetectionCacheHandle.close()` rewrite that file from this
+            # chunk's buffer alone -- destroying the complete detection cache
+            # backward/replay tracking depends on. Export borrows the cache; it
+            # never owns it. A hit is unaffected (already a pure read), so this
+            # keeps 100% of the reuse win and recomputes in memory on a miss.
+            results_by_idx = get_or_compute_raw(
+                runner, runner.cache_dir, images, list(valid_chunk), write=False
+            )
+            results = [
+                filter_for_source(
+                    runner.config,
+                    results_by_idx[fid],
+                    getattr(runner, "_roi_mask", None),
+                )[0]
+                for fid in valid_chunk
+            ]
         except Exception as e:
             logger.warning(
                 "Detection failed for batch starting at %s: %s", valid_chunk[0], e
@@ -751,7 +792,7 @@ def export_dataset(
     # bad model path or runtime.
     runner = None
     try:
-        runner = _init_detection_runner(params)
+        runner = _init_detection_runner(params, video_path)
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))

@@ -281,7 +281,7 @@ class ActiveLearningDialog(BaseDialog):
         ]
         return sorted(checked, reverse=True)
 
-    def build_request(self, detector_fn=None):
+    def build_request(self, detector=None):
         """Construct an `ALRequest` from the dialog's current field values."""
         from hydra_suite.detectkit.jobs.al_worker import ALRequest
 
@@ -297,7 +297,7 @@ class ActiveLearningDialog(BaseDialog):
             budget=self.budget_spin.value(),
             preset=self.preset_combo.currentText(),
             expected_count=self.expected_count_spin.value(),
-            detector_fn=detector_fn,
+            detector=detector,
             export_level=levels[0].label,
             export_levels=[lvl.label for lvl in levels],
             native_level=self._native_level.label,

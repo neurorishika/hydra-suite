@@ -2,16 +2,23 @@
 
 from __future__ import annotations
 
+import contextlib
+import dataclasses
 import logging
+import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Literal, Sequence
+from typing import Callable, Iterator, Literal, Sequence
 
 import numpy as np
 from PySide6.QtCore import Signal
 
+from hydra_suite.core.inference.cache.reuse import get_or_compute_raw
+from hydra_suite.core.inference.config import OBBConfig
+from hydra_suite.core.inference.result import OBBResult
+from hydra_suite.core.inference.stages.filtering import filter_with_indices
 from hydra_suite.data.al.acquisition import PRESETS, AcquisitionWeights, select
 from hydra_suite.data.al.candidate_pool import CandidatePoolConfig, build_candidate_pool
 from hydra_suite.data.al.escalation import LabelRecord
@@ -23,8 +30,13 @@ from hydra_suite.data.al.frame_source import (
     ImageFolderFrameSource,
     VideoFrameSource,
 )
+from hydra_suite.data.al.inference_adapter import (
+    AL_DEFAULT_MAX_TARGETS,
+    build_obb_config_for_al,
+)
 from hydra_suite.data.al.signals import (
     ALSignals,
+    detections_from_obb_result,
     score_count_deviation,
     score_crowd,
     score_fragmentation,
@@ -34,12 +46,36 @@ from hydra_suite.data.al.signals import (
 from hydra_suite.detectkit.gui.models import DetectKitProject, OBBSource
 from hydra_suite.utils.geometry import obb_corners_from_dims as _detection_corners
 from hydra_suite.utils.geometry_levels import GeometryLevel
+from hydra_suite.utils.video_artifacts import build_inference_cache_dir
 from hydra_suite.widgets.workers import BaseWorker
 
 logger = logging.getLogger(__name__)
 
-Detection = tuple  # (cx, cy, w, h, theta, conf)
-DetectorFn = Callable[[np.ndarray, float, float], Sequence[Detection]]
+# `Detection`/`DetectorFn` (the per-frame detector-closure aliases) are gone
+# with the closure itself: nothing outside this module ever referenced either,
+# and the AL path now describes its detector declaratively (`ALDetectorSpec`)
+# rather than passing an opaque callable.
+
+
+@dataclass
+class ALDetectorSpec:
+    """How to build the round's detector -- a declarative spec, not a closure.
+
+    This replaces the old ``ALRequest.detector_fn`` per-frame closure. The AL
+    pipeline no longer calls an opaque `detector(frame, conf, iou)` once (in
+    fact four times) per frame; it builds one `InferenceRunner` from these
+    fields and runs a single batched, cached detection pass over the whole
+    candidate list. The fields are exactly the tuple
+    ``detectkit_resolve_inference_models`` returns (`kind`, primary, secondary)
+    plus the sequential-mode crop padding, i.e. exactly what
+    ``build_obb_config_for_al`` consumes.
+    """
+
+    kind: Literal["obb_direct", "sequential"]
+    model_path: str
+    secondary_model_path: str | None = None
+    crop_pad_ratio: float = 0.15
+    runtime_tier: str | None = None
 
 
 @dataclass
@@ -53,7 +89,7 @@ class ALRequest:
     preset: str = "balanced"
     weights_override: AcquisitionWeights | None = None
     expected_count: int = 0
-    detector_fn: DetectorFn | None = None
+    detector: ALDetectorSpec | None = None
     diversity_window: int = 30
     probabilistic: bool = True
     candidate_pool: CandidatePoolConfig = field(default_factory=CandidatePoolConfig)
@@ -112,9 +148,54 @@ class _LazyALImages(Mapping):
         return len(self._frame_ids)
 
 
+def _candidate_stride(total_frames: int, max_candidates: int | None) -> int:
+    """Stride that spreads a capped candidate scan across the WHOLE source.
+
+    `build_candidate_pool` stops the scan the moment it has kept
+    ``max_candidates`` frames, and it reads the source in order -- so at
+    stride 1 a long video is only ever scored over its opening. Sampling every
+    ``total_frames // max_candidates``-th frame instead makes the scan's last
+    visited frame land near the END of the video, so the same bounded pool
+    covers the whole file.
+
+    The stride is deliberately NOT over-sampled (no "visit k x cap frames so
+    dedup has slack"): any such multiplier reconstructs the original bug in
+    milder form, since the cap would then fill 1/k of the way through the
+    video. Coverage is what the cap threatens; the cap is a memory ceiling, not
+    a quota to be met. In practice a large stride puts consecutive samples
+    seconds apart, where perceptual dedup almost never fires, so the pool
+    typically still fills anyway.
+
+    Returns 1 (unchanged, scan-everything behavior) for an uncapped pool, an
+    unknown length, or a source no longer than the cap.
+    """
+    if not max_candidates or max_candidates <= 0 or total_frames <= 0:
+        return 1
+    if total_frames <= max_candidates:
+        return 1
+    return max(1, total_frames // max_candidates)
+
+
 def _build_frame_source(req: ALRequest) -> FrameSource:
     if req.input_kind == "video":
-        return VideoFrameSource(req.input_path)
+        # A capped candidate pool truncates from the start of the source, so a
+        # stride-1 scan of a long video would only ever score its opening
+        # minutes. Compute a stride from the video's own length so the same
+        # bounded pool spans the whole file. Frame-count probing is cheap
+        # (VideoFrameSource reads CAP_PROP_FRAME_COUNT at construction).
+        probe = VideoFrameSource(req.input_path)
+        stride = _candidate_stride(probe.length(), req.candidate_pool.max_candidates)
+        if stride == 1:
+            return probe
+        probe.close()
+        logger.info(
+            "Candidate scan striding %d over %d video frames so the "
+            "%s-candidate pool spans the whole source rather than its opening.",
+            stride,
+            probe.length(),
+            req.candidate_pool.max_candidates,
+        )
+        return VideoFrameSource(req.input_path, stride=stride)
     if req.input_kind == "folder":
         return ImageFolderFrameSource(req.input_path)
     if req.input_kind == "project":
@@ -122,28 +203,128 @@ def _build_frame_source(req: ALRequest) -> FrameSource:
     raise ValueError(f"unknown input_kind: {req.input_kind}")
 
 
+def _build_detection_context(req: ALRequest) -> tuple[object, OBBConfig]:
+    """Return ``(runner, obb_config)`` for this round's batched detection pass.
+
+    The single construction seam for the AL detector -- the counterpart of
+    `_build_frame_source` for the model side, and the one place tests patch to
+    inject a runner double (anything implementing
+    ``detect_batch_raw(frames, frame_indices=...) -> list[OBBResult]``) instead
+    of loading real weights.
+
+    ``InferenceRunner`` is imported lazily: it pulls in torch/ultralytics, and
+    importing this module (the AL dialog does, to build an `ALRequest`) must
+    not pay that cost.
+    """
+    spec = req.detector
+    if spec is None:
+        raise ValueError("ALRequest.detector is required to build a detection context")
+    config = build_obb_config_for_al(
+        spec.kind,
+        spec.model_path,
+        spec.secondary_model_path,
+        crop_pad_ratio=spec.crop_pad_ratio,
+        confidence_threshold=req.base_conf,
+        iou_threshold=req.base_iou,
+        runtime_tier=spec.runtime_tier,
+        # Matches the retired per-frame detector closure's behavior of
+        # applying one caller conf to BOTH the sequential stage-1 detect pass
+        # and the stage-2 OBB pass -- ignored by build_obb_config_for_al for
+        # kind == "obb_direct" (single stage, no separate detect gate). See
+        # inference_adapter.py's "Stage-1 confidence note".
+        detect_confidence_threshold=req.base_conf,
+        # AL scoring must see everything the model proposes: a truncated
+        # detection set corrupts every signal AND (via Task 9's export) the
+        # labels written for crowded frames. The adapter's 300 default
+        # (= ultralytics' own max_det, what the retired per-frame closure ran
+        # under) covers essentially every real colony; a project that declares
+        # more expected animals than that gets headroom above its own count so
+        # the ceiling can never bite before `count_deviation` can measure it.
+        max_targets=max(AL_DEFAULT_MAX_TARGETS, 2 * int(req.expected_count or 0)),
+    )
+
+    from hydra_suite.core.inference.runner import InferenceRunner
+
+    # Only a video input has a stable file fingerprint to bind the detection
+    # cache key to (see `with_video_signature`); folder/project inputs pass
+    # None, which is the documented "non-video context" case.
+    video_path = req.input_path if req.input_kind == "video" else None
+    runner = InferenceRunner(config, video_path=video_path)
+    return runner, config.obb
+
+
+@contextlib.contextmanager
+def _al_detection_cache_dir(req: ALRequest) -> Iterator[Path]:
+    """Yield the directory the round's raw-detection cache lives in.
+
+    For a video input this is a DEDICATED ``al/`` subdirectory of the same
+    ``.inference_cache_<stem>/`` folder tracking uses -- never the folder
+    itself. `get_or_compute_raw` always writes ``<cache_dir>/detection.npz``,
+    and `DetectionCacheHandle.close()` rewrites that file from its own buffer
+    alone (this repo's documented no-merge convention). Since an AL round's
+    cache key is derived from its own `build_obb_only_config` and will rarely
+    match a tracking run's key, pointing AL at the shared folder would mean
+    every AL round silently overwrote a complete, expensive tracking detection
+    cache with a sparse candidate-only one. AL therefore keeps its own file:
+    repeat AL rounds on the same video with the same detector settings still
+    hit a pure cache read, and tracking's cache is untouchable from here.
+
+    Folder/project inputs deliberately get a throwaway directory instead: their
+    frame ids are positions in a sorted file listing, which shift whenever an
+    image is added or removed, so a persisted cache could later serve one
+    image's detections for another's. Those inputs still get the batched
+    single-pass detection; only cross-run reuse is given up.
+    """
+    if req.input_kind == "video":
+        cache_dir = build_inference_cache_dir(req.input_path, create=True) / "al"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        yield cache_dir
+        return
+    with tempfile.TemporaryDirectory(prefix="hydra_al_cache_") as tmp_dir:
+        yield Path(tmp_dir)
+
+
 def _frame_signals(
-    frame: np.ndarray,
     frame_id: int,
-    detector_fn: DetectorFn,
+    raw_obb_result: OBBResult,
+    obb_config: OBBConfig,
     expected_count: int,
     base_conf: float,
     base_iou: float,
+    frame_shape: tuple[int, int] | None = None,
 ) -> tuple[ALSignals, list]:
-    # Detections may be 6-tuples (cx,cy,w,h,theta,conf) or 7-tuples with a
-    # trailing native polygon (Task 14 export path); d[5] and d[:5] are valid
-    # for both, so no branching is needed here.
-    detections = list(detector_fn(frame, base_conf, base_iou))
+    # Base detections come from the same cheap re-filter of the cached raw
+    # OBBResult that `score_nms_instability` uses internally -- no detector
+    # call happens here. Detections may be 6-tuples (cx,cy,w,h,theta,conf);
+    # d[5] and d[:5] stay valid if a 7th (native polygon) element is ever
+    # added upstream, so no branching is needed here.
+    base_config = dataclasses.replace(
+        obb_config, confidence_threshold=base_conf, iou_threshold=base_iou
+    )
+    filtered, _ = filter_with_indices(raw_obb_result, base_config, roi_mask=None)
+    detections = detections_from_obb_result(filtered)
     confidences = [d[5] for d in detections]
     uncertainty = score_uncertainty(confidences, conf_floor=base_conf)
     count_dev = score_count_deviation(len(detections), expected_count)
 
-    h, w = frame.shape[:2]
     obb_corners = [_detection_corners(*d[:5]) for d in detections]
-    crowd, edge = score_crowd(obb_corners, frame_shape=(h, w))
+    # `frame_shape` is the (h, w) of the decoded frame this raw result came
+    # from, when the caller still has it in hand -- `run_active_learning` does,
+    # from the reads that fed the batched detection pass. Edge-proximity is
+    # meaningless without a real frame extent, so when no shape is supplied
+    # (any caller scoring purely from a cached raw result) it is honestly
+    # zeroed rather than scored against a fake extent -- mirroring
+    # `data/dataset_generation.py::FrameQualityScorer.score_frame`. The crowd
+    # component is shape-independent (pairwise polygon overlap only) either
+    # way.
+    if frame_shape is None:
+        crowd, _ = score_crowd(obb_corners, frame_shape=(1, 1))
+        edge = 0.0
+    else:
+        crowd, edge = score_crowd(obb_corners, frame_shape=frame_shape)
 
     nms = score_nms_instability(
-        frame, detector_fn, base_conf=base_conf, base_iou=base_iou
+        raw_obb_result, obb_config, base_conf=base_conf, base_iou=base_iou
     )
 
     signal = ALSignals(
@@ -187,46 +368,127 @@ def run_active_learning(
     req: ALRequest,
     progress: Callable[[int, str], None] | None = None,
 ) -> ALResult:
-    """Execute one AL round end-to-end. Pure function for testability."""
-    if req.detector_fn is None:
+    """Execute one AL round end-to-end. Pure function for testability.
+
+    Three phases, in place of the old strictly-sequential
+    decode -> detect -> score loop (which cost four uncached, unbatched model
+    calls per candidate frame):
+
+    1. Candidate selection -- one sequential decode of the source, with the
+       motion prefilter and windowed dedup running inline, before any model
+       call (`build_candidate_pool`).
+    2. Detection -- the whole candidate list goes through ONE batched,
+       cached pass (`get_or_compute_raw`), so the GPU sees many frames per
+       call, reading/writing AL's OWN dedicated detection cache (see
+       `_al_detection_cache_dir` -- never tracking's).
+    3. Scoring -- every signal, including NMS instability, is derived from
+       each frame's cached raw `OBBResult` by re-running the cheap NumPy
+       filtering gate; no further model calls happen.
+
+    Everything from selection (`select`) onward is unchanged from the
+    pre-restructure implementation.
+    """
+    if req.detector is None or not str(req.detector.model_path or "").strip():
         raise ValueError(
-            "ALRequest.detector_fn must be set (model must be loaded by caller)"
+            "ALRequest.detector must be set to an ALDetectorSpec carrying the "
+            "active model path (the caller resolves the project's model)"
         )
 
     weights = req.weights_override or PRESETS.get(req.preset, PRESETS["balanced"])
 
+    source = _build_frame_source(req)
+    try:
+        return _run_active_learning_with_source(req, source, weights, progress)
+    finally:
+        # Ruling: the round owns the source's OS handles. `VideoFrameSource`
+        # holds one `cv2.VideoCapture` open across all its reads, and this
+        # function reads from the source in all three phases AND again during
+        # export (the readability probe and `_LazyALImages`), so the earliest
+        # correct release point is the end of the round -- not the end of
+        # phase 2. Sources without a `close()` (folder/project, test doubles)
+        # simply have nothing to release.
+        close = getattr(source, "close", None)
+        if callable(close):
+            close()
+
+
+def _run_active_learning_with_source(
+    req: ALRequest,
+    source: FrameSource,
+    weights: AcquisitionWeights,
+    progress: Callable[[int, str], None] | None,
+) -> ALResult:
+    # --- Phase 1: candidate selection (one sequential decode, no model) -----
     if progress:
         progress(5, "Building candidate pool...")
-    source = _build_frame_source(req)
     candidates = build_candidate_pool(source, req.candidate_pool)
     if not candidates:
         raise RuntimeError(
             "0 candidates after FilterKit dedup; relax threshold or stride."
         )
+    cap = req.candidate_pool.max_candidates
+    if cap is not None and len(candidates) >= cap:
+        # The cap truncates the scan wherever it fills up, so say so. For video
+        # inputs `_build_frame_source` already strides the scan across the
+        # whole file, so this is a resolution limit, not a coverage one; for
+        # folder/project inputs (no stride) it does still mean the first N.
+        logger.info(
+            "Candidate pool hit its %d-frame cap; %d distinct frames are "
+            "scored this round. Raise CandidatePoolConfig.max_candidates "
+            "(watch memory) to sample the source more densely.",
+            cap,
+            len(candidates),
+        )
 
+    # --- Phase 2: one batched, cached detection pass over all candidates ----
     if progress:
-        progress(20, f"Scoring {len(candidates)} candidates...")
+        progress(25, f"Detecting on {len(candidates)} candidates...")
+    runner, obb_config = _build_detection_context(req)
+
+    readable: list[FrameRef] = []
+    frames: list[np.ndarray] = []
+    frame_shapes: dict[int, tuple[int, int]] = {}
+    for ref in candidates:
+        img = source.read(ref)
+        if img is None:
+            # Same log-and-skip contract the old per-frame scoring loop had
+            # for an unreadable candidate: it simply never gets scored.
+            continue
+        readable.append(ref)
+        frames.append(img)
+        frame_shapes[ref.frame_id] = (int(img.shape[0]), int(img.shape[1]))
+    if not readable:
+        raise RuntimeError("No candidate frame could be decoded; nothing to score.")
+
+    frame_indices = [ref.frame_id for ref in readable]
+    with _al_detection_cache_dir(req) as cache_dir:
+        raw_by_idx = get_or_compute_raw(runner, cache_dir, frames, frame_indices)
+    # The pixels are not needed past detection -- only each frame's extent,
+    # already captured in `frame_shapes` for the edge-proximity signal.
+    del frames
+
+    # --- Phase 3: score every candidate from its cached raw result ----------
+    if progress:
+        progress(60, f"Scoring {len(readable)} candidates...")
     signals: list[ALSignals] = []
     detections_by_id: dict[int, list] = {}
     frame_refs_by_id: dict[int, object] = {}
-    for i, ref in enumerate(candidates):
-        img = source.read(ref)
-        if img is None:
-            continue
+    for i, ref in enumerate(readable):
         sig, dets = _frame_signals(
-            img,
             ref.frame_id,
-            req.detector_fn,
+            raw_by_idx[ref.frame_id],
+            obb_config,
             req.expected_count,
             req.base_conf,
             req.base_iou,
+            frame_shape=frame_shapes[ref.frame_id],
         )
         signals.append(sig)
         detections_by_id[ref.frame_id] = dets
         frame_refs_by_id[ref.frame_id] = ref
         if progress and i % 10 == 0:
-            pct = 20 + int(60 * i / max(len(candidates), 1))
-            progress(pct, f"Scoring {i}/{len(candidates)}")
+            pct = 60 + int(20 * i / max(len(readable), 1))
+            progress(pct, f"Scoring {i}/{len(readable)}")
 
     if progress:
         progress(85, "Selecting top-K frames...")
