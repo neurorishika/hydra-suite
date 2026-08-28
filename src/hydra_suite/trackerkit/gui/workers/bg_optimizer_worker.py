@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 class BgSubtractionOptimizer(QThread):
     progress_signal = Signal(int, str)
     result_signal = Signal(list)
+    error_signal = Signal(str)
     finished_signal = Signal()
 
     def __init__(
@@ -72,9 +73,10 @@ class BgSubtractionOptimizer(QThread):
             self._cached_sample_indices = run.sample_indices
             self._cached_roi_mask = run.roi_mask
             self.result_signal.emit(run.results)
-        except Exception:  # noqa: BLE001 - surface via progress, mirror old behavior
+        except Exception as e:  # noqa: BLE001 - surface via progress + error_signal
             logger.exception("BgSubtractionOptimizer failed")
             self.progress_signal.emit(0, "Optimization failed.")
+            self.error_signal.emit(str(e))
         finally:
             self.finished_signal.emit()
 

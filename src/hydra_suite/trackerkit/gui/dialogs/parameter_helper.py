@@ -107,6 +107,7 @@ class ParameterHelperDialog(BaseDialog):
         self.base_params = current_params.copy()
 
         self.results: List[OptimizationResult] = []
+        self._last_error: str | None = None
         self.optimizer: TrackingOptimizer | None = None
         self.preview_worker: TrackingPreviewWorker | None = None
 
@@ -1193,6 +1194,12 @@ class ParameterHelperDialog(BaseDialog):
         self.progress.setVisible(True)
         self.progress.setValue(0)
         self.table.setRowCount(0)
+        # Reset stale state from any previous run in this dialog session, so a
+        # run that fails before producing results can't be mistaken for the
+        # previous run's success (self.results / self._last_error would
+        # otherwise still hold the prior run's data).
+        self.results = []
+        self._last_error = None
 
         # Merge current scoring weights into base_params so the optimizer's
         # _run_tracking_loop picks them up via params.get("SCORE_WEIGHT_*").
@@ -1213,6 +1220,7 @@ class ParameterHelperDialog(BaseDialog):
         )
         self.optimizer.progress_signal.connect(self.on_progress)
         self.optimizer.result_signal.connect(self.on_results)
+        self.optimizer.error_signal.connect(self.on_error)
         self.optimizer.finished_signal.connect(self.on_finished)
         self.optimizer.start()
 
@@ -1226,6 +1234,13 @@ class ParameterHelperDialog(BaseDialog):
         """Update the progress bar and status label with the optimizer's current trial progress."""
         self.progress.setValue(val)
         self.status_label.setText(msg)
+
+    @Slot(str)
+    def on_error(self, msg: str):
+        """Surface an optimizer failure loudly instead of letting it disappear
+        into a generic 'no results' status once the thread finishes."""
+        self._last_error = msg
+        QMessageBox.critical(self, "Optimization Error", msg)
 
     @Slot(list)
     def on_results(self, results: List[OptimizationResult]):
@@ -1343,9 +1358,13 @@ class ParameterHelperDialog(BaseDialog):
         self.progress.setVisible(False)
         n = len(self.results)
         if n > 0:
-            converged = self.optimizer is not None and self.optimizer._stop_requested
+            converged = (
+                self.optimizer is not None and self.optimizer._core._stop_requested
+            )
             reason = "Converged (plateau)" if converged else "Search finished"
             self.status_label.setText(f"{reason}. {n} trials. Lower score is better.")
+        elif self._last_error:
+            self.status_label.setText(f"Optimization failed: {self._last_error}")
         else:
             self.status_label.setText("Search finished with no results.")
 

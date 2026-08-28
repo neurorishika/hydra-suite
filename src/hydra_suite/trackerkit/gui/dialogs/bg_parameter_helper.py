@@ -110,6 +110,7 @@ class BgParameterHelperDialog(BaseDialog):
         self.video_path = video_path
         self.base_params = dict(current_params)
         self.results: List[BgOptimizationResult] = []
+        self._last_error: str | None = None
         self.optimizer: BgSubtractionOptimizer | None = None
         self.preview_worker: BgDetectionPreviewWorker | None = None
 
@@ -810,6 +811,7 @@ class BgParameterHelperDialog(BaseDialog):
             return
 
         self.results.clear()
+        self._last_error = None
         self.table.setRowCount(0)
         self.btn_run.setEnabled(False)
         self.btn_stop.setEnabled(True)
@@ -830,6 +832,7 @@ class BgParameterHelperDialog(BaseDialog):
         )
         self.optimizer.progress_signal.connect(self._on_progress)
         self.optimizer.result_signal.connect(self._on_results)
+        self.optimizer.error_signal.connect(self._on_error)
         self.optimizer.finished_signal.connect(self._on_finished)
         self.optimizer.start()
 
@@ -842,6 +845,13 @@ class BgParameterHelperDialog(BaseDialog):
     def _on_progress(self, pct: int, msg: str) -> None:
         self.progress.setValue(pct)
         self.status_label.setText(msg)
+
+    @Slot(str)
+    def _on_error(self, msg: str) -> None:
+        """Surface an optimizer failure loudly instead of letting it disappear
+        into a generic 'no results' status once the thread finishes."""
+        self._last_error = msg
+        QMessageBox.critical(self, "Optimization Error", msg)
 
     @Slot(list)
     def _on_results(self, results: list) -> None:
@@ -864,6 +874,8 @@ class BgParameterHelperDialog(BaseDialog):
                 f"Done. {n} trials.  Best score: {best.score:.3f}  "
                 f"(median area: {best.median_area:.0f} px\u00b2)"
             )
+        elif self._last_error:
+            self.status_label.setText(f"Optimization failed: {self._last_error}")
         else:
             self.status_label.setText("Search finished with no results.")
 
