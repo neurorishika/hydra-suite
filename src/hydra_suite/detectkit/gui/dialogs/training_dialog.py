@@ -2080,7 +2080,12 @@ QTabBar::tab:selected {
                 role_source_dir = merged.dataset_dir
                 slice_settings = getattr(self._project, "slice_settings", None)
                 if (
-                    role == TrainingRole.OBB_DIRECT
+                    role
+                    in {
+                        TrainingRole.OBB_DIRECT,
+                        TrainingRole.DETECT_DIRECT,
+                        TrainingRole.SEGMENT_DIRECT,
+                    }
                     and slice_settings is not None
                     and slice_settings.enabled
                 ):
@@ -2088,7 +2093,7 @@ QTabBar::tab:selected {
 
                     params = SliceBuildParams(
                         geometry_mode=slice_settings.geometry_mode,
-                        imgsz=self._project.imgsz_obb_direct,
+                        imgsz=self._imgsz_for_role(role),
                         object_tile_fraction=slice_settings.object_tile_fraction,
                         slice_width=slice_settings.slice_width,
                         slice_height=slice_settings.slice_height,

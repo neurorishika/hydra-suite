@@ -12,6 +12,12 @@ from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
 
 from .contracts import TrainingRole
 
+_DIRECT_DETECTOR_ROLES = {
+    TrainingRole.OBB_DIRECT,
+    TrainingRole.DETECT_DIRECT,
+    TrainingRole.SEGMENT_DIRECT,
+}
+
 
 def _project_root() -> Path:
     return Path(__file__).resolve().parents[3]
@@ -845,7 +851,7 @@ def publish_trained_model(
     slice_geom_sidecar_name: str | None = None
     if (
         slice_geometry
-        and role == TrainingRole.OBB_DIRECT
+        and role in _DIRECT_DETECTOR_ROLES
         and dst.suffix.lower() == ".pt"
     ):
         # Append to the full name (foo.pt -> foo.pt.slice_meta.json) so the
@@ -893,7 +899,7 @@ def publish_trained_model(
         metadata["training_params"] = dict(training_params)
     if classifier_meta:
         metadata.update(classifier_meta)
-    if slice_geometry and role == TrainingRole.OBB_DIRECT:
+    if slice_geometry and role in _DIRECT_DETECTOR_ROLES:
         metadata["slice_geometry"] = dict(slice_geometry)
         if slice_geom_sidecar_name:
             metadata["slice_meta_sidecar"] = slice_geom_sidecar_name

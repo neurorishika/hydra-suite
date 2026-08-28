@@ -1,4 +1,4 @@
-"""Sliced (tiled) training-data builder for DetectKit direct OBB models.
+"""Sliced training-data builder for DetectKit direct detector models.
 
 Tiles a merged OBB dataset so a direct model learns to detect at the SAME scale
 SAHI feeds at inference. Tiles through ``utils.slice_geometry`` — the exact grid

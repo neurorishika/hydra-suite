@@ -43,6 +43,12 @@ _MULTIHEAD_CLASSIFIER_ROLES = {
     TrainingRole.CLASSIFY_MULTIHEAD_CUSTOM,
 }
 
+_DIRECT_DETECTOR_ROLES = {
+    TrainingRole.OBB_DIRECT,
+    TrainingRole.DETECT_DIRECT,
+    TrainingRole.SEGMENT_DIRECT,
+}
+
 
 def _result_artifact_paths(result: dict) -> list[str]:
     artifact_paths = result.get("artifact_paths")
@@ -53,14 +59,14 @@ def _result_artifact_paths(result: dict) -> list[str]:
 
 
 def _slice_geometry_for_publish(spec: TrainingRunSpec) -> dict | None:
-    """Return the derived dataset's slice_geometry for OBB_DIRECT publish, else None.
+    """Return a direct detector's derived-dataset slice geometry, if any.
 
     Reads ``<derived_dataset_dir>/manifest.json`` and returns its
     ``slice_geometry`` dict when present and non-empty. Any error (missing
     role match, missing manifest, bad JSON, wrong shape) yields None so that
     publish behavior is unaffected when slicing was not used.
     """
-    if spec.role != TrainingRole.OBB_DIRECT:
+    if spec.role not in _DIRECT_DETECTOR_ROLES:
         return None
     try:
         manifest_path = Path(spec.derived_dataset_dir) / "manifest.json"

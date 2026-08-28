@@ -1,9 +1,9 @@
-"""Read a model's .slice_meta.json sidecar and map it to SAHI panel/config values.
+"""Read a direct detector's .slice_meta.json sidecar into SAHI settings.
 
 Pure (stdlib + numpy). The sidecar is written by training/model_publish.py for
-OBB-direct models trained with sliced data; TrackerKit reads it to pre-fill the
-SAHI panel. Mirrors the <artifact>.runtime_meta.json sidecar convention in
-runtime_artifacts.py.
+direct OBB, detect, and segment models trained with sliced data; TrackerKit
+reads it to pre-fill the SAHI panel. Mirrors the <artifact>.runtime_meta.json
+sidecar convention in runtime_artifacts.py.
 """
 
 from __future__ import annotations

@@ -1,12 +1,13 @@
 """Unit tests for _slice_geometry_for_publish wiring (spec Acceptance #5).
 
 Verifies that the training service reads slice_geometry out of the derived
-dataset's manifest.json for OBB_DIRECT runs, and returns None for every other
-case (non-OBB_DIRECT role, missing key, missing manifest) so publish behavior
-stays byte-identical when slicing is disabled or irrelevant.
+dataset's manifest.json for every direct detector role, and returns None for
+other roles or malformed/missing manifests.
 """
 
 import json
+
+import pytest
 
 from hydra_suite.training.contracts import (
     SourceDataset,
@@ -27,7 +28,15 @@ def _make_spec(*, role: TrainingRole, derived_dataset_dir: str) -> TrainingRunSp
     )
 
 
-def test_returns_geometry_for_obb_direct_with_manifest(tmp_path):
+@pytest.mark.parametrize(
+    "role",
+    [
+        TrainingRole.OBB_DIRECT,
+        TrainingRole.DETECT_DIRECT,
+        TrainingRole.SEGMENT_DIRECT,
+    ],
+)
+def test_returns_geometry_for_all_direct_detector_roles(tmp_path, role):
     manifest = tmp_path / "manifest.json"
     manifest.write_text(
         json.dumps(
@@ -40,13 +49,13 @@ def test_returns_geometry_for_obb_direct_with_manifest(tmp_path):
             }
         )
     )
-    spec = _make_spec(role=TrainingRole.OBB_DIRECT, derived_dataset_dir=str(tmp_path))
+    spec = _make_spec(role=role, derived_dataset_dir=str(tmp_path))
     result = _slice_geometry_for_publish(spec)
     assert result is not None
     assert result["reference_body_px"] == 42.0
 
 
-def test_returns_none_for_non_obb_direct_role(tmp_path):
+def test_returns_none_for_non_direct_detector_role(tmp_path):
     manifest = tmp_path / "manifest.json"
     manifest.write_text(
         json.dumps(

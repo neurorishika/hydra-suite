@@ -1,9 +1,44 @@
 import json
 from pathlib import Path
 
+import pytest
+
 import hydra_suite.training.model_publish as mp
 from hydra_suite.core.inference.slice_meta import read_slice_meta
 from hydra_suite.training.contracts import TrainingRole
+
+
+@pytest.mark.parametrize(
+    "role,base_model",
+    [
+        (TrainingRole.OBB_DIRECT, "yolo26s-obb.pt"),
+        (TrainingRole.DETECT_DIRECT, "yolo26s.pt"),
+        (TrainingRole.SEGMENT_DIRECT, "yolo26s-seg.pt"),
+    ],
+)
+def test_all_direct_detector_roles_publish_slice_geometry(
+    tmp_path, monkeypatch, role, base_model
+):
+    monkeypatch.setattr(mp, "get_models_root", lambda: tmp_path)
+    src = tmp_path / f"{role.value}.pt"
+    src.write_bytes(b"fake-weights")
+    geometry = {"geometry_mode": "auto_object", "reference_body_px": 42.0}
+
+    key, stored = mp.publish_trained_model(
+        role=role,
+        artifact_path=str(src),
+        size="s",
+        species="ant",
+        model_info="sliced",
+        trained_from_run_id="r1",
+        dataset_fingerprint="fp",
+        base_model=base_model,
+        slice_geometry=geometry,
+    )
+
+    sidecar = Path(stored).with_suffix(Path(stored).suffix + ".slice_meta.json")
+    assert json.loads(sidecar.read_text()) == geometry
+    assert mp.load_model_registry()["entries"][key]["slice_geometry"] == geometry
 
 
 def test_slice_geometry_written_as_sidecar_and_registry(tmp_path, monkeypatch):
