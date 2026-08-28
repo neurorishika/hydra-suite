@@ -18,6 +18,25 @@ def test_build_obb_config_for_al_direct_mode():
     assert cfg.obb.iou_threshold == 0.5
 
 
+@pytest.mark.parametrize(
+    ("kind", "task"),
+    [("detect_direct", "detect"), ("segment_direct", "segment")],
+)
+def test_build_obb_config_for_al_supports_all_direct_detector_tasks(kind, task):
+    cfg = build_obb_config_for_al(
+        kind,
+        "/path/to/model.pt",
+        None,
+        crop_pad_ratio=0.15,
+        confidence_threshold=0.05,
+        iou_threshold=0.5,
+    )
+
+    assert cfg.obb.mode == "direct"
+    assert cfg.obb.direct.model_task == task
+    assert cfg.obb.emit_native_geometry is (task == "segment")
+
+
 def test_build_obb_config_for_al_sequential_mode():
     cfg = build_obb_config_for_al(
         "sequential",
@@ -61,6 +80,21 @@ def test_build_obb_config_for_al_sequential_mode_detect_confidence_override():
     # already `confidence_threshold` (matching OLD's actual per-stage-2
     # behavior), not something this fix round needed to touch.
     assert cfg.obb.sequential.obb_confidence_threshold == 0.05
+
+
+def test_build_obb_config_for_al_sequential_segment_mode():
+    cfg = build_obb_config_for_al(
+        "sequential_segment",
+        "/path/to/detect.pt",
+        "/path/to/segment.pt",
+        crop_pad_ratio=0.2,
+        confidence_threshold=0.05,
+        iou_threshold=0.5,
+    )
+
+    assert cfg.obb.mode == "sequential"
+    assert cfg.obb.sequential.stage2_task == "segment"
+    assert cfg.obb.emit_native_geometry is True
 
 
 def test_build_obb_config_for_al_sequential_missing_secondary_raises():

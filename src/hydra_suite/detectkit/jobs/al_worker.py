@@ -71,10 +71,18 @@ class ALDetectorSpec:
     ``build_obb_config_for_al`` consumes.
     """
 
-    kind: Literal["obb_direct", "sequential"]
+    kind: Literal[
+        "obb_direct",
+        "detect_direct",
+        "segment_direct",
+        "sequential",
+        "sequential_obb",
+        "sequential_segment",
+    ]
     model_path: str
     secondary_model_path: str | None = None
     crop_pad_ratio: float = 0.15
+    stage2_image_size: int = 160
     runtime_tier: str | None = None
 
 
@@ -233,6 +241,7 @@ def _build_detection_context(req: ALRequest) -> tuple[object, OBBConfig]:
         # kind == "obb_direct" (single stage, no separate detect gate). See
         # inference_adapter.py's "Stage-1 confidence note".
         detect_confidence_threshold=req.base_conf,
+        stage2_image_size=spec.stage2_image_size,
         # AL scoring must see everything the model proposes: a truncated
         # detection set corrupts every signal AND (via Task 9's export) the
         # labels written for crowded frames. The adapter's 300 default

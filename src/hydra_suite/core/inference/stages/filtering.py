@@ -263,6 +263,11 @@ def _select(raw: OBBResult, indices: np.ndarray) -> OBBResult:
         corners=raw.corners[indices],
         detection_ids=raw.detection_ids[indices],
         class_ids=raw.class_ids_or_zeros[indices],
+        polygons=(
+            [raw.polygons[int(i)] for i in indices]
+            if raw.polygons is not None
+            else None
+        ),
     )
 
 

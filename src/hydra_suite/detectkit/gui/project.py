@@ -32,7 +32,19 @@ _MAX_RECENT = 20
 _KIT_NAME = "detectkit"
 _LEGACY_ARCHIVE_PREFIX = "legacy_"
 _PROJECT_MODELS_DIRNAME = "models"
-_PREVIEWABLE_HISTORY_ROLES = {"", "obb_direct"}
+# Every detector training role is usable for inference.  The old name and
+# two-role set reflected the original OBB-only overlay implementation; keeping
+# that policy here made a successfully trained direct detect/segment model look
+# broken everywhere that asked whether it was previewable.
+_INFERENCE_HISTORY_ROLES = {
+    "",
+    "obb_direct",
+    "detect_direct",
+    "segment_direct",
+    "seq_detect",
+    "seq_crop_obb",
+    "seq_crop_segment",
+}
 _DETECTKIT_ARTIFACT_DIRS = {
     "training_runs": "artifacts/training_runs",
     "evaluation": "artifacts/evaluation",
@@ -592,7 +604,7 @@ def detectkit_model_path_is_previewable(
     project: DetectKitProject,
     model_path: str,
 ) -> bool:
-    """Return whether a model path supports full-image preview overlays."""
+    """Return whether a model path has a complete DetectKit inference path."""
     candidate = str(model_path or "").strip()
     if not candidate or not Path(candidate).exists():
         return False
@@ -604,12 +616,17 @@ def detectkit_model_path_is_previewable(
             continue
         matched_history = True
         role = str(entry.get("role", "") or "").strip().lower()
-        if role in _PREVIEWABLE_HISTORY_ROLES:
+        if role in {"", "obb_direct", "detect_direct", "segment_direct"}:
             return True
-        if role in {"seq_detect", "seq_crop_obb"}:
-            counterpart_role = "seq_crop_obb" if role == "seq_detect" else "seq_detect"
-            if detectkit_latest_model_path_for_role(project, counterpart_role):
-                return True
+        if role == "seq_crop_obb":
+            return bool(detectkit_latest_model_path_for_role(project, "seq_detect"))
+        if role == "seq_crop_segment":
+            return bool(detectkit_latest_model_path_for_role(project, "seq_detect"))
+        if role == "seq_detect":
+            return bool(
+                detectkit_latest_model_path_for_role(project, "seq_crop_obb")
+                or detectkit_latest_model_path_for_role(project, "seq_crop_segment")
+            )
 
     return not matched_history
 
@@ -665,13 +682,14 @@ def detectkit_resolve_inference_models(
     """Resolve the runtime inference shape for a chosen primary model path.
 
     Returns (kind, primary, secondary):
-    - kind == "obb_direct" — primary is an OBB-direct checkpoint; secondary is None.
-    - kind == "sequential" — primary is a `seq_detect` checkpoint; secondary is the
-      newest `seq_crop_obb` checkpoint (or vice versa). Both paths exist.
+    - kind == ``"obb_direct"``, ``"detect_direct"``, or ``"segment_direct"`` —
+      primary is a direct checkpoint and secondary is None.
+    - kind == ``"sequential"`` or ``"sequential_segment"`` — primary is a
+      ``seq_detect`` checkpoint and secondary is its matching crop checkpoint.
     - kind == "unknown" — primary cannot be matched to any role (treated as
       legacy/external; caller may try direct-OBB inference at its own risk).
 
-    Raises `RuntimeError` if `kind == "sequential"` but the matching counterpart
+    Raises `RuntimeError` if a sequential checkpoint's matching counterpart
     cannot be located on disk.
     """
     primary = str(primary_path or "").strip()
@@ -688,25 +706,52 @@ def detectkit_resolve_inference_models(
     if role in {"", "obb_direct"}:
         return ("obb_direct", primary, None)
 
+    if role in {"detect_direct", "segment_direct"}:
+        return (role, primary, None)
+
+    def _latest_stage2() -> tuple[str, str]:
+        """Return the newest usable (role, path) sequential stage-2 model."""
+        for entry in reversed(project.training_history or []):
+            stage2_role = str(entry.get("role", "") or "").strip().lower()
+            if stage2_role not in {"seq_crop_obb", "seq_crop_segment"}:
+                continue
+            for path in _entry_model_paths(entry):
+                candidate = str(path or "").strip()
+                if candidate and Path(candidate).exists():
+                    return stage2_role, candidate
+        return "", ""
+
     if role == "seq_detect":
-        counterpart = detectkit_latest_model_path_for_role(project, "seq_crop_obb")
+        counterpart_role, counterpart = _latest_stage2()
         if not counterpart:
             raise RuntimeError(
-                "Sequential inference requires both seq_detect and seq_crop_obb "
-                "models. Train a seq_crop_obb model and try again."
+                "Sequential inference requires a seq_detect model and either a "
+                "seq_crop_obb or seq_crop_segment model. Train a crop model and try again."
             )
-        return ("sequential", primary, counterpart)
+        return (
+            (
+                "sequential_segment"
+                if counterpart_role == "seq_crop_segment"
+                else "sequential"
+            ),
+            primary,
+            counterpart,
+        )
 
-    if role == "seq_crop_obb":
+    if role in {"seq_crop_obb", "seq_crop_segment"}:
         counterpart = detectkit_latest_model_path_for_role(project, "seq_detect")
         if not counterpart:
             raise RuntimeError(
-                "Sequential inference requires both seq_detect and seq_crop_obb "
-                "models. Train a seq_detect model and try again."
+                "Sequential inference requires both a seq_detect model and the "
+                "selected crop model. Train a seq_detect model and try again."
             )
         # Normalize primary to the seq_detect head so callers always see a
         # consistent (detect, obb) ordering.
-        return ("sequential", counterpart, primary)
+        return (
+            "sequential_segment" if role == "seq_crop_segment" else "sequential",
+            counterpart,
+            primary,
+        )
 
     return ("unknown", primary, None)
 
@@ -808,7 +853,7 @@ def record_training_results(
             role = str(entry.get("role", "") or "").strip().lower()
             if (
                 not latest_previewable_project_model
-                and role in _PREVIEWABLE_HISTORY_ROLES
+                and role in _INFERENCE_HISTORY_ROLES
                 and entry.get("project_model_path")
             ):
                 latest_previewable_project_model = str(entry["project_model_path"])

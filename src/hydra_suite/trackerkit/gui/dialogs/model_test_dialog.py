@@ -127,7 +127,12 @@ def build_test_params(
         ``role == "seq_crop_obb"``, ``"detect_model_path"`` and the crop
         parameters above.
     """
-    task = "detect" if role == "seq_detect" else "obb"
+    task = {
+        "seq_detect": "detect",
+        "detect_direct": "detect",
+        "segment_direct": "segment",
+        "seq_crop_segment": "segment",
+    }.get(role, "obb")
     params: dict = {
         "model_path": model_path,
         "compute_runtime": compute_runtime,
@@ -135,7 +140,7 @@ def build_test_params(
         "task": task,
     }
 
-    if role == "seq_crop_obb":
+    if role in {"seq_crop_obb", "seq_crop_segment"}:
         params["detect_model_path"] = detect_model_path or model_path
         params["crop_pad_ratio"] = crop_pad_ratio
         params["min_crop_size_px"] = min_crop_size_px
@@ -220,12 +225,12 @@ class _TestWorker(BaseWorker):
 
             if detect_executor is not None:
                 corners = self._run_sequential(
-                    frame, idx, detect_executor, executor, crop_spec, imgsz
+                    frame, idx, detect_executor, executor, crop_spec, imgsz, task
                 )
             elif task == "detect":
                 corners = self._run_detect_only(frame, executor)
             else:
-                corners = self._run_direct(frame, idx, executor)
+                corners = self._run_direct(frame, idx, executor, task)
 
             annotated = frame.copy()
             for quad in corners:
@@ -243,9 +248,12 @@ class _TestWorker(BaseWorker):
         self.finished_all.emit()
 
     @staticmethod
-    def _run_direct(frame: np.ndarray, idx: int, executor) -> list:
+    def _run_direct(frame: np.ndarray, idx: int, executor, task: str) -> list:
         """Direct-mode OBB inference: run the executor and extract quads."""
-        from hydra_suite.core.inference.stages.obb import extract_obb_result
+        from hydra_suite.core.inference.stages.obb import (
+            _extract_obb_from_masks,
+            extract_obb_result,
+        )
 
         results = executor.predict(
             [frame],
@@ -255,7 +263,11 @@ class _TestWorker(BaseWorker):
         )
         if not results:
             return []
-        result = extract_obb_result(results[0], idx)
+        result = (
+            _extract_obb_from_masks(results[0], idx)
+            if task == "segment"
+            else extract_obb_result(results[0], idx)
+        )
         return list(result.corners)
 
     @staticmethod
@@ -287,6 +299,7 @@ class _TestWorker(BaseWorker):
         obb_executor,
         crop_spec: "_SeqCropSpec",
         stage2_imgsz,
+        stage2_task: str = "obb",
     ) -> list:
         """Sequential detect-then-crop-OBB test: build crops off stage-1 boxes."""
         from hydra_suite.core.inference.stages.obb import (
@@ -333,7 +346,16 @@ class _TestWorker(BaseWorker):
                 if stage2_size > 0
                 else (1.0, 1.0)
             )
-            sub.append(extract_obb_result(r, idx, offset=offsets[i], scale=scale))
+            if stage2_task == "segment":
+                from hydra_suite.core.inference.stages.obb import (
+                    _extract_obb_from_masks,
+                )
+
+                sub.append(
+                    _extract_obb_from_masks(r, idx, offset=offsets[i], scale=scale)
+                )
+            else:
+                sub.append(extract_obb_result(r, idx, offset=offsets[i], scale=scale))
 
         merged = merge_obb_results(idx, sub)
         return list(merged.corners)

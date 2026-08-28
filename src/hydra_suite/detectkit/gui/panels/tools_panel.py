@@ -271,9 +271,14 @@ class ToolsPanel(QWidget):
         model_frame_layout.setContentsMargins(4, 4, 4, 4)
         model_frame_layout.setSpacing(0)
         self._model_display = QLabel("(no model selected)")
-        self._model_display.setWordWrap(True)
+        # Checkpoint filenames commonly contain long underscore-delimited run
+        # ids. QLabel cannot wrap those tokens, so its minimum-width hint used
+        # to widen the scroll content and visibly distort this fixed-width rail.
+        # Keep the compact label constrained; the complete path is available
+        # on hover.
+        self._model_display.setWordWrap(False)
         self._model_display.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Minimum
         )
         model_frame_layout.addWidget(self._model_display)
         v.addWidget(model_frame)
@@ -453,12 +458,17 @@ class ToolsPanel(QWidget):
         self._active_model_path = str(primary or "").strip()
         if not self._active_model_path:
             self._model_display.setText("(no model selected)")
+            self._model_display.setToolTip("")
         elif secondary:
             p_name = Path(primary).name
             s_name = Path(secondary).name
             self._model_display.setText(f"Detect: {p_name}\nOBB: {s_name}")
+            self._model_display.setToolTip(
+                f"Detect: {primary}\nCrop model: {secondary}"
+            )
         else:
             self._model_display.setText(Path(primary).name)
+            self._model_display.setToolTip(self._active_model_path)
         self._emit_overlay_changed()
 
     # ------------------------------------------------------------------

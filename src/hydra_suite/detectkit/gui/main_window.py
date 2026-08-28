@@ -113,7 +113,10 @@ class _DetectKitDatasetInferenceWorker(BaseWorker):
         model_path: str,
         device_preference: str,
         confidence_threshold: float,
+        inference_kind: str = "obb_direct",
         secondary_model_path: "str | None" = None,
+        crop_pad_ratio: float = 0.15,
+        stage2_image_size: int = 160,
         slice_settings: "SliceTrainingSettings | None" = None,
         imgsz_obb_direct: int = 640,
     ) -> None:
@@ -122,9 +125,12 @@ class _DetectKitDatasetInferenceWorker(BaseWorker):
         self._model_path = str(model_path)
         self._device_preference = str(device_preference or "auto")
         self._confidence_threshold = float(confidence_threshold)
+        self._inference_kind = str(inference_kind or "obb_direct")
         self._secondary_model_path = (
             str(secondary_model_path).strip() if secondary_model_path else None
         )
+        self._crop_pad_ratio = float(crop_pad_ratio)
+        self._stage2_image_size = int(stage2_image_size)
         self._slice_settings = slice_settings
         self._imgsz_obb_direct = int(imgsz_obb_direct)
         self._cancel = False
@@ -152,7 +158,56 @@ class _DetectKitDatasetInferenceWorker(BaseWorker):
         detection_count = 0
         confidence_threshold = self._confidence_threshold
 
-        if self._secondary_model_path:
+        if self._secondary_model_path and self._inference_kind == "sequential_segment":
+            # The shared runner already knows how to execute a detect ->
+            # crop-segment pipeline and preserves the native polygons that its
+            # stage-2 segmentation model produces.
+            from hydra_suite.core.inference.runner import InferenceRunner
+            from hydra_suite.data.al.inference_adapter import build_obb_config_for_al
+
+            self.status.emit("Loading sequential segment models…")
+            config = build_obb_config_for_al(
+                self._inference_kind,
+                self._model_path,
+                self._secondary_model_path,
+                crop_pad_ratio=self._crop_pad_ratio,
+                confidence_threshold=confidence_threshold,
+                iou_threshold=0.7,
+                max_targets=300,
+                stage2_image_size=self._stage2_image_size,
+            )
+            runner = InferenceRunner(config)
+
+            import cv2
+
+            for index, image_path in enumerate(self._image_paths, start=1):
+                if self._cancel:
+                    self.status.emit("Inference cancelled.")
+                    return
+                self.status.emit(
+                    f"Running inference on image {index}/{total}: {Path(image_path).name}"
+                )
+                try:
+                    frame = cv2.imread(str(image_path))
+                    if frame is None:
+                        raise RuntimeError(f"Could not read image: {image_path}")
+                    obb = runner.detect_batch_raw([frame], [index - 1])[0]
+                    detections = dicts_from_obb_result(obb)
+                except Exception:
+                    logger.warning(
+                        "Sequential segment dataset inference failed on %s",
+                        image_path,
+                        exc_info=True,
+                    )
+                    detections = []
+                per_image[image_path] = detections
+                for det in detections:
+                    detection_count += 1
+                    class_id = int(det.get("class_id", 0))
+                    class_counts[class_id] = class_counts.get(class_id, 0) + 1
+                    confidence_sum += float(det.get("confidence", 0.0))
+                self.progress.emit(int(index / max(1, total) * 100))
+        elif self._secondary_model_path:
             self.status.emit("Loading sequential models…")
             detect_model, detect_device = load_torch_model(
                 self._model_path, self._device_preference
@@ -227,7 +282,13 @@ class _DetectKitDatasetInferenceWorker(BaseWorker):
                 self.progress.emit(int(index / max(1, total) * 100))
         else:
             self.status.emit("Loading model…")
-            model, device = load_torch_model(self._model_path, self._device_preference)
+            task = {
+                "detect_direct": "detect",
+                "segment_direct": "segment",
+            }.get(self._inference_kind, "obb")
+            model, device = load_torch_model(
+                self._model_path, self._device_preference, task=task
+            )
 
             slice_settings = self._slice_settings
             sliced = bool(slice_settings is not None and slice_settings.enabled)
@@ -262,6 +323,7 @@ class _DetectKitDatasetInferenceWorker(BaseWorker):
                             overlap=slice_settings.overlap,
                             merge_threshold=slice_settings.merge_threshold,
                             confidence_threshold=confidence_threshold,
+                            task=task,
                         )
                         detections = (
                             dicts_from_obb_result(obb) if obb is not None else []
@@ -272,6 +334,7 @@ class _DetectKitDatasetInferenceWorker(BaseWorker):
                             image_path,
                             device=device,
                             confidence_threshold=confidence_threshold,
+                            task=task,
                         )
                 except Exception:
                     logger.warning(
@@ -1145,7 +1208,8 @@ class DetectKitMainWindow(QMainWindow):
                     proj, proj.active_model_path
                 )
                 self._tools_panel.set_active_model_path(
-                    primary, secondary if kind == "sequential" else None
+                    primary,
+                    secondary if kind in {"sequential", "sequential_segment"} else None,
                 )
             except RuntimeError as exc:
                 # Sequential pair incomplete — show with suffix, no secondary.
@@ -1390,7 +1454,8 @@ class DetectKitMainWindow(QMainWindow):
                     self._project, self._project.active_model_path
                 )
                 self._tools_panel.set_active_model_path(
-                    primary, secondary if kind == "sequential" else None
+                    primary,
+                    secondary if kind in {"sequential", "sequential_segment"} else None,
                 )
             except RuntimeError as exc:
                 self._tools_panel.set_active_model_path(
@@ -1405,15 +1470,19 @@ class DetectKitMainWindow(QMainWindow):
         from .dialogs.active_learning import ActiveLearningDialog
 
         dlg = ActiveLearningDialog(project=self._project, parent=self)
-        # DetectKit's inference resolver only ever distinguishes obb_direct /
-        # sequential model shapes (`detectkit_resolve_inference_models`) --
-        # there is no segment- or detect-only AL path yet, so the achievable
-        # level is always "obb" today. Routing through `set_model_task`
-        # (rather than hard-coding `export_level="obb"` on the request) keeps
-        # the dialog's own capability gate as the single source of truth, so
-        # a future segment/detect-only AL path only has to call this with the
-        # real task string.
-        dlg.set_model_task("obb")
+        model_path = str(self._project.active_model_path or "").strip()
+        try:
+            kind, _primary, _secondary = detectkit_resolve_inference_models(
+                self._project, model_path
+            )
+        except RuntimeError:
+            kind = "obb_direct"
+        task = (
+            "segment"
+            if kind in {"segment_direct", "sequential_segment"}
+            else "detect" if kind == "detect_direct" else "obb"
+        )
+        dlg.set_model_task(task)
         dlg.set_run_handler(lambda: self._start_al_round(dlg))
         dlg.finished.connect(lambda *_: self._cancel_al_round())
         dlg.open()
@@ -1471,8 +1540,8 @@ class DetectKitMainWindow(QMainWindow):
             )
         if not detectkit_model_path_is_previewable(self._project, model_path):
             raise RuntimeError(
-                "Selected model does not support direct inference. "
-                "Train or load a YOLO OBB model and try again."
+                "Selected model is incomplete for inference. Select a direct model "
+                "or train the matching sequential counterpart."
             )
 
         from .prediction_preview import _resolve_compute_runtime
@@ -1481,6 +1550,11 @@ class DetectKitMainWindow(QMainWindow):
             self._project, model_path
         )
         crop_pad_ratio = float(getattr(self._project, "crop_pad_ratio", None) or 0.15)
+        stage2_image_size = (
+            self._project.imgsz_seq_crop_segment
+            if kind == "sequential_segment"
+            else self._project.imgsz_seq_crop_obb
+        )
         # The project's device preference resolved to a cpu/mps/cuda torch
         # runtime for the old closure; Runtime Gen-2's equivalent knob is the
         # tier. "gpu" (not "gpu_fast") keeps AL on the same native torch
@@ -1492,21 +1566,18 @@ class DetectKitMainWindow(QMainWindow):
             else "gpu"
         )
 
-        if kind == "sequential" and secondary is not None:
+        if kind in {"sequential", "sequential_segment"} and secondary is not None:
             return ALDetectorSpec(
-                kind="sequential",
+                kind=kind,
                 model_path=primary,
                 secondary_model_path=secondary,
                 crop_pad_ratio=crop_pad_ratio,
+                stage2_image_size=stage2_image_size,
                 runtime_tier=runtime_tier,
             )
 
-        # obb_direct or unknown — try direct OBB inference. (Unchanged from the
-        # closure-based version's fall-through: "unknown" is optimistically
-        # treated as a direct OBB checkpoint, and fails loudly at load time if
-        # it is not one.)
         return ALDetectorSpec(
-            kind="obb_direct",
+            kind=kind,
             model_path=primary,
             secondary_model_path=None,
             crop_pad_ratio=crop_pad_ratio,
@@ -1646,7 +1717,16 @@ class DetectKitMainWindow(QMainWindow):
             primary,
             self._project.device or "auto",
             settings.confidence_threshold,
-            secondary_model_path=secondary if kind == "sequential" else None,
+            inference_kind=kind,
+            secondary_model_path=(
+                secondary if kind in {"sequential", "sequential_segment"} else None
+            ),
+            crop_pad_ratio=self._project.crop_pad_ratio,
+            stage2_image_size=(
+                self._project.imgsz_seq_crop_segment
+                if kind == "sequential_segment"
+                else self._project.imgsz_seq_crop_obb
+            ),
             slice_settings=self._project.slice_settings,
             imgsz_obb_direct=self._project.imgsz_obb_direct,
         )

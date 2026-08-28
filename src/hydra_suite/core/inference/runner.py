@@ -828,6 +828,7 @@ class InferenceRunner:
                         frame_idx, raw_obb.num_detections
                     ),
                     class_ids=raw_obb.class_ids,
+                    polygons=raw_obb.polygons,
                 )
                 if caches is not None and caches.detection is not None:
                     caches.detection.write_frame(frame_idx, result=raw_obb)
@@ -1190,6 +1191,7 @@ class InferenceRunner:
                     f_idx, raw_obb.num_detections
                 ),
                 class_ids=raw_obb.class_ids,
+                polygons=raw_obb.polygons,
             )
             raw_results.append(raw_obb)
         return raw_results

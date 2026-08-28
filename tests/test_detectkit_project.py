@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from hydra_suite.data.project_bundle import (
     export_project_bundle_archive,
     import_project_bundle_archive,
@@ -568,6 +570,25 @@ def test_resolve_inference_models_obb_direct(tmp_path: Path) -> None:
     assert secondary is None
 
 
+@pytest.mark.parametrize("role", ["detect_direct", "segment_direct"])
+def test_resolve_inference_models_direct_non_obb_roles(
+    tmp_path: Path, role: str
+) -> None:
+    """Every direct detector head can be selected for inference."""
+    model = _make_model_file(tmp_path, f"best_{role}.pt")
+    project = DetectKitProject(project_dir=tmp_path, class_names=["ant"])
+    project.training_history = [
+        {"run_id": "run_1", "role": role, "project_model_path": model}
+    ]
+
+    kind, primary, secondary = detectkit_resolve_inference_models(project, model)
+
+    assert kind == role
+    assert primary == model
+    assert secondary is None
+    assert detectkit_model_path_is_previewable(project, model)
+
+
 def test_resolve_inference_models_sequential_via_detect(tmp_path: Path) -> None:
     detect_model = _make_model_file(tmp_path, "detect.pt")
     obb_model = _make_model_file(tmp_path, "obb_crop.pt")
@@ -615,6 +636,33 @@ def test_resolve_inference_models_sequential_via_obb(tmp_path: Path) -> None:
     assert kind == "sequential"
     assert primary == detect_model
     assert secondary == obb_model
+
+
+def test_resolve_inference_models_sequential_segment(tmp_path: Path) -> None:
+    detect_model = _make_model_file(tmp_path, "detect.pt")
+    segment_model = _make_model_file(tmp_path, "segment_crop.pt")
+    project = DetectKitProject(project_dir=tmp_path, class_names=["ant"])
+    project.training_history = [
+        {
+            "run_id": "run_detect",
+            "role": "seq_detect",
+            "project_model_path": detect_model,
+        },
+        {
+            "run_id": "run_segment",
+            "role": "seq_crop_segment",
+            "project_model_path": segment_model,
+        },
+    ]
+
+    kind, primary, secondary = detectkit_resolve_inference_models(
+        project, segment_model
+    )
+
+    assert kind == "sequential_segment"
+    assert primary == detect_model
+    assert secondary == segment_model
+    assert detectkit_model_path_is_previewable(project, segment_model)
 
 
 def test_resolve_inference_models_missing_counterpart_raises(tmp_path: Path) -> None:

@@ -81,15 +81,14 @@ def build_obb_config_for_al(
     iou_threshold: float,
     runtime_tier: str | None = None,
     detect_confidence_threshold: float | None = None,
+    stage2_image_size: int | None = None,
     max_targets: int | None = None,
 ) -> InferenceConfig:
     """Build an OBB-only ``InferenceConfig`` for one AL scoring pass.
 
     ``kind``/``primary_model_path``/``secondary_model_path`` are exactly the
     tuple returned by ``detectkit_resolve_inference_models``. ``crop_pad_ratio``
-    is only meaningful (and required) for ``kind == "sequential"``, matching
-    the field DetectKit's own `_load_active_detector_fn` already threads into
-    `predict_obb_for_frame_sequential`.
+    is only meaningful for the sequential kinds.
 
     ``detect_confidence_threshold`` overrides the sequential-mode stage-1
     (detect) confidence gate; it is ignored for ``kind == "obb_direct"``
@@ -105,13 +104,16 @@ def build_obb_config_for_al(
     only to deliberately tighten or widen that ceiling. Values below 1 are
     clamped to 1 by ``build_inference_config_from_params``.
 
-    Raises ``ValueError`` for any ``kind`` other than "obb_direct" or
-    "sequential" (notably "unknown" -- callers must resolve to a supported
-    kind before requesting an AL config), or if ``kind == "sequential"`` and
-    ``secondary_model_path`` is missing.
+    Raises ``ValueError`` for an unknown kind or a sequential kind without its
+    stage-2 checkpoint.
     """
     cap = AL_DEFAULT_MAX_TARGETS if max_targets is None else int(max_targets)
-    if kind == "obb_direct":
+    direct_tasks = {
+        "obb_direct": "obb",
+        "detect_direct": "detect",
+        "segment_direct": "segment",
+    }
+    if kind in direct_tasks:
         return build_obb_only_config(
             primary_model_path,
             runtime_tier=runtime_tier,
@@ -119,18 +121,27 @@ def build_obb_config_for_al(
             iou_threshold=iou_threshold,
             max_targets=cap,
             mode="direct",
+            model_task=direct_tasks[kind],
+            emit_native_geometry=direct_tasks[kind] == "segment",
         )
-    if kind == "sequential":
+    stage2_tasks = {
+        "sequential": "obb",
+        "sequential_obb": "obb",
+        "sequential_segment": "segment",
+    }
+    if kind in stage2_tasks:
         if not secondary_model_path:
             raise ValueError(
-                "AL sequential-mode config requires a secondary (crop-OBB) "
-                "model path; got None."
+                "AL sequential-mode config requires a secondary crop model; got None."
             )
         extra_params = {
             "YOLO_DETECT_MODEL_PATH": primary_model_path,
             "YOLO_CROP_OBB_MODEL_PATH": secondary_model_path,
             "YOLO_SEQ_CROP_PAD_RATIO": crop_pad_ratio,
+            "YOLO_SEQ_STAGE2_TASK": stage2_tasks[kind],
         }
+        if stage2_image_size is not None:
+            extra_params["YOLO_SEQ_STAGE2_IMGSZ"] = int(stage2_image_size)
         if detect_confidence_threshold is not None:
             extra_params["YOLO_SEQ_DETECT_CONF_THRESHOLD"] = detect_confidence_threshold
         return build_obb_only_config(
@@ -140,6 +151,7 @@ def build_obb_config_for_al(
             iou_threshold=iou_threshold,
             max_targets=cap,
             mode="sequential",
+            emit_native_geometry=stage2_tasks[kind] == "segment",
             extra_params=extra_params,
         )
     raise ValueError(f"Unsupported AL detector kind: {kind!r}")

@@ -228,7 +228,14 @@ def detections_from_obb_result(obb: OBBResult) -> list[Detection]:
             minor = math.sqrt(max(size / aspect, 0.0))
         else:
             major = minor = math.sqrt(max(size, 0.0))
-        out.append((cx, cy, major, minor, theta, float(obb.confidences[i])))
+        native_polygon = (
+            obb.polygons[i]
+            if obb.polygons is not None and i < len(obb.polygons)
+            else None
+        )
+        out.append(
+            (cx, cy, major, minor, theta, float(obb.confidences[i]), native_polygon)
+        )
     return out
 
 

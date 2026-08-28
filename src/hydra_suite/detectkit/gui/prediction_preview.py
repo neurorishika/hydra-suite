@@ -28,6 +28,8 @@ from hydra_suite.core.inference.config import OBBConfig, OBBDirectConfig, SliceC
 from hydra_suite.core.inference.runtime import RuntimeContext
 from hydra_suite.core.inference.runtime_artifacts import load_obb_executor
 from hydra_suite.core.inference.stages.obb import (
+    _extract_obb_from_boxes,
+    _extract_obb_from_masks,
     build_crops,
     extract_obb_result,
     merge_obb_results,
@@ -188,10 +190,17 @@ def _dicts_from_obb_result(obb: Any) -> list[dict[str, object]]:
     detections: list[dict[str, object]] = []
     class_ids = obb.class_ids_or_zeros
     for i in range(obb.num_detections):
+        native_polygon = (
+            obb.polygons[i]
+            if obb.polygons is not None and i < len(obb.polygons)
+            else obb.corners[i]
+        )
         detections.append(
             {
                 "class_id": int(class_ids[i]),
-                "polygon_px": [(float(x), float(y)) for (x, y) in obb.corners[i]],
+                "polygon_px": [
+                    (float(x), float(y)) for (x, y) in np.asarray(native_polygon)
+                ],
                 "confidence": float(obb.confidences[i]),
             }
         )
@@ -279,6 +288,7 @@ def predict_sliced_obb_result(
     merge_threshold: float,
     confidence_threshold: float,
     iou: float = _PREVIEW_IOU,
+    task: str = "obb",
 ):
     """Executor-level sliced OBB inference on one BGR frame (preview/AL).
 
@@ -302,7 +312,11 @@ def predict_sliced_obb_result(
     ]
     if not tiles_img:
         return _predict_direct(
-            executor, frame, confidence_threshold=confidence_threshold, iou=iou
+            executor,
+            frame,
+            confidence_threshold=confidence_threshold,
+            iou=iou,
+            emit_native_geometry=task == "segment",
         )
     results = executor.predict(tiles_img, conf=raw_floor, iou=float(iou), verbose=False)
 
@@ -314,10 +328,20 @@ def predict_sliced_obb_result(
     # its OWN ``executor.predict`` above -- it runs the executor's within-tile
     # NMS (``iou=_PREVIEW_IOU``) because, unlike the tracking pipeline, there is
     # no downstream filtering stage here to dedup within-tile duplicates.
+    def _extract_tile(res, x0: int, y0: int):
+        offset = (float(max(0, x0)), float(max(0, y0)))
+        if task == "detect":
+            return _extract_obb_from_boxes(
+                res, frame_idx=0, fixed_angle_rad=0.0, offset=offset
+            )
+        if task == "segment":
+            return _extract_obb_from_masks(
+                res, frame_idx=0, offset=offset, emit_native_geometry=True
+            )
+        return extract_obb_result(res, frame_idx=0, offset=offset)
+
     parts = [
-        extract_obb_result(
-            res, frame_idx=0, offset=(float(max(0, x0)), float(max(0, y0)))
-        )
+        _extract_tile(res, x0, y0)
         for (x0, y0, _x1, _y1), res in zip(plan.tiles, results)
     ]
     return merge_per_frame(
@@ -411,6 +435,7 @@ def predict_preview_detections_for_image(
     *,
     device: str,
     confidence_threshold: float,
+    task: str = "obb",
 ) -> list[dict[str, object]]:
     """Run inference using a pre-loaded executor on a single image. For batch reuse.
 
@@ -421,13 +446,22 @@ def predict_preview_detections_for_image(
     frame = cv2.imread(str(image_path))
     if frame is None:
         raise RuntimeError(f"Could not read image: {image_path}")
-    obb = _predict_direct(model, frame, confidence_threshold=confidence_threshold)
+    obb = _predict_direct(
+        model,
+        frame,
+        confidence_threshold=confidence_threshold,
+        emit_native_geometry=task == "segment",
+    )
     if obb is None:
         return []
     return _dicts_from_obb_result(obb)
 
 
-def load_torch_model(model_path: str, device_preference: str = "auto"):
+def load_torch_model(
+    model_path: str,
+    device_preference: str = "auto",
+    task: str = "obb",
+):
     """Load an OBB executor and return ``(executor, compute_runtime)``.
 
     The second element is the ``load_obb_executor`` compute-runtime string (not
@@ -437,7 +471,7 @@ def load_torch_model(model_path: str, device_preference: str = "auto"):
     """
     resolved = str(Path(model_path).expanduser().resolve())
     compute_runtime = _resolve_compute_runtime(device_preference)
-    return _get_torch_model(resolved, compute_runtime), compute_runtime
+    return _get_torch_model(resolved, compute_runtime, task), compute_runtime
 
 
 def predict_obb_for_frame(
