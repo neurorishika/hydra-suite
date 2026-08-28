@@ -51,7 +51,7 @@ candidate frame.
 **Interfaces:**
 - No new public interface — internal-only change to a loop body.
 
-- [ ] **Step 1: Read the current function to confirm the exact loop shape**
+- [x] **Step 1: Read the current function to confirm the exact loop shape**
 
 Read `src/hydra_suite/core/post/dataset_export.py` lines 123-215 to confirm the
 current code around:
@@ -63,7 +63,7 @@ for idx, frame_id in enumerate(unique_frames):
 and note the columns of `df` and what `frame_data` is used for afterward (it
 must remain a DataFrame with the same columns/behavior for downstream code).
 
-- [ ] **Step 2: Write a test proving current behavior (characterization test)**
+- [x] **Step 2: Write a test proving current behavior (characterization test)**
 
 If no existing test covers this function end-to-end, add one that builds a
 small synthetic tracking CSV (a `pandas.DataFrame` with `FrameID` plus whatever
@@ -95,13 +95,13 @@ function needs a real detection cache and video to run end-to-end; the full
 integration test for this path is Task 4's responsibility. This step is a pure
 characterization of the `groupby` replacement's correctness.
 
-- [ ] **Step 2b: Run it**
+- [x] **Step 2b: Run it**
 
 Run: `python -m pytest <test file> -k test_frame_lookup_matches_per_frame_rows -v`
 Expected: PASS (this test doesn't touch the real function yet, just proves the
 groupby semantics match manual per-frame filtering).
 
-- [ ] **Step 3: Apply the fix**
+- [x] **Step 3: Apply the fix**
 
 In `generate_active_learning_dataset`, before the `for idx, frame_id in
 enumerate(unique_frames):` loop, add:
@@ -115,13 +115,13 @@ frames_by_id = {int(fid): sub for fid, sub in df.groupby("FrameID")}
 None: continue` (or existing equivalent empty-frame handling — check what the
 original line did when no rows matched, and preserve that behavior exactly).
 
-- [ ] **Step 4: Run the full existing test suite for this file**
+- [x] **Step 4: Run the full existing test suite for this file**
 
 Run: `python -m pytest <test file> -v`
 Expected: all PASS, including any pre-existing tests for
 `generate_active_learning_dataset`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/hydra_suite/core/post/dataset_export.py <test file>
@@ -147,7 +147,7 @@ git commit -m "perf(trackerkit): replace per-frame O(n^2) DataFrame scan with gr
   (`list[OBBResult]`, filtered) — becomes a thin wrapper over
   `detect_batch_raw` + the existing per-frame `filter_for_source` call.
 
-- [ ] **Step 1: Read the current `detect_batch` body in full**
+- [x] **Step 1: Read the current `detect_batch` body in full**
 
 Read `src/hydra_suite/core/inference/runner.py` lines 1150-1200 to get the
 exact current body (the call to `run_obb(frames, self._models.obb,
@@ -156,7 +156,7 @@ raw_obb, roi_mask)` call, and how the raw `OBBResult` for each frame is
 currently constructed from `run_obb`'s return value) so the extraction is
 behavior-preserving to the line.
 
-- [ ] **Step 2: Write the failing test for `detect_batch_raw`**
+- [x] **Step 2: Write the failing test for `detect_batch_raw`**
 
 Add to `tests/test_inference_runner_batch.py`, following its existing fixture
 conventions (synthetic frames, a real small OBB model or whatever fixture the
@@ -180,12 +180,12 @@ for a runner backed by a real/synthetic OBB model — read the file first and
 substitute the actual fixture names in place of `runner_with_obb_model`/
 `synthetic_frames` above.)
 
-- [ ] **Step 3: Run it to confirm it fails**
+- [x] **Step 3: Run it to confirm it fails**
 
 Run: `python -m pytest tests/test_inference_runner_batch.py -k test_detect_batch_raw_returns_unfiltered_results -v`
 Expected: FAIL with `AttributeError: 'InferenceRunner' object has no attribute 'detect_batch_raw'`
 
-- [ ] **Step 4: Implement `detect_batch_raw`, refactor `detect_batch` to use it**
+- [x] **Step 4: Implement `detect_batch_raw`, refactor `detect_batch` to use it**
 
 In `runner.py`, extract the raw batched call and per-frame raw `OBBResult`
 construction (the part of `detect_batch`'s current body that runs before
@@ -216,18 +216,18 @@ def detect_batch(self, frames, frame_indices=None, roi_mask=None):
 
 Keep both docstrings' "No cache is read or written" line — still true for both.
 
-- [ ] **Step 5: Run the new test**
+- [x] **Step 5: Run the new test**
 
 Run: `python -m pytest tests/test_inference_runner_batch.py -k test_detect_batch_raw_returns_unfiltered_results -v`
 Expected: PASS
 
-- [ ] **Step 6: Run the full existing file to confirm no regression**
+- [x] **Step 6: Run the full existing file to confirm no regression**
 
 Run: `python -m pytest tests/test_inference_runner_batch.py -v`
 Expected: all PASS, including every pre-existing `detect_batch` test — this
 proves the refactor didn't change `detect_batch`'s observable behavior.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/hydra_suite/core/inference/runner.py tests/test_inference_runner_batch.py
@@ -251,7 +251,7 @@ git commit -m "refactor(inference): extract detect_batch_raw from detect_batch"
   frames: list[np.ndarray], frame_indices: list[int]) -> dict[int, OBBResult]`
   — used by Task 4 (TrackerKit export) and Task 9 (DetectKit AL worker).
 
-- [ ] **Step 1: Confirm the exact cache-handle construction pattern**
+- [x] **Step 1: Confirm the exact cache-handle construction pattern**
 
 Before writing any code, read:
 - `src/hydra_suite/core/inference/cache/store.py` in full — the
@@ -273,7 +273,7 @@ Before writing any code, read:
 Use whatever the real, confirmed construction pattern is in Step 2 below — do
 not guess parameter names not confirmed by this read.
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 Create `tests/test_inference_cache_reuse.py`:
 
@@ -331,12 +331,12 @@ sizes=np.zeros(1), shapes=np.zeros((1,2)), confidences=np.array([0.9]),
 corners=np.zeros((1,4,2)), detection_ids=OBBResult.make_detection_ids(idx, 1))`
 — confirm exact required fields from Step 1's read of `result.py` and adjust.)
 
-- [ ] **Step 3: Run tests to confirm they fail**
+- [x] **Step 3: Run tests to confirm they fail**
 
 Run: `python -m pytest tests/test_inference_cache_reuse.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'hydra_suite.core.inference.cache.reuse'`
 
-- [ ] **Step 4: Implement `get_or_compute_raw`**
+- [x] **Step 4: Implement `get_or_compute_raw`**
 
 Create `src/hydra_suite/core/inference/cache/reuse.py` using the exact
 construction pattern confirmed in Step 1. Shape (fill in the real
@@ -390,12 +390,12 @@ Step 1 (parameter names/order for `DetectionCacheHandle(...)`,
 `src/hydra_suite/utils/video_artifacts.py` rather than hardcoding
 `"detection.npz"` if that function is the established way to derive this path).
 
-- [ ] **Step 5: Run tests to confirm they pass**
+- [x] **Step 5: Run tests to confirm they pass**
 
 Run: `python -m pytest tests/test_inference_cache_reuse.py -v`
 Expected: all 3 PASS
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/hydra_suite/core/inference/cache/reuse.py tests/test_inference_cache_reuse.py
@@ -423,14 +423,14 @@ git commit -m "feat(inference): add shared get_or_compute_raw cache-reuse helper
 - Modifies: `_init_detection_runner(params, video_path)` — adds a required
   `video_path` parameter (was `_init_detection_runner(params)`).
 
-- [ ] **Step 1: Read the current three functions in full**
+- [x] **Step 1: Read the current three functions in full**
 
 Read `src/hydra_suite/data/dataset_generation.py` lines 322-416 (`_init_detection_runner`),
 562-630 (`_detect_records_for_frames`), and 700-830 (`export_dataset`, to see
 exactly how `video_path` is already in scope there and how it currently calls
 the other two) to confirm exact current signatures before changing them.
 
-- [ ] **Step 2: Write the failing test for cache-hit behavior**
+- [x] **Step 2: Write the failing test for cache-hit behavior**
 
 Add a test that: builds a tiny synthetic video + a pre-populated detection
 cache via `get_or_compute_raw` directly (reusing Task 3's test helpers/fixture
@@ -464,13 +464,13 @@ def test_detect_records_for_frames_uses_existing_cache(tmp_path, synthetic_video
 expected values from Step 1's read of `_detect_records_for_frames`'s body and
 any existing tests' fixtures for this module.)
 
-- [ ] **Step 3: Run it to confirm it fails**
+- [x] **Step 3: Run it to confirm it fails**
 
 Run: `python -m pytest <test file> -k test_detect_records_for_frames_uses_existing_cache -v`
 Expected: FAIL — either a `TypeError` (extra `video_path` arg not yet accepted)
 or the assertion failing because `detect_batch_raw` IS called (cache bypassed).
 
-- [ ] **Step 4: Implement the fix**
+- [x] **Step 4: Implement the fix**
 
 In `_init_detection_runner`, add a `video_path` parameter and pass
 `cache_dir=build_inference_cache_dir(video_path)` into the `InferenceRunner(...)`
@@ -489,12 +489,12 @@ records = [results_by_idx[idx] for idx in valid_chunk]
 property; use whichever is real.) Update `export_dataset` to pass `video_path`
 through to `_init_detection_runner(params, video_path)`.
 
-- [ ] **Step 5: Run the new test and the full file's existing tests**
+- [x] **Step 5: Run the new test and the full file's existing tests**
 
 Run: `python -m pytest <test file> -v`
 Expected: all PASS.
 
-- [ ] **Step 6: Correct the design-doc finding**
+- [x] **Step 6: Correct the design-doc finding**
 
 In `docs/superpowers/specs/done/2026-08-17-al-escalated-multi-format-export-design.md`,
 find finding #15's text (the "double inference is intentional/defensible" note)
@@ -504,7 +504,7 @@ premise (cache lacks low-enough-confidence detections) was false; export now
 reuses the existing detection cache. Do not otherwise rewrite the historical
 doc's content, per this repo's docs-lifecycle convention.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/hydra_suite/data/dataset_generation.py <test file> docs/superpowers/specs/done/2026-08-17-al-escalated-multi-format-export-design.md
@@ -529,7 +529,7 @@ git commit -m "perf(trackerkit): reuse existing detection cache for AL export in
   confidence_threshold: float, iou_threshold: float, runtime_tier=None) ->
   InferenceConfig` — used by Task 9.
 
-- [ ] **Step 1: Read the exact real signatures**
+- [x] **Step 1: Read the exact real signatures**
 
 Read `src/hydra_suite/core/inference/config.py` around line 1107
 (`build_obb_only_config`) for its exact full parameter list/defaults
@@ -547,7 +547,7 @@ emit_native_geometry=False, extra_params=None`). Read
 `predict_obb_for_frame_sequential`, since those need to reach
 `build_obb_only_config`'s `extra_params` for the sequential case.
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 ```python
 from hydra_suite.data.al.inference_adapter import build_obb_config_for_al
@@ -586,12 +586,12 @@ def test_build_obb_config_for_al_unknown_kind_raises():
 (Adjust assertions to match `OBBDirectConfig`/`OBBSequentialConfig`'s real
 field names confirmed in Step 1 if they differ from the above.)
 
-- [ ] **Step 3: Run to confirm failure**
+- [x] **Step 3: Run to confirm failure**
 
 Run: `python -m pytest tests/test_al_inference_adapter.py -v`
 Expected: FAIL — `ModuleNotFoundError`
 
-- [ ] **Step 4: Implement**
+- [x] **Step 4: Implement**
 
 ```python
 """Adapts DetectKit's resolved model info (kind/model paths from
@@ -641,12 +641,12 @@ with `extra_params` for the sequential case — the sketch above is illustrative
 the implementer must verify against the real function body, not assume these
 keys are correct.
 
-- [ ] **Step 5: Run tests to confirm pass**
+- [x] **Step 5: Run tests to confirm pass**
 
 Run: `python -m pytest tests/test_al_inference_adapter.py -v`
 Expected: all PASS
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/hydra_suite/data/al/inference_adapter.py tests/test_al_inference_adapter.py
@@ -668,7 +668,7 @@ git commit -m "feat(detectkit): add AL inference config adapter over build_obb_o
   consumer's point of view (`candidate_pool.py`'s `for ref in source:` /
   `source.read(ref)` calls in Task 7/9 keep working unmodified).
 
-- [ ] **Step 1: Read the full current file**
+- [x] **Step 1: Read the full current file**
 
 Read `src/hydra_suite/data/al/frame_source.py` in full (140 lines, per prior
 research) to see the exact current `read(ref)` implementation (reopen +
@@ -677,7 +677,7 @@ research) to see the exact current `read(ref)` implementation (reopen +
 `FrameRef`/`ref.frame_id` looks like), so the sequential rewrite preserves the
 exact same public contract.
 
-- [ ] **Step 2: Write the failing test for sequential-read correctness**
+- [x] **Step 2: Write the failing test for sequential-read correctness**
 
 Add a test proving that reading frames via the source in ascending order
 returns pixel-identical frames to today's per-frame reopen approach, and that a
@@ -718,12 +718,12 @@ def test_video_frame_source_sequential_reads_match_baseline(synthetic_video):
 already defines, confirmed from Step 1 — do not invent a different fixture
 name than what's already there.)
 
-- [ ] **Step 3: Run to confirm the reuse test fails**
+- [x] **Step 3: Run to confirm the reuse test fails**
 
 Run: `python -m pytest tests/test_al_frame_source.py -k test_video_frame_source_reuses_single_capture -v`
 Expected: FAIL (current code opens a new capture per `read()` call — `open_count["n"]` will be >= 5).
 
-- [ ] **Step 4: Implement sequential decode**
+- [x] **Step 4: Implement sequential decode**
 
 Rewrite `VideoFrameSource` to hold one lazily-opened `cv2.VideoCapture` as an
 instance attribute, tracking the last-read frame index. `read(ref)` becomes:
@@ -736,12 +736,12 @@ to release the capture, and ensure any existing caller (`candidate_pool.py`,
 confirmed in Task 7) is updated to use it as a context manager or call `close()`
 explicitly when done, if it doesn't already.
 
-- [ ] **Step 5: Run both new tests and the full existing file**
+- [x] **Step 5: Run both new tests and the full existing file**
 
 Run: `python -m pytest tests/test_al_frame_source.py -v`
 Expected: all PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/hydra_suite/data/al/frame_source.py tests/test_al_frame_source.py
@@ -766,7 +766,7 @@ git commit -m "perf(detectkit): reuse a single VideoCapture for sequential AL fr
   typical fixture-sized videos; prefilter threshold default permissive enough
   not to drop real motion).
 
-- [ ] **Step 1: Read the current function and its config type in full**
+- [x] **Step 1: Read the current function and its config type in full**
 
 Read `src/hydra_suite/data/al/candidate_pool.py` lines 1-75 in full (the
 confirmed 40-line `build_candidate_pool` body plus whatever
@@ -774,7 +774,7 @@ confirmed 40-line `build_candidate_pool` body plus whatever
 `compute_signature`/`is_duplicate` calls' exact signatures) before changing
 anything.
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 ```python
 def test_windowed_dedup_only_compares_against_recent_window(synthetic_video_with_repeats):
@@ -804,12 +804,12 @@ def test_frame_difference_prefilter_skips_static_frames(synthetic_video_static_a
 `tests/test_al_candidate_pool.py`, confirmed from Step 1 — one with a
 far-apart repeated frame, one with a long static run followed by motion.)
 
-- [ ] **Step 3: Run to confirm failure**
+- [x] **Step 3: Run to confirm failure**
 
 Run: `python -m pytest tests/test_al_candidate_pool.py -k "test_windowed_dedup_only_compares_against_recent_window or test_frame_difference_prefilter_skips_static_frames" -v`
 Expected: FAIL (config fields don't exist yet / behavior not implemented).
 
-- [ ] **Step 4: Implement windowed dedup**
+- [x] **Step 4: Implement windowed dedup**
 
 Replace the current `any(fk.is_duplicate(sig, prev, ...) for prev in
 kept_signatures)` (comparing against every previously kept frame) with a
@@ -817,7 +817,7 @@ bounded-length recent-window structure — e.g. a `collections.deque(maxlen=pool
 of kept signatures — so the comparison is against at most `dedup_window` prior
 entries, not the whole history.
 
-- [ ] **Step 5: Implement the frame-difference prefilter**
+- [x] **Step 5: Implement the frame-difference prefilter**
 
 Inline in the same scan loop (which now reads frames sequentially via Task 6's
 `VideoFrameSource`): maintain a rolling reference frame (initialize to the
@@ -832,14 +832,14 @@ allowed through, in which case let it through anyway (the periodic-sampling
 floor) and refresh the rolling reference to this frame either way (so slow
 lighting drift doesn't lock the threshold against a stale reference).
 
-- [ ] **Step 6: Run the new tests and the full existing file**
+- [x] **Step 6: Run the new tests and the full existing file**
 
 Run: `python -m pytest tests/test_al_candidate_pool.py -v`
 Expected: all PASS, including every pre-existing test in this file (confirms
 default config values keep close-to-current behavior when new fields are
 unset/defaulted).
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/hydra_suite/data/al/candidate_pool.py tests/test_al_candidate_pool.py
@@ -873,7 +873,7 @@ git commit -m "perf(detectkit): windowed dedup + frame-difference prefilter in A
   `_frame_signals(ref.frame_id, raw, obb_config.obb, req.expected_count,
   req.base_conf, req.base_iou)`.
 
-- [ ] **Step 1: Read both functions in full**
+- [x] **Step 1: Read both functions in full**
 
 Read `src/hydra_suite/data/al/signals.py` lines 195-230 (`score_nms_instability`
 and `_set_iou_greedy`) and `src/hydra_suite/detectkit/jobs/al_worker.py` lines
@@ -881,7 +881,7 @@ and `_set_iou_greedy`) and `src/hydra_suite/detectkit/jobs/al_worker.py` lines
 what `_frame_signals` currently does with the base `detector_fn` call's return
 value versus what `score_nms_instability` separately recomputes.
 
-- [ ] **Step 2: Write the failing test pinning the new contract**
+- [x] **Step 2: Write the failing test pinning the new contract**
 
 ```python
 def test_score_nms_instability_uses_raw_result_no_detector_calls():
@@ -893,13 +893,13 @@ def test_score_nms_instability_uses_raw_result_no_detector_calls():
     assert 0.0 <= score <= 1.0
 ```
 
-- [ ] **Step 3: Run to confirm it fails**
+- [x] **Step 3: Run to confirm it fails**
 
 Run: `python -m pytest tests/test_al_signals.py -k test_score_nms_instability_uses_raw_result_no_detector_calls -v`
 Expected: FAIL — current signature is `(frame, detector_fn, base_conf, base_iou)`,
 so this call raises a `TypeError`.
 
-- [ ] **Step 4: Implement**
+- [x] **Step 4: Implement**
 
 Rewrite `score_nms_instability(raw_obb_result, obb_config, base_conf, base_iou)`
 to build 3 `OBBConfig` variants (base `(base_conf, base_iou)`, and the same two
@@ -915,7 +915,7 @@ in place of calling `detector_fn` itself, and pass it to both the base-scoring
 logic and `score_nms_instability` — eliminating the redundant 4th call
 identified in the spec's corrections).
 
-- [ ] **Step 5: Run the new test and existing signals/al_worker tests**
+- [x] **Step 5: Run the new test and existing signals/al_worker tests**
 
 Run: `python -m pytest tests/test_al_signals.py tests/test_detectkit_al_worker.py -v`
 Expected: `test_al_signals.py`'s new test PASSes; `test_detectkit_al_worker.py`
@@ -926,7 +926,7 @@ pass the new parameter" and not something else, then proceed to Task 9 to
 close the loop. Do not consider this task done until Task 9's own test run
 shows `test_detectkit_al_worker.py` passing again.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/hydra_suite/data/al/signals.py src/hydra_suite/detectkit/jobs/al_worker.py tests/test_al_signals.py
@@ -962,14 +962,14 @@ git commit -m "refactor(detectkit): score NMS instability from a cached raw OBBR
   pre-built `InferenceConfig` directly — confirm which is the smaller,
   more consistent change during Step 1's read and pick one; do not carry both.
 
-- [ ] **Step 1: Read `run_active_learning` and `ALRequest` in full**
+- [x] **Step 1: Read `run_active_learning` and `ALRequest` in full**
 
 Read `src/hydra_suite/detectkit/jobs/al_worker.py` lines 1-362 in full,
 including `ALRequest`'s dataclass definition (find it via `grep -n "class
 ALRequest" src/hydra_suite/detectkit/jobs/al_worker.py`) and every current
 field, to plan the minimal set of field changes needed.
 
-- [ ] **Step 2: Write the failing integration test for the new 3-phase flow**
+- [x] **Step 2: Write the failing integration test for the new 3-phase flow**
 
 Extend `tests/test_detectkit_al_worker.py` (follow its existing
 `ALRequest`/fixture-video pattern) with a test that builds an `ALRequest`
@@ -1008,13 +1008,13 @@ non-AL callers and add a *parallel* `InferenceConfig`-based path, adjust this
 test and every subsequent step accordingly, and document that decision inline
 in the code via a one-line comment, not a placeholder.)
 
-- [ ] **Step 3: Run to confirm it fails**
+- [x] **Step 3: Run to confirm it fails**
 
 Run: `python -m pytest tests/test_detectkit_al_worker.py -k test_run_active_learning_populates_detection_cache -v`
 Expected: FAIL (either a `TypeError` on `ALRequest`'s current fields, or no
 cache file being written under the old detector-closure path).
 
-- [ ] **Step 4: Implement the 3-phase restructure**
+- [x] **Step 4: Implement the 3-phase restructure**
 
 Rewrite `run_active_learning` as:
 
@@ -1058,7 +1058,7 @@ transplant the actual current selection/threshold/export logic from
 and only replace the per-frame decode+detect+score loop with the three phases
 above.
 
-- [ ] **Step 5: Run the new test and the full existing file**
+- [x] **Step 5: Run the new test and the full existing file**
 
 Run: `python -m pytest tests/test_detectkit_al_worker.py -v`
 Expected: all PASS — including the pre-existing `fake_detector`-based tests, if
@@ -1067,12 +1067,12 @@ decision retired the closure entirely, update those pre-existing tests to use
 a real or fixture-backed model instead, and note this explicitly rather than
 silently deleting coverage).
 
-- [ ] **Step 6: Run Task 8's previously-blocked test**
+- [x] **Step 6: Run Task 8's previously-blocked test**
 
 Run: `python -m pytest tests/test_al_signals.py tests/test_detectkit_al_worker.py -v`
 Expected: all PASS now that the caller wiring is complete.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/hydra_suite/detectkit/jobs/al_worker.py src/hydra_suite/detectkit/gui/main_window.py tests/test_detectkit_al_worker.py
@@ -1092,7 +1092,7 @@ git commit -m "perf(detectkit): restructure AL scoring into batched decode/detec
 **Interfaces:**
 - No new production interfaces — this task only adds verification tooling.
 
-- [ ] **Step 1: Locate a real fixture model + video**
+- [x] **Step 1: Locate a real fixture model + video**
 
 Check `tools/equivalence/fixtures/` (per this repo's `CLAUDE.md`, fixtures are
 fetched via `bash tools/equivalence/fixtures/fetch_fixtures.sh`) for an
@@ -1101,7 +1101,7 @@ comparison; if a sequential-mode fixture model exists there too, use it for
 the sequential-mode half of this test. If fetching fixtures isn't already done
 on this machine, run `bash tools/equivalence/fixtures/fetch_fixtures.sh` first.
 
-- [ ] **Step 2: Write the numeric-equivalence test**
+- [x] **Step 2: Write the numeric-equivalence test**
 
 For at least the `obb_direct` mode (and `sequential` if a fixture model is
 available): run the OLD path (`predict_obb_for_frame_export`/`_sequential`
@@ -1128,14 +1128,14 @@ def test_new_detection_path_matches_old_path_on_fixture(fixture_video, fixture_o
     # compare centroids/angles within tolerance, sorted by position to avoid order dependence
 ```
 
-- [ ] **Step 3: Run it**
+- [x] **Step 3: Run it**
 
 Run: `python -m pytest tests/test_al_detectkit_equivalence.py -v`
 Expected: PASS. If it fails with a genuine numeric divergence beyond
 tolerance, treat this as a real finding — stop and report it rather than
 loosening the tolerance to force a pass.
 
-- [ ] **Step 4: Write the wall-clock benchmark script**
+- [x] **Step 4: Write the wall-clock benchmark script**
 
 Create `tools/equivalence/al_benchmark.py`: given a video path and model path,
 times `run_active_learning` end-to-end on the OLD `al_worker.py` code (checked
@@ -1147,12 +1147,12 @@ verification tool, run once to confirm the actual goal (this is a performance
 effort) and its output pasted into the final PR/commit description, not
 committed as an automated gate.
 
-- [ ] **Step 5: Run the benchmark and record results**
+- [x] **Step 5: Run the benchmark and record results**
 
 Run: `python tools/equivalence/al_benchmark.py --video <fixture> --model <fixture model>`
 Record the before/after wall-clock numbers.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add tests/test_al_detectkit_equivalence.py tools/equivalence/al_benchmark.py

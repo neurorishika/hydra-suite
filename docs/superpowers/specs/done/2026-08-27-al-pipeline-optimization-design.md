@@ -1,7 +1,7 @@
 # Active-Learning Pipeline Optimization — Design
 
 **Date:** 2026-08-27
-**Status:** Pending implementation plan.
+**Status:** Shipped — merged to main (681980aa).
 **Scope:** DetectKit + TrackerKit active-learning (AL) frame selection and export
 
 ## Problem
