@@ -908,7 +908,11 @@ Replace the `_clear_labels_from_all_sources` stub from Task 3 with:
             return
 
         total = sum(
-            len(list((Path(src.path) / "labels").rglob("*.txt")))
+            sum(
+                1
+                for p in (Path(src.path) / "labels").rglob("*.txt")
+                if p.name != "classes.txt"
+            )
             for src in self._project.sources
         )
         if total == 0:
