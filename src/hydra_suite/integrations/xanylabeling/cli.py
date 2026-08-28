@@ -12,33 +12,55 @@ from hydra_suite.utils.conda_utils import conda_subprocess_kwargs
 
 logger = logging.getLogger(__name__)
 
-HARD_CODED_CMD = [
-    "xanylabeling",
-    "convert",
-    "--task",
-    "xlabel2yolo",
-    "--mode",
-    "obb",
-    "--images",
-    "./images",
-    "--labels",
-    "./images",
-    "--output",
-    "./labels",
-    "--classes",
-    "classes.txt",
-]
+
+def _build_convert_cmd(mode: str) -> list[str]:
+    """Build the xlabel2yolo conversion CLI args for the given shape *mode*.
+
+    *mode* must be one of the x-anylabeling ``convert`` modes for
+    xlabel2yolo: "detect" (AABB), "obb" (rotated box), or "segment"
+    (polygon/mask) -- see ``xal_mode_for_level`` in
+    ``detectkit/gui/panels/dataset_panel.py``, which is the single place
+    that maps a DetectKit geometry level to this mode string.
+    """
+    return [
+        "xanylabeling",
+        "convert",
+        "--task",
+        "xlabel2yolo",
+        "--mode",
+        mode,
+        "--images",
+        "./images",
+        "--labels",
+        "./images",
+        "--output",
+        "./labels",
+        "--classes",
+        "classes.txt",
+    ]
+
+
+# Preserved for backwards compatibility with existing importers; reflects
+# the "obb" default. Prefer calling convert_project(..., mode=...) directly.
+HARD_CODED_CMD = _build_convert_cmd("obb")
 
 
 def convert_project(
-    project_dir: str, output_dir: str, conda_env: str | None = None
+    project_dir: str,
+    output_dir: str,
+    conda_env: str | None = None,
+    mode: str = "obb",
 ) -> tuple[bool, str]:
-    """Convert an X-AnyLabeling project to YOLO-OBB using the hardcoded CLI.
+    """Convert an X-AnyLabeling project to YOLO using the x-anylabeling CLI.
 
     Args:
         project_dir: path to X-AnyLabeling project folder
         output_dir: destination folder for converted dataset
         conda_env: conda env name for running xanylabeling
+        mode: xlabel2yolo shape mode -- "detect", "obb", or "segment". Must
+            match the shape type actually present in the project's xlabel
+            JSON (i.e. the source's geometry level), or the converter will
+            not find the shapes it's looking for.
 
     Returns:
         (success: bool, log: str)
@@ -53,7 +75,7 @@ def convert_project(
     cmd = []
     if conda_env:
         cmd.extend(["conda", "run", "-n", conda_env])
-    cmd.extend(HARD_CODED_CMD)
+    cmd.extend(_build_convert_cmd(mode))
 
     logger.info("Running X-AnyLabeling conversion: %s", " ".join(cmd))
     try:
