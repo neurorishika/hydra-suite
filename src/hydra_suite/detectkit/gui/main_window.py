@@ -1383,8 +1383,7 @@ class DetectKitMainWindow(QMainWindow):
         from hydra_suite.detectkit.jobs.al_worker import ALWorker
 
         try:
-            detector_fn = self._load_active_detector_fn()
-            request = dlg.build_request(detector_fn=detector_fn)
+            request = dlg.build_request(detector=self._resolve_active_detector_spec())
         except NotImplementedError as exc:
             dlg.status_label.setText(f"Error: {exc}")
             return
@@ -1411,13 +1410,19 @@ class DetectKitMainWindow(QMainWindow):
         if worker is not None:
             worker.requestInterruption()
 
-    def _load_active_detector_fn(self):
-        """Return a detector_fn(frame, conf, iou) -> list[(cx,cy,w,h,theta,conf)].
+    def _resolve_active_detector_spec(self):
+        """Return the `ALDetectorSpec` describing the project's active model.
 
-        Loads the project's active model via the same torch loader used by
-        `_run_inference_overlay` and adapts the result to the OBB-tuple format
-        required by `hydra_suite.data.al`.
+        Replaces the old `_load_active_detector_fn`, which eagerly loaded torch
+        models and closed over them in a per-frame `detector_fn(frame, conf,
+        iou)`. The AL round now builds its own `InferenceRunner` from this
+        declarative spec and runs one batched, cached detection pass, so the
+        GUI's job is reduced to resolving *which* checkpoints to use -- the
+        same `detectkit_resolve_inference_models` call as before, minus the
+        model loading.
         """
+        from hydra_suite.detectkit.jobs.al_worker import ALDetectorSpec
+
         if self._project is None:
             raise RuntimeError("No project loaded.")
         model_path = str(self._project.active_model_path or "").strip()
@@ -1431,42 +1436,43 @@ class DetectKitMainWindow(QMainWindow):
                 "Train or load a YOLO OBB model and try again."
             )
 
-        from .prediction_preview import load_torch_model, predict_obb_for_frame_export
+        from .prediction_preview import _resolve_compute_runtime
 
         kind, primary, secondary = detectkit_resolve_inference_models(
             self._project, model_path
         )
-        device_pref = self._project.device or "auto"
+        crop_pad_ratio = float(getattr(self._project, "crop_pad_ratio", None) or 0.15)
+        # The project's device preference resolved to a cpu/mps/cuda torch
+        # runtime for the old closure; Runtime Gen-2's equivalent knob is the
+        # tier. "gpu" (not "gpu_fast") keeps AL on the same native torch
+        # backend the closure used -- gpu_fast would trigger a TensorRT/CoreML
+        # export, which AL scoring never did before.
+        runtime_tier = (
+            "cpu"
+            if _resolve_compute_runtime(self._project.device or "auto") == "cpu"
+            else "gpu"
+        )
 
         if kind == "sequential" and secondary is not None:
-            detect_model, detect_device = load_torch_model(primary, device_pref)
-            obb_model, obb_device = load_torch_model(secondary, device_pref)
-
-            def _detector_fn_seq(frame, conf, iou):
-                return predict_obb_for_frame_sequential(
-                    detect_model,
-                    obb_model,
-                    frame,
-                    detect_device=detect_device,
-                    obb_device=obb_device,
-                    conf=conf,
-                    iou=iou,
-                    crop_pad_ratio=float(
-                        getattr(self._project, "crop_pad_ratio", None) or 0.15
-                    ),
-                )
-
-            return _detector_fn_seq
-
-        # obb_direct or unknown — try direct OBB inference.
-        model, device = load_torch_model(primary, device_pref)
-
-        def _detector_fn(frame, conf, iou):
-            return predict_obb_for_frame_export(
-                model, frame, device=device, conf=conf, iou=iou
+            return ALDetectorSpec(
+                kind="sequential",
+                model_path=primary,
+                secondary_model_path=secondary,
+                crop_pad_ratio=crop_pad_ratio,
+                runtime_tier=runtime_tier,
             )
 
-        return _detector_fn
+        # obb_direct or unknown — try direct OBB inference. (Unchanged from the
+        # closure-based version's fall-through: "unknown" is optimistically
+        # treated as a direct OBB checkpoint, and fails loudly at load time if
+        # it is not one.)
+        return ALDetectorSpec(
+            kind="obb_direct",
+            model_path=primary,
+            secondary_model_path=None,
+            crop_pad_ratio=crop_pad_ratio,
+            runtime_tier=runtime_tier,
+        )
 
     def _on_training_completed(self, results: list) -> None:
         if self._project is None:
