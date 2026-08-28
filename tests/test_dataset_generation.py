@@ -1,6 +1,7 @@
 """Tests for dataset generation and active-learning export metadata."""
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -343,7 +344,7 @@ def test_export_dataset_writes_three_roots_for_segmentation(tmp_path, monkeypatc
 
     frame = np.zeros((200, 400, 3), dtype=np.uint8)
     monkeypatch.setattr(dg, "_open_video", lambda p: _FakeCap(frame, total=3))
-    monkeypatch.setattr(dg, "_init_detection_runner", lambda params: None)
+    monkeypatch.setattr(dg, "_init_detection_runner", lambda params, video_path: None)
     monkeypatch.setattr(
         dg,
         "_detect_records_for_frames",
@@ -394,7 +395,7 @@ def test_export_dataset_writes_two_roots_for_obb_model(tmp_path, monkeypatch):
 
     frame = np.zeros((200, 400, 3), dtype=np.uint8)
     monkeypatch.setattr(dg, "_open_video", lambda p: _FakeCap(frame, total=3))
-    monkeypatch.setattr(dg, "_init_detection_runner", lambda params: None)
+    monkeypatch.setattr(dg, "_init_detection_runner", lambda params, video_path: None)
     monkeypatch.setattr(
         dg,
         "_detect_records_for_frames",
@@ -773,15 +774,16 @@ def test_init_detection_runner_bgsub_sets_emit_native_geometry(monkeypatch):
     captured = {}
 
     class _FakeRunner:
-        def __init__(self, cfg):
+        def __init__(self, cfg, cache_dir=None):
             captured["cfg"] = cfg
+            captured["cache_dir"] = cache_dir
 
     monkeypatch.setattr(
         "hydra_suite.core.inference.runner.InferenceRunner", _FakeRunner
     )
 
     runner = dataset_generation._init_detection_runner(
-        {"DETECTION_METHOD": "background_subtraction"}
+        {"DETECTION_METHOD": "background_subtraction"}, "/tmp/does_not_exist.mp4"
     )
 
     assert runner is not None
@@ -789,6 +791,7 @@ def test_init_detection_runner_bgsub_sets_emit_native_geometry(monkeypatch):
     assert cfg.obb is None
     assert cfg.bgsub is not None
     assert cfg.bgsub.emit_native_geometry is True
+    assert captured["cache_dir"] is not None
 
 
 def test_edge_score_uses_real_frame_shape():
@@ -1059,14 +1062,25 @@ def _bgsub_contour_result(frame_idx, cx=100.0, cy=50.0):
 
 
 class _FakeRunner:
-    """InferenceRunner stand-in returning a canned OBBResult per frame."""
+    """InferenceRunner stand-in returning a canned OBBResult per frame.
 
-    def __init__(self, by_frame):
+    Implements `detect_batch_raw` (not `detect_batch`) plus `config`/
+    `cache_dir`/`_roi_mask` so it satisfies `get_or_compute_raw`'s and
+    `filter_for_source`'s contracts exactly like the real InferenceRunner.
+    Every canned result here is bg-sub-shaped (NaN confidences -- see
+    `_bgsub_contour_result`/`_bgsub_empty_result`), so `detection_source`
+    is fixed to `"bgsub"`, which makes `filter_for_source` the identity
+    (matching what the real bg-sub branch does).
+    """
+
+    def __init__(self, by_frame, cache_dir=None):
         self._by_frame = by_frame
-        self.config = None
+        self.config = SimpleNamespace(detection_source="bgsub")
+        self.cache_dir = cache_dir
+        self._roi_mask = None
         self.closed = False
 
-    def detect_batch(self, images, frame_indices):
+    def detect_batch_raw(self, frames, frame_indices=None, roi_mask=None):
         return [self._by_frame[int(fid)] for fid in frame_indices]
 
     def close(self):
@@ -1101,10 +1115,11 @@ def test_bgsub_export_survives_a_zero_detection_frame(tmp_path, monkeypatch):
             0: _bgsub_empty_result(0),  # first frame: no history
             1: _bgsub_contour_result(1),
             2: _bgsub_contour_result(2),
-        }
+        },
+        cache_dir=tmp_path / "cache",
     )
     monkeypatch.setattr(dg, "_open_video", lambda p: _FakeCap(frame, total=3))
-    monkeypatch.setattr(dg, "_init_detection_runner", lambda params: runner)
+    monkeypatch.setattr(dg, "_init_detection_runner", lambda params, video_path: runner)
 
     manifest = dg.export_dataset(
         video_path=str(video),
@@ -1150,7 +1165,7 @@ def test_zero_record_frames_are_never_exported_as_background(tmp_path, monkeypat
 
     frame = np.zeros((200, 400, 3), dtype=np.uint8)
     monkeypatch.setattr(dg, "_open_video", lambda p: _FakeCap(frame, total=2))
-    monkeypatch.setattr(dg, "_init_detection_runner", lambda params: None)
+    monkeypatch.setattr(dg, "_init_detection_runner", lambda params, video_path: None)
     monkeypatch.setattr(
         dg,
         "_detect_records_for_frames",
@@ -1193,7 +1208,7 @@ def test_export_fails_loudly_when_no_frame_has_geometry(tmp_path, monkeypatch):
 
     frame = np.zeros((200, 400, 3), dtype=np.uint8)
     monkeypatch.setattr(dg, "_open_video", lambda p: _FakeCap(frame, total=1))
-    monkeypatch.setattr(dg, "_init_detection_runner", lambda params: None)
+    monkeypatch.setattr(dg, "_init_detection_runner", lambda params, video_path: None)
     monkeypatch.setattr(
         dg,
         "_detect_records_for_frames",
@@ -1218,9 +1233,11 @@ def test_detection_failure_is_counted_not_swallowed(tmp_path):
     import hydra_suite.data.dataset_generation as dg
 
     class _BoomRunner:
-        config = None
+        config = SimpleNamespace(detection_source="bgsub")
+        cache_dir = tmp_path / "cache"
+        _roi_mask = None
 
-        def detect_batch(self, images, frame_indices):
+        def detect_batch_raw(self, frames, frame_indices=None, roi_mask=None):
             raise RuntimeError("model exploded")
 
     frames = {0: np.zeros((4, 4, 3), np.uint8), 1: np.zeros((4, 4, 3), np.uint8)}
@@ -1231,14 +1248,16 @@ def test_detection_failure_is_counted_not_swallowed(tmp_path):
     assert stats["detection_failed"] == 2
 
 
-def test_missing_contour_costs_only_its_own_frame():
+def test_missing_contour_costs_only_its_own_frame(tmp_path):
     """DESIGN RULE: a per-frame geometry failure must not kill the round."""
     import hydra_suite.data.dataset_generation as dg
     from hydra_suite.core.inference.result import OBBResult
 
     broken = _bgsub_contour_result(0)
     broken = OBBResult(**{**broken.__dict__, "polygons": None})
-    runner = _FakeRunner({0: broken, 1: _bgsub_contour_result(1)})
+    runner = _FakeRunner(
+        {0: broken, 1: _bgsub_contour_result(1)}, cache_dir=tmp_path / "cache"
+    )
     frames = {0: np.zeros((4, 4, 3), np.uint8), 1: np.zeros((4, 4, 3), np.uint8)}
 
     records, stats = dg._detect_records_for_frames(
@@ -1264,7 +1283,8 @@ def test_init_detection_runner_failure_is_loud(monkeypatch):
     monkeypatch.setattr(cfgmod, "build_obb_only_config", boom)
     with pytest.raises(RuntimeError, match="Could not initialize the export"):
         dg._init_detection_runner(
-            {"DETECTION_METHOD": "yolo_obb", "YOLO_OBB_DIRECT_TASK": "obb"}
+            {"DETECTION_METHOD": "yolo_obb", "YOLO_OBB_DIRECT_TASK": "obb"},
+            "/tmp/does_not_exist.mp4",
         )
 
 
@@ -1396,7 +1416,7 @@ def test_provenance_records_the_sequential_model_and_the_weights(tmp_path, monke
 
     frame = np.zeros((200, 400, 3), dtype=np.uint8)
     monkeypatch.setattr(dg, "_open_video", lambda p: _FakeCap(frame, total=1))
-    monkeypatch.setattr(dg, "_init_detection_runner", lambda params: None)
+    monkeypatch.setattr(dg, "_init_detection_runner", lambda params, video_path: None)
     monkeypatch.setattr(
         dg,
         "_detect_records_for_frames",
@@ -1460,7 +1480,7 @@ def test_video_capture_is_released_when_the_detection_runner_raises(
 
     monkeypatch.setattr(dg, "_open_video", lambda _p: _FakeCap())
 
-    def _boom(_params):
+    def _boom(_params, _video_path):
         raise RuntimeError("Could not initialize the export detection runner")
 
     monkeypatch.setattr(dg, "_init_detection_runner", _boom)
@@ -1477,3 +1497,107 @@ def test_video_capture_is_released_when_the_detection_runner_raises(
         )
 
     assert released == [True], "VideoCapture leaked when the runner failed"
+
+
+# ---------------------------------------------------------------------------
+# Task 4: export must reuse the existing on-disk detection cache instead of
+# always rerunning inference at export time.
+# ---------------------------------------------------------------------------
+
+
+def _cache_reuse_obb_result(frame_idx):
+    from hydra_suite.core.inference.result import OBBResult
+
+    corners = obb_corners_from_dims(16.0, 16.0, 8.0, 4.0, 0.0).reshape(1, 4, 2)
+    return OBBResult(
+        frame_idx=frame_idx,
+        centroids=np.array([[16.0, 16.0]], dtype=np.float32),
+        angles=np.array([0.0], dtype=np.float32),
+        sizes=np.array([32.0], dtype=np.float32),
+        shapes=np.array([[32.0, 2.0]], dtype=np.float32),
+        confidences=np.array([0.9], dtype=np.float32),
+        corners=corners,
+        detection_ids=OBBResult.make_detection_ids(frame_idx, 1),
+        class_ids=np.array([0], dtype=np.int64),
+    )
+
+
+def test_detect_records_for_frames_uses_existing_cache(tmp_path, monkeypatch):
+    """A cache the tracking pass already fully populated must be a pure read.
+
+    `_init_detection_runner` wires `runner.cache_dir` to the video's real
+    `.inference_cache_<stem>/` folder; once `get_or_compute_raw` has written a
+    complete cache for the requested frames, `_detect_records_for_frames`
+    must reuse it and never call `detect_batch_raw` again.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from hydra_suite.core.inference.cache.reuse import get_or_compute_raw
+    from hydra_suite.data import dataset_generation as dg
+
+    video_path = tmp_path / "clip.mp4"
+    video_path.write_bytes(b"")  # never opened -- InferenceRunner loading is mocked
+
+    def fake_run_obb(frames, models, obb_config, runtime, roi_mask=None):
+        return [_cache_reuse_obb_result(i) for i in range(len(frames))]
+
+    params = {"DETECTION_METHOD": "yolo_obb", "YOLO_OBB_DIRECT_TASK": "obb"}
+
+    frames = [
+        np.zeros((32, 32, 3), dtype=np.uint8),
+        np.zeros((32, 32, 3), dtype=np.uint8),
+    ]
+    with (
+        patch("hydra_suite.core.inference.runner._load_all_models") as ml,
+        patch("hydra_suite.core.inference.runner.run_obb", side_effect=fake_run_obb),
+    ):
+        ml.return_value = MagicMock(
+            obb=MagicMock(), headtail=None, cnn=[], pose=None, apriltag=None
+        )
+        runner = dg._init_detection_runner(params, str(video_path))
+        # Pre-populate the cache for frames [0, 1] via the real path once
+        # (needs `run_obb` still patched) -- this is the ONLY call allowed
+        # to reach detect_batch_raw.
+        get_or_compute_raw(runner, runner.cache_dir, frames, [0, 1])
+
+    assert runner.cache_dir is not None
+
+    def _fail_if_called(*a, **k):
+        raise AssertionError(
+            "detect_batch_raw should not be called on a full cache hit"
+        )
+
+    monkeypatch.setattr(runner, "detect_batch_raw", _fail_if_called)
+
+    records, stats = dg._detect_records_for_frames(
+        runner, {0: frames[0], 1: frames[1]}, params, GeometryLevel.OBB
+    )
+
+    assert stats["detection_failed"] == 0
+    assert set(records) == {0, 1}
+    assert len(records[0]) >= 1
+    assert len(records[1]) >= 1
+
+
+def test_init_detection_runner_requires_video_path_for_cache_dir(monkeypatch):
+    """`_init_detection_runner` must wire `cache_dir` from `video_path`, not
+    leave the runner uncached -- an uncached runner can never reuse the
+    detection cache tracking already built."""
+    from unittest.mock import MagicMock, patch
+
+    from hydra_suite.data import dataset_generation as dg
+
+    with (
+        patch("hydra_suite.core.inference.runner._load_all_models") as ml,
+        patch("hydra_suite.core.inference.runner.run_obb"),
+    ):
+        ml.return_value = MagicMock(
+            obb=MagicMock(), headtail=None, cnn=[], pose=None, apriltag=None
+        )
+        runner = dg._init_detection_runner(
+            {"DETECTION_METHOD": "yolo_obb", "YOLO_OBB_DIRECT_TASK": "obb"},
+            "/some/dir/clip.mp4",
+        )
+
+    assert runner.cache_dir is not None
+    assert Path(runner.cache_dir).name == ".inference_cache_clip"

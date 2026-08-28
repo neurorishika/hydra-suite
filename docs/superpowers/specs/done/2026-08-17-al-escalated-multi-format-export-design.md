@@ -112,10 +112,14 @@ Design smells:
     `_score_fragmented_detections` loop. `get_worst_frames` reads only
     `frame_signals`. Eight of the sixteen tests in `tests/test_dataset_generation.py`
     pin the dead path; the live path is barely covered.
-15. **Double inference with divergent thresholds.** The scorer reads cached OBBs; the
+15. ~~**Double inference with divergent thresholds.** The scorer reads cached OBBs; the
     exporter spins up a second `InferenceRunner` at conf 0.05 / iou 0.5 and
     re-detects. Defensible ("detect everything for annotation") but undocumented in
-    the output, and it means labels can disagree with what tracking saw.
+    the output, and it means labels can disagree with what tracking saw.~~
+    **Correction:** fixed in `docs/superpowers/plans/2026-08-27-al-pipeline-optimization.md`
+    (Task 4) — the premise (the detection cache lacks the low-enough-confidence
+    detections the export pass needs) was false; export now reuses the existing
+    on-disk detection cache instead of always rerunning inference.
 16. **`include_context` fights the diversity window.** ±1 frames triples the set with
     unscored near-duplicates; no perceptual dedup on this path. Context frames outside
     the tracked range silently produce empty label files.

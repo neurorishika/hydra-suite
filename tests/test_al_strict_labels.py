@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import numpy as np
 import pandas as pd
 
@@ -144,20 +146,27 @@ def _fake_obb_result(cx, cy, w=44.0, h=16.0, theta=0.0):
 
 
 class _FakeRunner:
-    """Stands in for InferenceRunner: `detect_batch` returns one canned
+    """Stands in for InferenceRunner: `detect_batch_raw` returns one canned
     OBBResult (in resized-frame space) per requested frame, regardless of
     image content -- the point of this test is coordinate scaling, not
-    detection itself."""
+    detection itself.
 
-    def __init__(self, result_by_frame):
+    `detection_source="bgsub"` makes `filter_for_source` the identity, so
+    the canned result passes through unfiltered exactly like the pre-cache
+    `detect_batch` mock this replaces.
+    """
+
+    def __init__(self, result_by_frame, cache_dir=None):
         self._result_by_frame = result_by_frame
-        self.config = None
+        self.config = SimpleNamespace(detection_source="bgsub")
+        self.cache_dir = cache_dir
+        self._roi_mask = None
 
-    def detect_batch(self, images, frame_indices):
+    def detect_batch_raw(self, frames, frame_indices=None, roi_mask=None):
         return [self._result_by_frame[fid] for fid in frame_indices]
 
 
-def test_detector_points_are_scaled_back_to_original_frame_space():
+def test_detector_points_are_scaled_back_to_original_frame_space(tmp_path):
     """Regression: detection runs on the RESIZE_FACTOR-scaled frame, so raw
     obb corners come back in resized-frame space. The deleted legacy
     `_measurements_to_detections` used to scale them back by 1/resize_factor;
@@ -172,7 +181,7 @@ def test_detector_points_are_scaled_back_to_original_frame_space():
     """
     resize_factor = 0.5
     obb_result = _fake_obb_result(55.0, 30.0)
-    runner = _FakeRunner({0: obb_result})
+    runner = _FakeRunner({0: obb_result}, cache_dir=tmp_path / "cache")
 
     frames = {0: np.zeros((3, 3, 3), dtype=np.uint8)}
     records_by_frame, stats = _detect_records_for_frames(
