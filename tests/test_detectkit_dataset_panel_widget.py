@@ -222,6 +222,85 @@ def test_clear_labels_from_frame_reselects_same_row_not_row_zero(
     assert panel.image_list.currentRow() == b_row
 
 
+def test_clear_labels_from_frame_multiselect_partial_labeling_no_false_warning(
+    qapp, tmp_path, monkeypatch
+):
+    """Regression (I1): selecting multiple frames where only some have a
+    resolvable label file -- a normal, common state per
+    clear_labels_for_source's own documented contract -- must NOT trigger a
+    "some could not be written" warning. The old comparison
+    (cleared < len(image_paths)) fired a false partial-failure warning any
+    time a selected frame simply had no label file yet; the fix compares
+    against the resolved label-file count instead."""
+    from PySide6.QtWidgets import QMessageBox
+
+    panel, source_root = _make_panel_with_source(qapp, tmp_path)
+    # b.jpg has no label file -- a legitimate, common state, not a failure.
+    (source_root / "images" / "b.jpg").write_bytes(b"fake")
+    from hydra_suite.detectkit.gui.models import OBBSource
+
+    panel._project.sources = [OBBSource(path=str(source_root), name="src", level="obb")]
+    panel.refresh_sources(panel._project)
+
+    for i in range(panel.image_list.count()):
+        panel.image_list.item(i).setSelected(True)
+
+    warning_calls = []
+
+    def _capture_warning(self, title, text, *a, **k):
+        warning_calls.append((title, text))
+        return QMessageBox.StandardButton.Yes
+
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.panels.dataset_panel.QMessageBox.warning",
+        _capture_warning,
+    )
+
+    panel._clear_labels_from_frame()
+
+    # The confirmation dialog is expected (one "warning" call), but no
+    # SECOND call reporting a partial failure.
+    assert len(warning_calls) == 1
+    assert (source_root / "labels" / "a.txt").read_text() == ""
+
+
+def test_clear_labels_from_frame_multiselect_shared_label_no_false_warning(
+    qapp, tmp_path, monkeypatch
+):
+    """Regression (I1, dedup variant): two selected images resolving to the
+    SAME label file (e.g. same stem, different extension) must not trigger
+    a false partial-failure warning either -- clear_labels_for_source dedups
+    and returns 1, and the expected count must also be the deduped 1."""
+    from PySide6.QtWidgets import QMessageBox
+
+    from hydra_suite.detectkit.gui.models import OBBSource
+
+    panel, source_root = _make_panel_with_source(qapp, tmp_path)
+    # a.png shares a.jpg's stem and therefore resolves to the same label.
+    (source_root / "images" / "a.png").write_bytes(b"fake")
+    panel._project.sources = [OBBSource(path=str(source_root), name="src", level="obb")]
+    panel.refresh_sources(panel._project)
+
+    for i in range(panel.image_list.count()):
+        panel.image_list.item(i).setSelected(True)
+
+    warning_calls = []
+
+    def _capture_warning(self, title, text, *a, **k):
+        warning_calls.append((title, text))
+        return QMessageBox.StandardButton.Yes
+
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.panels.dataset_panel.QMessageBox.warning",
+        _capture_warning,
+    )
+
+    panel._clear_labels_from_frame()
+
+    assert len(warning_calls) == 1
+    assert (source_root / "labels" / "a.txt").read_text() == ""
+
+
 def test_dataset_panel_has_clear_source_labels_button(qapp):
     from hydra_suite.detectkit.gui.panels.dataset_panel import DatasetPanel
 
@@ -435,6 +514,38 @@ def test_clear_all_labels_prompt_warns_about_linked_sources(
     panel._clear_labels_from_all_sources()
 
     assert "outside" in captured["text"].lower()
+
+
+def test_clear_all_labels_prompt_excludes_classes_txt_from_count(
+    qapp, tmp_path, monkeypatch
+):
+    """T4: mirrors the source-scope stray-classes.txt-exclusion coverage for
+    the project-scope ("Remove ALL labels") action -- a stray classes.txt
+    under a source's labels/ must not inflate the type-to-confirm prompt's
+    total label-file count."""
+    panel, sources = _make_panel_with_two_sources(qapp, tmp_path)
+    # Add a stray classes.txt under one source's labels/ alongside its real
+    # label file -- 2 sources x 1 real label file each = 2 expected.
+    (Path(sources[0].path) / "labels" / "classes.txt").write_text("ant\n")
+
+    captured = {}
+
+    def _capture_get_text(parent, title, text, *a, **k):
+        captured["text"] = text
+        return "", False
+
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.panels.dataset_panel.QInputDialog.getText",
+        _capture_get_text,
+    )
+
+    panel._clear_labels_from_all_sources()
+
+    # Only the 2 real f.txt files should be counted, not the stray
+    # classes.txt under labels/ as a third.
+    assert "2 label file(s) total" in captured["text"]
+    assert "3 label file(s) total" not in captured["text"]
+    assert (Path(sources[0].path) / "labels" / "classes.txt").read_text() == "ant\n"
 
 
 def test_clear_all_labels_no_op_when_project_empty(qapp, tmp_path, monkeypatch):

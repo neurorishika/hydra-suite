@@ -13,13 +13,13 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QAction, QKeySequence, QShortcut
-from PySide6.QtWidgets import QInputDialog  # noqa: F401
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QListView,
     QListWidget,
@@ -40,6 +40,7 @@ from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noq
 from ..utils import (
     clear_labels_for_source,
     ensure_detectkit_source_structure,
+    labels_to_clear,
     list_images_in_source,
     source_class_id_map,
 )
@@ -458,12 +459,13 @@ class DatasetPanel(QWidget):
         if confirm != QMessageBox.StandardButton.Yes:
             return
 
+        expected = len(labels_to_clear(source_path, image_paths))
         cleared = clear_labels_for_source(source_path, image_paths)
-        if cleared < len(image_paths):
+        if cleared < expected:
             QMessageBox.warning(
                 self,
                 "Clear Labels",
-                f"Cleared {cleared} of {len(image_paths)} label file(s); "
+                f"Cleared {cleared} of {expected} label file(s); "
                 "some could not be written.",
             )
         self._on_image_changed(self.image_list.currentRow())
@@ -476,11 +478,7 @@ class DatasetPanel(QWidget):
         src_obj = self._selected_source_obj()
         name = src_obj.name if src_obj else Path(source_path).name
 
-        count = sum(
-            1
-            for p in (Path(source_path) / "labels").rglob("*.txt")
-            if p.name != "classes.txt"
-        )
+        count = len(labels_to_clear(source_path))
         if count == 0:
             QMessageBox.information(
                 self, "Remove Labels", f"'{name}' has no label files to clear."
@@ -524,14 +522,7 @@ class DatasetPanel(QWidget):
             )
             return
 
-        total = sum(
-            sum(
-                1
-                for p in (Path(src.path) / "labels").rglob("*.txt")
-                if p.name != "classes.txt"
-            )
-            for src in self._project.sources
-        )
+        total = sum(len(labels_to_clear(src.path)) for src in self._project.sources)
         if total == 0:
             QMessageBox.information(
                 self, "Remove Labels", "No label files exist in this project."
