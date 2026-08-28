@@ -317,15 +317,31 @@ class _BgFrameCache:
     roi_mask: Optional[np.ndarray]
 
 
-def _read_gray_frames(cap, frame_indices, resize_f, stop_check):
-    """Read raw grayscale frames once; trial-specific adjustments happen later."""
+def _read_gray_frames(cap, frame_indices, resize_f, stop_check, progress_cb=None):
+    """Read raw grayscale frames once; trial-specific adjustments happen later.
+
+    ``frame_indices`` is assumed sorted ascending (both callers build it via
+    ``np.linspace``/``np.unique``). Seeking is skipped whenever the next
+    target is already the next sequential frame — a bare ``cap.read()`` is
+    cheap, while ``cap.set(CAP_PROP_POS_FRAMES, ...)`` re-seeks from the
+    nearest keyframe on every call and is expensive/unreliable with some
+    codecs on long videos (see worker.py's own note on this), which made
+    this step look frozen with no incremental progress reported.
+    """
     frames: List[np.ndarray] = []
-    for idx in frame_indices:
+    last_idx = None
+    n_total = len(frame_indices)
+    for i, idx in enumerate(frame_indices):
         if stop_check():
             cap.release()
             return None
-        cap.set(cv2.CAP_PROP_POS_FRAMES, int(idx))
+        if progress_cb is not None:
+            progress_cb(i, n_total)
+        idx = int(idx)
+        if last_idx is None or idx != last_idx + 1:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
         ret, frame = cap.read()
+        last_idx = idx
         if not ret:
             continue
         if resize_f < 1.0:
@@ -649,6 +665,9 @@ def run_bg_optimization(
         prime_indices,
         resize_f,
         _stopped,
+        progress_cb=lambda i, n: _report(
+            5, f"Caching optimization frames (priming {i + 1}/{n}) …"
+        ),
     )
     if prime_frames is None:
         return empty_run
@@ -657,6 +676,9 @@ def run_bg_optimization(
         sample_indices,
         resize_f,
         _stopped,
+        progress_cb=lambda i, n: _report(
+            7, f"Caching optimization frames (sampling {i + 1}/{n}) …"
+        ),
     )
     cap.release()
 
