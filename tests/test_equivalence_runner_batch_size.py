@@ -1,7 +1,7 @@
-"""Test detection_batch_size parameter for equivalence runner.
+"""Test performance-control parameters for the equivalence runner.
 
-This module tests the --detection-batch-size CLI flag and build_config() parameter
-that enable testing TensorRT dynamic-batch OBB detection on real video.
+These controls enable detector, crop-backend, and pipeline-depth sweeps on real
+fixture videos without mutating their checked-in configs.
 """
 
 import importlib.util
@@ -68,3 +68,70 @@ def test_build_config_omits_detection_batch_size_when_not_provided(tmp_path):
     assert (
         "detection_batch_size" not in cfg
     ), "detection_batch_size should not be set when detection_batch_size is None"
+
+
+def test_build_config_sets_individual_stage_batch_sizes(tmp_path):
+    orig_config = tmp_path / "orig_config.json"
+    orig_config.write_text(
+        json.dumps(
+            {
+                "file_path": "",
+                "csv_path": "",
+                "cnn_classifiers": [
+                    {"label": "color", "batch_size": 64},
+                    {"label": "mark", "batch_size": 32},
+                ],
+            }
+        )
+    )
+
+    out_cfg = equiv_runner.build_config(
+        str(orig_config),
+        video_link=tmp_path / "test_video.mp4",
+        outdir=tmp_path,
+        runtime="config",
+        headtail_batch_size=16,
+        cnn_batch_size=24,
+        pose_batch_size=8,
+        pipeline_depth=1,
+    )
+
+    with open(out_cfg) as fh:
+        cfg = json.load(fh)
+
+    assert cfg["headtail_batch_size"] == 16
+    assert [item["batch_size"] for item in cfg["cnn_classifiers"]] == [24, 24]
+    assert cfg["pose_batch_size"] == 8
+    assert cfg["pipeline_depth"] == 1
+
+
+def test_benchmark_controls_records_resolved_fixture_settings():
+    controls = equiv_runner.benchmark_controls(
+        {
+            "runtime_tier": "gpu",
+            "detection_batch_size": 4,
+            "headtail_batch_size": 25,
+            "cnn_classifiers": [
+                {"label": "color", "batch_size": 25},
+                {"label": "mark", "batch_size": 16},
+            ],
+            "pose_batch_size": 8,
+            "pipeline_depth": 2,
+            "start_frame": 0,
+            "end_frame": 499,
+        }
+    )
+
+    assert controls == {
+        "runtime_tier": "gpu",
+        "detection_batch_size": 4,
+        "headtail_batch_size": 25,
+        "cnn_batch_sizes": [
+            {"label": "color", "batch_size": 25},
+            {"label": "mark", "batch_size": 16},
+        ],
+        "pose_batch_size": 8,
+        "pipeline_depth": 2,
+        "start_frame": 0,
+        "end_frame": 499,
+    }

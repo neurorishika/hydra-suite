@@ -55,7 +55,11 @@ from .result import FrameResult, OBBResult
 from .stages.apriltag import run_apriltag
 from .stages.bgsub import run_bgsub_batch
 from .stages.cnn import run_cnn_batch
-from .stages.crops import extract_aabb_crops, extract_canonical_crops_batch
+from .stages.crops import (
+    apply_foreign_mask_to_crop_batch,
+    extract_aabb_crops,
+    extract_canonical_crops_batch,
+)
 from .stages.filtering import filter_for_source
 from .stages.headtail import run_headtail_batch
 from .stages.obb import _RawOBBTensors, materialize_tensors, run_obb
@@ -363,9 +367,21 @@ class Pipeline:
                     self.clipping_stats.record(_corners, geometry)
 
         # --- downstream batch stages over the non-empty frames -------------
+        # Head-tail and pose consume the same undirected Layer-1 canonical
+        # geometry. When both are enabled, build that expensive warp once;
+        # each stage retains its own exact quantisation/masking boundary.
+        shared_canonical_batch = None
         headtail: dict[int, Any] | None = None
         if self.stages.headtail_model is not None:
             with span(N.HEADTAIL, units=sum(o.num_detections for o in nonempty_obbs)):
+                if self.stages.pose_model is not None:
+                    with span(N.CROP_EXTRACT):
+                        shared_canonical_batch = extract_canonical_crops_batch(
+                            nonempty_frames,
+                            nonempty_obbs,
+                            geometry,
+                            self.runtime,
+                        )
                 headtail = run_headtail_batch(
                     nonempty_frames,
                     nonempty_obbs,
@@ -373,6 +389,7 @@ class Pipeline:
                     cfg.headtail,
                     self.runtime,
                     geometry,
+                    canonical_batch=shared_canonical_batch,
                 )
 
         cnns_by_frame: dict[int, list] = {idx: [] for idx in filtered_by_frame}
@@ -404,14 +421,23 @@ class Pipeline:
                 # everywhere.
                 background_color = (0, 0, 0)
                 with span(N.CROP_EXTRACT):
-                    crop_batch = extract_canonical_crops_batch(
-                        nonempty_frames,
-                        nonempty_obbs,
-                        geometry,
-                        self.runtime,
-                        suppress_foreign=suppress_foreign,
-                        background_color=background_color,
-                    )
+                    if shared_canonical_batch is None:
+                        crop_batch = extract_canonical_crops_batch(
+                            nonempty_frames,
+                            nonempty_obbs,
+                            geometry,
+                            self.runtime,
+                            suppress_foreign=suppress_foreign,
+                            background_color=background_color,
+                        )
+                    elif suppress_foreign:
+                        crop_batch = apply_foreign_mask_to_crop_batch(
+                            shared_canonical_batch,
+                            geometry,
+                            background_color,
+                        )
+                    else:
+                        crop_batch = shared_canonical_batch
                 pose = run_pose_batch(
                     crop_batch,
                     self.stages.pose_model,

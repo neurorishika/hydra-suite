@@ -141,6 +141,10 @@ def build_config(
     runtime: str,
     skeleton: str | None = None,
     detection_batch_size: int | None = None,
+    headtail_batch_size: int | None = None,
+    cnn_batch_size: int | None = None,
+    pose_batch_size: int | None = None,
+    pipeline_depth: int | None = None,
 ) -> Path:
     with open(orig_config_path) as fh:
         cfg = json.load(fh)
@@ -155,6 +159,15 @@ def build_config(
     cfg.update(runtime_overrides(runtime))
     if detection_batch_size is not None:
         cfg["detection_batch_size"] = int(detection_batch_size)
+    if headtail_batch_size is not None:
+        cfg["headtail_batch_size"] = int(headtail_batch_size)
+    if cnn_batch_size is not None:
+        for classifier in cfg.get("cnn_classifiers", []):
+            classifier["batch_size"] = int(cnn_batch_size)
+    if pose_batch_size is not None:
+        cfg["pose_batch_size"] = int(pose_batch_size)
+    if pipeline_depth is not None:
+        cfg["pipeline_depth"] = int(pipeline_depth)
     out_cfg = outdir / "equiv_config.json"
     with open(out_cfg, "w") as fh:
         json.dump(cfg, fh, indent=2)
@@ -206,6 +219,26 @@ def capture_meta(label: str, runtime: str, hydra_file: str) -> dict:
     return meta
 
 
+def benchmark_controls(config: dict) -> dict:
+    """Return the resolved real-fixture controls needed to reproduce a run."""
+    return {
+        "runtime_tier": config.get("runtime_tier"),
+        "detection_batch_size": config.get("detection_batch_size"),
+        "headtail_batch_size": config.get("headtail_batch_size"),
+        "cnn_batch_sizes": [
+            {
+                "label": classifier.get("label"),
+                "batch_size": classifier.get("batch_size"),
+            }
+            for classifier in config.get("cnn_classifiers", [])
+        ],
+        "pose_batch_size": config.get("pose_batch_size"),
+        "pipeline_depth": config.get("pipeline_depth"),
+        "start_frame": config.get("start_frame"),
+        "end_frame": config.get("end_frame"),
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--orig-config", required=True)
@@ -237,7 +270,31 @@ def main() -> int:
         "--detection-batch-size",
         type=int,
         default=None,
-        help="Override detection_batch_size (YOLO_BATCH_SIZE) for TensorRT batching.",
+        help="Override the number of video frames per detector call.",
+    )
+    ap.add_argument(
+        "--headtail-batch-size",
+        type=int,
+        default=None,
+        help="Override the maximum crops per head-tail classifier call.",
+    )
+    ap.add_argument(
+        "--cnn-batch-size",
+        type=int,
+        default=None,
+        help="Override the maximum crops per identity CNN call.",
+    )
+    ap.add_argument(
+        "--pose-batch-size",
+        type=int,
+        default=None,
+        help="Override the maximum crops per pose backend call.",
+    )
+    ap.add_argument(
+        "--pipeline-depth",
+        type=int,
+        default=None,
+        help="Override inference pipeline depth (1 is synchronous; 2 overlaps stages).",
     )
     args = ap.parse_args()
 
@@ -271,11 +328,18 @@ def main() -> int:
         args.runtime,
         skeleton=args.skeleton,
         detection_batch_size=args.detection_batch_size,
+        headtail_batch_size=args.headtail_batch_size,
+        cnn_batch_size=args.cnn_batch_size,
+        pose_batch_size=args.pose_batch_size,
+        pipeline_depth=args.pipeline_depth,
     )
 
     import hydra_suite
 
     meta = capture_meta(args.label, args.runtime, hydra_suite.__file__)
+    with open(cfg_path) as fh:
+        resolved_config = json.load(fh)
+    meta["benchmark_controls"] = benchmark_controls(resolved_config)
     with open(outdir / "meta.json", "w") as fh:
         json.dump(meta, fh, indent=2)
     log.info("hydra_suite src: %s", hydra_suite.__file__)
@@ -294,9 +358,11 @@ def main() -> int:
     from hydra_suite.trackerkit.cli import run_tracking_cli
 
     try:
-        with open(cfg_path) as _fh:
-            _cfg = json.load(_fh)
-        n_frames = int(_cfg.get("end_frame", 0)) - int(_cfg.get("start_frame", 0)) + 1
+        n_frames = (
+            int(resolved_config.get("end_frame", 0))
+            - int(resolved_config.get("start_frame", 0))
+            + 1
+        )
     except Exception:
         n_frames = 0
 

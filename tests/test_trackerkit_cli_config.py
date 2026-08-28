@@ -174,6 +174,16 @@ def test_cli_session_yolo_batch_size_defaults_to_one_when_not_configured(tmp_pat
     assert session.params["YOLO_BATCH_SIZE"] == 1
 
 
+def test_cli_session_pipeline_depth_reaches_engine_params(tmp_path):
+    session = load_tracker_cli_session(
+        str(tmp_path / "subject.mp4"),
+        config_data={"pipeline_depth": 1},
+        video_probe=TrackerCliVideoProbe(fps=20.0, total_frames=50, width=5, height=5),
+    )
+
+    assert session.params["PIPELINE_DEPTH"] == 1
+
+
 # --- Cache-key stability -------------------------------------------------
 # Both the live GUI path and the CLI path resolve a ``RUNTIME_TIER`` to a
 # ``ResolvedBackend`` (Runtime Gen-2, FT7b) and pass it to

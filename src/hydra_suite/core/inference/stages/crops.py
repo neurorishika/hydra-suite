@@ -631,3 +631,68 @@ def extract_canonical_crops_batch(
         obb_by_frame={o.frame_idx: o for o in obb_results},
         native_sizes=np.concatenate(native_sizes_list),
     )
+
+
+def canonical_batch_to_classifier_np(batch: CropBatch) -> NumpyCropBatch:
+    """Convert shared canonical floats to the classifier's exact uint8 view.
+
+    ``extract_classifier_crops`` quantises the Layer-1 warp with round-to-nearest
+    before handing HWC BGR crops to the CPU classifier backend. Keep that exact
+    boundary here so head-tail can reuse a pose-compatible float ``CropBatch``
+    without changing a single classifier input byte.
+    """
+    if batch.crops.shape[0] == 0:
+        crops: list[np.ndarray] = []
+    else:
+        crops_u8 = (
+            (batch.crops * 255.0)
+            .round()
+            .clamp_(0, 255)
+            .to(torch.uint8)
+            .permute(0, 2, 3, 1)
+            .cpu()
+            .numpy()
+        )
+        crops = [np.ascontiguousarray(crops_u8[i]) for i in range(len(crops_u8))]
+
+    return NumpyCropBatch(
+        crops=crops,
+        detection_ids=batch.detection_ids,
+        frame_index=batch.frame_index,
+        obb_by_frame=batch.obb_by_frame,
+        native_sizes=batch.native_sizes,
+    )
+
+
+def apply_foreign_mask_to_crop_batch(
+    batch: CropBatch,
+    geometry: CanonicalGeometry,
+    background_color: tuple[int, int, int] = (0, 0, 0),
+) -> CropBatch:
+    """Return a pose-masked copy of an existing unmasked canonical batch.
+
+    The shared input remains untouched for head-tail. Per-frame masking delegates
+    to the same truncating uint8 helper used during normal pose extraction, so
+    this is bit-identical to ``extract_canonical_crops_batch(...,
+    suppress_foreign=True)`` while avoiding a second Layer-1 warp.
+    """
+    masked = batch.crops.clone()
+    for frame_idx in sorted(batch.obb_by_frame):
+        obb = batch.obb_by_frame[frame_idx]
+        rows = batch.select_frame(frame_idx)
+        if len(rows) == 0 or obb.num_detections <= 1:
+            continue
+        row_index = torch.as_tensor(rows, dtype=torch.long, device=masked.device)
+        frame_crops = masked.index_select(0, row_index)
+        frame_crops = _apply_foreign_mask_canonical_batch(
+            frame_crops, obb, geometry, background_color
+        )
+        masked.index_copy_(0, row_index, frame_crops)
+
+    return CropBatch(
+        crops=masked,
+        detection_ids=batch.detection_ids,
+        frame_index=batch.frame_index,
+        obb_by_frame=batch.obb_by_frame,
+        native_sizes=batch.native_sizes,
+    )

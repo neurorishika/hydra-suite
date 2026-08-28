@@ -14,8 +14,9 @@ from hydra_suite.utils import profiling_names as N
 from hydra_suite.utils.profiling import span
 
 from ..config import HeadTailConfig
-from ..result import HeadTailResult, OBBResult
+from ..result import CropBatch, HeadTailResult, OBBResult
 from ..runtime import RuntimeContext, resolved_backend_for
+from ._batching import predict_in_chunks
 from ._resource_close import close_backend_resource
 
 logger = logging.getLogger(__name__)
@@ -135,7 +136,9 @@ def run_headtail(
         canon_crops, model.input_size, model.backend.metadata.fit_policy
     )
 
-    all_probs = model.backend.predict_batch(np_crops)
+    all_probs = predict_in_chunks(
+        np_crops, getattr(config, "batch_size", 64), model.backend.predict_batch
+    )
 
     # axis_theta for the head-tail offset map is derived empirically from the
     # OBB corners with atan2(c[1]-c[0]). Reasoning: the new pipeline's crop
@@ -255,14 +258,18 @@ def run_headtail_batch(
     config: HeadTailConfig,
     runtime: RuntimeContext,
     geometry: CanonicalGeometry,
+    canonical_batch: CropBatch | None = None,
 ) -> "dict[int, HeadTailResult]":
     """Run head-tail classification over a window; return one HeadTailResult per frame.
 
-    Builds classifier crops internally via extract_classifier_crops_batch_np (the
-    shared canonical canvas, BGR uint8 -- bit-identical to the per-frame
-    run_headtail path), then fits each to the model input via Layer 2 exactly
-    like run_headtail. Runs the backend ONCE over all crops (cross-frame perf
-    win), then splits per frame via batch.select_frame. Assembly delegates to
+    Builds classifier crops internally, or consumes an optional shared unmasked
+    ``canonical_batch`` produced for both head-tail and pose. The CPU conversion
+    preserves the classifier path's round-to-nearest uint8 boundary exactly;
+    CUDA consumes the original floats. It then fits each crop to the model input
+    via Layer 2 exactly like run_headtail. Runs the backend over all crops in
+    order-preserving ``config.batch_size`` chunks, then splits per frame via
+    ``batch.select_frame``.
+    Assembly delegates to
     _assemble_headtail_result (DRY with run_headtail).
 
     Both branches dispatch Layer 2 on the SAME ``model.backend.metadata
@@ -286,12 +293,15 @@ def run_headtail_batch(
         # (grid_sample != cv2 -> identity-agreement gate, not byte-identity).
         from hydra_suite.core.canonicalization.resample import fit_batch_for_model
 
-        from .crops import extract_canonical_crops_batch
+        if canonical_batch is None:
+            from .crops import extract_canonical_crops_batch
 
-        with span(N.CROP_EXTRACT):
-            batch = extract_canonical_crops_batch(
-                frames, obb_results, geometry, runtime
-            )
+            with span(N.CROP_EXTRACT):
+                batch = extract_canonical_crops_batch(
+                    frames, obb_results, geometry, runtime
+                )
+        else:
+            batch = canonical_batch
         n_total = batch.crops.shape[0]
         if n_total:
             # NVDEC frames (the only CUDA frame source) are RGB -> input_is_bgr=False
@@ -302,27 +312,43 @@ def run_headtail_batch(
                     (fitted[i] * 255.0).floor().clamp(0, 255) for i in range(n_total)
                 ]
             with span(N.BACKEND_FORWARD, units=n_total, gpu=True):
-                all_probs = model.backend.predict_batch_cuda(
-                    cuda_crops, input_is_bgr=False
+                all_probs = predict_in_chunks(
+                    cuda_crops,
+                    getattr(config, "batch_size", 64),
+                    lambda chunk: model.backend.predict_batch_cuda(
+                        chunk, input_is_bgr=False
+                    ),
                 )
         else:
             all_probs = []
     else:
-        from .crops import apply_fit_batch_for_model, extract_classifier_crops_batch_np
+        from .crops import (
+            apply_fit_batch_for_model,
+            canonical_batch_to_classifier_np,
+            extract_classifier_crops_batch_np,
+        )
 
         # ``batch.crops`` is already the list of HWC uint8 BGR canonical crops
         # predict_batch wants, so there is no float32 tensor round trip here:
         # the old ``stack -> /255 -> permute -> cpu -> *255 -> clip -> astype``
         # detour was exactly value-preserving and therefore pure overhead
         # (four full-batch float32 passes per window).
-        with span(N.CROP_EXTRACT):
-            batch = extract_classifier_crops_batch_np(frames, obb_results, geometry)
+        if canonical_batch is None:
+            with span(N.CROP_EXTRACT):
+                batch = extract_classifier_crops_batch_np(frames, obb_results, geometry)
+        else:
+            with span(N.CROP_EXTRACT):
+                batch = canonical_batch_to_classifier_np(canonical_batch)
         if batch.crops:
             np_crops: list[np.ndarray] = apply_fit_batch_for_model(
                 batch.crops, model.input_size, policy
             )
             with span(N.BACKEND_FORWARD, units=len(np_crops), gpu=True):
-                all_probs = model.backend.predict_batch(np_crops)
+                all_probs = predict_in_chunks(
+                    np_crops,
+                    getattr(config, "batch_size", 64),
+                    model.backend.predict_batch,
+                )
         else:
             all_probs = []
 

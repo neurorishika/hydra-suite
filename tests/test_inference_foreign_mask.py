@@ -1,9 +1,13 @@
 import numpy as np
+import torch
 
 from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
 from hydra_suite.core.inference.result import OBBResult
 from hydra_suite.core.inference.runtime import RuntimeContext
-from hydra_suite.core.inference.stages.crops import extract_canonical_crops_batch
+from hydra_suite.core.inference.stages.crops import (
+    apply_foreign_mask_to_crop_batch,
+    extract_canonical_crops_batch,
+)
 
 _GEOM = CanonicalGeometry(canvas_wh=(64, 64), margin=1.5, aspect_ratio=1.0)
 
@@ -55,3 +59,32 @@ def test_foreign_mask_blacks_out_neighbor_pixels():
     )
     # masking must zero strictly more pixels than the unmasked crop
     assert (masked.crops[0] == 0).sum() > (plain.crops[0] == 0).sum()
+
+
+def test_masking_shared_batch_is_bit_identical_and_keeps_input_unmodified():
+    frame = np.full((64, 64, 3), 200, np.uint8)
+    obb = _two_adjacent_obbs()
+    rt = RuntimeContext(
+        cuda_mode=False,
+        device="cpu",
+        use_nvdec=False,
+        tensor_on_cuda=False,
+    )
+    shared = extract_canonical_crops_batch([frame], [obb], _GEOM, rt)
+    before = shared.crops.clone()
+    reference = extract_canonical_crops_batch(
+        [frame],
+        [obb],
+        _GEOM,
+        rt,
+        suppress_foreign=True,
+        background_color=(0, 0, 0),
+    )
+
+    actual = apply_foreign_mask_to_crop_batch(shared, _GEOM, (0, 0, 0))
+
+    assert torch.equal(actual.crops, reference.crops)
+    assert torch.equal(shared.crops, before)
+    assert np.array_equal(actual.detection_ids, reference.detection_ids)
+    assert np.array_equal(actual.frame_index, reference.frame_index)
+    assert np.array_equal(actual.native_sizes, reference.native_sizes)

@@ -39,7 +39,12 @@ from hydra_suite.core.inference.config import (
     PoseYOLOConfig,
 )
 from hydra_suite.core.inference.pipeline import BatchWindow, Pipeline, PipelineStages
-from hydra_suite.core.inference.result import CropBatch, OBBResult, PoseResult
+from hydra_suite.core.inference.result import (
+    CropBatch,
+    HeadTailResult,
+    OBBResult,
+    PoseResult,
+)
 from hydra_suite.core.inference.runtime import RuntimeContext
 from hydra_suite.core.inference.stages.pose import PoseModel
 
@@ -81,6 +86,7 @@ def _build_pipeline(captured: dict) -> tuple[Pipeline, BatchWindow]:
             backend="yolo",
             yolo=PoseYOLOConfig(model_path="/stub_pose.pt"),
             skeleton_file="",
+            suppress_foreign_regions=False,
         ),
         canonical=_CONFIGURED_GEOMETRY,
         detection_batch_size=2,
@@ -108,6 +114,7 @@ def _build_pipeline(captured: dict) -> tuple[Pipeline, BatchWindow]:
 def _capturing_extract_canonical_crops_batch(captured):
     def _fn(frames, obb_results, geometry, runtime, **kwargs):
         captured["crop_geometry"] = geometry
+        captured["crop_calls"] = captured.get("crop_calls", 0) + 1
         n_total = sum(o.num_detections for o in obb_results)
         det_ids = (
             np.concatenate([o.detection_ids for o in obb_results])
@@ -124,13 +131,15 @@ def _capturing_extract_canonical_crops_batch(captured):
         obb_by_frame = {o.frame_idx: o for o in obb_results}
         native_sizes = np.zeros((n_total, 2), np.int64)
         crops = torch.zeros((n_total, 3, 1, 1))
-        return CropBatch(
+        batch = CropBatch(
             crops=crops,
             detection_ids=det_ids,
             frame_index=frame_index,
             obb_by_frame=obb_by_frame,
             native_sizes=native_sizes,
         )
+        captured["extracted_batch"] = batch
+        return batch
 
     return _fn
 
@@ -138,6 +147,7 @@ def _capturing_extract_canonical_crops_batch(captured):
 def _capturing_run_pose_batch(captured):
     def _fn(crop_batch, model, config, runtime, geometry=None, **kwargs):
         captured["pose_geometry"] = geometry
+        captured["pose_batch"] = crop_batch
         results: dict[int, PoseResult] = {}
         for frame_idx, obb in crop_batch.obb_by_frame.items():
             n = obb.num_detections
@@ -146,6 +156,30 @@ def _capturing_run_pose_batch(captured):
                 valid_mask=np.ones(n, dtype=bool),
             )
         return results
+
+    return _fn
+
+
+def _capturing_run_headtail_batch(captured):
+    def _fn(
+        frames,
+        obb_results,
+        model,
+        config,
+        runtime,
+        geometry=None,
+        canonical_batch=None,
+    ):
+        captured["headtail_batch"] = canonical_batch
+        return {
+            obb.frame_idx: HeadTailResult(
+                heading_hints=np.full(obb.num_detections, np.nan, np.float32),
+                heading_confidences=np.zeros(obb.num_detections, np.float32),
+                directed_mask=np.zeros(obb.num_detections, np.uint8),
+                canonical_affines=None,
+            )
+            for obb in obb_results
+        }
 
     return _fn
 
@@ -188,3 +222,30 @@ def test_pose_batch_crop_geometry_matches_build_geometry():
         f"crop-build geometry: built with {captured['crop_geometry']}, "
         f"recovered with {captured['pose_geometry']}"
     )
+
+
+def test_headtail_and_pose_share_one_canonical_extraction():
+    captured: dict = {}
+    pipe, window = _build_pipeline(captured)
+    pipe.stages.headtail_model = MagicMock()
+
+    with (
+        patch("hydra_suite.core.inference.pipeline.run_obb", side_effect=_fake_run_obb),
+        patch(
+            "hydra_suite.core.inference.pipeline.extract_canonical_crops_batch",
+            side_effect=_capturing_extract_canonical_crops_batch(captured),
+        ),
+        patch(
+            "hydra_suite.core.inference.pipeline.run_headtail_batch",
+            side_effect=_capturing_run_headtail_batch(captured),
+        ),
+        patch(
+            "hydra_suite.core.inference.pipeline.run_pose_batch",
+            side_effect=_capturing_run_pose_batch(captured),
+        ),
+    ):
+        pipe._process_window(window)
+
+    assert captured["crop_calls"] == 1
+    assert captured["headtail_batch"] is captured["extracted_batch"]
+    assert captured["pose_batch"] is captured["extracted_batch"]
