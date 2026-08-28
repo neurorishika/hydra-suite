@@ -17,6 +17,7 @@ from hydra_suite.core.inference.sam2.masks import mask_to_contour
 from hydra_suite.data.al.escalation import LabelRecord
 from hydra_suite.data.al.labels import write_label_file
 from hydra_suite.data.project_bundle import ensure_bundle_subdirectory
+from hydra_suite.detectkit.gui.constants import IMG_EXTS
 from hydra_suite.detectkit.gui.models import OBBSource, PendingEscalation
 from hydra_suite.utils.geometry_levels import GeometryLevel
 from hydra_suite.widgets.workers import BaseWorker
@@ -150,10 +151,12 @@ def run_escalation(
         # materializer can produce this layout. A flat top-level glob would
         # silently stage ZERO labels for such a source, and accept() would
         # then delete every real label with nothing to replace it.
+        # IMG_EXTS (not a hardcoded jpg/png tuple): DetectKit's canonical
+        # extension set also covers .bmp/.tif/.tiff/.webp. Missing one of
+        # those staged no label for that image, and accept() then refused
+        # forever on the missing-labels check.
         images = sorted(
-            p
-            for p in images_dir.rglob("*")
-            if p.suffix.lower() in (".jpg", ".jpeg", ".png")
+            p for p in images_dir.rglob("*") if p.suffix.lower() in IMG_EXTS
         )
         for ii, img_path in enumerate(images):
             img = cv2.imread(str(img_path))

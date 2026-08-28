@@ -265,6 +265,33 @@ def test_escalation_preserves_per_instance_class_ids(tmp_path):
     assert [line.split()[0] for line in promoted_lines] == ["0", "1"]
 
 
+def test_escalation_stages_non_jpg_png_images(tmp_path):
+    """Regression: the image walk hardcoded .jpg/.jpeg/.png, so a source with
+    e.g. a .bmp image staged no label for it and accept() then refused
+    forever on the missing-labels check. It must use DetectKit's canonical
+    IMG_EXTS instead."""
+    root = tmp_path / "sources" / "bmp"
+    (root / "images").mkdir(parents=True)
+    (root / "labels").mkdir(parents=True)
+    cv2.imwrite(str(root / "images" / "a.bmp"), np.zeros((100, 100, 3), np.uint8))
+    (root / "labels" / "a.txt").write_text("0 0.1 0.1 0.4 0.1 0.4 0.4 0.1 0.4\n")
+    (root / "classes.txt").write_text("ant\n")
+    src = OBBSource(path=str(root), name="bmp", level="obb")
+    project = types.SimpleNamespace(project_dir=str(tmp_path), sources=[src])
+    req = EscalationRequest(
+        project=project, source_names=["bmp"], variant="sam2.1-hiera-base_plus"
+    )
+
+    run_escalation(req, _FakeExec())
+
+    assert (Path(src.pending_escalation.staged_path) / "labels" / "a.txt").exists()
+
+    accept_pending_escalation(src)  # must not refuse
+
+    assert src.level == "polygon"
+    assert src.pending_escalation is None
+
+
 def test_read_boxes_from_label_parses_class_id(tmp_path):
     from hydra_suite.detectkit.jobs.sam2_prompts import read_boxes_from_label
 
