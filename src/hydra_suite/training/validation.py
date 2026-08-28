@@ -235,14 +235,9 @@ def _validate_item_file_pair(
         return issues
 
     if not parsed:
-        issues.append(
-            ValidationIssue(
-                severity="error",
-                code="empty_label",
-                message="Label file has no objects.",
-                path=str(lbl),
-            )
-        )
+        # Empty labels are valid YOLO negative examples.  In particular, SAHI
+        # deliberately writes them for sampled background tiles.
+        stats["empty_labels"] = int(stats.get("empty_labels", 0)) + 1
         return issues
 
     for parts in parsed:
@@ -297,14 +292,9 @@ def _validate_item_file_pair_for_mode(
         return issues
 
     if not parsed:
-        issues.append(
-            ValidationIssue(
-                severity="error",
-                code="empty_label",
-                message="Label file has no objects.",
-                path=str(lbl),
-            )
-        )
+        # Empty labels are valid YOLO negative examples.  In particular, SAHI
+        # deliberately writes them for sampled background tiles.
+        stats["empty_labels"] = int(stats.get("empty_labels", 0)) + 1
         return issues
 
     validators = {
@@ -332,6 +322,7 @@ def validate_obb_dataset(
         "root_dir": inspection.root_dir,
         "split_counts": {k: len(v) for k, v in inspection.splits.items()},
         "missing_labels": 0,
+        "empty_labels": 0,
         "invalid_lines": 0,
         "class_ids": set(),
     }
@@ -344,6 +335,14 @@ def validate_obb_dataset(
             issues.extend(_validate_item_file_pair(item, split, stats))
 
     class_ids = sorted(int(x) for x in stats.get("class_ids", set()))
+    if not class_ids:
+        issues.append(
+            ValidationIssue(
+                severity="error",
+                code="no_labeled_objects",
+                message="Dataset contains no labeled objects.",
+            )
+        )
     if len(class_ids) > 1:
         issues.append(
             ValidationIssue(
@@ -380,6 +379,7 @@ def validate_ultralytics_dataset(
         "root_dir": inspection.root_dir,
         "split_counts": {k: len(v) for k, v in inspection.splits.items()},
         "missing_labels": 0,
+        "empty_labels": 0,
         "invalid_lines": 0,
         "class_ids": set(),
         "label_mode": label_mode,
@@ -400,6 +400,14 @@ def validate_ultralytics_dataset(
             )
 
     class_ids = sorted(int(x) for x in stats.get("class_ids", set()))
+    if not class_ids:
+        issues.append(
+            ValidationIssue(
+                severity="error",
+                code="no_labeled_objects",
+                message="Dataset contains no labeled objects.",
+            )
+        )
     if require_single_class and len(class_ids) > 1:
         issues.append(
             ValidationIssue(

@@ -2138,8 +2138,16 @@ QTabBar::tab:selected {
                     f"Prepared [{role.value}] dataset: {build.dataset_dir}"
                 )
         except Exception as exc:
-            self._set_run_status(f"Dataset preparation failed: {exc}")
-            QMessageBox.critical(self, "Build Failed", str(exc))
+            self._append_log(f"Dataset preparation failed:\n{exc}")
+            self._set_run_status(
+                "Dataset preparation failed. See the session log for details."
+            )
+            if not silent:
+                QMessageBox.critical(
+                    self,
+                    "Build Failed",
+                    "Dataset preparation failed. See the session log for details.",
+                )
             return False
 
         self._set_run_status(
