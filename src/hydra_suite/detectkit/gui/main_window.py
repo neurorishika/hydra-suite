@@ -1753,8 +1753,9 @@ class DetectKitMainWindow(QMainWindow):
             # The worker set pending_escalation on existing sources on a
             # background thread; persist + refresh immediately. Everything
             # UI-facing (message boxes, the review dialog) is deferred to
-            # _finish -- result_ready can be delivered on the worker thread,
-            # and the application-modal progress dialog is still open here.
+            # _finish, because the application-modal progress dialog is still
+            # open here -- a dialog opened from this slot would stack under it
+            # and be undismissable.
             self._save_current_project()
             self._dataset_panel.refresh_sources(self._project)
             self._tools_panel.refresh_overview()

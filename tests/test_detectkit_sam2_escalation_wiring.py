@@ -68,10 +68,9 @@ def test_main_window_has_review_escalations_handler():
 
 def test_main_window_escalation_finish_defers_dialog_past_progress_close():
     """The review dialog (and any post-run message box) must NOT be opened
-    from _handle_result, which BaseWorker's result_ready signal can deliver
-    on the worker thread, and which fires while the application-modal
-    progress dialog is still open -- both would make the dialog undismissable
-    or crash Qt. It must be deferred to _finish, which runs after
+    from _handle_result, which fires while the application-modal progress
+    dialog is still open -- a dialog opened there would stack under it and be
+    undismissable. It must be deferred to _finish, which runs after
     progress.close()."""
     import inspect
 
@@ -83,6 +82,10 @@ def test_main_window_escalation_finish_defers_dialog_past_progress_close():
 
     handle_result_start = source.index("def _handle_result")
     finish_start = source.index("def _finish")
+    # Without this, a reordering that puts _finish first would make
+    # handle_result_body an empty string and every assertion below pass
+    # vacuously -- silently disarming the one guard for this bug class.
+    assert finish_start > handle_result_start
     handle_result_body = source[handle_result_start:finish_start]
     finish_body = source[finish_start:]
 
