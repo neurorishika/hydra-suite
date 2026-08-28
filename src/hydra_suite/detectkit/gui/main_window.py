@@ -1516,6 +1516,7 @@ class DetectKitMainWindow(QMainWindow):
             self._sync_al_action_enabled()
         self._canvas.set_overlay_visibility(settings.show_gt, settings.show_pred)
         self._canvas.set_class_filter(settings.visible_class_ids)
+        self._canvas.set_derived_levels_visible(settings.show_derived_levels)
 
         signature = self._dataset_signature(settings)
 
