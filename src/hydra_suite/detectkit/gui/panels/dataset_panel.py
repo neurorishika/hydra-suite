@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QAction, QKeySequence, QShortcut
+from PySide6.QtWidgets import QInputDialog  # noqa: F401
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -153,6 +154,16 @@ class DatasetPanel(QWidget):
         )
         self.image_list.currentRowChanged.connect(self._on_image_changed)
         images_layout.addWidget(self.image_list)
+
+        self.btn_clear_source_labels = QPushButton("Remove all labels from source")
+        self.btn_clear_source_labels.setProperty("detectkitVariant", "danger")
+        self.btn_clear_source_labels.clicked.connect(self._clear_labels_from_source)
+        images_layout.addWidget(self.btn_clear_source_labels)
+
+        self.btn_clear_all_labels = QPushButton("Remove ALL labels from all sources")
+        self.btn_clear_all_labels.setProperty("detectkitVariant", "danger")
+        self.btn_clear_all_labels.clicked.connect(self._clear_labels_from_all_sources)
+        images_layout.addWidget(self.btn_clear_all_labels)
 
         self._delete_shortcut = QShortcut(QKeySequence(Qt.Key_Delete), self.image_list)
         self._delete_shortcut.setContext(Qt.WidgetShortcut)
@@ -456,6 +467,52 @@ class DatasetPanel(QWidget):
                 "some could not be written.",
             )
         self._on_image_changed(self.image_list.currentRow())
+
+    def _clear_labels_from_source(self) -> None:
+        """Empty every label file for the currently selected source."""
+        source_path = self._selected_source_path()
+        if source_path is None:
+            return
+        src_obj = self._selected_source_obj()
+        name = src_obj.name if src_obj else Path(source_path).name
+
+        count = len(list((Path(source_path) / "labels").rglob("*.txt")))
+        if count == 0:
+            QMessageBox.information(
+                self, "Remove Labels", f"'{name}' has no label files to clear."
+            )
+            return
+
+        confirm = QMessageBox.warning(
+            self,
+            "Remove Labels",
+            (
+                f"Clear ALL labels for source '{name}' ({count} label "
+                "file(s))? Images are not affected.\n\nThis cannot be "
+                "undone."
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        cleared = clear_labels_for_source(source_path)
+        if cleared < count:
+            QMessageBox.warning(
+                self,
+                "Remove Labels",
+                f"Cleared {cleared} of {count} label file(s); some could "
+                "not be written.",
+            )
+        row = self.image_list.currentRow()
+        self._on_source_combo_changed(self.source_combo.currentIndex())
+        if 0 <= row < self.image_list.count():
+            self.image_list.setCurrentRow(row)
+
+    def _clear_labels_from_all_sources(self) -> None:
+        """Placeholder -- replaced in full by Task 4 of this plan."""
+        raise NotImplementedError
 
     @staticmethod
     def _label_path_for_image(image_path: Path, source_root: Path) -> Path | None:

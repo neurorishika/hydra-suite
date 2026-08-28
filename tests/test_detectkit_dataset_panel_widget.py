@@ -220,3 +220,93 @@ def test_clear_labels_from_frame_reselects_same_row_not_row_zero(
     panel._clear_labels_from_frame()
 
     assert panel.image_list.currentRow() == b_row
+
+
+def test_dataset_panel_has_clear_source_labels_button(qapp):
+    from hydra_suite.detectkit.gui.panels.dataset_panel import DatasetPanel
+
+    panel = DatasetPanel()
+    assert hasattr(panel, "btn_clear_source_labels")
+
+
+def test_clear_labels_from_source_requires_confirmation(qapp, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    panel, source_root = _make_panel_with_source(qapp, tmp_path)
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.panels.dataset_panel.QMessageBox.warning",
+        lambda *a, **k: QMessageBox.StandardButton.Cancel,
+    )
+
+    panel._clear_labels_from_source()
+
+    assert (source_root / "labels" / "a.txt").read_text() != ""
+
+
+def test_clear_labels_from_source_confirmation_names_source_and_count(
+    qapp, tmp_path, monkeypatch
+):
+    from PySide6.QtWidgets import QMessageBox
+
+    panel, _source_root = _make_panel_with_source(qapp, tmp_path)
+    captured = {}
+
+    def _capture_warning(self, title, text, *a, **k):
+        captured["text"] = text
+        return QMessageBox.StandardButton.Cancel
+
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.panels.dataset_panel.QMessageBox.warning",
+        _capture_warning,
+    )
+
+    panel._clear_labels_from_source()
+
+    assert "src" in captured["text"]
+    assert "1" in captured["text"]  # 1 label file
+
+
+def test_clear_labels_from_source_clears_all_on_confirm(qapp, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    panel, source_root = _make_panel_with_source(qapp, tmp_path)
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.panels.dataset_panel.QMessageBox.warning",
+        lambda *a, **k: QMessageBox.StandardButton.Yes,
+    )
+
+    panel._clear_labels_from_source()
+
+    assert (source_root / "labels" / "a.txt").read_text() == ""
+
+
+def test_clear_labels_from_source_no_op_when_no_labels(qapp, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    from hydra_suite.detectkit.gui.models import DetectKitProject, OBBSource
+    from hydra_suite.detectkit.gui.panels.dataset_panel import DatasetPanel
+
+    source_root = tmp_path / "empty_src"
+    (source_root / "images").mkdir(parents=True)
+    (source_root / "labels").mkdir(parents=True)
+    (source_root / "classes.txt").write_text("ant\n")
+    proj = DetectKitProject(project_dir=tmp_path, class_names=["ant"])
+    proj.sources = [OBBSource(path=str(source_root), name="empty", level="obb")]
+    panel = DatasetPanel()
+    panel.set_project(proj, main_window=None)
+
+    warn_called = []
+    info_called = []
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.panels.dataset_panel.QMessageBox.warning",
+        lambda *a, **k: warn_called.append(True) or QMessageBox.StandardButton.Yes,
+    )
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.panels.dataset_panel.QMessageBox.information",
+        lambda *a, **k: info_called.append(True),
+    )
+
+    panel._clear_labels_from_source()
+
+    assert not warn_called  # no pointless confirm
+    assert info_called  # info dialog shown instead
