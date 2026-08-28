@@ -16,15 +16,24 @@ def test_show_image_calls_multi_level_api_with_source_level_and_reviewed():
     """show_image must resolve the current source's level/reviewed and pass
     them to set_gt_detections_multi_level, not the old single-layer
     set_gt_detections."""
-    from hydra_suite.detectkit.gui.main_window import MainWindow
+    from hydra_suite.detectkit.gui.main_window import (
+        MainWindow,
+        _resolve_source_render_state,
+    )
 
     source = inspect.getsource(MainWindow.show_image)
     assert "set_gt_detections_multi_level" in source
     assert "set_gt_detections(" not in source  # the old single-layer call is gone
     assert "native_level" in source
     assert "reviewed" in source
-    assert "GeometryLevel.from_str" in source
-    assert "except ValueError" in source  # from_str must be guarded, see Step 3
+
+    # The GeometryLevel.from_str guard lives in _resolve_source_render_state,
+    # not in show_image itself -- show_image only calls the helper.
+    resolver_source = inspect.getsource(_resolve_source_render_state)
+    assert "GeometryLevel.from_str" in resolver_source
+    assert (
+        "except ValueError" in resolver_source
+    )  # from_str must be guarded, see Step 3
 
 
 def test_resolve_native_level_and_reviewed_reads_the_matching_source():

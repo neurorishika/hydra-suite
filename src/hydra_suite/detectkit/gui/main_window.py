@@ -2009,9 +2009,6 @@ class DetectKitMainWindow(QMainWindow):
                             exc_info=True,
                         )
                 dets = parse_obb_label(label_path, w, h, class_id_map=class_id_map)
-                # _resolve_source_render_state guards GeometryLevel.from_str with
-                # except ValueError, falling back to (OBB, True) for a source
-                # whose level string doesn't parse (unvalidated project JSON).
                 native_level, reviewed = _resolve_source_render_state(
                     self._project, source_path
                 )
