@@ -11,6 +11,7 @@ import pandas as pd
 from hydra_suite.core.post.processing import (
     interpolate_trajectories,
     resolve_trajectories,
+    trim_positionless_ends,
 )
 from hydra_suite.utils import profiling_names as N
 from hydra_suite.utils.profiling import span
@@ -106,6 +107,7 @@ def merge_trajectories(
     tag_cache_path=None,
     heading_flip_max_burst=5,
     directed_heading_posthoc=False,
+    fill_all_interior: bool = False,
     enable_profiling=False,
     profile_export_path=None,
     progress=None,
@@ -167,7 +169,13 @@ def merge_trajectories(
                     max_gap=max_gap,
                     heading_flip_max_burst=heading_flip_max_burst,
                     directed_heading_posthoc=directed_heading_posthoc,
+                    fill_all_interior=fill_all_interior,
                 )
+            elif isinstance(resolved, pd.DataFrame):
+                # No interpolation requested: positions are not fabricated,
+                # but leading/trailing position-less rows can never be filled
+                # and must not be left in the final CSV as silent NaN.
+                resolved = trim_positionless_ends(resolved)
         profiler.phase_end("post_interpolate")
 
         if _stop():

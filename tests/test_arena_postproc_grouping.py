@@ -202,9 +202,11 @@ def test_relink_never_joins_same_label_across_arenas():
 # ---------------------------------------------------------------------------
 #
 # The fragment solver performs an INJECTIVE fragment -> label assignment
-# within each temporal-overlap connected component (see
-# `_base_assignment_via_substrate` in `core/individual/identity/offline.py`).
-# With labels repeating per arena, four temporally-overlapping fragments (two
+# within each temporal-overlap group (2026-08-27 identity-final-consistency:
+# `_iterative_assign` in `core/individual/identity/offline.py` enforces this
+# directly -- via its `_blockers`/`_overlaps` collision check -- rather than
+# through the deleted `_base_assignment_via_substrate` component-Hungarian
+# step). With labels repeating per arena, four temporally-overlapping fragments (two
 # per arena) that all favor the same catalog label "ant_a" must yield ONE
 # "ant_a" winner PER ARENA (2 total) when grouped -- not one winner for the
 # whole file (1 total), which is what an arena-blind global solve forces.

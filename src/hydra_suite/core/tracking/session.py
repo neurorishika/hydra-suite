@@ -25,8 +25,10 @@ from hydra_suite.core.post.pose_merge import (
     resolve_current_tag_cache_path,
 )
 from hydra_suite.core.post.processing import (
+    final_interpolation_max_gap,
     interpolate_trajectories,
     process_trajectories_from_csv,
+    trim_positionless_ends,
 )
 from hydra_suite.core.post.rich_export import (
     export_rich_csv,
@@ -229,13 +231,7 @@ class TrackingSessionCore:
     def _interpolate_and_scale(self, df):
         interp_method = str(self.config.get("interpolation_method", "none")).lower()
         if interp_method != "none":
-            max_gap = max(
-                1,
-                round(
-                    float(self.config["interpolation_max_gap_seconds"])
-                    * float(self.params["FPS"])
-                ),
-            )
+            max_gap = final_interpolation_max_gap(self.config, self.params)
             df = interpolate_trajectories(
                 df,
                 method=interp_method,
@@ -244,7 +240,10 @@ class TrackingSessionCore:
                 directed_heading_posthoc=bool(
                     self.params.get("DIRECTED_ORIENT_POSTHOC_CONSISTENCY", False)
                 ),
+                fill_all_interior=True,
             )
+        else:
+            df = trim_positionless_ends(df)
         return rescale_coordinates(
             df, resize_factor=float(self.params.get("RESIZE_FACTOR", 1.0))
         )
@@ -265,13 +264,7 @@ class TrackingSessionCore:
             params=self.params,
             resize_factor=float(self.params.get("RESIZE_FACTOR", 1.0)),
             interp_method=str(self.config.get("interpolation_method", "none")).lower(),
-            max_gap=max(
-                1,
-                round(
-                    float(self.config["interpolation_max_gap_seconds"])
-                    * float(self.params["FPS"])
-                ),
-            ),
+            max_gap=final_interpolation_max_gap(self.config, self.params),
             tag_cache_path=resolve_current_tag_cache_path(
                 self.params, self.paths.get("detection_cache_path")
             ),
@@ -279,6 +272,7 @@ class TrackingSessionCore:
             directed_heading_posthoc=bool(
                 self.params.get("DIRECTED_ORIENT_POSTHOC_CONSISTENCY", False)
             ),
+            fill_all_interior=True,
             enable_profiling=bool(self.params.get("ENABLE_PROFILING", False)),
             progress=self.callbacks.progress,
             should_stop=self.callbacks.should_stop,
@@ -318,7 +312,7 @@ class TrackingSessionCore:
             "",
         )
 
-    def _export_rich(self, final_csv):
+    def _export_rich(self, final_csv, resolve: bool = True):
         return export_rich_csv(
             final_csv,
             self.pose_state,
@@ -329,13 +323,37 @@ class TrackingSessionCore:
             debug_mode=bool(self.params.get("DEBUG_MODE", True)),
             fps=self.params.get("FPS"),
             identity_ran=self._identity_ran(),
+            resolve=resolve,
         )
 
     def _relink_export_rich(self, final_csv):
+        # Computed here (not eagerly in __init__, and not stored back onto the
+        # shared `self.params`) -- the final densification pass's gap cap,
+        # shared with the forward/merge interpolation passes. Passed via a
+        # local dict so this call is the only place that sees the derived
+        # value; `self.params` itself is never mutated as a side effect.
+        params = dict(self.params)
+        params["FINAL_INTERPOLATION_MAX_GAP"] = final_interpolation_max_gap(
+            self.config, self.params
+        )
+        # I2: this run's real interpolation-method/heading settings, so the
+        # relink pass's own interpolate_trajectories call (rich_export.py)
+        # honors an explicit interpolation_method="none" instead of always
+        # falling back to interpolate_trajectories's "linear" default -- the
+        # same values `_interpolate_and_scale`/`_merge` already thread.
+        params["FINAL_INTERPOLATION_METHOD"] = str(
+            self.config.get("interpolation_method", "none")
+        ).lower()
+        params["FINAL_HEADING_FLIP_MAX_BURST"] = int(
+            self.config["heading_flip_max_burst"]
+        )
+        params["FINAL_DIRECTED_HEADING_POSTHOC"] = bool(
+            self.params.get("DIRECTED_ORIENT_POSTHOC_CONSISTENCY", False)
+        )
         return relink_and_export_rich_csv(
             final_csv,
             self.pose_state,
-            params=self.params,
+            params=params,
             min_valid_conf=float(self.params.get("POSE_MIN_KPT_CONF_VALID", 0.2)),
             ignore_keypoints=self.config.get("pose_ignore_keypoints"),
             identity_evidence_cache_path=self._identity_evidence_cache_path(),
@@ -676,14 +694,19 @@ class TrackingSessionCore:
                 with span(N.WRITE):
                     _save_trajectories_to_csv(final_df, final_csv)
 
-                cb.stage_changed("rich_export")
-                with span(N.RICH_EXPORT):
-                    rich_path = self._export_rich(final_csv)
-
-                if (
+                # Computed ONCE: whether identity resolution happens here (no
+                # postpass) or is deferred to the relink step below (Task 6 --
+                # the fragment solver must run exactly once per pipeline run).
+                postpass = (
                     should_run_interpolated_postpass(self.config)
                     and not cb.should_stop()
-                ):
+                )
+
+                cb.stage_changed("rich_export")
+                with span(N.RICH_EXPORT):
+                    rich_path = self._export_rich(final_csv, resolve=not postpass)
+
+                if postpass:
                     cb.stage_changed("interpolated_crops")
                     with span(N.INTERP_CROPS):
                         self._run_interp_crops(final_csv)

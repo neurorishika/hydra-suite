@@ -15,6 +15,7 @@ import pandas as pd
 
 from hydra_suite.core.individual.postprocess_df import (
     apply_identity_postprocessing_to_df,
+    derive_identity_keys,
 )
 from hydra_suite.core.individual.properties.export import DETECTED_HEADING_COLUMNS
 from hydra_suite.core.post.pose_merge import (
@@ -217,6 +218,7 @@ def build_rich_export_dataframe(
     min_valid_conf,
     ignore_keypoints,
     identity_evidence_cache_path=None,
+    resolve: bool = True,
 ):
     """Load final CSV and merge all available analysis sources into a rich export dataframe.
 
@@ -226,6 +228,14 @@ def build_rich_export_dataframe(
     self-sufficient from the realtime decoder. ``None`` when the caller
     couldn't resolve one (identity post-processing then falls back to
     whatever CSV columns are present).
+
+    ``resolve`` (Task 6, single-solve fix): when False, the fragment solver
+    is NOT run here -- only :func:`derive_identity_keys` (the
+    ``UniqueIdentityKey`` a downstream relink step needs) is applied.
+    Callers that relink trajectories BEFORE resolving identity (see
+    ``relink_and_export_rich_csv``) pass ``resolve=False`` so the solver
+    runs exactly once, on the relinked/densified frame, instead of once
+    here and again after relinking.
     """
     with span(N.BUILD_DATAFRAME):
         if not final_csv_path or not os.path.exists(final_csv_path):
@@ -302,11 +312,14 @@ def build_rich_export_dataframe(
                 individual_properties_cache_path=state.individual_properties_cache_path,
             )
 
-        with_pose_df = apply_identity_postprocessing_to_df(
-            with_pose_df,
-            params,
-            identity_evidence_cache_path=identity_evidence_cache_path,
-        )
+        if resolve:
+            with_pose_df = apply_identity_postprocessing_to_df(
+                with_pose_df,
+                params,
+                identity_evidence_cache_path=identity_evidence_cache_path,
+            )
+        else:
+            with_pose_df = derive_identity_keys(with_pose_df, params)
 
         log_rich_export_summary(with_pose_df)
 
@@ -324,6 +337,7 @@ def export_rich_csv(
     debug_mode=True,
     fps=None,
     identity_ran=True,
+    resolve: bool = True,
 ):
     """Write the rich individual-analysis CSV next to the final CSV."""
     with_pose_df = build_rich_export_dataframe(
@@ -333,9 +347,26 @@ def export_rich_csv(
         min_valid_conf=min_valid_conf,
         ignore_keypoints=ignore_keypoints,
         identity_evidence_cache_path=identity_evidence_cache_path,
+        resolve=resolve,
     )
     if with_pose_df is None or with_pose_df.empty:
         return None
+
+    if resolve:
+        from hydra_suite.core.post.identity_postprocess import (
+            assert_one_identity_per_trajectory,
+            collapse_to_majority_identity,
+        )
+
+        offenders = assert_one_identity_per_trajectory(with_pose_df)
+        if offenders:
+            logger.error(
+                "relink/resolve produced %d trajectories with more than one "
+                "identity: %s -- collapsing to majority",
+                len(offenders),
+                offenders[:20],
+            )
+            with_pose_df = collapse_to_majority_identity(with_pose_df, offenders)
 
     from hydra_suite.core.post.trajectory_writer import write_final_trajectories
 
@@ -361,7 +392,22 @@ def relink_and_export_rich_csv(
     fps=None,
     identity_ran=True,
 ):
-    """Rewrite final CSV IDs after pose-aware relinking and regenerate the rich export CSV."""
+    """Rewrite final CSV IDs after pose-aware relinking and regenerate the rich export CSV.
+
+    Task 6 (relink-before-resolve): identity is resolved by the fragment
+    solver EXACTLY ONCE per pipeline run, on the relinked + densified +
+    interpolated frame -- never before relinking, so the solver can never
+    silently see (and label) two fragments that relinking is about to stitch
+    into one trajectory. The pipeline is:
+
+        build (resolve=False, so only UniqueIdentityKey is derived)
+        -> relink_trajectories_with_pose_by_arena
+        -> densify_trajectory_frames
+        -> interpolate_trajectories(fill_all_interior=True)
+        -> resolve_identity (the solver, exactly once)
+        -> assert_one_identity_per_trajectory / collapse_to_majority_identity
+        -> write both CSVs
+    """
     if not final_csv_path or not os.path.exists(final_csv_path):
         return None
 
@@ -372,6 +418,7 @@ def relink_and_export_rich_csv(
         min_valid_conf=min_valid_conf,
         ignore_keypoints=ignore_keypoints,
         identity_evidence_cache_path=identity_evidence_cache_path,
+        resolve=False,
     )
 
     try:
@@ -391,9 +438,9 @@ def relink_and_export_rich_csv(
             identity_ran=identity_ran,
         )
 
-    relink_input_df = (
-        with_pose_df if with_pose_df is not None and not with_pose_df.empty else base_df
-    )
+    has_pose = with_pose_df is not None and not with_pose_df.empty
+    relink_input_df = with_pose_df if has_pose else base_df
+
     # relink_trajectories_with_pose matches fragments via UniqueIdentityKey,
     # which repeats across arenas (arena 0 and arena 7 can both hold an
     # "ant A"), so an ungrouped relink is a genuine cross-arena merge risk.
@@ -402,11 +449,89 @@ def relink_and_export_rich_csv(
     # relink_trajectories_with_pose_by_arena groups by arena_id (falling
     # straight through to one unchanged call when there is no arena_id
     # column, or a single arena).
-    from hydra_suite.core.post.processing import relink_trajectories_with_pose_by_arena
+    from hydra_suite.core.individual.postprocess_df import resolve_identity
+    from hydra_suite.core.post.identity_postprocess import (
+        assert_one_identity_per_trajectory,
+        collapse_to_majority_identity,
+    )
+    from hydra_suite.core.post.processing import (
+        densify_trajectory_frames,
+        interpolate_trajectories,
+        relink_trajectories_with_pose_by_arena,
+        trim_positionless_ends,
+    )
 
     relinked_with_pose = relink_trajectories_with_pose_by_arena(relink_input_df, params)
     if relinked_with_pose is None or relinked_with_pose.empty:
         relinked_with_pose = relink_input_df
+
+    # Densify + interpolate the relinked chains BEFORE resolving identity, so
+    # the solver (and every downstream consumer) sees the final, gap-filled
+    # frame -- not the pre-relink fragments' own frame ranges.
+    relinked_with_pose = densify_trajectory_frames(relinked_with_pose)
+    # No magic default here: the real floor is
+    # max(user_gap, MAX_OCCLUSION_GAP + 1), computed by
+    # `final_interpolation_max_gap` (which needs `config`, not just `params`,
+    # so it can't be recomputed from inside this module). The session-level
+    # caller (`TrackingSessionCore._relink_export_rich`) always supplies it;
+    # a caller that omits it fails loudly instead of silently under-filling
+    # gaps with an unrelated constant.
+    if "FINAL_INTERPOLATION_MAX_GAP" not in params:
+        raise KeyError(
+            "relink_and_export_rich_csv requires params['FINAL_INTERPOLATION_MAX_GAP'] "
+            "(compute it via hydra_suite.core.post.processing.final_interpolation_max_gap "
+            "before calling)"
+        )
+    max_gap = int(params["FINAL_INTERPOLATION_MAX_GAP"])
+    # I2: honor the run's real interpolation-method/heading settings instead
+    # of silently falling back to interpolate_trajectories's own
+    # "linear"/5/False defaults, which would override an explicit
+    # interpolation_method="none" ("do not fabricate positions") and the
+    # run's actual heading-consistency config. Defaults here (not required
+    # like FINAL_INTERPOLATION_MAX_GAP) preserve this function's prior
+    # always-linear-fill behavior for callers that don't pass them.
+    final_interp_method = str(
+        params.get("FINAL_INTERPOLATION_METHOD", "linear")
+    ).lower()
+    final_heading_flip_max_burst = int(params.get("FINAL_HEADING_FLIP_MAX_BURST", 5))
+    final_directed_heading_posthoc = bool(
+        params.get("FINAL_DIRECTED_HEADING_POSTHOC", False)
+    )
+    if final_interp_method != "none":
+        relinked_with_pose = interpolate_trajectories(
+            relinked_with_pose,
+            method=final_interp_method,
+            max_gap=max_gap,
+            heading_flip_max_burst=final_heading_flip_max_burst,
+            directed_heading_posthoc=final_directed_heading_posthoc,
+            fill_all_interior=True,
+        )
+    else:
+        # interpolate_trajectories(method="none") is a pure no-op (it
+        # returns immediately, skipping trim_positionless_ends too) -- run
+        # trim_positionless_ends explicitly so leading/trailing
+        # position-less rows introduced by densify_trajectory_frames still
+        # get dropped, matching `_interpolate_and_scale`'s else-branch.
+        relinked_with_pose = trim_positionless_ends(relinked_with_pose)
+
+    # The single identity resolve for this pipeline run.
+    relinked_with_pose = resolve_identity(
+        relinked_with_pose,
+        params,
+        identity_evidence_cache_path=identity_evidence_cache_path,
+    )
+
+    offenders = assert_one_identity_per_trajectory(relinked_with_pose)
+    if offenders:
+        logger.error(
+            "relink/resolve produced %d trajectories with more than one "
+            "identity: %s -- collapsing to majority",
+            len(offenders),
+            offenders[:20],
+        )
+        relinked_with_pose = collapse_to_majority_identity(
+            relinked_with_pose, offenders
+        )
 
     common_cols = [col for col in base_df.columns if col in relinked_with_pose.columns]
     relinked_base = relinked_with_pose.loc[:, common_cols].copy()
@@ -430,7 +555,7 @@ def relink_and_export_rich_csv(
         logger.exception("Failed to rewrite relinked final CSV: %s", final_csv_path)
         return None
 
-    if with_pose_df is not None and not with_pose_df.empty:
+    if has_pose:
         from hydra_suite.core.post.trajectory_writer import write_final_trajectories
 
         rich_path = write_final_trajectories(
@@ -472,7 +597,7 @@ def relink_and_export_rich_csv(
             else 0
         ),
     )
-    if with_pose_df is not None and not with_pose_df.empty:
+    if has_pose:
         rich_path = rich_export_path(final_csv_path)
         logger.info("Relinked rich-export CSV saved: %s", rich_path)
         return rich_path

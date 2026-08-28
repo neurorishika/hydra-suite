@@ -121,7 +121,7 @@ def test_relink_without_pose_refreshes_user_mode_tracks_csv(tmp_path, monkeypatc
     result = relink_and_export_rich_csv(
         final_csv,
         state=object(),
-        params={},
+        params={"FINAL_INTERPOLATION_MAX_GAP": 10},
         min_valid_conf=0.2,
         ignore_keypoints=None,
         debug_mode=False,
@@ -133,11 +133,19 @@ def test_relink_without_pose_refreshes_user_mode_tracks_csv(tmp_path, monkeypatc
     # falls back to returning the (relinked) final CSV path itself.
     assert result == final_csv
 
-    # The final CSV itself was rewritten with the relinked IDs.
+    # The final CSV itself was rewritten with the relinked IDs. (Task 6:
+    # identity resolution -- including sort_trajectories_by_identity's
+    # renumbering to sequential ids -- now always runs once after relinking,
+    # even on this no-pose-data path, so the relinked (100, 200) fragment
+    # ids are further canonicalized to sequential ids by the time they are
+    # written. The important invariant this test guards is not the exact id
+    # VALUES but that the two trajectories survive and the final CSV and
+    # tracks.csv agree on whatever ids were assigned.)
     rewritten = pd.read_csv(final_csv)
-    assert set(rewritten["TrajectoryID"].unique()) == {100, 200}
+    rewritten_ids = set(rewritten["TrajectoryID"].unique())
+    assert len(rewritten_ids) == 2
 
     # The clean tracks.csv must now agree -- refreshed from the relinked base,
     # not left stale with the pre-relink IDs (1, 2).
     tracks = pd.read_csv(stale_tracks)
-    assert set(tracks["id"].unique()) == {100, 200}
+    assert set(tracks["id"].unique()) == rewritten_ids

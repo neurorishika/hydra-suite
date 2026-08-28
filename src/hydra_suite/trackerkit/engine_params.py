@@ -1080,6 +1080,10 @@ def build_engine_params(
         "ONLINE_PRIOR_WEIGHT": float(
             _cfg_get(cfg, "online_prior_weight", default=0.25)
         ),
+        "FRAGMENT_MIN_SUPPORT": float(
+            _cfg_get(cfg, "fragment_min_support", default=0.5)
+        ),
+        "FRAGMENT_MAX_BLOCKERS": int(_cfg_get(cfg, "fragment_max_blockers", default=4)),
         "FRAGMENT_LENGTH_WEIGHT": float(
             _cfg_get(cfg, "fragment_length_weight", default=0.60)
         ),

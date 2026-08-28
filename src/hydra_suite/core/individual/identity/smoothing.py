@@ -298,26 +298,34 @@ def smooth_trajectory_posteriors(
 def smoothed_label_and_conf(
     smoothed: list[np.ndarray],
     catalog: IdentityCatalog,
-    display_threshold: float,
+    display_threshold: float | None,
 ) -> list[tuple[str, float]]:
     """Per-frame ``(label, confidence)`` from smoothed catalog posteriors.
 
     For each frame's smoothed log-posterior, picks the argmax over the
     *known* identities (catalog index >= 1, i.e. excluding ``unknown`` at
-    index 0) and reports its probability as the confidence. When that
-    probability is below ``display_threshold`` the label is reported as
-    ``''`` (unknown/undecided) and the confidence is zeroed -- matching the
-    online decoder's display-threshold convention exactly
+    index 0) and reports its probability as the confidence.
+
+    ``display_threshold`` is an *optional* gate, kept only for callers that
+    want to mirror the realtime overlay's display convention: when a float
+    is given and the best-known probability is below it, the label is
+    reported as ``''`` (unknown/undecided) and the confidence is zeroed --
+    matching the online decoder's display-threshold convention exactly
     (``substrate.solve_unique_assignment`` / ``TrackIdentityDecoder.
     _display_threshold``, which both report 0.0 confidence alongside an
     unassigned/blank label rather than a raw sub-threshold probability).
+    ``None`` disables the gate entirely and always reports the argmax label
+    and its raw posterior -- this is the mode used to write the offline
+    record columns (``IdentityFinalSmoothedLabel``/``...Confidence``),
+    which are a log of the classifier's belief, not a display decision.
 
     Args:
         smoothed: per-frame normalized log-posteriors (e.g. the output of
             :func:`smooth_trajectory_posteriors`).
         catalog: the catalog the posteriors are indexed against.
         display_threshold: minimum best-known probability required to
-            report a label instead of ``''``.
+            report a label instead of ``''``, or ``None`` to always report
+            the argmax label ungated.
 
     Returns:
         A list aligned to ``smoothed`` of ``(label, confidence)`` pairs.
@@ -337,11 +345,11 @@ def smoothed_label_and_conf(
 
         best_known_idx = int(np.argmax(known_probs)) + 1
         best_conf = float(probs[best_known_idx])
-        if best_conf >= display_threshold:
-            label = catalog.label_of(best_known_idx)
-        else:
+        if display_threshold is not None and best_conf < display_threshold:
             label = ""
             best_conf = 0.0
+        else:
+            label = catalog.label_of(best_known_idx)
         results.append((label, best_conf))
 
     return results

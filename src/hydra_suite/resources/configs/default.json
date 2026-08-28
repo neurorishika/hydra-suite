@@ -119,6 +119,7 @@
   "metric_high_uncertainty": true,
   "enable_identity_analysis": false,
   "identity_method": "none_disabled",
+  "fragment_min_support": 0.5,
   "use_apriltags": false,
   "cnn_classifiers": [],
   "color_tag_confidence": 0.5,

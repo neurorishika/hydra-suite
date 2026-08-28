@@ -90,6 +90,62 @@ relinking for them falls back to spatial and motion gates alone.
 See the [per-detection processing schematic](../schematics/trackerkit_pipeline.md)
 for how this fits into the wider detection-to-identity pipeline.
 
+## Final-Output Vocabulary
+
+The debug `*_tracking_final_with_individual.csv` export carries a fixed,
+explicit vocabulary for identity provenance -- no blank/NaN values:
+
+- **`IdentityFinalSource`** is never blank. A row that carries no identity
+  provenance (no classifier ran, no cache evidence, no relink veto) reads the
+  literal string `"none"`, not an empty cell -- readers should treat blank as
+  legacy data from before this vocabulary shipped, never as a valid current
+  value.
+- **`IdentityFinalSmoothedLabel` / `IdentityFinalSmoothedConfidence`** are an
+  ungated *record* of the cache's forward-backward smoothed evidence for
+  every row that has any (its argmax label and posterior), not a
+  display value -- they are no longer threshold-gated by
+  `IDENTITY_DISPLAY_THRESHOLD`. A row with no cache evidence (no
+  `DetectionID`, e.g. a filled/interpolated row) reads
+  `IdentityFinalSmoothedLabel="unknown"` with confidence `0.0`, which is a
+  fact about that row lacking evidence, not a low-confidence classification.
+- **`IdentityFinalConflictResolved`** is always boolean (`True`/`False`),
+  never NaN.
+- **Trajectories are dense.** A written trajectory has no interior NaN
+  position/orientation and no gap in its frame sequence -- interior gaps are
+  interpolated and filled (kept as `State="occluded"` rows with empty
+  `DetectionID` so a consumer can still exclude them from evidence). A
+  trajectory's leading and trailing runs that carry no detection and no
+  position are dropped outright rather than left as dangling NaN rows, so
+  every trajectory's first and last row has a real position.
+
+Rendered/exported video overlays label each track by its resolved
+`IdentityFinalLabel` (falling back to `IdentityFinalSmoothedLabel`, then
+`UniqueIdentityKey`) using this priority chain, tier by tier:
+
+1. `IdentityFinalLabel`, if the row has one and it is not the literal string
+   `"unknown"`.
+2. Otherwise `IdentityFinalSmoothedLabel`, under the same rule.
+3. Otherwise `UniqueIdentityKey` -- the raw per-frame classifier/tag
+   evidence -- but **only** when neither of the first two tiers had *any*
+   value, informative or not.
+
+A blank/missing value at a tier defers to the next tier, but the literal
+value `"unknown"` does **not** -- it is treated as the resolved answer for
+that track (this trajectory genuinely has no identity, not "we don't know
+yet"), so the overlay stops there and falls back to a plain `TrajectoryID`
+label/color instead of continuing down the chain to raw evidence. This
+matters because `"unknown"` is a common, expected value: any trajectory the
+fragment solver could not confidently resolve is written with
+`IdentityFinalLabel="unknown"` (see above), and a real run's unresolved
+fraction can be substantial. Without this rule, an unresolved track's video
+label/color would silently come from raw, un-smoothed per-frame evidence --
+the exact frame-to-frame flicker this priority chain exists to eliminate --
+rather than from a stable value. The on-video label matches what the CSV
+reports for that track whenever a tier resolved with an informative value;
+for a genuinely unresolved track, both the CSV (`"unknown"`) and the video
+(plain `TrajectoryID`) consistently signal "not identified," just with
+different literal tokens.
+
 ## Typical Uses
 
 - Build identity classifier training sets.

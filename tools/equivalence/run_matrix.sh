@@ -67,6 +67,7 @@ if [ "$FIXTURES" = "1" ]; then
     "worm_bgsub|$FX/clips/worm_bgsub.mp4|$FX/configs/worm_bgsub.json|"
     "worm_bgsub_scaled|$FX/clips/worm_bgsub.mp4|$FX/configs/worm_bgsub_scaled.json|"
     "ant_cnn_identity|$FX/clips/ant_cnn_identity.mp4|$FX/configs/ant_cnn_identity.json|$FX/ooceraea_biroi.json"
+    "ant_cnn_identity_relink|$FX/clips/ant_cnn_identity.mp4|$FX/configs/ant_cnn_identity_relink.json|$FX/ooceraea_biroi.json"
     "fly_obb|$FX/clips/fly_obb.mp4|$FX/configs/fly_obb.json|"
   )
   # ON-path clips: configs that deliberately turn a feature ON, so their
