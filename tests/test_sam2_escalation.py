@@ -3,9 +3,15 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 
 from hydra_suite.detectkit.gui.models import OBBSource
-from hydra_suite.detectkit.jobs.sam2_escalation import EscalationRequest, run_escalation
+from hydra_suite.detectkit.jobs.sam2_escalation import (
+    EscalationRequest,
+    accept_pending_escalation,
+    reject_pending_escalation,
+    run_escalation,
+)
 
 
 class _FakeExec:
@@ -39,90 +45,199 @@ def _make_source(tmp_path):
     return OBBSource(path=str(root), name="orig", level="obb")
 
 
-def test_escalation_writes_reviewed_false_derived_source(tmp_path):
+def test_escalation_stages_without_touching_canonical_labels(tmp_path):
     src = _make_source(tmp_path)
+    original_label_text = (Path(src.path) / "labels" / "a.txt").read_text()
     project = types.SimpleNamespace(project_dir=str(tmp_path), sources=[src])
     req = EscalationRequest(
         project=project, source_names=["orig"], variant="sam2.1-hiera-base_plus"
     )
+
     result = run_escalation(req, _FakeExec())
 
-    assert result.derived == ["orig_seg"]
+    assert result.staged == ["orig"]
     assert result.primed == 1 and result.fell_back == 1
-    new = [s for s in project.sources if s.name == "orig_seg"][0]
-    assert new.level == "polygon" and new.reviewed is False
-    assert new.derived_from == "orig" and new.sam2_variant == "sam2.1-hiera-base_plus"
-    label = Path(new.path) / "labels" / "a.txt"
-    assert label.exists() and len(label.read_text().splitlines()) == 2
-    assert (Path(new.path) / "images" / "a.jpg").exists()  # image copied
+    assert result.skipped == []
+
+    # Canonical source untouched.
+    assert (Path(src.path) / "labels" / "a.txt").read_text() == original_label_text
+    assert src.level == "obb"
+    assert src.reviewed is True
+
+    # No new OBBSource registered.
+    assert [s.name for s in project.sources] == ["orig"]
+
+    pending = src.pending_escalation
+    assert pending is not None
+    assert pending.target_level == "polygon"
+    assert pending.sam2_variant == "sam2.1-hiera-base_plus"
+    staged_label = Path(pending.staged_path) / "labels" / "a.txt"
+    assert staged_label.exists() and len(staged_label.read_text().splitlines()) == 2
+    assert (Path(pending.staged_path) / "classes.txt").read_text() == "ant\n"
 
 
-def test_rerun_without_overwrite_skips_and_preserves_existing(tmp_path):
-    src = _make_source(tmp_path)
-    project = types.SimpleNamespace(project_dir=str(tmp_path), sources=[src])
-    req = EscalationRequest(
-        project=project, source_names=["orig"], variant="sam2.1-hiera-base_plus"
-    )
-    result = run_escalation(req, _FakeExec())
-    assert result.derived == ["orig_seg"]
-
-    derived_sources = [s for s in project.sources if s.name == "orig_seg"]
-    assert len(derived_sources) == 1
-    derived = derived_sources[0]
-    # Simulate the user having reviewed the derived source.
-    derived.reviewed = True
-    label_path = Path(derived.path) / "labels" / "a.txt"
-    original_label_text = label_path.read_text()
-
-    req2 = EscalationRequest(
-        project=project,
-        source_names=["orig"],
-        variant="sam2.1-hiera-base_plus",
-        overwrite=False,
-    )
-    result2 = run_escalation(req2, _FakeExec())
-
-    assert result2.derived == []
-    assert len(result2.skipped) == 1
-    assert result2.skipped[0][0] == "orig"
-
-    seg_sources = [s for s in project.sources if s.name == "orig_seg"]
-    assert len(seg_sources) == 1  # no duplicate entry
-    assert seg_sources[0] is derived
-    assert seg_sources[0].reviewed is True  # not clobbered
-    assert label_path.read_text() == original_label_text  # not clobbered
-
-
-def test_rerun_with_overwrite_replaces_in_place(tmp_path):
+def test_rerun_without_overwrite_skips_existing_pending(tmp_path):
     src = _make_source(tmp_path)
     project = types.SimpleNamespace(project_dir=str(tmp_path), sources=[src])
     req = EscalationRequest(
         project=project, source_names=["orig"], variant="sam2.1-hiera-base_plus"
     )
     run_escalation(req, _FakeExec())
-    derived = [s for s in project.sources if s.name == "orig_seg"][0]
-    derived.reviewed = True
+    first_staged_path = src.pending_escalation.staged_path
 
-    req2 = EscalationRequest(
-        project=project,
-        source_names=["orig"],
-        variant="sam2.1-hiera-base_plus",
-        overwrite=True,
+    result2 = run_escalation(req, _FakeExec(), overwrite=False)
+
+    assert result2.staged == []
+    assert len(result2.skipped) == 1 and result2.skipped[0][0] == "orig"
+    assert src.pending_escalation.staged_path == first_staged_path  # untouched
+
+
+def test_rerun_with_overwrite_restages(tmp_path):
+    src = _make_source(tmp_path)
+    project = types.SimpleNamespace(project_dir=str(tmp_path), sources=[src])
+    req = EscalationRequest(
+        project=project, source_names=["orig"], variant="sam2.1-hiera-base_plus"
     )
-    result2 = run_escalation(req2, _FakeExec(), overwrite=True)
+    run_escalation(req, _FakeExec())
+    first_staged_path = src.pending_escalation.staged_path
 
-    assert result2.derived == ["orig_seg"]
+    result2 = run_escalation(req, _FakeExec(), overwrite=True)
+
+    assert result2.staged == ["orig"]
     assert result2.skipped == []
-    seg_sources = [s for s in project.sources if s.name == "orig_seg"]
-    assert len(seg_sources) == 1  # still exactly one entry, no duplicate
-    assert seg_sources[0].reviewed is False  # replaced in place, fresh state
+    # Same content-hashed staging dir reused, not accumulated.
+    assert src.pending_escalation.staged_path == first_staged_path
+    assert Path(first_staged_path).is_dir()
+
+
+def test_accept_pending_escalation_promotes_labels_and_resets_reviewed(tmp_path):
+    src = _make_source(tmp_path)
+    project = types.SimpleNamespace(project_dir=str(tmp_path), sources=[src])
+    req = EscalationRequest(
+        project=project, source_names=["orig"], variant="sam2.1-hiera-base_plus"
+    )
+    run_escalation(req, _FakeExec())
+    staged_label_text = (
+        Path(src.pending_escalation.staged_path) / "labels" / "a.txt"
+    ).read_text()
+    staged_path = src.pending_escalation.staged_path
+
+    accept_pending_escalation(src)
+
+    assert src.pending_escalation is None
+    assert src.level == "polygon"
+    assert src.reviewed is False
+    assert src.sam2_variant == "sam2.1-hiera-base_plus"
+    assert (Path(src.path) / "labels" / "a.txt").read_text() == staged_label_text
+    assert not Path(staged_path).exists()
+
+
+def _make_nested_source(tmp_path):
+    """A source whose images/labels use a nested split layout (images/train/...),
+    as dataset_inspector.py's directory-layout scan supports and as
+    source_import.py's materializer can produce."""
+    root = tmp_path / "sources" / "nested"
+    (root / "images" / "train").mkdir(parents=True)
+    (root / "labels" / "train").mkdir(parents=True)
+    cv2.imwrite(
+        str(root / "images" / "train" / "a.jpg"), np.zeros((100, 100, 3), np.uint8)
+    )
+    (root / "labels" / "train" / "a.txt").write_text(
+        "0 0.1 0.1 0.4 0.1 0.4 0.4 0.1 0.4\n"
+    )
+    (root / "classes.txt").write_text("ant\n")
+    return OBBSource(path=str(root), name="nested", level="obb")
+
+
+def test_escalation_stages_nested_image_layout_correctly(tmp_path):
+    """Regression: staging must mirror the source's directory structure, not
+    flatten to top-level images/*.* -- a split layout (images/train/...) has
+    zero images at the top level, which used to silently stage nothing and
+    made accept() delete every label with no staged replacement."""
+    src = _make_nested_source(tmp_path)
+    project = types.SimpleNamespace(project_dir=str(tmp_path), sources=[src])
+    req = EscalationRequest(
+        project=project, source_names=["nested"], variant="sam2.1-hiera-base_plus"
+    )
+
+    result = run_escalation(req, _FakeExec())
+
+    assert result.staged == ["nested"]
+    staged_label = (
+        Path(src.pending_escalation.staged_path) / "labels" / "train" / "a.txt"
+    )
+    assert staged_label.exists()
+    assert len(staged_label.read_text().splitlines()) == 1
+
+
+def test_accept_refuses_when_staged_labels_missing_files(tmp_path):
+    """If staging skipped a label (e.g. an unreadable image during escalation),
+    accept must refuse rather than deleting that image's original label with
+    nothing to replace it."""
+    src = _make_source(tmp_path)
+    # Add a second image/label pair.
+    cv2.imwrite(
+        str(Path(src.path) / "images" / "b.jpg"), np.zeros((100, 100, 3), np.uint8)
+    )
+    (Path(src.path) / "labels" / "b.txt").write_text(
+        "0 0.2 0.2 0.5 0.2 0.5 0.5 0.2 0.5\n"
+    )
+    project = types.SimpleNamespace(project_dir=str(tmp_path), sources=[src])
+    req = EscalationRequest(
+        project=project, source_names=["orig"], variant="sam2.1-hiera-base_plus"
+    )
+    run_escalation(req, _FakeExec())
+
+    # Simulate an image that failed to stage (e.g. cv2.imread returned None
+    # during escalation): remove its staged label after the fact.
+    staged_b = Path(src.pending_escalation.staged_path) / "labels" / "b.txt"
+    staged_b.unlink()
+
+    original_a = (Path(src.path) / "labels" / "a.txt").read_text()
+    original_b = (Path(src.path) / "labels" / "b.txt").read_text()
+
+    with pytest.raises(RuntimeError):
+        accept_pending_escalation(src)
+
+    # Nothing was touched -- refusal happens before any deletion.
+    assert src.pending_escalation is not None
+    assert (Path(src.path) / "labels" / "a.txt").read_text() == original_a
+    assert (Path(src.path) / "labels" / "b.txt").read_text() == original_b
+
+
+def test_reject_pending_escalation_discards_staging_leaves_source_untouched(tmp_path):
+    src = _make_source(tmp_path)
+    original_label_text = (Path(src.path) / "labels" / "a.txt").read_text()
+    project = types.SimpleNamespace(project_dir=str(tmp_path), sources=[src])
+    req = EscalationRequest(
+        project=project, source_names=["orig"], variant="sam2.1-hiera-base_plus"
+    )
+    run_escalation(req, _FakeExec())
+    staged_path = src.pending_escalation.staged_path
+
+    reject_pending_escalation(src)
+
+    assert src.pending_escalation is None
+    assert src.level == "obb"
+    assert src.reviewed is True
+    assert (Path(src.path) / "labels" / "a.txt").read_text() == original_label_text
+    assert not Path(staged_path).exists()
+
+
+def test_accept_without_pending_raises():
+    src = OBBSource(name="orig", level="obb")
+    with pytest.raises(ValueError):
+        accept_pending_escalation(src)
+
+
+def test_reject_without_pending_raises():
+    src = OBBSource(name="orig", level="obb")
+    with pytest.raises(ValueError):
+        reject_pending_escalation(src)
 
 
 def test_worker_runs_with_injected_executor(tmp_path):
-    from hydra_suite.detectkit.jobs.sam2_escalation import (
-        EscalationRequest,
-        Sam2EscalationWorker,
-    )
+    from hydra_suite.detectkit.jobs.sam2_escalation import Sam2EscalationWorker
 
     src = _make_source(tmp_path)
     project = types.SimpleNamespace(project_dir=str(tmp_path), sources=[src])
@@ -133,6 +248,6 @@ def test_worker_runs_with_injected_executor(tmp_path):
     )
     worker = Sam2EscalationWorker(req, executor=_FakeExec())
     captured = {}
-    worker.result_ready.connect(lambda r: captured.update(derived=r.derived))
+    worker.result_ready.connect(lambda r: captured.update(staged=r.staged))
     worker.execute()  # call directly (no thread) — BaseWorker pattern
-    assert captured["derived"] == ["orig_seg"]
+    assert captured["staged"] == ["orig"]
