@@ -451,23 +451,6 @@ def _coerce_coco_image_size(
     return int(image.shape[1]), int(image.shape[0])
 
 
-def _points_to_min_area_rect(
-    points: list[tuple[float, float]], width: int, height: int
-) -> list[float] | None:
-    if len(points) < 3:
-        return None
-
-    import cv2
-    import numpy as np
-
-    rect = cv2.minAreaRect(np.asarray(points, dtype=np.float32))
-    box = cv2.boxPoints(rect).astype(float)
-    coords: list[float] = []
-    for x_pos, y_pos in box:
-        coords.extend([x_pos / float(width), y_pos / float(height)])
-    return coords
-
-
 def _coco_segmentation_points(segmentation: Any) -> list[tuple[float, float]]:
     points: list[tuple[float, float]] = []
     if not isinstance(segmentation, list):

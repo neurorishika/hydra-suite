@@ -36,6 +36,7 @@ class OverlaySettings(NamedTuple):
 
     show_gt: bool
     show_pred: bool
+    show_derived_levels: bool
     confidence_threshold: float
     visible_class_ids: set
     active_model_path: str
@@ -246,6 +247,15 @@ class ToolsPanel(QWidget):
         self._chk_show_pred.stateChanged.connect(self._emit_overlay_changed)
         v.addWidget(self._chk_show_pred)
 
+        self._chk_show_derived_levels = QCheckBox("Show derived levels")
+        self._chk_show_derived_levels.setChecked(True)
+        self._chk_show_derived_levels.setToolTip(
+            "Also show geometry levels derived from a source's native level "
+            "(e.g. a polygon source's derived OBB and AABB outlines)."
+        )
+        self._chk_show_derived_levels.stateChanged.connect(self._emit_overlay_changed)
+        v.addWidget(self._chk_show_derived_levels)
+
         overlay_hint = QLabel(
             "Choose a model and threshold, then run inference on the current image when you want to refresh predictions."
         )
@@ -432,6 +442,7 @@ class ToolsPanel(QWidget):
         return OverlaySettings(
             show_gt=show_gt,
             show_pred=show_pred,
+            show_derived_levels=self._chk_show_derived_levels.isChecked(),
             confidence_threshold=confidence,
             visible_class_ids=visible_ids,
             active_model_path=self._active_model_path,

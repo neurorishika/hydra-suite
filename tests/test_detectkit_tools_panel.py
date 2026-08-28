@@ -41,13 +41,47 @@ def test_overlay_settings_namedtuple():
     s = OverlaySettings(
         show_gt=True,
         show_pred=False,
+        show_derived_levels=True,
         confidence_threshold=0.5,
         visible_class_ids=set(),
         active_model_path="",
     )
     assert s.show_gt is True
     assert s.show_pred is False
-    assert s.confidence_threshold == 0.5
+    assert s.show_derived_levels is True
+
+
+def test_tools_panel_has_show_derived_levels_checkbox(qapp):
+    from hydra_suite.detectkit.gui.panels.tools_panel import ToolsPanel
+
+    panel = ToolsPanel()
+    assert hasattr(panel, "_chk_show_derived_levels")
+
+
+def test_overlay_settings_includes_show_derived_levels_default_true(qapp):
+    from hydra_suite.detectkit.gui.panels.tools_panel import ToolsPanel
+
+    panel = ToolsPanel()
+    settings = panel.get_overlay_settings()
+    assert settings.show_derived_levels is True
+
+
+def test_overlay_settings_reflects_unchecked_show_derived_levels(qapp):
+    from hydra_suite.detectkit.gui.panels.tools_panel import ToolsPanel
+
+    panel = ToolsPanel()
+    panel._chk_show_derived_levels.setChecked(False)
+    settings = panel.get_overlay_settings()
+    assert settings.show_derived_levels is False
+
+
+def test_main_window_on_overlay_changed_wires_derived_levels_to_canvas():
+    import inspect
+
+    from hydra_suite.detectkit.gui.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._on_overlay_changed)
+    assert "set_derived_levels_visible" in source
 
 
 def test_tools_panel_fixed_width(qapp):

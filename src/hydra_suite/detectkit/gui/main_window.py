@@ -73,6 +73,35 @@ from .utils import (
 logger = logging.getLogger(__name__)
 
 
+def _resolve_source_render_state(project, source_path):
+    """Return (native_level, reviewed) for the OBBSource at *source_path* in
+    *project*. Falls back to (GeometryLevel.OBB, True) if project is None,
+    no source matches, or the matched source's level string doesn't parse --
+    OBBSource.level is an unvalidated string loaded from project JSON, so a
+    hand-edited or future-version file must degrade gracefully here rather
+    than crashing show_image on every image selection."""
+    from hydra_suite.training.geometry_levels import GeometryLevel
+
+    if project is None:
+        return GeometryLevel.OBB, True
+
+    src_obj = next((s for s in project.sources if s.path == source_path), None)
+    if src_obj is None:
+        return GeometryLevel.OBB, True
+
+    try:
+        native_level = GeometryLevel.from_str(src_obj.level)
+    except ValueError:
+        logger.warning(
+            "Unknown geometry level %r for source %r; rendering as OBB",
+            src_obj.level,
+            source_path,
+        )
+        native_level = GeometryLevel.OBB
+
+    return native_level, src_obj.reviewed
+
+
 class _DetectKitDatasetInferenceWorker(BaseWorker):
     """Run PyTorch OBB inference across every image in the active source."""
 
@@ -1487,6 +1516,7 @@ class DetectKitMainWindow(QMainWindow):
             self._sync_al_action_enabled()
         self._canvas.set_overlay_visibility(settings.show_gt, settings.show_pred)
         self._canvas.set_class_filter(settings.visible_class_ids)
+        self._canvas.set_derived_levels_visible(settings.show_derived_levels)
 
         signature = self._dataset_signature(settings)
 
@@ -1980,7 +2010,15 @@ class DetectKitMainWindow(QMainWindow):
                             exc_info=True,
                         )
                 dets = parse_obb_label(label_path, w, h, class_id_map=class_id_map)
-                self._canvas.set_gt_detections(dets, class_names=class_names)
+                native_level, reviewed = _resolve_source_render_state(
+                    self._project, source_path
+                )
+                self._canvas.set_gt_detections_multi_level(
+                    dets,
+                    class_names=class_names,
+                    native_level=native_level,
+                    reviewed=reviewed,
+                )
 
         # If we already have predictions for this image from a previous Run Inference, restore them.
         self._refresh_prediction_overlay(force=True)
