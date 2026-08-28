@@ -7,6 +7,7 @@ from hydra_suite.core.inference.config import (
     InferenceConfigError,
     OBBConfig,
     OBBDirectConfig,
+    build_inference_config_from_params,
 )
 
 
@@ -23,6 +24,16 @@ def _min_cfg(**kw):
 def test_pipeline_depth_defaults_to_2():
     cfg = _min_cfg()
     assert cfg.pipeline_depth == 2
+
+
+def test_pipeline_depth_is_built_from_tracker_params():
+    cfg = build_inference_config_from_params(
+        {
+            "YOLO_OBB_DIRECT_MODEL_PATH": "/m.pt",
+            "PIPELINE_DEPTH": 1,
+        }
+    )
+    assert cfg.pipeline_depth == 1
 
 
 def test_pipeline_depth_roundtrips_via_json():

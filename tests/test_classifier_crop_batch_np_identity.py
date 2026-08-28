@@ -15,12 +15,24 @@ import numpy as np
 
 from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
 from hydra_suite.core.inference.result import OBBResult
+from hydra_suite.core.inference.runtime import RuntimeContext
 from hydra_suite.core.inference.stages.crops import (
+    canonical_batch_to_classifier_np,
+    extract_canonical_crops_batch,
     extract_classifier_crops_batch,
     extract_classifier_crops_batch_np,
 )
 
 _GEOM = CanonicalGeometry(canvas_wh=(64, 32), margin=1.3, aspect_ratio=2.0)
+
+
+def _runtime_cpu() -> RuntimeContext:
+    return RuntimeContext(
+        cuda_mode=False,
+        device="cpu",
+        use_nvdec=False,
+        tensor_on_cuda=False,
+    )
 
 
 def _obb(frame_idx: int, n: int) -> OBBResult:
@@ -86,3 +98,28 @@ def test_numpy_batch_handles_empty_window():
     assert batch.crops == []
     assert batch.detection_ids.shape == (0,)
     assert batch.native_sizes.shape == (0, 2)
+
+
+def test_shared_canonical_batch_converts_to_identical_classifier_bytes():
+    rng = np.random.default_rng(1)
+    frames = [
+        rng.integers(0, 256, (64, 64, 3), dtype=np.uint8),
+        rng.integers(0, 256, (64, 64, 3), dtype=np.uint8),
+    ]
+    obbs = [_obb(3, 3), _obb(7, 2)]
+
+    reference = extract_classifier_crops_batch_np(frames, obbs, _GEOM)
+    shared = extract_canonical_crops_batch(
+        frames, obbs, _GEOM, _runtime_cpu(), suppress_foreign=False
+    )
+    converted = canonical_batch_to_classifier_np(shared)
+
+    assert len(converted.crops) == len(reference.crops)
+    for actual, expected in zip(converted.crops, reference.crops):
+        assert np.array_equal(actual, expected)
+    assert np.array_equal(converted.detection_ids, reference.detection_ids)
+    assert np.array_equal(converted.frame_index, reference.frame_index)
+    assert np.array_equal(converted.native_sizes, reference.native_sizes)
+    assert converted.obb_by_frame.keys() == reference.obb_by_frame.keys()
+    for frame_idx in converted.obb_by_frame:
+        assert converted.obb_by_frame[frame_idx] is reference.obb_by_frame[frame_idx]

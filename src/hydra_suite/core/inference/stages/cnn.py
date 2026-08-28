@@ -15,6 +15,7 @@ from hydra_suite.utils.profiling import span
 from ..config import CNNConfig
 from ..result import CNNDetectionPrediction, CNNFactorPrediction, CNNResult, OBBResult
 from ..runtime import RuntimeContext, resolved_backend_for
+from ._batching import predict_in_chunks
 from ._resource_close import close_backend_resource
 
 logger = logging.getLogger(__name__)
@@ -98,7 +99,9 @@ def run_cnn(
         canon_crops, model.input_size, model.backend.metadata.fit_policy
     )
 
-    all_probs = model.backend.predict_batch(np_crops)
+    all_probs = predict_in_chunks(
+        np_crops, getattr(config, "batch_size", 64), model.backend.predict_batch
+    )
 
     return _assemble_cnn_result(all_probs, model, config)
 
@@ -155,9 +158,9 @@ def run_cnn_batch(
     Builds classifier crops internally via extract_classifier_crops_batch_np (the
     shared canonical canvas, BGR uint8 -- bit-identical to the per-frame run_cnn
     path), then fits each to the model input via Layer 2 exactly like run_cnn.
-    Runs the backend ONCE over all crops (cross-frame perf win), then splits
-    per frame via batch.select_frame. Assembly delegates to _assemble_cnn_result
-    (DRY with run_cnn).
+    Runs the backend over all crops in order-preserving ``config.batch_size``
+    chunks, then splits per frame via ``batch.select_frame``. Assembly delegates
+    to ``_assemble_cnn_result`` (DRY with ``run_cnn``).
 
     Both branches dispatch Layer 2 on the SAME ``model.backend.metadata
     .fit_policy`` (letterbox/squash/native). The GPU (NVDEC on-device) branch
@@ -203,8 +206,12 @@ def run_cnn_batch(
                     (fitted[i] * 255.0).floor().clamp(0, 255) for i in range(n_total)
                 ]
             with span(N.BACKEND_FORWARD, units=n_total, gpu=True):
-                all_probs = model.backend.predict_batch_cuda(
-                    cuda_crops, input_is_bgr=False
+                all_probs = predict_in_chunks(
+                    cuda_crops,
+                    getattr(config, "batch_size", 64),
+                    lambda chunk: model.backend.predict_batch_cuda(
+                        chunk, input_is_bgr=False
+                    ),
                 )
         else:
             all_probs = []
@@ -223,7 +230,11 @@ def run_cnn_batch(
                 batch.crops, model.input_size, policy
             )
             with span(N.BACKEND_FORWARD, units=len(np_crops), gpu=True):
-                all_probs = model.backend.predict_batch(np_crops)
+                all_probs = predict_in_chunks(
+                    np_crops,
+                    getattr(config, "batch_size", 64),
+                    model.backend.predict_batch,
+                )
         else:
             all_probs = []
 

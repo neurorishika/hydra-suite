@@ -1097,6 +1097,7 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
         apriltag=apriltag_cfg,
         canonical=canonical,
         detection_batch_size=batch_size,
+        pipeline_depth=int(params.get("PIPELINE_DEPTH", 2)),
         realtime=False,
         use_cache=True,
         runtime_tier=runtime_tier,

@@ -167,7 +167,13 @@ def _make_stub_headtail(frame_idx: int, detection_ids: np.ndarray) -> HeadTailRe
 
 
 def _fake_run_headtail_batch(
-    frames, obb_results, model, config, runtime, geometry=None
+    frames,
+    obb_results,
+    model,
+    config,
+    runtime,
+    geometry=None,
+    canonical_batch=None,
 ):
     """Deterministic run_headtail_batch stub.
 
@@ -201,7 +207,15 @@ def _make_stub_cnn(frame_idx: int, detection_ids: np.ndarray, label: str) -> CNN
     return CNNResult(label=label, predictions=preds)
 
 
-def _fake_run_cnn_batch(frames, obb_results, model, config, runtime, geometry=None):
+def _fake_run_cnn_batch(
+    frames,
+    obb_results,
+    model,
+    config,
+    runtime,
+    geometry=None,
+    headtail_by_frame=None,
+):
     """Deterministic run_cnn_batch stub.
 
     Returns one CNNResult per frame, keyed by frame_idx. The label is taken from

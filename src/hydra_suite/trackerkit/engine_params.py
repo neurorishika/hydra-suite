@@ -970,6 +970,7 @@ def build_engine_params(
             _cfg_get(cfg, "yolo_seq_individual_batch_size", default=4)
         ),
         "YOLO_BATCH_SIZE": int(_cfg_get(cfg, "detection_batch_size", default=1)),
+        "PIPELINE_DEPTH": int(_cfg_get(cfg, "pipeline_depth", default=2)),
         "YOLO_SEQ_STAGE2_POW2_PAD": bool(
             _cfg_get(cfg, "yolo_seq_stage2_pow2_pad", default=False)
         ),

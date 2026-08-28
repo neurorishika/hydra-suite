@@ -162,6 +162,25 @@ when `new/legacy` wall-clock ratio exceeds `PERF_TOLERANCE` (default 1.25). This
 catches throughput regressions that the CSV comparison can't — e.g. a cold
 per-frame pose service running seconds/frame even when the trajectories match.
 
+For profiling a real fixture, `runner.py` can override each independent batching
+control without editing the fixture config:
+
+```bash
+HYDRA_PROFILE=1 PYTHONPATH=src python tools/equivalence/runner.py \
+  --orig-config tools/equivalence/fixtures/configs/ant_cnn_identity.json \
+  --video tools/equivalence/fixtures/clips/ant_cnn_identity.mp4 \
+  --outdir /tmp/ant-profile --runtime gpu \
+  --skeleton tools/equivalence/fixtures/ooceraea_biroi.json \
+  --detection-batch-size 4 --headtail-batch-size 25 \
+  --cnn-batch-size 25 --pose-batch-size 25 --pipeline-depth 2
+```
+
+`--detection-batch-size` is frames per detector call. The head-tail, CNN, and
+pose flags are crops per backend call; `--pipeline-depth` controls synchronous
+versus overlapped execution. `meta.json` records the resolved controls alongside
+end-to-end time/FPS, and the profile JSONs under `<video>_logs/` contain the
+stage attribution.
+
 ## Cross-device merge-readiness
 
 Run `run_matrix.sh` on each target machine (Apple Silicon → `mps`, NVIDIA →

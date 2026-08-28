@@ -117,6 +117,15 @@ class _FakeHTBackend:
         return [[np.array([0.05, 0.05, 0.9, 0.0], dtype=np.float32)] for _ in crops]
 
 
+class _RecordingHTBackend(_FakeHTBackend):
+    def __init__(self):
+        self.batch_sizes = []
+
+    def predict_batch(self, crops):
+        self.batch_sizes.append(len(crops))
+        return super().predict_batch(crops)
+
+
 class _FakeHTModel:
     backend = _FakeHTBackend()
     input_size = (16, 16)
@@ -131,6 +140,15 @@ class _FakeCNNBackend:
     def predict_batch(self, crops):
         probs = np.array([1 / 3, 1 / 3, 1 / 3], dtype=np.float32)
         return [[probs.copy()] for _ in crops]
+
+
+class _RecordingCNNBackend(_FakeCNNBackend):
+    def __init__(self):
+        self.batch_sizes = []
+
+    def predict_batch(self, crops):
+        self.batch_sizes.append(len(crops))
+        return super().predict_batch(crops)
 
 
 def _fake_cnn_model():
@@ -268,6 +286,26 @@ def test_run_headtail_batch_empty_frame():
     assert out[1].heading_hints.shape[0] == 2
 
 
+def test_run_headtail_batch_honors_classifier_batch_size():
+    obb = _obb(0, 5)
+    backend = _RecordingHTBackend()
+    model = _FakeHTModel.__new__(_FakeHTModel)
+    model.backend = backend
+    model.input_size = (16, 16)
+    model.class_names = ["right", "left", "up", "down"]
+
+    run_headtail_batch(
+        [np.zeros((100, 100, 3), np.uint8)],
+        [obb],
+        model,
+        config=HeadTailConfig(model_path="/ht.pt", batch_size=2),
+        runtime=_cpu_rt(),
+        geometry=_TEST_GEOMETRY,
+    )
+
+    assert backend.batch_sizes == [2, 2, 1]
+
+
 # ---------------------------------------------------------------------------
 # Equivalence: run_headtail_batch == run_headtail per frame
 # Uses crop-content-sensitive backend to catch crop-path divergence.
@@ -354,6 +392,28 @@ def test_run_cnn_batch_probabilities():
     np.testing.assert_array_almost_equal(
         probs, np.array([1 / 3, 1 / 3, 1 / 3], dtype=np.float32)
     )
+
+
+def test_run_cnn_batch_honors_classifier_batch_size():
+    obb = _obb(0, 5)
+    backend = _RecordingCNNBackend()
+    model = CNNModel(
+        backend=backend,
+        input_size=(16, 16),
+        factor_names=["identity"],
+        factor_class_names=[["a", "b", "c"]],
+    )
+
+    run_cnn_batch(
+        [np.zeros((100, 100, 3), np.uint8)],
+        [obb],
+        model,
+        config=CNNConfig(label="identity", model_path="/cnn.pt", batch_size=2),
+        runtime=_cpu_rt(),
+        geometry=_TEST_GEOMETRY,
+    )
+
+    assert backend.batch_sizes == [2, 2, 1]
 
 
 # ---------------------------------------------------------------------------
