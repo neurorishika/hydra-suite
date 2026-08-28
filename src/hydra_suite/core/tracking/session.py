@@ -336,6 +336,20 @@ class TrackingSessionCore:
         params["FINAL_INTERPOLATION_MAX_GAP"] = final_interpolation_max_gap(
             self.config, self.params
         )
+        # I2: this run's real interpolation-method/heading settings, so the
+        # relink pass's own interpolate_trajectories call (rich_export.py)
+        # honors an explicit interpolation_method="none" instead of always
+        # falling back to interpolate_trajectories's "linear" default -- the
+        # same values `_interpolate_and_scale`/`_merge` already thread.
+        params["FINAL_INTERPOLATION_METHOD"] = str(
+            self.config.get("interpolation_method", "none")
+        ).lower()
+        params["FINAL_HEADING_FLIP_MAX_BURST"] = int(
+            self.config["heading_flip_max_burst"]
+        )
+        params["FINAL_DIRECTED_HEADING_POSTHOC"] = bool(
+            self.params.get("DIRECTED_ORIENT_POSTHOC_CONSISTENCY", False)
+        )
         return relink_and_export_rich_csv(
             final_csv,
             self.pose_state,

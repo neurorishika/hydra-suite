@@ -458,6 +458,7 @@ def relink_and_export_rich_csv(
         densify_trajectory_frames,
         interpolate_trajectories,
         relink_trajectories_with_pose_by_arena,
+        trim_positionless_ends,
     )
 
     relinked_with_pose = relink_trajectories_with_pose_by_arena(relink_input_df, params)
@@ -482,9 +483,36 @@ def relink_and_export_rich_csv(
             "before calling)"
         )
     max_gap = int(params["FINAL_INTERPOLATION_MAX_GAP"])
-    relinked_with_pose = interpolate_trajectories(
-        relinked_with_pose, max_gap=max_gap, fill_all_interior=True
+    # I2: honor the run's real interpolation-method/heading settings instead
+    # of silently falling back to interpolate_trajectories's own
+    # "linear"/5/False defaults, which would override an explicit
+    # interpolation_method="none" ("do not fabricate positions") and the
+    # run's actual heading-consistency config. Defaults here (not required
+    # like FINAL_INTERPOLATION_MAX_GAP) preserve this function's prior
+    # always-linear-fill behavior for callers that don't pass them.
+    final_interp_method = str(
+        params.get("FINAL_INTERPOLATION_METHOD", "linear")
+    ).lower()
+    final_heading_flip_max_burst = int(params.get("FINAL_HEADING_FLIP_MAX_BURST", 5))
+    final_directed_heading_posthoc = bool(
+        params.get("FINAL_DIRECTED_HEADING_POSTHOC", False)
     )
+    if final_interp_method != "none":
+        relinked_with_pose = interpolate_trajectories(
+            relinked_with_pose,
+            method=final_interp_method,
+            max_gap=max_gap,
+            heading_flip_max_burst=final_heading_flip_max_burst,
+            directed_heading_posthoc=final_directed_heading_posthoc,
+            fill_all_interior=True,
+        )
+    else:
+        # interpolate_trajectories(method="none") is a pure no-op (it
+        # returns immediately, skipping trim_positionless_ends too) -- run
+        # trim_positionless_ends explicitly so leading/trailing
+        # position-less rows introduced by densify_trajectory_frames still
+        # get dropped, matching `_interpolate_and_scale`'s else-branch.
+        relinked_with_pose = trim_positionless_ends(relinked_with_pose)
 
     # The single identity resolve for this pipeline run.
     relinked_with_pose = resolve_identity(

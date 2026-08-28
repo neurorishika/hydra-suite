@@ -224,3 +224,148 @@ def test_export_rich_csv_collapses_disagreeing_identities(
     error_records = [r for r in caplog.records if r.levelname == "ERROR"]
     assert any("more than one" in r.getMessage() for r in error_records)
     assert any("2" in r.getMessage() for r in error_records)  # names TrajectoryID 2
+
+
+def test_relink_honors_interpolation_method_none(tmp_path, monkeypatch):
+    """I2: relink_and_export_rich_csv must NOT silently override an explicit
+    interpolation_method="none" ("do not fabricate positions") with
+    interpolate_trajectories's own "linear" default. Frame gaps still get
+    densified (Task 5), but interior X/Y/Theta gaps must be left NaN, not
+    linearly filled -- while trim_positionless_ends still runs."""
+    final = tmp_path / "clip_final.csv"
+    # TrajectoryID 0: frames 1,2 then a gap, then frame 5 -- densify inserts
+    # frames 3,4 as position-less "occluded" rows; with method="none" they
+    # must stay NaN rather than being linearly interpolated.
+    base = pd.DataFrame(
+        {
+            "TrajectoryID": [0, 0, 0],
+            "FrameID": [1, 2, 5],
+            "X": [0.0, 1.0, 4.0],
+            "Y": [0.0, 0.0, 0.0],
+            "Theta": 0.0,
+            "State": "active",
+            "DetectionID": [1, 2, 3],
+        }
+    )
+    base.to_csv(final, index=False)
+
+    def fake_build(
+        final_csv_path,
+        state,
+        *,
+        params,
+        min_valid_conf,
+        ignore_keypoints,
+        identity_evidence_cache_path=None,
+        resolve=True,
+    ):
+        return pd.read_csv(final_csv_path)
+
+    def fake_relink(df, params):
+        return df.copy()
+
+    def fake_resolve(df, params, identity_evidence_cache_path=None):
+        out = df.copy()
+        out[C.FINAL_LABEL] = "a"
+        out[C.FINAL_ID] = 1
+        out[C.FINAL_SOURCE] = "offline"
+        out[C.FINAL_CONFIDENCE] = 0.9
+        return out
+
+    monkeypatch.setattr(rich_export, "build_rich_export_dataframe", fake_build)
+    import hydra_suite.core.post.processing as P
+
+    monkeypatch.setattr(P, "relink_trajectories_with_pose_by_arena", fake_relink)
+    import hydra_suite.core.individual.postprocess_df as PD
+
+    monkeypatch.setattr(PD, "resolve_identity", fake_resolve)
+
+    params = {
+        "FINAL_INTERPOLATION_MAX_GAP": 11,
+        "FINAL_INTERPOLATION_METHOD": "none",
+    }
+    out = rich_export.relink_and_export_rich_csv(
+        str(final),
+        state=None,
+        params=params,
+        min_valid_conf=0.2,
+        ignore_keypoints=None,
+        debug_mode=True,
+        fps=10.0,
+    )
+    written = pd.read_csv(out)
+    # Frame gaps still get densified (Task 5's design).
+    assert written["FrameID"].tolist() == [1, 2, 3, 4, 5]
+    # Interior gap rows (frames 3, 4) are NOT linearly filled.
+    gap_rows = written[written["FrameID"].isin([3, 4])]
+    assert gap_rows["X"].isna().all()
+    assert gap_rows["Y"].isna().all()
+    # No leading/trailing position-less rows here to trim, but the real
+    # rows keep their genuine (unfilled) positions.
+    assert written.loc[written["FrameID"] == 1, "X"].iloc[0] == 0.0
+    assert written.loc[written["FrameID"] == 5, "X"].iloc[0] == 4.0
+
+
+def test_relink_default_interpolation_method_is_linear_fill(tmp_path, monkeypatch):
+    """Without FINAL_INTERPOLATION_METHOD in params (e.g. an older caller),
+    relink_and_export_rich_csv preserves its prior always-linear-fill
+    behavior byte-for-byte."""
+    final = tmp_path / "clip_final.csv"
+    base = pd.DataFrame(
+        {
+            "TrajectoryID": [0, 0, 0],
+            "FrameID": [1, 2, 5],
+            "X": [0.0, 1.0, 4.0],
+            "Y": [0.0, 0.0, 0.0],
+            "Theta": 0.0,
+            "State": "active",
+            "DetectionID": [1, 2, 3],
+        }
+    )
+    base.to_csv(final, index=False)
+
+    def fake_build(
+        final_csv_path,
+        state,
+        *,
+        params,
+        min_valid_conf,
+        ignore_keypoints,
+        identity_evidence_cache_path=None,
+        resolve=True,
+    ):
+        return pd.read_csv(final_csv_path)
+
+    def fake_relink(df, params):
+        return df.copy()
+
+    def fake_resolve(df, params, identity_evidence_cache_path=None):
+        out = df.copy()
+        out[C.FINAL_LABEL] = "a"
+        out[C.FINAL_ID] = 1
+        out[C.FINAL_SOURCE] = "offline"
+        out[C.FINAL_CONFIDENCE] = 0.9
+        return out
+
+    monkeypatch.setattr(rich_export, "build_rich_export_dataframe", fake_build)
+    import hydra_suite.core.post.processing as P
+
+    monkeypatch.setattr(P, "relink_trajectories_with_pose_by_arena", fake_relink)
+    import hydra_suite.core.individual.postprocess_df as PD
+
+    monkeypatch.setattr(PD, "resolve_identity", fake_resolve)
+
+    params = {"FINAL_INTERPOLATION_MAX_GAP": 11}
+    out = rich_export.relink_and_export_rich_csv(
+        str(final),
+        state=None,
+        params=params,
+        min_valid_conf=0.2,
+        ignore_keypoints=None,
+        debug_mode=True,
+        fps=10.0,
+    )
+    written = pd.read_csv(out)
+    assert written["X"].isna().sum() == 0
+    gap_rows = written[written["FrameID"].isin([3, 4])]
+    assert not gap_rows["X"].isna().any()
