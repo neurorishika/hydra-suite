@@ -404,7 +404,7 @@ def _init_detection_runner(params, video_path):
                 extra_params=extra_params,
             )
 
-        runner = InferenceRunner(cfg, cache_dir=cache_dir)
+        runner = InferenceRunner(cfg, cache_dir=cache_dir, video_path=video_path)
         logger.info(
             "Detection runner initialized for dataset export (method=%s, level=%s)",
             method,

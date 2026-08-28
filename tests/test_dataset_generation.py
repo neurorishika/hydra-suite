@@ -774,9 +774,10 @@ def test_init_detection_runner_bgsub_sets_emit_native_geometry(monkeypatch):
     captured = {}
 
     class _FakeRunner:
-        def __init__(self, cfg, cache_dir=None):
+        def __init__(self, cfg, cache_dir=None, video_path=None):
             captured["cfg"] = cfg
             captured["cache_dir"] = cache_dir
+            captured["video_path"] = video_path
 
     monkeypatch.setattr(
         "hydra_suite.core.inference.runner.InferenceRunner", _FakeRunner
@@ -792,6 +793,14 @@ def test_init_detection_runner_bgsub_sets_emit_native_geometry(monkeypatch):
     assert cfg.bgsub is not None
     assert cfg.bgsub.emit_native_geometry is True
     assert captured["cache_dir"] is not None
+    # Regression: `video_path` was accepted by `_init_detection_runner` but
+    # never threaded into the `InferenceRunner(...)` constructor call, so the
+    # runner's `_video_sig` was always "" and its cache key could never match
+    # the one tracking's own (real video_path-carrying) runner writes -- the
+    # cache-hit path was unreachable in production. See test
+    # `test_detect_records_for_frames_uses_a_cache_built_by_a_separate_runner`
+    # for the end-to-end regression test.
+    assert captured["video_path"] == "/tmp/does_not_exist.mp4"
 
 
 def test_edge_score_uses_real_frame_shape():
@@ -1522,31 +1531,62 @@ def _cache_reuse_obb_result(frame_idx):
     )
 
 
-def test_detect_records_for_frames_uses_existing_cache(tmp_path, monkeypatch):
-    """A cache the tracking pass already fully populated must be a pure read.
+def test_detect_records_for_frames_uses_a_cache_built_by_a_separate_runner(
+    tmp_path, monkeypatch
+):
+    """A cache a PRIOR, INDEPENDENT tracking run already fully populated must
+    be a pure read by export's own, separately-constructed runner.
 
-    `_init_detection_runner` wires `runner.cache_dir` to the video's real
-    `.inference_cache_<stem>/` folder; once `get_or_compute_raw` has written a
-    complete cache for the requested frames, `_detect_records_for_frames`
-    must reuse it and never call `detect_batch_raw` again.
+    This is the actual acceptance criterion for Task 4: tracking's
+    `InferenceRunner` (built directly with `cache_dir=`/`video_path=`,
+    mirroring `core/tracking/worker.py`) populates `detection.npz`; a SEPARATE
+    `InferenceRunner` built via `_init_detection_runner(params, video_path)`
+    (export's own path) must then read that SAME cache without calling
+    `detect_batch_raw` at all.
+
+    Using two independent runner instances (rather than one runner for both
+    the populate and the read step) is deliberate: a single shared instance's
+    `_video_sig` is trivially identical on both sides regardless of whether
+    `_init_detection_runner` actually threads `video_path` into the
+    `InferenceRunner(...)` constructor -- a real regression there (the runner
+    never receiving `video_path`, so its cache key can never match a cache
+    written by another, real-video_path-carrying runner) would go undetected
+    by a same-instance test.
     """
     from unittest.mock import MagicMock, patch
 
     from hydra_suite.core.inference.cache.reuse import get_or_compute_raw
+    from hydra_suite.core.inference.config import build_obb_only_config
+    from hydra_suite.core.inference.runner import InferenceRunner
     from hydra_suite.data import dataset_generation as dg
+    from hydra_suite.utils.video_artifacts import build_inference_cache_dir
 
     video_path = tmp_path / "clip.mp4"
-    video_path.write_bytes(b"")  # never opened -- InferenceRunner loading is mocked
+    video_path.write_bytes(b"not really a video, but stat()-able")
 
     def fake_run_obb(frames, models, obb_config, runtime, roi_mask=None):
         return [_cache_reuse_obb_result(i) for i in range(len(frames))]
-
-    params = {"DETECTION_METHOD": "yolo_obb", "YOLO_OBB_DIRECT_TASK": "obb"}
 
     frames = [
         np.zeros((32, 32, 3), dtype=np.uint8),
         np.zeros((32, 32, 3), dtype=np.uint8),
     ]
+
+    # --- Runner #1: mimics how tracking builds its runner (worker.py passes
+    # BOTH cache_dir= and video_path= directly to InferenceRunner) -- uses
+    # different confidence/iou than export on purpose, since those are
+    # excluded from the cache key. Model path/mode must match export's
+    # defaults for the keys to agree, which is exactly what the fix makes
+    # possible.
+    tracking_cfg = build_obb_only_config(
+        "yolo26s-obb.pt",
+        confidence_threshold=0.25,
+        iou_threshold=0.7,
+        max_targets=8,
+        mode="direct",
+        model_task="obb",
+    )
+    cache_dir = build_inference_cache_dir(str(video_path))
     with (
         patch("hydra_suite.core.inference.runner._load_all_models") as ml,
         patch("hydra_suite.core.inference.runner.run_obb", side_effect=fake_run_obb),
@@ -1554,23 +1594,35 @@ def test_detect_records_for_frames_uses_existing_cache(tmp_path, monkeypatch):
         ml.return_value = MagicMock(
             obb=MagicMock(), headtail=None, cnn=[], pose=None, apriltag=None
         )
-        runner = dg._init_detection_runner(params, str(video_path))
-        # Pre-populate the cache for frames [0, 1] via the real path once
-        # (needs `run_obb` still patched) -- this is the ONLY call allowed
-        # to reach detect_batch_raw.
-        get_or_compute_raw(runner, runner.cache_dir, frames, [0, 1])
+        tracking_runner = InferenceRunner(
+            tracking_cfg, cache_dir=cache_dir, video_path=str(video_path)
+        )
+        get_or_compute_raw(tracking_runner, tracking_runner.cache_dir, frames, [0, 1])
 
-    assert runner.cache_dir is not None
+    assert (cache_dir / "detection.npz").exists()
+
+    # --- Runner #2: export's own, completely separate runner instance, built
+    # via the real `_init_detection_runner(params, video_path)` production
+    # path, pointed at the SAME video.
+    params = {"DETECTION_METHOD": "yolo_obb", "YOLO_OBB_DIRECT_TASK": "obb"}
+    with patch("hydra_suite.core.inference.runner._load_all_models") as ml2:
+        ml2.return_value = MagicMock(
+            obb=MagicMock(), headtail=None, cnn=[], pose=None, apriltag=None
+        )
+        export_runner = dg._init_detection_runner(params, str(video_path))
+
+    assert export_runner.cache_dir == cache_dir
+    assert export_runner is not tracking_runner
 
     def _fail_if_called(*a, **k):
         raise AssertionError(
             "detect_batch_raw should not be called on a full cache hit"
         )
 
-    monkeypatch.setattr(runner, "detect_batch_raw", _fail_if_called)
+    monkeypatch.setattr(export_runner, "detect_batch_raw", _fail_if_called)
 
     records, stats = dg._detect_records_for_frames(
-        runner, {0: frames[0], 1: frames[1]}, params, GeometryLevel.OBB
+        export_runner, {0: frames[0], 1: frames[1]}, params, GeometryLevel.OBB
     )
 
     assert stats["detection_failed"] == 0
