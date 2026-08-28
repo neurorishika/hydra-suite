@@ -258,7 +258,8 @@ static inference over a frame's detections; SAM2 is interactive and iterative.
 
 The shipped feature is an offline **batch "escalate-all"**, not an interactive per-detection tool: it
 reads the existing `obb`/`aabb` labels for one or more selected sources and auto-primes a segmentation
-mask for every detection, producing a new derived source that the user then reviews.
+mask for every detection, staging the result for the user to accept or reject in place on the same
+source (see Workflow below) — it does not create a new source.
 
 **Workflow:**
 
@@ -274,11 +275,30 @@ mask for every detection, producing a new derived source that the user then revi
    from the HF hub via `checkpoints.py`).
 4. Each mask is converted to a polygon (`mask_to_contour`); an empty/low-quality mask falls back to the
    original box's rectangle as the polygon so no detection is ever dropped.
-5. Results are written to a **new derived source** named `<source>_seg` (`level="polygon"`,
-   `reviewed=False`) — the original source's images/labels are never touched. The user reviews the
-   derived source in X-AnyLabeling and marks it reviewed; unreviewed sources are excluded from training
-   merges. Re-running escalation over a source whose `<name>_seg` already exists is guarded: by default
-   it is skipped, and only overwritten in place (no duplicate source entries) if the user confirms.
+5. Results are written to a **per-source staging directory** under
+   `artifacts/pending_escalations/<source>-<variant>-<hash>/` (`run_escalation()`,
+   `detectkit/jobs/sam2_escalation.py`) and recorded on `OBBSource.pending_escalation`
+   (`PendingEscalation`: `staged_path`, `target_level`, `sam2_variant`, `created_at`). The source's own
+   canonical `labels/`/`classes.txt` are never touched during staging, and no new source is registered
+   — the source list still shows exactly one entry for that source. Re-running escalation over a source
+   that already has a pending escalation is skipped by default (recorded in `EscalationResult.skipped`);
+   passing `overwrite=True` replaces the staged directory in place.
+6. The user reviews and resolves the staged result via `accept_pending_escalation(source)` or
+   `reject_pending_escalation(source)` (same module). `accept_pending_escalation` validates the staged
+   directory is present and covers every label the source currently has, then promotes it into the
+   source's canonical `labels/`/`classes.txt` in place, sets `level`/`sam2_variant` from the pending
+   record, resets `reviewed=False` (same meaning as any other machine-derived, not-yet-confirmed
+   result — just applied to the existing source instead of a new sibling), removes the staging
+   directory, and clears `pending_escalation`. `reject_pending_escalation` discards the staged
+   directory and clears `pending_escalation`, leaving the source untouched. Both raise if the source has
+   no pending escalation.
+7. This flow is driven from the GUI by the "Review escalations…" button in the Tools panel
+   (`ToolsPanel.review_escalations_requested` → `MainWindow._on_review_escalations`), which opens
+   `ReviewEscalationsDialog` (`gui/dialogs/review_escalations_dialog.py`) listing **every** source in
+   the project with a non-`None` `pending_escalation`, not just sources from the escalation run that
+   just finished — so a pending escalation left unresolved (e.g. the dialog was closed without acting
+   on it, or the project was closed and reopened) is still found and reopened later. The dialog also
+   opens automatically right after a run that staged at least one source.
 
 **Key properties:**
 
