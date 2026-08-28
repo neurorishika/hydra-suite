@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
+
+import pytest
 
 from hydra_suite.detectkit.gui.source_import import (
     IMPORT_MODE_LINKED,
+    inspect_al_round,
     inspect_detectkit_source,
+    materialize_al_round,
     materialize_detectkit_source,
 )
 
@@ -109,6 +114,163 @@ def test_materialize_detectkit_source_converts_coco_bbox_annotations(tmp_path: P
     )
     assert len(fields) == 9
     assert fields[0] == "0"
+
+
+def _write_al_round(
+    round_dir: Path,
+    *,
+    stale_paths_root: Path | None = None,
+    levels: tuple[tuple[str, bool], ...] = (("obb", True), ("aabb", False)),
+) -> None:
+    """Write an AL round container: manifest.json + obb/ (authoritative) + aabb/
+    (derived) sibling roots, mirroring hydra_suite.data.al.export.export_al_dataset.
+
+    *stale_paths_root*, if given, makes the manifest record each root's path
+    under that (nonexistent) location instead of under *round_dir* -- as if
+    the round had been copied/renamed after export -- so callers must fall
+    back to ``round_dir / level`` to find the real data.
+    """
+    for level, _authoritative in levels:
+        level_dir = round_dir / level
+        _write_fake_image(level_dir / "images" / "f001.jpg")
+        (level_dir / "labels").mkdir(parents=True, exist_ok=True)
+        (level_dir / "labels" / "f001.txt").write_text(
+            "0 0.1 0.1 0.2 0.1 0.2 0.2 0.1 0.2\n", encoding="utf-8"
+        )
+        (level_dir / "classes.txt").write_text("ant\n", encoding="utf-8")
+
+    manifest_root = stale_paths_root if stale_paths_root is not None else round_dir
+    manifest = {
+        "schema_version": 2,
+        "round_dir": str(round_dir),
+        "native_level": "obb",
+        "roots": [
+            {
+                "level": level,
+                "authoritative": authoritative,
+                "derived_from": None if authoritative else "obb",
+                "reviewed": authoritative,
+                "path": str(manifest_root / level),
+            }
+            for level, authoritative in levels
+        ],
+        "class_names": ["ant"],
+    }
+    round_dir.mkdir(parents=True, exist_ok=True)
+    (round_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def test_inspect_detectkit_source_resolves_al_round_to_authoritative_root(
+    tmp_path: Path,
+):
+    round_dir = tmp_path / "active_learning" / "20260827_172624"
+    _write_al_round(round_dir)
+
+    inspection = inspect_detectkit_source(round_dir)
+
+    assert inspection.dataset_root == (round_dir / "obb").resolve()
+    assert inspection.source_kind == "detectkit_al"
+    assert inspection.discovered_labels == ["ant"]
+
+
+def test_materialize_detectkit_source_imports_al_round_authoritative_root(
+    tmp_path: Path,
+):
+    round_dir = tmp_path / "active_learning" / "20260827_172624"
+    _write_al_round(round_dir)
+
+    materialized = materialize_detectkit_source(round_dir, tmp_path / "project")
+
+    assert materialized.source_root == (round_dir / "obb").resolve()
+    assert (materialized.canonical_path / "images" / "f001.jpg").exists()
+    assert (materialized.canonical_path / "classes.txt").read_text(
+        encoding="utf-8"
+    ) == "ant\n"
+
+
+def test_inspect_al_round_returns_every_sibling_authoritative_first(tmp_path: Path):
+    round_dir = tmp_path / "active_learning" / "20260827_172624"
+    _write_al_round(round_dir)
+
+    roots = inspect_al_round(round_dir)
+
+    assert roots is not None
+    assert [r.level for r in roots] == ["obb", "aabb"]
+    assert [r.authoritative for r in roots] == [True, False]
+    assert [r.reviewed for r in roots] == [True, False]
+    assert roots[0].path == (round_dir / "obb").resolve()
+    assert roots[1].path == (round_dir / "aabb").resolve()
+    assert roots[0].inspection.discovered_labels == ["ant"]
+
+
+def test_inspect_al_round_returns_none_for_non_al_round_folder(tmp_path: Path):
+    (tmp_path / "images").mkdir()
+    (tmp_path / "labels").mkdir()
+    (tmp_path / "classes.txt").write_text("ant\n", encoding="utf-8")
+
+    assert inspect_al_round(tmp_path) is None
+
+
+def test_materialize_al_round_imports_every_sibling(tmp_path: Path):
+    round_dir = tmp_path / "active_learning" / "20260827_172624"
+    _write_al_round(round_dir)
+
+    results = materialize_al_round(round_dir, tmp_path / "project")
+
+    assert results is not None
+    assert [r.level for r in results] == ["obb", "aabb"]
+    assert [r.authoritative for r in results] == [True, False]
+    for entry in results:
+        assert entry.materialized.source_kind == "detectkit_al"
+        assert (entry.materialized.canonical_path / "images" / "f001.jpg").exists()
+
+
+def test_inspect_al_round_falls_back_when_manifest_paths_are_stale(tmp_path: Path):
+    """The manifest records absolute paths at export time; if the round folder
+    is later copied/renamed, those paths go stale even though the round's own
+    obb/aabb subfolder structure is unchanged. inspect_al_round must fall back
+    to <round_dir>/<level> instead of failing."""
+    round_dir = tmp_path / "moved" / "20260827_172624"
+    stale_root = tmp_path / "original_location_no_longer_exists"
+    _write_al_round(round_dir, stale_paths_root=stale_root)
+
+    roots = inspect_al_round(round_dir)
+
+    assert roots is not None
+    assert [r.level for r in roots] == ["obb", "aabb"]
+    assert roots[0].path == (round_dir / "obb").resolve()
+    assert roots[1].path == (round_dir / "aabb").resolve()
+
+
+def test_inspect_detectkit_source_falls_back_when_manifest_paths_are_stale(
+    tmp_path: Path,
+):
+    round_dir = tmp_path / "moved" / "20260827_172624"
+    stale_root = tmp_path / "original_location_no_longer_exists"
+    _write_al_round(round_dir, stale_paths_root=stale_root)
+
+    inspection = inspect_detectkit_source(round_dir)
+
+    assert inspection.dataset_root == (round_dir / "obb").resolve()
+    assert inspection.source_kind == "detectkit_al"
+
+
+def test_inspect_al_round_returns_none_when_authoritative_root_missing(
+    tmp_path: Path,
+):
+    """If the authoritative root is gone (deleted, and its manifest path is
+    also stale/unresolvable) but a derived sibling survives, inspect_al_round
+    must refuse rather than silently presenting the unreviewed derived
+    sibling as if it were the whole round."""
+    round_dir = tmp_path / "active_learning" / "20260827_172624"
+    _write_al_round(round_dir)
+    shutil.rmtree(round_dir / "obb")
+
+    assert inspect_al_round(round_dir) is None
+    # The single-root redirect path must refuse for the same reason, not
+    # fall back to registering the aabb sibling as "the" source.
+    with pytest.raises(ValueError):
+        inspect_detectkit_source(round_dir)
 
 
 def test_materialize_detectkit_source_can_link_and_normalize_in_place(tmp_path: Path):

@@ -6,7 +6,7 @@ import json
 import logging
 import re
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from hashlib import sha1
 from pathlib import Path
 from typing import Any
@@ -211,6 +211,124 @@ def _inspect_coco_source(root: Path) -> DetectKitSourceInspection | None:
     )
 
 
+def _load_al_round_roots(root: Path) -> list[dict[str, Any]] | None:
+    """Return the ``roots`` list from an AL round manifest.json at *root*, if any.
+
+    Matches the container format written by ``hydra_suite.data.al.export.
+    export_al_dataset``: a round directory holding ``manifest.json`` plus one
+    sibling dataset root per geometry level (e.g. ``obb/``, ``aabb/``). The
+    round directory itself has no ``images``/``labels``, so it never satisfies
+    ``_is_detectkit_source_root`` -- callers must resolve into one of the
+    listed roots instead of treating *root* as a dataset itself.
+    """
+    manifest_path = root / "manifest.json"
+    if not manifest_path.is_file():
+        return None
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    roots = payload.get("roots")
+    if not isinstance(roots, list) or not roots:
+        return None
+    if not all(isinstance(entry, dict) and entry.get("path") for entry in roots):
+        return None
+    return roots
+
+
+def _resolve_al_round_entry_path(round_dir: Path, entry: dict[str, Any]) -> Path | None:
+    """Resolve one manifest root entry to an existing directory, tolerating a
+    moved/renamed round.
+
+    The manifest records each root's ABSOLUTE path at export time
+    (``data/al/export.py`` writes ``path = round_dir / level.label``). If the
+    round directory has since been copied, moved, or renamed, that recorded
+    path is stale even though the round's own internal structure -- one
+    subfolder per level, named after the level -- is unchanged. Fall back to
+    ``round_dir / level`` before giving up.
+    """
+    candidates = [Path(str(entry["path"])).expanduser()]
+    level = entry.get("level")
+    if level:
+        candidates.append(round_dir / str(level))
+    for candidate in candidates:
+        resolved = candidate.expanduser().resolve()
+        if resolved.exists():
+            return resolved
+    return None
+
+
+def _select_al_round_authoritative_root(
+    round_dir: Path, roots: list[dict[str, Any]]
+) -> Path | None:
+    for entry in roots:
+        if entry.get("authoritative"):
+            return _resolve_al_round_entry_path(round_dir, entry)
+    if roots:
+        return _resolve_al_round_entry_path(round_dir, roots[0])
+    return None
+
+
+@dataclass(slots=True, frozen=True)
+class ALRoundRoot:
+    """One sibling root of an AL round export, paired with its own inspection."""
+
+    level: str
+    authoritative: bool
+    reviewed: bool
+    path: Path
+    inspection: DetectKitSourceInspection
+
+
+def inspect_al_round(source_root: str | Path) -> list[ALRoundRoot] | None:
+    """Inspect every sibling root of an AL round export (manifest.json + roots).
+
+    Returns the authoritative root first, then any derived siblings (e.g.
+    ``obb`` then ``aabb``) -- the same relationship
+    ``detectkit.jobs.al_worker.run_active_learning`` establishes when it
+    writes an AL round directly into a project, so a manually-added external
+    round ends up registered identically. Returns ``None`` if *source_root*
+    is not an AL round container.
+    """
+    root = Path(source_root).expanduser().resolve()
+    al_roots = _load_al_round_roots(root)
+    if al_roots is None:
+        return None
+
+    entries: list[ALRoundRoot] = []
+    for entry in al_roots:
+        is_authoritative = bool(entry.get("authoritative"))
+        path = _resolve_al_round_entry_path(root, entry)
+        if path is None:
+            # A derived sibling can go missing without invalidating the
+            # round -- it's reconstructible from the authoritative root. The
+            # authoritative root itself going missing means there is no
+            # ground truth left to import; don't silently present a
+            # leftover derived/unreviewed sibling as if it were the round.
+            if is_authoritative:
+                return None
+            continue
+        try:
+            inspection = inspect_detectkit_source(path)
+        except Exception:
+            if is_authoritative:
+                return None
+            continue
+        entries.append(
+            ALRoundRoot(
+                level=str(entry.get("level") or inspection.source_kind),
+                authoritative=is_authoritative,
+                reviewed=bool(entry.get("reviewed", is_authoritative)),
+                path=path,
+                inspection=inspection,
+            )
+        )
+    if not entries or not any(item.authoritative for item in entries):
+        return None
+    entries.sort(key=lambda item: not item.authoritative)
+    return entries
+
+
 def inspect_detectkit_source(source_root: str | Path) -> DetectKitSourceInspection:
     """Inspect a selected source and describe how DetectKit should handle it."""
     root = Path(source_root).expanduser().resolve()
@@ -226,9 +344,18 @@ def inspect_detectkit_source(source_root: str | Path) -> DetectKitSourceInspecti
     if coco_inspection is not None:
         return coco_inspection
 
+    al_roots = _load_al_round_roots(root)
+    if al_roots is not None:
+        authoritative_path = _select_al_round_authoritative_root(root, al_roots)
+        if authoritative_path is not None and authoritative_path != root:
+            inspection = inspect_detectkit_source(authoritative_path)
+            return replace(inspection, source_kind="detectkit_al")
+
     raise ValueError(
         "Selected source folder must be a DetectKit source, a YOLO detect/obb dataset root, "
-        "or a COCO annotations root.\n\n"
+        "a COCO annotations root, or an active-learning export round (a folder "
+        "containing manifest.json) -- select that round folder's authoritative "
+        "level subfolder if this error persists.\n\n"
         f"{root}"
     )
 
@@ -573,6 +700,10 @@ def materialize_detectkit_source(
     """Resolve *source_root* into a DetectKit-ready source for *project_dir*."""
     root = Path(source_root).expanduser().resolve()
     inspection = inspect_detectkit_source(root)
+    # inspect_detectkit_source may redirect an AL round container (manifest.json
+    # + sibling level roots) to its authoritative level subfolder; operate on
+    # that resolved dataset root from here on, not the container directory.
+    root = inspection.dataset_root
     level = _detect_source_level(root, inspection)
     if import_mode not in {IMPORT_MODE_PORTABLE, IMPORT_MODE_LINKED}:
         raise ValueError(f"Unsupported DetectKit import mode: {import_mode}")
@@ -629,3 +760,52 @@ def materialize_detectkit_source(
         imported=True,
         level=level,
     )
+
+
+@dataclass(slots=True, frozen=True)
+class MaterializedALRoundRoot:
+    """One materialized sibling root of an AL round export."""
+
+    level: str
+    authoritative: bool
+    reviewed: bool
+    materialized: MaterializedDetectKitSource
+
+
+def materialize_al_round(
+    source_root: str | Path,
+    project_dir: str | Path,
+    *,
+    import_mode: str = IMPORT_MODE_PORTABLE,
+    force_import: bool = False,
+) -> list[MaterializedALRoundRoot] | None:
+    """Materialize every sibling root of an AL round export.
+
+    Mirrors ``detectkit.jobs.al_worker.run_active_learning``, which registers
+    one DetectKit source per geometry level root and links derived roots back
+    to the authoritative one -- so a manually-added external AL round ends up
+    compatible with the same escalation/role-gating machinery an internally
+    generated round gets. Returns ``None`` if *source_root* is not an AL round
+    container (no ``manifest.json`` with a ``roots`` list).
+    """
+    al_roots = inspect_al_round(source_root)
+    if al_roots is None:
+        return None
+
+    return [
+        MaterializedALRoundRoot(
+            level=entry.level,
+            authoritative=entry.authoritative,
+            reviewed=entry.reviewed,
+            materialized=replace(
+                materialize_detectkit_source(
+                    entry.path,
+                    project_dir,
+                    import_mode=import_mode,
+                    force_import=force_import,
+                ),
+                source_kind="detectkit_al",
+            ),
+        )
+        for entry in al_roots
+    ]

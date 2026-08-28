@@ -59,6 +59,7 @@ def _describe_source_kind(source_kind: str) -> str:
         "yolo_detect": "YOLO detect dataset",
         "yolo_obb": "YOLO OBB dataset",
         "coco": "COCO annotations dataset",
+        "detectkit_al": "Active-learning export (authoritative level root)",
     }
     return descriptions.get(source_kind, source_kind)
 
