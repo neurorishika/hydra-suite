@@ -128,6 +128,16 @@ ORACLE = {
         "should_export_final_media_videos": False,
         "should_run_interpolated_postpass": True,
     },
+    # Identical to "ant_cnn_identity" except "enable_tracklet_relinking":
+    # true (Task 8) -- none of these 5 predicates read that key, so the
+    # oracle is the same.
+    "ant_cnn_identity_relink": {
+        "is_pose_export_enabled": True,
+        "is_pose_inference_enabled": True,
+        "is_headtail_compute_enabled": True,
+        "should_export_final_media_videos": False,
+        "should_run_interpolated_postpass": True,
+    },
     "ant_obb_sleap": {
         "is_pose_export_enabled": False,
         "is_pose_inference_enabled": False,
