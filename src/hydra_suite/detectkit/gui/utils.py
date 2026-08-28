@@ -139,6 +139,70 @@ def find_label_for_image(
     return None
 
 
+def clear_labels_for_source(
+    source_path: str | Path, image_paths: list[Path] | None = None
+) -> int:
+    """Truncate label files to empty for a source. Returns the count cleared.
+
+    Unfiltered (image_paths=None): every "*.txt" under source_path/labels/,
+    recursively, except a stray classes.txt (which belongs at the source
+    root, not under labels/, but is skipped defensively if found there).
+
+    Filtered: only the label files matching the given image paths, resolved
+    via (1) mirroring images/<rel> -> labels/<rel>.txt, then (2) a direct
+    stem match at the labels/ root -- deliberately NOT an unanchored
+    recursive search (see find_label_for_image's Strategy 3, which this
+    function does not use): with a split layout, two images in different
+    splits can share a stem, and an unanchored search would silently
+    resolve to the WRONG image's label file. An image that doesn't resolve
+    via (1) or (2) is skipped, not an error -- "no label file for this
+    image" is a legitimate, common state.
+
+    Never deletes a file or touches images/classes.txt -- "clear" means
+    truncate to empty content, matching the "Clear labels from frame" name
+    (the image's own row in the browser persists).
+    """
+    source_root = Path(source_path)
+    labels_dir = source_root / "labels"
+    if not labels_dir.is_dir():
+        return 0
+
+    if image_paths is None:
+        label_paths = [p for p in labels_dir.rglob("*.txt") if p.name != "classes.txt"]
+    else:
+        images_dir = source_root / "images"
+        seen: set[Path] = set()
+        label_paths = []
+        for raw_image_path in image_paths:
+            image_path = Path(raw_image_path)
+            candidate: Path | None = None
+            if images_dir.is_dir():
+                try:
+                    rel = image_path.relative_to(images_dir)
+                    mirrored = labels_dir / rel.with_suffix(".txt")
+                    if mirrored.exists():
+                        candidate = mirrored
+                except ValueError:
+                    pass
+            if candidate is None:
+                flat = labels_dir / f"{image_path.stem}.txt"
+                if flat.exists():
+                    candidate = flat
+            if candidate is not None and candidate not in seen:
+                seen.add(candidate)
+                label_paths.append(candidate)
+
+    cleared = 0
+    for label_path in label_paths:
+        try:
+            label_path.write_text("", encoding="utf-8")
+            cleared += 1
+        except Exception:
+            logger.warning("Failed to clear labels at %s", label_path)
+
+    return cleared
+
+
 def parse_obb_label(
     label_path: Path,
     img_w: int,
