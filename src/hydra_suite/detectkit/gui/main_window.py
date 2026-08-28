@@ -429,6 +429,16 @@ QPushButton[detectkitVariant="quiet"]:hover {
     background-color: #2a2d2e;
     border-color: #0e639c;
 }
+QPushButton[detectkitVariant="danger"] {
+    background-color: #c0392b;
+    color: white;
+}
+QPushButton[detectkitVariant="danger"]:hover {
+    background-color: #a93226;
+}
+QPushButton[detectkitVariant="danger"]:pressed {
+    background-color: #922b21;
+}
 QGroupBox {
     background-color: #252526;
     border: 1px solid #3e3e42;

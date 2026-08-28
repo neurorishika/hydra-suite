@@ -139,6 +139,86 @@ def find_label_for_image(
     return None
 
 
+def labels_to_clear(
+    source_path: str | Path, image_paths: list[Path] | None = None
+) -> list[Path]:
+    """Return the exact set of label files ``clear_labels_for_source`` will
+    truncate for *source_path* (optionally filtered to *image_paths*).
+
+    This is the single source of truth for "what files are in scope" for a
+    clear-labels action -- both the actual clearer and any UI code that
+    needs to preview/count the same set (confirmation dialogs, partial-
+    failure comparisons) must call this rather than re-deriving the rule.
+
+    Unfiltered (image_paths=None): every "*.txt" under source_path/labels/,
+    recursively, except a stray classes.txt (which belongs at the source
+    root, not under labels/, but is skipped defensively if found there).
+
+    Filtered: only the label files matching the given image paths, resolved
+    via (1) mirroring images/<rel> -> labels/<rel>.txt, then (2) a direct
+    stem match at the labels/ root -- deliberately NOT an unanchored
+    recursive search (see find_label_for_image's Strategy 3, which this
+    function does not use): with a split layout, two images in different
+    splits can share a stem, and an unanchored search would silently
+    resolve to the WRONG image's label file. An image that doesn't resolve
+    via (1) or (2) is skipped, not an error -- "no label file for this
+    image" is a legitimate, common state. Duplicate resolutions (two images
+    sharing one label file) are de-duplicated to a single entry.
+    """
+    source_root = Path(source_path)
+    labels_dir = source_root / "labels"
+    if not labels_dir.is_dir():
+        return []
+
+    if image_paths is None:
+        return [p for p in labels_dir.rglob("*.txt") if p.name != "classes.txt"]
+
+    images_dir = source_root / "images"
+    seen: set[Path] = set()
+    label_paths: list[Path] = []
+    for raw_image_path in image_paths:
+        image_path = Path(raw_image_path)
+        candidate: Path | None = None
+        if images_dir.is_dir():
+            try:
+                rel = image_path.relative_to(images_dir)
+                mirrored = labels_dir / rel.with_suffix(".txt")
+                if mirrored.exists():
+                    candidate = mirrored
+            except ValueError:
+                pass
+        if candidate is None:
+            flat = labels_dir / f"{image_path.stem}.txt"
+            if flat.exists():
+                candidate = flat
+        if candidate is not None and candidate not in seen:
+            seen.add(candidate)
+            label_paths.append(candidate)
+
+    return label_paths
+
+
+def clear_labels_for_source(
+    source_path: str | Path, image_paths: list[Path] | None = None
+) -> int:
+    """Truncate label files to empty for a source. Returns the count cleared.
+
+    See ``labels_to_clear`` for the exact rule for which files are in scope.
+    Never deletes a file or touches images/classes.txt -- "clear" means
+    truncate to empty content, matching the "Clear labels from frame" name
+    (the image's own row in the browser persists).
+    """
+    cleared = 0
+    for label_path in labels_to_clear(source_path, image_paths):
+        try:
+            label_path.write_text("", encoding="utf-8")
+            cleared += 1
+        except Exception:
+            logger.warning("Failed to clear labels at %s", label_path, exc_info=True)
+
+    return cleared
+
+
 def parse_obb_label(
     label_path: Path,
     img_w: int,

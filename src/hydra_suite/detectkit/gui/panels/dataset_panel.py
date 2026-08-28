@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QListView,
     QListWidget,
@@ -37,7 +38,9 @@ from hydra_suite.utils.conda_utils import run_conda
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
 
 from ..utils import (
+    clear_labels_for_source,
     ensure_detectkit_source_structure,
+    labels_to_clear,
     list_images_in_source,
     source_class_id_map,
 )
@@ -152,6 +155,16 @@ class DatasetPanel(QWidget):
         )
         self.image_list.currentRowChanged.connect(self._on_image_changed)
         images_layout.addWidget(self.image_list)
+
+        self.btn_clear_source_labels = QPushButton("Remove all labels from source")
+        self.btn_clear_source_labels.setProperty("detectkitVariant", "danger")
+        self.btn_clear_source_labels.clicked.connect(self._clear_labels_from_source)
+        images_layout.addWidget(self.btn_clear_source_labels)
+
+        self.btn_clear_all_labels = QPushButton("Remove ALL labels from all sources")
+        self.btn_clear_all_labels.setProperty("detectkitVariant", "danger")
+        self.btn_clear_all_labels.clicked.connect(self._clear_labels_from_all_sources)
+        images_layout.addWidget(self.btn_clear_all_labels)
 
         self._delete_shortcut = QShortcut(QKeySequence(Qt.Key_Delete), self.image_list)
         self._delete_shortcut.setContext(Qt.WidgetShortcut)
@@ -331,6 +344,16 @@ class DatasetPanel(QWidget):
         delete_action = QAction(label_text, menu)
         delete_action.triggered.connect(self._delete_selected_images)
         menu.addAction(delete_action)
+
+        clear_label_text = (
+            f"Clear labels from {len(items)} frames..."
+            if len(items) > 1
+            else "Clear labels from frame..."
+        )
+        clear_action = QAction(clear_label_text, menu)
+        clear_action.triggered.connect(self._clear_labels_from_frame)
+        menu.addAction(clear_action)
+
         menu.exec(self.image_list.viewport().mapToGlobal(pos))
 
     def _delete_selected_images(self) -> None:
@@ -397,6 +420,158 @@ class DatasetPanel(QWidget):
                 "Delete Images",
                 "Some images could not be deleted:\n\n" + "\n".join(failures),
             )
+
+    def _clear_labels_from_frame(self) -> None:
+        """Empty the label file(s) for the currently selected image(s),
+        leaving the images and every other frame's labels untouched. The
+        currently displayed image is re-rendered in place -- nothing about
+        which images exist has changed, so the list itself is not rebuilt."""
+        items = self.image_list.selectedItems()
+        if not items:
+            return
+
+        source_path = self._selected_source_path()
+        if source_path is None:
+            return
+
+        image_paths: list[Path] = []
+        for item in items:
+            data = item.data(Qt.UserRole)
+            if data:
+                image_paths.append(Path(str(data)))
+        if not image_paths:
+            return
+
+        sample_names = ", ".join(p.name for p in image_paths[:3])
+        if len(image_paths) > 3:
+            sample_names += f", ... (+{len(image_paths) - 3} more)"
+        confirm = QMessageBox.warning(
+            self,
+            "Clear Labels",
+            (
+                f"Clear all labels for {len(image_paths)} frame(s)? The "
+                f"image(s) stay, only their annotations are removed.\n\n"
+                f"{sample_names}\n\nThis cannot be undone."
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        expected = len(labels_to_clear(source_path, image_paths))
+        cleared = clear_labels_for_source(source_path, image_paths)
+        if cleared < expected:
+            QMessageBox.warning(
+                self,
+                "Clear Labels",
+                f"Cleared {cleared} of {expected} label file(s); "
+                "some could not be written.",
+            )
+        self._on_image_changed(self.image_list.currentRow())
+
+    def _clear_labels_from_source(self) -> None:
+        """Empty every label file for the currently selected source."""
+        source_path = self._selected_source_path()
+        if source_path is None:
+            return
+        src_obj = self._selected_source_obj()
+        name = src_obj.name if src_obj else Path(source_path).name
+
+        count = len(labels_to_clear(source_path))
+        if count == 0:
+            QMessageBox.information(
+                self, "Remove Labels", f"'{name}' has no label files to clear."
+            )
+            return
+
+        confirm = QMessageBox.warning(
+            self,
+            "Remove Labels",
+            (
+                f"Clear ALL labels for source '{name}' ({count} label "
+                "file(s))? Images are not affected.\n\nThis cannot be "
+                "undone."
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        cleared = clear_labels_for_source(source_path)
+        if cleared < count:
+            QMessageBox.warning(
+                self,
+                "Remove Labels",
+                f"Cleared {cleared} of {count} label file(s); some could "
+                "not be written.",
+            )
+        row = self.image_list.currentRow()
+        self._on_source_combo_changed(self.source_combo.currentIndex())
+        if 0 <= row < self.image_list.count():
+            self.image_list.setCurrentRow(row)
+
+    def _clear_labels_from_all_sources(self) -> None:
+        """Empty every label file for every source in the project, behind a
+        type-the-project-name confirmation -- the strongest gate in this
+        panel, for the strongest blast radius."""
+        if self._project is None or not self._project.sources:
+            QMessageBox.information(
+                self, "Remove Labels", "No sources in this project."
+            )
+            return
+
+        total = sum(len(labels_to_clear(src.path)) for src in self._project.sources)
+        if total == 0:
+            QMessageBox.information(
+                self, "Remove Labels", "No label files exist in this project."
+            )
+            return
+
+        project_dir = Path(self._project.project_dir).resolve()
+        project_name = project_dir.name or str(project_dir)
+        linked_count = sum(
+            1
+            for src in self._project.sources
+            if project_dir not in Path(src.path).resolve().parents
+            and Path(src.path).resolve() != project_dir
+        )
+        linked_note = (
+            f"\n\n{linked_count} source(s) live outside this project folder and "
+            "will also be cleared."
+            if linked_count
+            else ""
+        )
+
+        typed, ok = QInputDialog.getText(
+            self,
+            "Remove ALL Labels",
+            (
+                f"This clears ALL labels across {len(self._project.sources)} "
+                f"source(s) ({total} label file(s) total). Images are not "
+                f"affected. This cannot be undone.{linked_note}\n\nType the "
+                f"project name to confirm: {project_name}"
+            ),
+        )
+        typed = typed.strip() if ok else ""
+        if not typed or typed != project_name:
+            return
+
+        cleared_total = 0
+        for src in self._project.sources:
+            cleared_total += clear_labels_for_source(src.path)
+        if cleared_total < total:
+            QMessageBox.warning(
+                self,
+                "Remove Labels",
+                f"Cleared {cleared_total} of {total} label file(s) across "
+                "the project; some could not be written.",
+            )
+        row = self.image_list.currentRow()
+        self._on_source_combo_changed(self.source_combo.currentIndex())
+        if 0 <= row < self.image_list.count():
+            self.image_list.setCurrentRow(row)
 
     @staticmethod
     def _label_path_for_image(image_path: Path, source_root: Path) -> Path | None:

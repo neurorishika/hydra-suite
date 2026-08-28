@@ -24,3 +24,10 @@ detectkit
 - Dataset panel for assembling and inspecting training data
 - Training panel with configurable hyperparameters
 - Integration with TrackerKit's dataset generation exports
+
+### Dataset panel
+
+The dataset panel's "Clear labels" actions (frame, source, and whole-project
+scope) are destructive and irreversible: they truncate the matching label
+file(s) to empty rather than deleting them, so the files remain on disk but
+lose their annotations. Images themselves are never touched.
