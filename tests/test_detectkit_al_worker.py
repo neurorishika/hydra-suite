@@ -66,6 +66,53 @@ def test_al_worker_writes_seeded_labels_and_registers_source(tmp_path):
     assert any(s.path == str(new_source_dir) for s in project.sources)
 
 
+def test_al_worker_registers_only_authoritative_source_for_multi_level_export(tmp_path):
+    """A round exported at multiple levels (obb authoritative + aabb derived)
+    must register exactly ONE project source -- the authoritative root -- not
+    one sibling per level. The derived level's folder still gets written to
+    disk by export_al_dataset (unchanged), it's just not registered."""
+    from hydra_suite.detectkit.jobs.al_worker import ALRequest, run_active_learning
+
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+    project = DetectKitProject(project_dir=project_dir, sources=[])
+
+    folder = _seed_image_folder(tmp_path, n=3)
+
+    def fake_detector(frame, conf, iou):
+        return [(10, 10, 8, 4, 0.0, 0.95)]
+
+    request = ALRequest(
+        input_kind="folder",
+        input_path=str(folder),
+        project=project,
+        budget=3,
+        preset="balanced",
+        expected_count=1,
+        detector_fn=fake_detector,
+        diversity_window=0,
+        probabilistic=False,
+        export_levels=["obb", "aabb"],
+        native_level="obb",
+    )
+
+    result = run_active_learning(request)
+
+    assert len(project.sources) == 1
+    registered = project.sources[0]
+    assert registered.level == "obb"
+    assert registered.derived_from is None
+    assert registered.name.startswith("al_round_")
+    assert "_obb" not in registered.name
+    assert "_aabb" not in registered.name
+    assert registered.path == result.source_path
+
+    # The derived aabb sibling still exists on disk (export.py is unchanged)
+    # even though it was not registered as a project source.
+    aabb_root = Path(result.source_path).parent / "aabb"
+    assert aabb_root.is_dir()
+
+
 def test_al_worker_refuses_polygon_export_when_no_frame_has_detections(tmp_path):
     """Regression: `native_level` must gate independently of what LabelRecords
     actually exist.
