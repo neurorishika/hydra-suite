@@ -16,8 +16,12 @@ the Simplification Sprint lands the relocation.
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 from typing import Literal
+
+import cv2
+import numpy as np
 
 from hydra_suite.filterkit.core import (  # noqa: I900 (layer carve-out, see module docstring)
     FilterKitCore,
@@ -36,6 +40,31 @@ class CandidatePoolConfig:
     dedup_threshold: int = 8  # Hamming for hashes; bins for histogram
     max_candidates: int | None = None
 
+    # Windowed dedup: compare each frame's signature against at most the last
+    # `dedup_window` *kept* signatures instead of the full history. `None`
+    # (default) means unbounded -- identical to the pre-windowing global scan,
+    # so leaving this unset keeps existing behavior exactly for any
+    # typical-sized fixture/video.
+    dedup_window: int | None = None
+
+    # Frame-difference motion prefilter: frames whose grayscale mean-absolute
+    # difference from a rolling reference frame is below `motion_threshold`
+    # skip full dedup/signature scoring entirely (cheap early-out before the
+    # perceptual hash is even computed). Default 0.0 is permissive -- a real
+    # per-pixel mean-abs-diff is virtually never < 0.0, so by default the
+    # prefilter is a no-op and every frame still reaches full scoring, same as
+    # current behavior.
+    motion_threshold: float = 0.0
+
+    # Periodic-sampling floor: even when consecutive frames sit below
+    # `motion_threshold` (e.g. a long static stretch), let one through anyway
+    # once `periodic_sample_every` frames have been skipped since the last
+    # frame that was let through, so long static stretches still get
+    # occasionally sampled. Irrelevant while `motion_threshold` is at its
+    # permissive default (the skip branch is never taken), so any default
+    # value here is safe; kept modest for when motion_threshold is tightened.
+    periodic_sample_every: int = 30
+
 
 def build_candidate_pool(
     source: FrameSource,
@@ -45,11 +74,23 @@ def build_candidate_pool(
 
     Iterates `source`, computes the configured perceptual signature for each
     frame, and keeps only frames whose signature is sufficiently distinct from
-    all previously-kept frames.
+    the most recently kept frames (within `cfg.dedup_window`, or all
+    previously-kept frames when unset).
+
+    Before scoring, an inline frame-difference prefilter skips frames whose
+    visual change from a rolling reference frame is negligible
+    (`cfg.motion_threshold`), with a periodic-sampling floor
+    (`cfg.periodic_sample_every`) so long static stretches still contribute an
+    occasional sample. This prefilter and the dedup step both operate on
+    frames read sequentially via `source`, so they benefit from
+    `VideoFrameSource`'s single-capture sequential-read reuse.
     """
     fk = FilterKitCore()
     kept: list[FrameRef] = []
-    kept_signatures: list = []
+    kept_signatures: deque = deque(maxlen=cfg.dedup_window)
+
+    reference_gray: np.ndarray | None = None
+    frames_since_allowed = 0
 
     for ref in source:
         if cfg.max_candidates is not None and len(kept) >= cfg.max_candidates:
@@ -62,6 +103,30 @@ def build_candidate_pool(
         img = source.read(ref)
         if img is None:
             continue
+
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+
+        if reference_gray is not None:
+            delta = float(
+                np.abs(gray.astype(np.int16) - reference_gray.astype(np.int16)).mean()
+            )
+            periodic_override = frames_since_allowed >= cfg.periodic_sample_every
+            if delta < cfg.motion_threshold and not periodic_override:
+                # Negligible visual change: skip full dedup/signature scoring
+                # for this frame entirely -- it never enters the candidate
+                # pool consideration. Reference frame is intentionally left
+                # untouched here (refreshed only on a letting-through) so slow
+                # drift is measured cumulatively, not frame-to-frame.
+                frames_since_allowed += 1
+                continue
+
+        # Frame is let through -- either real motion, the periodic-sampling
+        # floor, or the very first frame. Refresh the rolling reference on
+        # every letting-through so slow lighting drift doesn't lock the
+        # threshold against a stale reference.
+        reference_gray = gray
+        frames_since_allowed = 0
+
         sig = fk.compute_signature(img, method=cfg.dedup_method)
 
         is_dup = any(
