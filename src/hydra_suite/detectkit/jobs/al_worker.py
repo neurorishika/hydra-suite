@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -12,6 +13,9 @@ from typing import Callable, Literal, Sequence
 import numpy as np
 from PySide6.QtCore import Signal
 
+from hydra_suite.core.inference.config import OBBConfig
+from hydra_suite.core.inference.result import OBBResult
+from hydra_suite.core.inference.stages.filtering import filter_with_indices
 from hydra_suite.data.al.acquisition import PRESETS, AcquisitionWeights, select
 from hydra_suite.data.al.candidate_pool import CandidatePoolConfig, build_candidate_pool
 from hydra_suite.data.al.escalation import LabelRecord
@@ -25,6 +29,7 @@ from hydra_suite.data.al.frame_source import (
 )
 from hydra_suite.data.al.signals import (
     ALSignals,
+    detections_from_obb_result,
     score_count_deviation,
     score_crowd,
     score_fragmentation,
@@ -123,27 +128,41 @@ def _build_frame_source(req: ALRequest) -> FrameSource:
 
 
 def _frame_signals(
-    frame: np.ndarray,
     frame_id: int,
-    detector_fn: DetectorFn,
+    raw_obb_result: OBBResult,
+    obb_config: OBBConfig,
     expected_count: int,
     base_conf: float,
     base_iou: float,
 ) -> tuple[ALSignals, list]:
-    # Detections may be 6-tuples (cx,cy,w,h,theta,conf) or 7-tuples with a
-    # trailing native polygon (Task 14 export path); d[5] and d[:5] are valid
-    # for both, so no branching is needed here.
-    detections = list(detector_fn(frame, base_conf, base_iou))
+    # Base detections come from the same cheap re-filter of the cached raw
+    # OBBResult that `score_nms_instability` uses internally -- no detector
+    # call happens here. Detections may be 6-tuples (cx,cy,w,h,theta,conf);
+    # d[5] and d[:5] stay valid if a 7th (native polygon) element is ever
+    # added upstream, so no branching is needed here.
+    base_config = dataclasses.replace(
+        obb_config, confidence_threshold=base_conf, iou_threshold=base_iou
+    )
+    filtered, _ = filter_with_indices(raw_obb_result, base_config, roi_mask=None)
+    detections = detections_from_obb_result(filtered)
     confidences = [d[5] for d in detections]
     uncertainty = score_uncertainty(confidences, conf_floor=base_conf)
     count_dev = score_count_deviation(len(detections), expected_count)
 
-    h, w = frame.shape[:2]
     obb_corners = [_detection_corners(*d[:5]) for d in detections]
-    crowd, edge = score_crowd(obb_corners, frame_shape=(h, w))
+    # No decoded frame is resident on this path (the batched detection pass
+    # never keeps candidate pixels around past detection), so there is no
+    # real frame extent to score edge-proximity against. `score_crowd`'s
+    # crowd component is shape-independent (pairwise polygon overlap only),
+    # so it is unaffected; edge is honestly zeroed rather than scored
+    # against a fake shape. Mirrors the established handling of this same
+    # "no frame_shape available" case in
+    # `data/dataset_generation.py::FrameQualityScorer.score_frame`.
+    crowd, _ = score_crowd(obb_corners, frame_shape=(1, 1))
+    edge = 0.0
 
     nms = score_nms_instability(
-        frame, detector_fn, base_conf=base_conf, base_iou=base_iou
+        raw_obb_result, obb_config, base_conf=base_conf, base_iou=base_iou
     )
 
     signal = ALSignals(
