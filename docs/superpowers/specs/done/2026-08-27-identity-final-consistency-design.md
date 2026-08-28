@@ -1,8 +1,9 @@
 # Identity Final-Output Consistency — Design
 
-**Status:** approved for planning (2026-08-27, after adversarial review — corrections
-folded in, see §1.2). Follows `2026-08-27-identity-subsystem-repair-design.md`
-(merged `f2d4ca36`). Plan: `docs/superpowers/plans/2026-08-27-identity-final-consistency.md`.
+**Status:** Shipped — merged to main (14 task commits + 5-commit final fix wave,
+scoped re-review ALL_FINDINGS_ADDRESSED, 2026-08-27). Follows
+`2026-08-27-identity-subsystem-repair-design.md` (merged `f2d4ca36`). Plan:
+`docs/superpowers/plans/done/2026-08-27-identity-final-consistency.md`.
 
 ## 1. Problem (audited on `DEMO/ID/ONLINE`, run 2026-08-27 15:09)
 
