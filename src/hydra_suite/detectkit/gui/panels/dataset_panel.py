@@ -476,7 +476,11 @@ class DatasetPanel(QWidget):
         src_obj = self._selected_source_obj()
         name = src_obj.name if src_obj else Path(source_path).name
 
-        count = len(list((Path(source_path) / "labels").rglob("*.txt")))
+        count = sum(
+            1
+            for p in (Path(source_path) / "labels").rglob("*.txt")
+            if p.name != "classes.txt"
+        )
         if count == 0:
             QMessageBox.information(
                 self, "Remove Labels", f"'{name}' has no label files to clear."

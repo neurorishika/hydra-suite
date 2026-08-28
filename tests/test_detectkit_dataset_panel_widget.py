@@ -266,6 +266,39 @@ def test_clear_labels_from_source_confirmation_names_source_and_count(
     assert "1" in captured["text"]  # 1 label file
 
 
+def test_clear_labels_from_source_confirmation_excludes_classes_txt_from_count(
+    qapp, tmp_path, monkeypatch
+):
+    """A stray classes.txt under labels/ (unusual, but defensively handled by
+    clear_labels_for_source, which excludes it by name) must not inflate the
+    confirmation dialog's count -- the count must match what actually gets
+    cleared."""
+    from PySide6.QtWidgets import QMessageBox
+
+    panel, source_root = _make_panel_with_source(qapp, tmp_path)
+    # Add a stray classes.txt under labels/ alongside the real label file.
+    (source_root / "labels" / "classes.txt").write_text("ant\n")
+
+    captured = {}
+
+    def _capture_warning(self, title, text, *a, **k):
+        captured["text"] = text
+        return QMessageBox.StandardButton.Yes
+
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.panels.dataset_panel.QMessageBox.warning",
+        _capture_warning,
+    )
+
+    panel._clear_labels_from_source()
+
+    # Only a.txt should be counted (1), not a.txt + labels/classes.txt (2).
+    assert "1" in captured["text"]
+    assert "2" not in captured["text"]
+    # The stray classes.txt under labels/ is untouched by the clear.
+    assert (source_root / "labels" / "classes.txt").read_text() == "ant\n"
+
+
 def test_clear_labels_from_source_clears_all_on_confirm(qapp, tmp_path, monkeypatch):
     from PySide6.QtWidgets import QMessageBox
 
