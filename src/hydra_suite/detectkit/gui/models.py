@@ -250,6 +250,11 @@ class DetectKitProject:
     role_seq_crop_obb: bool = True
     role_seq_crop_segment: bool = False
 
+    # Simple training-plan selection. The role booleans remain persisted for
+    # backward compatibility with existing projects and run history.
+    training_mode: str = "direct"
+    training_task: str = "obb"
+
     # Device
     device: str = "auto"
 

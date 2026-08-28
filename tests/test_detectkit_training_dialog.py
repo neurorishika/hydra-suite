@@ -12,7 +12,12 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtWidgets import QApplication, QDialogButtonBox  # noqa: E402
+from PySide6.QtWidgets import (  # noqa: E402
+    QApplication,
+    QDialogButtonBox,
+    QGridLayout,
+    QGroupBox,
+)
 
 
 @pytest.fixture(scope="module")
@@ -105,6 +110,17 @@ def test_training_dialog_uses_advanced_tab_label(qapp, tmp_path):
     assert dlg.training_tabs.tabText(1) == "Advanced"
 
 
+def test_training_dialog_uses_compact_grid_layouts(qapp, tmp_path):
+    """The main controls stay dense instead of expanding into long forms."""
+    from hydra_suite.detectkit.gui.dialogs.training_dialog import TrainingDialog
+
+    dlg = TrainingDialog(_make_proj(tmp_path))
+    groups = {group.title(): group for group in dlg.findChildren(QGroupBox)}
+    assert isinstance(groups["Training Selection"].layout(), QGridLayout)
+    assert isinstance(groups["Dataset And Runtime"].layout(), QGridLayout)
+    assert isinstance(dlg.slice_group.layout(), QGridLayout)
+
+
 def test_training_dialog_summary_reflects_current_plan(qapp, tmp_path):
     from hydra_suite.detectkit.gui.dialogs.training_dialog import TrainingDialog
 
@@ -115,51 +131,57 @@ def test_training_dialog_summary_reflects_current_plan(qapp, tmp_path):
     dlg = TrainingDialog(proj)
 
     summary = dlg.plan_summary.text()
-    assert "Recipe:" in summary
+    assert "Plan:" in summary
     assert "Stages:" in summary
     assert "Classes:" in summary
     assert "worker" in summary
 
 
-def test_training_dialog_has_recipe_selector(qapp, tmp_path):
+def test_training_dialog_has_two_simple_plan_selectors(qapp, tmp_path):
     from hydra_suite.detectkit.gui.dialogs.training_dialog import TrainingDialog
 
     dlg = TrainingDialog(_make_proj(tmp_path))
-    assert hasattr(dlg, "recipe_combo")
-    assert dlg.recipe_combo.count() >= 4
+    assert hasattr(dlg, "mode_combo")
+    assert hasattr(dlg, "task_combo")
+    assert dlg.mode_combo.count() == 2
+    assert dlg.task_combo.count() == 3
 
 
-def test_training_dialog_default_recipe_matches_all_stages(qapp, tmp_path):
+def test_training_dialog_defaults_to_one_direct_obb_plan(qapp, tmp_path):
     from hydra_suite.detectkit.gui.dialogs.training_dialog import TrainingDialog
 
     dlg = TrainingDialog(_make_proj(tmp_path))
-    assert dlg.recipe_combo.currentData() == "all_stages"
-    assert dlg.chk_customize_roles.isChecked() is False
+    assert dlg.mode_combo.currentData() == "direct"
+    assert dlg.task_combo.currentData() == "obb"
     assert dlg.chk_role_obb_direct.isChecked() is True
-    assert dlg.chk_role_seq_detect.isChecked() is True
-    assert dlg.chk_role_seq_crop_obb.isChecked() is True
+    assert dlg.chk_role_seq_detect.isChecked() is False
+    assert dlg.chk_role_seq_crop_obb.isChecked() is False
 
 
-def test_training_dialog_recipe_selection_updates_roles(qapp, tmp_path):
+def test_training_dialog_sequential_selection_updates_roles(qapp, tmp_path):
     from hydra_suite.detectkit.gui.dialogs.training_dialog import TrainingDialog
 
     dlg = TrainingDialog(_make_proj(tmp_path))
-    dlg.recipe_combo.setCurrentIndex(dlg.recipe_combo.findData("sequential"))
+    dlg.mode_combo.setCurrentIndex(dlg.mode_combo.findData("sequential"))
+    dlg.task_combo.setCurrentIndex(dlg.task_combo.findData("obb"))
 
-    assert dlg.chk_customize_roles.isChecked() is False
     assert dlg.chk_role_obb_direct.isChecked() is False
     assert dlg.chk_role_seq_detect.isChecked() is True
     assert dlg.chk_role_seq_crop_obb.isChecked() is True
 
 
-def test_training_dialog_custom_recipe_enables_manual_stage_selection(qapp, tmp_path):
+def test_training_dialog_selection_maps_each_task_to_one_valid_plan(qapp, tmp_path):
     from hydra_suite.detectkit.gui.dialogs.training_dialog import TrainingDialog
 
-    dlg = TrainingDialog(_make_proj(tmp_path))
-    dlg.recipe_combo.setCurrentIndex(dlg.recipe_combo.findData("custom"))
+    proj = _make_proj(tmp_path)
+    proj.sources[0].level = "polygon"
+    dlg = TrainingDialog(proj)
+    dlg.mode_combo.setCurrentIndex(dlg.mode_combo.findData("direct"))
+    dlg.task_combo.setCurrentIndex(dlg.task_combo.findData("segment"))
 
-    assert dlg.chk_customize_roles.isChecked() is True
-    assert dlg.role_cards_widget.isHidden() is False
+    assert dlg.chk_role_segment_direct.isChecked() is True
+    assert dlg.chk_role_obb_direct.isChecked() is False
+    assert dlg.chk_role_seq_detect.isChecked() is False
 
 
 def test_training_dialog_start_always_enabled(qapp, tmp_path):
@@ -182,19 +204,18 @@ def test_training_worker_is_base_worker(qapp):
 # ---------------------------------------------------------------------------
 
 
-def test_training_dialog_roles_roundtrip(qapp, tmp_path):
+def test_training_dialog_plan_roundtrip(qapp, tmp_path):
     from hydra_suite.detectkit.gui.dialogs.training_dialog import TrainingDialog
 
     proj = _make_proj(tmp_path)
-    proj.role_obb_direct = True
-    proj.role_seq_detect = False
-    proj.role_seq_crop_obb = True
+    proj.training_mode = "sequential"
+    proj.training_task = "segment"
+    proj.sources[0].level = "polygon"
     dlg = TrainingDialog(proj)
-    assert dlg.chk_role_obb_direct.isChecked() is True
-    assert dlg.chk_role_seq_detect.isChecked() is False
-    assert dlg.chk_role_seq_crop_obb.isChecked() is True
-    assert dlg.chk_customize_roles.isChecked() is True
-    assert dlg.recipe_combo.currentData() == "custom"
+    assert dlg.mode_combo.currentData() == "sequential"
+    assert dlg.task_combo.currentData() == "segment"
+    assert dlg.chk_role_seq_detect.isChecked() is True
+    assert dlg.chk_role_seq_crop_segment.isChecked() is True
 
 
 # ---------------------------------------------------------------------------
@@ -310,7 +331,8 @@ def test_training_dialog_recipe_hides_irrelevant_advanced_controls(qapp, tmp_pat
     from hydra_suite.detectkit.gui.dialogs.training_dialog import TrainingDialog
 
     dlg = TrainingDialog(_make_proj(tmp_path))
-    dlg.recipe_combo.setCurrentIndex(dlg.recipe_combo.findData("direct_obb"))
+    dlg.mode_combo.setCurrentIndex(dlg.mode_combo.findData("direct"))
+    dlg.task_combo.setCurrentIndex(dlg.task_combo.findData("obb"))
 
     assert dlg.spin_imgsz_obb_direct.isHidden() is False
     assert dlg.spin_imgsz_seq_detect.isHidden() is True
@@ -373,16 +395,21 @@ def test_training_dialog_write_to_project(qapp, tmp_path):
     from hydra_suite.detectkit.gui.dialogs.training_dialog import TrainingDialog
 
     proj = _make_proj(tmp_path)
+    proj.sources[0].level = "polygon"
     dlg = TrainingDialog(proj)
 
-    dlg.chk_role_seq_detect.setChecked(False)
+    dlg.mode_combo.setCurrentIndex(dlg.mode_combo.findData("sequential"))
+    dlg.task_combo.setCurrentIndex(dlg.task_combo.findData("segment"))
     dlg.spin_epochs.setValue(25)
     dlg.spin_seed.setValue(99)
     dlg.aug_group.setChecked(False)
 
     dlg._write_to_project()
 
-    assert proj.role_seq_detect is False
+    assert proj.training_mode == "sequential"
+    assert proj.training_task == "segment"
+    assert proj.role_seq_detect is True
+    assert proj.role_seq_crop_segment is True
     assert proj.epochs == 25
     assert proj.seed == 99
     assert proj.aug_enabled is False

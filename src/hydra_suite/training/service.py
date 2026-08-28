@@ -328,6 +328,7 @@ class TrainingOrchestrator:
         split_cfg: SplitConfig,
         seed: int,
         dedup: bool,
+        target_level: GeometryLevel = GeometryLevel.OBB,
     ) -> DatasetBuildResult:
         """Merge multiple OBB source datasets into a single unified dataset with optional deduplication."""
         resolved_class_names = [
@@ -346,6 +347,7 @@ class TrainingOrchestrator:
             seed=seed,
             dedup=dedup,
             remap_single_class=len(resolved_class_names) == 1,
+            target_level=target_level,
         )
 
     def build_sliced_obb_dataset(

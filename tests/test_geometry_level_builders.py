@@ -1,16 +1,18 @@
+import json
 from pathlib import Path
 
 import cv2
 import numpy as np
 import pytest
 
-from hydra_suite.training.contracts import TrainingRole
+from hydra_suite.training.contracts import SourceDataset, SplitConfig, TrainingRole
 from hydra_suite.training.dataset_builders import (
     _parse_geometry_label_lines,
     blocked_roles_for_level,
     derive_crop_segment_dataset_from_source,
     derive_detect_dataset_from_obb,
     derive_segment_dataset_from_source,
+    merge_obb_sources,
     prepare_role_dataset,
     role_min_level,
 )
@@ -149,6 +151,76 @@ def test_merged_level_empty_is_polygon():
 
     level, blocker = merged_level_and_blocker([])
     assert level is GeometryLevel.POLYGON and blocker is None
+
+
+def test_merge_uses_only_sources_that_can_supply_the_selected_geometry(tmp_path):
+    """Mixed project sources are selected per target instead of globally gated."""
+    aabb = tmp_path / "aabb"
+    polygon = tmp_path / "polygon"
+    _mk_dataset(aabb, "0 0.5 0.5 0.4 0.3\n")
+    _mk_dataset(
+        polygon,
+        "0 0.1 0.1 0.8 0.1 0.8 0.7 0.4 0.9 0.1 0.7\n",
+    )
+    sources = [
+        SourceDataset(path=str(aabb), name="boxes", level="aabb"),
+        SourceDataset(path=str(polygon), name="masks", level="polygon"),
+    ]
+
+    obb = merge_obb_sources(
+        sources,
+        tmp_path / "out",
+        SplitConfig(),
+        class_names=["object"],
+        dedup=False,
+        target_level=GeometryLevel.OBB,
+    )
+    obb_labels = list((Path(obb.dataset_dir) / "labels").rglob("*.txt"))
+    assert obb.stats["source_items"] == {"masks": 2}
+    assert all(len(path.read_text().split()) == 9 for path in obb_labels)
+
+    detect = merge_obb_sources(
+        sources,
+        tmp_path / "out",
+        SplitConfig(),
+        class_names=["object"],
+        dedup=False,
+        target_level=GeometryLevel.AABB,
+    )
+    assert set(detect.stats["source_items"]) == {"boxes", "masks"}
+    assert all(
+        len(path.read_text().split()) == 5
+        for path in (Path(detect.dataset_dir) / "labels").rglob("*.txt")
+    )
+
+
+def test_merge_resolves_the_matching_root_from_a_multilevel_source(tmp_path):
+    round_root = tmp_path / "round"
+    _mk_dataset(round_root / "obb", "0 0.1 0.1 0.8 0.1 0.8 0.8 0.1 0.8\n")
+    _mk_dataset(round_root / "aabb", "0 0.5 0.5 0.7 0.4\n")
+    (round_root / "manifest.json").write_text(
+        json.dumps(
+            {
+                "roots": [
+                    {"level": "obb", "path": str(round_root / "obb")},
+                    {"level": "aabb", "path": str(round_root / "aabb")},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    merged = merge_obb_sources(
+        [SourceDataset(path=str(round_root), name="round", level="obb")],
+        tmp_path / "out",
+        SplitConfig(),
+        class_names=["object"],
+        dedup=False,
+        target_level=GeometryLevel.AABB,
+    )
+    labels = list((Path(merged.dataset_dir) / "labels").rglob("*.txt"))
+    assert labels
+    assert all(len(path.read_text().split()) == 5 for path in labels)
 
 
 def test_project_roundtrips_detect_segment_model_and_imgsz(tmp_path):

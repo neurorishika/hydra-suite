@@ -43,6 +43,9 @@ class SourceDataset:
     path: str
     source_type: str = "yolo_obb"
     name: str = ""
+    # Native annotation fidelity. Training derives lower-fidelity labels for
+    # a role but never invents a higher-fidelity geometry.
+    level: str = "obb"
 
 
 @dataclass(slots=True)

@@ -37,10 +37,14 @@ def _repo_dir_for_role(role: TrainingRole, scheme_name: str = "classkit") -> Pat
     root = get_models_root()
     if role == TrainingRole.OBB_DIRECT:
         out = root / "YOLO-obb"
-    elif role == TrainingRole.SEQ_DETECT:
+    elif role in {TrainingRole.DETECT_DIRECT, TrainingRole.SEQ_DETECT}:
         out = root / "YOLO-detect"
     elif role == TrainingRole.SEQ_CROP_OBB:
         out = root / "YOLO-obb" / "cropped"
+    elif role == TrainingRole.SEGMENT_DIRECT:
+        out = root / "YOLO-segment"
+    elif role == TrainingRole.SEQ_CROP_SEGMENT:
+        out = root / "YOLO-segment" / "cropped"
     elif role == TrainingRole.CLASSIFY_FLAT_YOLO:
         out = root / "YOLO-classify" / scheme_name
     elif role == TrainingRole.CLASSIFY_FLAT_TINY:
@@ -62,10 +66,16 @@ def _repo_dir_for_role(role: TrainingRole, scheme_name: str = "classkit") -> Pat
 def _task_usage_for_role(role: TrainingRole) -> tuple[str, str]:
     if role == TrainingRole.OBB_DIRECT:
         return "obb", "obb_direct"
+    if role == TrainingRole.DETECT_DIRECT:
+        return "detect", "detect_direct"
     if role == TrainingRole.SEQ_DETECT:
         return "detect", "seq_detect"
     if role == TrainingRole.SEQ_CROP_OBB:
         return "obb", "seq_crop_obb"
+    if role == TrainingRole.SEGMENT_DIRECT:
+        return "segment", "segment_direct"
+    if role == TrainingRole.SEQ_CROP_SEGMENT:
+        return "segment", "seq_crop_segment"
     if role in (TrainingRole.CLASSIFY_FLAT_YOLO, TrainingRole.CLASSIFY_MULTIHEAD_YOLO):
         return "classify", "classify_yolo"
     if role in (TrainingRole.CLASSIFY_FLAT_TINY, TrainingRole.CLASSIFY_MULTIHEAD_TINY):

@@ -6,8 +6,9 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
-    QFormLayout,
+    QGridLayout,
     QGroupBox,
+    QLabel,
     QLineEdit,
     QSpinBox,
 )
@@ -20,7 +21,10 @@ class SliceSettingsGroup(QGroupBox):
 
     def __init__(self, parent=None) -> None:
         super().__init__("Sliced dataset / inference (SAHI)", parent)
-        form = QFormLayout(self)
+        grid = QGridLayout(self)
+        grid.setContentsMargins(16, 18, 16, 14)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(8)
 
         self.chk_enabled = QCheckBox("Enable sliced training + preview")
         self.cmb_mode = QComboBox()
@@ -50,18 +54,58 @@ class SliceSettingsGroup(QGroupBox):
         self.spin_merge.setRange(0.0, 1.0)
         self.spin_merge.setSingleStep(0.05)
 
-        form.addRow(self.chk_enabled)
-        form.addRow("Geometry mode", self.cmb_mode)
-        form.addRow("Object tile fraction", self.spin_frac)
-        form.addRow("Reference body px (0 = auto/imgsz)", self.spin_ref)
-        form.addRow("Custom tile W", self.spin_w)
-        form.addRow("Custom tile H", self.spin_h)
-        form.addRow("Overlap", self.spin_overlap)
-        form.addRow("Min area ratio", self.spin_min_area)
-        form.addRow("Negative tile fraction", self.spin_neg)
-        form.addRow("Target sizes (px, comma)", self.txt_targets)
-        form.addRow(self.chk_full)
-        form.addRow("Merge threshold", self.spin_merge)
+        for control in (
+            self.cmb_mode,
+            self.spin_frac,
+            self.spin_ref,
+            self.spin_w,
+            self.spin_h,
+            self.spin_overlap,
+            self.spin_min_area,
+            self.spin_neg,
+            self.spin_merge,
+        ):
+            control.setMaximumWidth(170)
+        self.txt_targets.setMinimumWidth(180)
+
+        grid.addWidget(self.chk_enabled, 0, 0, 1, 6)
+        rows = (
+            (
+                "Geometry mode",
+                self.cmb_mode,
+                "Object tile fraction",
+                self.spin_frac,
+                "Reference body px",
+                self.spin_ref,
+            ),
+            (
+                "Custom tile W",
+                self.spin_w,
+                "Custom tile H",
+                self.spin_h,
+                "Overlap",
+                self.spin_overlap,
+            ),
+            (
+                "Min area ratio",
+                self.spin_min_area,
+                "Negative tile fraction",
+                self.spin_neg,
+                "Target sizes (px)",
+                self.txt_targets,
+            ),
+        )
+        for row, values in enumerate(rows, start=1):
+            for column, value in enumerate(values):
+                grid.addWidget(
+                    QLabel(value) if isinstance(value, str) else value, row, column
+                )
+
+        grid.addWidget(self.chk_full, 4, 0, 1, 2)
+        grid.addWidget(QLabel("Merge threshold"), 4, 2)
+        grid.addWidget(self.spin_merge, 4, 3)
+        for column in (1, 3, 5):
+            grid.setColumnStretch(column, 1)
 
     def load_from(self, s: SliceTrainingSettings) -> None:
         self.chk_enabled.setChecked(bool(s.enabled))

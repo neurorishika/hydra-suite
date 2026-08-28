@@ -137,6 +137,40 @@ def _safe_name(text: str) -> str:
     )
 
 
+def resolve_source_path_for_target(
+    src: SourceDataset, target_level: GeometryLevel
+) -> Path:
+    """Resolve a project source, including multi-level AL round containers.
+
+    Newer projects may retain a round directory containing one dataset root per
+    geometry level. Prefer the exact stored sibling for this role so the
+    training plan uses the project's materialized labels, while still falling
+    back to the source root for ordinary and older projects.
+    """
+    root = Path(src.path).expanduser().resolve()
+    manifest_path = root / "manifest.json"
+    if not manifest_path.is_file():
+        return root
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        entries = manifest.get("roots", [])
+    except (OSError, ValueError, TypeError):
+        return root
+    if not isinstance(entries, list):
+        return root
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get("level") != target_level.label:
+            continue
+        candidates = [
+            Path(str(entry.get("path", ""))).expanduser(),
+            root / target_level.label,
+        ]
+        for candidate in candidates:
+            if candidate.is_dir():
+                return candidate.resolve()
+    return root
+
+
 def _parse_obb_label_lines(lbl_path: Path) -> list[tuple[int, np.ndarray]]:
     out: list[tuple[int, np.ndarray]] = []
     for ln in lbl_path.read_text(encoding="utf-8").splitlines():
@@ -179,17 +213,19 @@ def _parse_geometry_label_lines(lbl_path: Path) -> list[tuple[int, np.ndarray]]:
     return out
 
 
-def _render_filtered_obb_label(
+def _render_filtered_geometry_label(
     lbl: Path,
     *,
+    target_level: GeometryLevel,
+    source_level: GeometryLevel,
     class_id_map: dict[int, int] | None = None,
     remap_single_class: bool = False,
 ) -> tuple[str, set[int]]:
-    """Return filtered/remapped OBB label text and the kept class ids."""
-    detections = _parse_obb_label_lines(lbl)
+    """Return filtered/remapped labels projected to *target_level*."""
+    detections = _parse_geometry_label_lines(lbl)
     lines: list[str] = []
     kept_class_ids: set[int] = set()
-    for cls_id, poly in detections:
+    for cls_id, points in detections:
         mapped_id = int(cls_id)
         if class_id_map is not None:
             mapped = class_id_map.get(mapped_id)
@@ -199,12 +235,49 @@ def _render_filtered_obb_label(
         elif remap_single_class:
             mapped_id = 0
 
-        coords = " ".join(f"{float(v):.6f}" for v in poly.reshape(-1))
-        lines.append(f"{mapped_id} {coords}")
+        points = _project_points_to_level(
+            points,
+            target_level,
+            preserve_source_geometry=source_level == target_level,
+        )
+        lines.append(_format_points_for_level(mapped_id, points, target_level))
         kept_class_ids.add(mapped_id)
 
     text = "\n".join(lines) + ("\n" if lines else "")
     return text, kept_class_ids
+
+
+def _project_points_to_level(
+    points: np.ndarray,
+    level: GeometryLevel,
+    *,
+    preserve_source_geometry: bool = False,
+) -> np.ndarray:
+    """Project normalized source geometry down to the requested target level."""
+    points = np.asarray(points, dtype=np.float32)
+    if preserve_source_geometry or level == GeometryLevel.POLYGON:
+        return points
+    if level == GeometryLevel.OBB:
+        return np.asarray(cv2.boxPoints(cv2.minAreaRect(points)), dtype=np.float32)
+    x1, y1 = float(points[:, 0].min()), float(points[:, 1].min())
+    x2, y2 = float(points[:, 0].max()), float(points[:, 1].max())
+    return np.asarray([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], dtype=np.float32)
+
+
+def _format_points_for_level(
+    class_id: int, points: np.ndarray, level: GeometryLevel
+) -> str:
+    """Serialize normalized geometry in the YOLO syntax for *level*."""
+    points = np.clip(np.asarray(points, dtype=np.float32), 0.0, 1.0)
+    if level == GeometryLevel.AABB:
+        x1, y1 = float(points[:, 0].min()), float(points[:, 1].min())
+        x2, y2 = float(points[:, 0].max()), float(points[:, 1].max())
+        return (
+            f"{int(class_id)} {(x1 + x2) * 0.5:.6f} {(y1 + y2) * 0.5:.6f} "
+            f"{max(0.0, x2 - x1):.6f} {max(0.0, y2 - y1):.6f}"
+        )
+    coords = " ".join(f"{float(v):.6f}" for v in points.reshape(-1))
+    return f"{int(class_id)} {coords}"
 
 
 def eligible_sources(sources):
@@ -230,8 +303,14 @@ def merge_obb_sources(
     dedup: bool = True,
     remap_single_class: bool = True,
     class_names: list[str] | None = None,
+    target_level: GeometryLevel = GeometryLevel.OBB,
 ) -> DatasetBuildResult:
-    """Merge OBB sources into one canonical dataset (non-destructive)."""
+    """Merge compatible sources into a canonical target-geometry dataset.
+
+    The historical function name remains for callers. Sources at a higher
+    geometry level are losslessly projected down to *target_level*; sources
+    below it are excluded from this role's dataset.
+    """
     resolved_class_names = _normalize_class_names(
         class_names=class_names,
         class_name=class_name,
@@ -243,7 +322,7 @@ def merge_obb_sources(
 
     root = Path(output_root).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
-    out_dir = root / f"combined_obb_{_timestamp()}"
+    out_dir = root / f"combined_{target_level.label}_{_timestamp()}"
 
     for split in ("train", "val", "test"):
         (out_dir / "images" / split).mkdir(parents=True, exist_ok=True)
@@ -259,12 +338,23 @@ def merge_obb_sources(
     encountered_class_ids: set[int] = set()
 
     for src in sources:
-        src_name = _safe_name(src.name or Path(src.path).name)
-        inspection: DatasetInspection = inspect_obb_or_detect_dataset(src.path)
+        try:
+            source_level = GeometryLevel.from_str(getattr(src, "level", "obb"))
+        except ValueError:
+            source_level = GeometryLevel.OBB
+        if source_level < target_level:
+            skipped_sources.append(
+                f"Source '{src.name or src.path}' is {source_level.label}-level and "
+                f"cannot supply {target_level.label}-level training labels."
+            )
+            continue
+        source_path = resolve_source_path_for_target(src, target_level)
+        src_name = _safe_name(src.name or source_path.name)
+        inspection: DatasetInspection = inspect_obb_or_detect_dataset(source_path)
         class_id_map: dict[int, int] | None = None
         try:
             source_class_names = resolve_dataset_class_names(
-                src.path, inspection.class_names
+                source_path, inspection.class_names
             )
             class_id_map = build_class_id_map(source_class_names, resolved_class_names)
         except RuntimeError:
@@ -283,8 +373,10 @@ def merge_obb_sources(
             for idx, item in enumerate(items):
                 img = Path(item.image_path)
                 lbl = Path(item.label_path)
-                label_text, kept_class_ids = _render_filtered_obb_label(
+                label_text, kept_class_ids = _render_filtered_geometry_label(
                     lbl,
+                    target_level=target_level,
+                    source_level=source_level,
                     class_id_map=class_id_map,
                     remap_single_class=remap_single_class,
                 )
@@ -317,7 +409,7 @@ def merge_obb_sources(
     _validate_class_name_coverage(
         resolved_class_names,
         encountered_class_ids,
-        dataset_label="Merged OBB dataset",
+        dataset_label=f"Merged {target_level.label} dataset",
     )
     _write_dataset_yaml(
         out_dir,
@@ -325,7 +417,8 @@ def merge_obb_sources(
         include_test=include_test,
     )
     manifest = {
-        "type": "merged_obb",
+        "type": f"merged_{target_level.label}",
+        "target_level": target_level.label,
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "sources": [asdict(s) for s in sources],
         "split_cfg": asdict(split_cfg),
