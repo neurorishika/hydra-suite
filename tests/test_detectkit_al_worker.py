@@ -609,3 +609,68 @@ def test_run_active_learning_requires_a_detector_spec(tmp_path):
                 budget=1,
             )
         )
+
+
+def test_build_detection_context_threads_base_conf_as_sequential_stage1_override(
+    tmp_path, monkeypatch
+):
+    """Task 10 fix round (Critical finding C1): `_build_detection_context` must
+    pass `detect_confidence_threshold=req.base_conf` through to
+    `build_obb_config_for_al` -- otherwise sequential mode's stage-1 detect
+    gate silently locks at `build_obb_only_config`'s dataclass default (0.25)
+    regardless of what the AL round actually requests, which is exactly what
+    the retired per-frame detector closure never did (it applied one caller
+    `conf` to both stages). This test asserts the real production callsite
+    (not just `build_obb_config_for_al` in isolation, already covered by
+    `tests/test_al_inference_adapter.py`) does the threading."""
+    from hydra_suite.detectkit.jobs import al_worker as al_worker_mod
+    from hydra_suite.detectkit.jobs.al_worker import ALDetectorSpec, ALRequest
+
+    captured: dict = {}
+
+    def _fake_build_obb_config_for_al(kind, primary, secondary, **kwargs):
+        from hydra_suite.core.inference.config import InferenceConfig
+
+        captured["kind"] = kind
+        captured.update(kwargs)
+        obb_config = OBBConfig(
+            mode="direct",
+            direct=OBBDirectConfig(model_path=primary),
+            confidence_threshold=kwargs["confidence_threshold"],
+            iou_threshold=kwargs["iou_threshold"],
+        )
+        return InferenceConfig(obb=obb_config)
+
+    class _FakeInferenceRunner:
+        def __init__(self, config, video_path=None):
+            self.config = config
+            self.video_path = video_path
+
+    monkeypatch.setattr(
+        al_worker_mod, "build_obb_config_for_al", _fake_build_obb_config_for_al
+    )
+    monkeypatch.setattr(
+        "hydra_suite.core.inference.runner.InferenceRunner", _FakeInferenceRunner
+    )
+
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+    req = ALRequest(
+        input_kind="video",
+        input_path="unused.mp4",
+        project=DetectKitProject(project_dir=project_dir, sources=[]),
+        budget=1,
+        detector=ALDetectorSpec(
+            kind="sequential",
+            model_path="/detect.pt",
+            secondary_model_path="/obb.pt",
+        ),
+        base_conf=0.05,
+        base_iou=0.5,
+    )
+
+    al_worker_mod._build_detection_context(req)
+
+    assert captured["kind"] == "sequential"
+    assert captured["confidence_threshold"] == 0.05
+    assert captured["detect_confidence_threshold"] == 0.05

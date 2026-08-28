@@ -179,6 +179,12 @@ def _build_detection_context(req: ALRequest) -> tuple[object, OBBConfig]:
         confidence_threshold=req.base_conf,
         iou_threshold=req.base_iou,
         runtime_tier=spec.runtime_tier,
+        # Matches the retired per-frame detector closure's behavior of
+        # applying one caller conf to BOTH the sequential stage-1 detect pass
+        # and the stage-2 OBB pass -- ignored by build_obb_config_for_al for
+        # kind == "obb_direct" (single stage, no separate detect gate). See
+        # inference_adapter.py's "Stage-1 confidence note".
+        detect_confidence_threshold=req.base_conf,
     )
 
     from hydra_suite.core.inference.runner import InferenceRunner

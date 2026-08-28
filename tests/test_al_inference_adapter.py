@@ -33,6 +33,34 @@ def test_build_obb_config_for_al_sequential_mode():
     assert cfg.obb.sequential.crop_pad_ratio == 0.2
     assert cfg.obb.confidence_threshold == 0.05
     assert cfg.obb.iou_threshold == 0.5
+    # Without an explicit `detect_confidence_threshold` override, stage-1
+    # falls back to OBBSequentialConfig's own dataclass default (0.25) --
+    # documenting this pre-existing default explicitly here so a future
+    # change to it is a deliberate, reviewed decision, not a silent drift.
+    assert cfg.obb.sequential.detect_confidence_threshold == 0.25
+
+
+def test_build_obb_config_for_al_sequential_mode_detect_confidence_override():
+    """Task 10 fix round (Critical finding C1): without this override, stage-1
+    detect confidence was ALWAYS 0.25 regardless of the caller's requested
+    `confidence_threshold` -- a real behavior change from the retired
+    per-frame AL detector closure, which applied one caller `conf` to BOTH
+    stages. `al_worker._build_detection_context` now always passes
+    `detect_confidence_threshold=req.base_conf` to restore that parity."""
+    cfg = build_obb_config_for_al(
+        "sequential",
+        "/path/to/detect.pt",
+        "/path/to/obb.pt",
+        crop_pad_ratio=0.2,
+        confidence_threshold=0.05,
+        iou_threshold=0.5,
+        detect_confidence_threshold=0.05,
+    )
+    assert cfg.obb.sequential.detect_confidence_threshold == 0.05
+    # Stage-2's own confidence gate is unaffected by this override -- it was
+    # already `confidence_threshold` (matching OLD's actual per-stage-2
+    # behavior), not something this fix round needed to touch.
+    assert cfg.obb.sequential.obb_confidence_threshold == 0.05
 
 
 def test_build_obb_config_for_al_sequential_missing_secondary_raises():
