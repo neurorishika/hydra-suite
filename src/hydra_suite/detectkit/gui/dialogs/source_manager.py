@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -24,11 +25,10 @@ from ..source_import import (
     IMPORT_MODE_LINKED,
     IMPORT_MODE_PORTABLE,
     compute_positional_class_remap,
-    inspect_al_round,
     inspect_detectkit_source,
-    materialize_al_round,
     materialize_detectkit_source,
     remap_materialized_source_classes,
+    resolve_al_round_authoritative_level,
 )
 from .source_validation import (
     SOURCE_ADD_MODE_LINKED,
@@ -114,23 +114,11 @@ class SourceManagerDialog(BaseDialog):
             QMessageBox.information(self, "Add Source", "Source already added.")
             return
 
-        # An active-learning export round (manifest.json + one sibling dataset
-        # root per geometry level, e.g. obb/ + aabb/) is reviewed/imported as a
-        # whole: every sibling gets registered, linked back to the
-        # authoritative root via derived_from, mirroring how
-        # jobs/al_worker.py registers an internally generated round. This
-        # keeps a manually-added external round compatible with the same
-        # role-gating/SAM2-escalation machinery an internal round gets,
-        # instead of silently dropping every non-authoritative level.
-        al_roots = inspect_al_round(selected_path)
-        if al_roots is not None:
-            inspection = al_roots[0].inspection
-        else:
-            try:
-                inspection = inspect_detectkit_source(selected_path)
-            except Exception as exc:
-                QMessageBox.warning(self, "Add Source", str(exc))
-                return
+        try:
+            inspection = inspect_detectkit_source(selected_path)
+        except Exception as exc:
+            QMessageBox.warning(self, "Add Source", str(exc))
+            return
 
         # inspection.dataset_root may differ from selected_path when the user
         # picked an active-learning round container -- review the resolved
@@ -211,17 +199,6 @@ class SourceManagerDialog(BaseDialog):
                 return
             force_remap = True
 
-        if al_roots is not None:
-            self._add_al_round_sources(
-                selected_path,
-                existing_paths,
-                import_mode,
-                force_remap,
-                source_classes,
-                project_classes,
-            )
-            return
-
         try:
             materialized = materialize_detectkit_source(
                 selected_path,
@@ -251,142 +228,40 @@ class SourceManagerDialog(BaseDialog):
             QMessageBox.information(self, "Add Source", "Source already added.")
             return
 
+        # An AL round's manifest declares which level is authoritative --
+        # trust that over the validation dialog's re-scanned `selection.level`
+        # (label files in an AL export are 9-field quads for every level, so
+        # a re-scan cannot tell OBB apart from an axis-aligned-quad AABB;
+        # see resolve_al_round_authoritative_level's docstring).
+        manifest_level = resolve_al_round_authoritative_level(selected_path)
+        level = (
+            manifest_level
+            if manifest_level is not None
+            else (
+                selection.level
+                if getattr(selection, "level", None)
+                else materialized.level
+            )
+        )
+
         self._project.sources.append(
             OBBSource(
                 path=canonical_path,
-                name=materialized.display_name,
+                name=Path(selected_path).name,
                 original_path=original_path,
                 source_kind=materialized.source_kind,
                 imported=materialized.imported,
-                level=(
-                    selection.level
-                    if getattr(selection, "level", None)
-                    else materialized.level
-                ),
+                level=level,
             )
         )
-        self._refresh_list()
-
-    def _add_al_round_sources(
-        self,
-        round_path: str,
-        existing_paths: set[str],
-        import_mode: str,
-        force_remap: bool,
-        source_classes: list[str],
-        project_classes: list[str],
-    ) -> None:
-        """Materialize + register every sibling root of an AL round export.
-
-        One project source per geometry level, non-authoritative roots linked
-        back to the authoritative one via ``derived_from`` -- matching
-        ``jobs/al_worker.py``'s registration of an internally generated round.
-        """
-        from ..models import OBBSource
-
-        try:
-            materialized_roots = materialize_al_round(
-                round_path,
-                self._project.project_dir,
-                import_mode=import_mode,
-                force_import=force_remap,
-            )
-        except Exception as exc:
-            QMessageBox.warning(self, "Add Source", str(exc))
-            return
-
-        # Every sibling shares one class list (export_al_dataset writes the
-        # same reconciled class_names to each root), so one remap covers the
-        # whole round -- compute it once rather than per-entry, and re-check
-        # the SAME already-registered path map for the whole round rather
-        # than recomputing it as entries get appended one at a time.
-        remap = (
-            compute_positional_class_remap(source_classes, project_classes)
-            if force_remap
-            else None
-        )
-        name_by_existing_path: dict[str, str] = {}
-        for src in self._project.sources:
-            for candidate in (src.path, src.original_path):
-                if candidate:
-                    name_by_existing_path[candidate] = src.name
-
-        round_name = Path(round_path).name
-        authoritative_name: str | None = None
-        added_any = False
-        for entry in materialized_roots or []:
-            materialized = entry.materialized
-            canonical_path = str(materialized.canonical_path)
-            original_path = str(materialized.source_root)
-
-            if remap is not None:
-                try:
-                    remap_materialized_source_classes(
-                        Path(materialized.canonical_path), project_classes, remap
-                    )
-                except Exception as exc:
-                    QMessageBox.warning(self, "Add Source", str(exc))
-                    # Stop importing further siblings, but keep -- and show
-                    # -- whatever was already registered this call rather
-                    # than returning with the sources list and the dialog's
-                    # list widget silently out of sync.
-                    break
-
-            is_duplicate = (
-                canonical_path in existing_paths or original_path in existing_paths
-            )
-            if entry.authoritative and authoritative_name is None:
-                # Even if the authoritative root was already registered
-                # (e.g. previously added on its own, before this round was
-                # added as a whole), resolve derived_from to its ACTUAL
-                # registered name -- not the name this call would have used
-                # -- so a skipped duplicate never leaves a derived sibling's
-                # derived_from silently None (which would make it look
-                # authoritative instead of just unlinked).
-                if is_duplicate:
-                    authoritative_name = name_by_existing_path.get(
-                        canonical_path
-                    ) or name_by_existing_path.get(original_path)
-                else:
-                    authoritative_name = f"{round_name}_{entry.level}"
-
-            if is_duplicate:
-                continue
-
-            name = f"{round_name}_{entry.level}"
-            self._project.sources.append(
-                OBBSource(
-                    path=canonical_path,
-                    name=name,
-                    original_path=original_path,
-                    source_kind=materialized.source_kind,
-                    imported=materialized.imported,
-                    # entry.level (the manifest's own declared level), not
-                    # materialized.level: every AL-export root's labels are
-                    # stored as 9-field quads regardless of level, and
-                    # _detect_source_level hardcodes intended_level=OBB for
-                    # that shape -- it can't tell an authoritative OBB root
-                    # from an axis-aligned-quad AABB sibling apart by
-                    # re-scanning. The manifest already recorded which is
-                    # which at export time; trust it.
-                    level=entry.level,
-                    reviewed=entry.reviewed,
-                    derived_from=None if entry.authoritative else authoritative_name,
-                )
-            )
-            existing_paths.add(canonical_path)
-            existing_paths.add(original_path)
-            name_by_existing_path[canonical_path] = name
-            name_by_existing_path[original_path] = name
-            added_any = True
-
-        if not added_any:
-            QMessageBox.information(self, "Add Source", "Source already added.")
         self._refresh_list()
 
     def _remove_selected(self) -> None:
         row = self._source_list.currentRow()
         if row < 0 or row >= len(self._project.sources):
             return
-        self._project.sources.pop(row)
+        removed = self._project.sources.pop(row)
+        pending = removed.pending_escalation
+        if pending is not None and pending.staged_path:
+            shutil.rmtree(Path(pending.staged_path), ignore_errors=True)
         self._refresh_list()
