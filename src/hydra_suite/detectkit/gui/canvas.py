@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import cv2
 import numpy as np
@@ -32,6 +32,9 @@ from hydra_suite.utils.geometry_derivation import (
 )
 
 from .constants import CANVAS_BG_COLOR, DEFAULT_OBB_FONT_SIZE, DEFAULT_OBB_LINE_WIDTH
+
+if TYPE_CHECKING:
+    from hydra_suite.training.geometry_levels import GeometryLevel
 
 logger = logging.getLogger(__name__)
 
@@ -75,11 +78,6 @@ def _level_styles():
     }
 
 
-_UNREVIEWED_NATIVE_STYLE = _LevelStyle(
-    Qt.PenStyle.SolidLine, Qt.BrushStyle.BDiagPattern, 140
-)
-
-
 class OBBCanvas(QGraphicsView):
     """Read-only image viewer with oriented-bounding-box overlays."""
 
@@ -110,7 +108,7 @@ class OBBCanvas(QGraphicsView):
         self._gt_level_items: dict = {}
         self._gt_level_label_items: dict = {}
         self._gt_level_class_ids: dict = {}
-        self._gt_native_level = None
+        self._gt_native_level: Optional["GeometryLevel"] = None
         self._show_derived_levels: bool = True
         # Prediction layer (model output, dashed lines)
         self._pred_obb_items: list = []
@@ -288,15 +286,45 @@ class OBBCanvas(QGraphicsView):
         """Draw ground-truth OBB polygons (solid lines)."""
         if not append:
             self.clear_gt_detections()
-        self._draw_detections(
-            detections,
-            self._gt_obb_items,
-            self._gt_label_items,
-            self._gt_class_ids,
-            class_names,
-            Qt.PenStyle.SolidLine,
-            show_confidence=False,
-        )
+
+        if append and self._gt_native_level is not None:
+            # A multi-level draw already populated the per-level GT
+            # buckets, so _apply_visibility takes the per-level branch
+            # (it iterates _gt_level_items, not the flat lists, whenever
+            # the former is non-empty). Appending only into the flat lists
+            # here would leave these items outside that iteration -- they'd
+            # never be visited by show/hide toggles or class filters. Route
+            # them into the native level's buckets instead, and mirror the
+            # newly drawn items into the flat lists too since those still
+            # serve as the flat concatenation other callers (e.g.
+            # clear_gt_detections) read.
+            native_level = self._gt_native_level
+            obb_items = self._gt_level_items.setdefault(native_level, [])
+            label_items = self._gt_level_label_items.setdefault(native_level, [])
+            class_ids = self._gt_level_class_ids.setdefault(native_level, [])
+            start = len(obb_items)
+            self._draw_detections(
+                detections,
+                obb_items,
+                label_items,
+                class_ids,
+                class_names,
+                Qt.PenStyle.SolidLine,
+                show_confidence=False,
+            )
+            self._gt_obb_items.extend(obb_items[start:])
+            self._gt_label_items.extend(label_items[start:])
+            self._gt_class_ids.extend(class_ids[start:])
+        else:
+            self._draw_detections(
+                detections,
+                self._gt_obb_items,
+                self._gt_label_items,
+                self._gt_class_ids,
+                class_names,
+                Qt.PenStyle.SolidLine,
+                show_confidence=False,
+            )
         self._apply_visibility()
 
     def set_gt_detections_multi_level(
@@ -304,7 +332,7 @@ class OBBCanvas(QGraphicsView):
         detections: list[dict],
         class_names: list[str] | dict[int, str] | None = None,
         *,
-        native_level,
+        native_level: "GeometryLevel",
         reviewed: bool = True,
     ) -> None:
         """Draw ground-truth detections at *native_level*, plus every
@@ -335,8 +363,13 @@ class OBBCanvas(QGraphicsView):
             if not level_detections:
                 continue
 
+            # Unreviewed native shapes get a hatched fill to flag them as
+            # not-yet-confirmed, but MUST keep the level's own pen style --
+            # hardcoding SolidLine here would collide with AABB's own
+            # SolidLine pen and make an unreviewed OBB-native quad visually
+            # merge with its derived AABB outline (they'd be indistinguishable).
             style = (
-                _UNREVIEWED_NATIVE_STYLE
+                _LevelStyle(styles[level].pen_style, Qt.BrushStyle.BDiagPattern, 140)
                 if (level == native_level and not reviewed)
                 else styles[level]
             )
@@ -430,9 +463,11 @@ class OBBCanvas(QGraphicsView):
     def clear_pred_detections(self) -> None:
         """Remove all prediction polygon and label items from the scene."""
         for item in self._pred_obb_items:
-            self._scene.removeItem(item)
+            if item is not None:
+                self._scene.removeItem(item)
         for item in self._pred_label_items:
-            self._scene.removeItem(item)
+            if item is not None:
+                self._scene.removeItem(item)
         self._pred_obb_items.clear()
         self._pred_label_items.clear()
         self._pred_class_ids.clear()

@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import os
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
 import sys
 from pathlib import Path
 
 import numpy as np
 import pytest
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
 
 pytest.importorskip("PySide6")
 
@@ -242,6 +242,66 @@ def test_set_gt_detections_multi_level_unreviewed_uses_hatched_brush_on_native_o
     derived_item = canvas._gt_level_items[GeometryLevel.AABB][0]
     assert native_item.brush().style() == Qt.BrushStyle.BDiagPattern
     assert derived_item.brush().style() != Qt.BrushStyle.BDiagPattern
+
+
+def test_set_gt_detections_multi_level_unreviewed_native_pen_differs_from_aabb(
+    qapp,
+):
+    """Regression: the unreviewed-native override must keep the native
+    level's own pen style, not hardcode SolidLine -- otherwise an
+    unreviewed OBB-native quad (DashLine) collides with derived AABB's
+    own SolidLine pen and the two boxes become visually indistinguishable."""
+    from hydra_suite.training.geometry_levels import GeometryLevel
+
+    canvas = OBBCanvas()
+    canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
+    quad = [(10.0, 10.0), (90.0, 20.0), (80.0, 90.0), (0.0, 80.0)]
+    canvas.set_gt_detections_multi_level(
+        [{"class_id": 0, "polygon_px": quad}],
+        native_level=GeometryLevel.OBB,
+        reviewed=False,
+    )
+    native_item = canvas._gt_level_items[GeometryLevel.OBB][0]
+    aabb_item = canvas._gt_level_items[GeometryLevel.AABB][0]
+    assert native_item.pen().style() != aabb_item.pen().style()
+    assert native_item.pen().style() == Qt.PenStyle.DashLine
+    # Fill override is preserved -- only the pen style itself was fixed.
+    assert native_item.brush().style() == Qt.BrushStyle.BDiagPattern
+
+
+def test_set_gt_detections_append_after_multi_level_is_visibility_controlled(
+    qapp,
+):
+    """Regression: set_gt_detections(..., append=True) called after a
+    multi-level draw must route the new item into the native level's
+    bucket, or _apply_visibility (which iterates _gt_level_items once it's
+    populated) never visits it and show/hide toggles silently no-op on it."""
+    from hydra_suite.training.geometry_levels import GeometryLevel
+
+    canvas = OBBCanvas()
+    canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
+    quad = [(10.0, 10.0), (90.0, 20.0), (80.0, 90.0), (0.0, 80.0)]
+    canvas.set_gt_detections_multi_level(
+        [{"class_id": 0, "polygon_px": quad}],
+        native_level=GeometryLevel.OBB,
+        reviewed=True,
+    )
+    appended_quad = [(15.0, 15.0), (95.0, 25.0), (85.0, 95.0), (5.0, 85.0)]
+    canvas.set_gt_detections(
+        [{"class_id": 0, "polygon_px": appended_quad}], append=True
+    )
+
+    # The appended item must have landed in the native level's bucket, not
+    # only the flat list.
+    assert len(canvas._gt_level_items[GeometryLevel.OBB]) == 2
+    appended_item = canvas._gt_level_items[GeometryLevel.OBB][-1]
+    assert appended_item.isVisible() is True
+
+    canvas.set_overlay_visibility(show_gt=False, show_pred=True)
+    assert appended_item.isVisible() is False
+
+    canvas.set_overlay_visibility(show_gt=True, show_pred=True)
+    assert appended_item.isVisible() is True
 
 
 def test_set_derived_levels_visible_hides_non_native_layers_only(qapp):
