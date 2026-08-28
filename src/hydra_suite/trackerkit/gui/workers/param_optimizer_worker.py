@@ -147,6 +147,7 @@ class TrackingOptimizer(QThread):
 
     progress_signal = Signal(int, str)
     result_signal = Signal(list)  # List of OptimizationResult
+    error_signal = Signal(str)
     finished_signal = Signal()
 
     def __init__(
@@ -177,6 +178,7 @@ class TrackingOptimizer(QThread):
             sampler_type=sampler_type,
             progress_cb=lambda p, m: self.progress_signal.emit(p, m),
             result_cb=lambda results: self.result_signal.emit(results),
+            error_cb=lambda msg: self.error_signal.emit(msg),
         )
 
     def stop(self):
@@ -188,6 +190,16 @@ class TrackingOptimizer(QThread):
         except RuntimeError as e:
             # Dialog was closed before the thread finished; ignore orphaned signals.
             logger.warning("Optimizer signal emission skipped (dialog closed?): %s", e)
+        except Exception as e:
+            # Anything else is an unexpected failure the optimizer core did not
+            # already turn into an error_signal (e.g. a bug in optimize() itself
+            # outside the try/except blocks it already has). Surface it instead
+            # of letting the QThread die silently and reporting "no results".
+            logger.exception("TrackingOptimizer thread failed unexpectedly")
+            try:
+                self.error_signal.emit(f"Optimizer failed unexpectedly: {e}")
+            except RuntimeError:
+                pass
         finally:
             try:
                 self.finished_signal.emit()

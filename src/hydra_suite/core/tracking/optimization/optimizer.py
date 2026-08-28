@@ -498,9 +498,11 @@ class TrackingOptimizerCore:
         sampler_type: str = "auto",
         progress_cb=None,
         result_cb=None,
+        error_cb=None,
     ):
         self._progress_cb = progress_cb
         self._result_cb = result_cb
+        self._error_cb = error_cb
         self.video_path = video_path
         self.detection_cache_path = detection_cache_path
         self.start_frame = start_frame
@@ -597,22 +599,36 @@ class TrackingOptimizerCore:
                 _roi_mask,
             ).detection
             if self.cache is None or not self.cache.is_valid():
+                msg = (
+                    "Detection cache is incompatible with the current parameters "
+                    "(e.g. detection method/model or ROI mask changed since it was "
+                    "built). Rebuild the cache and try again."
+                )
                 if self._progress_cb is not None:
-                    self._progress_cb(0, "Error: Incompatible detection cache.")
+                    self._progress_cb(0, f"Error: {msg}")
+                if self._error_cb is not None:
+                    self._error_cb(msg)
                 return False
         except Exception as e:
+            logger.exception("Optimizer: failed to open detection cache")
+            msg = f"Error loading detection cache: {e}"
             if self._progress_cb is not None:
-                self._progress_cb(0, f"Error loading cache: {str(e)}")
+                self._progress_cb(0, msg)
+            if self._error_cb is not None:
+                self._error_cb(msg)
             return False
 
         if not self.cache.covers_frame_range(self.start_frame, self.end_frame):
             missing = self.cache.get_missing_frames(self.start_frame, self.end_frame)
             msg = (
-                f"Error: Cache does not cover frames "
-                f"{self.start_frame}-{self.end_frame}. Missing: {missing}"
+                f"Detection cache does not cover frames "
+                f"{self.start_frame}-{self.end_frame}. Missing: {missing}. "
+                "Rebuild the detection cache for this frame range and try again."
             )
             if self._progress_cb is not None:
-                self._progress_cb(0, msg)
+                self._progress_cb(0, f"Error: {msg}")
+            if self._error_cb is not None:
+                self._error_cb(msg)
             return False
         return True
 
@@ -774,6 +790,11 @@ class TrackingOptimizerCore:
 
     def optimize(self):
         if not self._open_and_validate_cache():
+            # Explicitly push an empty result set so a stale result list from a
+            # previous successful run in the same dialog session isn't left
+            # showing as if this run had produced (or reused) results.
+            if self._result_cb is not None:
+                self._result_cb([])
             return []
 
         optuna.logging.set_verbosity(optuna.logging.WARNING)
@@ -861,7 +882,14 @@ class TrackingOptimizerCore:
         try:
             study.optimize(objective, n_trials=self.n_trials)
         except Exception as e:
-            logger.error(f"Optimization trial failed: {e}")
+            # Optuna's default catch=() means ANY exception raised inside a
+            # trial (e.g. the very first one, before any result is appended)
+            # aborts the whole study immediately. Surface this loudly instead
+            # of just logging it -- otherwise the GUI reports a plain "no
+            # results" with no indication anything actually went wrong.
+            logger.exception("Optimization trial failed")
+            if self._error_cb is not None:
+                self._error_cb(f"Optimization trial failed: {e}")
 
         results.sort(key=lambda x: x.score)
         # Do not call self.cache.close(): it was opened read-only and

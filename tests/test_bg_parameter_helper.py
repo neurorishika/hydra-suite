@@ -3,7 +3,8 @@ from __future__ import annotations
 import math
 import os
 import sys
-from unittest.mock import MagicMock
+import types
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -77,6 +78,50 @@ def test_bg_parameter_helper_exposes_full_bg_tuning_surface(qapp: QApplication) 
     assert tuning_config["MORPH_KERNEL_SIZE"] is True
     assert tuning_config["BRIGHTNESS"] is False
     assert tuning_config["ENABLE_SIZE_FILTERING"] is False
+
+    dialog.close()
+
+
+def test_bg_parameter_helper_on_finished_surfaces_last_error(
+    qapp: QApplication,
+) -> None:
+    """A bg-sub optimizer run that raises before producing results must show
+    the real failure reason instead of a generic 'no results' message."""
+    dialog = BgParameterHelperDialog(
+        video_path="/tmp/video.mp4",
+        current_params={"MAX_TARGETS": 5, "RESIZE_FACTOR": 0.5},
+    )
+    dialog.results = []
+    with patch("hydra_suite.trackerkit.gui.dialogs.bg_parameter_helper.QMessageBox"):
+        dialog._on_error("boom: could not read video")
+
+    dialog._on_finished()
+
+    assert "boom: could not read video" in dialog.status_label.text()
+
+    dialog.close()
+
+
+def test_bg_parameter_helper_on_run_resets_stale_last_error(
+    qapp: QApplication,
+) -> None:
+    dialog = BgParameterHelperDialog(
+        video_path="/tmp/video.mp4",
+        current_params={"MAX_TARGETS": 5, "RESIZE_FACTOR": 0.5},
+    )
+    dialog._last_error = "stale error from a previous run"
+    dialog.get_tuning_config = lambda: {"THRESHOLD_VALUE": True}
+
+    import hydra_suite.trackerkit.gui.dialogs.bg_parameter_helper as bg_helper_mod
+
+    original_optimizer_cls = bg_helper_mod.BgSubtractionOptimizer
+    bg_helper_mod.BgSubtractionOptimizer = MagicMock(return_value=MagicMock())
+    try:
+        dialog._on_run()
+    finally:
+        bg_helper_mod.BgSubtractionOptimizer = original_optimizer_cls
+
+    assert dialog._last_error is None
 
     dialog.close()
 
@@ -284,6 +329,95 @@ def test_tracking_parameter_helper_coalesces_preview_frame_renders(
 
     assert render_spy.call_count == 1
     assert render_spy.call_args[0][0] is frame_b
+
+    dialog.close()
+
+
+def test_tracking_parameter_helper_on_finished_reads_stop_requested_from_core(
+    qapp: QApplication,
+) -> None:
+    """Regression test: ``on_finished`` must read ``_stop_requested`` off the
+    ``TrackingOptimizerCore`` (``self.optimizer._core``), not off the QThread
+    wrapper itself, which has no such attribute and raised AttributeError."""
+    dialog = ParameterHelperDialog(
+        video_path="/tmp/video.mp4",
+        detection_cache_path="/tmp/cache.npz",
+        start_frame=0,
+        end_frame=100,
+        current_params={"REFERENCE_BODY_SIZE": 40.0},
+    )
+    from hydra_suite.core.tracking.optimization.optimizer import OptimizationResult
+
+    dialog.results = [OptimizationResult(params={}, score=1.0, trial_number=0)]
+    dialog.optimizer = types.SimpleNamespace(
+        _core=types.SimpleNamespace(_stop_requested=True)
+    )
+
+    dialog.on_finished()
+
+    assert "Converged" in dialog.status_label.text()
+    assert not hasattr(dialog.optimizer, "_stop_requested")
+
+    # Avoid closeEvent()'s isRunning() check against the SimpleNamespace stub.
+    dialog.optimizer = None
+    dialog.close()
+
+
+def test_tracking_parameter_helper_on_finished_surfaces_last_error(
+    qapp: QApplication,
+) -> None:
+    """A run that fails before producing results (e.g. incompatible detection
+    cache) must show the real reason, not a generic 'no results' message."""
+    dialog = ParameterHelperDialog(
+        video_path="/tmp/video.mp4",
+        detection_cache_path="/tmp/cache.npz",
+        start_frame=0,
+        end_frame=100,
+        current_params={"REFERENCE_BODY_SIZE": 40.0},
+    )
+    dialog.results = []
+    with patch("hydra_suite.trackerkit.gui.dialogs.parameter_helper.QMessageBox"):
+        dialog.on_error("Detection cache is incompatible with the current parameters.")
+
+    dialog.on_finished()
+
+    assert "Detection cache is incompatible" in dialog.status_label.text()
+
+    dialog.close()
+
+
+def test_tracking_parameter_helper_run_optimization_resets_stale_state(
+    qapp: QApplication,
+) -> None:
+    """A fresh run must not let a previous run's results/error leak through if
+    the new run fails before producing anything (e.g. after a real tracking
+    run left behind an incompatible cache)."""
+    dialog = ParameterHelperDialog(
+        video_path="/tmp/video.mp4",
+        detection_cache_path="/tmp/cache.npz",
+        start_frame=0,
+        end_frame=100,
+        current_params={"REFERENCE_BODY_SIZE": 40.0},
+    )
+    dialog.results = [object()]
+    dialog._last_error = "stale error from a previous run"
+
+    # get_tuning_config() must report at least one enabled parameter or
+    # run_optimization() bails out before reaching the state reset.
+    dialog.get_tuning_config = lambda: {"YOLO_CONFIDENCE_THRESHOLD": True}
+    dialog.optimizer = None
+
+    import hydra_suite.trackerkit.gui.dialogs.parameter_helper as parameter_helper_mod
+
+    original_optimizer_cls = parameter_helper_mod.TrackingOptimizer
+    parameter_helper_mod.TrackingOptimizer = MagicMock(return_value=MagicMock())
+    try:
+        dialog.run_optimization()
+    finally:
+        parameter_helper_mod.TrackingOptimizer = original_optimizer_cls
+
+    assert dialog.results == []
+    assert dialog._last_error is None
 
     dialog.close()
 
