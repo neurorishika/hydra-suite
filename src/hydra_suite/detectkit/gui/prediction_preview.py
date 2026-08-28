@@ -460,40 +460,15 @@ def predict_obb_for_frame(
     return _tuples_from_obb_result(obb)
 
 
-def _tuples_with_polygons_from_obb_result(
-    obb: Any,
-) -> list[tuple]:
-    """Like :func:`_tuples_from_obb_result` but append each detection's native
-    polygon (an ``(P, 2)`` pixel-space array, or ``None`` when unavailable)."""
-    base = _tuples_from_obb_result(obb)
-    polys = obb.polygons if obb.polygons is not None else [None] * len(base)
-    return [(*t, polys[i] if i < len(polys) else None) for i, t in enumerate(base)]
-
-
-def predict_obb_for_frame_export(
-    model,
-    frame,
-    *,
-    device: str = "auto",
-    conf: float = 0.25,
-    iou: float = _PREVIEW_IOU,
-) -> list[tuple]:
-    """Export-oriented direct inference: like :func:`predict_obb_for_frame` but
-    requests native geometry so detections carry ``(..., polygon_or_none)``.
-
-    ``model`` is an executor handle; ``device`` is retained for call-site
-    compatibility but unused.
-    """
-    obb = _predict_direct(
-        model,
-        frame,
-        confidence_threshold=conf,
-        iou=iou,
-        emit_native_geometry=True,
-    )
-    if obb is None:
-        return []
-    return _tuples_with_polygons_from_obb_result(obb)
+# `predict_obb_for_frame_export` and its exclusive helper
+# `_tuples_with_polygons_from_obb_result` lived here. Their only caller was
+# DetectKit's AL detector closure (`main_window._load_active_detector_fn`),
+# retired when AL scoring moved onto `InferenceRunner`'s batched, cached
+# detection pass; nothing else in the repo referenced either. Deleted rather
+# than left as a never-exercised path. The native-geometry capability itself
+# is unaffected -- it is a defaulted `_predict_direct(..., emit_native_geometry=)`
+# keyword, and `OBBConfig.emit_native_geometry` remains the supported way to
+# ask a real inference config for polygons.
 
 
 def predict_obb_for_frame_sequential(

@@ -245,13 +245,82 @@ def test_run_active_learning_populates_detection_cache(tmp_path, monkeypatch):
 
     assert result.n_picked >= 1
     cache_dir = build_inference_cache_dir(str(video_path))
-    assert (cache_dir / "detection.npz").exists()
+    assert (cache_dir / "al" / "detection.npz").exists()
 
     # Second round over the same video: fully covered by the cache written
     # above, so no further model call happens.
     first_calls = len(runner.calls)
     run_active_learning(_request("proj_b"))
     assert len(runner.calls) == first_calls
+
+
+def test_al_round_never_touches_trackings_detection_cache(tmp_path, monkeypatch):
+    """An AL round must write its own cache file. `DetectionCacheHandle.close()`
+    rewrites `<dir>/detection.npz` from its own buffer alone, so if AL pointed at
+    `.inference_cache_<stem>/` directly it would silently destroy a complete
+    tracking detection cache and replace it with a sparse candidate-only one."""
+    from hydra_suite.detectkit.jobs.al_worker import ALRequest, run_active_learning
+    from hydra_suite.utils.video_artifacts import build_inference_cache_dir
+
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+    video_path = _write_video(tmp_path / "clip.mp4", n=8)
+
+    # Stand in for a tracking run's existing detection cache.
+    cache_dir = build_inference_cache_dir(str(video_path), create=True)
+    tracking_cache = cache_dir / "detection.npz"
+    tracking_cache.write_bytes(b"tracking-cache-sentinel")
+
+    _patch_detection(monkeypatch, lambda pos, idx: [(10, 10, 8, 4, 0.0, 0.95)])
+    run_active_learning(
+        ALRequest(
+            input_kind="video",
+            input_path=str(video_path),
+            project=DetectKitProject(project_dir=project_dir, sources=[]),
+            budget=2,
+            preset="balanced",
+            expected_count=1,
+            detector=_SPEC,
+            diversity_window=0,
+            probabilistic=False,
+        )
+    )
+
+    assert tracking_cache.read_bytes() == b"tracking-cache-sentinel"
+    assert (cache_dir / "al" / "detection.npz").exists()
+
+
+def test_candidate_pool_is_capped_by_default(tmp_path, monkeypatch):
+    """`CandidatePoolConfig.max_candidates` must default to a finite cap: the AL
+    round holds every candidate frame in memory and sends them through the model
+    as ONE unwindowed batch, so an unbounded pool is an OOM risk on long videos."""
+    from hydra_suite.data.al.candidate_pool import CandidatePoolConfig
+    from hydra_suite.detectkit.jobs.al_worker import ALRequest, run_active_learning
+
+    cap = CandidatePoolConfig().max_candidates
+    assert cap is not None and cap > 0
+
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+    folder = _seed_image_folder(tmp_path, n=cap + 5)  # every frame is distinct
+
+    runner = _patch_detection(monkeypatch, lambda pos, idx: [(10, 10, 8, 4, 0.0, 0.9)])
+    run_active_learning(
+        ALRequest(
+            input_kind="folder",
+            input_path=str(folder),
+            project=DetectKitProject(project_dir=project_dir, sources=[]),
+            budget=2,
+            preset="balanced",
+            expected_count=1,
+            detector=_SPEC,
+            diversity_window=0,
+            probabilistic=False,
+        )
+    )
+
+    assert len(runner.calls) == 1
+    assert len(runner.calls[0]) == cap
 
 
 def test_al_worker_registers_only_authoritative_source_for_multi_level_export(

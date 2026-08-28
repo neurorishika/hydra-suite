@@ -38,7 +38,20 @@ class CandidatePoolConfig:
 
     dedup_method: DedupMethod = "phash"
     dedup_threshold: int = 8  # Hamming for hashes; bins for histogram
-    max_candidates: int | None = None
+
+    # Hard ceiling on the returned pool, and a memory/OOM guard rather than a
+    # scoring knob. Downstream, DetectKit's AL round holds every candidate
+    # frame in memory at once and hands the whole list to ONE
+    # `InferenceRunner.detect_batch_raw` call, which forwards it to `run_obb`
+    # with no windowing of its own (unlike the tracking batch pass, which
+    # windows by `detection_batch_size`). An unbounded pool on a long,
+    # high-motion video is therefore thousands of full-resolution frames
+    # resident simultaneously AND one enormous model batch. 128 keeps both
+    # bounded (~800 MB of decoded 1080p) while still giving the batched pass
+    # plenty to work with; raise it deliberately, with the frame size and the
+    # detection batch in mind. `None` restores the old unbounded behaviour for
+    # callers that know their source is small.
+    max_candidates: int | None = 128
 
     # Windowed dedup: compare each frame's signature against at most the last
     # `dedup_window` *kept* signatures instead of the full history. `None`
@@ -84,6 +97,13 @@ def build_candidate_pool(
     occasional sample. This prefilter and the dedup step both operate on
     frames read sequentially via `source`, so they benefit from
     `VideoFrameSource`'s single-capture sequential-read reuse.
+
+    `cfg.max_candidates` stops the scan as soon as the cap is reached, so on a
+    source longer than the cap the pool covers the source's BEGINNING only. To
+    spread a capped pool across a long video, give the source a stride
+    (`VideoFrameSource(path, stride=n)`) rather than raising the cap -- the cap
+    exists to bound the caller's memory and model-batch size (see
+    `CandidatePoolConfig.max_candidates`).
     """
     fk = FilterKitCore()
     kept: list[FrameRef] = []

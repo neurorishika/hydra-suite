@@ -195,10 +195,17 @@ def _build_detection_context(req: ALRequest) -> tuple[object, OBBConfig]:
 def _al_detection_cache_dir(req: ALRequest) -> Iterator[Path]:
     """Yield the directory the round's raw-detection cache lives in.
 
-    For a video input this is the same ``.inference_cache_<stem>/`` directory
-    tracking itself uses, so an AL round and a tracking run over the same video
-    share one detection cache -- the whole point of routing AL through
-    `get_or_compute_raw`.
+    For a video input this is a DEDICATED ``al/`` subdirectory of the same
+    ``.inference_cache_<stem>/`` folder tracking uses -- never the folder
+    itself. `get_or_compute_raw` always writes ``<cache_dir>/detection.npz``,
+    and `DetectionCacheHandle.close()` rewrites that file from its own buffer
+    alone (this repo's documented no-merge convention). Since an AL round's
+    cache key is derived from its own `build_obb_only_config` and will rarely
+    match a tracking run's key, pointing AL at the shared folder would mean
+    every AL round silently overwrote a complete, expensive tracking detection
+    cache with a sparse candidate-only one. AL therefore keeps its own file:
+    repeat AL rounds on the same video with the same detector settings still
+    hit a pure cache read, and tracking's cache is untouchable from here.
 
     Folder/project inputs deliberately get a throwaway directory instead: their
     frame ids are positions in a sorted file listing, which shift whenever an
@@ -207,7 +214,9 @@ def _al_detection_cache_dir(req: ALRequest) -> Iterator[Path]:
     single-pass detection; only cross-run reuse is given up.
     """
     if req.input_kind == "video":
-        yield build_inference_cache_dir(req.input_path, create=True)
+        cache_dir = build_inference_cache_dir(req.input_path, create=True) / "al"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        yield cache_dir
         return
     with tempfile.TemporaryDirectory(prefix="hydra_al_cache_") as tmp_dir:
         yield Path(tmp_dir)
@@ -353,6 +362,18 @@ def _run_active_learning_with_source(
     if not candidates:
         raise RuntimeError(
             "0 candidates after FilterKit dedup; relax threshold or stride."
+        )
+    cap = req.candidate_pool.max_candidates
+    if cap is not None and len(candidates) >= cap:
+        # The cap truncates from the start of the source, so say so rather
+        # than silently scoring only the opening of a long video.
+        logger.info(
+            "Candidate pool hit its %d-frame cap; only the first %d distinct "
+            "frames of the source are scored this round. Raise "
+            "CandidatePoolConfig.max_candidates (watch memory) or read the "
+            "source with a stride to spread coverage.",
+            cap,
+            cap,
         )
 
     # --- Phase 2: one batched, cached detection pass over all candidates ----

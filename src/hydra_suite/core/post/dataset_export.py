@@ -83,6 +83,13 @@ def _dedup_selected_frames(video_path, frame_ids, method, threshold):
     cfg = CandidatePoolConfig(
         dedup_method=str(method).strip().lower(),
         dedup_threshold=int(threshold),
+        # Explicitly uncapped. `max_candidates` defaults to a finite value to
+        # bound DetectKit's AL round, which holds every candidate frame in
+        # memory and detects on them as one batch. This call site is a pure
+        # filter over an ALREADY-selected frame list -- it keeps no frame
+        # resident and runs no model -- so a cap here would silently drop the
+        # user's selected frames past the cap instead of deduping them.
+        max_candidates=None,
     )
     kept = build_candidate_pool(source, cfg)
     kept_ids = [ref.frame_id for ref in kept]
