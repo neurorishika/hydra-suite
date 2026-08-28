@@ -269,64 +269,29 @@ def _select_al_round_authoritative_root(
     return None
 
 
-@dataclass(slots=True, frozen=True)
-class ALRoundRoot:
-    """One sibling root of an AL round export, paired with its own inspection."""
+def resolve_al_round_authoritative_level(source_root: str | Path) -> str | None:
+    """Return an AL round's manifest-declared authoritative-root level.
 
-    level: str
-    authoritative: bool
-    reviewed: bool
-    path: Path
-    inspection: DetectKitSourceInspection
+    An AL-export root's labels are always stored as 9-field quads regardless
+    of level (see `_detect_source_level`'s `intended_level=OBB` re-scan,
+    which cannot distinguish a genuine OBB from an axis-aligned-quad-encoded
+    AABB by re-scanning). Only the manifest recorded which is which at
+    export time -- callers that need an AL round's true level (rather than a
+    re-scanned guess) must go through this function instead of
+    `_detect_source_level`.
 
-
-def inspect_al_round(source_root: str | Path) -> list[ALRoundRoot] | None:
-    """Inspect every sibling root of an AL round export (manifest.json + roots).
-
-    Returns the authoritative root first, then any derived siblings (e.g.
-    ``obb`` then ``aabb``) -- the same relationship
-    ``detectkit.jobs.al_worker.run_active_learning`` establishes when it
-    writes an AL round directly into a project, so a manually-added external
-    round ends up registered identically. Returns ``None`` if *source_root*
-    is not an AL round container.
+    Returns ``None`` if *source_root* is not an AL round container (no
+    ``manifest.json`` with a ``roots`` list) or has no authoritative entry.
     """
     root = Path(source_root).expanduser().resolve()
     al_roots = _load_al_round_roots(root)
     if al_roots is None:
         return None
-
-    entries: list[ALRoundRoot] = []
     for entry in al_roots:
-        is_authoritative = bool(entry.get("authoritative"))
-        path = _resolve_al_round_entry_path(root, entry)
-        if path is None:
-            # A derived sibling can go missing without invalidating the
-            # round -- it's reconstructible from the authoritative root. The
-            # authoritative root itself going missing means there is no
-            # ground truth left to import; don't silently present a
-            # leftover derived/unreviewed sibling as if it were the round.
-            if is_authoritative:
-                return None
-            continue
-        try:
-            inspection = inspect_detectkit_source(path)
-        except Exception:
-            if is_authoritative:
-                return None
-            continue
-        entries.append(
-            ALRoundRoot(
-                level=str(entry.get("level") or inspection.source_kind),
-                authoritative=is_authoritative,
-                reviewed=bool(entry.get("reviewed", is_authoritative)),
-                path=path,
-                inspection=inspection,
-            )
-        )
-    if not entries or not any(item.authoritative for item in entries):
-        return None
-    entries.sort(key=lambda item: not item.authoritative)
-    return entries
+        if entry.get("authoritative"):
+            level = entry.get("level")
+            return str(level) if level else None
+    return None
 
 
 def inspect_detectkit_source(source_root: str | Path) -> DetectKitSourceInspection:
@@ -760,52 +725,3 @@ def materialize_detectkit_source(
         imported=True,
         level=level,
     )
-
-
-@dataclass(slots=True, frozen=True)
-class MaterializedALRoundRoot:
-    """One materialized sibling root of an AL round export."""
-
-    level: str
-    authoritative: bool
-    reviewed: bool
-    materialized: MaterializedDetectKitSource
-
-
-def materialize_al_round(
-    source_root: str | Path,
-    project_dir: str | Path,
-    *,
-    import_mode: str = IMPORT_MODE_PORTABLE,
-    force_import: bool = False,
-) -> list[MaterializedALRoundRoot] | None:
-    """Materialize every sibling root of an AL round export.
-
-    Mirrors ``detectkit.jobs.al_worker.run_active_learning``, which registers
-    one DetectKit source per geometry level root and links derived roots back
-    to the authoritative one -- so a manually-added external AL round ends up
-    compatible with the same escalation/role-gating machinery an internally
-    generated round gets. Returns ``None`` if *source_root* is not an AL round
-    container (no ``manifest.json`` with a ``roots`` list).
-    """
-    al_roots = inspect_al_round(source_root)
-    if al_roots is None:
-        return None
-
-    return [
-        MaterializedALRoundRoot(
-            level=entry.level,
-            authoritative=entry.authoritative,
-            reviewed=entry.reviewed,
-            materialized=replace(
-                materialize_detectkit_source(
-                    entry.path,
-                    project_dir,
-                    import_mode=import_mode,
-                    force_import=force_import,
-                ),
-                source_kind="detectkit_al",
-            ),
-        )
-        for entry in al_roots
-    ]
