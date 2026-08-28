@@ -353,6 +353,50 @@ def test_process_obb_results_applies_roi_mask_filter(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# detect_batch_raw: extracted raw (pre-filter_for_source) path underlying
+# detect_batch. Must return the unfiltered per-frame OBBResult, while
+# detect_batch (now a thin wrapper) keeps returning the filtered results.
+# ---------------------------------------------------------------------------
+
+
+def test_detect_batch_raw_returns_unfiltered_results(tmp_path):
+    """detect_batch_raw() returns the raw, unfiltered OBBResult per frame;
+    detect_batch() must still apply filter_for_source on top of it, so raw
+    results have >= detections than the corresponding filtered results."""
+    from hydra_suite.core.inference.runner import InferenceRunner
+
+    cfg = _cfg()
+    roi_mask = _small_topleft_roi_mask()
+
+    def fake_run_obb(frames, models, obb_config, runtime, roi_mask=None):
+        return [_obb_two_detections(frame_idx=i) for i in range(len(frames))]
+
+    with (
+        patch("hydra_suite.core.inference.runner._load_all_models") as ml,
+        patch("hydra_suite.core.inference.runner.run_obb", side_effect=fake_run_obb),
+    ):
+        ml.return_value = MagicMock(
+            obb=MagicMock(), headtail=None, cnn=[], pose=None, apriltag=None
+        )
+        runner = InferenceRunner(cfg, cache_dir=tmp_path)
+        frames = [np.zeros((640, 640, 3), dtype=np.uint8) for _ in range(2)]
+
+        raw_results = runner.detect_batch_raw(frames, frame_indices=[0, 1])
+        filtered_results = runner.detect_batch(
+            frames, frame_indices=[0, 1], roi_mask=roi_mask
+        )
+
+    assert len(raw_results) == 2
+    assert all(isinstance(r, OBBResult) for r in raw_results)
+    # Raw results are unfiltered: both the in-ROI and out-of-ROI detection
+    # survive, while the ROI-filtered detect_batch() call drops one.
+    assert all(r.num_detections == 2 for r in raw_results)
+    for raw, filtered in zip(raw_results, filtered_results):
+        assert raw.num_detections >= filtered.num_detections
+    assert filtered_results[0].num_detections == 1
+
+
+# ---------------------------------------------------------------------------
 # Follow-up fix (task-review finding on the roi_mask fix above):
 # InferenceRunner._frame_space_roi_mask() is called once PER FRAME by
 # load_frame() during cached-replay (both forward cache-reuse and the whole
