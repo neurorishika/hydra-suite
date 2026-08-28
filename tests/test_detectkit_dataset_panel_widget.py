@@ -343,3 +343,120 @@ def test_clear_labels_from_source_no_op_when_no_labels(qapp, tmp_path, monkeypat
 
     assert not warn_called  # no pointless confirm
     assert info_called  # info dialog shown instead
+
+
+def _make_panel_with_two_sources(qapp, tmp_path):
+    from hydra_suite.detectkit.gui.models import DetectKitProject, OBBSource
+    from hydra_suite.detectkit.gui.panels.dataset_panel import DatasetPanel
+
+    proj_dir = tmp_path / "myproject"
+    proj_dir.mkdir()
+    sources = []
+    for name, is_linked in (("a", False), ("b", True)):
+        # One source lives inside the project dir, one outside it (a
+        # "linked" source, per DetectKitProject's portability concept) --
+        # exercises the project-scope warning about out-of-project blast
+        # radius.
+        root = (proj_dir if not is_linked else tmp_path / "elsewhere") / f"src_{name}"
+        (root / "images").mkdir(parents=True)
+        (root / "labels").mkdir(parents=True)
+        (root / "images" / "f.jpg").write_bytes(b"fake")
+        (root / "labels" / "f.txt").write_text("0 0.1 0.1 0.2 0.1 0.2 0.2 0.1 0.2\n")
+        (root / "classes.txt").write_text("ant\n")
+        sources.append(OBBSource(path=str(root), name=name, level="obb"))
+
+    proj = DetectKitProject(project_dir=proj_dir, class_names=["ant"])
+    proj.sources = sources
+    panel = DatasetPanel()
+    panel.set_project(proj, main_window=None)
+    return panel, sources
+
+
+def test_clear_all_labels_rejects_wrong_typed_name(qapp, tmp_path, monkeypatch):
+    panel, sources = _make_panel_with_two_sources(qapp, tmp_path)
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.panels.dataset_panel.QInputDialog.getText",
+        lambda *a, **k: ("not-the-project-name", True),
+    )
+
+    panel._clear_labels_from_all_sources()
+
+    for src in sources:
+        assert (Path(src.path) / "labels" / "f.txt").read_text() != ""
+
+
+def test_clear_all_labels_rejects_empty_typed_name(qapp, tmp_path, monkeypatch):
+    """Regression: an empty typed value must never satisfy the confirmation,
+    even in the (non-live-reachable-today, but cheap-to-guard) edge case of
+    an empty project folder name."""
+    panel, sources = _make_panel_with_two_sources(qapp, tmp_path)
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.panels.dataset_panel.QInputDialog.getText",
+        lambda *a, **k: ("", True),
+    )
+
+    panel._clear_labels_from_all_sources()
+
+    for src in sources:
+        assert (Path(src.path) / "labels" / "f.txt").read_text() != ""
+
+
+def test_clear_all_labels_accepts_correct_typed_name(qapp, tmp_path, monkeypatch):
+    panel, sources = _make_panel_with_two_sources(qapp, tmp_path)
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.panels.dataset_panel.QInputDialog.getText",
+        lambda *a, **k: ("myproject", True),
+    )
+
+    panel._clear_labels_from_all_sources()
+
+    for src in sources:
+        assert (Path(src.path) / "labels" / "f.txt").read_text() == ""
+
+
+def test_clear_all_labels_prompt_warns_about_linked_sources(
+    qapp, tmp_path, monkeypatch
+):
+    """The confirmation prompt must call out that some sources live outside
+    the project folder -- "type the project name" implies project-bounded
+    blast radius, but a linked source can be anywhere on disk."""
+    panel, _sources = _make_panel_with_two_sources(qapp, tmp_path)
+    captured = {}
+
+    def _capture_get_text(parent, title, text, *a, **k):
+        captured["text"] = text
+        return "", False
+
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.panels.dataset_panel.QInputDialog.getText",
+        _capture_get_text,
+    )
+
+    panel._clear_labels_from_all_sources()
+
+    assert "outside" in captured["text"].lower()
+
+
+def test_clear_all_labels_no_op_when_project_empty(qapp, tmp_path, monkeypatch):
+    from hydra_suite.detectkit.gui.models import DetectKitProject
+    from hydra_suite.detectkit.gui.panels.dataset_panel import DatasetPanel
+
+    proj = DetectKitProject(project_dir=tmp_path, class_names=["ant"])
+    panel = DatasetPanel()
+    panel.set_project(proj, main_window=None)
+
+    prompted = []
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.panels.dataset_panel.QInputDialog.getText",
+        lambda *a, **k: (prompted.append(True), ("", False))[1],
+    )
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.panels.dataset_panel.QMessageBox.information",
+        lambda *a, **k: None,
+    )
+
+    panel._clear_labels_from_all_sources()
+
+    assert (
+        not prompted
+    )  # info dialog shown instead of a pointless type-to-confirm prompt

@@ -515,8 +515,72 @@ class DatasetPanel(QWidget):
             self.image_list.setCurrentRow(row)
 
     def _clear_labels_from_all_sources(self) -> None:
-        """Placeholder -- replaced in full by Task 4 of this plan."""
-        raise NotImplementedError
+        """Empty every label file for every source in the project, behind a
+        type-the-project-name confirmation -- the strongest gate in this
+        panel, for the strongest blast radius."""
+        if self._project is None or not self._project.sources:
+            QMessageBox.information(
+                self, "Remove Labels", "No sources in this project."
+            )
+            return
+
+        total = sum(
+            sum(
+                1
+                for p in (Path(src.path) / "labels").rglob("*.txt")
+                if p.name != "classes.txt"
+            )
+            for src in self._project.sources
+        )
+        if total == 0:
+            QMessageBox.information(
+                self, "Remove Labels", "No label files exist in this project."
+            )
+            return
+
+        project_dir = Path(self._project.project_dir).resolve()
+        project_name = project_dir.name or str(project_dir)
+        linked_count = sum(
+            1
+            for src in self._project.sources
+            if project_dir not in Path(src.path).resolve().parents
+            and Path(src.path).resolve() != project_dir
+        )
+        linked_note = (
+            f"\n\n{linked_count} source(s) live outside this project folder and "
+            "will also be cleared."
+            if linked_count
+            else ""
+        )
+
+        typed, ok = QInputDialog.getText(
+            self,
+            "Remove ALL Labels",
+            (
+                f"This clears ALL labels across {len(self._project.sources)} "
+                f"source(s) ({total} label file(s) total). Images are not "
+                f"affected. This cannot be undone.{linked_note}\n\nType the "
+                f"project name to confirm: {project_name}"
+            ),
+        )
+        typed = typed.strip() if ok else ""
+        if not typed or typed != project_name:
+            return
+
+        cleared_total = 0
+        for src in self._project.sources:
+            cleared_total += clear_labels_for_source(src.path)
+        if cleared_total < total:
+            QMessageBox.warning(
+                self,
+                "Remove Labels",
+                f"Cleared {cleared_total} of {total} label file(s) across "
+                "the project; some could not be written.",
+            )
+        row = self.image_list.currentRow()
+        self._on_source_combo_changed(self.source_combo.currentIndex())
+        if 0 <= row < self.image_list.count():
+            self.image_list.setCurrentRow(row)
 
     @staticmethod
     def _label_path_for_image(image_path: Path, source_root: Path) -> Path | None:
