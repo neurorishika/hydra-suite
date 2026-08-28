@@ -280,8 +280,15 @@ def resolve_al_round_authoritative_level(source_root: str | Path) -> str | None:
     re-scanned guess) must go through this function instead of
     `_detect_source_level`.
 
-    Returns ``None`` if *source_root* is not an AL round container (no
-    ``manifest.json`` with a ``roots`` list) or has no authoritative entry.
+    When no entry carries ``authoritative: true`` this falls back to the
+    FIRST entry's declared level, mirroring
+    `_select_al_round_authoritative_root`'s own ``roots[0]`` fallback for the
+    path -- otherwise the registered source's path would come from
+    ``roots[0]`` while its level came from an unreliable re-scan.
+
+    Returns ``None`` only if *source_root* is not an AL round container (no
+    ``manifest.json`` with a ``roots`` list), the roots list is empty, or the
+    chosen entry declares no level.
     """
     root = Path(source_root).expanduser().resolve()
     al_roots = _load_al_round_roots(root)
@@ -291,6 +298,9 @@ def resolve_al_round_authoritative_level(source_root: str | Path) -> str | None:
         if entry.get("authoritative"):
             level = entry.get("level")
             return str(level) if level else None
+    if al_roots:
+        level = al_roots[0].get("level")
+        return str(level) if level else None
     return None
 
 

@@ -169,6 +169,24 @@ def test_resolve_al_round_authoritative_level_reads_manifest(tmp_path: Path):
     assert resolve_al_round_authoritative_level(round_dir) == "aabb"
 
 
+def test_resolve_al_round_authoritative_level_falls_back_to_first_root(
+    tmp_path: Path,
+):
+    """No entry flagged authoritative -> use the FIRST entry's declared level.
+
+    `_select_al_round_authoritative_root` already falls back to ``roots[0]``
+    for the path in exactly this case. Returning None here instead was
+    indistinguishable to `_add_source` from "not an AL round at all", so it
+    fell back to the unreliable re-scanned level guess -- registering a
+    source whose path came from roots[0] but whose level came from a re-scan
+    that cannot tell an axis-aligned-quad AABB from a genuine OBB.
+    """
+    round_dir = tmp_path / "active_learning" / "20260827_172624"
+    _write_al_round(round_dir, levels=(("aabb", False), ("obb", False)))
+
+    assert resolve_al_round_authoritative_level(round_dir) == "aabb"
+
+
 def test_resolve_al_round_authoritative_level_none_for_non_al_round(tmp_path: Path):
     (tmp_path / "images").mkdir()
     (tmp_path / "labels").mkdir()
