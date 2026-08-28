@@ -85,3 +85,48 @@ def test_build_obb_config_for_al_unknown_kind_raises():
             confidence_threshold=0.05,
             iou_threshold=0.5,
         )
+
+
+@pytest.mark.parametrize(
+    "kind,secondary",
+    [("obb_direct", None), ("sequential", "/path/to/obb.pt")],
+)
+def test_al_config_does_not_inherit_the_8_detection_tracking_cap(kind, secondary):
+    """DESIGN RULE: AL scoring must see everything the model proposes.
+
+    `build_obb_only_config` defaults to `max_targets=8` (a tracking knob: the
+    user's declared animal count), which becomes `raw_detection_cap=16` at RAW
+    extraction and `max_detections=8` after filtering. Inheriting that here
+    silently truncated every crowded frame, corrupting every AL signal AND --
+    since the round exports labels straight from these detections -- writing a
+    fabricated "only 8 animals here" ground truth for exactly the crowded
+    frames AL exists to surface.
+    """
+    from hydra_suite.data.al.inference_adapter import AL_DEFAULT_MAX_TARGETS
+
+    cfg = build_obb_config_for_al(
+        kind,
+        "/path/to/model.pt",
+        secondary,
+        crop_pad_ratio=0.15,
+        confidence_threshold=0.05,
+        iou_threshold=0.5,
+    )
+    # A frame with 15-20 real animals must survive both caps untouched.
+    assert cfg.obb.max_detections == AL_DEFAULT_MAX_TARGETS
+    assert cfg.obb.max_detections >= 20
+    assert cfg.obb.raw_detection_cap >= 2 * 20
+
+
+def test_al_config_max_targets_is_overridable():
+    cfg = build_obb_config_for_al(
+        "obb_direct",
+        "/path/to/model.pt",
+        None,
+        crop_pad_ratio=0.15,
+        confidence_threshold=0.05,
+        iou_threshold=0.5,
+        max_targets=1000,
+    )
+    assert cfg.obb.max_detections == 1000
+    assert cfg.obb.raw_detection_cap == 2000
