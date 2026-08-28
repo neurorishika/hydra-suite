@@ -43,26 +43,31 @@ threaded through the existing overlay-settings plumbing.
 ## Task 1: `geometry_derivation.py` — shared point-derivation math
 
 **Files:**
-- Create: `src/hydra_suite/detectkit/gui/geometry_derivation.py`
-- Test: Create `tests/test_detectkit_geometry_derivation.py`
+- Create: `src/hydra_suite/utils/geometry_derivation.py`
+- Test: Create `tests/test_geometry_derivation.py`
 
 **Interfaces:**
 - Produces: `min_area_rect_quad(points: Sequence[tuple[float, float]]) -> list[tuple[float,
   float]] | None` and `axis_aligned_bbox_quad(points: Sequence[tuple[float, float]]) ->
   list[tuple[float, float]] | None` — both coordinate-space-agnostic (same units in and out; no
-  normalization). Task 2 wraps the first in `source_import.py`'s existing normalized-coords
-  contract; Task 3 calls both directly in pixel space from `canvas.py`.
+  normalization). Task 3 calls both directly in pixel space from `canvas.py`. Placed in
+  `hydra_suite/utils/` (not `detectkit/gui/`) — this repo's dependency-direction rule
+  (CLAUDE.md: "Core, Runtime, Data, Training, and Utils must never import from any app-layer
+  package") would make a `detectkit/gui/`-hosted module permanently unreusable outside DetectKit;
+  `utils/` is importable from every app layer, including `detectkit/gui/canvas.py`. `cv2`/`numpy`
+  are safe to import at module level here: `canvas.py` (Task 3's only consumer) already imports
+  both at module level, so this module adds no new import cost on its one real call path.
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `tests/test_detectkit_geometry_derivation.py`:
+Create `tests/test_geometry_derivation.py`:
 
 ```python
-"""Tests for DetectKit's shared geometry-derivation math (canvas + training share this)."""
+"""Tests for shared geometry-derivation math (used by DetectKit's canvas rendering)."""
 
 from __future__ import annotations
 
-from hydra_suite.detectkit.gui.geometry_derivation import (
+from hydra_suite.utils.geometry_derivation import (
     axis_aligned_bbox_quad,
     min_area_rect_quad,
 )
@@ -107,22 +112,19 @@ def test_axis_aligned_bbox_quad_of_a_single_point_is_degenerate_but_defined():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `conda activate hydra-mps && python -m pytest tests/test_detectkit_geometry_derivation.py -v`
+Run: `conda activate hydra-mps && python -m pytest tests/test_geometry_derivation.py -v`
 Expected: FAIL with `ModuleNotFoundError` (the module doesn't exist yet).
 
 - [ ] **Step 3: Create the module**
 
-Create `src/hydra_suite/detectkit/gui/geometry_derivation.py`:
+Create `src/hydra_suite/utils/geometry_derivation.py`:
 
 ```python
-"""Shared point-derivation math for DetectKit's geometry levels.
+"""Shared point-derivation math (minimum-area rect, axis-aligned bbox).
 
 Coordinate-space-agnostic: every function here takes and returns points in
 whatever space the caller is working in (pixel or normalized [0, 1]) -- no
-normalization happens inside this module. Canvas rendering (canvas.py) calls
-these directly in pixel space; source_import.py's COCO-conversion wraps
-min_area_rect_quad with its own pixel-in/normalized-out contract. One
-implementation for both, so they can't silently drift apart.
+normalization happens inside this module.
 """
 
 from __future__ import annotations
@@ -160,87 +162,76 @@ def axis_aligned_bbox_quad(
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `conda activate hydra-mps && python -m pytest tests/test_detectkit_geometry_derivation.py -v`
+Run: `conda activate hydra-mps && python -m pytest tests/test_geometry_derivation.py -v`
 Expected: all 5 PASS.
 
 - [ ] **Step 5: Run black/isort**
 
-Run: `conda activate hydra-mps && black src/hydra_suite/detectkit/gui/geometry_derivation.py tests/test_detectkit_geometry_derivation.py && isort src/hydra_suite/detectkit/gui/geometry_derivation.py tests/test_detectkit_geometry_derivation.py`
+Run: `conda activate hydra-mps && black src/hydra_suite/utils/geometry_derivation.py tests/test_geometry_derivation.py && isort src/hydra_suite/utils/geometry_derivation.py tests/test_geometry_derivation.py`
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/hydra_suite/detectkit/gui/geometry_derivation.py tests/test_detectkit_geometry_derivation.py
-git commit -m "feat(detectkit): add shared geometry-derivation module (min-area-rect, bbox)"
+git add src/hydra_suite/utils/geometry_derivation.py tests/test_geometry_derivation.py
+git commit -m "feat(utils): add shared geometry-derivation module (min-area-rect, bbox)"
 ```
 
 ---
 
-## Task 2: `source_import.py` reuses the shared module
+## Task 2: delete dead code (`source_import.py::_points_to_min_area_rect`)
 
 **Files:**
 - Modify: `src/hydra_suite/detectkit/gui/source_import.py`
-- Test: `tests/test_detectkit_source_import.py` (existing COCO-conversion tests must still pass
-  unchanged — this task's own new coverage is that they still pass, no new test needed beyond
-  confirming that)
+- Test: `tests/test_detectkit_source_import.py` (no test changes needed — this task's own
+  verification is that the existing suite still fully passes after the deletion)
 
-**Interfaces:**
-- Consumes: `min_area_rect_quad` (Task 1).
-- Produces: `_points_to_min_area_rect(points, width, height)` — same signature and behavior as
-  before, now implemented as a thin wrapper.
+**Interfaces:** none produced — this task removes a function, it doesn't add one.
 
-- [ ] **Step 1: Confirm the baseline (existing tests pass before this change)**
+**Why this task exists:** the original plan draft assumed `_points_to_min_area_rect` was live
+code used by COCO-segmentation conversion, worth refactoring into a thin wrapper around Task 1's
+new module. Adversarial review found this premise stale: `grep -rn
+"_points_to_min_area_rect" src/ tests/` returns **only its own `def`** — zero call sites. Part A's
+COCO-conversion path (`_coco_annotation_to_points`) now preserves the full contour and never
+calls minAreaRect. There is nothing to refactor; the function is simply dead and should be
+deleted, matching what `make dead-code` should already be flagging.
 
-Run: `conda activate hydra-mps && python -m pytest tests/test_detectkit_source_import.py -k coco -v`
-Expected: PASS (baseline, before touching the file — this establishes what "no regression" means
-for Step 3).
+- [ ] **Step 1: Confirm it's genuinely dead before deleting**
 
-- [ ] **Step 2: Replace `_points_to_min_area_rect`'s body**
+Run: `grep -rn "_points_to_min_area_rect" /path/to/repo/src /path/to/repo/tests` (use this
+plan's actual worktree path). Expected: exactly one match — the `def _points_to_min_area_rect(`
+line itself, in `source_import.py`. If this turns up ANY other match, STOP — the premise for this
+task is wrong, escalate rather than deleting live code.
 
-In `src/hydra_suite/detectkit/gui/source_import.py`, replace the current
-`_points_to_min_area_rect` function (currently at lines 454-468, the one doing
-`import cv2` / `import numpy as np` / `cv2.minAreaRect(...)` inline) with:
-
-```python
-from .geometry_derivation import min_area_rect_quad
-
-
-def _points_to_min_area_rect(
-    points: list[tuple[float, float]], width: int, height: int
-) -> list[float] | None:
-    box = min_area_rect_quad(points)
-    if box is None:
-        return None
-    coords: list[float] = []
-    for x_pos, y_pos in box:
-        coords.extend([x_pos / float(width), y_pos / float(height)])
-    return coords
-```
-
-(Add the `from .geometry_derivation import min_area_rect_quad` import at the top of the file with
-the other local imports, not inline inside the function — the original had `import cv2`/`import
-numpy as np` inline specifically to defer those heavy imports; check whether that deferral
-pattern matters elsewhere in this file (e.g. are `cv2`/`numpy` already imported at module level
-for other functions in this same file?) and follow whatever the file's existing convention is for
-this one new import — a lightweight local-package import doesn't carry the same deferred-heavy-
-import justification cv2/numpy did, so importing it at module level is fine either way.)
-
-- [ ] **Step 3: Run tests to verify no regression**
+- [ ] **Step 2: Confirm the baseline (existing tests pass before this change)**
 
 Run: `conda activate hydra-mps && python -m pytest tests/test_detectkit_source_import.py -v`
-Expected: all PASS, same count as Step 1's baseline plus no new failures — the COCO-conversion
-tests exercise `_points_to_min_area_rect` transitively and must produce identical output, since
-only the internals moved, not the math or the contract.
+Expected: all PASS (baseline — establishes what "no regression" means for Step 4, and confirms
+none of these tests currently exercise the function being deleted).
 
-- [ ] **Step 4: Run black/isort**
+- [ ] **Step 3: Delete the function**
+
+In `src/hydra_suite/detectkit/gui/source_import.py`, delete the entire
+`_points_to_min_area_rect` function (currently lines 454-468: the `def` line, its docstring-free
+body, the inline `import cv2` / `import numpy as np`, and the `cv2.minAreaRect(...)` /
+`cv2.boxPoints(...)` logic — everything from `def _points_to_min_area_rect(` through the final
+`return coords` of that function). Leave the surrounding functions (`_coco_segmentation_points`
+above it, `_coco_bbox_to_polygon` below it) untouched.
+
+- [ ] **Step 4: Run tests to verify no regression**
+
+Run: `conda activate hydra-mps && python -m pytest tests/test_detectkit_source_import.py -v`
+Expected: all PASS, identical count to Step 2's baseline — proving the deletion touched nothing
+any test depended on.
+
+- [ ] **Step 5: Run black/isort**
 
 Run: `conda activate hydra-mps && black src/hydra_suite/detectkit/gui/source_import.py && isort src/hydra_suite/detectkit/gui/source_import.py`
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add src/hydra_suite/detectkit/gui/source_import.py
-git commit -m "refactor(detectkit): source_import's min-area-rect wraps the shared derivation module"
+git commit -m "refactor(detectkit): delete dead _points_to_min_area_rect (zero call sites since Part A)"
 ```
 
 ---
@@ -252,8 +243,8 @@ git commit -m "refactor(detectkit): source_import's min-area-rect wraps the shar
 - Test: `tests/test_detectkit_canvas.py`
 
 **Interfaces:**
-- Consumes: `min_area_rect_quad`, `axis_aligned_bbox_quad` (Task 1); `GeometryLevel` (existing,
-  `hydra_suite.training.geometry_levels`).
+- Consumes: `min_area_rect_quad`, `axis_aligned_bbox_quad` from `hydra_suite.utils.geometry_derivation`
+  (Task 1); `GeometryLevel` (existing, `hydra_suite.training.geometry_levels`).
 - Produces: `OBBCanvas.set_gt_detections_multi_level(detections, class_names=None, *,
   native_level: GeometryLevel, reviewed: bool = True) -> None` — the new entry point Task 4's
   `main_window.py` wiring calls. `OBBCanvas.set_derived_levels_visible(visible: bool) -> None` —
@@ -265,7 +256,14 @@ git commit -m "refactor(detectkit): source_import's min-area-rect wraps the shar
 
 - [ ] **Step 1: Write the failing tests**
 
-Add to `tests/test_detectkit_canvas.py`:
+First, `tests/test_detectkit_canvas.py` does NOT currently set `QT_QPA_PLATFORM=offscreen`
+(confirmed this session — it only has `pytest.importorskip("PySide6")`), unlike its sibling
+`test_detectkit_canvas_dual_layer.py`, which does. Add the guard at the very top of the file,
+before the `import sys` line: `import os` then `os.environ.setdefault("QT_QPA_PLATFORM",
+"offscreen")`, matching the sibling file's convention — this repo has a documented history of
+headed-Qt test runs hanging/crashing the suite.
+
+Then add to `tests/test_detectkit_canvas.py`:
 
 ```python
 def test_set_gt_detections_multi_level_polygon_native_draws_three_layers(qapp):
@@ -373,13 +371,22 @@ def test_clear_gt_detections_clears_per_level_state(qapp):
 
 def test_set_gt_detections_single_layer_still_works_unchanged(qapp):
     """Backward-compat: the old single-layer API is untouched for any
-    caller that doesn't pass native_level/reviewed."""
+    caller that doesn't pass native_level/reviewed -- including its
+    visibility wiring, which _apply_visibility must still drive via the
+    flat _gt_obb_items list when _gt_level_items was never populated."""
     canvas = OBBCanvas()
     canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
     canvas.set_gt_detections(
         [{"class_id": 0, "polygon_px": [(1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (1.0, 2.0)]}]
     )
     assert len(canvas._gt_obb_items) == 1
+    assert canvas._gt_level_items == {}  # single-layer path never touches this
+
+    canvas.set_overlay_visibility(show_gt=False, show_pred=True)
+    assert canvas._gt_obb_items[0].isVisible() is False
+
+    canvas.set_overlay_visibility(show_gt=True, show_pred=True)
+    assert canvas._gt_obb_items[0].isVisible() is True
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -391,12 +398,12 @@ Expected: FAIL — `AttributeError: 'OBBCanvas' object has no attribute 'set_gt_
 
 In `src/hydra_suite/detectkit/gui/canvas.py`:
 
-Add imports (with the existing `from PySide6.QtGui import (...)` block and a new local import):
+Add imports (with the existing `from PySide6.QtGui import (...)` block and a new import):
 
 ```python
 from dataclasses import dataclass
 
-from .geometry_derivation import axis_aligned_bbox_quad, min_area_rect_quad
+from hydra_suite.utils.geometry_derivation import axis_aligned_bbox_quad, min_area_rect_quad
 ```
 
 (`GeometryLevel` is imported lazily inside the methods that need it, matching this file's
@@ -421,8 +428,13 @@ def _level_styles():
     from hydra_suite.training.geometry_levels import GeometryLevel
 
     return {
+        # POLYGON's pen is DotLine (not SolidLine) so a polygon-native
+        # source's filled outline stays visually distinct from AABB's solid
+        # outline when both draw for the same detection -- the fill alone
+        # (translucent) is the primary differentiator per spec Decision 1,
+        # but a same-style outline underneath it would still be confusable.
         GeometryLevel.POLYGON: _LevelStyle(
-            Qt.PenStyle.SolidLine, Qt.BrushStyle.SolidPattern, 90
+            Qt.PenStyle.DotLine, Qt.BrushStyle.SolidPattern, 90
         ),
         GeometryLevel.OBB: _LevelStyle(
             Qt.PenStyle.DashLine, Qt.BrushStyle.NoBrush, 0
@@ -534,17 +546,35 @@ against a `None` label item:
                     lbl.setVisible(visible)
 ```
 
-Replace `_apply_visibility`'s body (below the `_set_layer` helper) to iterate per-level GT layers
-instead of the old single GT call:
+**CRITICAL — do not simply delete the old GT `_set_layer` call.** `set_gt_detections` (the
+old single-layer API, kept for backward compat) populates ONLY the flat
+`_gt_obb_items`/`_gt_label_items`/`_gt_class_ids` lists — it never touches `_gt_level_items`.
+If `_apply_visibility` unconditionally iterates `_gt_level_items` and drops the flat-list call,
+then after any `set_gt_detections`/`set_detections` call `_gt_level_items == {}`, the GT loop
+runs zero times, and `setVisible()` is never called on any GT item for that path — silently
+breaking `set_overlay_visibility`/`set_class_filter` for every caller still using the single-layer
+API. This is caught by two pre-existing tests in `tests/test_detectkit_canvas_dual_layer.py`
+(`test_canvas_set_overlay_visibility_hides_gt`, `test_canvas_set_class_filter`) — if Step 4 shows
+either of those failing, this is why.
+
+Replace `_apply_visibility`'s body (below the `_set_layer` helper) with a branch: use the
+per-level path when it's been populated, otherwise fall back to the old flat-list path — the two
+are mutually exclusive per call (whichever of `set_gt_detections`/`set_gt_detections_multi_level`
+was called last), so there's no double-`setVisible()` risk:
 
 ```python
-        for level, items in self._gt_level_items.items():
-            label_items = self._gt_level_label_items[level]
-            class_ids = self._gt_level_class_ids[level]
-            level_visible = self._show_gt and (
-                level == self._gt_native_level or self._show_derived_levels
+        if self._gt_level_items:
+            for level, items in self._gt_level_items.items():
+                label_items = self._gt_level_label_items[level]
+                class_ids = self._gt_level_class_ids[level]
+                level_visible = self._show_gt and (
+                    level == self._gt_native_level or self._show_derived_levels
+                )
+                _set_layer(items, label_items, class_ids, level_visible)
+        else:
+            _set_layer(
+                self._gt_obb_items, self._gt_label_items, self._gt_class_ids, self._show_gt
             )
-            _set_layer(items, label_items, class_ids, level_visible)
 
         _set_layer(
             self._pred_obb_items,
@@ -648,11 +678,56 @@ Modify `clear_gt_detections` to also clear the new per-level state:
         self._gt_native_level = None
 ```
 
-`clear_all` also needs the same three new dicts reset (it currently duplicates
-`clear_gt_detections`'s field list rather than calling it) — add
-`self._gt_level_items.clear()` / `self._gt_level_label_items.clear()` /
-`self._gt_level_class_ids.clear()` / `self._gt_native_level = None` to `clear_all` too, matching
-its existing pattern of listing fields directly rather than calling `clear_gt_detections()`.
+`clear_all` also needs the same new state reset. It currently duplicates
+`clear_gt_detections`'s field list rather than calling it (it goes through `self._scene.clear()`,
+which deletes the underlying Qt/C++ items directly, so it must NOT also call
+`clear_gt_detections()` — that would try to `removeItem()` objects `scene.clear()` already
+destroyed). **This is not optional cleanup:** if `_gt_level_items` is left populated after
+`clear_all()`, the next `_apply_visibility()` call (e.g. from `_on_overlay_changed`) calls
+`setVisible()` on already-deleted C++ objects and raises `RuntimeError: Internal C++ object
+already deleted`. `clear_all` is reachable in production via `main_window.py`'s
+`on_images_deleted` → `_apply_visibility` sequence. Add the reset to `clear_all`'s existing field
+list:
+
+```python
+    def clear_all(self) -> None:
+        """Remove everything from the scene."""
+        self._scene.clear()
+        self._pix_item = None
+        self._gt_obb_items.clear()
+        self._gt_label_items.clear()
+        self._gt_class_ids.clear()
+        self._gt_level_items.clear()
+        self._gt_level_label_items.clear()
+        self._gt_level_class_ids.clear()
+        self._gt_native_level = None
+        self._pred_obb_items.clear()
+        self._pred_label_items.clear()
+        self._pred_class_ids.clear()
+        self._zoom = 1.0
+        self._fit_mode = True
+        self.setCursor(Qt.CursorShape.ArrowCursor)
+```
+
+(`_show_derived_levels` is deliberately NOT reset here — it's a user preference tracking the
+"Show derived levels" checkbox state, not scene content; resetting it would desync the canvas
+from the checkbox's actual UI state.)
+
+Add a regression test for this exact crash to Task 3's Step 1 test list:
+
+```python
+def test_clear_all_then_apply_visibility_does_not_raise(qapp):
+    from hydra_suite.training.geometry_levels import GeometryLevel
+
+    canvas = OBBCanvas()
+    canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
+    quad = [(10.0, 10.0), (90.0, 20.0), (80.0, 90.0), (0.0, 80.0)]
+    canvas.set_gt_detections_multi_level(
+        [{"class_id": 0, "polygon_px": quad}], native_level=GeometryLevel.OBB
+    )
+    canvas.clear_all()
+    canvas.set_overlay_visibility(show_gt=True, show_pred=True)  # must not raise
+```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -685,8 +760,16 @@ git commit -m "feat(detectkit): OBBCanvas renders per-geometry-level GT layers"
 
 **Interfaces:**
 - Consumes: `OBBCanvas.set_gt_detections_multi_level` (Task 3).
-- Produces: `MainWindow.show_image` calls the new API with the current source's
-  `level`/`reviewed` instead of the old single-layer `set_gt_detections`.
+- Produces: `_resolve_source_render_state(project, source_path) -> tuple[GeometryLevel, bool]` —
+  a new MODULE-LEVEL (not a `MainWindow` method) pure function in `main_window.py`, so it's
+  testable without instantiating a `QWidget`. Looks up the `OBBSource` whose `.path ==
+  source_path` in `project.sources`; returns `(GeometryLevel.OBB, True)` if `project` is `None`,
+  no source matches, or the matched source's `level` string doesn't parse via
+  `GeometryLevel.from_str` (which raises `ValueError` on an unrecognized string — this function
+  catches that and falls back rather than propagating it, since `OBBSource.level` is an
+  unvalidated string loaded straight from project JSON). `MainWindow.show_image` calls this
+  helper, then calls `set_gt_detections_multi_level` with its result, instead of the old
+  single-layer `set_gt_detections`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -718,6 +801,54 @@ def test_show_image_calls_multi_level_api_with_source_level_and_reviewed():
     assert "set_gt_detections(" not in source  # the old single-layer call is gone
     assert "native_level" in source
     assert "reviewed" in source
+    assert "GeometryLevel.from_str" in source
+    assert "except ValueError" in source  # from_str must be guarded, see Step 3
+
+
+def test_resolve_native_level_and_reviewed_reads_the_matching_source():
+    """Behavioral check (not just source-text): the level/reviewed resolved
+    for a given source_path must actually come from the OBBSource whose
+    .path matches, not some other source or a wrong default."""
+    from hydra_suite.detectkit.gui.main_window import _resolve_source_render_state
+    from hydra_suite.detectkit.gui.models import DetectKitProject, OBBSource
+    from hydra_suite.training.geometry_levels import GeometryLevel
+
+    proj = DetectKitProject(class_names=["ant"])
+    proj.sources = [
+        OBBSource(path="/a", name="a", level="obb", reviewed=True),
+        OBBSource(path="/b", name="b", level="polygon", reviewed=False),
+    ]
+
+    native_level, reviewed = _resolve_source_render_state(proj, "/b")
+    assert native_level == GeometryLevel.POLYGON
+    assert reviewed is False
+
+
+def test_resolve_native_level_and_reviewed_defaults_when_source_missing():
+    from hydra_suite.detectkit.gui.main_window import _resolve_source_render_state
+    from hydra_suite.detectkit.gui.models import DetectKitProject
+    from hydra_suite.training.geometry_levels import GeometryLevel
+
+    proj = DetectKitProject(class_names=["ant"])
+    native_level, reviewed = _resolve_source_render_state(proj, "/nonexistent")
+    assert native_level == GeometryLevel.OBB
+    assert reviewed is True
+
+
+def test_resolve_native_level_and_reviewed_falls_back_on_unknown_level_string():
+    """A hand-edited/future-version project JSON could carry a level string
+    GeometryLevel.from_str doesn't recognize -- this must degrade to OBB
+    with a warning, not crash show_image on every image selection."""
+    from hydra_suite.detectkit.gui.main_window import _resolve_source_render_state
+    from hydra_suite.detectkit.gui.models import DetectKitProject, OBBSource
+    from hydra_suite.training.geometry_levels import GeometryLevel
+
+    proj = DetectKitProject(class_names=["ant"])
+    proj.sources = [OBBSource(path="/c", name="c", level="not_a_real_level", reviewed=True)]
+
+    native_level, reviewed = _resolve_source_render_state(proj, "/c")
+    assert native_level == GeometryLevel.OBB  # fallback, not a raised ValueError
+    assert reviewed is True
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -756,23 +887,52 @@ In `src/hydra_suite/detectkit/gui/main_window.py`, `show_image` currently does (
                 self._canvas.set_gt_detections(dets, class_names=class_names)
 ```
 
-Replace the final two lines (the `dets = ...` / `self._canvas.set_gt_detections(...)` pair) with:
+Add a new module-level function (not a `MainWindow` method — this makes it testable without a
+`QApplication`/widget instance), placed near the top of `main_window.py` after its imports,
+alongside any other module-level helper functions already in the file:
+
+```python
+def _resolve_source_render_state(project, source_path):
+    """Return (native_level, reviewed) for the OBBSource at *source_path* in
+    *project*. Falls back to (GeometryLevel.OBB, True) if project is None,
+    no source matches, or the matched source's level string doesn't parse --
+    OBBSource.level is an unvalidated string loaded from project JSON, so a
+    hand-edited or future-version file must degrade gracefully here rather
+    than crashing show_image on every image selection."""
+    from hydra_suite.training.geometry_levels import GeometryLevel
+
+    if project is None:
+        return GeometryLevel.OBB, True
+
+    src_obj = next((s for s in project.sources if s.path == source_path), None)
+    if src_obj is None:
+        return GeometryLevel.OBB, True
+
+    try:
+        native_level = GeometryLevel.from_str(src_obj.level)
+    except ValueError:
+        logger.warning(
+            "Unknown geometry level %r for source %r; rendering as OBB",
+            src_obj.level,
+            source_path,
+        )
+        native_level = GeometryLevel.OBB
+
+    return native_level, src_obj.reviewed
+```
+
+(Check whether `main_window.py` already has a module-level `logger = logging.getLogger(...)` —
+it almost certainly does, given `logger.warning(...)` calls already appear in `show_image` per
+the quoted code above; reuse that same logger, don't create a second one.)
+
+Then replace the final two lines of `show_image`'s existing block (the `dets = ...` /
+`self._canvas.set_gt_detections(...)` pair) with:
 
 ```python
                 dets = parse_obb_label(label_path, w, h, class_id_map=class_id_map)
-
-                from hydra_suite.training.geometry_levels import GeometryLevel
-
-                src_obj = None
-                if self._project is not None:
-                    src_obj = next(
-                        (s for s in self._project.sources if s.path == source_path),
-                        None,
-                    )
-                native_level = (
-                    GeometryLevel.from_str(src_obj.level) if src_obj else GeometryLevel.OBB
+                native_level, reviewed = _resolve_source_render_state(
+                    self._project, source_path
                 )
-                reviewed = src_obj.reviewed if src_obj else True
                 self._canvas.set_gt_detections_multi_level(
                     dets,
                     class_names=class_names,
@@ -781,16 +941,10 @@ Replace the final two lines (the `dets = ...` / `self._canvas.set_gt_detections(
                 )
 ```
 
-(Confirm `GeometryLevel.from_str` is the correct existing helper name by checking its usage
-elsewhere in this repo, e.g. `al_worker.py`'s `GeometryLevel.from_str(req.native_level)` — read
-that call site if this name doesn't match what's actually defined in
-`hydra_suite/utils/geometry_levels.py`.)
-
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `conda activate hydra-mps && python -m pytest tests/test_detectkit_show_image_multi_level.py -v`
-(adjust filename per Step 1)
-Expected: PASS.
+Expected: all 4 PASS.
 
 - [ ] **Step 5: Run black/isort**
 

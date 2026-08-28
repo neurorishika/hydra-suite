@@ -30,12 +30,14 @@ its derived OBB *and* its derived AABB outline in one view.
   line) — an orthogonal axis (ground-truth vs. model output), not a geometry-level axis. There
   is no per-detection level tag, no N-layer item-list pattern, and no derivation logic anywhere
   in `canvas.py`. This is new capability, not a generalization of an existing one.
-- **Derivation math already exists, just in the wrong place for reuse:**
-  `source_import.py::_points_to_min_area_rect` (lines 454-468) already computes a minimum-area
-  rotated rect from a point set via `cv2.minAreaRect`/`cv2.boxPoints`, used today only for
-  COCO-segmentation-to-OBB conversion at import time. Extracting its core math into a shared,
-  coordinate-space-agnostic module lets canvas rendering and training-time conversion call the
-  same function instead of two independent implementations that could silently drift apart.
+- **Corrected during this session's adversarial review:** `source_import.py::_points_to_min_area_rect`
+  is **dead code** as of Part A — `grep -rn "_points_to_min_area_rect" src/ tests/` finds only
+  its own `def`, zero call sites. Part A's COCO segmentation-conversion path
+  (`_coco_annotation_to_points`) now preserves the full contour and never calls minAreaRect. The
+  min-area-rect math this spec needs (for deriving a polygon-native source's OBB outline) has no
+  existing home to extract from — it's new capability for canvas rendering, not a reuse of
+  existing logic. `_points_to_min_area_rect` is deleted outright as part of this spec's work
+  (Part B's plan), and `min_area_rect_quad` becomes the sole implementation.
 
 ## Decisions (locked during brainstorming)
 
@@ -53,28 +55,31 @@ its derived OBB *and* its derived AABB outline in one view.
    underlying architecture (an ordered per-level layer list) still supports finer-grained
    per-level toggling later without a redesign, it's just not exposed as separate UI controls
    yet.
-3. **Derivation module lives in `detectkit/gui/`** (not `utils/` or `training/`, which already
-   have same-named-but-different-purpose `geometry_levels.py` modules dealing with the
-   `GeometryLevel` enum and line-format classification, not point-derivation math) — a new,
-   small, Qt-free, coordinate-space-agnostic module that both canvas rendering and
-   `source_import.py`'s existing COCO conversion import from.
+3. **Derivation module lives in `hydra_suite/utils/`** (`utils/geometry_derivation.py`, alongside
+   the existing `utils/geometry.py` and `utils/slice_geometry.py` — precedent for shared,
+   Qt-free geometry math living there). Corrected during adversarial review: an earlier draft of
+   this decision put the module in `detectkit/gui/`, which would have violated CLAUDE.md's
+   dependency-direction rule (Core/Runtime/Data/Training/Utils must never import from an
+   app-layer package) the moment any non-GUI code needed this math, and the "name collision"
+   justification for that placement didn't hold up (`geometry_derivation.py` doesn't collide
+   with `utils/geometry_levels.py` or `training/geometry_levels.py`, which classify line formats
+   into a `GeometryLevel`, not derive points). `utils/` is importable from every app layer,
+   including `detectkit/gui/canvas.py`.
+4. **Only the native level's shape carries a text label** (class name); derived (non-native)
+   levels render as pure outline/fill with no duplicate overlapping text. Locked during planning
+   (not originally in this Decisions list) to avoid 2-3 overlapping text labels per detection
+   when multiple levels draw for the same shape.
 
 ## Architecture
 
 ```
-src/hydra_suite/detectkit/gui/geometry_derivation.py     # NEW, Qt-free
-    min_area_rect_quad(points) -> list[(x, y)] | None    # same coordinate space in and out;
-                                                            core math extracted from
-                                                            source_import.py's
-                                                            _points_to_min_area_rect
-    axis_aligned_bbox_quad(points) -> list[(x, y)] | None # plain bbox, same space in/out
+src/hydra_suite/utils/geometry_derivation.py              # NEW, Qt-free
+    min_area_rect_quad(points) -> list[(x, y)] | None     # same coordinate space in and out
+    axis_aligned_bbox_quad(points) -> list[(x, y)] | None  # plain bbox, same space in/out
 
 src/hydra_suite/detectkit/gui/source_import.py
-    _points_to_min_area_rect(points, width, height)       # MODIFIED: thin wrapper around the
-                                                            # new min_area_rect_quad, preserving
-                                                            # its existing normalized-coords-out
-                                                            # contract for its one call site
-                                                            # (COCO segmentation conversion)
+    _points_to_min_area_rect(points, width, height)       # DELETED: dead code (zero call sites
+                                                            # as of Part A -- see Motivation)
 
 src/hydra_suite/detectkit/gui/canvas.py
     OBBCanvas._draw_detections(...)                        # MODIFIED: takes a style descriptor
@@ -147,40 +152,35 @@ def axis_aligned_bbox_quad(
     coordinate space as input. None if points is empty."""
 ```
 
-`source_import.py::_points_to_min_area_rect(points, width, height)` becomes:
-
-```python
-def _points_to_min_area_rect(points, width, height):
-    box = min_area_rect_quad(points)
-    if box is None:
-        return None
-    coords: list[float] = []
-    for x_pos, y_pos in box:
-        coords.extend([x_pos / float(width), y_pos / float(height)])
-    return coords
-```
-
-preserving its existing pixel-in/normalized-out contract for its one call site
-(`_materialize_coco_source`'s segmentation handling) — only the `cv2.minAreaRect`/`boxPoints`
-math itself moves to the shared module, the normalization stays local to this wrapper.
+`source_import.py::_points_to_min_area_rect` is deleted outright (dead code, see Motivation) —
+there is no wrapper to preserve. `min_area_rect_quad`/`axis_aligned_bbox_quad` in
+`utils/geometry_derivation.py` are the only implementation, consumed solely by `canvas.py` for
+this spec.
 
 ## Testing
 
 - Pure-function: `min_area_rect_quad`/`axis_aligned_bbox_quad` on known point sets (a rotated
   rectangle's corners round-trip through `min_area_rect_quad` close to themselves; an
   axis-aligned bbox is exact); `<3`/empty-point edge cases return `None`.
-- `_points_to_min_area_rect`'s existing tests (COCO segmentation conversion) must still pass
-  unchanged — its public contract doesn't change, only its internals.
+- `source_import.py`'s existing COCO-conversion tests must still pass unchanged after
+  `_points_to_min_area_rect`'s deletion — they never called it (confirmed dead code), so this is
+  a true no-op regression check, not exercise of the deleted function.
 - Canvas: a new test constructing a polygon-native detection and asserting
   `set_gt_detections_multi_level` produces 3 layers (polygon/obb/aabb) with the right styles; an
   OBB-native detection produces 2 layers (obb/aabb); an AABB-native detection produces 1 layer.
   An unreviewed source's native-level item uses the hatched brush; a reviewed one doesn't.
-  `set_derived_levels_visible(False)` hides derived layers' items but not the native one.
+  `set_derived_levels_visible(False)` hides derived layers' items but not the native one. The
+  pre-existing single-layer `set_gt_detections`/`set_overlay_visibility` path (used by
+  `test_detectkit_canvas_dual_layer.py`) must keep working unchanged — `_apply_visibility` must
+  branch on whether per-level state was ever populated, not unconditionally assume it was.
 - `main_window.py`'s `show_image` wiring: a smoke test that it resolves the current source's
   `level`/`reviewed` and calls `set_gt_detections_multi_level` with them (not the old
-  single-layer `set_gt_detections`).
-- Follows `tests/test_detectkit_canvas.py`'s existing `QT_QPA_PLATFORM=offscreen` /
-  `pytest.importorskip("PySide6")` pattern.
+  single-layer `set_gt_detections`), including a behavioral (not just source-text) check that
+  the resolved values are actually correct for a given `OBBSource`.
+- `tests/test_detectkit_canvas.py` does not currently set `QT_QPA_PLATFORM=offscreen` (only
+  `pytest.importorskip("PySide6")`) — the plan adds that guard as part of this work, matching
+  `test_detectkit_canvas_dual_layer.py`'s existing convention, rather than assuming it already
+  exists.
 
 ## Out of scope
 
