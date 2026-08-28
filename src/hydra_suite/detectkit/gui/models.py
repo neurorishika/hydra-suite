@@ -10,6 +10,35 @@ from typing import Any
 DEFAULT_CLASS_NAME = "object"
 
 
+@dataclass
+class PendingEscalation:
+    """A staged (not-yet-reviewed) SAM2 escalation result awaiting accept/reject."""
+
+    staged_path: str = ""
+    target_level: str = "polygon"
+    sam2_variant: str = ""
+    created_at: str = ""
+
+    def to_dict(self) -> dict:
+        """Serialize to a plain dictionary."""
+        return {
+            "staged_path": self.staged_path,
+            "target_level": self.target_level,
+            "sam2_variant": self.sam2_variant,
+            "created_at": self.created_at,
+        }
+
+    @staticmethod
+    def from_dict(d: dict) -> "PendingEscalation":
+        """Restore a PendingEscalation from a dictionary."""
+        return PendingEscalation(
+            staged_path=str(d.get("staged_path", "")),
+            target_level=str(d.get("target_level", "polygon") or "polygon"),
+            sam2_variant=str(d.get("sam2_variant", "")),
+            created_at=str(d.get("created_at", "")),
+        )
+
+
 def normalize_class_names(values: Any) -> list[str]:
     """Normalize class-name input into a non-empty ordered list."""
     if isinstance(values, str):
@@ -37,6 +66,7 @@ class OBBSource:
     reviewed: bool = True  # False only for un-reviewed SAM2-primed derived sources
     derived_from: str | None = None  # origin source name for derived sources
     sam2_variant: str | None = None  # SAM2 version that primed a derived source
+    pending_escalation: PendingEscalation | None = None  # staged, unreviewed escalation
 
     def to_dict(self) -> dict:
         """Serialize to a plain dictionary."""
@@ -51,6 +81,11 @@ class OBBSource:
             "reviewed": self.reviewed,
             "derived_from": self.derived_from,
             "sam2_variant": self.sam2_variant,
+            "pending_escalation": (
+                self.pending_escalation.to_dict()
+                if self.pending_escalation is not None
+                else None
+            ),
         }
 
     @staticmethod
@@ -67,6 +102,11 @@ class OBBSource:
             reviewed=bool(d.get("reviewed", True)),
             derived_from=(d.get("derived_from") or None),
             sam2_variant=(d.get("sam2_variant") or None),
+            pending_escalation=(
+                PendingEscalation.from_dict(d["pending_escalation"])
+                if d.get("pending_escalation")
+                else None
+            ),
         )
 
 
