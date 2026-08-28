@@ -302,37 +302,42 @@ def run_active_learning(
         provenance=provenance,
     )
 
-    # One OBBSource per written level. The exporter's per-root `source.json`
-    # records `authoritative` (implied by `derived_from is None`) and
-    # `reviewed`; mirror those into the OBBSource fields. `source.json`'s own
-    # `derived_from` is a *geometry-level label* ("polygon") in that schema,
-    # but `OBBSource.derived_from` is documented and used elsewhere
-    # (`jobs/sam2_escalation.py`) as the *origin source name* -- a lookup key
-    # into `project.sources`. So it is set here to the authoritative
-    # sibling's own `OBBSource.name`, not copied verbatim from the manifest,
-    # so the authoritative root stays the single point of human review and
-    # is actually resolvable by name.
-    authoritative_name: str | None = None
-    for root_meta in manifest["roots"]:
-        name = f"al_round_{timestamp}_{root_meta['level']}"
-        is_derived = root_meta["derived_from"] is not None
-        req.project.sources.append(
-            OBBSource(
-                path=root_meta["path"],
-                name=name,
-                validated=False,
-                original_path=req.input_path,
-                source_kind="detectkit_al",
-                imported=True,
-                level=root_meta["level"],
-                reviewed=bool(root_meta["reviewed"]),
-                derived_from=authoritative_name if is_derived else None,
-            )
+    # ONE OBBSource for the round's authoritative root only -- the root
+    # export_al_dataset marks derived_from=None (the highest level actually
+    # requested, which equals native_level whenever native_level itself was
+    # among the requested levels -- see data/al/export.py's _write_root).
+    # The exporter still writes every requested level's sibling folder to
+    # disk (data/al/export.py is unchanged) -- those siblings are simply not
+    # registered as separate project sources; training derives lower levels
+    # from the registered source on demand, same as any other source.
+    authoritative_root = next(
+        (
+            root_meta
+            for root_meta in manifest["roots"]
+            if root_meta["derived_from"] is None
+        ),
+        None,
+    )
+    if authoritative_root is None:
+        raise RuntimeError(
+            "AL round manifest has no authoritative root (derived_from=None "
+            "entry) -- this indicates a corrupt or incompatible manifest."
         )
-        if not is_derived:
-            authoritative_name = name
+    req.project.sources.append(
+        OBBSource(
+            path=authoritative_root["path"],
+            name=f"al_round_{timestamp}",
+            validated=False,
+            original_path=req.input_path,
+            source_kind="detectkit_al",
+            imported=True,
+            level=authoritative_root["level"],
+            reviewed=bool(authoritative_root["reviewed"]),
+            derived_from=None,
+        )
+    )
 
-    source_path = manifest["roots"][0]["path"]
+    source_path = authoritative_root["path"]
 
     if progress:
         progress(100, "Active learning complete")

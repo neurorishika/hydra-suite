@@ -101,6 +101,7 @@ class ToolsPanel(QWidget):
     run_inference_requested = Signal()
     escalate_sam2_requested = Signal()
     mark_reviewed_requested = Signal()
+    review_escalations_requested = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -182,6 +183,10 @@ class ToolsPanel(QWidget):
         self._btn_mark_reviewed = QPushButton("Mark reviewed…")
         self._btn_mark_reviewed.clicked.connect(self.mark_reviewed_requested)
         v.addWidget(self._btn_mark_reviewed)
+
+        self._btn_review_escalations = QPushButton("Review escalations…")
+        self._btn_review_escalations.clicked.connect(self.review_escalations_requested)
+        v.addWidget(self._btn_review_escalations)
 
         return box
 

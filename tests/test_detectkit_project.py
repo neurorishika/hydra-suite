@@ -9,7 +9,11 @@ from hydra_suite.data.project_bundle import (
     export_project_bundle_archive,
     import_project_bundle_archive,
 )
-from hydra_suite.detectkit.gui.models import DetectKitProject, OBBSource
+from hydra_suite.detectkit.gui.models import (
+    DetectKitProject,
+    OBBSource,
+    PendingEscalation,
+)
 from hydra_suite.detectkit.gui.project import (
     create_project,
     default_project_parent_dir,
@@ -96,6 +100,67 @@ def test_obb_source_roundtrip():
     assert restored.original_path == "/mnt/original/obb_ds"
     assert restored.source_kind == "yolo_detect"
     assert restored.imported is True
+
+
+def test_save_open_project_preserves_all_obb_source_fields(tmp_path: Path) -> None:
+    """Regression: save_project/open_project must not drop OBBSource fields.
+
+    `_serialize_project_state_paths`/`_deserialize_project_state_paths` used
+    to rebuild each source from six hand-listed fields, silently discarding
+    level/reviewed/derived_from/sam2_variant/pending_escalation -- so a
+    project saved right after a SAM2 escalation staged a result lost the
+    staging record on the very next save (orphaning the staging directory),
+    and an accepted escalation's level="polygon"/reviewed=False reverted to
+    obb/reviewed on reload.
+    """
+    proj = create_project(tmp_path, class_names=["ant", "bee"])
+    source_dir = tmp_path / "artifacts" / "imported_sources" / "ds1"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    staged_dir = tmp_path / "artifacts" / "pending_escalations" / "ds1-sam2-abc123"
+    staged_dir.mkdir(parents=True, exist_ok=True)
+    pending = PendingEscalation(
+        staged_path=str(staged_dir),
+        target_level="polygon",
+        sam2_variant="sam2.1-hiera-base_plus",
+        created_at="2026-08-27T00:00:00",
+    )
+    proj.sources = [
+        OBBSource(
+            path=str(source_dir),
+            name="ds1",
+            validated=True,
+            original_path="/elsewhere/ds1",
+            source_kind="detectkit_al",
+            imported=True,
+            level="polygon",
+            reviewed=False,
+            derived_from="ds0",
+            sam2_variant="sam2.1-hiera-base_plus",
+            pending_escalation=pending,
+        )
+    ]
+    save_project(proj)
+
+    loaded = open_project(tmp_path)
+    assert loaded is not None
+    assert len(loaded.sources) == 1
+    restored = loaded.sources[0]
+
+    assert Path(restored.path) == source_dir
+    assert restored.name == "ds1"
+    assert restored.validated is True
+    assert restored.original_path == "/elsewhere/ds1"
+    assert restored.source_kind == "detectkit_al"
+    assert restored.imported is True
+    assert restored.level == "polygon"
+    assert restored.reviewed is False
+    assert restored.derived_from == "ds0"
+    assert restored.sam2_variant == "sam2.1-hiera-base_plus"
+    assert restored.pending_escalation is not None
+    assert Path(restored.pending_escalation.staged_path) == staged_dir
+    assert restored.pending_escalation.target_level == "polygon"
+    assert restored.pending_escalation.sam2_variant == "sam2.1-hiera-base_plus"
+    assert restored.pending_escalation.created_at == "2026-08-27T00:00:00"
 
 
 def test_default_project_parent_dir_uses_hydra_projects_root(

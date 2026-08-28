@@ -123,13 +123,14 @@ def test_source_manager_adds_imported_yolo_detect_source(qapp, tmp_path, monkeyp
     assert (Path(added.path) / "labels" / "sample.txt").exists()
 
 
-def test_source_manager_adds_al_round_registers_every_sibling(
+def test_source_manager_add_source_collapses_al_round_to_one_source(
     qapp, tmp_path, monkeypatch
 ):
-    """Picking an AL round container registers one source per geometry level,
-    linked back to the authoritative root, matching jobs/al_worker.py's
-    registration of an internally generated round -- not just the
-    authoritative level."""
+    """Picking an AL round container registers exactly ONE source -- the
+    authoritative root -- named after the round folder itself, not the
+    resolved level subfolder ("obb") and not one entry per sibling level."""
+    import json
+
     from hydra_suite.detectkit.gui.dialogs.source_manager import SourceManagerDialog
     from hydra_suite.detectkit.gui.dialogs.source_validation import (
         SOURCE_ADD_MODE_PORTABLE,
@@ -146,7 +147,6 @@ def test_source_manager_adds_al_round_registers_every_sibling(
             "0 0.1 0.1 0.2 0.1 0.2 0.2 0.1 0.2\n", encoding="utf-8"
         )
         (level_dir / "classes.txt").write_text("ant\n", encoding="utf-8")
-    import json
 
     (round_dir / "manifest.json").write_text(
         json.dumps(
@@ -185,32 +185,24 @@ def test_source_manager_adds_al_round_registers_every_sibling(
     dlg = SourceManagerDialog(proj)
     dlg._add_source()
 
-    assert len(proj.sources) == 2
-    by_level = {src.level: src for src in proj.sources}
-    obb_src, aabb_src = by_level["obb"], by_level["aabb"]
-
-    assert obb_src.reviewed is True
-    assert obb_src.derived_from is None
-    assert obb_src.source_kind == "detectkit_al"
-
-    assert aabb_src.reviewed is False
-    assert aabb_src.derived_from == obb_src.name
-    assert aabb_src.source_kind == "detectkit_al"
-
-    assert obb_src.name != aabb_src.name
-    assert Path(obb_src.path).is_dir()
-    assert Path(aabb_src.path).is_dir()
+    assert len(proj.sources) == 1
+    added = proj.sources[0]
+    assert added.name == "20260827_172624"
+    assert added.level == "obb"
+    assert added.source_kind == "detectkit_al"
+    assert added.reviewed is True
+    assert added.derived_from is None
+    assert Path(added.path).is_dir()
+    assert dlg._source_list.count() == 1
 
 
-def test_source_manager_al_round_links_to_already_registered_authoritative_root(
+def test_source_manager_add_source_trusts_manifest_level_for_aabb_round(
     qapp, tmp_path, monkeypatch
 ):
-    """If the authoritative root was already registered under a different
-    name (e.g. added directly, before the round was ever added as a whole),
-    re-adding the round as a container must link the derived sibling's
-    derived_from to the ACTUAL existing name. Silently leaving it None would
-    make the unreviewed derived source look authoritative instead of just
-    unlinked."""
+    """An AL round whose AUTHORITATIVE level is aabb must be registered as
+    level='aabb', not 'obb' -- re-scanning the label files can't tell them
+    apart (both are 9-field quads), so the manifest's declared level must be
+    trusted, not the geometry-scan result."""
     import json
 
     from hydra_suite.detectkit.gui.dialogs.source_manager import SourceManagerDialog
@@ -218,77 +210,84 @@ def test_source_manager_al_round_links_to_already_registered_authoritative_root(
         SOURCE_ADD_MODE_PORTABLE,
         DetectKitSourceAdditionChoice,
     )
-    from hydra_suite.detectkit.gui.models import OBBSource
 
-    round_dir = tmp_path / "active_learning" / "20260827_172624"
-    for level in ("obb", "aabb"):
-        level_dir = round_dir / level
-        (level_dir / "images").mkdir(parents=True)
-        (level_dir / "labels").mkdir(parents=True)
-        (level_dir / "images" / "f001.jpg").write_bytes(b"fake-image")
-        (level_dir / "labels" / "f001.txt").write_text(
-            "0 0.1 0.1 0.2 0.1 0.2 0.2 0.1 0.2\n", encoding="utf-8"
-        )
-        (level_dir / "classes.txt").write_text("ant\n", encoding="utf-8")
+    round_dir = tmp_path / "active_learning" / "20260827_180000"
+    level_dir = round_dir / "aabb"
+    (level_dir / "images").mkdir(parents=True)
+    (level_dir / "labels").mkdir(parents=True)
+    (level_dir / "images" / "f001.jpg").write_bytes(b"fake-image")
+    (level_dir / "labels" / "f001.txt").write_text(
+        "0 0.1 0.1 0.2 0.1 0.2 0.2 0.1 0.2\n", encoding="utf-8"
+    )
+    (level_dir / "classes.txt").write_text("ant\n", encoding="utf-8")
 
     (round_dir / "manifest.json").write_text(
         json.dumps(
             {
                 "roots": [
                     {
-                        "level": "obb",
+                        "level": "aabb",
                         "authoritative": True,
                         "reviewed": True,
-                        "path": str(round_dir / "obb"),
-                    },
-                    {
-                        "level": "aabb",
-                        "authoritative": False,
-                        "reviewed": False,
                         "path": str(round_dir / "aabb"),
-                    },
+                    }
                 ]
             }
         ),
         encoding="utf-8",
     )
 
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.dialogs.source_manager.QFileDialog.getExistingDirectory",
+        lambda *args, **kwargs: str(round_dir),
+    )
+    # DetectKitSourceAdditionChoice defaults to level="obb" -- this is the
+    # dialog's own re-scanned guess, which is exactly the wrong value this
+    # test must NOT see land on the registered source.
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.dialogs.source_manager.confirm_detectkit_source_addition",
+        lambda *args, **kwargs: DetectKitSourceAdditionChoice(
+            mode=SOURCE_ADD_MODE_PORTABLE
+        ),
+    )
+
     proj = _make_proj(tmp_path)
-    # Simulate the obb root having been added earlier, directly, under its
-    # own folder name -- e.g. a manual pick of the obb subfolder before the
-    # round was ever imported as a whole.
-    obb_dir = str((round_dir / "obb").resolve())
-    proj.sources.append(
+    dlg = SourceManagerDialog(proj)
+    dlg._add_source()
+
+    assert len(proj.sources) == 1
+    assert proj.sources[0].level == "aabb"
+
+
+def test_remove_selected_deletes_pending_escalation_staging_dir(qapp, tmp_path):
+    """Removing a source with an unreviewed pending escalation must not leak
+    its staging directory under artifacts/pending_escalations/."""
+    from hydra_suite.detectkit.gui.dialogs.source_manager import SourceManagerDialog
+    from hydra_suite.detectkit.gui.models import OBBSource, PendingEscalation
+
+    staged_dir = tmp_path / "artifacts" / "pending_escalations" / "orig-variant-abc123"
+    staged_dir.mkdir(parents=True)
+    (staged_dir / "labels").mkdir()
+
+    proj = _make_proj(tmp_path)
+    proj.sources = [
         OBBSource(
-            path=obb_dir,
-            original_path=obb_dir,
-            name="obb",
-            source_kind="detectkit",
-            imported=False,
-            level="obb",
-            reviewed=True,
+            path=str(tmp_path / "orig"),
+            name="orig",
+            pending_escalation=PendingEscalation(
+                staged_path=str(staged_dir),
+                target_level="polygon",
+                sam2_variant="sam2.1-hiera-base_plus",
+                created_at="2026-08-27T00:00:00",
+            ),
         )
-    )
-
-    monkeypatch.setattr(
-        "hydra_suite.detectkit.gui.dialogs.source_manager.QFileDialog.getExistingDirectory",
-        lambda *args, **kwargs: str(round_dir),
-    )
-    monkeypatch.setattr(
-        "hydra_suite.detectkit.gui.dialogs.source_manager.confirm_detectkit_source_addition",
-        lambda *args, **kwargs: DetectKitSourceAdditionChoice(
-            mode=SOURCE_ADD_MODE_PORTABLE
-        ),
-    )
-
+    ]
     dlg = SourceManagerDialog(proj)
-    dlg._add_source()
+    dlg._source_list.setCurrentRow(0)
+    dlg._remove_selected()
 
-    # obb was already registered (duplicate) -> only the aabb sibling gets
-    # newly appended this call.
-    assert len(proj.sources) == 2
-    aabb_src = next(s for s in proj.sources if s.level == "aabb")
-    assert aabb_src.derived_from == "obb"
+    assert proj.sources == []
+    assert not staged_dir.exists()
 
 
 def test_source_manager_does_not_add_source_when_validation_cancelled(
