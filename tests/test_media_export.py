@@ -106,6 +106,45 @@ def test_overlay_priority_is_final_then_smoothed_then_unique_key():
     assert keys[3] == "trajectory:3"
 
 
+def test_explicit_unknown_final_label_does_not_fall_through_to_raw_evidence():
+    """I6: a resolved-but-unknown IdentityFinalLabel is the resolved answer
+    for that track -- it must NOT fall through to UniqueIdentityKey's raw
+    per-frame classifier evidence (that would reintroduce the flicker Task
+    7 was meant to eliminate). It renders like a track with no identity
+    info at all: plain TrajectoryID label/color."""
+    df = pd.DataFrame(
+        {
+            "TrajectoryID": [5],
+            "UniqueIdentityKey": ["cnn:colortag=blue"],
+            "IdentityFinalLabel": ["unknown"],
+            "IdentityFinalSmoothedLabel": [np.nan],
+        }
+    )
+    labels = media_export.build_video_track_label_array(df)
+    assert labels[0] == "ID5"
+
+    keys = media_export.build_video_track_color_key_array(df)
+    assert keys[0] == "trajectory:5"
+
+
+def test_explicit_unknown_smoothed_label_does_not_fall_through_to_raw_evidence():
+    """Same I6 guard for the IdentityFinalSmoothedLabel tier, when
+    IdentityFinalLabel itself is absent."""
+    df = pd.DataFrame(
+        {
+            "TrajectoryID": [6],
+            "UniqueIdentityKey": ["cnn:colortag=blue"],
+            "IdentityFinalLabel": [np.nan],
+            "IdentityFinalSmoothedLabel": ["unknown"],
+        }
+    )
+    labels = media_export.build_video_track_label_array(df)
+    assert labels[0] == "ID6"
+
+    keys = media_export.build_video_track_color_key_array(df)
+    assert keys[0] == "trajectory:6"
+
+
 def test_precomputed_palette_uses_trajectory_colors_for_plain_tracks():
     colors = [(10, 20, 30), (40, 50, 60), (70, 80, 90)]
     track_ids = np.asarray([0, 1, 2], dtype=np.int32)

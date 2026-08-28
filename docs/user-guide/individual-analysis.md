@@ -120,9 +120,31 @@ explicit vocabulary for identity provenance -- no blank/NaN values:
 
 Rendered/exported video overlays label each track by its resolved
 `IdentityFinalLabel` (falling back to `IdentityFinalSmoothedLabel`, then
-`UniqueIdentityKey`, if a row has no final label) -- never by raw per-frame
-classifier evidence directly, so the on-video label always matches what the
-CSV reports for that track.
+`UniqueIdentityKey`) using this priority chain, tier by tier:
+
+1. `IdentityFinalLabel`, if the row has one and it is not the literal string
+   `"unknown"`.
+2. Otherwise `IdentityFinalSmoothedLabel`, under the same rule.
+3. Otherwise `UniqueIdentityKey` -- the raw per-frame classifier/tag
+   evidence -- but **only** when neither of the first two tiers had *any*
+   value, informative or not.
+
+A blank/missing value at a tier defers to the next tier, but the literal
+value `"unknown"` does **not** -- it is treated as the resolved answer for
+that track (this trajectory genuinely has no identity, not "we don't know
+yet"), so the overlay stops there and falls back to a plain `TrajectoryID`
+label/color instead of continuing down the chain to raw evidence. This
+matters because `"unknown"` is a common, expected value: any trajectory the
+fragment solver could not confidently resolve is written with
+`IdentityFinalLabel="unknown"` (see above), and a real run's unresolved
+fraction can be substantial. Without this rule, an unresolved track's video
+label/color would silently come from raw, un-smoothed per-frame evidence --
+the exact frame-to-frame flicker this priority chain exists to eliminate --
+rather than from a stable value. The on-video label matches what the CSV
+reports for that track whenever a tier resolved with an informative value;
+for a genuinely unresolved track, both the CSV (`"unknown"`) and the video
+(plain `TrajectoryID`) consistently signal "not identified," just with
+different literal tokens.
 
 ## Typical Uses
 

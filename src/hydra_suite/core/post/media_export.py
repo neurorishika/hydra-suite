@@ -102,6 +102,26 @@ def format_video_track_label(track_id, unique_identity_key=None) -> str:
     return f"ID{track_id}"
 
 
+def _is_explicit_unknown_label(value) -> bool:
+    """True when *value* is the literal, resolved ``"unknown"`` label token.
+
+    Distinguishes "this identity tier resolved to unknown" from "this
+    identity tier has no value at all" (missing/blank/NaN) -- the two must
+    be handled differently by the resolved-identity priority chain below
+    (I6): a genuinely resolved ``"unknown"`` must stop the fallthrough,
+    while a blank/missing value must still let the chain continue to the
+    next tier.
+    """
+    if value is None:
+        return False
+    try:
+        if pd.isna(value):
+            return False
+    except Exception:
+        pass
+    return str(value).strip().lower() == "unknown"
+
+
 def normalize_video_identity_color_key(value):
     """Return a stable identity color key token or an empty string."""
     if value is None:
@@ -150,9 +170,16 @@ def build_video_track_label_array(trajectories_df):
         for column in identity_columns:
             if column not in trajectories_df.columns:
                 continue
-            token = normalize_video_identity_color_key(
-                trajectories_df.iloc[row_index][column]
-            )
+            raw_value = trajectories_df.iloc[row_index][column]
+            if column in (
+                C.FINAL_LABEL,
+                C.FINAL_SMOOTHED_LABEL,
+            ) and _is_explicit_unknown_label(raw_value):
+                # I6: "unknown" IS the resolved answer for this track (not a
+                # missing value) -- stop here rather than falling through to
+                # UniqueIdentityKey's raw per-frame classifier evidence.
+                break
+            token = normalize_video_identity_color_key(raw_value)
             if token:
                 chosen_token = token
                 break
@@ -177,9 +204,16 @@ def build_video_track_color_key_array(trajectories_df):
         for column in identity_columns:
             if column not in trajectories_df.columns:
                 continue
-            token = normalize_video_identity_color_key(
-                trajectories_df.iloc[row_index][column]
-            )
+            raw_value = trajectories_df.iloc[row_index][column]
+            if column in (
+                C.FINAL_LABEL,
+                C.FINAL_SMOOTHED_LABEL,
+            ) and _is_explicit_unknown_label(raw_value):
+                # I6: "unknown" IS the resolved answer for this track (not a
+                # missing value) -- stop here rather than falling through to
+                # UniqueIdentityKey's raw per-frame classifier evidence.
+                break
+            token = normalize_video_identity_color_key(raw_value)
             if token:
                 chosen_key = f"identity:{token}"
                 break
