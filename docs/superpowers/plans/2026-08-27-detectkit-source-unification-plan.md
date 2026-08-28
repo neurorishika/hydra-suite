@@ -43,6 +43,12 @@ repo (see CLAUDE.md).
   needed for this work — it does not touch the tracking/inference pipeline.
 - Commit as the configured git user — do not add a `Co-Authored-By: Claude` trailer or
   `Claude-Session:` line to any commit message in this plan.
+- Per CLAUDE.md's Isolation rule: all implementation happens in a git worktree branched from
+  local HEAD, never committed directly onto `main`. Before Task 1, run:
+  `git worktree add .worktrees/detectkit-source-unification -b feat/detectkit-source-unification HEAD`.
+  Every `git add`/`git commit` step in this plan runs inside that worktree
+  (`.worktrees/detectkit-source-unification/`), and every `pytest`/`black`/`isort`/`make` command
+  runs with that worktree as the working directory.
 
 ---
 
@@ -190,7 +196,13 @@ git commit -m "feat(detectkit): add PendingEscalation model for staged SAM2 revi
   container to its authoritative root's inspection, `source_kind="detectkit_al"`, raises
   `ValueError` if the authoritative root can't be resolved). `materialize_detectkit_source` unchanged.
   `inspect_al_round`, `materialize_al_round`, `ALRoundRoot`, `MaterializedALRoundRoot` **no longer
-  exist** — Task 3 (`source_manager.py`) must not import them.
+  exist** — Task 3 (`source_manager.py`) must not import them. New:
+  `resolve_al_round_authoritative_level(source_root) -> str | None` — returns the AL round's
+  manifest-declared authoritative-root `level`, or `None` if *source_root* is not an AL round.
+  Task 3 uses this so a manually-added external round trusts the manifest's declared level instead
+  of re-scanning label geometry (label files in an AL export are always 9-field quads regardless of
+  level — `AABB` and `OBB` are visually indistinguishable by re-scanning; only the manifest knows
+  which is which).
 
 - [ ] **Step 1: Remove the multi-root functions/dataclasses from `source_import.py`**
 
@@ -211,16 +223,78 @@ After deletion, the file should end at `materialize_detectkit_source` (currently
 762 with the final `return MaterializedDetectKitSource(...)` for the imported case) — nothing after
 it.
 
-- [ ] **Step 2: Update `tests/test_detectkit_source_import.py` to drop removed-function tests**
+- [ ] **Step 2: Add `resolve_al_round_authoritative_level`**
+
+Add this function to `source_import.py`, directly below `_select_al_round_authoritative_root`
+(which it reuses the manifest-loading half of):
+
+```python
+def resolve_al_round_authoritative_level(source_root: str | Path) -> str | None:
+    """Return an AL round's manifest-declared authoritative-root level.
+
+    An AL-export root's labels are always stored as 9-field quads regardless
+    of level (see `_detect_source_level`'s `intended_level=OBB` re-scan,
+    which cannot distinguish a genuine OBB from an axis-aligned-quad-encoded
+    AABB by re-scanning). Only the manifest recorded which is which at
+    export time -- callers that need an AL round's true level (rather than a
+    re-scanned guess) must go through this function instead of
+    `_detect_source_level`.
+
+    Returns ``None`` if *source_root* is not an AL round container (no
+    ``manifest.json`` with a ``roots`` list) or has no authoritative entry.
+    """
+    root = Path(source_root).expanduser().resolve()
+    al_roots = _load_al_round_roots(root)
+    if al_roots is None:
+        return None
+    for entry in al_roots:
+        if entry.get("authoritative"):
+            level = entry.get("level")
+            return str(level) if level else None
+    return None
+```
+
+- [ ] **Step 3: Add a failing test for `resolve_al_round_authoritative_level`, then verify it passes**
+
+Add to `tests/test_detectkit_source_import.py` (after `_write_al_round`):
+
+```python
+def test_resolve_al_round_authoritative_level_reads_manifest(tmp_path: Path):
+    round_dir = tmp_path / "active_learning" / "20260827_172624"
+    _write_al_round(
+        round_dir,
+        levels=(("aabb", True), ("obb", False)),
+    )
+
+    assert resolve_al_round_authoritative_level(round_dir) == "aabb"
+
+
+def test_resolve_al_round_authoritative_level_none_for_non_al_round(tmp_path: Path):
+    (tmp_path / "images").mkdir()
+    (tmp_path / "labels").mkdir()
+    (tmp_path / "classes.txt").write_text("ant\n", encoding="utf-8")
+
+    assert resolve_al_round_authoritative_level(tmp_path) is None
+```
+
+Add `resolve_al_round_authoritative_level` to the import block at the top of the test file (see
+Step 4 below — do both import edits together). Run:
+`conda activate hydra-mps && python -m pytest tests/test_detectkit_source_import.py -k resolve_al_round_authoritative_level -v`
+Expected: FAIL first (function doesn't exist until Step 2 above is applied — if doing these steps
+in order, Step 2 already landed, so this should PASS immediately; if TDD-ing strictly, comment out
+Step 2's function body temporarily to see the test fail, then restore it).
+
+- [ ] **Step 4: Update `tests/test_detectkit_source_import.py` to drop removed-function tests**
 
 Remove `inspect_al_round` and `materialize_al_round` from the import block at the top of the file
-(lines 11–17):
+(lines 11–17), and add `resolve_al_round_authoritative_level` (needed by Step 3 above):
 
 ```python
 from hydra_suite.detectkit.gui.source_import import (
     IMPORT_MODE_LINKED,
     inspect_detectkit_source,
     materialize_detectkit_source,
+    resolve_al_round_authoritative_level,
 )
 ```
 
@@ -259,22 +333,25 @@ Keep all other tests unchanged: `test_inspect_detectkit_source_accepts_existing_
 `test_inspect_detectkit_source_falls_back_when_manifest_paths_are_stale`,
 `test_materialize_detectkit_source_can_link_and_normalize_in_place`.
 
-- [ ] **Step 3: Run the test file**
+- [ ] **Step 5: Run the test file**
 
 Run: `conda activate hydra-mps && python -m pytest tests/test_detectkit_source_import.py -v`
 Expected: all PASS, no `ImportError`.
 
-- [ ] **Step 4: Run flake8/black/isort on the two changed files**
+- [ ] **Step 6: Run flake8/black/isort on the two changed files**
 
 Run: `conda activate hydra-mps && black src/hydra_suite/detectkit/gui/source_import.py tests/test_detectkit_source_import.py && isort src/hydra_suite/detectkit/gui/source_import.py tests/test_detectkit_source_import.py`
 Expected: no errors; files reformatted if needed.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add src/hydra_suite/detectkit/gui/source_import.py tests/test_detectkit_source_import.py
 git commit -m "refactor(detectkit): revert AL-round import to single authoritative-root redirect"
 ```
+
+(This commit includes `resolve_al_round_authoritative_level` from Steps 2–3, since it lives in the
+same file and is part of the same revert-and-clean-up unit of work.)
 
 ---
 
@@ -285,12 +362,17 @@ git commit -m "refactor(detectkit): revert AL-round import to single authoritati
 - Test: `tests/test_detectkit_source_manager_dialog.py`
 
 **Interfaces:**
-- Consumes: `inspect_detectkit_source`, `materialize_detectkit_source` from `source_import.py`
-  (Task 2's surviving functions — `inspect_al_round`/`materialize_al_round` imports must be removed).
+- Consumes: `inspect_detectkit_source`, `materialize_detectkit_source`,
+  `resolve_al_round_authoritative_level` from `source_import.py` (Task 2's surviving/new functions —
+  `inspect_al_round`/`materialize_al_round` imports must be removed).
 - Produces: `SourceManagerDialog._add_source()` registers exactly one `OBBSource` per pick, named
   `Path(selected_path).name` — for an AL-round pick this is the round folder's own name (e.g.
-  `20260827_172624`), never `obb` or a level-suffixed name. `_add_al_round_sources` **no longer
-  exists**.
+  `20260827_172624`), never `obb` or a level-suffixed name, with `level` taken from the manifest's
+  declared authoritative level when the pick is an AL round (not re-scanned — see Task 2's docstring
+  for why re-scanning can't tell OBB from AABB for this format). `_add_al_round_sources` **no longer
+  exists**. `_remove_selected` now also deletes any pending-escalation staging directory belonging
+  to the removed source, so escalating a source and then removing it doesn't leak an orphaned
+  `artifacts/pending_escalations/` directory.
 
 - [ ] **Step 1: Update the test file first (TDD — these tests currently describe the old behavior)**
 
@@ -373,15 +455,124 @@ def test_source_manager_add_source_collapses_al_round_to_one_source(
     assert dlg._source_list.count() == 1
 ```
 
-- [ ] **Step 2: Run the new test to verify it fails**
+Also add a second test proving the manifest's declared level is trusted over a re-scan, for a round
+whose authoritative level is `aabb` (not `obb`) — this is the case where re-scanning the 9-field quad
+labels would silently over-claim `obb`:
 
-Run: `conda activate hydra-mps && python -m pytest tests/test_detectkit_source_manager_dialog.py::test_source_manager_add_source_collapses_al_round_to_one_source -v`
-Expected: FAIL — either an assertion mismatch (`len(proj.sources) == 2` currently) or an error, since
-`_add_source` still calls the multi-root path.
+```python
+def test_source_manager_add_source_trusts_manifest_level_for_aabb_round(
+    qapp, tmp_path, monkeypatch
+):
+    """An AL round whose AUTHORITATIVE level is aabb must be registered as
+    level='aabb', not 'obb' -- re-scanning the label files can't tell them
+    apart (both are 9-field quads), so the manifest's declared level must be
+    trusted, not the geometry-scan result."""
+    import json
+
+    from hydra_suite.detectkit.gui.dialogs.source_manager import SourceManagerDialog
+    from hydra_suite.detectkit.gui.dialogs.source_validation import (
+        SOURCE_ADD_MODE_PORTABLE,
+        DetectKitSourceAdditionChoice,
+    )
+
+    round_dir = tmp_path / "active_learning" / "20260827_180000"
+    level_dir = round_dir / "aabb"
+    (level_dir / "images").mkdir(parents=True)
+    (level_dir / "labels").mkdir(parents=True)
+    (level_dir / "images" / "f001.jpg").write_bytes(b"fake-image")
+    (level_dir / "labels" / "f001.txt").write_text(
+        "0 0.1 0.1 0.2 0.1 0.2 0.2 0.1 0.2\n", encoding="utf-8"
+    )
+    (level_dir / "classes.txt").write_text("ant\n", encoding="utf-8")
+
+    (round_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "roots": [
+                    {
+                        "level": "aabb",
+                        "authoritative": True,
+                        "reviewed": True,
+                        "path": str(round_dir / "aabb"),
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.dialogs.source_manager.QFileDialog.getExistingDirectory",
+        lambda *args, **kwargs: str(round_dir),
+    )
+    # DetectKitSourceAdditionChoice defaults to level="obb" -- this is the
+    # dialog's own re-scanned guess, which is exactly the wrong value this
+    # test must NOT see land on the registered source.
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.dialogs.source_manager.confirm_detectkit_source_addition",
+        lambda *args, **kwargs: DetectKitSourceAdditionChoice(
+            mode=SOURCE_ADD_MODE_PORTABLE
+        ),
+    )
+
+    proj = _make_proj(tmp_path)
+    dlg = SourceManagerDialog(proj)
+    dlg._add_source()
+
+    assert len(proj.sources) == 1
+    assert proj.sources[0].level == "aabb"
+
+
+def test_remove_selected_deletes_pending_escalation_staging_dir(qapp, tmp_path):
+    """Removing a source with an unreviewed pending escalation must not leak
+    its staging directory under artifacts/pending_escalations/."""
+    from hydra_suite.detectkit.gui.dialogs.source_manager import SourceManagerDialog
+    from hydra_suite.detectkit.gui.models import OBBSource, PendingEscalation
+
+    staged_dir = tmp_path / "artifacts" / "pending_escalations" / "orig-variant-abc123"
+    staged_dir.mkdir(parents=True)
+    (staged_dir / "labels").mkdir()
+
+    proj = _make_proj(tmp_path)
+    proj.sources = [
+        OBBSource(
+            path=str(tmp_path / "orig"),
+            name="orig",
+            pending_escalation=PendingEscalation(
+                staged_path=str(staged_dir),
+                target_level="polygon",
+                sam2_variant="sam2.1-hiera-base_plus",
+                created_at="2026-08-27T00:00:00",
+            ),
+        )
+    ]
+    dlg = SourceManagerDialog(proj)
+    dlg._source_list.setCurrentRow(0)
+    dlg._remove_selected()
+
+    assert proj.sources == []
+    assert not staged_dir.exists()
+```
+
+- [ ] **Step 2: Run the new tests to verify they fail**
+
+Run: `conda activate hydra-mps && python -m pytest tests/test_detectkit_source_manager_dialog.py -k "collapses_al_round_to_one_source or trusts_manifest_level or deletes_pending_escalation_staging_dir" -v`
+Expected: FAIL — either an assertion mismatch (`len(proj.sources) == 2` currently, or `level == "obb"`
+for the aabb-authoritative case) or an `AttributeError` (`_remove_selected` doesn't yet clean up
+staging dirs), since `_add_source`/`_remove_selected` still have the old behavior.
 
 - [ ] **Step 3: Revert `_add_source` and remove `_add_al_round_sources`**
 
-In `src/hydra_suite/detectkit/gui/dialogs/source_manager.py`, change the import block:
+In `src/hydra_suite/detectkit/gui/dialogs/source_manager.py`, add `import shutil` to the top-level
+imports (needed by the `_remove_selected` change in Step 3 below):
+
+```python
+import logging
+import shutil
+from pathlib import Path
+```
+
+Change the `..source_import` import block:
 
 ```python
 from ..source_import import (
@@ -391,14 +582,16 @@ from ..source_import import (
     inspect_detectkit_source,
     materialize_detectkit_source,
     remap_materialized_source_classes,
+    resolve_al_round_authoritative_level,
 )
 ```
 
-(drop `inspect_al_round`, `materialize_al_round`).
+(drop `inspect_al_round`, `materialize_al_round`; add `resolve_al_round_authoritative_level`).
 
-Replace the entire `_add_source` method body from `al_roots = inspect_al_round(selected_path)`
-through the end of the method (the `self._project.sources.append(...)` / `self._refresh_list()` at
-its end) with:
+Replace the 8-line comment block above the old multi-root dispatch (starting `# An active-learning
+export round (manifest.json + one sibling dataset` at line 117) through the end of the `_add_source`
+method (the `self._project.sources.append(...)` / `self._refresh_list()` at its end, currently line
+268) with:
 
 ```python
         try:
@@ -515,6 +708,22 @@ its end) with:
             QMessageBox.information(self, "Add Source", "Source already added.")
             return
 
+        # An AL round's manifest declares which level is authoritative --
+        # trust that over the validation dialog's re-scanned `selection.level`
+        # (label files in an AL export are 9-field quads for every level, so
+        # a re-scan cannot tell OBB apart from an axis-aligned-quad AABB;
+        # see resolve_al_round_authoritative_level's docstring).
+        manifest_level = resolve_al_round_authoritative_level(selected_path)
+        level = (
+            manifest_level
+            if manifest_level is not None
+            else (
+                selection.level
+                if getattr(selection, "level", None)
+                else materialized.level
+            )
+        )
+
         self._project.sources.append(
             OBBSource(
                 path=canonical_path,
@@ -522,27 +731,42 @@ its end) with:
                 original_path=original_path,
                 source_kind=materialized.source_kind,
                 imported=materialized.imported,
-                level=(
-                    selection.level
-                    if getattr(selection, "level", None)
-                    else materialized.level
-                ),
+                level=level,
             )
         )
         self._refresh_list()
 ```
 
-Note the one behavior change from the pre-session original: `name=Path(selected_path).name` (was
+Note two behavior changes from the pre-session original: `name=Path(selected_path).name` (was
 `materialized.display_name`, which is `root.name` where `root` is the *resolved* dataset root —
-wrong for an AL-round pick, since that resolves to the level subfolder, e.g. `obb`).
+wrong for an AL-round pick, since that resolves to the level subfolder, e.g. `obb`); and the
+manifest-level override above (the pre-session original didn't have AL-round handling at all, so
+this is new behavior, not a revert).
 
 Then delete the entire `_add_al_round_sources` method (everything from `def _add_al_round_sources(`
 through its closing `self._refresh_list()`, right before `_remove_selected`).
 
-- [ ] **Step 4: Run the new test to verify it passes**
+Finally, update `_remove_selected` to clean up a removed source's pending-escalation staging
+directory (this closes a leak that Task 5 introduces — without it, escalating a source then removing
+it via "Remove Selected" would strand its `artifacts/pending_escalations/` directory forever, since
+nothing else ever visits a removed `OBBSource`):
+
+```python
+    def _remove_selected(self) -> None:
+        row = self._source_list.currentRow()
+        if row < 0 or row >= len(self._project.sources):
+            return
+        removed = self._project.sources.pop(row)
+        pending = removed.pending_escalation
+        if pending is not None and pending.staged_path:
+            shutil.rmtree(Path(pending.staged_path), ignore_errors=True)
+        self._refresh_list()
+```
+
+- [ ] **Step 4: Run the new tests to verify they pass**
 
 Run: `conda activate hydra-mps && python -m pytest tests/test_detectkit_source_manager_dialog.py -v`
-Expected: all PASS, including the new collapsed-source test and every pre-existing test in the file
+Expected: all PASS, including the three new tests and every pre-existing test in the file
 (`test_source_manager_adds_imported_yolo_detect_source`,
 `test_source_manager_does_not_add_source_when_validation_cancelled`,
 `test_source_manager_adds_linked_source_in_place`, etc.).
@@ -638,14 +862,23 @@ In `src/hydra_suite/detectkit/jobs/al_worker.py`, replace the block from the com
 (currently lines 305–335) with:
 
 ```python
-    # ONE OBBSource for the round's authoritative (native-level) root only.
+    # ONE OBBSource for the round's authoritative root only -- the root
+    # export_al_dataset marks derived_from=None (the highest level actually
+    # requested, which equals native_level whenever native_level itself was
+    # among the requested levels -- see data/al/export.py's _write_root).
     # The exporter still writes every requested level's sibling folder to
     # disk (data/al/export.py is unchanged) -- those siblings are simply not
     # registered as separate project sources; training derives lower levels
     # from the registered source on demand, same as any other source.
     authoritative_root = next(
-        root_meta for root_meta in manifest["roots"] if root_meta["derived_from"] is None
+        (root_meta for root_meta in manifest["roots"] if root_meta["derived_from"] is None),
+        None,
     )
+    if authoritative_root is None:
+        raise RuntimeError(
+            "AL round manifest has no authoritative root (derived_from=None "
+            "entry) -- this indicates a corrupt or incompatible manifest."
+        )
     req.project.sources.append(
         OBBSource(
             path=authoritative_root["path"],
@@ -712,7 +945,7 @@ import cv2
 import numpy as np
 import pytest
 
-from hydra_suite.detectkit.gui.models import OBBSource, PendingEscalation
+from hydra_suite.detectkit.gui.models import OBBSource
 from hydra_suite.detectkit.jobs.sam2_escalation import (
     EscalationRequest,
     accept_pending_escalation,
@@ -835,6 +1068,77 @@ def test_accept_pending_escalation_promotes_labels_and_resets_reviewed(tmp_path)
     assert src.sam2_variant == "sam2.1-hiera-base_plus"
     assert (Path(src.path) / "labels" / "a.txt").read_text() == staged_label_text
     assert not Path(staged_path).exists()
+
+
+def _make_nested_source(tmp_path):
+    """A source whose images/labels use a nested split layout (images/train/...),
+    as dataset_inspector.py's directory-layout scan supports and as
+    source_import.py's materializer can produce."""
+    root = tmp_path / "sources" / "nested"
+    (root / "images" / "train").mkdir(parents=True)
+    (root / "labels" / "train").mkdir(parents=True)
+    cv2.imwrite(
+        str(root / "images" / "train" / "a.jpg"), np.zeros((100, 100, 3), np.uint8)
+    )
+    (root / "labels" / "train" / "a.txt").write_text(
+        "0 0.1 0.1 0.4 0.1 0.4 0.4 0.1 0.4\n"
+    )
+    (root / "classes.txt").write_text("ant\n")
+    return OBBSource(path=str(root), name="nested", level="obb")
+
+
+def test_escalation_stages_nested_image_layout_correctly(tmp_path):
+    """Regression: staging must mirror the source's directory structure, not
+    flatten to top-level images/*.* -- a split layout (images/train/...) has
+    zero images at the top level, which used to silently stage nothing and
+    made accept() delete every label with no staged replacement."""
+    src = _make_nested_source(tmp_path)
+    project = types.SimpleNamespace(project_dir=str(tmp_path), sources=[src])
+    req = EscalationRequest(
+        project=project, source_names=["nested"], variant="sam2.1-hiera-base_plus"
+    )
+
+    result = run_escalation(req, _FakeExec())
+
+    assert result.staged == ["nested"]
+    staged_label = (
+        Path(src.pending_escalation.staged_path) / "labels" / "train" / "a.txt"
+    )
+    assert staged_label.exists()
+    assert len(staged_label.read_text().splitlines()) == 1
+
+
+def test_accept_refuses_when_staged_labels_missing_files(tmp_path):
+    """If staging skipped a label (e.g. an unreadable image during escalation),
+    accept must refuse rather than deleting that image's original label with
+    nothing to replace it."""
+    src = _make_source(tmp_path)
+    # Add a second image/label pair.
+    cv2.imwrite(str(Path(src.path) / "images" / "b.jpg"), np.zeros((100, 100, 3), np.uint8))
+    (Path(src.path) / "labels" / "b.txt").write_text(
+        "0 0.2 0.2 0.5 0.2 0.5 0.5 0.2 0.5\n"
+    )
+    project = types.SimpleNamespace(project_dir=str(tmp_path), sources=[src])
+    req = EscalationRequest(
+        project=project, source_names=["orig"], variant="sam2.1-hiera-base_plus"
+    )
+    run_escalation(req, _FakeExec())
+
+    # Simulate an image that failed to stage (e.g. cv2.imread returned None
+    # during escalation): remove its staged label after the fact.
+    staged_b = Path(src.pending_escalation.staged_path) / "labels" / "b.txt"
+    staged_b.unlink()
+
+    original_a = (Path(src.path) / "labels" / "a.txt").read_text()
+    original_b = (Path(src.path) / "labels" / "b.txt").read_text()
+
+    with pytest.raises(RuntimeError):
+        accept_pending_escalation(src)
+
+    # Nothing was touched -- refusal happens before any deletion.
+    assert src.pending_escalation is not None
+    assert (Path(src.path) / "labels" / "a.txt").read_text() == original_a
+    assert (Path(src.path) / "labels" / "b.txt").read_text() == original_b
 
 
 def test_reject_pending_escalation_discards_staging_leaves_source_untouched(tmp_path):
@@ -1029,12 +1333,27 @@ def run_escalation(
         staged_root = ensure_bundle_subdirectory(
             project_root, f"artifacts/pending_escalations/{staged_dirname}"
         )
+
+        # A source with an existing pending escalation under a DIFFERENT
+        # staging path (e.g. this is a re-escalation with a different SAM2
+        # variant, which hashes to a different directory) must have its old
+        # staging dir cleaned up -- otherwise it's orphaned forever, since
+        # nothing else ever revisits a replaced pending_escalation.
+        old_pending = src.pending_escalation
+        if old_pending is not None and old_pending.staged_path != str(staged_root):
+            shutil.rmtree(Path(old_pending.staged_path), ignore_errors=True)
+
         shutil.rmtree(staged_root, ignore_errors=True)
         (staged_root / "labels").mkdir(parents=True, exist_ok=True)
 
+        # Recursive + path-mirroring: a source's images/labels can be nested
+        # (e.g. images/train/..., images/val/...) -- source_import.py's
+        # materializer can produce this layout. A flat top-level glob would
+        # silently stage ZERO labels for such a source, and accept() would
+        # then delete every real label with nothing to replace it.
         images = sorted(
             p
-            for p in images_dir.glob("*")
+            for p in images_dir.rglob("*")
             if p.suffix.lower() in (".jpg", ".jpeg", ".png")
         )
         for ii, img_path in enumerate(images):
@@ -1042,7 +1361,8 @@ def run_escalation(
             if img is None:
                 continue
             h, w = img.shape[:2]
-            label_path = labels_dir / f"{img_path.stem}.txt"
+            relative_label = img_path.relative_to(images_dir).with_suffix(".txt")
+            label_path = labels_dir / relative_label
             boxes = read_boxes_from_label(label_path, w, h)
             records: list[LabelRecord] = []
             if boxes:
@@ -1067,8 +1387,10 @@ def run_escalation(
                             level=GeometryLevel.POLYGON,
                         )
                     )
+            staged_label_path = staged_root / "labels" / relative_label
+            staged_label_path.parent.mkdir(parents=True, exist_ok=True)
             write_label_file(
-                staged_root / "labels" / f"{img_path.stem}.txt",
+                staged_label_path,
                 records,
                 frame_size=(h, w),
                 level=GeometryLevel.POLYGON,
@@ -1104,6 +1426,13 @@ def accept_pending_escalation(source: OBBSource) -> None:
     instead of a new sibling), removes the staging directory, and clears
     ``pending_escalation``.
 
+    Validates BEFORE deleting anything: refuses (raising ``RuntimeError``,
+    source left untouched) if the staging directory is missing on disk, or
+    if it is missing a label file for an image the source currently has a
+    label for (e.g. an image that failed to decode during escalation and was
+    silently skipped by ``run_escalation``) -- accepting such a staged result
+    would otherwise delete real labels with nothing staged to replace them.
+
     Raises ValueError if the source has no pending escalation.
     """
     pending = source.pending_escalation
@@ -1111,11 +1440,33 @@ def accept_pending_escalation(source: OBBSource) -> None:
         raise ValueError(f"Source '{source.name}' has no pending escalation.")
 
     staged_root = Path(pending.staged_path)
-    source_root = Path(source.path)
+    staged_labels = staged_root / "labels"
+    if not staged_labels.is_dir():
+        raise RuntimeError(
+            f"Staged escalation for '{source.name}' is missing on disk "
+            f"({staged_labels}); nothing was changed. Reject this escalation "
+            "and re-run it."
+        )
 
-    labels_dst = source_root / "labels"
-    shutil.rmtree(labels_dst, ignore_errors=True)
-    shutil.copytree(staged_root / "labels", labels_dst)
+    source_root = Path(source.path)
+    source_labels = source_root / "labels"
+    existing_rel = (
+        {p.relative_to(source_labels) for p in source_labels.rglob("*.txt")}
+        if source_labels.is_dir()
+        else set()
+    )
+    staged_rel = {p.relative_to(staged_labels) for p in staged_labels.rglob("*.txt")}
+    missing = sorted(str(p) for p in existing_rel - staged_rel)
+    if missing:
+        raise RuntimeError(
+            f"Staged escalation for '{source.name}' is missing "
+            f"{len(missing)} label file(s) that exist in the source (likely "
+            "an unreadable image during escalation) -- refusing to accept, "
+            f"as this would delete those labels: {missing[:5]}"
+        )
+
+    shutil.rmtree(source_labels, ignore_errors=True)
+    shutil.copytree(staged_labels, source_labels)
     classes_src = staged_root / "classes.txt"
     if classes_src.exists():
         shutil.copyfile(classes_src, source_root / "classes.txt")
@@ -1143,7 +1494,7 @@ def reject_pending_escalation(source: OBBSource) -> None:
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `conda activate hydra-mps && python -m pytest tests/test_sam2_escalation.py -v`
-Expected: all 8 tests PASS.
+Expected: all 10 tests PASS.
 
 - [ ] **Step 5: Run black/isort**
 
@@ -1281,9 +1632,20 @@ def test_review_escalations_dialog_reject_checked_discards_staging(qapp, tmp_pat
     assert not Path(staged_path).exists()
 
 
-def test_review_escalations_dialog_skips_unchecked_rows(qapp, tmp_path):
+def test_review_escalations_dialog_skips_unchecked_rows(qapp, tmp_path, monkeypatch):
     from hydra_suite.detectkit.gui.dialogs.review_escalations_dialog import (
         ReviewEscalationsDialog,
+    )
+
+    # With no rows checked, _apply_checked shows a blocking QMessageBox.information
+    # to tell the user nothing was selected -- under QT_QPA_PLATFORM=offscreen that
+    # still opens a real (invisible) event loop and hangs the test process waiting
+    # for a click that will never come, so it must be monkeypatched out here (this
+    # repo has hit exactly this class of hang before -- see CLAUDE.md's "main
+    # whole-suite blockers" note on modal-dialog hangs).
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.dialogs.review_escalations_dialog.QMessageBox.information",
+        lambda *args, **kwargs: None,
     )
 
     src = _make_pending_source(tmp_path)
@@ -1348,13 +1710,15 @@ class ReviewEscalationsDialog(BaseDialog):
 
         container = QWidget()
         layout = QVBoxLayout(container)
-        layout.addWidget(
-            QLabel(
-                "These sources have a staged SAM2 segmentation result awaiting "
-                "review. Accept to replace the source's labels with the staged "
-                "result; reject to discard it."
-            )
+        intro = QLabel(
+            "These sources have a staged SAM2 segmentation result awaiting "
+            "review. Accept to replace the source's labels with the staged "
+            "result; reject to discard it.\n\n"
+            "Accepted sources are marked unreviewed and are excluded from "
+            "training until you use \"Mark reviewed…\" for them."
         )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
 
         self._list = QListWidget()
         for src in pending_sources:
@@ -1428,40 +1792,151 @@ git commit -m "feat(detectkit): add ReviewEscalationsDialog for staged SAM2 acce
 
 ---
 
-## Task 7: Wire the review dialog into `main_window.py`
+## Task 7: Wire the review dialog into `main_window.py` (with a standalone entry point)
 
 **Files:**
+- Modify: `src/hydra_suite/detectkit/gui/panels/tools_panel.py`
 - Modify: `src/hydra_suite/detectkit/gui/main_window.py`
 - Test: `tests/test_detectkit_sam2_escalation_wiring.py`
 
 **Interfaces:**
-- Consumes: `EscalationResult.staged` (Task 5), `ReviewEscalationsDialog` (Task 6).
-- Produces: `_on_escalate_to_segment_sam2` opens `ReviewEscalationsDialog` for any newly staged
-  sources as soon as the escalation worker finishes, then saves + refreshes.
+- Consumes: `EscalationResult.staged`/`.skipped`/`.primed`/`.fell_back` (Task 5),
+  `ReviewEscalationsDialog` (Task 6).
+- Produces: `ToolsPanel.review_escalations_requested: Signal()` + `ToolsPanel._btn_review_escalations`
+  (new button, next to "Mark reviewed…"). `MainWindow._on_review_escalations()` — opens
+  `ReviewEscalationsDialog` for **every** source in the current project with
+  `pending_escalation is not None` (not just ones from the run that just finished), so a pending
+  escalation the user closed without acting on is always reachable again later, per the spec's
+  "survives project close/reopen ... so the user can come back to it." `_on_escalate_to_segment_sam2`
+  no longer opens any dialog from `_handle_result` (which can run on the worker thread, and would
+  otherwise stack a second modal dialog underneath the still-open application-modal progress
+  dialog) — it stashes the result and defers all UI (message boxes, `_on_review_escalations`) to
+  `_finish`, which runs after `progress.close()`.
 
-- [ ] **Step 1: Write the failing wiring test**
+- [ ] **Step 1: Write the failing tests**
 
 Add to `tests/test_detectkit_sam2_escalation_wiring.py`:
 
 ```python
-def test_main_window_imports_review_escalations_dialog():
-    """The escalation handler must reference ReviewEscalationsDialog, not the
-    old 'created a new sibling source' messaging."""
+def test_tools_panel_exposes_review_escalations_button(qapp):
+    from hydra_suite.detectkit.gui.panels.tools_panel import ToolsPanel
+
+    panel = ToolsPanel()
+    assert hasattr(panel, "_btn_review_escalations")
+    assert hasattr(panel, "review_escalations_requested")
+
+
+def test_main_window_has_review_escalations_handler():
+    from hydra_suite.detectkit.gui.main_window import MainWindow
+
+    assert callable(getattr(MainWindow, "_on_review_escalations", None))
+
+
+def test_main_window_escalation_finish_defers_dialog_past_progress_close():
+    """The review dialog (and any post-run message box) must NOT be opened
+    from _handle_result, which BaseWorker's result_ready signal can deliver
+    on the worker thread, and which fires while the application-modal
+    progress dialog is still open -- both would make the dialog undismissable
+    or crash Qt. It must be deferred to _finish, which runs after
+    progress.close()."""
     import inspect
 
     from hydra_suite.detectkit.gui.main_window import MainWindow
 
     source = inspect.getsource(MainWindow._on_escalate_to_segment_sam2)
-    assert "ReviewEscalationsDialog" in source
-    assert "result.staged" in source or "getattr(result, \"staged\"" in source
+    assert "_on_review_escalations" in source
+    assert "getattr(result, \"staged\"" in source
+
+    handle_result_start = source.index("def _handle_result")
+    finish_start = source.index("def _finish")
+    handle_result_body = source[handle_result_start:finish_start]
+    finish_body = source[finish_start:]
+
+    assert "ReviewEscalationsDialog" not in handle_result_body
+    assert "QMessageBox" not in handle_result_body
+    assert "ReviewEscalationsDialog" in finish_body or "_on_review_escalations" in finish_body
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run tests to verify they fail**
 
-Run: `conda activate hydra-mps && python -m pytest tests/test_detectkit_sam2_escalation_wiring.py::test_main_window_imports_review_escalations_dialog -v`
-Expected: FAIL — `ReviewEscalationsDialog` not yet referenced in `_on_escalate_to_segment_sam2`.
+Run: `conda activate hydra-mps && python -m pytest tests/test_detectkit_sam2_escalation_wiring.py -k "review_escalations or finish_defers" -v`
+Expected: FAIL — `_btn_review_escalations`/`review_escalations_requested` don't exist yet,
+`_on_review_escalations` doesn't exist yet, and `_handle_result` still builds `QMessageBox`/dialog
+content directly.
 
-- [ ] **Step 3: Update `_on_escalate_to_segment_sam2` in `main_window.py`**
+- [ ] **Step 3: Add the "Review escalations…" button to `ToolsPanel`**
+
+In `src/hydra_suite/detectkit/gui/panels/tools_panel.py`, add a new signal next to
+`mark_reviewed_requested`:
+
+```python
+    escalate_sam2_requested = Signal()
+    mark_reviewed_requested = Signal()
+    review_escalations_requested = Signal()
+```
+
+Then add the button in `_build_escalation_group`, right after the existing
+`self._btn_mark_reviewed` block:
+
+```python
+        self._btn_mark_reviewed = QPushButton("Mark reviewed…")
+        self._btn_mark_reviewed.clicked.connect(self.mark_reviewed_requested)
+        v.addWidget(self._btn_mark_reviewed)
+
+        self._btn_review_escalations = QPushButton("Review escalations…")
+        self._btn_review_escalations.clicked.connect(self.review_escalations_requested)
+        v.addWidget(self._btn_review_escalations)
+```
+
+- [ ] **Step 4: Wire the button and add `_on_review_escalations` in `main_window.py`**
+
+Add the connection next to the existing `mark_reviewed_requested` connection (currently
+`self._tools_panel.mark_reviewed_requested.connect(self._on_mark_reviewed)`):
+
+```python
+        self._tools_panel.mark_reviewed_requested.connect(self._on_mark_reviewed)
+        self._tools_panel.review_escalations_requested.connect(
+            self._on_review_escalations
+        )
+```
+
+Add `self._last_escalation_result: object | None = None` next to the existing
+`self._escalation_worker = None` / `self._escalation_progress_dialog = None` initialization (used by
+Step 5's `_finish` below to carry the result across the thread/modal boundary).
+
+Add a new method near `_on_mark_reviewed`:
+
+```python
+    def _on_review_escalations(self) -> None:
+        """Open the review dialog for every source with a pending escalation,
+        regardless of when it was staged. Reachable independent of an
+        escalation run having just finished, so closing the dialog without
+        acting never strands a pending escalation."""
+        if self._project is None:
+            QMessageBox.information(self, "Review Escalations", "Open a project first.")
+            return
+
+        pending_sources = [
+            s for s in self._project.sources if s.pending_escalation is not None
+        ]
+        if not pending_sources:
+            QMessageBox.information(
+                self,
+                "Review Escalations",
+                "There are no pending escalations to review.",
+            )
+            return
+
+        from .dialogs.review_escalations_dialog import ReviewEscalationsDialog
+
+        review_dlg = ReviewEscalationsDialog(pending_sources, parent=self)
+        review_dlg.exec()
+        self._save_current_project()
+        self._dataset_panel.refresh_sources(self._project)
+        self._tools_panel.refresh_overview()
+```
+
+- [ ] **Step 5: Update `_on_escalate_to_segment_sam2`: conflict check, and defer all UI to `_finish`**
 
 Replace the `would_overwrite` block (currently the section starting `existing_names = {s.name for s
 in self._project.sources}` through `overwrite = True` before `request = EscalationRequest(...)`)
@@ -1502,29 +1977,35 @@ Then replace the `_handle_result` function body (currently from `derived = list(
 
 ```python
         def _handle_result(result: object) -> None:
+            # The worker set pending_escalation on existing sources on a
+            # background thread; persist + refresh immediately. Everything
+            # UI-facing (message boxes, the review dialog) is deferred to
+            # _finish -- result_ready can be delivered on the worker thread,
+            # and the application-modal progress dialog is still open here.
+            self._save_current_project()
+            self._dataset_panel.refresh_sources(self._project)
+            self._tools_panel.refresh_overview()
+            self._last_escalation_result = result
+```
+
+And replace the existing `_finish` function body (currently just `progress.close()` +
+`self._escalation_worker = None` + `self._escalation_progress_dialog = None`) with:
+
+```python
+        def _finish() -> None:
+            progress.close()
+            self._escalation_worker = None
+            self._escalation_progress_dialog = None
+
+            result = self._last_escalation_result
+            self._last_escalation_result = None
+            if result is None:
+                return
+
             staged = list(getattr(result, "staged", []) or [])
             primed = int(getattr(result, "primed", 0))
             fell_back = int(getattr(result, "fell_back", 0))
             skipped = list(getattr(result, "skipped", []) or [])
-            # The worker set pending_escalation on existing sources; persist + refresh.
-            self._save_current_project()
-            self._dataset_panel.refresh_sources(self._project)
-            self._tools_panel.refresh_overview()
-
-            if staged:
-                pending_sources = [
-                    s
-                    for s in self._project.sources
-                    if s.name in staged and s.pending_escalation is not None
-                ]
-                from .dialogs.review_escalations_dialog import ReviewEscalationsDialog
-
-                review_dlg = ReviewEscalationsDialog(pending_sources, parent=self)
-                review_dlg.exec()
-                self._save_current_project()
-                self._dataset_panel.refresh_sources(self._project)
-                self._tools_panel.refresh_overview()
-
             skipped_note = (
                 (
                     "\n\nSkipped (already has a pending escalation, not "
@@ -1534,16 +2015,19 @@ Then replace the `_handle_result` function body (currently from `derived = list(
                 if skipped
                 else ""
             )
+
             if staged:
-                if skipped:
-                    QMessageBox.information(
-                        self,
-                        "Escalate to segment (SAM2)",
-                        (
-                            f"{primed} instance(s) primed, {fell_back} fell back "
-                            f"to the original box.{skipped_note}"
-                        ),
-                    )
+                QMessageBox.information(
+                    self,
+                    "Escalate to segment (SAM2)",
+                    (
+                        f"Staged {len(staged)} source(s) for review: "
+                        f"{', '.join(staged)}.\n\n"
+                        f"{primed} instance(s) primed, {fell_back} fell back "
+                        f"to the original box.{skipped_note}"
+                    ),
+                )
+                self._on_review_escalations()
             else:
                 QMessageBox.information(
                     self,
@@ -1552,38 +2036,57 @@ Then replace the `_handle_result` function body (currently from `derived = list(
                 )
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [ ] **Step 6: Run tests to verify they pass**
 
 Run: `conda activate hydra-mps && python -m pytest tests/test_detectkit_sam2_escalation_wiring.py -v`
-Expected: all PASS (the new test plus the 3 pre-existing ones).
+Expected: all PASS (the 3 new tests plus the 3 pre-existing ones).
 
-- [ ] **Step 5: Run black/isort**
+- [ ] **Step 7: Run black/isort**
 
-Run: `conda activate hydra-mps && black src/hydra_suite/detectkit/gui/main_window.py tests/test_detectkit_sam2_escalation_wiring.py && isort src/hydra_suite/detectkit/gui/main_window.py tests/test_detectkit_sam2_escalation_wiring.py`
+Run: `conda activate hydra-mps && black src/hydra_suite/detectkit/gui/panels/tools_panel.py src/hydra_suite/detectkit/gui/main_window.py tests/test_detectkit_sam2_escalation_wiring.py && isort src/hydra_suite/detectkit/gui/panels/tools_panel.py src/hydra_suite/detectkit/gui/main_window.py tests/test_detectkit_sam2_escalation_wiring.py`
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add src/hydra_suite/detectkit/gui/main_window.py tests/test_detectkit_sam2_escalation_wiring.py
-git commit -m "feat(detectkit): open ReviewEscalationsDialog after staged SAM2 escalation"
+git add src/hydra_suite/detectkit/gui/panels/tools_panel.py src/hydra_suite/detectkit/gui/main_window.py tests/test_detectkit_sam2_escalation_wiring.py
+git commit -m "feat(detectkit): add standalone Review Escalations entry point, defer dialog past progress close"
 ```
 
 ---
 
-## Task 8: Full DetectKit test sweep + lint
+## Task 8: Stale docs, full DetectKit test sweep + lint
 
-**Files:** none new — this is a verification-only task across everything Tasks 1–7 touched, plus a
-check that nothing else in the codebase still references the removed multi-root functions.
+**Files:**
+- Modify: `docs/developer-guide/runtime-integration.md` (its "SAM2 Escalation" section documents the
+  removed `<name>_seg`-sibling behavior in detail and must be corrected)
+- Verification-only otherwise, across everything Tasks 1–7 touched, plus a check that nothing else
+  in the codebase still references the removed multi-root functions.
 
 - [ ] **Step 1: Confirm no remaining references to removed symbols**
 
-Run: `grep -rn "inspect_al_round\|materialize_al_round\|ALRoundRoot\|MaterializedALRoundRoot" src/ tests/ docs/superpowers/plans docs/superpowers/specs`
+Run: `grep -rln "inspect_al_round\|materialize_al_round\|ALRoundRoot\|MaterializedALRoundRoot" src/ tests/`
 
-Expected: no matches in `src/` or `tests/` (only historical mentions inside the design spec's
-"Relationship to prior work" section are acceptable, since that section documents what was reverted
-— leave the spec file untouched).
+Expected: no output (empty). (Scope this grep to `src/` and `tests/` only — the design spec's
+"Relationship to prior work" section legitimately mentions these names to document what was
+reverted, and this plan file itself names them throughout; neither should be grepped here.)
 
-- [ ] **Step 2: Run the full DetectKit test slice**
+- [ ] **Step 2: Update the stale SAM2 escalation docs**
+
+`docs/developer-guide/runtime-integration.md`'s "SAM2 Escalation" section currently documents the
+removed behavior verbatim (*"Results are written to a new derived source named `<source>_seg`...
+the original source's images/labels are never touched... Re-running escalation over a source whose
+`<name>_seg` already exists is guarded..."*). Rewrite that section to describe the staged
+accept/reject flow instead: `run_escalation` writes to a per-source staging directory under
+`artifacts/pending_escalations/` and sets `OBBSource.pending_escalation`, without touching the
+source's canonical labels or registering a new source; a re-run over a source with an existing
+pending escalation is skipped by default (`overwrite=True` replaces it); `accept_pending_escalation`
+promotes the staged result into the source's canonical `labels/`/`classes.txt` in place (setting
+`level`, `sam2_variant`, resetting `reviewed=False`), `reject_pending_escalation` discards it; both
+are driven from the "Review escalations…" button (`ToolsPanel.review_escalations_requested` →
+`MainWindow._on_review_escalations`), which lists every source with a pending escalation project-wide,
+not just ones from the run that just finished.
+
+- [ ] **Step 3: Run the full DetectKit test slice**
 
 Run:
 ```bash
@@ -1591,18 +2094,19 @@ conda activate hydra-mps
 python -m pytest tests/test_detectkit_source_import.py tests/test_detectkit_source_manager_dialog.py \
   tests/test_detectkit_al_worker.py tests/test_sam2_escalation.py \
   tests/test_detectkit_review_escalations_dialog.py tests/test_detectkit_sam2_escalation_wiring.py \
-  tests/test_obbsource_reviewed.py tests/test_training_gating_reviewed.py \
-  tests/test_escalate_sam2_dialog.py -v
+  tests/test_detectkit_tools_panel.py tests/test_obbsource_reviewed.py \
+  tests/test_training_gating_reviewed.py tests/test_escalate_sam2_dialog.py -v
 ```
 Expected: all PASS.
 
-- [ ] **Step 3: Run `make format-check` and `make lint`**
+- [ ] **Step 4: Run `make format-check`, `make lint`, and `make docs-check`**
 
-Run: `conda activate hydra-mps && make format-check && make lint`
+Run: `conda activate hydra-mps && make format-check && make lint && make docs-check`
 Expected: no formatting diffs, no new lint findings introduced by this plan's files (pre-existing
-findings elsewhere in the repo are out of scope).
+findings elsewhere in the repo are out of scope), and `make docs-check` passes against the updated
+`runtime-integration.md`.
 
-- [ ] **Step 4: Manual smoke test (GUI)**
+- [ ] **Step 5: Manual smoke test (GUI)**
 
 Per CLAUDE.md: for GUI changes, start the app and exercise the golden path before calling this done.
 
@@ -1614,19 +2118,25 @@ detectkit
 In the running app: open (or create) a DetectKit project, use Manage Sources → Add Source on a
 folder containing an AL-round `manifest.json` (or generate one via an AL round if a model is
 available), and confirm exactly one source appears, named after the round folder. Then, if a SAM2
-checkpoint is available, escalate that source and confirm the Review Escalations dialog appears
-with Accept/Reject options, and that accepting swaps the source's level to `polygon` in place
-(still one entry in the source list, not two).
+checkpoint is available, escalate that source and confirm: the escalation finishes, a summary
+message box appears, and the Review Escalations dialog opens automatically with Accept/Reject
+options. Reject it, then click the new "Review escalations…" button in the Tools panel and confirm
+it reports no pending escalations (proving reject actually cleared the field). Escalate again and
+this time Accept — confirm the source's level swaps to `polygon` in place (still one entry in the
+source list, not two) and that it now shows as unreviewed. Finally, close the project and reopen it
+without touching escalation, escalate a different source, close the Review Escalations dialog
+without acting on it, and confirm the "Review escalations…" button still finds and reopens it for
+that source (proving a pending escalation survives being left unattended, not just a fresh run).
 
 If no SAM2 checkpoint is available in this environment, skip the escalation half of the smoke test
 and say so explicitly rather than claiming it was verified.
 
-- [ ] **Step 5: Commit (only if Steps 1-4 required any fixes)**
+- [ ] **Step 6: Commit (only if Steps 1-5 required any fixes)**
 
 If any fixes were needed:
 ```bash
 git add -A
-git commit -m "fix(detectkit): address lint/test findings from source-unification sweep"
+git commit -m "fix(detectkit): address lint/test/docs findings from source-unification sweep"
 ```
 
 If no fixes were needed, skip this step — there is nothing to commit.

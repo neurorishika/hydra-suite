@@ -182,11 +182,14 @@ already a multi-select flow).
   recorded on the source. Staging folder is removed; `pending_escalation` is cleared.
 - **Reject:** staging folder is deleted; `pending_escalation` is cleared; source is untouched.
 - A pending escalation that's never reviewed survives project close/reopen (it's on disk under
-  `artifacts/` and referenced from the saved project file), so the user can come back to it.
+  `artifacts/` and referenced from the saved project file), so the user can come back to it — the
+  review dialog must be reachable via a standalone entry point (not only right after an escalation
+  run finishes), so a pending escalation the user closed without acting on is never stranded.
 
-`reviewed`'s lifecycle (what sets it back to `True`) is **unchanged by this spec** — there is
-no existing "mark as reviewed" action in the codebase today, and adding one is out of scope
-here.
+`reviewed`'s lifecycle (what sets it back to `True`) is **unchanged by this spec** — a "Mark
+reviewed…" action already exists (`MainWindow._on_mark_reviewed`, wired from
+`ToolsPanel.mark_reviewed_requested`) and continues to be the only way to set `reviewed` back to
+`True`; this spec doesn't touch it or add a second one.
 
 ## Relationship to prior work (this session)
 
