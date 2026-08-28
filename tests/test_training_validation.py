@@ -212,6 +212,62 @@ def test_validate_ultralytics_dataset_detect_flags_invalid_detect_lines(
     assert any(issue.code == "invalid_detect_format" for issue in report.issues)
 
 
+def test_validate_ultralytics_dataset_allows_negative_tiles(tmp_path: Path) -> None:
+    validation, _contracts, inspector = _load_validation_modules()
+    items = {}
+    for split, name, label_text in (
+        ("train", "object", "0 0.5 0.5 0.3 0.2"),
+        ("train", "negative", ""),
+        ("val", "object", "0 0.5 0.5 0.3 0.2"),
+    ):
+        image = tmp_path / "images" / split / f"{name}.jpg"
+        label = tmp_path / "labels" / split / f"{name}.txt"
+        image.parent.mkdir(parents=True, exist_ok=True)
+        label.parent.mkdir(parents=True, exist_ok=True)
+        image.write_bytes(name.encode())
+        _write_label(label, label_text)
+        items.setdefault(split, []).append(
+            inspector.DatasetItem(
+                image_path=str(image), label_path=str(label), split=split
+            )
+        )
+
+    report = validation.validate_ultralytics_dataset(
+        inspector.DatasetInspection(root_dir=str(tmp_path), splits=items),
+        label_mode="detect",
+    )
+
+    assert report.valid is True
+    assert report.stats["empty_labels"] == 1
+
+
+def test_validate_ultralytics_dataset_rejects_all_negative_tiles(
+    tmp_path: Path,
+) -> None:
+    validation, _contracts, inspector = _load_validation_modules()
+    items = {}
+    for split, name in (("train", "background"), ("val", "background")):
+        image = tmp_path / "images" / split / f"{name}.jpg"
+        label = tmp_path / "labels" / split / f"{name}.txt"
+        image.parent.mkdir(parents=True, exist_ok=True)
+        label.parent.mkdir(parents=True, exist_ok=True)
+        image.write_bytes(name.encode())
+        _write_label(label, "")
+        items[split] = [
+            inspector.DatasetItem(
+                image_path=str(image), label_path=str(label), split=split
+            )
+        ]
+
+    report = validation.validate_ultralytics_dataset(
+        inspector.DatasetInspection(root_dir=str(tmp_path), splits=items),
+        label_mode="detect",
+    )
+
+    assert report.valid is False
+    assert any(issue.code == "no_labeled_objects" for issue in report.issues)
+
+
 def test_validate_role_dataset_detect_accepts_expected_ultralytics_layout(
     tmp_path: Path,
 ) -> None:
