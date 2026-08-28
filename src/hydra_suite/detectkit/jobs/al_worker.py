@@ -30,7 +30,10 @@ from hydra_suite.data.al.frame_source import (
     ImageFolderFrameSource,
     VideoFrameSource,
 )
-from hydra_suite.data.al.inference_adapter import build_obb_config_for_al
+from hydra_suite.data.al.inference_adapter import (
+    AL_DEFAULT_MAX_TARGETS,
+    build_obb_config_for_al,
+)
 from hydra_suite.data.al.signals import (
     ALSignals,
     detections_from_obb_result,
@@ -145,9 +148,54 @@ class _LazyALImages(Mapping):
         return len(self._frame_ids)
 
 
+def _candidate_stride(total_frames: int, max_candidates: int | None) -> int:
+    """Stride that spreads a capped candidate scan across the WHOLE source.
+
+    `build_candidate_pool` stops the scan the moment it has kept
+    ``max_candidates`` frames, and it reads the source in order -- so at
+    stride 1 a long video is only ever scored over its opening. Sampling every
+    ``total_frames // max_candidates``-th frame instead makes the scan's last
+    visited frame land near the END of the video, so the same bounded pool
+    covers the whole file.
+
+    The stride is deliberately NOT over-sampled (no "visit k x cap frames so
+    dedup has slack"): any such multiplier reconstructs the original bug in
+    milder form, since the cap would then fill 1/k of the way through the
+    video. Coverage is what the cap threatens; the cap is a memory ceiling, not
+    a quota to be met. In practice a large stride puts consecutive samples
+    seconds apart, where perceptual dedup almost never fires, so the pool
+    typically still fills anyway.
+
+    Returns 1 (unchanged, scan-everything behavior) for an uncapped pool, an
+    unknown length, or a source no longer than the cap.
+    """
+    if not max_candidates or max_candidates <= 0 or total_frames <= 0:
+        return 1
+    if total_frames <= max_candidates:
+        return 1
+    return max(1, total_frames // max_candidates)
+
+
 def _build_frame_source(req: ALRequest) -> FrameSource:
     if req.input_kind == "video":
-        return VideoFrameSource(req.input_path)
+        # A capped candidate pool truncates from the start of the source, so a
+        # stride-1 scan of a long video would only ever score its opening
+        # minutes. Compute a stride from the video's own length so the same
+        # bounded pool spans the whole file. Frame-count probing is cheap
+        # (VideoFrameSource reads CAP_PROP_FRAME_COUNT at construction).
+        probe = VideoFrameSource(req.input_path)
+        stride = _candidate_stride(probe.length(), req.candidate_pool.max_candidates)
+        if stride == 1:
+            return probe
+        probe.close()
+        logger.info(
+            "Candidate scan striding %d over %d video frames so the "
+            "%s-candidate pool spans the whole source rather than its opening.",
+            stride,
+            probe.length(),
+            req.candidate_pool.max_candidates,
+        )
+        return VideoFrameSource(req.input_path, stride=stride)
     if req.input_kind == "folder":
         return ImageFolderFrameSource(req.input_path)
     if req.input_kind == "project":
@@ -185,6 +233,14 @@ def _build_detection_context(req: ALRequest) -> tuple[object, OBBConfig]:
         # kind == "obb_direct" (single stage, no separate detect gate). See
         # inference_adapter.py's "Stage-1 confidence note".
         detect_confidence_threshold=req.base_conf,
+        # AL scoring must see everything the model proposes: a truncated
+        # detection set corrupts every signal AND (via Task 9's export) the
+        # labels written for crowded frames. The adapter's 300 default
+        # (= ultralytics' own max_det, what the retired per-frame closure ran
+        # under) covers essentially every real colony; a project that declares
+        # more expected animals than that gets headroom above its own count so
+        # the ceiling can never bite before `count_deviation` can measure it.
+        max_targets=max(AL_DEFAULT_MAX_TARGETS, 2 * int(req.expected_count or 0)),
     )
 
     from hydra_suite.core.inference.runner import InferenceRunner
@@ -323,7 +379,8 @@ def run_active_learning(
        call (`build_candidate_pool`).
     2. Detection -- the whole candidate list goes through ONE batched,
        cached pass (`get_or_compute_raw`), so the GPU sees many frames per
-       call and a detection cache shared with tracking is read/written.
+       call, reading/writing AL's OWN dedicated detection cache (see
+       `_al_detection_cache_dir` -- never tracking's).
     3. Scoring -- every signal, including NMS instability, is derived from
        each frame's cached raw `OBBResult` by re-running the cheap NumPy
        filtering gate; no further model calls happen.
@@ -371,15 +428,16 @@ def _run_active_learning_with_source(
         )
     cap = req.candidate_pool.max_candidates
     if cap is not None and len(candidates) >= cap:
-        # The cap truncates from the start of the source, so say so rather
-        # than silently scoring only the opening of a long video.
+        # The cap truncates the scan wherever it fills up, so say so. For video
+        # inputs `_build_frame_source` already strides the scan across the
+        # whole file, so this is a resolution limit, not a coverage one; for
+        # folder/project inputs (no stride) it does still mean the first N.
         logger.info(
-            "Candidate pool hit its %d-frame cap; only the first %d distinct "
-            "frames of the source are scored this round. Raise "
-            "CandidatePoolConfig.max_candidates (watch memory) or read the "
-            "source with a stride to spread coverage.",
+            "Candidate pool hit its %d-frame cap; %d distinct frames are "
+            "scored this round. Raise CandidatePoolConfig.max_candidates "
+            "(watch memory) to sample the source more densely.",
             cap,
-            cap,
+            len(candidates),
         )
 
     # --- Phase 2: one batched, cached detection pass over all candidates ----

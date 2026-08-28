@@ -103,7 +103,10 @@ def build_candidate_pool(
     spread a capped pool across a long video, give the source a stride
     (`VideoFrameSource(path, stride=n)`) rather than raising the cap -- the cap
     exists to bound the caller's memory and model-batch size (see
-    `CandidatePoolConfig.max_candidates`).
+    `CandidatePoolConfig.max_candidates`). DetectKit's AL round does exactly
+    that: `al_worker._build_frame_source` derives a stride from the video's
+    length so its capped pool spans the whole file
+    (`al_worker._candidate_stride`).
     """
     fk = FilterKitCore()
     kept: list[FrameRef] = []

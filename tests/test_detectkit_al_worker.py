@@ -674,3 +674,111 @@ def test_build_detection_context_threads_base_conf_as_sequential_stage1_override
     assert captured["kind"] == "sequential"
     assert captured["confidence_threshold"] == 0.05
     assert captured["detect_confidence_threshold"] == 0.05
+
+
+def test_build_detection_context_threads_a_generous_max_targets(tmp_path, monkeypatch):
+    """Fix 2: the production callsite must lift the tracking-oriented
+    `max_targets=8` default, and must scale it above a project's own declared
+    animal count so the ceiling can never bite before `count_deviation` can
+    measure an overcount."""
+    from hydra_suite.data.al.inference_adapter import AL_DEFAULT_MAX_TARGETS
+    from hydra_suite.detectkit.jobs import al_worker as al_worker_mod
+    from hydra_suite.detectkit.jobs.al_worker import ALRequest
+
+    captured: dict = {}
+
+    def _fake_build_obb_config_for_al(kind, primary, secondary, **kwargs):
+        from hydra_suite.core.inference.config import InferenceConfig
+
+        captured.update(kwargs)
+        return InferenceConfig(
+            obb=OBBConfig(
+                mode="direct",
+                direct=OBBDirectConfig(model_path=primary),
+                confidence_threshold=kwargs["confidence_threshold"],
+                iou_threshold=kwargs["iou_threshold"],
+            )
+        )
+
+    class _FakeInferenceRunner:
+        def __init__(self, config, video_path=None):
+            self.config = config
+
+    monkeypatch.setattr(
+        al_worker_mod, "build_obb_config_for_al", _fake_build_obb_config_for_al
+    )
+    monkeypatch.setattr(
+        "hydra_suite.core.inference.runner.InferenceRunner", _FakeInferenceRunner
+    )
+
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+
+    def _req(expected_count):
+        return ALRequest(
+            input_kind="video",
+            input_path="unused.mp4",
+            project=DetectKitProject(project_dir=project_dir, sources=[]),
+            budget=1,
+            expected_count=expected_count,
+            detector=_SPEC,
+        )
+
+    al_worker_mod._build_detection_context(_req(20))
+    assert captured["max_targets"] == AL_DEFAULT_MAX_TARGETS
+
+    al_worker_mod._build_detection_context(_req(500))
+    assert captured["max_targets"] == 1000
+
+
+def test_candidate_stride_spreads_a_capped_scan_over_a_long_source():
+    """Fix 4 (unit): the stride must be 1 for short sources and >1 for sources
+    long enough that a stride-1 capped scan would only see their beginning."""
+    from hydra_suite.detectkit.jobs.al_worker import _candidate_stride
+
+    assert _candidate_stride(100, None) == 1  # uncapped pool: never stride
+    assert _candidate_stride(100, 128) == 1  # shorter than the cap
+    assert _candidate_stride(128, 128) == 1  # exactly the cap
+    assert _candidate_stride(0, 128) == 1  # unknown length: no guessing
+    assert _candidate_stride(12800, 128) == 100  # 100x the cap => stride 100
+
+
+def test_capped_candidate_pool_spans_the_whole_video_not_just_its_start(
+    tmp_path, monkeypatch
+):
+    """Fix 4: `max_candidates` is a memory guard, and `build_candidate_pool`
+    stops as soon as it fills -- so on a long video a stride-1 scan would score
+    only the opening frames. `_build_frame_source` must stride the scan so a
+    still-capped pool covers the entire source."""
+    from hydra_suite.data.al.candidate_pool import CandidatePoolConfig
+    from hydra_suite.detectkit.jobs.al_worker import ALRequest, run_active_learning
+
+    cap = 8
+    n_frames = 400
+    video_path = _write_video(tmp_path / "long.mp4", n=n_frames)
+
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+
+    runner = _patch_detection(monkeypatch, lambda pos, idx: [(10, 10, 8, 4, 0.0, 0.9)])
+    run_active_learning(
+        ALRequest(
+            input_kind="video",
+            input_path=str(video_path),
+            project=DetectKitProject(project_dir=project_dir, sources=[]),
+            budget=2,
+            preset="balanced",
+            expected_count=1,
+            detector=_SPEC,
+            diversity_window=0,
+            probabilistic=False,
+            candidate_pool=CandidatePoolConfig(max_candidates=cap),
+        )
+    )
+
+    assert len(runner.calls) == 1
+    scanned = runner.calls[0]
+    # Still bounded by the memory cap...
+    assert len(scanned) <= cap
+    # ...but reaching well past the first `cap` frames of the video.
+    assert max(scanned) > n_frames // 2
