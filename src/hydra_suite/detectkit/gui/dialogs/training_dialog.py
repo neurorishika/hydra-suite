@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QDoubleSpinBox,
     QFileDialog,
-    QFormLayout,
     QFrame,
     QGridLayout,
     QGroupBox,
@@ -33,7 +32,6 @@ from PySide6.QtWidgets import (
 )
 
 from hydra_suite.training.contracts import TrainingRole
-from hydra_suite.training.dataset_builders import blocked_roles_for_level
 from hydra_suite.training.geometry_levels import GeometryLevel
 from hydra_suite.widgets.dialogs import BaseDialog
 from hydra_suite.widgets.workers import BaseWorker
@@ -54,29 +52,31 @@ def merged_level_and_blocker(sources):
     return GeometryLevel.from_str(getattr(blocker, "level", "obb")), blocker
 
 
-_RECIPE_ROLE_MAP: dict[str, tuple[bool, bool, bool]] = {
-    "direct_obb": (True, False, False),
-    "sequential": (False, True, True),
-    "all_stages": (True, True, True),
+_SELECTION_ROLE_MAP: dict[tuple[str, str], tuple[str, ...]] = {
+    ("direct", "obb"): ("obb_direct",),
+    ("direct", "detect"): ("detect_direct",),
+    ("direct", "segment"): ("segment_direct",),
+    ("sequential", "obb"): ("seq_detect", "seq_crop_obb"),
+    ("sequential", "detect"): ("seq_detect",),
+    ("sequential", "segment"): ("seq_detect", "seq_crop_segment"),
 }
 
-_RECIPE_DESCRIPTIONS: dict[str, str] = {
-    "direct_obb": (
-        "Train one full-image OBB model. Use this when objects are large enough "
-        "to stay readable after the direct-image resize."
-    ),
-    "sequential": (
-        "Train the two-stage sequence pipeline only. This is the better default "
-        "for very small objects where direct OBB would shrink them too far."
-    ),
-    "all_stages": (
-        "Train direct OBB and the full sequential pipeline together so you can "
-        "compare them and keep both checkpoints available."
-    ),
-    "custom": (
-        "Manual role selection is enabled. Use this only when the preset recipes "
-        "do not match the training stages you want."
-    ),
+_SELECTION_DESCRIPTIONS: dict[tuple[str, str], str] = {
+    ("direct", "obb"): "Train one full-image oriented bounding-box model.",
+    ("direct", "detect"): "Train one full-image axis-aligned detector.",
+    ("direct", "segment"): "Train one full-image instance-segmentation model.",
+    (
+        "sequential",
+        "obb",
+    ): "Train a full-image detector followed by a crop-focused OBB model.",
+    (
+        "sequential",
+        "detect",
+    ): "Train the first-stage full-image detector for a sequential pipeline.",
+    (
+        "sequential",
+        "segment",
+    ): "Train a full-image detector followed by a crop-focused segmentation model.",
 }
 
 
@@ -207,6 +207,7 @@ class TrainingDialog(BaseDialog):
 
     def _build_content(self) -> None:
         self._apply_training_dialog_styles()
+        self._build_role_state()
 
         container = QWidget()
         layout = QVBoxLayout(container)
@@ -320,7 +321,7 @@ QTabBar::tab:selected {
         layout.addWidget(title)
 
         body = QLabel(
-            "Pick a training recipe, verify the plan, then run with a live view"
+            "Choose a training style and model target, verify the plan, then run with a live view"
             " of progress and outputs. Advanced settings stay available without"
             " crowding the first screen."
         )
@@ -330,7 +331,7 @@ QTabBar::tab:selected {
 
         chip_row = QHBoxLayout()
         chip_row.setSpacing(8)
-        chip_row.addWidget(self._build_workflow_chip("1. Pick recipe"))
+        chip_row.addWidget(self._build_workflow_chip("1. Choose plan"))
         chip_row.addWidget(self._build_workflow_chip("2. Train and review"))
         chip_row.addStretch(1)
         layout.addLayout(chip_row)
@@ -343,27 +344,21 @@ QTabBar::tab:selected {
 
     def _build_overview_tab(self) -> QWidget:
         page = QWidget()
-        layout = QVBoxLayout(page)
+        layout = QGridLayout(page)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
 
-        top_row = QHBoxLayout()
-        top_row.setSpacing(12)
-        left_column = QVBoxLayout()
-        left_column.setSpacing(12)
-        left_column.addWidget(self._build_recipe_group())
-        left_column.addWidget(self._build_roles_group())
-        top_row.addLayout(left_column, 2)
-
-        right_column = QVBoxLayout()
-        right_column.setSpacing(12)
-        right_column.addWidget(self._build_summary_card())
-        right_column.addWidget(self._build_dataset_fit_card())
-        top_row.addLayout(right_column, 1)
-        layout.addLayout(top_row)
-
-        layout.addWidget(self._build_source_preview_group())
-        layout.addStretch(1)
+        selection = self._build_training_selection_group()
+        selection.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum
+        )
+        layout.addWidget(selection, 0, 0)
+        layout.addWidget(self._build_summary_card(), 0, 1)
+        layout.addWidget(self._build_dataset_fit_card(), 1, 0, 1, 2)
+        layout.addWidget(self._build_source_preview_group(), 2, 0, 1, 2)
+        layout.setColumnStretch(0, 3)
+        layout.setColumnStretch(1, 2)
+        layout.setRowStretch(2, 1)
         return self._wrap_scroll_page(page)
 
     def _build_training_tab(self) -> QWidget:
@@ -377,8 +372,14 @@ QTabBar::tab:selected {
 
         lower_row = QHBoxLayout()
         lower_row.setSpacing(12)
-        lower_row.addWidget(self._build_base_models_group(), 1)
-        lower_row.addWidget(self._build_augmentation_group(), 1)
+        base_models = self._build_base_models_group()
+        augmentation = self._build_augmentation_group()
+        for group in (base_models, augmentation):
+            group.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum
+            )
+        lower_row.addWidget(base_models, 1, Qt.AlignmentFlag.AlignTop)
+        lower_row.addWidget(augmentation, 1, Qt.AlignmentFlag.AlignTop)
         layout.addLayout(lower_row)
 
         layout.addWidget(self._build_slice_group())
@@ -440,7 +441,7 @@ QTabBar::tab:selected {
 
         self.dataset_fit_view = QTextEdit()
         self.dataset_fit_view.setReadOnly(True)
-        self.dataset_fit_view.setMinimumHeight(220)
+        self.dataset_fit_view.setMinimumHeight(180)
         self.dataset_fit_view.setPlaceholderText(
             "Dataset fit guidance will appear here."
         )
@@ -483,28 +484,39 @@ QTabBar::tab:selected {
         layout.addWidget(self.source_preview_scroll)
         return self.source_preview_group
 
-    def _build_recipe_group(self) -> QGroupBox:
-        gb = QGroupBox("Training Recipe")
-        layout = QVBoxLayout(gb)
-        layout.setSpacing(10)
+    def _build_training_selection_group(self) -> QGroupBox:
+        gb = QGroupBox("Training Selection")
+        layout = QGridLayout(gb)
+        layout.setContentsMargins(16, 18, 16, 14)
+        layout.setHorizontalSpacing(10)
+        layout.setVerticalSpacing(8)
 
-        layout.addWidget(
-            self._build_section_note(
-                "Start with a recipe instead of individual stages. You can override the stage selection only when needed."
-            )
+        note = self._build_section_note(
+            "Choose one style and one target. Train another model in a separate run."
         )
+        layout.addWidget(note, 0, 0, 1, 4)
 
-        self.recipe_combo = QComboBox()
-        self.recipe_combo.addItem("Direct OBB", "direct_obb")
-        self.recipe_combo.addItem("Sequential", "sequential")
-        self.recipe_combo.addItem("Direct + Sequential", "all_stages")
-        self.recipe_combo.addItem("Custom", "custom")
-        layout.addWidget(self.recipe_combo)
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItem("Direct", "direct")
+        self.mode_combo.addItem("Sequential", "sequential")
+        self.mode_combo.setMinimumWidth(150)
+        layout.addWidget(QLabel("Style"), 1, 0)
+        layout.addWidget(self.mode_combo, 1, 1)
 
-        self.recipe_description = QLabel("")
-        self.recipe_description.setObjectName("detectkitTrainingRoleBody")
-        self.recipe_description.setWordWrap(True)
-        layout.addWidget(self.recipe_description)
+        self.task_combo = QComboBox()
+        self.task_combo.addItem("OBB", "obb")
+        self.task_combo.addItem("Detect", "detect")
+        self.task_combo.addItem("Segment", "segment")
+        self.task_combo.setMinimumWidth(150)
+        layout.addWidget(QLabel("Target"), 1, 2)
+        layout.addWidget(self.task_combo, 1, 3)
+
+        self.selection_description = QLabel("")
+        self.selection_description.setObjectName("detectkitTrainingRoleBody")
+        self.selection_description.setWordWrap(True)
+        layout.addWidget(self.selection_description, 2, 0, 1, 4)
+        layout.setColumnStretch(1, 1)
+        layout.setColumnStretch(3, 1)
         return gb
 
     @staticmethod
@@ -537,7 +549,8 @@ QTabBar::tab:selected {
         return frame
 
     def _connect_summary_signals(self) -> None:
-        self.recipe_combo.currentIndexChanged.connect(self._on_recipe_changed)
+        self.mode_combo.currentIndexChanged.connect(self._on_training_selection_changed)
+        self.task_combo.currentIndexChanged.connect(self._on_training_selection_changed)
         self.spin_crop_pad.valueChanged.connect(self._mark_dataset_fit_dirty)
         self.spin_crop_min_px.valueChanged.connect(self._mark_dataset_fit_dirty)
         self.chk_crop_square.toggled.connect(self._mark_dataset_fit_dirty)
@@ -551,17 +564,6 @@ QTabBar::tab:selected {
             self._mark_dataset_fit_dirty
         )
 
-        for checkbox in (
-            self.chk_role_obb_direct,
-            self.chk_role_detect_direct,
-            self.chk_role_segment_direct,
-            self.chk_role_seq_detect,
-            self.chk_role_seq_crop_obb,
-            self.chk_role_seq_crop_segment,
-            self.chk_customize_roles,
-        ):
-            checkbox.toggled.connect(self._refresh_summary)
-
         for spinner in (
             self.spin_train,
             self.spin_val,
@@ -570,14 +572,6 @@ QTabBar::tab:selected {
             spinner.valueChanged.connect(self._refresh_summary)
 
         self.combo_device.currentTextChanged.connect(self._refresh_summary)
-
-        self.chk_role_obb_direct.toggled.connect(self._on_role_selection_changed)
-        self.chk_role_detect_direct.toggled.connect(self._on_role_selection_changed)
-        self.chk_role_segment_direct.toggled.connect(self._on_role_selection_changed)
-        self.chk_role_seq_detect.toggled.connect(self._on_role_selection_changed)
-        self.chk_role_seq_crop_obb.toggled.connect(self._on_role_selection_changed)
-        self.chk_role_seq_crop_segment.toggled.connect(self._on_role_selection_changed)
-        self.chk_customize_roles.toggled.connect(self._on_customize_roles_toggled)
 
     def _selected_role_keys(self) -> list[str]:
         selected = []
@@ -619,14 +613,14 @@ QTabBar::tab:selected {
         role_labels = [self._role_display_name(role) for role in selected_roles]
         class_names = self._class_names()
         device = self.combo_device.currentText().strip() or "cpu"
-        recipe_key = self._selected_recipe_key()
-        recipe_label = self.recipe_combo.currentText().strip() or "Custom"
+        mode_label = self.mode_combo.currentText().strip() or "Direct"
+        task_label = self.task_combo.currentText().strip() or "OBB"
+        source_fit = self._source_fit_summary()
         summary = (
-            f"<b>Recipe:</b> {recipe_label}"
-            f" &nbsp;&bull;&nbsp; <b>Overrides:</b> {'manual' if self.chk_customize_roles.isChecked() or recipe_key == 'custom' else 'guided'}<br>"
+            f"<b>Plan:</b> {mode_label} {task_label}<br>"
             f"<b>Stages:</b> {self._preview_values(role_labels)}<br>"
             f"<b>Classes:</b> {len(class_names)} ({self._preview_values(class_names)})<br>"
-            f"<b>Sources:</b> {len(self._project.sources)} OBB source(s)<br>"
+            f"<b>Sources:</b> {source_fit}<br>"
             f"<b>Split:</b> {int(round(self.spin_train.value() * 100.0))}% train / "
             f"{int(round(self.spin_val.value() * 100.0))}% val"
             f" &nbsp;&bull;&nbsp; <b>Seed:</b> {self.spin_seed.value()}<br>"
@@ -668,121 +662,33 @@ QTabBar::tab:selected {
         )
         self.btn_resume.setEnabled(has_resume)
 
-    # --- 1. Roles ---
+    # --- 1. Internal role state ---
 
-    def _build_roles_group(self) -> QGroupBox:
-        gb = QGroupBox("Stage Selection")
-        v = QVBoxLayout(gb)
-        v.setSpacing(10)
-
-        v.addWidget(
-            self._build_section_note(
-                "Most users should keep stage selection guided by the training recipe. Only switch to manual selection if you need a non-standard run."
-            )
-        )
-
-        self.chk_customize_roles = QCheckBox("Customize stage selection")
-        self.chk_customize_roles.setChecked(False)
-        v.addWidget(self.chk_customize_roles)
-
-        self.recipe_roles_hint = QLabel("")
-        self.recipe_roles_hint.setObjectName("detectkitTrainingRoleBody")
-        self.recipe_roles_hint.setWordWrap(True)
-        v.addWidget(self.recipe_roles_hint)
-
-        self.role_cards_widget = QWidget()
-        h = QHBoxLayout(self.role_cards_widget)
-        h.setSpacing(10)
+    def _build_role_state(self) -> None:
+        """Keep legacy role fields in sync without exposing stage checkboxes."""
         self.chk_role_obb_direct = QCheckBox("obb_direct")
         self.chk_role_detect_direct = QCheckBox("detect_direct")
         self.chk_role_segment_direct = QCheckBox("segment_direct")
         self.chk_role_seq_detect = QCheckBox("seq_detect")
         self.chk_role_seq_crop_obb = QCheckBox("seq_crop_obb")
         self.chk_role_seq_crop_segment = QCheckBox("seq_crop_segment")
-        self.chk_role_obb_direct.setChecked(True)
-        self.chk_role_seq_detect.setChecked(True)
-        self.chk_role_seq_crop_obb.setChecked(True)
-        h.addWidget(
-            self._build_role_card(
-                self.chk_role_obb_direct,
-                "OBB direct",
-                "Train the main oriented bounding-box model directly on the merged project dataset.",
-            ),
-            1,
-        )
-        h.addWidget(
-            self._build_role_card(
-                self.chk_role_detect_direct,
-                "Detect direct",
-                "Train a full-image axis-aligned detector directly on the merged project dataset.",
-            ),
-            1,
-        )
-        h.addWidget(
-            self._build_role_card(
-                self.chk_role_segment_direct,
-                "Segment direct",
-                "Train a full-image instance-segmentation model directly on the merged project dataset.",
-            ),
-            1,
-        )
-        h.addWidget(
-            self._build_role_card(
-                self.chk_role_seq_detect,
-                "Sequence detect",
-                "Train the sequence detector derived from the OBB role outputs for staged inference.",
-            ),
-            1,
-        )
-        h.addWidget(
-            self._build_role_card(
-                self.chk_role_seq_crop_obb,
-                "Sequence crop OBB",
-                "Train the crop-focused OBB model used in the second sequence stage.",
-            ),
-            1,
-        )
-        h.addWidget(
-            self._build_role_card(
-                self.chk_role_seq_crop_segment,
-                "Sequence crop segment",
-                "Train the crop-focused segmentation model used in the second sequence stage.",
-            ),
-            1,
-        )
-        v.addWidget(self.role_cards_widget)
-
-        note = self._build_section_note(
-            "Run order stays deterministic: OBB direct -> Sequence detect -> Sequence crop OBB."
-        )
-        v.addWidget(note)
-
-        # Secondary entry: escalate a role-blocking source to segment via SAM2.
-        self._escalate_blocker_name: str | None = None
-        self.btn_escalate_blocker = QPushButton("Escalate to segment (SAM2)")
-        self.btn_escalate_blocker.setVisible(False)
-        self.btn_escalate_blocker.clicked.connect(self._on_escalate_blocker_clicked)
-        v.addWidget(self.btn_escalate_blocker)
-        return gb
-
-    def _on_escalate_blocker_clicked(self) -> None:
-        """Open the SAM2 escalate dialog on the main window, pre-selecting the blocker."""
-        who = self._escalate_blocker_name
-        handler = getattr(self.parent(), "_on_escalate_to_segment_sam2", None)
-        if who and callable(handler):
-            handler(preselect=who)
 
     # --- 2. Config ---
 
     def _build_config_group(self) -> QGroupBox:
         gb = QGroupBox("Dataset And Runtime")
-        form = QFormLayout(gb)
-        form.setSpacing(10)
-        form.addRow(
-            "",
+        grid = QGridLayout(gb)
+        grid.setContentsMargins(16, 18, 16, 14)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(8)
+        grid.addWidget(
             self._build_section_note(
-                "Project class names and workspace are managed by DetectKit. Adjust split, runtime, and crop derivation here."
+                "Project classes are managed by DetectKit. Configure split, runtime, and sequential crop derivation here."
             ),
+            0,
+            0,
+            1,
+            4,
         )
 
         from ..models import normalize_class_names
@@ -794,7 +700,8 @@ QTabBar::tab:selected {
         self.class_names_label.setToolTip(
             "Class names come from the project. Edit them by changing project metadata."
         )
-        form.addRow("Project classes", self.class_names_label)
+        grid.addWidget(QLabel("Project classes"), 1, 0)
+        grid.addWidget(self.class_names_label, 1, 1)
 
         # Split
         self.spin_train = QDoubleSpinBox()
@@ -806,20 +713,26 @@ QTabBar::tab:selected {
         self.spin_val.setSingleStep(0.05)
         self.spin_val.setValue(0.2)
         h_split = QHBoxLayout()
+        h_split.setContentsMargins(0, 0, 0, 0)
+        h_split.setSpacing(6)
         h_split.addWidget(QLabel("train"))
         h_split.addWidget(self.spin_train)
         h_split.addWidget(QLabel("val"))
         h_split.addWidget(self.spin_val)
-        form.addRow("Dataset split", h_split)
+        split_widget = QWidget()
+        split_widget.setLayout(h_split)
+        grid.addWidget(QLabel("Dataset split"), 2, 0)
+        grid.addWidget(split_widget, 2, 1)
 
         self.spin_seed = QSpinBox()
         self.spin_seed.setRange(0, 999999)
         self.spin_seed.setValue(42)
-        form.addRow("Random seed", self.spin_seed)
+        grid.addWidget(QLabel("Random seed"), 1, 2)
+        grid.addWidget(self.spin_seed, 1, 3)
 
         self.chk_dedup = QCheckBox("Deduplicate source images by content hash")
         self.chk_dedup.setChecked(True)
-        form.addRow("", self.chk_dedup)
+        grid.addWidget(self.chk_dedup, 2, 2, 1, 2)
 
         # Crop derivation
         self.spin_crop_pad = QDoubleSpinBox()
@@ -832,6 +745,8 @@ QTabBar::tab:selected {
         self.chk_crop_square = QCheckBox("Square crop")
         self.chk_crop_square.setChecked(True)
         h_crop = QHBoxLayout()
+        h_crop.setContentsMargins(0, 0, 0, 0)
+        h_crop.setSpacing(6)
         h_crop.addWidget(QLabel("pad"))
         h_crop.addWidget(self.spin_crop_pad)
         h_crop.addWidget(QLabel("min px"))
@@ -840,7 +755,8 @@ QTabBar::tab:selected {
         self.crop_settings_label = QLabel("Sequence crop settings")
         self.crop_settings_widget = QWidget()
         self.crop_settings_widget.setLayout(h_crop)
-        form.addRow(self.crop_settings_label, self.crop_settings_widget)
+        grid.addWidget(self.crop_settings_label, 3, 0)
+        grid.addWidget(self.crop_settings_widget, 3, 1, 1, 3)
 
         # Device — PyTorch training devices only.
         self.combo_device = QComboBox()
@@ -849,7 +765,10 @@ QTabBar::tab:selected {
             "PyTorch training device. ONNX/TensorRT exports happen later from history."
         )
         self.combo_device.addItems(self._build_device_options())
-        form.addRow("Compute device", self.combo_device)
+        grid.addWidget(QLabel("Compute device"), 4, 0)
+        grid.addWidget(self.combo_device, 4, 1)
+        grid.setColumnStretch(1, 2)
+        grid.setColumnStretch(3, 1)
 
         return gb
 
@@ -858,8 +777,9 @@ QTabBar::tab:selected {
     def _build_hyperparams_group(self) -> QGroupBox:
         gb = QGroupBox("Training Hyperparameters")
         g = QGridLayout(gb)
+        g.setContentsMargins(16, 18, 16, 14)
         g.setHorizontalSpacing(12)
-        g.setVerticalSpacing(10)
+        g.setVerticalSpacing(8)
 
         g.addWidget(
             self._build_section_note(
@@ -875,12 +795,14 @@ QTabBar::tab:selected {
         self.spin_epochs = QSpinBox()
         self.spin_epochs.setRange(1, 1000)
         self.spin_epochs.setValue(100)
+        self.spin_epochs.setMaximumWidth(160)
         g.addWidget(QLabel("epochs"), 1, 0)
         g.addWidget(self.spin_epochs, 1, 1)
 
         self.spin_batch = QSpinBox()
         self.spin_batch.setRange(1, 256)
         self.spin_batch.setValue(16)
+        self.spin_batch.setMaximumWidth(120)
         self.chk_auto_batch = QCheckBox("Auto")
         self.chk_auto_batch.setToolTip(
             "Let Ultralytics auto-detect optimal batch size (batch=-1)."
@@ -889,6 +811,8 @@ QTabBar::tab:selected {
             lambda checked: self.spin_batch.setEnabled(not checked)
         )
         batch_layout = QHBoxLayout()
+        batch_layout.setContentsMargins(0, 0, 0, 0)
+        batch_layout.setSpacing(6)
         batch_layout.addWidget(self.spin_batch)
         batch_layout.addWidget(self.chk_auto_batch)
         batch_widget = QWidget()
@@ -900,6 +824,7 @@ QTabBar::tab:selected {
         self.spin_lr0.setRange(1e-5, 1.0)
         self.spin_lr0.setDecimals(5)
         self.spin_lr0.setValue(0.01)
+        self.spin_lr0.setMaximumWidth(160)
         g.addWidget(QLabel("lr0"), 1, 4)
         g.addWidget(self.spin_lr0, 1, 5)
 
@@ -907,12 +832,14 @@ QTabBar::tab:selected {
         self.spin_patience = QSpinBox()
         self.spin_patience.setRange(1, 500)
         self.spin_patience.setValue(30)
+        self.spin_patience.setMaximumWidth(160)
         g.addWidget(QLabel("patience"), 2, 0)
         g.addWidget(self.spin_patience, 2, 1)
 
         self.spin_workers = QSpinBox()
         self.spin_workers.setRange(0, 32)
         self.spin_workers.setValue(8)
+        self.spin_workers.setMaximumWidth(160)
         g.addWidget(QLabel("workers"), 2, 2)
         g.addWidget(self.spin_workers, 2, 3)
 
@@ -923,6 +850,7 @@ QTabBar::tab:selected {
         self.spin_imgsz_obb_direct = QSpinBox()
         self.spin_imgsz_obb_direct.setRange(64, 2048)
         self.spin_imgsz_obb_direct.setValue(640)
+        self.spin_imgsz_obb_direct.setMaximumWidth(160)
         self.label_imgsz_obb_direct = QLabel("imgsz (obb_direct)")
         g.addWidget(self.label_imgsz_obb_direct, 3, 0)
         g.addWidget(self.spin_imgsz_obb_direct, 3, 1)
@@ -930,6 +858,7 @@ QTabBar::tab:selected {
         self.spin_imgsz_seq_detect = QSpinBox()
         self.spin_imgsz_seq_detect.setRange(64, 2048)
         self.spin_imgsz_seq_detect.setValue(640)
+        self.spin_imgsz_seq_detect.setMaximumWidth(160)
         self.label_imgsz_seq_detect = QLabel("imgsz (seq_detect)")
         g.addWidget(self.label_imgsz_seq_detect, 3, 2)
         g.addWidget(self.spin_imgsz_seq_detect, 3, 3)
@@ -937,6 +866,7 @@ QTabBar::tab:selected {
         self.spin_imgsz_seq_crop_obb = QSpinBox()
         self.spin_imgsz_seq_crop_obb.setRange(64, 2048)
         self.spin_imgsz_seq_crop_obb.setValue(160)
+        self.spin_imgsz_seq_crop_obb.setMaximumWidth(160)
         self.spin_imgsz_seq_crop_obb.setToolTip(
             "Must match YOLO_SEQ_STAGE2_IMGSZ used during inference (default 160)."
         )
@@ -947,6 +877,7 @@ QTabBar::tab:selected {
         self.spin_imgsz_detect_direct = QSpinBox()
         self.spin_imgsz_detect_direct.setRange(64, 2048)
         self.spin_imgsz_detect_direct.setValue(640)
+        self.spin_imgsz_detect_direct.setMaximumWidth(160)
         self.label_imgsz_detect_direct = QLabel("imgsz (detect_direct)")
         g.addWidget(self.label_imgsz_detect_direct, 4, 0)
         g.addWidget(self.spin_imgsz_detect_direct, 4, 1)
@@ -954,6 +885,7 @@ QTabBar::tab:selected {
         self.spin_imgsz_segment_direct = QSpinBox()
         self.spin_imgsz_segment_direct.setRange(64, 2048)
         self.spin_imgsz_segment_direct.setValue(640)
+        self.spin_imgsz_segment_direct.setMaximumWidth(160)
         self.label_imgsz_segment_direct = QLabel("imgsz (segment_direct)")
         g.addWidget(self.label_imgsz_segment_direct, 4, 2)
         g.addWidget(self.spin_imgsz_segment_direct, 4, 3)
@@ -961,6 +893,7 @@ QTabBar::tab:selected {
         self.spin_imgsz_seq_crop_segment = QSpinBox()
         self.spin_imgsz_seq_crop_segment.setRange(64, 2048)
         self.spin_imgsz_seq_crop_segment.setValue(160)
+        self.spin_imgsz_seq_crop_segment.setMaximumWidth(160)
         self.spin_imgsz_seq_crop_segment.setToolTip(
             "Must match YOLO_SEQ_STAGE2_IMGSZ used during inference (default 160)."
         )
@@ -968,6 +901,8 @@ QTabBar::tab:selected {
         g.addWidget(self.label_imgsz_seq_crop_segment, 4, 4)
         g.addWidget(self.spin_imgsz_seq_crop_segment, 4, 5)
 
+        for col in (1, 3, 5):
+            g.setColumnStretch(col, 1)
         return gb
 
     # --- 4. Base Models ---
@@ -986,13 +921,18 @@ QTabBar::tab:selected {
 
     def _build_base_models_group(self) -> QGroupBox:
         gb = QGroupBox("Base Checkpoints")
-        form = QFormLayout(gb)
-        form.setSpacing(10)
-        form.addRow(
-            "",
+        grid = QGridLayout(gb)
+        grid.setContentsMargins(16, 18, 16, 14)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(8)
+        grid.addWidget(
             self._build_section_note(
-                "Pick a base checkpoint per active stage. Type a path to use custom weights."
+                "Choose the starting weights for the active stages. You can type a custom path."
             ),
+            0,
+            0,
+            1,
+            4,
         )
 
         obb_options = self._yolo_obb_options()
@@ -1006,45 +946,74 @@ QTabBar::tab:selected {
         self.combo_model_obb_direct.setEditable(True)
         self.combo_model_obb_direct.addItems(obb_options)
         self.combo_model_obb_direct.setCurrentText(default_obb)
-        self.label_model_obb_direct = QLabel("obb_direct")
-        form.addRow(self.label_model_obb_direct, self.combo_model_obb_direct)
+        self.combo_model_obb_direct.setMinimumWidth(190)
+        self.label_model_obb_direct = QLabel("Direct OBB")
 
         self.combo_model_detect_direct = QComboBox()
         self.combo_model_detect_direct.setEditable(True)
         self.combo_model_detect_direct.addItems(detect_options)
         self.combo_model_detect_direct.setCurrentText(default_detect)
-        self.label_model_detect_direct = QLabel("detect_direct")
-        form.addRow(self.label_model_detect_direct, self.combo_model_detect_direct)
+        self.combo_model_detect_direct.setMinimumWidth(190)
+        self.label_model_detect_direct = QLabel("Direct detect")
 
         self.combo_model_segment_direct = QComboBox()
         self.combo_model_segment_direct.setEditable(True)
         self.combo_model_segment_direct.addItems(seg_options)
         self.combo_model_segment_direct.setCurrentText(default_seg)
-        self.label_model_segment_direct = QLabel("segment_direct")
-        form.addRow(self.label_model_segment_direct, self.combo_model_segment_direct)
+        self.combo_model_segment_direct.setMinimumWidth(190)
+        self.label_model_segment_direct = QLabel("Direct segment")
 
         self.combo_model_seq_detect = QComboBox()
         self.combo_model_seq_detect.setEditable(True)
         self.combo_model_seq_detect.addItems(detect_options)
         self.combo_model_seq_detect.setCurrentText(default_detect)
-        self.label_model_seq_detect = QLabel("seq_detect")
-        form.addRow(self.label_model_seq_detect, self.combo_model_seq_detect)
+        self.combo_model_seq_detect.setMinimumWidth(190)
+        self.label_model_seq_detect = QLabel("Sequential detector")
 
         self.combo_model_seq_crop_obb = QComboBox()
         self.combo_model_seq_crop_obb.setEditable(True)
         self.combo_model_seq_crop_obb.addItems(obb_options)
         self.combo_model_seq_crop_obb.setCurrentText(default_obb)
-        self.label_model_seq_crop_obb = QLabel("seq_crop_obb")
-        form.addRow(self.label_model_seq_crop_obb, self.combo_model_seq_crop_obb)
+        self.combo_model_seq_crop_obb.setMinimumWidth(190)
+        self.label_model_seq_crop_obb = QLabel("Sequential crop OBB")
 
         self.combo_model_seq_crop_segment = QComboBox()
         self.combo_model_seq_crop_segment.setEditable(True)
         self.combo_model_seq_crop_segment.addItems(seg_options)
         self.combo_model_seq_crop_segment.setCurrentText(default_seg)
-        self.label_model_seq_crop_segment = QLabel("seq_crop_segment")
-        form.addRow(
-            self.label_model_seq_crop_segment, self.combo_model_seq_crop_segment
+        self.combo_model_seq_crop_segment.setMinimumWidth(190)
+        self.label_model_seq_crop_segment = QLabel("Sequential crop segment")
+
+        model_rows = (
+            (
+                self.label_model_obb_direct,
+                self.combo_model_obb_direct,
+                self.label_model_detect_direct,
+                self.combo_model_detect_direct,
+            ),
+            (
+                self.label_model_segment_direct,
+                self.combo_model_segment_direct,
+                self.label_model_seq_detect,
+                self.combo_model_seq_detect,
+            ),
+            (
+                self.label_model_seq_crop_obb,
+                self.combo_model_seq_crop_obb,
+                self.label_model_seq_crop_segment,
+                self.combo_model_seq_crop_segment,
+            ),
         )
+        for row, (left_label, left_combo, right_label, right_combo) in enumerate(
+            model_rows, start=1
+        ):
+            grid.addWidget(left_label, row, 0)
+            grid.addWidget(left_combo, row, 1)
+            grid.addWidget(right_label, row, 2)
+            grid.addWidget(right_combo, row, 3)
+
+        grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(3, 1)
 
         return gb
 
@@ -1055,6 +1024,7 @@ QTabBar::tab:selected {
         self.aug_group.setCheckable(True)
         self.aug_group.setChecked(True)
         v = QVBoxLayout(self.aug_group)
+        v.setContentsMargins(16, 18, 16, 14)
         v.setSpacing(8)
 
         note = QLabel(
@@ -1065,7 +1035,9 @@ QTabBar::tab:selected {
         note.setWordWrap(True)
         v.addWidget(note)
 
-        form = QFormLayout()
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(8)
 
         def _spin(default: float, maximum: float = 1.0) -> QDoubleSpinBox:
             sb = QDoubleSpinBox()
@@ -1073,26 +1045,31 @@ QTabBar::tab:selected {
             sb.setDecimals(3)
             sb.setSingleStep(0.05)
             sb.setValue(default)
+            sb.setMaximumWidth(140)
             return sb
 
         self.aug_fliplr = _spin(0.5)
-        form.addRow("fliplr", self.aug_fliplr)
         self.aug_flipud = _spin(0.0)
-        form.addRow("flipud", self.aug_flipud)
         self.aug_degrees = _spin(0.0, 360.0)
-        form.addRow("degrees", self.aug_degrees)
         self.aug_mosaic = _spin(1.0)
-        form.addRow("mosaic", self.aug_mosaic)
         self.aug_mixup = _spin(0.0)
-        form.addRow("mixup", self.aug_mixup)
         self.aug_hsv_h = _spin(0.015)
-        form.addRow("hsv_h", self.aug_hsv_h)
         self.aug_hsv_s = _spin(0.7)
-        form.addRow("hsv_s", self.aug_hsv_s)
         self.aug_hsv_v = _spin(0.4)
-        form.addRow("hsv_v", self.aug_hsv_v)
-
-        v.addLayout(form)
+        aug_rows = (
+            ("fliplr", self.aug_fliplr, "flipud", self.aug_flipud),
+            ("degrees", self.aug_degrees, "mosaic", self.aug_mosaic),
+            ("mixup", self.aug_mixup, "hsv h", self.aug_hsv_h),
+            ("hsv s", self.aug_hsv_s, "hsv v", self.aug_hsv_v),
+        )
+        for row, (left_name, left_spin, right_name, right_spin) in enumerate(aug_rows):
+            grid.addWidget(QLabel(left_name), row, 0)
+            grid.addWidget(left_spin, row, 1)
+            grid.addWidget(QLabel(right_name), row, 2)
+            grid.addWidget(right_spin, row, 3)
+        grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(3, 1)
+        v.addLayout(grid)
         return self.aug_group
 
     # --- 6. Run Controls ---
@@ -1204,12 +1181,9 @@ QTabBar::tab:selected {
     def _load_from_project(self) -> None:
         proj = self._project
 
-        self.chk_role_obb_direct.setChecked(proj.role_obb_direct)
-        self.chk_role_detect_direct.setChecked(proj.role_detect_direct)
-        self.chk_role_segment_direct.setChecked(proj.role_segment_direct)
-        self.chk_role_seq_detect.setChecked(proj.role_seq_detect)
-        self.chk_role_seq_crop_obb.setChecked(proj.role_seq_crop_obb)
-        self.chk_role_seq_crop_segment.setChecked(proj.role_seq_crop_segment)
+        self._set_combo_data(self.mode_combo, getattr(proj, "training_mode", "direct"))
+        self._set_combo_data(self.task_combo, getattr(proj, "training_task", "obb"))
+        self._apply_selection_roles()
 
         self.spin_train.setValue(proj.split_train)
         self.spin_val.setValue(proj.split_val)
@@ -1257,8 +1231,8 @@ QTabBar::tab:selected {
         self.slice_group.load_from(proj.slice_settings)
 
         self._apply_persistent_state()
-        self._sync_recipe_from_roles()
         self._refresh_role_gating()
+        self._on_training_selection_changed()
         self._set_run_status("Ready to start training for the selected roles.")
         self._refresh_summary()
         self._refresh_overview_data_cards()
@@ -1275,6 +1249,8 @@ QTabBar::tab:selected {
     def _write_to_project(self) -> None:
         proj = self._project
 
+        proj.training_mode = self._selected_mode()
+        proj.training_task = self._selected_task()
         proj.role_obb_direct = self.chk_role_obb_direct.isChecked()
         proj.role_detect_direct = self.chk_role_detect_direct.isChecked()
         proj.role_segment_direct = self.chk_role_segment_direct.isChecked()
@@ -1338,66 +1314,44 @@ QTabBar::tab:selected {
 
         return normalize_class_names(self._project.class_names)
 
-    def _selected_recipe_key(self) -> str:
-        return (
-            str(self.recipe_combo.currentData() or "all_stages").strip() or "all_stages"
-        )
+    def _selected_mode(self) -> str:
+        return str(self.mode_combo.currentData() or "direct")
 
-    def _recipe_for_roles(self) -> str:
-        signature = (
-            bool(self.chk_role_obb_direct.isChecked()),
-            bool(self.chk_role_seq_detect.isChecked()),
-            bool(self.chk_role_seq_crop_obb.isChecked()),
-        )
-        for recipe_key, recipe_signature in _RECIPE_ROLE_MAP.items():
-            if recipe_signature == signature:
-                return recipe_key
-        return "custom"
+    @staticmethod
+    def _set_combo_data(combo: QComboBox, value: str) -> None:
+        index = combo.findData(str(value))
+        combo.setCurrentIndex(index if index >= 0 else 0)
 
-    def _set_recipe_combo(self, recipe_key: str) -> None:
-        idx = self.recipe_combo.findData(recipe_key)
-        if idx < 0:
-            idx = self.recipe_combo.findData("custom")
-        if idx >= 0:
-            self.recipe_combo.setCurrentIndex(idx)
+    def _selected_task(self) -> str:
+        return str(self.task_combo.currentData() or "obb")
 
-    def _apply_recipe_roles(self, recipe_key: str) -> None:
-        signature = _RECIPE_ROLE_MAP.get(recipe_key)
-        if signature is None:
-            return
-        checkboxes = (
-            self.chk_role_obb_direct,
-            self.chk_role_seq_detect,
-            self.chk_role_seq_crop_obb,
-        )
-        for checkbox, checked in zip(checkboxes, signature):
+    def _selected_plan_key(self) -> tuple[str, str]:
+        return self._selected_mode(), self._selected_task()
+
+    def _plan_role_keys(self) -> tuple[str, ...]:
+        return _SELECTION_ROLE_MAP[self._selected_plan_key()]
+
+    def _selected_required_level(self) -> GeometryLevel:
+        from hydra_suite.training.dataset_builders import role_min_level
+
+        return max(role_min_level(role) for role in self._selected_roles())
+
+    def _apply_selection_roles(self) -> None:
+        selected = set(self._plan_role_keys())
+        for role, checkbox in self._role_checkboxes().items():
             checkbox.blockSignals(True)
-            checkbox.setChecked(bool(checked))
+            checkbox.setChecked(role in selected)
             checkbox.blockSignals(False)
 
-    def _update_recipe_description(self) -> None:
-        recipe_key = self._selected_recipe_key()
-        self.recipe_description.setText(_RECIPE_DESCRIPTIONS.get(recipe_key, ""))
-
-    def _update_role_selection_visibility(self) -> None:
-        guided = not self.chk_customize_roles.isChecked()
-        self.role_cards_widget.setVisible(not guided)
-        selected_labels = [
-            self._role_display_name(role) for role in self._selected_role_keys()
-        ]
-        if guided:
-            self.recipe_roles_hint.setText(
-                "Guided stage selection: "
-                + self._preview_values(selected_labels)
-                + ". Switch on manual selection only if you need a different stage mix."
-            )
-            self.recipe_roles_hint.setVisible(True)
-        else:
-            self.recipe_roles_hint.setText(
-                "Manual stage selection is enabled. DetectKit will train exactly the stages checked below."
-            )
-            self.recipe_roles_hint.setVisible(True)
-        self._update_advanced_role_controls()
+    def _role_checkboxes(self) -> dict[str, QCheckBox]:
+        return {
+            "obb_direct": self.chk_role_obb_direct,
+            "detect_direct": self.chk_role_detect_direct,
+            "segment_direct": self.chk_role_segment_direct,
+            "seq_detect": self.chk_role_seq_detect,
+            "seq_crop_obb": self.chk_role_seq_crop_obb,
+            "seq_crop_segment": self.chk_role_seq_crop_segment,
+        }
 
     def _update_advanced_role_controls(self) -> None:
         selected_roles = set(self._selected_role_keys())
@@ -1471,106 +1425,46 @@ QTabBar::tab:selected {
         self._refresh_dataset_fit()
         self._refresh_source_preview()
 
-    def _sync_recipe_from_roles(self) -> None:
-        recipe_key = self._recipe_for_roles()
-        self.recipe_combo.blockSignals(True)
-        self._set_recipe_combo(recipe_key)
-        self.recipe_combo.blockSignals(False)
-
-        self.chk_customize_roles.blockSignals(True)
-        self.chk_customize_roles.setChecked(recipe_key == "custom")
-        self.chk_customize_roles.blockSignals(False)
-
-        self._update_recipe_description()
-        self._update_role_selection_visibility()
-
-    def _on_role_selection_changed(self, *_args) -> None:
-        if self.chk_customize_roles.isChecked():
-            recipe_key = self._recipe_for_roles()
-            self.recipe_combo.blockSignals(True)
-            self._set_recipe_combo(recipe_key)
-            self.recipe_combo.blockSignals(False)
-            self._update_recipe_description()
-        self._refresh_role_gating()
-        self._mark_dataset_fit_dirty()
-
     def _refresh_role_gating(self) -> None:
-        """Disable + annotate roles blocked by the merged geometry level of selected sources."""
+        """Reflect which targets are supported by at least one source level."""
         sources = list(self._project.sources) if self._project else []
-        level, blocker = merged_level_and_blocker(sources)
-        role_checks = {
-            TrainingRole.OBB_DIRECT: self.chk_role_obb_direct,
-            TrainingRole.DETECT_DIRECT: self.chk_role_detect_direct,
-            TrainingRole.SEGMENT_DIRECT: self.chk_role_segment_direct,
-            TrainingRole.SEQ_DETECT: self.chk_role_seq_detect,
-            TrainingRole.SEQ_CROP_OBB: self.chk_role_seq_crop_obb,
-            TrainingRole.SEQ_CROP_SEGMENT: self.chk_role_seq_crop_segment,
+        if not sources:
+            return
+        highest = max(
+            (GeometryLevel.from_str(getattr(src, "level", "obb")) for src in sources),
+            default=GeometryLevel.AABB,
+        )
+        task_requirements = {
+            "obb": GeometryLevel.OBB,
+            "detect": GeometryLevel.AABB,
+            "segment": GeometryLevel.POLYGON,
         }
-        blocked = blocked_roles_for_level(level, list(role_checks))
-        # Offer a SAM2 escalation shortcut for the blocking source, if any.
-        who = blocker.name if blocker is not None else None
-        has_block = bool(blocked) and who is not None
-        self._escalate_blocker_name = who if has_block else None
-        if has_block:
-            self.btn_escalate_blocker.setText(f"Escalate '{who}' to segment (SAM2)")
-        self.btn_escalate_blocker.setVisible(has_block)
-        for role, chk in role_checks.items():
-            required = blocked.get(role)
-            if required is not None:
-                chk.setEnabled(False)
-                chk.setChecked(False)
-                who = blocker.name if blocker is not None else "a source"
-                chk.setToolTip(
-                    f"{role.value} unavailable: needs {required.label}-level data, but "
-                    f"source '{who}' is {level.label}-level."
-                )
-            else:
-                chk.setEnabled(True)
-                chk.setToolTip("")
+        model = self.task_combo.model()
+        for index in range(self.task_combo.count()):
+            task = str(self.task_combo.itemData(index))
+            model.item(index).setEnabled(highest >= task_requirements[task])
 
-    def _on_recipe_changed(self, *_args) -> None:
-        recipe_key = self._selected_recipe_key()
-        if recipe_key == "custom":
-            if not self.chk_customize_roles.isChecked():
-                self.chk_customize_roles.blockSignals(True)
-                self.chk_customize_roles.setChecked(True)
-                self.chk_customize_roles.blockSignals(False)
-        elif self.chk_customize_roles.isChecked():
-            self.chk_customize_roles.blockSignals(True)
-            self.chk_customize_roles.setChecked(False)
-            self.chk_customize_roles.blockSignals(False)
-        self._update_recipe_description()
-        if not self.chk_customize_roles.isChecked() and recipe_key != "custom":
-            self._apply_recipe_roles(recipe_key)
-        self._update_role_selection_visibility()
+    def _on_training_selection_changed(self, *_args) -> None:
+        self._apply_selection_roles()
+        self.selection_description.setText(
+            _SELECTION_DESCRIPTIONS[self._selected_plan_key()]
+        )
+        self._update_advanced_role_controls()
         self._refresh_summary()
         self._mark_dataset_fit_dirty()
 
-    def _on_customize_roles_toggled(self, checked: bool) -> None:
-        if not checked:
-            recipe_key = self._selected_recipe_key()
-            if recipe_key == "custom":
-                recipe_key = self._recipe_for_roles()
-                if recipe_key == "custom":
-                    recipe_key = "all_stages"
-                self.recipe_combo.blockSignals(True)
-                self._set_recipe_combo(recipe_key)
-                self.recipe_combo.blockSignals(False)
-                self._update_recipe_description()
-            self._apply_recipe_roles(recipe_key)
-        else:
-            if self._selected_recipe_key() != "custom":
-                self.recipe_combo.blockSignals(True)
-                self._set_recipe_combo("custom")
-                self.recipe_combo.blockSignals(False)
-                self._update_recipe_description()
-        self._update_role_selection_visibility()
-        self._refresh_summary()
-        self._mark_dataset_fit_dirty()
+    def _source_fit_summary(self) -> str:
+        sources = list(self._project.sources)
+        required = self._selected_required_level()
+        usable = sum(
+            GeometryLevel.from_str(getattr(src, "level", "obb")) >= required
+            for src in sources
+        )
+        return f"{len(sources)} configured; {usable} usable for {required.label}"
 
     def _dataset_fit_key(self) -> tuple:
         source_paths = tuple(
-            str(src.path).strip()
+            (str(src.path).strip(), str(getattr(src, "level", "obb")))
             for src in self._project.sources
             if str(src.path).strip()
         )
@@ -1604,6 +1498,10 @@ QTabBar::tab:selected {
             return
 
         try:
+            from hydra_suite.training.contracts import SourceDataset
+            from hydra_suite.training.dataset_builders import (
+                resolve_source_path_for_target,
+            )
             from hydra_suite.training.dataset_inspector import (
                 DatasetInspection,
                 analyze_obb_sizes,
@@ -1617,15 +1515,26 @@ QTabBar::tab:selected {
             self.dataset_fit_view.setPlainText("")
             return
 
+        required_level = self._selected_required_level()
         source_paths = [
-            str(src.path).strip()
+            str(
+                resolve_source_path_for_target(
+                    SourceDataset(
+                        path=str(src.path).strip(),
+                        name=src.name,
+                        level=getattr(src, "level", "obb"),
+                    ),
+                    required_level,
+                )
+            )
             for src in self._project.sources
             if str(src.path).strip()
+            and GeometryLevel.from_str(getattr(src, "level", "obb")) >= required_level
         ]
         if not source_paths:
             self.dataset_fit_status.setText("No source datasets configured yet.")
             self.dataset_fit_view.setPlainText(
-                "Add one or more DetectKit OBB sources to see size and recipe guidance here."
+                f"Add one or more {required_level.label}-compatible sources to see guidance for this plan."
             )
             self._dataset_fit_cache_key = cache_key
             self._dataset_fit_cache_text = self.dataset_fit_view.toPlainText()
@@ -1796,6 +1705,10 @@ QTabBar::tab:selected {
         self, max_items: int = 6
     ) -> list[dict[str, str | Path]]:
         try:
+            from hydra_suite.training.contracts import SourceDataset
+            from hydra_suite.training.dataset_builders import (
+                resolve_source_path_for_target,
+            )
             from hydra_suite.training.dataset_inspector import (
                 inspect_obb_or_detect_dataset,
             )
@@ -1803,8 +1716,20 @@ QTabBar::tab:selected {
             return []
 
         buckets: dict[str, list[dict[str, str | Path]]] = {}
+        required_level = self._selected_required_level()
         for src in self._project.sources:
-            source_path = str(src.path).strip()
+            if GeometryLevel.from_str(getattr(src, "level", "obb")) < required_level:
+                continue
+            source_path = str(
+                resolve_source_path_for_target(
+                    SourceDataset(
+                        path=str(src.path).strip(),
+                        name=src.name,
+                        level=getattr(src, "level", "obb"),
+                    ),
+                    required_level,
+                )
+            )
             if not source_path or not Path(source_path).exists():
                 continue
             try:
@@ -2030,7 +1955,12 @@ QTabBar::tab:selected {
             p = src.path.strip()
             if p:
                 sources.append(
-                    SourceDataset(path=p, source_type="yolo_obb", name=Path(p).name)
+                    SourceDataset(
+                        path=p,
+                        source_type="yolo_obb",
+                        name=src.name or Path(p).name,
+                        level=getattr(src, "level", "obb"),
+                    )
                 )
         return sources
 
@@ -2101,10 +2031,10 @@ QTabBar::tab:selected {
             )
             return False
 
-        obb_sources = self._collect_sources()
-        if not obb_sources:
+        sources = self._collect_sources()
+        if not sources:
             QMessageBox.warning(
-                self, "No OBB Sources", "Add at least one OBB source dataset."
+                self, "No Sources", "Add at least one labeled DetectKit source dataset."
             )
             return False
 
@@ -2123,60 +2053,77 @@ QTabBar::tab:selected {
                 val=self.spin_val.value(),
                 test=0.0,
             )
-            merged = orchestrator.build_merged_obb_dataset(
-                obb_sources,
-                class_names=self._class_names(),
-                split_cfg=split,
-                seed=self.spin_seed.value(),
-                dedup=self.chk_dedup.isChecked(),
-            )
             self.role_dataset_dirs = {}
-            self._append_log(f"Merged dataset: {merged.dataset_dir}")
+            from hydra_suite.training.dataset_builders import role_min_level
 
-            merged_level = merged_level_and_blocker(self._project.sources)[0]
-
-            role_source_dir = merged.dataset_dir
-            slice_settings = getattr(self._project, "slice_settings", None)
-            if slice_settings is not None and slice_settings.enabled:
-                from hydra_suite.training.sliced_dataset import SliceBuildParams
-
-                params = SliceBuildParams(
-                    geometry_mode=slice_settings.geometry_mode,
-                    imgsz=self._project.imgsz_obb_direct,
-                    object_tile_fraction=slice_settings.object_tile_fraction,
-                    slice_width=slice_settings.slice_width,
-                    slice_height=slice_settings.slice_height,
-                    overlap=slice_settings.overlap,
-                    min_area_ratio=slice_settings.min_area_ratio,
-                    negative_tile_fraction=slice_settings.negative_tile_fraction,
-                    target_sizes=list(slice_settings.target_sizes),
-                    full_frame_mix=slice_settings.full_frame_mix,
-                )
-                sliced = orchestrator.build_sliced_obb_dataset(
-                    merged.dataset_dir,
-                    level=merged_level,
-                    params=params,
-                    seed=self.spin_seed.value(),
-                )
-                role_source_dir = sliced.dataset_dir
-                self._append_log(f"Sliced dataset: {sliced.dataset_dir}")
-
-                from hydra_suite.detectkit.gui.models import populate_measured_reference
-
-                measured_ref = float(
-                    sliced.stats.get("measured_reference_body_px", 0.0)
-                )
-                if populate_measured_reference(
-                    self._project.slice_settings, measured_ref
-                ):
-                    from hydra_suite.detectkit.gui.project import save_project
-
-                    save_project(self._project)
-                    self._append_log(
-                        f"Auto-set reference body size: {measured_ref:.1f}px (measured)"
-                    )
+            merged_by_level = {}
 
             for role in roles:
+                required_level = role_min_level(role)
+                merged = merged_by_level.get(required_level)
+                if merged is None:
+                    merged = orchestrator.build_merged_obb_dataset(
+                        sources,
+                        class_names=self._class_names(),
+                        split_cfg=split,
+                        seed=self.spin_seed.value(),
+                        dedup=self.chk_dedup.isChecked(),
+                        target_level=required_level,
+                    )
+                    merged_by_level[required_level] = merged
+                    used_count = len(merged.stats.get("source_items", {}))
+                    self._append_log(
+                        f"Merged {required_level.label} dataset from "
+                        f"{used_count}/{len(sources)} compatible source(s): {merged.dataset_dir}"
+                    )
+
+                role_source_dir = merged.dataset_dir
+                slice_settings = getattr(self._project, "slice_settings", None)
+                if (
+                    role == TrainingRole.OBB_DIRECT
+                    and slice_settings is not None
+                    and slice_settings.enabled
+                ):
+                    from hydra_suite.training.sliced_dataset import SliceBuildParams
+
+                    params = SliceBuildParams(
+                        geometry_mode=slice_settings.geometry_mode,
+                        imgsz=self._project.imgsz_obb_direct,
+                        object_tile_fraction=slice_settings.object_tile_fraction,
+                        slice_width=slice_settings.slice_width,
+                        slice_height=slice_settings.slice_height,
+                        overlap=slice_settings.overlap,
+                        min_area_ratio=slice_settings.min_area_ratio,
+                        negative_tile_fraction=slice_settings.negative_tile_fraction,
+                        target_sizes=list(slice_settings.target_sizes),
+                        full_frame_mix=slice_settings.full_frame_mix,
+                    )
+                    sliced = orchestrator.build_sliced_obb_dataset(
+                        merged.dataset_dir,
+                        level=required_level,
+                        params=params,
+                        seed=self.spin_seed.value(),
+                    )
+                    role_source_dir = sliced.dataset_dir
+                    self._append_log(f"Sliced dataset: {sliced.dataset_dir}")
+
+                    from hydra_suite.detectkit.gui.models import (
+                        populate_measured_reference,
+                    )
+
+                    measured_ref = float(
+                        sliced.stats.get("measured_reference_body_px", 0.0)
+                    )
+                    if populate_measured_reference(
+                        self._project.slice_settings, measured_ref
+                    ):
+                        from hydra_suite.detectkit.gui.project import save_project
+
+                        save_project(self._project)
+                        self._append_log(
+                            f"Auto-set reference body size: {measured_ref:.1f}px (measured)"
+                        )
+
                 build = orchestrator.build_role_dataset(
                     role,
                     role_source_dir,
@@ -2184,7 +2131,7 @@ QTabBar::tab:selected {
                     crop_pad_ratio=self.spin_crop_pad.value(),
                     min_crop_size_px=self.spin_crop_min_px.value(),
                     enforce_square=self.chk_crop_square.isChecked(),
-                    merged_level=merged_level,
+                    merged_level=required_level,
                 )
                 self.role_dataset_dirs[role.value] = build.dataset_dir
                 self._append_log(
@@ -2522,8 +2469,8 @@ QTabBar::tab:selected {
                 "seq_crop_obb": self.chk_role_seq_crop_obb.isChecked(),
                 "seq_crop_segment": self.chk_role_seq_crop_segment.isChecked(),
             },
-            "recipe": self._selected_recipe_key(),
-            "customize_roles": self.chk_customize_roles.isChecked(),
+            "training_mode": self._selected_mode(),
+            "training_task": self._selected_task(),
             "split_train": self.spin_train.value(),
             "split_val": self.spin_val.value(),
             "seed": self.spin_seed.value(),
@@ -2564,19 +2511,11 @@ QTabBar::tab:selected {
 
     def _apply_training_state(self, data: dict) -> None:
         """Apply a previously saved state dict to the dialog widgets."""
-        roles = data.get("roles", {})
-        if "obb_direct" in roles:
-            self.chk_role_obb_direct.setChecked(bool(roles["obb_direct"]))
-        if "detect_direct" in roles:
-            self.chk_role_detect_direct.setChecked(bool(roles["detect_direct"]))
-        if "segment_direct" in roles:
-            self.chk_role_segment_direct.setChecked(bool(roles["segment_direct"]))
-        if "seq_detect" in roles:
-            self.chk_role_seq_detect.setChecked(bool(roles["seq_detect"]))
-        if "seq_crop_obb" in roles:
-            self.chk_role_seq_crop_obb.setChecked(bool(roles["seq_crop_obb"]))
-        if "seq_crop_segment" in roles:
-            self.chk_role_seq_crop_segment.setChecked(bool(roles["seq_crop_segment"]))
+        if "training_mode" in data or "training_task" in data:
+            self._set_combo_data(
+                self.mode_combo, str(data.get("training_mode", "direct"))
+            )
+            self._set_combo_data(self.task_combo, str(data.get("training_task", "obb")))
 
         for attr, widget in [
             ("split_train", self.spin_train),
@@ -2613,7 +2552,6 @@ QTabBar::tab:selected {
             ("auto_batch", self.chk_auto_batch),
             ("cache", self.chk_cache),
             ("aug_enabled", self.aug_group),
-            ("customize_roles", self.chk_customize_roles),
         ]:
             if attr in data:
                 widget.setChecked(bool(data[attr]))
@@ -2632,10 +2570,8 @@ QTabBar::tab:selected {
         if "device" in data:
             self._set_device_combo(str(data["device"]))
 
-        if "recipe" in data:
-            self._set_recipe_combo(str(data["recipe"]))
-
         self._refresh_role_gating()
+        self._on_training_selection_changed()
 
     def _save_training_config(self) -> None:
         import json

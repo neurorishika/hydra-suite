@@ -148,6 +148,50 @@ def _validate_detect_line(
     return issues
 
 
+def _validate_segment_line(
+    parts: list[str], lbl: Path, stats: dict[str, object]
+) -> list[ValidationIssue]:
+    """Validate one YOLO instance-segmentation label line."""
+    issues: list[ValidationIssue] = []
+    if len(parts) < 7 or (len(parts) - 1) % 2:
+        stats["invalid_lines"] = int(stats["invalid_lines"]) + 1
+        issues.append(
+            ValidationIssue(
+                severity="error",
+                code="invalid_segment_format",
+                message="Expected class id followed by at least three x/y points.",
+                path=str(lbl),
+            )
+        )
+        return issues
+    try:
+        class_id = int(float(parts[0]))
+        coords = [float(value) for value in parts[1:]]
+    except Exception:
+        issues.append(
+            ValidationIssue(
+                severity="error",
+                code="invalid_numeric",
+                message="Non-numeric segmentation label values.",
+                path=str(lbl),
+            )
+        )
+        return issues
+    cast = stats["class_ids"]
+    if isinstance(cast, set):
+        cast.add(class_id)
+    if any(coord < -1e-6 or coord > 1.0 + 1e-6 for coord in coords):
+        issues.append(
+            ValidationIssue(
+                severity="error",
+                code="coord_out_of_range",
+                message="Normalized segmentation coordinate out of [0,1] range.",
+                path=str(lbl),
+            )
+        )
+    return issues
+
+
 def _validate_item_file_pair(
     item, split: str, stats: dict[str, object]
 ) -> list[ValidationIssue]:
@@ -263,7 +307,12 @@ def _validate_item_file_pair_for_mode(
         )
         return issues
 
-    validator = _validate_obb_line if label_mode == "obb" else _validate_detect_line
+    validators = {
+        "obb": _validate_obb_line,
+        "detect": _validate_detect_line,
+        "segment": _validate_segment_line,
+    }
+    validator = validators[label_mode]
     for parts in parsed:
         issues.extend(validator(parts, lbl, stats))
     return issues
@@ -322,8 +371,8 @@ def validate_ultralytics_dataset(
     min_train: int = 1,
     min_val: int = 1,
 ) -> ValidationReport:
-    """Validate an Ultralytics detect/OBB dataset against the expected label mode."""
-    if label_mode not in {"obb", "detect"}:
+    """Validate an Ultralytics OBB, detect, or segment dataset."""
+    if label_mode not in {"obb", "detect", "segment"}:
         raise RuntimeError(f"Unsupported Ultralytics label mode: {label_mode}")
 
     issues: list[ValidationIssue] = []
@@ -388,10 +437,18 @@ def validate_role_dataset(
             min_train=min_train,
             min_val=min_val,
         )
-    if role == TrainingRole.SEQ_DETECT:
+    if role in {TrainingRole.DETECT_DIRECT, TrainingRole.SEQ_DETECT}:
         return validate_ultralytics_dataset(
             inspection,
             label_mode="detect",
+            require_train_val=require_train_val,
+            min_train=min_train,
+            min_val=min_val,
+        )
+    if role in {TrainingRole.SEGMENT_DIRECT, TrainingRole.SEQ_CROP_SEGMENT}:
+        return validate_ultralytics_dataset(
+            inspection,
+            label_mode="segment",
             require_train_val=require_train_val,
             min_train=min_train,
             min_val=min_val,

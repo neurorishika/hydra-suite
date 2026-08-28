@@ -240,3 +240,27 @@ def test_validate_role_dataset_detect_accepts_expected_ultralytics_layout(
 
     assert report.valid is True
     assert report.stats["label_mode"] == "detect"
+
+
+def test_validate_role_dataset_segment_accepts_polygon_labels(tmp_path: Path) -> None:
+    validation, contracts, _inspector = _load_validation_modules()
+    for split, name in (("train", "a"), ("val", "b")):
+        image = tmp_path / "images" / split / f"{name}.jpg"
+        image.parent.mkdir(parents=True, exist_ok=True)
+        image.write_bytes(name.encode())
+        _write_label(
+            tmp_path / "labels" / split / f"{name}.txt",
+            "0 0.1 0.1 0.8 0.1 0.8 0.8 0.4 0.9 0.1 0.8",
+        )
+    (tmp_path / "dataset.yaml").write_text(
+        "train: images/train\nval: images/val\nnames:\n  0: ant\n",
+        encoding="utf-8",
+    )
+
+    report = validation.validate_role_dataset(
+        tmp_path,
+        contracts.TrainingRole.SEGMENT_DIRECT,
+    )
+
+    assert report.valid is True
+    assert report.stats["label_mode"] == "segment"

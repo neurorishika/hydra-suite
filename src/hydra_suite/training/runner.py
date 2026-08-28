@@ -132,8 +132,10 @@ def _extract_best_val_acc_from_results_csv(metrics_csv_path: Path) -> float | No
 def _ultralytics_task_for_role(role: TrainingRole) -> str:
     if role in (TrainingRole.OBB_DIRECT, TrainingRole.SEQ_CROP_OBB):
         return "obb"
-    if role == TrainingRole.SEQ_DETECT:
+    if role in (TrainingRole.DETECT_DIRECT, TrainingRole.SEQ_DETECT):
         return "detect"
+    if role in (TrainingRole.SEGMENT_DIRECT, TrainingRole.SEQ_CROP_SEGMENT):
+        return "segment"
     if role in (
         TrainingRole.CLASSIFY_FLAT_YOLO,
         TrainingRole.CLASSIFY_MULTIHEAD_YOLO,
@@ -145,7 +147,7 @@ def _ultralytics_task_for_role(role: TrainingRole) -> str:
 def _resolve_ultralytics_data_arg(spec: TrainingRunSpec, task: str) -> str:
     """Resolve the `data=` argument expected by Ultralytics for a training run."""
     dataset_ref = Path(spec.derived_dataset_dir).expanduser()
-    if task in {"detect", "obb"} and dataset_ref.is_dir():
+    if task in {"detect", "obb", "segment"} and dataset_ref.is_dir():
         yaml_path = dataset_ref / "dataset.yaml"
         if yaml_path.exists():
             return str(yaml_path.resolve())
@@ -660,9 +662,7 @@ def _run_tiny_training_loop(
                 patience_counter = 0
                 _safe_log(
                     log_cb,
-                    f"  * new best val_acc={
-                        val_acc:.4f} at epoch {
-                        epoch + 1} — checkpoint saved",
+                    f"  * new best val_acc={val_acc:.4f} at epoch {epoch + 1} — checkpoint saved",
                 )
             else:
                 patience_counter += 1
@@ -691,8 +691,7 @@ def _run_tiny_training_loop(
     if has_validation and best_val_acc is not None:
         _safe_log(
             log_cb,
-            f"Training loop done: best_val_acc={
-                best_val_acc:.4f} @ epoch {best_epoch}/{_final_epoch}, "
+            f"Training loop done: best_val_acc={best_val_acc:.4f} @ epoch {best_epoch}/{_final_epoch}, "
             f"wall_time={_elapsed:.1f}s",
         )
     else:
@@ -972,8 +971,7 @@ def _train_tiny_classify(
         n_val = sum(1 for _, lbl in val_samples if lbl == cls_idx)
         _safe_log(
             log_cb,
-            f"  class {cls_idx} ({
-                idx_to_class[cls_idx]}): train={n_train}, val={n_val}",
+            f"  class {cls_idx} ({idx_to_class[cls_idx]}): train={n_train}, val={n_val}",
         )
 
     input_w = int(spec.tiny_params.input_width)
@@ -1377,11 +1375,7 @@ def _run_torchvision_training_loop(
         _safe_log(
             log_cb,
             (
-                f"Epoch {
-                    epoch + 1}/{
-                    params.epochs}  loss={
-                    avg_loss:.4f}  val_acc={
-                    val_acc:.4f}"
+                f"Epoch {epoch + 1}/{params.epochs}  loss={avg_loss:.4f}  val_acc={val_acc:.4f}"
                 if val_acc is not None
                 else f"Epoch {epoch + 1}/{params.epochs}  loss={avg_loss:.4f}  val_acc=n/a"
             ),
@@ -1410,9 +1404,7 @@ def _run_torchvision_training_loop(
                 )
                 _safe_log(
                     log_cb,
-                    f"  * new best val_acc={
-                        val_acc:.4f} at epoch {
-                        epoch + 1} — checkpoint saved",
+                    f"  * new best val_acc={val_acc:.4f} at epoch {epoch + 1} — checkpoint saved",
                 )
             else:
                 patience_count += 1
@@ -1442,8 +1434,7 @@ def _run_torchvision_training_loop(
     if has_validation and best_val_acc is not None:
         _safe_log(
             log_cb,
-            f"Training loop done: best_val_acc={
-                best_val_acc:.4f} @ epoch {best_epoch}/{_final_epoch}, "
+            f"Training loop done: best_val_acc={best_val_acc:.4f} @ epoch {best_epoch}/{_final_epoch}, "
             f"wall_time={_elapsed:.1f}s",
         )
     else:
@@ -2188,8 +2179,7 @@ def _train_multihead_shared_classify(
     elapsed = _time.monotonic() - _t0
     _safe_log(
         log_cb,
-        f"Shared-trunk training done: best_val_acc={best_val_acc} @ epoch {best_epoch} ({
-            elapsed:.1f}s)",
+        f"Shared-trunk training done: best_val_acc={best_val_acc} @ epoch {best_epoch} ({elapsed:.1f}s)",
     )
     return {
         "success": best_ckpt_path.exists(),

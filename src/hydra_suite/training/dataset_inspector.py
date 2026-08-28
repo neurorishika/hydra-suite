@@ -266,18 +266,24 @@ class OBBSizeStats:
 
 
 def _parse_obb_object_from_line(ln: str, w: int, h: int):
-    """Parse one OBB label line and return (bw, bh) in pixels, or None."""
+    """Parse OBB, detect, or polygon geometry and return its pixel envelope."""
     import numpy as np
 
     ln = ln.strip()
     if not ln:
         return None
     parts = ln.split()
-    if len(parts) != 9:
+    if len(parts) == 5:
+        try:
+            _cls, cx, cy, bw, bh = (float(v) for v in parts)
+        except ValueError:
+            return None
+        return max(1.0, bw * float(w)), max(1.0, bh * float(h))
+    if len(parts) < 7 or (len(parts) - 1) % 2:
         return None
     try:
         coords = np.asarray([float(v) for v in parts[1:]], dtype=np.float32).reshape(
-            4, 2
+            -1, 2
         )
     except Exception:
         return None

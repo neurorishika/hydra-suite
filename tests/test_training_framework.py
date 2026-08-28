@@ -394,6 +394,63 @@ def test_runner_command_per_role(tmp_path: Path):
     assert f"data={str((ds_dir / 'dataset.yaml').resolve())}" in joined
 
 
+def test_runner_maps_every_detectkit_yolo_role_to_its_ultralytics_task(
+    tmp_path: Path,
+):
+    ds_dir = tmp_path / "ds"
+    ds_dir.mkdir()
+    (ds_dir / "dataset.yaml").write_text(
+        "train: images/train\nval: images/val\n", encoding="utf-8"
+    )
+    expected_tasks = {
+        TrainingRole.OBB_DIRECT: "obb",
+        TrainingRole.DETECT_DIRECT: "detect",
+        TrainingRole.SEGMENT_DIRECT: "segment",
+        TrainingRole.SEQ_DETECT: "detect",
+        TrainingRole.SEQ_CROP_OBB: "obb",
+        TrainingRole.SEQ_CROP_SEGMENT: "segment",
+    }
+    for role, task in expected_tasks.items():
+        suffix = "-seg" if task == "segment" else "-obb" if task == "obb" else ""
+        spec = TrainingRunSpec(
+            role=role,
+            source_datasets=[SourceDataset(path="/tmp/src")],
+            derived_dataset_dir=str(ds_dir),
+            base_model=f"yolo26s{suffix}.pt",
+            hyperparams=TrainingHyperParams(),
+            device="cpu",
+        )
+        command = build_ultralytics_command(spec, tmp_path / "runs" / role.value)
+        assert task == command[3 if command[0] == sys.executable else 1]
+        assert f"data={str((ds_dir / 'dataset.yaml').resolve())}" in command
+
+
+def test_publish_metadata_supports_every_detectkit_yolo_role(
+    tmp_path: Path, monkeypatch
+):
+    import hydra_suite.training.model_publish as publish
+
+    monkeypatch.setattr(publish, "_project_root", lambda: tmp_path)
+    expected = {
+        TrainingRole.OBB_DIRECT: ("obb", "obb_direct", "YOLO-obb"),
+        TrainingRole.DETECT_DIRECT: ("detect", "detect_direct", "YOLO-detect"),
+        TrainingRole.SEGMENT_DIRECT: ("segment", "segment_direct", "YOLO-segment"),
+        TrainingRole.SEQ_DETECT: ("detect", "seq_detect", "YOLO-detect"),
+        TrainingRole.SEQ_CROP_OBB: ("obb", "seq_crop_obb", "YOLO-obb/cropped"),
+        TrainingRole.SEQ_CROP_SEGMENT: (
+            "segment",
+            "seq_crop_segment",
+            "YOLO-segment/cropped",
+        ),
+    }
+    for role, (task, usage, directory) in expected.items():
+        assert publish._task_usage_for_role(role) == (task, usage)
+        assert (
+            publish._repo_dir_for_role(role).relative_to(tmp_path / "models").as_posix()
+            == directory
+        )
+
+
 def test_runner_command_falls_back_to_directory_without_dataset_yaml(tmp_path: Path):
     ds_dir = tmp_path / "ds"
     ds_dir.mkdir(parents=True)
