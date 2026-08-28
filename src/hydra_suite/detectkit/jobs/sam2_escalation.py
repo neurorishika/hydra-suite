@@ -180,7 +180,11 @@ def run_escalation(
                         poly = box.polygon_px
                     records.append(
                         LabelRecord(
-                            class_id=0,
+                            # Preserve the original per-instance class id: a
+                            # hardcoded 0 would collapse every class of a
+                            # multi-class source on accept, which now
+                            # overwrites the source's own labels in place.
+                            class_id=box.class_id,
                             confidence=1.0,
                             points=np.asarray(poly, dtype=np.float32).reshape(-1, 2),
                             level=GeometryLevel.POLYGON,

@@ -11,6 +11,10 @@ class SourceBox:
     aabb: tuple[float, float, float, float]  # x1, y1, x2, y2 in pixels
     center: tuple[float, float]
     polygon_px: list[tuple[float, float]]  # original label polygon (fallback)
+    # The label line's own class id. Carried through escalation so a
+    # multi-class source keeps its per-instance class assignments when a
+    # staged escalation is accepted over its canonical labels.
+    class_id: int = 0
 
 
 @dataclass
@@ -38,6 +42,7 @@ def read_boxes_from_label(label_path: Path, img_w: int, img_h: int) -> list[Sour
         if not parts:
             continue
         try:
+            class_id = int(float(parts[0]))
             vals = [float(v) for v in parts[1:]]
         except ValueError:
             continue
@@ -58,7 +63,9 @@ def read_boxes_from_label(label_path: Path, img_w: int, img_h: int) -> list[Sour
             sum(p[0] for p in poly) / len(poly),
             sum(p[1] for p in poly) / len(poly),
         )
-        out.append(SourceBox(aabb=aabb, center=center, polygon_px=poly))
+        out.append(
+            SourceBox(aabb=aabb, center=center, polygon_px=poly, class_id=int(class_id))
+        )
     return out
 
 
