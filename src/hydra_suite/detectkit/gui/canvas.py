@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Optional
 
 import cv2
@@ -25,6 +26,11 @@ from PySide6.QtWidgets import (
     QGraphicsView,
 )
 
+from hydra_suite.utils.geometry_derivation import (
+    axis_aligned_bbox_quad,
+    min_area_rect_quad,
+)
+
 from .constants import CANVAS_BG_COLOR, DEFAULT_OBB_FONT_SIZE, DEFAULT_OBB_LINE_WIDTH
 
 logger = logging.getLogger(__name__)
@@ -40,6 +46,38 @@ _PALETTE = [
     QColor(255, 140, 0),  # orange
     QColor(180, 220, 80),  # lime
 ]
+
+
+@dataclass(frozen=True)
+class _LevelStyle:
+    pen_style: "Qt.PenStyle"
+    brush_style: "Qt.BrushStyle"
+    fill_alpha: int  # 0-255; only used when brush_style != NoBrush
+
+
+def _level_styles():
+    """Lazily built so importing GeometryLevel doesn't happen at module load."""
+    from hydra_suite.training.geometry_levels import GeometryLevel
+
+    return {
+        # POLYGON's pen is DotLine (not SolidLine) so a polygon-native
+        # source's filled outline stays visually distinct from AABB's solid
+        # outline when both draw for the same detection -- the fill alone
+        # (translucent) is the primary differentiator per spec Decision 1,
+        # but a same-style outline underneath it would still be confusable.
+        GeometryLevel.POLYGON: _LevelStyle(
+            Qt.PenStyle.DotLine, Qt.BrushStyle.SolidPattern, 90
+        ),
+        GeometryLevel.OBB: _LevelStyle(Qt.PenStyle.DashLine, Qt.BrushStyle.NoBrush, 0),
+        GeometryLevel.AABB: _LevelStyle(
+            Qt.PenStyle.SolidLine, Qt.BrushStyle.NoBrush, 0
+        ),
+    }
+
+
+_UNREVIEWED_NATIVE_STYLE = _LevelStyle(
+    Qt.PenStyle.SolidLine, Qt.BrushStyle.BDiagPattern, 140
+)
 
 
 class OBBCanvas(QGraphicsView):
@@ -65,6 +103,15 @@ class OBBCanvas(QGraphicsView):
         self._gt_obb_items: list = []
         self._gt_label_items: list = []
         self._gt_class_ids: list[int] = []
+        # Per-geometry-level GT sub-layers (native level down to AABB); the
+        # flat _gt_obb_items/_gt_label_items/_gt_class_ids lists below stay
+        # as a concatenation across all drawn levels, for _apply_visibility
+        # and clear_gt_detections' pre-existing flat-iteration callers.
+        self._gt_level_items: dict = {}
+        self._gt_level_label_items: dict = {}
+        self._gt_level_class_ids: dict = {}
+        self._gt_native_level = None
+        self._show_derived_levels: bool = True
         # Prediction layer (model output, dashed lines)
         self._pred_obb_items: list = []
         self._pred_label_items: list = []
@@ -142,6 +189,10 @@ class OBBCanvas(QGraphicsView):
         class_names: list[str] | dict[int, str] | None,
         line_style: "Qt.PenStyle",
         show_confidence: bool = False,
+        *,
+        brush_style: "Qt.BrushStyle" = Qt.BrushStyle.NoBrush,
+        fill_alpha: int = 255,
+        show_labels: bool = True,
     ) -> None:
         """Render *detections* into the given item lists."""
         font = QFont()
@@ -164,11 +215,21 @@ class OBBCanvas(QGraphicsView):
             pen = QPen(colour, DEFAULT_OBB_LINE_WIDTH)
             pen.setCosmetic(True)
             pen.setStyle(line_style)
-            poly_item = self._scene.addPolygon(
-                qpoly, pen, QBrush(Qt.BrushStyle.NoBrush)
-            )
+
+            if brush_style != Qt.BrushStyle.NoBrush:
+                fill_colour = QColor(colour)
+                fill_colour.setAlpha(fill_alpha)
+                brush = QBrush(fill_colour, brush_style)
+            else:
+                brush = QBrush(Qt.BrushStyle.NoBrush)
+
+            poly_item = self._scene.addPolygon(qpoly, pen, brush)
             obb_items.append(poly_item)
             class_ids.append(class_id)
+
+            if not show_labels:
+                label_items.append(None)
+                continue
 
             label_name = lookup.get(class_id, f"class_{class_id}")
             if show_confidence and confidence is not None:
@@ -191,11 +252,25 @@ class OBBCanvas(QGraphicsView):
                     not self._visible_class_ids or cid in self._visible_class_ids
                 )
                 obb.setVisible(visible)
-                lbl.setVisible(visible)
+                if lbl is not None:
+                    lbl.setVisible(visible)
 
-        _set_layer(
-            self._gt_obb_items, self._gt_label_items, self._gt_class_ids, self._show_gt
-        )
+        if self._gt_level_items:
+            for level, items in self._gt_level_items.items():
+                label_items = self._gt_level_label_items[level]
+                class_ids = self._gt_level_class_ids[level]
+                level_visible = self._show_gt and (
+                    level == self._gt_native_level or self._show_derived_levels
+                )
+                _set_layer(items, label_items, class_ids, level_visible)
+        else:
+            _set_layer(
+                self._gt_obb_items,
+                self._gt_label_items,
+                self._gt_class_ids,
+                self._show_gt,
+            )
+
         _set_layer(
             self._pred_obb_items,
             self._pred_label_items,
@@ -222,6 +297,77 @@ class OBBCanvas(QGraphicsView):
             Qt.PenStyle.SolidLine,
             show_confidence=False,
         )
+        self._apply_visibility()
+
+    def set_gt_detections_multi_level(
+        self,
+        detections: list[dict],
+        class_names: list[str] | dict[int, str] | None = None,
+        *,
+        native_level,
+        reviewed: bool = True,
+    ) -> None:
+        """Draw ground-truth detections at *native_level*, plus every
+        derived level below it down to AABB, each in its own per-level
+        style. Only the native level's shapes carry a text label."""
+        from hydra_suite.training.geometry_levels import GeometryLevel
+
+        self.clear_gt_detections()
+        styles = _level_styles()
+
+        for level in (GeometryLevel.POLYGON, GeometryLevel.OBB, GeometryLevel.AABB):
+            if level > native_level:
+                continue
+
+            level_detections = []
+            for det in detections:
+                polygon_px = det.get("polygon_px", [])
+                if level == native_level:
+                    shape = polygon_px
+                elif level == GeometryLevel.OBB:
+                    shape = min_area_rect_quad(polygon_px)
+                else:  # GeometryLevel.AABB
+                    shape = axis_aligned_bbox_quad(polygon_px)
+                if not shape:
+                    continue
+                level_detections.append({**det, "polygon_px": shape})
+
+            if not level_detections:
+                continue
+
+            style = (
+                _UNREVIEWED_NATIVE_STYLE
+                if (level == native_level and not reviewed)
+                else styles[level]
+            )
+            obb_items: list = []
+            label_items: list = []
+            class_ids: list = []
+            self._draw_detections(
+                level_detections,
+                obb_items,
+                label_items,
+                class_ids,
+                class_names,
+                style.pen_style,
+                show_confidence=False,
+                brush_style=style.brush_style,
+                fill_alpha=style.fill_alpha,
+                show_labels=(level == native_level),
+            )
+            self._gt_level_items[level] = obb_items
+            self._gt_level_label_items[level] = label_items
+            self._gt_level_class_ids[level] = class_ids
+            self._gt_obb_items.extend(obb_items)
+            self._gt_label_items.extend(label_items)
+            self._gt_class_ids.extend(class_ids)
+
+        self._gt_native_level = native_level
+        self._apply_visibility()
+
+    def set_derived_levels_visible(self, visible: bool) -> None:
+        """Toggle whether non-native (derived) GT levels are drawn."""
+        self._show_derived_levels = visible
         self._apply_visibility()
 
     def set_pred_detections(
@@ -271,10 +417,15 @@ class OBBCanvas(QGraphicsView):
         for item in self._gt_obb_items:
             self._scene.removeItem(item)
         for item in self._gt_label_items:
-            self._scene.removeItem(item)
+            if item is not None:
+                self._scene.removeItem(item)
         self._gt_obb_items.clear()
         self._gt_label_items.clear()
         self._gt_class_ids.clear()
+        self._gt_level_items.clear()
+        self._gt_level_label_items.clear()
+        self._gt_level_class_ids.clear()
+        self._gt_native_level = None
 
     def clear_pred_detections(self) -> None:
         """Remove all prediction polygon and label items from the scene."""
@@ -293,6 +444,10 @@ class OBBCanvas(QGraphicsView):
         self._gt_obb_items.clear()
         self._gt_label_items.clear()
         self._gt_class_ids.clear()
+        self._gt_level_items.clear()
+        self._gt_level_label_items.clear()
+        self._gt_level_class_ids.clear()
+        self._gt_native_level = None
         self._pred_obb_items.clear()
         self._pred_label_items.clear()
         self._pred_class_ids.clear()

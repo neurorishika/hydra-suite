@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import os
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
 import sys
 from pathlib import Path
 
@@ -169,3 +173,146 @@ def test_canvas_ctrl_wheel_zoom_changes_zoom(qapp):
 
     assert event.accepted is True
     assert canvas._zoom > before
+
+
+def test_set_gt_detections_multi_level_polygon_native_draws_three_layers(qapp):
+    from hydra_suite.training.geometry_levels import GeometryLevel
+
+    canvas = OBBCanvas()
+    canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
+    polygon = [(10.0, 10.0), (50.0, 5.0), (90.0, 40.0), (60.0, 90.0), (20.0, 60.0)]
+    canvas.set_gt_detections_multi_level(
+        [{"class_id": 0, "polygon_px": polygon}],
+        native_level=GeometryLevel.POLYGON,
+        reviewed=True,
+    )
+    assert set(canvas._gt_level_items.keys()) == {
+        GeometryLevel.POLYGON,
+        GeometryLevel.OBB,
+        GeometryLevel.AABB,
+    }
+    for level in (GeometryLevel.POLYGON, GeometryLevel.OBB, GeometryLevel.AABB):
+        assert len(canvas._gt_level_items[level]) == 1
+
+
+def test_set_gt_detections_multi_level_obb_native_draws_two_layers(qapp):
+    from hydra_suite.training.geometry_levels import GeometryLevel
+
+    canvas = OBBCanvas()
+    canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
+    quad = [(10.0, 10.0), (90.0, 20.0), (80.0, 90.0), (0.0, 80.0)]
+    canvas.set_gt_detections_multi_level(
+        [{"class_id": 0, "polygon_px": quad}],
+        native_level=GeometryLevel.OBB,
+        reviewed=True,
+    )
+    assert set(canvas._gt_level_items.keys()) == {GeometryLevel.OBB, GeometryLevel.AABB}
+
+
+def test_set_gt_detections_multi_level_aabb_native_draws_one_layer(qapp):
+    from hydra_suite.training.geometry_levels import GeometryLevel
+
+    canvas = OBBCanvas()
+    canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
+    quad = [(10.0, 10.0), (90.0, 10.0), (90.0, 90.0), (10.0, 90.0)]
+    canvas.set_gt_detections_multi_level(
+        [{"class_id": 0, "polygon_px": quad}],
+        native_level=GeometryLevel.AABB,
+        reviewed=True,
+    )
+    assert set(canvas._gt_level_items.keys()) == {GeometryLevel.AABB}
+
+
+def test_set_gt_detections_multi_level_unreviewed_uses_hatched_brush_on_native_only(
+    qapp,
+):
+    from PySide6.QtCore import Qt
+
+    from hydra_suite.training.geometry_levels import GeometryLevel
+
+    canvas = OBBCanvas()
+    canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
+    quad = [(10.0, 10.0), (90.0, 20.0), (80.0, 90.0), (0.0, 80.0)]
+    canvas.set_gt_detections_multi_level(
+        [{"class_id": 0, "polygon_px": quad}],
+        native_level=GeometryLevel.OBB,
+        reviewed=False,
+    )
+    native_item = canvas._gt_level_items[GeometryLevel.OBB][0]
+    derived_item = canvas._gt_level_items[GeometryLevel.AABB][0]
+    assert native_item.brush().style() == Qt.BrushStyle.BDiagPattern
+    assert derived_item.brush().style() != Qt.BrushStyle.BDiagPattern
+
+
+def test_set_derived_levels_visible_hides_non_native_layers_only(qapp):
+    from hydra_suite.training.geometry_levels import GeometryLevel
+
+    canvas = OBBCanvas()
+    canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
+    polygon = [(10.0, 10.0), (50.0, 5.0), (90.0, 40.0), (60.0, 90.0), (20.0, 60.0)]
+    canvas.set_gt_detections_multi_level(
+        [{"class_id": 0, "polygon_px": polygon}],
+        native_level=GeometryLevel.POLYGON,
+        reviewed=True,
+    )
+
+    canvas.set_derived_levels_visible(False)
+    assert canvas._gt_level_items[GeometryLevel.POLYGON][0].isVisible() is True
+    assert canvas._gt_level_items[GeometryLevel.OBB][0].isVisible() is False
+    assert canvas._gt_level_items[GeometryLevel.AABB][0].isVisible() is False
+
+    canvas.set_derived_levels_visible(True)
+    assert canvas._gt_level_items[GeometryLevel.OBB][0].isVisible() is True
+    assert canvas._gt_level_items[GeometryLevel.AABB][0].isVisible() is True
+
+
+def test_clear_gt_detections_clears_per_level_state(qapp):
+    from hydra_suite.training.geometry_levels import GeometryLevel
+
+    canvas = OBBCanvas()
+    canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
+    quad = [(10.0, 10.0), (90.0, 20.0), (80.0, 90.0), (0.0, 80.0)]
+    canvas.set_gt_detections_multi_level(
+        [{"class_id": 0, "polygon_px": quad}], native_level=GeometryLevel.OBB
+    )
+    canvas.clear_gt_detections()
+    assert canvas._gt_level_items == {}
+    assert canvas._gt_obb_items == []
+
+
+def test_set_gt_detections_single_layer_still_works_unchanged(qapp):
+    """Backward-compat: the old single-layer API is untouched for any
+    caller that doesn't pass native_level/reviewed -- including its
+    visibility wiring, which _apply_visibility must still drive via the
+    flat _gt_obb_items list when _gt_level_items was never populated."""
+    canvas = OBBCanvas()
+    canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
+    canvas.set_gt_detections(
+        [
+            {
+                "class_id": 0,
+                "polygon_px": [(1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (1.0, 2.0)],
+            }
+        ]
+    )
+    assert len(canvas._gt_obb_items) == 1
+    assert canvas._gt_level_items == {}  # single-layer path never touches this
+
+    canvas.set_overlay_visibility(show_gt=False, show_pred=True)
+    assert canvas._gt_obb_items[0].isVisible() is False
+
+    canvas.set_overlay_visibility(show_gt=True, show_pred=True)
+    assert canvas._gt_obb_items[0].isVisible() is True
+
+
+def test_clear_all_then_apply_visibility_does_not_raise(qapp):
+    from hydra_suite.training.geometry_levels import GeometryLevel
+
+    canvas = OBBCanvas()
+    canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
+    quad = [(10.0, 10.0), (90.0, 20.0), (80.0, 90.0), (0.0, 80.0)]
+    canvas.set_gt_detections_multi_level(
+        [{"class_id": 0, "polygon_px": quad}], native_level=GeometryLevel.OBB
+    )
+    canvas.clear_all()
+    canvas.set_overlay_visibility(show_gt=True, show_pred=True)  # must not raise
