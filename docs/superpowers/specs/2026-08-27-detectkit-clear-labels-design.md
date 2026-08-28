@@ -34,8 +34,16 @@ DetectKit. This is friction users hit routinely during iterative labeling.
 2. **One shared, Qt-free helper backs all three actions.** `clear_labels_for_source(source_path,
    image_paths=None)` — unfiltered clears every `*.txt` under the source's `labels/`; filtered
    (`image_paths` given) clears only the label files matching those images. One tested
-   implementation, three UI entry points, matching `_delete_selected_images`'s file-resolution
-   pattern (`_label_path_for_image`) so the two actions stay consistent.
+   implementation, three UI entry points. **Corrected during adversarial review:** it does
+   deliberately NOT reuse the existing `_label_path_for_image`/`find_label_for_image`
+   resolvers' full 3-strategy chain — their third strategy (an unanchored recursive
+   `labels_dir.rglob(f"{stem}.txt")` search) can resolve an unlabeled image in one split to a
+   *different* split's same-stem label file, silently clearing the wrong frame. Verified this
+   session with a concrete `images/train/f001.jpg` (unlabeled) vs. `images/val/f001.jpg` ->
+   `labels/val/f001.txt` reproduction. `clear_labels_for_source` uses only the two safe
+   strategies (mirrored path, flat stem match at the `labels/` root) and skips an image it can't
+   resolve that way — silently missing a legitimately-differently-organized label is an
+   acceptable "skip", silently clearing the wrong frame's labels is not.
 3. **Confirmation strength scales with scope**, per the locked decision from brainstorming:
    - Frame: single Yes/Cancel (matches `_delete_selected_images`'s existing pattern exactly).
    - Source: single Yes/Cancel, naming the source and the count of label files that will be
@@ -49,22 +57,33 @@ DetectKit. This is friction users hit routinely during iterative labeling.
 
 ## Architecture
 
-No new module needed for the pure-function core — one function added to the file that already
-holds `_label_path_for_image` (or a small sibling, see below). Everything else is UI wiring
-inside `dataset_panel.py`.
+**Corrected during adversarial review:** the pure-function core lives in
+`src/hydra_suite/detectkit/gui/utils.py` (not `dataset_panel.py`) — that module already holds
+`find_label_for_image` (the near-duplicate resolver `clear_labels_for_source` is a narrower
+sibling of) and is genuinely Qt-free, unlike `dataset_panel.py` (which imports `PySide6` at
+module scope). This also keeps `DatasetPanel` — already ~700 lines, over CLAUDE.md's ~500-line
+guideline — from growing further with logic that doesn't need `self`.
+
+Also corrected: `DatasetPanel` has no `_build_ui` method — its entire UI is built inline in
+`__init__`. Every reference below is to `__init__`, not a nonexistent method.
 
 ```
-src/hydra_suite/detectkit/gui/panels/dataset_panel.py
+src/hydra_suite/detectkit/gui/utils.py
     clear_labels_for_source(source_path, image_paths=None) -> int   # NEW, module-level,
                                                                       # Qt-free, returns count
                                                                       # of files cleared
+
+src/hydra_suite/detectkit/gui/panels/dataset_panel.py
     _on_image_list_context_menu()        # MODIFIED: add "Clear labels from frame..." entry
-    _clear_labels_from_frame()           # NEW: frame-scope handler, mirrors
-                                          # _delete_selected_images's confirm/execute shape
+    _clear_labels_from_frame()           # NEW: frame-scope handler, re-renders the current
+                                          # image in place (does NOT rebuild the image list --
+                                          # nothing about which images exist has changed)
     _clear_labels_from_source()          # NEW: source-scope handler, new button
     _clear_labels_from_all_sources()     # NEW: project-scope handler, new button,
                                           # type-to-confirm dialog
-    _build_ui()                          # MODIFIED: add two new buttons under Images section
+    __init__()                           # MODIFIED: add two new buttons under Images section,
+                                          # stacked vertically (matching this panel's existing
+                                          # paired-button precedent) rather than side-by-side
 ```
 
 ## `clear_labels_for_source`
@@ -84,16 +103,33 @@ def clear_labels_for_source(
 
 Implementation notes:
 - Unfiltered case: `(Path(source_path) / "labels").rglob("*.txt")`, write `""` to each existing
-  file. Recursive, so it clears nested split layouts (`labels/train/...`) the same way the
-  materializer can produce them.
-- Filtered case: resolve each `image_path` via the same logic `_label_path_for_image` already
-  implements (mirror images/&lt;rel&gt; -> labels/&lt;rel&gt;.txt, with the stem-match fallback);
-  a resolution miss (no label file for that image) is silently skipped, not an error — matches
-  `_delete_selected_images`'s existing "best effort" tolerance for missing label files.
-- Returns the number of files actually truncated, for the confirmation dialogs' counts and the
-  post-action status message.
+  file, skipping a stray `classes.txt` if one is ever found under `labels/` by mistake (it
+  belongs at the source root by convention). Recursive, so it clears nested split layouts
+  (`labels/train/...`) the same way the materializer can produce them.
+- Filtered case: resolve each `image_path` via only the mirrored-path and flat-stem-at-root
+  strategies (see Decision 2's correction above) — deliberately NOT the unanchored recursive
+  fallback `_label_path_for_image`/`find_label_for_image` use. A resolution miss (no label file
+  for that image) is silently skipped, not an error. Results are deduplicated (two images
+  resolving to the same label file count once).
+- Returns the number of files actually truncated. Callers use this to detect partial failure
+  (a per-file write error is logged and skipped, not raised) and surface a follow-up warning —
+  matching `_delete_selected_images`'s existing failure-reporting pattern in this panel.
 
 ## UI wiring
+
+**Note (added during adversarial review):** the code sketches below are illustrative of the
+intended shape; the implementation plan
+(`docs/superpowers/plans/2026-08-27-detectkit-clear-labels-plan.md`) is authoritative for the
+exact, corrected code — it fixes several things this section's original sketches got wrong: (1)
+`_build_ui` doesn't exist, the buttons are added inline in `__init__`; (2) after clearing labels,
+the handlers must re-render the current image/row in place, not call
+`_on_source_combo_changed` unconditionally (that rebuilds the image list and resets to row 0,
+which is correct for actual image deletion but wrong here — nothing about which images exist
+changed); (3) `clear_labels_for_source`'s return value IS used, to surface a partial-failure
+warning (see Decision 2's note above — the "doesn't need failure-reporting UI" paragraph
+originally in this section was wrong; matching `_delete_selected_images`'s existing pattern means
+matching its failure reporting too, not just its confirmation dialog); (4) the two new buttons
+stack vertically, not in an `QHBoxLayout` row (see Architecture section above).
 
 ### 1. Clear labels from frame
 
@@ -154,17 +190,17 @@ def _clear_labels_from_frame(self) -> None:
 ```
 
 No success toast — matches `_delete_selected_images`'s existing precedent in this same file
-(silent on success, a `QMessageBox.warning` only exists there for partial *failures*).
-`clear_labels_for_source` is a truncate on an already-existing, already-writable file, not a
-delete-then-recreate — failure is rare enough (and not user-actionable beyond "try again") that
-it doesn't need its own failure-reporting UI; a per-file `try/except` inside the helper (skip
-and move on, matching the existing tolerance for a missing label file) is sufficient.
+(silent on success). A per-file `try/except` inside the helper skips and logs a failed write
+rather than raising; the caller checks the returned count against how many files it expected to
+clear and shows a `QMessageBox.warning` only when they differ — matching
+`_delete_selected_images`'s existing failure-reporting pattern, not skipping it.
 
 ### 2 & 3. Source-scope and project-scope buttons
 
-Added to `_build_ui`, inside `images_layout`, directly after `self.image_list` (and its
-shortcuts, which aren't part of the layout) — visually grouped under the Images section per the
-original request ("two new buttons needs to be added under the images section"):
+Added inline in `__init__` (there is no `_build_ui` method), inside `images_layout`, directly
+after `self.image_list` (and its shortcuts, which aren't part of the layout) — visually grouped
+under the Images section per the original request ("two new buttons needs to be added under the
+images section"), stacked vertically rather than side-by-side (see Architecture section above):
 
 ```python
         clear_btn_row = QHBoxLayout()
