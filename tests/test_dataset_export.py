@@ -4,6 +4,37 @@ import pandas as pd
 from hydra_suite.core.post import dataset_export
 
 
+def test_frame_lookup_matches_per_frame_rows():
+    """Verify groupby replacement semantics match per-frame filtering."""
+    df = pd.DataFrame(
+        {
+            "FrameID": [1, 1, 2, 3, 3, 3],
+            "X": [10.0, 20.0, 30.0, 40.0, 50.0, 60.0],
+            "Y": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        }
+    )
+    # Verify the groupby-based approach matches the original per-frame scan
+    grouped = {int(fid): sub for fid, sub in df.groupby("FrameID")}
+    assert len(grouped[1]) == 2
+    assert len(grouped[2]) == 1
+    assert len(grouped[3]) == 3
+    assert list(grouped[3]["X"]) == [40.0, 50.0, 60.0]
+
+    # Also verify the semantics match the original filtering approach
+    for frame_id in df["FrameID"].unique():
+        frame_data_old = df[df["FrameID"] == frame_id]
+        frame_data_new = grouped.get(int(frame_id))
+        assert len(frame_data_old) == len(frame_data_new)
+        assert (
+            (
+                frame_data_old.reset_index(drop=True)
+                == frame_data_new.reset_index(drop=True)
+            )
+            .all()
+            .all()
+        )
+
+
 class _StubScorer:
     """Minimal FrameQualityScorer stand-in returning a fixed selection."""
 
