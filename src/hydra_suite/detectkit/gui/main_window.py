@@ -1877,7 +1877,9 @@ class DetectKitMainWindow(QMainWindow):
 
         from .dialogs.review_escalations_dialog import ReviewEscalationsDialog
 
-        review_dlg = ReviewEscalationsDialog(pending_sources, parent=self)
+        review_dlg = ReviewEscalationsDialog(
+            pending_sources, parent=self, project_dir=self._project.project_dir
+        )
         review_dlg.exec()
         self._save_current_project()
         self._dataset_panel.refresh_sources(self._project)

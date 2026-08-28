@@ -28,7 +28,7 @@ class ReviewEscalationsDialog(BaseDialog):
     a working queue, not a form.
     """
 
-    def __init__(self, pending_sources: list, parent=None) -> None:
+    def __init__(self, pending_sources: list, parent=None, project_dir=None) -> None:
         super().__init__(
             "Review Escalations",
             parent=parent,
@@ -36,6 +36,8 @@ class ReviewEscalationsDialog(BaseDialog):
         )
         self.accepted_names: list[str] = []
         self.rejected_names: list[str] = []
+        # Bounds the staging-directory deletes accept/reject perform.
+        self._project_dir = project_dir
 
         container = QWidget()
         layout = QVBoxLayout(container)
@@ -92,10 +94,10 @@ class ReviewEscalationsDialog(BaseDialog):
             src = item.data(Qt.UserRole)
             try:
                 if accept:
-                    accept_pending_escalation(src)
+                    accept_pending_escalation(src, self._project_dir)
                     self.accepted_names.append(src.name)
                 else:
-                    reject_pending_escalation(src)
+                    reject_pending_escalation(src, self._project_dir)
                     self.rejected_names.append(src.name)
             except Exception as exc:
                 QMessageBox.warning(self, "Review Escalations", str(exc))

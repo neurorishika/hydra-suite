@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import shutil
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -23,6 +24,74 @@ from hydra_suite.utils.geometry_levels import GeometryLevel
 from hydra_suite.widgets.workers import BaseWorker
 
 from .sam2_prompts import build_prompts, read_boxes_from_label
+
+logger = logging.getLogger(__name__)
+
+# Every staging directory lives at
+# ``<project_dir>/artifacts/pending_escalations/<dirname>``.
+PENDING_ESCALATIONS_RELDIR = Path("artifacts") / "pending_escalations"
+
+
+def _is_safe_to_delete(
+    path: str | Path | None,
+    project_dir: str | Path | None = None,
+) -> bool:
+    """True if *path* is a staging directory this module may recursively delete.
+
+    ``PendingEscalation.staged_path`` round-trips through the saved project
+    file, so it is untrusted input from disk: a hand-edited or corrupted
+    project could point it at ``/`` or at the source's own directory, and
+    every deletion here is a recursive ``rmtree``. When *project_dir* is
+    known the path must resolve strictly inside that project's
+    ``artifacts/pending_escalations/``; when it is not (callers holding only
+    an ``OBBSource``), the path must at least have the structural shape every
+    staging directory has.
+    """
+    text = str(path or "").strip()
+    if not text:
+        return False
+    try:
+        resolved = Path(text).expanduser().resolve()
+    except OSError:
+        return False
+    if resolved == Path(resolved.anchor):  # filesystem root
+        return False
+
+    if project_dir is not None:
+        try:
+            allowed_root = (
+                Path(project_dir).expanduser().resolve() / PENDING_ESCALATIONS_RELDIR
+            )
+        except OSError:
+            return False
+        return resolved != allowed_root and resolved.is_relative_to(allowed_root)
+
+    return (
+        resolved.parent.name == PENDING_ESCALATIONS_RELDIR.name
+        and resolved.parent.parent.name == PENDING_ESCALATIONS_RELDIR.parent.name
+    )
+
+
+def remove_staged_escalation_dir(
+    path: str | Path | None,
+    project_dir: str | Path | None = None,
+) -> bool:
+    """Recursively delete a staging directory, refusing anything out of bounds.
+
+    Returns True if a delete was attempted. An out-of-bounds path is logged
+    and skipped rather than raising -- this guards a destructive operation,
+    and a source carrying a currently-invalid ``staged_path`` should just
+    leave that directory alone, not crash the caller.
+    """
+    if not _is_safe_to_delete(path, project_dir):
+        logger.warning(
+            "Refusing to delete staged escalation path outside %s: %r",
+            PENDING_ESCALATIONS_RELDIR,
+            str(path or ""),
+        )
+        return False
+    shutil.rmtree(Path(str(path)).expanduser(), ignore_errors=True)
+    return True
 
 
 @dataclass
@@ -141,9 +210,9 @@ def run_escalation(
         # nothing else ever revisits a replaced pending_escalation.
         old_pending = src.pending_escalation
         if old_pending is not None and old_pending.staged_path != str(staged_root):
-            shutil.rmtree(Path(old_pending.staged_path), ignore_errors=True)
+            remove_staged_escalation_dir(old_pending.staged_path, project_root)
 
-        shutil.rmtree(staged_root, ignore_errors=True)
+        remove_staged_escalation_dir(staged_root, project_root)
         (staged_root / "labels").mkdir(parents=True, exist_ok=True)
 
         # Recursive + path-mirroring: a source's images/labels can be nested
@@ -222,7 +291,10 @@ def run_escalation(
     return result
 
 
-def accept_pending_escalation(source: OBBSource) -> None:
+def accept_pending_escalation(
+    source: OBBSource,
+    project_dir: str | Path | None = None,
+) -> None:
     """Promote *source*'s staged escalation result to its canonical labels.
 
     Overwrites the source's ``labels/`` + ``classes.txt`` from the staged
@@ -238,6 +310,9 @@ def accept_pending_escalation(source: OBBSource) -> None:
     label for (e.g. an image that failed to decode during escalation and was
     silently skipped by ``run_escalation``) -- accepting such a staged result
     would otherwise delete real labels with nothing staged to replace them.
+
+    *project_dir*, when given, bounds the staging-directory delete to that
+    project's ``artifacts/pending_escalations/`` (see ``_is_safe_to_delete``).
 
     Raises ValueError if the source has no pending escalation.
     """
@@ -271,7 +346,12 @@ def accept_pending_escalation(source: OBBSource) -> None:
             f"as this would delete those labels: {missing[:5]}"
         )
 
-    shutil.rmtree(source_labels, ignore_errors=True)
+    # ignore_errors=False (the default): a partially-failed delete must raise
+    # HERE, before any copy has started. Swallowing it left the destination
+    # only half gone, and the copytree below then failed with FileExistsError
+    # -- wedging labels/ in a half-deleted state.
+    if source_labels.exists():
+        shutil.rmtree(source_labels)
     shutil.copytree(staged_labels, source_labels)
     classes_src = staged_root / "classes.txt"
     if classes_src.exists():
@@ -281,17 +361,25 @@ def accept_pending_escalation(source: OBBSource) -> None:
     source.reviewed = False
     source.sam2_variant = pending.sam2_variant
 
-    shutil.rmtree(staged_root, ignore_errors=True)
+    remove_staged_escalation_dir(staged_root, project_dir)
     source.pending_escalation = None
 
 
-def reject_pending_escalation(source: OBBSource) -> None:
+def reject_pending_escalation(
+    source: OBBSource,
+    project_dir: str | Path | None = None,
+) -> None:
     """Discard *source*'s staged escalation result, leaving it untouched.
+
+    *project_dir*, when given, bounds the staging-directory delete to that
+    project's ``artifacts/pending_escalations/`` (see ``_is_safe_to_delete``).
+    An out-of-bounds ``staged_path`` is left on disk and the pending state is
+    cleared anyway -- rejecting must always succeed.
 
     Raises ValueError if the source has no pending escalation.
     """
     pending = source.pending_escalation
     if pending is None:
         raise ValueError(f"Source '{source.name}' has no pending escalation.")
-    shutil.rmtree(Path(pending.staged_path), ignore_errors=True)
+    remove_staged_escalation_dir(pending.staged_path, project_dir)
     source.pending_escalation = None

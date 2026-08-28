@@ -30,7 +30,10 @@ def _make_pending_source(tmp_path, name="orig"):
     (source_root / "images").mkdir(parents=True)
     (source_root / "classes.txt").write_text("ant\n", encoding="utf-8")
 
-    staged_root = tmp_path / f"{name}-staged"
+    # Real staging layout: <project_dir>/artifacts/pending_escalations/<dir>.
+    # accept/reject only delete paths with that shape (see
+    # sam2_escalation._is_safe_to_delete).
+    staged_root = tmp_path / "artifacts" / "pending_escalations" / f"{name}-staged"
     (staged_root / "labels").mkdir(parents=True)
     (staged_root / "labels" / "a.txt").write_text(
         "0 0.1 0.1 0.2 0.1 0.2 0.2 0.1 0.2 0.1 0.1\n", encoding="utf-8"

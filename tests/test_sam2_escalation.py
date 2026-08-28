@@ -306,6 +306,117 @@ def test_read_boxes_from_label_parses_class_id(tmp_path):
     assert [b.class_id for b in boxes] == [0, 2]
 
 
+def test_accept_fails_loudly_if_clearing_source_labels_fails(tmp_path, monkeypatch):
+    """A failed pre-copy delete must raise BEFORE any copy has started.
+
+    It used to be `rmtree(..., ignore_errors=True)`, which swallowed a
+    partial failure and let the following copytree blow up with
+    FileExistsError -- leaving labels/ half-deleted.
+    """
+    import shutil as _shutil
+
+    src = _make_source(tmp_path)
+    project = types.SimpleNamespace(project_dir=str(tmp_path), sources=[src])
+    req = EscalationRequest(
+        project=project, source_names=["orig"], variant="sam2.1-hiera-base_plus"
+    )
+    run_escalation(req, _FakeExec())
+    original = (Path(src.path) / "labels" / "a.txt").read_text()
+
+    def _boom(*args, **kwargs):
+        raise PermissionError("locked")
+
+    monkeypatch.setattr(_shutil, "rmtree", _boom)
+    copied = []
+    monkeypatch.setattr(
+        _shutil, "copytree", lambda *a, **k: copied.append(a)  # must never run
+    )
+
+    with pytest.raises(PermissionError):
+        accept_pending_escalation(src)
+
+    assert copied == []
+    assert (Path(src.path) / "labels" / "a.txt").read_text() == original
+
+
+def test_accept_works_when_source_has_no_labels_dir(tmp_path):
+    """The pre-copy delete is guarded on existence: a source with no labels/
+    (nothing to clear) must still accept cleanly rather than raising
+    FileNotFoundError from the now-unsuppressed rmtree."""
+    root = tmp_path / "sources" / "nolabels"
+    (root / "images").mkdir(parents=True)
+    cv2.imwrite(str(root / "images" / "a.jpg"), np.zeros((100, 100, 3), np.uint8))
+    (root / "classes.txt").write_text("ant\n")
+    src = OBBSource(path=str(root), name="nolabels", level="obb")
+    project = types.SimpleNamespace(project_dir=str(tmp_path), sources=[src])
+    req = EscalationRequest(
+        project=project, source_names=["nolabels"], variant="sam2.1-hiera-base_plus"
+    )
+    run_escalation(req, _FakeExec())
+
+    accept_pending_escalation(src)
+
+    assert src.level == "polygon"
+    assert (Path(src.path) / "labels" / "a.txt").exists()
+
+
+def test_reject_refuses_to_delete_out_of_bounds_staged_path(tmp_path):
+    """staged_path round-trips through the saved project file, so it is
+    untrusted input from disk. A path outside the project's
+    artifacts/pending_escalations/ must be left alone (not recursively
+    deleted), and reject must still clear the pending state without raising.
+    """
+    from hydra_suite.detectkit.gui.models import PendingEscalation
+
+    src = _make_source(tmp_path)
+    outside = tmp_path / "precious"
+    outside.mkdir()
+    (outside / "keep.txt").write_text("do not delete\n")
+    src.pending_escalation = PendingEscalation(
+        staged_path=str(outside),
+        target_level="polygon",
+        sam2_variant="sam2.1-hiera-base_plus",
+        created_at="2026-08-27T00:00:00",
+    )
+
+    reject_pending_escalation(src, tmp_path)
+
+    assert src.pending_escalation is None
+    assert (outside / "keep.txt").exists()
+
+
+def test_reject_refuses_to_delete_filesystem_root(tmp_path):
+    from hydra_suite.detectkit.gui.models import PendingEscalation
+    from hydra_suite.detectkit.jobs.sam2_escalation import _is_safe_to_delete
+
+    src = _make_source(tmp_path)
+    src.pending_escalation = PendingEscalation(staged_path="/")
+
+    assert _is_safe_to_delete("/", tmp_path) is False
+    assert _is_safe_to_delete("/") is False
+    assert _is_safe_to_delete("", tmp_path) is False
+    # The staging root itself is not deletable either -- only entries in it.
+    assert (
+        _is_safe_to_delete(tmp_path / "artifacts" / "pending_escalations", tmp_path)
+        is False
+    )
+    assert (
+        _is_safe_to_delete(
+            tmp_path / "artifacts" / "pending_escalations" / "a-b-c", tmp_path
+        )
+        is True
+    )
+    # Without a project_dir, the structural shape is what is checked.
+    assert (
+        _is_safe_to_delete(tmp_path / "artifacts" / "pending_escalations" / "a-b-c")
+        is True
+    )
+    assert _is_safe_to_delete(tmp_path / "somewhere" / "a-b-c") is False
+
+    reject_pending_escalation(src, tmp_path)  # must not raise
+    assert src.pending_escalation is None
+
+
 def test_accept_without_pending_raises():
     src = OBBSource(name="orig", level="obb")
     with pytest.raises(ValueError):

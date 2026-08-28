@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -21,6 +20,7 @@ from PySide6.QtWidgets import (
 
 from hydra_suite.widgets.dialogs import BaseDialog
 
+from ...jobs.sam2_escalation import remove_staged_escalation_dir
 from ..source_import import (
     IMPORT_MODE_LINKED,
     IMPORT_MODE_PORTABLE,
@@ -263,5 +263,7 @@ class SourceManagerDialog(BaseDialog):
         removed = self._project.sources.pop(row)
         pending = removed.pending_escalation
         if pending is not None and pending.staged_path:
-            shutil.rmtree(Path(pending.staged_path), ignore_errors=True)
+            # Bounded delete: staged_path round-trips through the saved
+            # project file, so it is untrusted input from disk.
+            remove_staged_escalation_dir(pending.staged_path, self._project.project_dir)
         self._refresh_list()
