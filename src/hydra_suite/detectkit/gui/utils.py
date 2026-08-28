@@ -9,7 +9,7 @@ from typing import Optional
 
 from hydra_suite.training.class_mapping import build_class_id_map, read_classes_txt
 
-from .constants import IMG_EXTS, OBB_LABEL_FIELDS
+from .constants import IMG_EXTS
 
 logger = logging.getLogger(__name__)
 
@@ -145,13 +145,23 @@ def parse_obb_label(
     img_h: int,
     class_id_map: dict[int, int] | None = None,
 ) -> list[dict]:
-    """Parse an OBB label file and return pixel-coordinate polygons.
+    """Parse a DetectKit label file and return pixel-coordinate polygons.
 
-    Each valid line has *OBB_LABEL_FIELDS* (9) space-separated values:
-    ``class_id x1 y1 x2 y2 x3 y3 x4 y4`` where coordinates are
-    normalised [0, 1].  Returns a list of dicts with keys ``class_id``
-    (int) and ``polygon_px`` (list of four ``(x, y)`` tuples in pixels).
-    Invalid lines are silently skipped.
+    Supports every line shape DetectKit's own sources and the AL exporter
+    (``data/al/labels.py``) can produce, all with normalised [0, 1]
+    coordinates:
+
+    - AABB (5 fields): ``class_id cx cy w h`` -> an axis-aligned quad.
+    - OBB/quad (9 fields): ``class_id x1 y1 x2 y2 x3
+      y3 x4 y4`` -> a quad.
+    - Polygon (odd field count >= 7): ``class_id x1 y1 x2 y2 ... xn yn``
+      -> the contour's own points (n >= 3).
+
+    Returns a list of dicts with keys ``class_id`` (int) and
+    ``polygon_px`` (list of ``(x, y)`` tuples in pixels -- 4 for an
+    AABB/OBB line, n for a genuine polygon). Invalid lines (too few
+    fields, an even-but-not-4-and-not->=6 coordinate count, or a
+    degenerate <3-point shape) are silently skipped.
     """
     results: list[dict] = []
     try:
@@ -161,7 +171,7 @@ def parse_obb_label(
 
     for line in text.splitlines():
         parts = line.strip().split()
-        if len(parts) != OBB_LABEL_FIELDS:
+        if len(parts) < 5:
             continue
         try:
             class_id = int(parts[0])
@@ -170,10 +180,24 @@ def parse_obb_label(
                 if mapped_class_id is None:
                     continue
                 class_id = int(mapped_class_id)
-            coords = [float(v) for v in parts[1:]]
+
+            coord_parts = parts[1:]
+            if len(coord_parts) == 4:
+                cx, cy, w, h = (float(v) for v in coord_parts)
+                x1, y1 = cx - w / 2.0, cy - h / 2.0
+                x2, y2 = cx + w / 2.0, cy + h / 2.0
+                coords = [x1, y1, x2, y1, x2, y2, x1, y2]
+            elif len(coord_parts) >= 6 and len(coord_parts) % 2 == 0:
+                coords = [float(v) for v in coord_parts]
+            else:
+                continue
+
             polygon_px = [
-                (coords[i] * img_w, coords[i + 1] * img_h) for i in range(0, 8, 2)
+                (coords[i] * img_w, coords[i + 1] * img_h)
+                for i in range(0, len(coords), 2)
             ]
+            if len(polygon_px) < 3:
+                continue
             results.append(
                 {
                     "class_id": class_id,
