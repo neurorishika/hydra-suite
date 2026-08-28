@@ -92,3 +92,26 @@ def test_main_window_escalation_finish_defers_dialog_past_progress_close():
         "ReviewEscalationsDialog" in finish_body
         or "_on_review_escalations" in finish_body
     )
+
+
+def test_main_window_escalation_error_deferred_past_progress_close():
+    """A worker error must not pop a QMessageBox directly from the error
+    signal connection (which fires before progress.close()) -- it must be
+    stashed and shown from _finish, after progress.close(), matching the
+    result path's fix in this same task."""
+    import inspect
+
+    from hydra_suite.detectkit.gui.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._on_escalate_to_segment_sam2)
+    assert "_last_escalation_error" in source
+
+    error_connect_idx = source.index("worker.error.connect(")
+    finish_start = source.index("def _finish")
+
+    # The connect statement itself must not construct a QMessageBox inline.
+    error_connect_snippet = source[error_connect_idx : error_connect_idx + 120]
+    assert "QMessageBox" not in error_connect_snippet
+
+    finish_body = source[finish_start:]
+    assert "QMessageBox" in finish_body  # still shown, just deferred here

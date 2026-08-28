@@ -604,6 +604,7 @@ class DetectKitMainWindow(QMainWindow):
         self._escalation_worker = None
         self._escalation_progress_dialog: Optional[QProgressDialog] = None
         self._last_escalation_result: object | None = None
+        self._last_escalation_error: str | None = None
 
         # Build workspace panels first (toolbar actions need them)
         self._dataset_panel = DatasetPanel()
@@ -1738,9 +1739,15 @@ class DetectKitMainWindow(QMainWindow):
         worker.progress.connect(progress.setValue)
         worker.status.connect(progress.setLabelText)
         worker.status.connect(lambda msg: self.statusBar().showMessage(msg, 3000))
-        worker.error.connect(
-            lambda msg: QMessageBox.warning(self, "Escalate to segment (SAM2)", msg)
-        )
+
+        def _stash_error(msg: str) -> None:
+            # error fires before finished/progress.close() -- stash and show
+            # from _finish, same reasoning as _handle_result below: showing a
+            # QMessageBox here would stack it under the still-open
+            # application-modal progress dialog.
+            self._last_escalation_error = msg
+
+        worker.error.connect(_stash_error)
 
         def _handle_result(result: object) -> None:
             # The worker set pending_escalation on existing sources on a
@@ -1757,6 +1764,12 @@ class DetectKitMainWindow(QMainWindow):
             progress.close()
             self._escalation_worker = None
             self._escalation_progress_dialog = None
+
+            error_msg = self._last_escalation_error
+            self._last_escalation_error = None
+            if error_msg is not None:
+                QMessageBox.warning(self, "Escalate to segment (SAM2)", error_msg)
+                return
 
             result = self._last_escalation_result
             self._last_escalation_result = None
