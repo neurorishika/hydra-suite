@@ -23,6 +23,21 @@ class _FakeExecutor:
         return [_FakeResult() for _ in images]
 
 
+class _MPSFakeExecutor(_FakeExecutor):
+    """Executor shape sufficient to exercise the MPS tile-batch guard."""
+
+    class _Model:
+        class _Parameter:
+            device = "mps:0"
+
+        def parameters(self):
+            return iter([self._Parameter()])
+
+    def __init__(self):
+        super().__init__()
+        self.model = self._Model()
+
+
 def test_predict_sliced_tiles_and_merges_empty(monkeypatch):
     # Force extract_obb_result to yield empty OBBResults so we exercise tiling+merge
     # without a real model.
@@ -59,6 +74,41 @@ def test_predict_sliced_tiles_and_merges_empty(monkeypatch):
     assert out.num_detections == 0
     # 512x512 with 256 tiles + 0.2 overlap tiles into a >1 tile grid.
     assert len(ex.calls[0]) > 1
+
+
+def test_predict_sliced_bounds_mps_tile_batches(monkeypatch):
+    monkeypatch.setattr(
+        pp,
+        "extract_obb_result",
+        lambda res, frame_idx=0, **kw: OBBResult(
+            frame_idx=frame_idx,
+            centroids=np.zeros((0, 2), np.float32),
+            angles=np.zeros((0,), np.float32),
+            sizes=np.zeros((0,), np.float32),
+            shapes=np.zeros((0, 2), np.float32),
+            confidences=np.zeros((0,), np.float32),
+            corners=np.zeros((0, 4, 2), np.float32),
+            detection_ids=np.zeros((0,), np.int64),
+        ),
+    )
+    ex = _MPSFakeExecutor()
+
+    pp.predict_sliced_obb_result(
+        ex,
+        np.zeros((1024, 1024, 3), np.uint8),
+        geometry_mode="custom",
+        imgsz=640,
+        reference_body_px=0.0,
+        object_tile_fraction=0.15,
+        slice_width=128,
+        slice_height=128,
+        overlap=0.0,
+        merge_threshold=0.5,
+        confidence_threshold=0.25,
+    )
+
+    assert len(ex.calls) > 1
+    assert max(len(batch) for batch in ex.calls) <= pp._MPS_SLICE_BATCH_SIZE
 
 
 def test_predict_sliced_offsets_detection_into_frame_space(monkeypatch):

@@ -49,6 +49,15 @@ _PREVIEW_IOU = 0.7
 #: busy multi-animal scenes and would silently hide real detections.
 _PREVIEW_MAX_DET = 100
 
+# MPSGraph rejects tensors with more than INT_MAX elements.  A large image can
+# yield hundreds of small SAHI tiles; passing every tile to a large YOLO model
+# in one ``predict`` call creates enormous intermediate feature maps even
+# though every individual tile is safe.  Four 640px tiles leave ample headroom
+# for a YOLO-x segmentation backbone.  Other runtimes retain a modestly larger
+# batch for throughput without ever constructing an unbounded tensor.
+_MPS_SLICE_BATCH_SIZE = 4
+_DEFAULT_SLICE_BATCH_SIZE = 16
+
 #: A CPU, numpy-universe ``RuntimeContext`` for the preview's shared-seam merge.
 #: The preview executor always returns CPU ultralytics ``Results`` (never
 #: on-device CUDA tensors), so ``tensor_on_cuda`` is False and ``merge_per_frame``
@@ -81,6 +90,24 @@ def _preview_slice_merge_config(merge_threshold: float) -> OBBConfig:
         ),
         raw_detection_cap=0,
     )
+
+
+def _slice_prediction_batch_size(executor: Any) -> int:
+    """Return a bounded tile batch size for a preview executor.
+
+    Ultralytics exposes the bound torch module as ``executor.model``.  Direct
+    TensorRT/CoreML adapters do not, and safely use the general bound.  Do not
+    derive a batch size from the full tile list: that was the source of the
+    MPSGraph INT_MAX failure on high-resolution images.
+    """
+    try:
+        model = getattr(executor, "model", None)
+        parameter = next(model.parameters()) if model is not None else None
+        if parameter is not None and str(parameter.device).startswith("mps"):
+            return _MPS_SLICE_BATCH_SIZE
+    except (AttributeError, StopIteration, TypeError):
+        pass
+    return _DEFAULT_SLICE_BATCH_SIZE
 
 
 class _SeqCropSpec:
@@ -318,7 +345,17 @@ def predict_sliced_obb_result(
             iou=iou,
             emit_native_geometry=task == "segment",
         )
-    results = executor.predict(tiles_img, conf=raw_floor, iou=float(iou), verbose=False)
+    batch_size = _slice_prediction_batch_size(executor)
+    results = []
+    for start in range(0, len(tiles_img), batch_size):
+        results.extend(
+            executor.predict(
+                tiles_img[start : start + batch_size],
+                conf=raw_floor,
+                iou=float(iou),
+                verbose=False,
+            )
+        )
 
     # Route extraction + cross-tile merge through the SAME production seam the
     # ``Grid`` region source uses: ``extract_obb_result``'s native ``offset=``
