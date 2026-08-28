@@ -452,12 +452,24 @@ _IDENTITY_INVARIANT_COLUMNS = (C.FINAL_LABEL, C.FINAL_ID, C.FINAL_SOURCE)
 def assert_one_identity_per_trajectory(df: pd.DataFrame) -> list:
     """Return the sorted ``TrajectoryID``s that carry more than one identity.
 
-    A ``TrajectoryID`` is an offender when any of ``IdentityFinalLabel``,
-    ``IdentityFinalID``, or ``IdentityFinalSource`` takes more than one
-    distinct value (``dropna=False`` -- a mix of a real value and a missing
-    one is also a violation) within that trajectory. Missing Final-family
-    columns (identity never resolved at all) or a missing ``TrajectoryID``
-    column both mean nothing to check, so both return ``[]``.
+    A ``TrajectoryID`` is an offender when either ``IdentityFinalLabel`` or
+    ``IdentityFinalID`` takes more than one distinct value (``dropna=False``
+    -- a mix of a real value and a missing one is also a violation) within
+    that trajectory, OR its non-``IdentityFinalSource.NONE`` rows disagree
+    on ``IdentityFinalSource``. Missing Final-family columns (identity never
+    resolved at all) or a missing ``TrajectoryID`` column both mean nothing
+    to check, so both return ``[]``.
+
+    ``IdentityFinalSource.NONE`` rows are excluded from the source check
+    (but NOT from the label/ID checks) because ``NONE`` is not itself a
+    provenance value -- it is the "no source was ever recorded for this
+    row" sentinel written by ``fill_identity_nans_with_consensus`` for rows
+    that had no realtime/tag/offline evidence at all. A trajectory where
+    every row agrees on ``IdentityFinalLabel`` and every *evidenced* row
+    agrees on ``IdentityFinalSource`` has never actually had conflicting
+    identity information, purely varying source PROVENANCE (some rows
+    resolved, some consensus-filled) is not a conflict, and must not trip
+    this guard or trigger ``collapse_to_majority_identity``'s rewrite.
 
     This is the last-line invariant guard, called right before every rich
     -export write (Task 6): relink runs BEFORE identity resolution now, but
@@ -472,6 +484,16 @@ def assert_one_identity_per_trajectory(df: pd.DataFrame) -> list:
 
     offenders = set()
     for col in present_cols:
+        if col == C.FINAL_SOURCE:
+            source = normalize_final_source_series(df[col])
+            evidenced = source != C.IdentityFinalSource.NONE
+            if not evidenced.any():
+                continue
+            nunique = (
+                source[evidenced].groupby(df.loc[evidenced, "TrajectoryID"]).nunique()
+            )
+            offenders.update(nunique[nunique > 1].index.tolist())
+            continue
         nunique = df.groupby("TrajectoryID")[col].nunique(dropna=False)
         offenders.update(nunique[nunique > 1].index.tolist())
     return sorted(offenders)
@@ -482,12 +504,26 @@ def collapse_to_majority_identity(df: pd.DataFrame, offenders) -> pd.DataFrame:
 
     For every ``TrajectoryID`` in *offenders*: pick the ``IdentityFinalLabel``
     with the most rows (ties broken by first appearance in ``FrameID``
-    order), take ``IdentityFinalID``/``IdentityFinalSource`` from that
-    label's first row, and set ``IdentityFinalConfidence`` to the MINIMUM
-    confidence across the whole trajectory -- a forced collapse is exactly
-    the situation where the trajectory's identity is least trustworthy, and
+    order), take ``IdentityFinalID`` from that label's first row, and set
+    ``IdentityFinalConfidence`` to the MINIMUM confidence among the rows
+    that actually carried a source -- a forced collapse is exactly the
+    situation where the trajectory's identity is least trustworthy, and
     reporting the min (not the majority label's own confidence) keeps that
     honest. Trajectories not in *offenders* are returned unchanged.
+
+    ``IdentityFinalSource`` is rewritten to the majority row's source only
+    on rows that already carried a real (non-``NONE``) source of their own;
+    rows whose source was ``IdentityFinalSource.NONE`` (never resolved by
+    realtime/tag/offline evidence, only consensus-filled) are left at
+    ``NONE`` -- this mechanism must never fabricate provenance a row never
+    had. For the same reason, the MINIMUM confidence is taken only over
+    rows that carried a real source: consensus-filled rows are always
+    confidence 0.0 by construction (``fill_identity_nans_with_consensus``)
+    and were never actually in conflict, so including them would flatten
+    every genuinely-evidenced row's confidence to 0.0 for free. If a
+    trajectory has no evidenced rows at all (a pure ID/label mismatch with
+    no source column, or every row is source-less), fall back to the
+    whole-trajectory minimum.
     """
     if df is None or df.empty or not offenders:
         return df
@@ -497,6 +533,7 @@ def collapse_to_majority_identity(df: pd.DataFrame, offenders) -> pd.DataFrame:
     if C.FINAL_LABEL not in out.columns:
         return out
 
+    has_source_col = C.FINAL_SOURCE in out.columns
     sort_col = "FrameID" if "FrameID" in out.columns else None
     for traj_id in offenders_set:
         mask = out["TrajectoryID"] == traj_id
@@ -516,10 +553,29 @@ def collapse_to_majority_identity(df: pd.DataFrame, offenders) -> pd.DataFrame:
         out.loc[mask, C.FINAL_LABEL] = majority_label
         if C.FINAL_ID in out.columns:
             out.loc[mask, C.FINAL_ID] = first_row[C.FINAL_ID]
-        if C.FINAL_SOURCE in out.columns:
-            out.loc[mask, C.FINAL_SOURCE] = first_row[C.FINAL_SOURCE]
+
+        evidenced_idx = group.index
+        if has_source_col:
+            existing_source = normalize_final_source_series(
+                out.loc[group.index, C.FINAL_SOURCE]
+            )
+            evidenced_idx = group.index[
+                (existing_source != C.IdentityFinalSource.NONE).to_numpy()
+            ]
+            # Never fabricate provenance on rows that never carried a
+            # source of their own -- only rows that genuinely had one get
+            # overwritten with the majority row's source.
+            out.loc[evidenced_idx, C.FINAL_SOURCE] = first_row[C.FINAL_SOURCE]
+
         if C.FINAL_CONFIDENCE in out.columns:
-            min_conf = pd.to_numeric(group[C.FINAL_CONFIDENCE], errors="coerce").min()
+            conf_pool_idx = evidenced_idx if len(evidenced_idx) else group.index
+            min_conf = pd.to_numeric(
+                out.loc[conf_pool_idx, C.FINAL_CONFIDENCE], errors="coerce"
+            ).min()
+            if pd.isna(min_conf):
+                min_conf = pd.to_numeric(
+                    group[C.FINAL_CONFIDENCE], errors="coerce"
+                ).min()
             out.loc[mask, C.FINAL_CONFIDENCE] = min_conf
 
     return out

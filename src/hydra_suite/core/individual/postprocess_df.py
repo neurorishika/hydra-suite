@@ -145,7 +145,7 @@ def _stamp_non_identifying_labels(df, params):
         if C.FINAL_SOURCE in df.columns:
             source_token = C.normalize_final_source_series(df[C.FINAL_SOURCE])
         else:
-            source_token = pd.Series("", index=df.index)
+            source_token = pd.Series(C.IdentityFinalSource.NONE, index=df.index)
         unresolved = unresolved | (
             label_token.isin(_UNKNOWN_VALUES)
             & (source_token == C.IdentityFinalSource.NONE)

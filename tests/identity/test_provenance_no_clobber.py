@@ -144,9 +144,14 @@ def test_offline_never_mutates_realtime_columns(tmp_path):
     ), "expected the solver to confidently assign at least one row"
     assert out.loc[assigned_mask, C.FINAL_SOURCE].eq("offline").all()
 
-    # (c) IdentityFinalSource only ever takes "offline" or "" from this
-    # solver -- it never claims "realtime"/"tag" provenance.
-    assert out[C.FINAL_SOURCE].isin(["offline", ""]).all()
+    # (c) IdentityFinalSource only ever takes "offline" or the explicit
+    # "no source resolved" sentinel from this solver -- it never claims
+    # "realtime"/"tag" provenance.
+    assert (
+        out[C.FINAL_SOURCE]
+        .isin([C.IdentityFinalSource.OFFLINE, C.IdentityFinalSource.NONE])
+        .all()
+    )
 
     # Sanity: the offline result reflects the CACHE evidence (ant_c/ant_b),
     # not the seeded (wrong) realtime labels (ant_a) -- proving it wasn't
