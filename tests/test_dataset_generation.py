@@ -1088,8 +1088,10 @@ class _FakeRunner:
         self.cache_dir = cache_dir
         self._roi_mask = None
         self.closed = False
+        self.calls = []
 
     def detect_batch_raw(self, frames, frame_indices=None, roi_mask=None):
+        self.calls.append([int(fid) for fid in frame_indices])
         return [self._by_frame[int(fid)] for fid in frame_indices]
 
     def close(self):
@@ -1274,6 +1276,56 @@ def test_missing_contour_costs_only_its_own_frame(tmp_path):
     )
     assert stats["detection_failed"] == 1
     assert set(records) == {1}
+
+
+def test_export_cache_miss_recomputes_without_touching_trackings_cache(tmp_path):
+    """DESIGN RULE: export BORROWS tracking's detection cache; it never writes it.
+
+    `runner.cache_dir` here is tracking's own `.inference_cache_<stem>/`, and
+    `DetectionCacheHandle.close()` rewrites `detection.npz` from the current
+    call's buffer alone (the repo's no-merge convention). Since export chunks
+    frames (batch size 1 by default), a single miss would otherwise leave
+    tracking's complete cache replaced by one chunk's detections -- which makes
+    backward/replay tracking, which requires a full-range cache, refuse to run.
+
+    A miss must therefore still succeed by recomputing in memory, while the
+    on-disk file stays byte-identical.
+    """
+    import hydra_suite.data.dataset_generation as dg
+    from hydra_suite.core.inference.cache.base import CacheKey
+    from hydra_suite.core.inference.cache.store import DetectionCacheHandle
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    cache_path = cache_dir / "detection.npz"
+
+    # A "tracking" cache that covers only frames 0-2 -- the subrange case.
+    key = CacheKey(schema_version=0, model_path="", model_mtime=0.0, config_hash="")
+    handle = DetectionCacheHandle(
+        path=cache_path, key=key, require_key=False, read_only=False
+    )
+    for fid in (0, 1, 2):
+        handle.write_frame(fid, result=_bgsub_contour_result(fid))
+    handle.close()
+    before = cache_path.read_bytes()
+
+    # Export asks for 0-4: frames 3 and 4 are not in the cache => miss.
+    runner = _FakeRunner(
+        {fid: _bgsub_contour_result(fid) for fid in range(5)}, cache_dir=cache_dir
+    )
+    frames = {fid: np.zeros((4, 4, 3), np.uint8) for fid in range(5)}
+
+    records, stats = dg._detect_records_for_frames(
+        runner, frames, {}, GeometryLevel.OBB
+    )
+
+    # (a) detection still succeeded, via in-memory recompute of the misses only
+    #     (export chunks one frame at a time, so 0-2 are pure cache reads).
+    assert stats["detection_failed"] == 0
+    assert set(records) == set(range(5))
+    assert runner.calls == [[3], [4]]
+    # (b) the pre-existing on-disk cache is untouched
+    assert cache_path.read_bytes() == before
 
 
 def test_init_detection_runner_failure_is_loud(monkeypatch):

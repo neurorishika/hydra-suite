@@ -627,8 +627,19 @@ def _detect_records_for_frames(runner, frames, params, native_level):
             # used to apply, mirroring `InferenceRunner.load_frame` -- an
             # unfiltered raw result includes below-threshold/duplicate/
             # over-max-targets detections `detect_batch` always excluded.
+            #
+            # `write=False` is mandatory here, not an optimization: this
+            # cache_dir is tracking's OWN `.inference_cache_<stem>/`, and a
+            # cache MISS (a different model mtime, a SAHI-sliced tracking run
+            # whose key this export config cannot reproduce, a partial or
+            # subrange tracking pass) would otherwise have each chunk's
+            # `DetectionCacheHandle.close()` rewrite that file from this
+            # chunk's buffer alone -- destroying the complete detection cache
+            # backward/replay tracking depends on. Export borrows the cache; it
+            # never owns it. A hit is unaffected (already a pure read), so this
+            # keeps 100% of the reuse win and recomputes in memory on a miss.
             results_by_idx = get_or_compute_raw(
-                runner, runner.cache_dir, images, list(valid_chunk)
+                runner, runner.cache_dir, images, list(valid_chunk), write=False
             )
             results = [
                 filter_for_source(

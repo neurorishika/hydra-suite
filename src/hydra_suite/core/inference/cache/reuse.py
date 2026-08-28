@@ -61,6 +61,8 @@ def get_or_compute_raw(
     cache_dir: Path,
     frames: "list[np.ndarray]",
     frame_indices: "list[int]",
+    *,
+    write: bool = True,
 ) -> "dict[int, OBBResult]":
     """Return raw (unfiltered) per-frame OBB detections for ``frame_indices``.
 
@@ -69,6 +71,20 @@ def get_or_compute_raw(
     ``runner.detect_batch_raw``. Otherwise recomputes the WHOLE requested set
     fresh in a single ``detect_batch_raw`` call (not just the missing
     subset) and persists it as one new complete cache write.
+
+    ``write=False`` makes the miss path read-only: the whole requested set is
+    still recomputed and returned, but NOTHING is written -- no write handle is
+    constructed and ``<cache_dir>/detection.npz`` is never touched. This is for
+    callers that merely *borrow* a cache file another subsystem owns (notably
+    TrackerKit's dataset export, which points at tracking's own
+    ``.inference_cache_<stem>/detection.npz``). Persisting there would be
+    destructive, not merely wasteful: ``DetectionCacheHandle.close()`` rewrites
+    the file from the current call's buffer alone (this repo's documented
+    no-merge convention), so one miss would replace tracking's complete
+    detection cache with just the frames this call happened to ask for --
+    breaking backward/replay tracking, which requires a full-range cache. The
+    cache-HIT path is identical either way (it is already a pure read), so
+    ``write=False`` gives up nothing on the common, fast path.
 
     ``runner`` must implement ``detect_batch_raw(frames, frame_indices=...)
     -> list[OBBResult]`` (``InferenceRunner.detect_batch_raw``, Task 2).
@@ -89,6 +105,9 @@ def get_or_compute_raw(
             return cached
 
     raw_results = runner.detect_batch_raw(frames, frame_indices=frame_indices)
+
+    if not write:
+        return dict(zip(frame_indices, raw_results))
 
     write_handle = DetectionCacheHandle(
         path=cache_path,
