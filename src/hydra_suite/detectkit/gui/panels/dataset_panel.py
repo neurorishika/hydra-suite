@@ -37,6 +37,7 @@ from hydra_suite.utils.conda_utils import run_conda
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
 
 from ..utils import (
+    clear_labels_for_source,
     ensure_detectkit_source_structure,
     list_images_in_source,
     source_class_id_map,
@@ -331,6 +332,16 @@ class DatasetPanel(QWidget):
         delete_action = QAction(label_text, menu)
         delete_action.triggered.connect(self._delete_selected_images)
         menu.addAction(delete_action)
+
+        clear_label_text = (
+            f"Clear labels from {len(items)} frames..."
+            if len(items) > 1
+            else "Clear labels from frame..."
+        )
+        clear_action = QAction(clear_label_text, menu)
+        clear_action.triggered.connect(self._clear_labels_from_frame)
+        menu.addAction(clear_action)
+
         menu.exec(self.image_list.viewport().mapToGlobal(pos))
 
     def _delete_selected_images(self) -> None:
@@ -397,6 +408,54 @@ class DatasetPanel(QWidget):
                 "Delete Images",
                 "Some images could not be deleted:\n\n" + "\n".join(failures),
             )
+
+    def _clear_labels_from_frame(self) -> None:
+        """Empty the label file(s) for the currently selected image(s),
+        leaving the images and every other frame's labels untouched. The
+        currently displayed image is re-rendered in place -- nothing about
+        which images exist has changed, so the list itself is not rebuilt."""
+        items = self.image_list.selectedItems()
+        if not items:
+            return
+
+        source_path = self._selected_source_path()
+        if source_path is None:
+            return
+
+        image_paths: list[Path] = []
+        for item in items:
+            data = item.data(Qt.UserRole)
+            if data:
+                image_paths.append(Path(str(data)))
+        if not image_paths:
+            return
+
+        sample_names = ", ".join(p.name for p in image_paths[:3])
+        if len(image_paths) > 3:
+            sample_names += f", ... (+{len(image_paths) - 3} more)"
+        confirm = QMessageBox.warning(
+            self,
+            "Clear Labels",
+            (
+                f"Clear all labels for {len(image_paths)} frame(s)? The "
+                f"image(s) stay, only their annotations are removed.\n\n"
+                f"{sample_names}\n\nThis cannot be undone."
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        cleared = clear_labels_for_source(source_path, image_paths)
+        if cleared < len(image_paths):
+            QMessageBox.warning(
+                self,
+                "Clear Labels",
+                f"Cleared {cleared} of {len(image_paths)} label file(s); "
+                "some could not be written.",
+            )
+        self._on_image_changed(self.image_list.currentRow())
 
     @staticmethod
     def _label_path_for_image(image_path: Path, source_root: Path) -> Path | None:
