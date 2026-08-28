@@ -116,7 +116,19 @@ def test_frame_difference_prefilter_skips_static_frames(
     synthetic_video_static_and_moving,
 ):
     source = VideoFrameSource(str(synthetic_video_static_and_moving))
-    pool_config = CandidatePoolConfig(motion_threshold=5.0, periodic_sample_every=50)
+    # dedup_threshold=-1 deliberately makes the plain perceptual-hash dedup
+    # step incapable of ever flagging a duplicate on its own (a Hamming/
+    # Bhattacharyya distance is always >= 0, so `distance <= -1` is never
+    # true). Without this, the pre-existing dedup step alone -- with its
+    # default threshold=8 -- already collapses these 20 identical static
+    # frames down to 1 kept frame (verified separately: phash distance
+    # between the static frames is exactly 0.0), so the assertion below would
+    # pass even with a broken/absent motion prefilter. Disabling dedup here
+    # forces the "at most 1 static frame kept" assertion to depend solely on
+    # the motion prefilter actually firing.
+    pool_config = CandidatePoolConfig(
+        dedup_threshold=-1, motion_threshold=5.0, periodic_sample_every=50
+    )
     candidates = build_candidate_pool(source, pool_config)
     ids = {c.frame_id for c in candidates}
     assert any(20 <= i <= 24 for i in ids)  # motion frames survive the prefilter
