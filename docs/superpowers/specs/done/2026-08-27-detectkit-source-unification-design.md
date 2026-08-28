@@ -1,10 +1,8 @@
 # DetectKit Source Unification — Design Spec
 
-> **Status:** APPROVED, ready for planning.
-> **Decided:** 2026-08-27.
-> **Scope:** Part A only (source data model + import + escalation). Parts B (multi-level
+> **Status:** Part A shipped — merged to main (172ff6e3, 2026-08-27). Parts B (multi-level
 > canvas visualization) and C (clear-labels actions) are design notes at the end of this
-> document — deliberately lighter-weight, to be turned into their own specs once Part A's
+> document — deliberately lighter-weight, to be turned into their own specs now that Part A's
 > actual shape is known. Per the user: "As soon as A is implemented B+C will be implemented."
 
 ## Goal

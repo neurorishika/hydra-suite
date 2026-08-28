@@ -65,7 +65,7 @@ repo (see CLAUDE.md).
   `to_dict`/`from_dict`). Later tasks (`sam2_escalation.py`, `review_escalations_dialog.py`) read
   and write `source.pending_escalation` and construct `PendingEscalation(...)` directly.
 
-- [ ] **Step 1: Write the failing round-trip test**
+- [x] **Step 1: Write the failing round-trip test**
 
 Add to `tests/test_obbsource_reviewed.py`:
 
@@ -102,13 +102,13 @@ def test_obbsource_pending_escalation_defaults_none():
     assert back.pending_escalation is None
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `conda activate hydra-mps && python -m pytest tests/test_obbsource_reviewed.py -v`
 Expected: the three new tests FAIL with `ImportError: cannot import name 'PendingEscalation'` (or
 `AttributeError`/`TypeError: unexpected keyword argument 'pending_escalation'`).
 
-- [ ] **Step 3: Implement `PendingEscalation` and the new field**
+- [x] **Step 3: Implement `PendingEscalation` and the new field**
 
 In `src/hydra_suite/detectkit/gui/models.py`, add right after the module docstring/imports (needs
 `@dataclass` already imported), immediately before the `OBBSource` class:
@@ -170,12 +170,12 @@ And in `OBBSource.from_dict`, after `sam2_variant=(d.get("sam2_variant") or None
             ),
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `conda activate hydra-mps && python -m pytest tests/test_obbsource_reviewed.py -v`
 Expected: all PASS (6 tests total: the 3 pre-existing + 3 new).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/hydra_suite/detectkit/gui/models.py tests/test_obbsource_reviewed.py
@@ -204,7 +204,7 @@ git commit -m "feat(detectkit): add PendingEscalation model for staged SAM2 revi
   level — `AABB` and `OBB` are visually indistinguishable by re-scanning; only the manifest knows
   which is which).
 
-- [ ] **Step 1: Remove the multi-root functions/dataclasses from `source_import.py`**
+- [x] **Step 1: Remove the multi-root functions/dataclasses from `source_import.py`**
 
 In `src/hydra_suite/detectkit/gui/source_import.py`, delete these blocks entirely (they were all
 added this session and are consumed only by the multi-root registration path being reverted):
@@ -223,7 +223,7 @@ After deletion, the file should end at `materialize_detectkit_source` (currently
 762 with the final `return MaterializedDetectKitSource(...)` for the imported case) — nothing after
 it.
 
-- [ ] **Step 2: Add `resolve_al_round_authoritative_level`**
+- [x] **Step 2: Add `resolve_al_round_authoritative_level`**
 
 Add this function to `source_import.py`, directly below `_select_al_round_authoritative_root`
 (which it reuses the manifest-loading half of):
@@ -254,7 +254,7 @@ def resolve_al_round_authoritative_level(source_root: str | Path) -> str | None:
     return None
 ```
 
-- [ ] **Step 3: Add a failing test for `resolve_al_round_authoritative_level`, then verify it passes**
+- [x] **Step 3: Add a failing test for `resolve_al_round_authoritative_level`, then verify it passes**
 
 Add to `tests/test_detectkit_source_import.py` (after `_write_al_round`):
 
@@ -284,7 +284,7 @@ Expected: FAIL first (function doesn't exist until Step 2 above is applied — i
 in order, Step 2 already landed, so this should PASS immediately; if TDD-ing strictly, comment out
 Step 2's function body temporarily to see the test fail, then restore it).
 
-- [ ] **Step 4: Update `tests/test_detectkit_source_import.py` to drop removed-function tests**
+- [x] **Step 4: Update `tests/test_detectkit_source_import.py` to drop removed-function tests**
 
 Remove `inspect_al_round` and `materialize_al_round` from the import block at the top of the file
 (lines 11–17), and add `resolve_al_round_authoritative_level` (needed by Step 3 above):
@@ -333,17 +333,17 @@ Keep all other tests unchanged: `test_inspect_detectkit_source_accepts_existing_
 `test_inspect_detectkit_source_falls_back_when_manifest_paths_are_stale`,
 `test_materialize_detectkit_source_can_link_and_normalize_in_place`.
 
-- [ ] **Step 5: Run the test file**
+- [x] **Step 5: Run the test file**
 
 Run: `conda activate hydra-mps && python -m pytest tests/test_detectkit_source_import.py -v`
 Expected: all PASS, no `ImportError`.
 
-- [ ] **Step 6: Run flake8/black/isort on the two changed files**
+- [x] **Step 6: Run flake8/black/isort on the two changed files**
 
 Run: `conda activate hydra-mps && black src/hydra_suite/detectkit/gui/source_import.py tests/test_detectkit_source_import.py && isort src/hydra_suite/detectkit/gui/source_import.py tests/test_detectkit_source_import.py`
 Expected: no errors; files reformatted if needed.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/hydra_suite/detectkit/gui/source_import.py tests/test_detectkit_source_import.py
@@ -374,7 +374,7 @@ same file and is part of the same revert-and-clean-up unit of work.)
   to the removed source, so escalating a source and then removing it doesn't leak an orphaned
   `artifacts/pending_escalations/` directory.
 
-- [ ] **Step 1: Update the test file first (TDD — these tests currently describe the old behavior)**
+- [x] **Step 1: Update the test file first (TDD — these tests currently describe the old behavior)**
 
 In `tests/test_detectkit_source_manager_dialog.py`, replace
 `test_source_manager_adds_al_round_registers_every_sibling` and
@@ -554,14 +554,14 @@ def test_remove_selected_deletes_pending_escalation_staging_dir(qapp, tmp_path):
     assert not staged_dir.exists()
 ```
 
-- [ ] **Step 2: Run the new tests to verify they fail**
+- [x] **Step 2: Run the new tests to verify they fail**
 
 Run: `conda activate hydra-mps && python -m pytest tests/test_detectkit_source_manager_dialog.py -k "collapses_al_round_to_one_source or trusts_manifest_level or deletes_pending_escalation_staging_dir" -v`
 Expected: FAIL — either an assertion mismatch (`len(proj.sources) == 2` currently, or `level == "obb"`
 for the aabb-authoritative case) or an `AttributeError` (`_remove_selected` doesn't yet clean up
 staging dirs), since `_add_source`/`_remove_selected` still have the old behavior.
 
-- [ ] **Step 3: Revert `_add_source` and remove `_add_al_round_sources`**
+- [x] **Step 3: Revert `_add_source` and remove `_add_al_round_sources`**
 
 In `src/hydra_suite/detectkit/gui/dialogs/source_manager.py`, add `import shutil` to the top-level
 imports (needed by the `_remove_selected` change in Step 3 below):
@@ -763,7 +763,7 @@ nothing else ever visits a removed `OBBSource`):
         self._refresh_list()
 ```
 
-- [ ] **Step 4: Run the new tests to verify they pass**
+- [x] **Step 4: Run the new tests to verify they pass**
 
 Run: `conda activate hydra-mps && python -m pytest tests/test_detectkit_source_manager_dialog.py -v`
 Expected: all PASS, including the three new tests and every pre-existing test in the file
@@ -771,11 +771,11 @@ Expected: all PASS, including the three new tests and every pre-existing test in
 `test_source_manager_does_not_add_source_when_validation_cancelled`,
 `test_source_manager_adds_linked_source_in_place`, etc.).
 
-- [ ] **Step 5: Run black/isort**
+- [x] **Step 5: Run black/isort**
 
 Run: `conda activate hydra-mps && black src/hydra_suite/detectkit/gui/dialogs/source_manager.py tests/test_detectkit_source_manager_dialog.py && isort src/hydra_suite/detectkit/gui/dialogs/source_manager.py tests/test_detectkit_source_manager_dialog.py`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/hydra_suite/detectkit/gui/dialogs/source_manager.py tests/test_detectkit_source_manager_dialog.py
@@ -798,7 +798,7 @@ git commit -m "refactor(detectkit): collapse AL-round source-manager import to o
   root where `derived_from is None`, named `al_round_<timestamp>` (was `al_round_<timestamp>_<level>`
   per root). `ALResult.source_path` is that root's path (unchanged shape, just resolved differently).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `tests/test_detectkit_al_worker.py` (after `test_al_worker_writes_seeded_labels_and_registers_source`):
 
@@ -850,12 +850,12 @@ def test_al_worker_registers_only_authoritative_source_for_multi_level_export(tm
     assert aabb_root.is_dir()
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `conda activate hydra-mps && python -m pytest tests/test_detectkit_al_worker.py::test_al_worker_registers_only_authoritative_source_for_multi_level_export -v`
 Expected: FAIL with `assert 2 == 1` (current code registers one source per level).
 
-- [ ] **Step 3: Implement the single-registration change**
+- [x] **Step 3: Implement the single-registration change**
 
 In `src/hydra_suite/detectkit/jobs/al_worker.py`, replace the block from the comment
 `# One OBBSource per written level. ...` through `source_path = manifest["roots"][0]["path"]`
@@ -896,17 +896,17 @@ In `src/hydra_suite/detectkit/jobs/al_worker.py`, replace the block from the com
     source_path = authoritative_root["path"]
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `conda activate hydra-mps && python -m pytest tests/test_detectkit_al_worker.py -v`
 Expected: all PASS, including the 4 pre-existing tests in the file (they only ever exercised
 single-level export, so this change is behavior-preserving for them).
 
-- [ ] **Step 5: Run black/isort**
+- [x] **Step 5: Run black/isort**
 
 Run: `conda activate hydra-mps && black src/hydra_suite/detectkit/jobs/al_worker.py tests/test_detectkit_al_worker.py && isort src/hydra_suite/detectkit/jobs/al_worker.py tests/test_detectkit_al_worker.py`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/hydra_suite/detectkit/jobs/al_worker.py tests/test_detectkit_al_worker.py
@@ -932,7 +932,7 @@ git commit -m "refactor(detectkit): al_worker registers one source per round, no
   `source.pending_escalation is None`. Task 6 (review dialog) and Task 7 (main_window wiring) call
   `result.staged`, `accept_pending_escalation`, `reject_pending_escalation`.
 
-- [ ] **Step 1: Replace `tests/test_sam2_escalation.py` with tests for the new behavior**
+- [x] **Step 1: Replace `tests/test_sam2_escalation.py` with tests for the new behavior**
 
 This is a full rewrite of the file (the whole `<name>_seg`-sibling behavior it tested is gone).
 Write the new file content:
@@ -1189,12 +1189,12 @@ def test_worker_runs_with_injected_executor(tmp_path):
     assert captured["staged"] == ["orig"]
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `conda activate hydra-mps && python -m pytest tests/test_sam2_escalation.py -v`
 Expected: FAIL — `ImportError: cannot import name 'accept_pending_escalation'` (and similar).
 
-- [ ] **Step 3: Rewrite `sam2_escalation.py`**
+- [x] **Step 3: Rewrite `sam2_escalation.py`**
 
 Replace the full content of `src/hydra_suite/detectkit/jobs/sam2_escalation.py` with:
 
@@ -1491,16 +1491,16 @@ def reject_pending_escalation(source: OBBSource) -> None:
     source.pending_escalation = None
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `conda activate hydra-mps && python -m pytest tests/test_sam2_escalation.py -v`
 Expected: all 10 tests PASS.
 
-- [ ] **Step 5: Run black/isort**
+- [x] **Step 5: Run black/isort**
 
 Run: `conda activate hydra-mps && black src/hydra_suite/detectkit/jobs/sam2_escalation.py tests/test_sam2_escalation.py && isort src/hydra_suite/detectkit/jobs/sam2_escalation.py tests/test_sam2_escalation.py`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/hydra_suite/detectkit/jobs/sam2_escalation.py tests/test_sam2_escalation.py
@@ -1525,7 +1525,7 @@ git commit -m "feat(detectkit): stage SAM2 escalation results for accept/reject 
   starts checked; "Accept Checked" / "Reject Checked" apply immediately (not deferred to dialog
   close) and remove actioned rows from the list.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/test_detectkit_review_escalations_dialog.py`:
 
@@ -1659,12 +1659,12 @@ def test_review_escalations_dialog_skips_unchecked_rows(qapp, tmp_path, monkeypa
     assert src.pending_escalation is not None
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `conda activate hydra-mps && python -m pytest tests/test_detectkit_review_escalations_dialog.py -v`
 Expected: FAIL with `ModuleNotFoundError` (the dialog module doesn't exist yet).
 
-- [ ] **Step 3: Create the dialog**
+- [x] **Step 3: Create the dialog**
 
 Create `src/hydra_suite/detectkit/gui/dialogs/review_escalations_dialog.py`:
 
@@ -1774,16 +1774,16 @@ class ReviewEscalationsDialog(BaseDialog):
             self._list.takeItem(row)
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `conda activate hydra-mps && python -m pytest tests/test_detectkit_review_escalations_dialog.py -v`
 Expected: all 4 PASS.
 
-- [ ] **Step 5: Run black/isort**
+- [x] **Step 5: Run black/isort**
 
 Run: `conda activate hydra-mps && black src/hydra_suite/detectkit/gui/dialogs/review_escalations_dialog.py tests/test_detectkit_review_escalations_dialog.py && isort src/hydra_suite/detectkit/gui/dialogs/review_escalations_dialog.py tests/test_detectkit_review_escalations_dialog.py`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/hydra_suite/detectkit/gui/dialogs/review_escalations_dialog.py tests/test_detectkit_review_escalations_dialog.py
@@ -1813,7 +1813,7 @@ git commit -m "feat(detectkit): add ReviewEscalationsDialog for staged SAM2 acce
   dialog) — it stashes the result and defers all UI (message boxes, `_on_review_escalations`) to
   `_finish`, which runs after `progress.close()`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/test_detectkit_sam2_escalation_wiring.py`:
 
@@ -1857,14 +1857,14 @@ def test_main_window_escalation_finish_defers_dialog_past_progress_close():
     assert "ReviewEscalationsDialog" in finish_body or "_on_review_escalations" in finish_body
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `conda activate hydra-mps && python -m pytest tests/test_detectkit_sam2_escalation_wiring.py -k "review_escalations or finish_defers" -v`
 Expected: FAIL — `_btn_review_escalations`/`review_escalations_requested` don't exist yet,
 `_on_review_escalations` doesn't exist yet, and `_handle_result` still builds `QMessageBox`/dialog
 content directly.
 
-- [ ] **Step 3: Add the "Review escalations…" button to `ToolsPanel`**
+- [x] **Step 3: Add the "Review escalations…" button to `ToolsPanel`**
 
 In `src/hydra_suite/detectkit/gui/panels/tools_panel.py`, add a new signal next to
 `mark_reviewed_requested`:
@@ -1888,7 +1888,7 @@ Then add the button in `_build_escalation_group`, right after the existing
         v.addWidget(self._btn_review_escalations)
 ```
 
-- [ ] **Step 4: Wire the button and add `_on_review_escalations` in `main_window.py`**
+- [x] **Step 4: Wire the button and add `_on_review_escalations` in `main_window.py`**
 
 Add the connection next to the existing `mark_reviewed_requested` connection (currently
 `self._tools_panel.mark_reviewed_requested.connect(self._on_mark_reviewed)`):
@@ -1936,7 +1936,7 @@ Add a new method near `_on_mark_reviewed`:
         self._tools_panel.refresh_overview()
 ```
 
-- [ ] **Step 5: Update `_on_escalate_to_segment_sam2`: conflict check, and defer all UI to `_finish`**
+- [x] **Step 5: Update `_on_escalate_to_segment_sam2`: conflict check, and defer all UI to `_finish`**
 
 Replace the `would_overwrite` block (currently the section starting `existing_names = {s.name for s
 in self._project.sources}` through `overwrite = True` before `request = EscalationRequest(...)`)
@@ -2036,16 +2036,16 @@ And replace the existing `_finish` function body (currently just `progress.close
                 )
 ```
 
-- [ ] **Step 6: Run tests to verify they pass**
+- [x] **Step 6: Run tests to verify they pass**
 
 Run: `conda activate hydra-mps && python -m pytest tests/test_detectkit_sam2_escalation_wiring.py -v`
 Expected: all PASS (the 3 new tests plus the 3 pre-existing ones).
 
-- [ ] **Step 7: Run black/isort**
+- [x] **Step 7: Run black/isort**
 
 Run: `conda activate hydra-mps && black src/hydra_suite/detectkit/gui/panels/tools_panel.py src/hydra_suite/detectkit/gui/main_window.py tests/test_detectkit_sam2_escalation_wiring.py && isort src/hydra_suite/detectkit/gui/panels/tools_panel.py src/hydra_suite/detectkit/gui/main_window.py tests/test_detectkit_sam2_escalation_wiring.py`
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/hydra_suite/detectkit/gui/panels/tools_panel.py src/hydra_suite/detectkit/gui/main_window.py tests/test_detectkit_sam2_escalation_wiring.py
@@ -2062,7 +2062,7 @@ git commit -m "feat(detectkit): add standalone Review Escalations entry point, d
 - Verification-only otherwise, across everything Tasks 1–7 touched, plus a check that nothing else
   in the codebase still references the removed multi-root functions.
 
-- [ ] **Step 1: Confirm no remaining references to removed symbols**
+- [x] **Step 1: Confirm no remaining references to removed symbols**
 
 Run: `grep -rln "inspect_al_round\|materialize_al_round\|ALRoundRoot\|MaterializedALRoundRoot" src/ tests/`
 
@@ -2070,7 +2070,7 @@ Expected: no output (empty). (Scope this grep to `src/` and `tests/` only — th
 "Relationship to prior work" section legitimately mentions these names to document what was
 reverted, and this plan file itself names them throughout; neither should be grepped here.)
 
-- [ ] **Step 2: Update the stale SAM2 escalation docs**
+- [x] **Step 2: Update the stale SAM2 escalation docs**
 
 `docs/developer-guide/runtime-integration.md`'s "SAM2 Escalation" section currently documents the
 removed behavior verbatim (*"Results are written to a new derived source named `<source>_seg`...
@@ -2086,7 +2086,7 @@ are driven from the "Review escalations…" button (`ToolsPanel.review_escalatio
 `MainWindow._on_review_escalations`), which lists every source with a pending escalation project-wide,
 not just ones from the run that just finished.
 
-- [ ] **Step 3: Run the full DetectKit test slice**
+- [x] **Step 3: Run the full DetectKit test slice**
 
 Run:
 ```bash
@@ -2099,14 +2099,14 @@ python -m pytest tests/test_detectkit_source_import.py tests/test_detectkit_sour
 ```
 Expected: all PASS.
 
-- [ ] **Step 4: Run `make format-check`, `make lint`, and `make docs-check`**
+- [x] **Step 4: Run `make format-check`, `make lint`, and `make docs-check`**
 
 Run: `conda activate hydra-mps && make format-check && make lint && make docs-check`
 Expected: no formatting diffs, no new lint findings introduced by this plan's files (pre-existing
 findings elsewhere in the repo are out of scope), and `make docs-check` passes against the updated
 `runtime-integration.md`.
 
-- [ ] **Step 5: Manual smoke test (GUI)**
+- [x] **Step 5: Manual smoke test (GUI)**
 
 Per CLAUDE.md: for GUI changes, start the app and exercise the golden path before calling this done.
 
@@ -2131,7 +2131,7 @@ that source (proving a pending escalation survives being left unattended, not ju
 If no SAM2 checkpoint is available in this environment, skip the escalation half of the smoke test
 and say so explicitly rather than claiming it was verified.
 
-- [ ] **Step 6: Commit (only if Steps 1-5 required any fixes)**
+- [x] **Step 6: Commit (only if Steps 1-5 required any fixes)**
 
 If any fixes were needed:
 ```bash
