@@ -27,6 +27,8 @@ from typing import Callable, Sequence
 import cv2
 import numpy as np
 
+from hydra_suite.data.al.escalation import LabelRecord
+
 from .base import SemanticLabeler
 from .tiling import (
     DEFAULT_OVERLAP,
@@ -102,7 +104,7 @@ def match_one_to_one(
 
 def calibrate(
     labeler: SemanticLabeler,
-    frames: Sequence[tuple[Path, list]],
+    frames: Sequence[tuple[Path, list[LabelRecord]]],
     prompt: str,
     *,
     reference_body_px: float | None,
@@ -128,17 +130,21 @@ def calibrate(
     incomparable cost and error rates.
     """
     floor = CONFIDENCE_GRID[0]
-    # fraction -> (per-frame candidates+labels, total seconds, tiles, tile_px)
+    # fraction -> (per-frame candidates+labels, total seconds, total tiles, tile_px)
     acc: dict[float | None, dict] = {}
-    seen_frames = 0
     n_frames_total = max(len(frames), 1)
-    for fi, (img_path, records) in enumerate(frames):
-        if should_stop is not None and should_stop():
-            break
+
+    # Precompute per-frame tile-plan options before running any inference, so
+    # the total inference-pass count -- and hence the progress percentage --
+    # is known upfront. Frame dimensions (not just reference_body_px) affect
+    # tiles_per_frame, so this cannot be estimated from the first frame alone
+    # without either overshooting or undershooting 100% under mixed sizes.
+    per_frame: list[tuple[np.ndarray, list, list]] = []
+    total_passes = 0
+    for img_path, records in frames:
         image = cv2.imread(str(img_path))
         if image is None:
             continue
-        seen_frames += 1
         h, w = image.shape[:2]
         label_polys = [
             np.asarray(r.points, dtype=np.float32).reshape(-1, 2) for r in records
@@ -146,7 +152,16 @@ def calibrate(
         options = candidate_tile_plans(
             (h, w), reference_body_px, fractions=tile_fractions, overlap=overlap
         )
-        for oi, opt in enumerate(options):
+        per_frame.append((image, label_polys, options))
+        total_passes += len(options)
+    seen_frames = len(per_frame)
+    total_passes = max(total_passes, 1)
+
+    done_passes = 0
+    for fi, (image, label_polys, options) in enumerate(per_frame):
+        if should_stop is not None and should_stop():
+            break
+        for opt in options:
             if should_stop is not None and should_stop():
                 break
             started = time.perf_counter()
@@ -166,18 +181,24 @@ def calibrate(
                 {
                     "frames": [],
                     "seconds": 0.0,
-                    "tiles": opt.tiles_per_frame,
+                    "tiles_total": 0,
                     "tile_px": opt.tile_px,
                     "n": 0,
                 },
             )
             entry["frames"].append((candidates, label_polys))
             entry["seconds"] += elapsed
+            # tile_px is genuinely constant across frames for a given
+            # fraction (it depends only on reference_body_px and the
+            # fraction), so capturing it once above is safe -- but
+            # tiles_per_frame depends on frame dimensions too, so it is
+            # accumulated here and averaged below rather than captured once.
+            entry["tiles_total"] += opt.tiles_per_frame
             entry["n"] += 1
+            done_passes += 1
             if progress is not None:
-                done = fi * len(options) + oi + 1
                 progress(
-                    int(100 * done / (n_frames_total * max(len(options), 1))),
+                    min(100, int(100 * done_passes / total_passes)),
                     f"Calibrating frame {fi + 1}/{n_frames_total}, "
                     f"tile {opt.tile_px or 'full frame'}",
                 )
@@ -190,6 +211,7 @@ def calibrate(
             continue
         n_frames = max(entry["n"], 1)
         seconds_per_frame = entry["seconds"] / n_frames
+        tiles_per_frame = round(entry["tiles_total"] / n_frames)
         for conf in CONFIDENCE_GRID:
             matched = missed = extra = total_labels = 0
             for candidates, label_polys in entry["frames"]:
@@ -206,7 +228,7 @@ def calibrate(
                 CalibrationPoint(
                     tile_fraction=fraction,
                     tile_px=entry["tile_px"],
-                    tiles_per_frame=entry["tiles"],
+                    tiles_per_frame=tiles_per_frame,
                     seconds_per_frame=seconds_per_frame,
                     confidence=conf,
                     missed_per_frame=missed / n_frames,

@@ -105,9 +105,12 @@ def test_recommend_refuses_below_the_minimum_matched_count():
     assert "insufficient" in reason.lower()
 
 
-def test_recommend_prefers_recall_over_f1():
-    # A point that misses 1/frame with 30 extra beats one that misses 5/frame
-    # with 2 extra, even though the latter has better F1.
+def test_recall_floor_excludes_the_f1_optimal_point():
+    # The recall floor -- not a tie-break between comparable points -- is
+    # what expresses "recall over F1" here: f1_optimal misses 5/frame with
+    # only 2 extra (better F1) but its recall (0.79) fails MIN_RECALL, so it
+    # is excluded from eligibility outright, leaving recall_first as the
+    # only candidate.
     recall_first = _pt(conf=0.20, missed=1.0, extra=30.0, recall=0.958, matched=70)
     f1_optimal = _pt(conf=0.60, missed=5.0, extra=2.0, recall=0.79, matched=60)
     best, reason = recommend([f1_optimal, recall_first])
@@ -171,3 +174,55 @@ def test_calibrate_runs_one_inference_pass_per_tile_fraction(tmp_path):
     assert {p.tile_fraction for p in points} == {o.fraction for o in opts}
     assert len(points) == len(opts) * len(CONFIDENCE_GRID)
     assert all(p.seconds_per_frame >= 0.0 for p in points)
+
+
+def test_calibrate_averages_tiles_per_frame_across_mixed_frame_sizes(tmp_path):
+    # tiles_per_frame depends on FRAME DIMENSIONS, not just reference_body_px:
+    # a 2000x2000 frame and a 4000x4000 frame tile differently at the same
+    # fraction. Capturing the count from only the first frame that resolves
+    # a fraction (rather than averaging across every frame that resolves it)
+    # would silently misreport it -- and recommend() sorts on this count.
+    import cv2
+
+    from hydra_suite.core.inference.semantic.calibration import calibrate
+    from hydra_suite.core.inference.semantic.tiling import candidate_tile_plans
+
+    small = tmp_path / "small.png"
+    large = tmp_path / "large.png"
+    cv2.imwrite(str(small), np.zeros((2000, 2000, 3), dtype=np.uint8))
+    cv2.imwrite(str(large), np.zeros((4000, 4000, 3), dtype=np.uint8))
+
+    reference_body_px = 80.0
+    opts_small = {
+        o.fraction: o for o in candidate_tile_plans((2000, 2000), reference_body_px)
+    }
+    opts_large = {
+        o.fraction: o for o in candidate_tile_plans((4000, 4000), reference_body_px)
+    }
+    # A fraction that resolves on BOTH sizes but tiles differently on each --
+    # otherwise this test could not distinguish "averaged" from "first frame".
+    shared = [
+        f
+        for f in opts_small
+        if f in opts_large
+        and opts_small[f].tiles_per_frame != opts_large[f].tiles_per_frame
+    ]
+    assert shared, "fixture assumption broken: no fraction tiles differently"
+    frac = shared[0]
+    expected_avg = round(
+        (opts_small[frac].tiles_per_frame + opts_large[frac].tiles_per_frame) / 2
+    )
+    assert expected_avg != opts_small[frac].tiles_per_frame  # first-frame != average
+
+    labeler = _CountingLabeler()
+    points = calibrate(
+        labeler,
+        [(small, []), (large, [])],
+        "ant",
+        reference_body_px=reference_body_px,
+        seam_margin_px=4,
+        merge_iou=0.5,
+    )
+    matches = [p for p in points if p.tile_fraction == frac]
+    assert matches
+    assert all(p.tiles_per_frame == expected_avg for p in matches)
