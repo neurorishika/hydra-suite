@@ -59,3 +59,20 @@ def test_detect_batch_returns_one_result_per_frame_with_frame_idx(monkeypatch):
     results = runner.detect_batch(frames, frame_indices=[10, 11, 12])
     assert [r.num_detections for r in results] == [3, 0, 5]
     assert [r.frame_idx for r in results] == [10, 11, 12]
+
+
+def test_detect_batch_raw_forwards_roi_mask_to_obb_stage(monkeypatch):
+    runner = _make_runner_with_fakes(monkeypatch, per_frame_counts=[0])
+    import hydra_suite.core.inference.runner as rmod
+
+    captured = {}
+
+    def capture_roi_mask(frames, models, cfg, runtime, roi_mask=None):
+        captured["roi_mask"] = roi_mask
+        return []
+
+    monkeypatch.setattr(rmod, "run_obb", capture_roi_mask)
+    roi_mask = np.ones((8, 8), dtype=np.uint8)
+    runner.detect_batch_raw([np.zeros((8, 8, 3), np.uint8)], roi_mask=roi_mask)
+
+    assert captured["roi_mask"] is roi_mask

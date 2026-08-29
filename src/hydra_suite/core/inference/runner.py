@@ -1172,7 +1172,13 @@ class InferenceRunner:
         if frame_indices is None:
             frame_indices = list(range(len(frames)))
 
-        raw_list = run_obb(frames, self._models.obb, self.config.obb, self.runtime)
+        raw_list = run_obb(
+            frames,
+            self._models.obb,
+            self.config.obb,
+            self.runtime,
+            roi_mask=roi_mask,
+        )
         raw_results: list[OBBResult] = []
         for raw, f_idx in zip(raw_list, frame_indices):
             if isinstance(raw, _RawOBBTensors):

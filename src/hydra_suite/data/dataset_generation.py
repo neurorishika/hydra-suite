@@ -10,7 +10,10 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from hydra_suite.core.inference.cache.reuse import get_or_compute_raw
+from hydra_suite.core.inference.cache.reuse import (
+    get_or_compute_raw,
+    open_raw_detection_cache_reader,
+)
 from hydra_suite.core.inference.stages.filtering import filter_for_source
 from hydra_suite.data.al.escalation import (
     LabelRecord,
@@ -604,6 +607,11 @@ def _detect_records_for_frames(runner, frames, params, native_level):
     )
     out: dict[int, list[LabelRecord]] = {}
     frame_ids = sorted(frames)
+    # Keep one cache handle for the full export.  Each chunk otherwise creates
+    # a new handle, whose first read decompresses every array in detection.npz.
+    # This preserves the current cache-miss inference batch shape: only cache
+    # reads are coalesced in memory.
+    cache_reader = open_raw_detection_cache_reader(runner, runner.cache_dir)
     for start in range(0, len(frame_ids), batch_size):
         chunk = frame_ids[start : start + batch_size]
         images = []
@@ -639,7 +647,12 @@ def _detect_records_for_frames(runner, frames, params, native_level):
             # never owns it. A hit is unaffected (already a pure read), so this
             # keeps 100% of the reuse win and recomputes in memory on a miss.
             results_by_idx = get_or_compute_raw(
-                runner, runner.cache_dir, images, list(valid_chunk), write=False
+                runner,
+                runner.cache_dir,
+                images,
+                list(valid_chunk),
+                write=False,
+                cache_reader=cache_reader,
             )
             results = [
                 filter_for_source(

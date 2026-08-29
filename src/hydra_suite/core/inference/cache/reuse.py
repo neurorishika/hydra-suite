@@ -19,7 +19,7 @@ import numpy as np
 
 from ..result import OBBResult
 from .base import CacheKey
-from .keys import detection_cache_key, with_video_signature
+from .keys import bgsub_detection_cache_key, detection_cache_key, with_video_signature
 from .store import DetectionCacheHandle
 
 # Placeholder key for callers that cannot offer a real OBBConfig-derived key
@@ -35,25 +35,52 @@ _FALLBACK_KEY = CacheKey(
 def _cache_key_for(runner: object) -> tuple[CacheKey, bool]:
     """Return ``(key, require_key)`` for validating/stamping this call's cache.
 
-    A real ``InferenceRunner`` carries a full ``config.obb`` plus a video
-    signature (``runner._video_sig``) and an arena ROI mask
-    (``runner._roi_mask``), so its detections are keyed exactly like the
-    runner's own on-disk detection cache (see ``_open_caches`` in
-    ``core/inference/runner.py``) -- invalidated by model path/mtime, any
-    ROI-gated slicing config, and the source video's size/mtime fingerprint.
+    A real ``InferenceRunner`` carries either a full ``config.obb`` or a
+    ``config.bgsub`` plus a video signature (``runner._video_sig``) and an
+    arena ROI mask (``runner._roi_mask``).  Its detections are therefore keyed
+    exactly like the runner's own on-disk detection cache (see ``_open_caches``
+    in ``core/inference/runner.py``), including the source video's size/mtime
+    fingerprint.
 
-    A caller that only implements ``detect_batch_raw`` (no ``.config``) has
-    none of that to offer; this then falls back to a placeholder key with
-    ``require_key=False``, so validity is judged purely by what is on disk.
+    A caller that only implements ``detect_batch_raw`` (no usable detection
+    config) has none of that to offer; this then falls back to a placeholder
+    key with ``require_key=False``, so validity is judged by cache existence
+    and written-frame coverage only.  This is intentionally limited to test
+    doubles and generic consumers -- a real bg-sub runner must not take it.
     """
     config = getattr(runner, "config", None)
     obb_config = getattr(config, "obb", None) if config is not None else None
-    if obb_config is None:
-        return _FALLBACK_KEY, False
     roi_mask = getattr(runner, "_roi_mask", None)
     video_sig = getattr(runner, "_video_sig", "")
-    key = with_video_signature(detection_cache_key(obb_config, roi_mask), video_sig)
-    return key, True
+    if obb_config is not None:
+        key = detection_cache_key(obb_config, roi_mask)
+        return with_video_signature(key, video_sig), True
+    bgsub_config = getattr(config, "bgsub", None) if config is not None else None
+    if bgsub_config is not None:
+        key = bgsub_detection_cache_key(bgsub_config)
+        return with_video_signature(key, video_sig), True
+    return _FALLBACK_KEY, False
+
+
+def open_raw_detection_cache_reader(
+    runner: object, cache_dir: Path
+) -> DetectionCacheHandle:
+    """Open one validated, read-only raw-detection cache handle for *runner*.
+
+    A ``DetectionCacheHandle`` memoizes the arrays it reads.  Exporters that
+    process their input in many chunks should retain this reader for the whole
+    operation, otherwise each chunk reloads and decompresses the full
+    ``detection.npz`` file.  A miss remains a miss for the whole session, but
+    is still recomputed by :func:`get_or_compute_raw` without modifying a
+    borrowed cache.
+    """
+    key, require_key = _cache_key_for(runner)
+    return DetectionCacheHandle(
+        path=Path(cache_dir) / "detection.npz",
+        key=key,
+        require_key=require_key,
+        read_only=True,
+    )
 
 
 def get_or_compute_raw(
@@ -63,6 +90,7 @@ def get_or_compute_raw(
     frame_indices: "list[int]",
     *,
     write: bool = True,
+    cache_reader: DetectionCacheHandle | None = None,
 ) -> "dict[int, OBBResult]":
     """Return raw (unfiltered) per-frame OBB detections for ``frame_indices``.
 
@@ -91,14 +119,7 @@ def get_or_compute_raw(
     """
     frame_indices = list(frame_indices)
     cache_path = Path(cache_dir) / "detection.npz"
-    key, require_key = _cache_key_for(runner)
-
-    read_handle = DetectionCacheHandle(
-        path=cache_path,
-        key=key,
-        require_key=require_key,
-        read_only=False,
-    )
+    read_handle = cache_reader or open_raw_detection_cache_reader(runner, cache_dir)
     if read_handle.is_valid():
         cached = {idx: read_handle.read_frame(idx) for idx in frame_indices}
         if all(result is not None for result in cached.values()):
@@ -109,6 +130,7 @@ def get_or_compute_raw(
     if not write:
         return dict(zip(frame_indices, raw_results))
 
+    key, require_key = _cache_key_for(runner)
     write_handle = DetectionCacheHandle(
         path=cache_path,
         key=key,

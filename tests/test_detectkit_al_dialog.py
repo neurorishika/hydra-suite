@@ -62,6 +62,21 @@ def test_dialog_gates_by_default_without_set_model_task(qapp, tmp_path):
     dlg.close()
 
 
+def test_dialog_exposes_candidate_pool_controls(qapp, tmp_path):
+    dlg = ActiveLearningDialog(project=DetectKitProject(project_dir=tmp_path))
+
+    dlg.dedup_window_spin.setValue(12)
+    dlg.motion_threshold_spin.setValue(3.5)
+    request = dlg.build_request()
+
+    assert request.candidate_pool.dedup_window == 12
+    assert request.candidate_pool.motion_threshold == 3.5
+
+    dlg.dedup_window_spin.setValue(0)
+    assert dlg.build_request().candidate_pool.dedup_window is None
+    dlg.close()
+
+
 def test_dialog_sets_export_level_from_the_model_task(qapp, tmp_path):
     """Regression: ALRequest.export_level was never set, so it stayed 'obb'."""
     project = DetectKitProject(project_dir=tmp_path)

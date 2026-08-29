@@ -66,6 +66,12 @@ def test_candidate_pool_no_dedup_passthrough(tmp_path):
     assert len(refs) == 5
 
 
+def test_candidate_pool_defaults_enable_bounded_dedup_and_motion_prefilter():
+    cfg = CandidatePoolConfig()
+    assert cfg.dedup_window is not None and cfg.dedup_window > 0
+    assert cfg.motion_threshold > 0.0
+
+
 @pytest.fixture
 def synthetic_video_with_repeats(tmp_path) -> Path:
     """10 distinct frames, then a near-dup of frame 0 (far outside a small

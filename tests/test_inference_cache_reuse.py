@@ -1,6 +1,11 @@
 import numpy as np
 
-from hydra_suite.core.inference.cache.reuse import get_or_compute_raw
+from hydra_suite.core.inference.cache.reuse import (
+    _cache_key_for,
+    get_or_compute_raw,
+    open_raw_detection_cache_reader,
+)
+from hydra_suite.core.inference.config import BgSubConfig, InferenceConfig
 from hydra_suite.core.inference.result import OBBResult
 
 
@@ -98,3 +103,66 @@ def test_get_or_compute_raw_write_false_still_serves_a_cache_hit(tmp_path):
     result = get_or_compute_raw(runner, tmp_path, frames, [0, 1], write=False)
     assert runner.calls == []
     assert set(result.keys()) == {0, 1}
+
+
+def test_bgsub_runner_uses_its_configured_cache_key():
+    """A real bg-sub runner must not degrade to the test-double fallback."""
+
+    cfg = InferenceConfig(
+        obb=None, bgsub=BgSubConfig.from_params({"THRESHOLD_VALUE": 25})
+    )
+    runner = type("BgSubRunner", (), {"config": cfg, "_video_sig": "12:34"})()
+
+    key, require_key = _cache_key_for(runner)
+
+    assert require_key is True
+    assert key.model_path == "background_subtraction"
+    assert key.config_hash
+
+
+def test_bgsub_cache_recomputes_when_detection_config_changes(tmp_path):
+    frames = [np.zeros((4, 4, 3), dtype=np.uint8)]
+
+    first = _FakeRunner()
+    first.config = InferenceConfig(
+        obb=None, bgsub=BgSubConfig.from_params({"THRESHOLD_VALUE": 25})
+    )
+    first._video_sig = "12:34"
+    get_or_compute_raw(first, tmp_path, frames, [0])
+
+    second = _FakeRunner()
+    second.config = InferenceConfig(
+        obb=None, bgsub=BgSubConfig.from_params({"THRESHOLD_VALUE": 26})
+    )
+    second._video_sig = "12:34"
+    get_or_compute_raw(second, tmp_path, frames, [0])
+
+    assert second.calls == [[0]]
+
+
+def test_reused_reader_loads_cache_arrays_only_once(tmp_path, monkeypatch):
+    """Chunked export must reuse an already-loaded detection.npz reader."""
+
+    import hydra_suite.core.inference.cache.store as store
+
+    runner = _FakeRunner()
+    frames = [np.zeros((4, 4, 3), dtype=np.uint8) for _ in range(2)]
+    get_or_compute_raw(runner, tmp_path, frames, [0, 1])
+
+    real_load = store.np.load
+    calls = 0
+
+    def counted_load(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return real_load(*args, **kwargs)
+
+    monkeypatch.setattr(store.np, "load", counted_load)
+    reader = open_raw_detection_cache_reader(runner, tmp_path)
+    get_or_compute_raw(runner, tmp_path, [frames[0]], [0], cache_reader=reader)
+    get_or_compute_raw(runner, tmp_path, [frames[1]], [1], cache_reader=reader)
+
+    # The unkeyed fake runner checks only file existence, so the first chunk
+    # performs one eager array load. The second uses the reader's cached
+    # validity and arrays rather than reloading NPZ.
+    assert calls == 1

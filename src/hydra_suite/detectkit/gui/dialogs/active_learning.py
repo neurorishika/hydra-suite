@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialogButtonBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QGroupBox,
@@ -23,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from hydra_suite.data.al.acquisition import PRESETS
+from hydra_suite.data.al.candidate_pool import CandidatePoolConfig
 from hydra_suite.data.al.escalation import achievable_levels
 from hydra_suite.detectkit.gui.models import DetectKitProject
 from hydra_suite.utils.geometry_levels import GeometryLevel
@@ -70,7 +72,7 @@ class ActiveLearningDialog(BaseDialog):
         self._run_handler: Callable[[], None] | None = None
         self._running = False
         self._native_level = GeometryLevel.OBB
-        self.resize(560, 540)
+        self.resize(560, 610)
         self._build_content()
         # Keep checkbox/enabled state self-consistent from construction
         # onward -- `_build_levels_group` starts every checkbox checked and
@@ -141,6 +143,27 @@ class ActiveLearningDialog(BaseDialog):
         self.budget_spin.setRange(1, 1000)
         self.budget_spin.setValue(50)
         form.addRow("Budget (top-K)", self.budget_spin)
+
+        defaults = CandidatePoolConfig()
+        self.dedup_window_spin = QSpinBox()
+        self.dedup_window_spin.setRange(0, 10_000)
+        self.dedup_window_spin.setValue(int(defaults.dedup_window or 0))
+        self.dedup_window_spin.setToolTip(
+            "Compare each frame only with this many recently kept frames. "
+            "Set 0 for global deduplication across the entire source."
+        )
+        form.addRow("Dedup history (kept frames; 0 = global)", self.dedup_window_spin)
+
+        self.motion_threshold_spin = QDoubleSpinBox()
+        self.motion_threshold_spin.setRange(0.0, 255.0)
+        self.motion_threshold_spin.setDecimals(2)
+        self.motion_threshold_spin.setSingleStep(0.5)
+        self.motion_threshold_spin.setValue(defaults.motion_threshold)
+        self.motion_threshold_spin.setToolTip(
+            "Skip full duplicate scoring when the mean grayscale pixel change "
+            "is below this value. Set 0 to disable the motion prefilter."
+        )
+        form.addRow("Motion prefilter threshold (0 = off)", self.motion_threshold_spin)
 
         return self.acquisition_group
 
@@ -298,6 +321,10 @@ class ActiveLearningDialog(BaseDialog):
             preset=self.preset_combo.currentText(),
             expected_count=self.expected_count_spin.value(),
             detector=detector,
+            candidate_pool=CandidatePoolConfig(
+                dedup_window=self.dedup_window_spin.value() or None,
+                motion_threshold=self.motion_threshold_spin.value(),
+            ),
             export_level=levels[0].label,
             export_levels=[lvl.label for lvl in levels],
             native_level=self._native_level.label,

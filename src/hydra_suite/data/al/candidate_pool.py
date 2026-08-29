@@ -54,20 +54,19 @@ class CandidatePoolConfig:
     max_candidates: int | None = 128
 
     # Windowed dedup: compare each frame's signature against at most the last
-    # `dedup_window` *kept* signatures instead of the full history. `None`
-    # (default) means unbounded -- identical to the pre-windowing global scan,
-    # so leaving this unset keeps existing behavior exactly for any
-    # typical-sized fixture/video.
-    dedup_window: int | None = None
+    # `dedup_window` *kept* signatures instead of the full history.  A bounded
+    # default makes the feature useful on long videos while retaining enough
+    # local history to collapse adjacent repeats. ``None`` opts back into a
+    # global, unbounded scan.
+    dedup_window: int | None = 64
 
     # Frame-difference motion prefilter: frames whose grayscale mean-absolute
     # difference from a rolling reference frame is below `motion_threshold`
     # skip full dedup/signature scoring entirely (cheap early-out before the
-    # perceptual hash is even computed). Default 0.0 is permissive -- a real
-    # per-pixel mean-abs-diff is virtually never < 0.0, so by default the
-    # prefilter is a no-op and every frame still reaches full scoring, same as
-    # current behavior.
-    motion_threshold: float = 0.0
+    # perceptual hash is even computed).  The default of 1.0 catches truly
+    # static or near-static frames without suppressing ordinary motion. Set
+    # this to 0.0 to disable the prefilter.
+    motion_threshold: float = 1.0
 
     # Periodic-sampling floor: even when consecutive frames sit below
     # `motion_threshold` (e.g. a long static stretch), let one through anyway
