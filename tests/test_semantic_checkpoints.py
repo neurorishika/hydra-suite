@@ -197,3 +197,78 @@ def test_missing_clip_names_an_install_that_can_actually_fix_it(tmp_path, monkey
         ck, "_find_spec", lambda name: None if name == "ftfy" else object()
     )
     assert "hydra-suite[sam3]" in ck.probe_availability(cache_dir=tmp_path).reason
+
+
+def test_predictor_overrides_pin_the_requested_confidence_floor():
+    """F2: ultralytics filters at args.conf BEFORE our wrapper ever runs.
+
+    BasePredictor.__init__ sets ``args.conf = 0.25`` when it is None and
+    ``postprocess`` keeps only ``pred_scores > args.conf``. Overriding
+    {model, device, save, verbose} but not ``conf`` therefore made the whole
+    cache-floor design fiction: nothing below 0.25 could ever be cached, so
+    ``recorded_confidence_floor`` lied and calibration cells 0.05-0.25 were
+    all the same run.
+
+    Asserted on the override DICT, so this needs no GPU, no checkpoint and
+    no ultralytics install.
+    """
+    from hydra_suite.core.inference.semantic import sam3
+
+    ov = sam3.predictor_overrides("/tmp/sam3.pt", "cpu", 0.05)
+    assert "conf" in ov, "the predictor's own confidence gate is unset"
+    assert ov["conf"] == pytest.approx(0.05)
+    # iou is pinned too rather than inherited from ultralytics' 0.7 default.
+    assert ov["iou"] == pytest.approx(sam3.PREDICTOR_NMS_IOU)
+    assert ov["model"] == "/tmp/sam3.pt"
+    assert ov["device"] == "cpu"
+    assert ov["save"] is False and ov["verbose"] is False
+    # Any floor the caller asks for is honoured, not just the default.
+    assert sam3.predictor_overrides("m", "cpu", 0.02)["conf"] == pytest.approx(0.02)
+    # ...and clamped into [0, 1] so a bad dialog value cannot reach the predictor.
+    assert sam3.predictor_overrides("m", "cpu", -1.0)["conf"] == 0.0
+    assert sam3.predictor_overrides("m", "cpu", 5.0)["conf"] == 1.0
+
+
+def test_from_variant_passes_the_floor_through_to_the_predictor(tmp_path, monkeypatch):
+    """The plumbing, not just the helper: from_variant must USE the floor."""
+    import sys
+    import types
+
+    from hydra_suite.core.inference.semantic import sam3
+
+    monkeypatch.setattr(
+        sam3, "probe_availability", lambda *a, **k: ck.Sam3Availability(True, "")
+    )
+    monkeypatch.setattr(sam3, "ensure_checkpoint", lambda *a, **k: tmp_path / "s.pt")
+    monkeypatch.setattr(sam3, "resolve_torch_device", lambda: "cpu")
+
+    seen = {}
+
+    class _FakePredictor:
+        def __init__(self, overrides=None):
+            seen.update(overrides or {})
+
+    mod = types.ModuleType("ultralytics.models.sam")
+    mod.SAM3SemanticPredictor = _FakePredictor
+    pkg = types.ModuleType("ultralytics.models")
+    pkg.sam = mod
+    root = types.ModuleType("ultralytics")
+    root.models = pkg
+    monkeypatch.setitem(sys.modules, "ultralytics", root)
+    monkeypatch.setitem(sys.modules, "ultralytics.models", pkg)
+    monkeypatch.setitem(sys.modules, "ultralytics.models.sam", mod)
+
+    sam3.Sam3SemanticLabeler.from_variant(cache_dir=tmp_path, confidence_floor=0.05)
+    assert seen.get("conf") == pytest.approx(0.05)
+
+
+def test_workers_ask_for_the_cache_floor_not_the_ultralytics_default():
+    """The three construction sites must all thread a floor through."""
+    import inspect
+
+    from hydra_suite.detectkit.jobs import semantic_escalation as job
+
+    src = inspect.getsource(job)
+    assert src.count("from_variant(") == 3
+    # Every from_variant call site passes an explicit floor.
+    assert src.count("confidence_floor=") == 3

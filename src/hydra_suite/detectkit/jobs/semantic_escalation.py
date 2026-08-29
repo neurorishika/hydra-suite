@@ -810,7 +810,14 @@ class TilePreviewWorker(BaseWorker):
         if labeler is None:
             from hydra_suite.core.inference.semantic.sam3 import Sam3SemanticLabeler
 
-            labeler = Sam3SemanticLabeler.from_variant(self._variant)
+            # F2: the preview must see what the run will see, so its
+            # predictor floor is the same cache floor the run would use.
+            labeler = Sam3SemanticLabeler.from_variant(
+                self._variant,
+                confidence_floor=cache_confidence_floor(
+                    self._params.get("confidence", 0.35)
+                ),
+            )
         self.result_ready.emit(
             preview_one_tile(
                 labeler,
@@ -854,7 +861,11 @@ class CalibrationWorker(BaseWorker):
         if labeler is None:
             from hydra_suite.core.inference.semantic.sam3 import Sam3SemanticLabeler
 
-            labeler = Sam3SemanticLabeler.from_variant(self._variant)
+            # F2: the sweep's own bottom cell, so cells 0.05-0.25 are not
+            # all silently identical to 0.25.
+            labeler = Sam3SemanticLabeler.from_variant(
+                self._variant, confidence_floor=CONFIDENCE_GRID[0]
+            )
         points = calibrate(
             labeler,
             self._frames,
@@ -895,7 +906,13 @@ class SemanticEscalationWorker(BaseWorker):
         if labeler is None:
             from hydra_suite.core.inference.semantic.sam3 import Sam3SemanticLabeler
 
-            labeler = Sam3SemanticLabeler.from_variant(self._request.variant)
+            # F2: the predictor's OWN conf gate must sit at the cache floor,
+            # not ultralytics' 0.25 default, or the cache silently holds
+            # nothing below 0.25 and every offline re-threshold below it lies.
+            labeler = Sam3SemanticLabeler.from_variant(
+                self._request.variant,
+                confidence_floor=cache_confidence_floor(self._request.confidence),
+            )
         self.status.emit(
             f"Segmenting '{self._request.prompt}' across "
             f"{len(self._request.source_names)} source(s)..."

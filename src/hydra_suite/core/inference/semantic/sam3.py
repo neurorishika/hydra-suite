@@ -20,6 +20,39 @@ from .checkpoints import DEFAULT_VARIANT, ensure_checkpoint, probe_availability
 
 logger = logging.getLogger(__name__)
 
+# Pinned rather than inherited. Ultralytics' BasePredictor.__init__ sets
+# ``args.conf = 0.25`` when it is None, and ``postprocess`` filters
+# ``pred_scores > args.conf`` BEFORE anything of ours runs -- so a cache
+# advertised as "collected at floor 0.05" would in fact hold nothing below
+# 0.25, and every calibration cell from 0.05 to 0.25 would be identical.
+# The predictor floor must therefore be the floor WE asked for.
+DEFAULT_CONFIDENCE_FLOOR = 0.05
+# The predictor's own class-agnostic NMS IoU. Ultralytics defaults this to
+# 0.7; pinned here so an upstream default change cannot silently alter what
+# reaches our cross-tile merge (which applies its own, separate merge_iou).
+PREDICTOR_NMS_IOU = 0.7
+
+
+def predictor_overrides(
+    checkpoint: Path | str,
+    device: str,
+    confidence_floor: float = DEFAULT_CONFIDENCE_FLOOR,
+) -> dict:
+    """The override dict handed to ``SAM3SemanticPredictor``.
+
+    Split out from ``from_variant`` so it can be asserted on without a GPU,
+    a checkpoint, or ultralytics installed.
+    """
+    return {
+        "model": str(checkpoint),
+        "device": device,
+        "save": False,
+        "verbose": False,
+        # See DEFAULT_CONFIDENCE_FLOOR / PREDICTOR_NMS_IOU above.
+        "conf": float(max(0.0, min(1.0, confidence_floor))),
+        "iou": PREDICTOR_NMS_IOU,
+    }
+
 
 class Sam3SemanticLabeler:
     """Text-prompted instance segmentation via SAM3."""
@@ -40,7 +73,16 @@ class Sam3SemanticLabeler:
         *,
         allow_download: bool = True,
         cache_dir: Path | None = None,
+        confidence_floor: float = DEFAULT_CONFIDENCE_FLOOR,
     ) -> "Sam3SemanticLabeler":
+        """Build a labeler whose predictor keeps everything at or above
+        *confidence_floor*.
+
+        ``confidence_floor`` is not cosmetic: it is the hard lower bound of
+        what the candidate cache can ever contain, so it must be set to the
+        lowest threshold any later offline re-threshold or calibration sweep
+        will ask for.
+        """
         avail = probe_availability(variant, cache_dir)
         # A merely-undownloaded checkpoint is tolerated (ensure_checkpoint
         # below fetches it); anything else is fatal. Keyed on the structured
@@ -55,12 +97,7 @@ class Sam3SemanticLabeler:
 
         dev = device or resolve_torch_device()
         predictor = SAM3SemanticPredictor(
-            overrides={
-                "model": str(ckpt),
-                "device": dev,
-                "save": False,
-                "verbose": False,
-            }
+            overrides=predictor_overrides(ckpt, dev, confidence_floor)
         )
         return cls(predictor, dev)
 
