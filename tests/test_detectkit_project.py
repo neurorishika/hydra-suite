@@ -37,6 +37,15 @@ from hydra_suite.detectkit.gui.project import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_recent_projects_file(monkeypatch, tmp_path: Path) -> None:
+    """Keep project-lifecycle tests from writing the user's GUI recents list."""
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.project.get_recent_projects_path",
+        lambda: tmp_path / "recent_projects.json",
+    )
+
+
 def test_project_roundtrip(tmp_path: Path):
     proj = DetectKitProject(
         project_dir=tmp_path,
@@ -262,6 +271,12 @@ def test_record_training_results_exports_models_and_logs_to_project(
     weights_dir.mkdir(parents=True)
     artifact_path = weights_dir / "best.pt"
     artifact_path.write_bytes(b"weights")
+    published_path = tmp_path / "published.pt"
+    published_path.write_bytes(b"weights")
+    published_path.with_suffix(".pt.slice_meta.json").write_text(
+        json.dumps({"geometry_mode": "auto_object", "reference_body_px": 42.0}),
+        encoding="utf-8",
+    )
     metrics_path = run_dir / "results.csv"
     metrics_path.write_text("epoch,metric\n1,0.9\n", encoding="utf-8")
 
@@ -273,6 +288,7 @@ def test_record_training_results_exports_models_and_logs_to_project(
                 "role": "obb_direct",
                 "success": True,
                 "artifact_path": str(artifact_path),
+                "published_model_path": str(published_path),
                 "metrics_path": str(metrics_path),
                 "training_log": "epoch 1\nmetric 0.9",
             }
@@ -283,6 +299,13 @@ def test_record_training_results_exports_models_and_logs_to_project(
     entry = persisted[0]
     assert Path(entry["project_model_path"]).exists()
     assert Path(entry["project_model_path"]).parent == project.project_dir / "models"
+    exported_sidecar = Path(entry["project_model_path"]).with_suffix(
+        ".pt.slice_meta.json"
+    )
+    assert json.loads(exported_sidecar.read_text(encoding="utf-8")) == {
+        "geometry_mode": "auto_object",
+        "reference_body_px": 42.0,
+    }
     assert Path(entry["project_log_path"]).exists()
     assert Path(entry["project_metrics_paths"][0]).exists()
     assert detectkit_project_model_paths(project) == [entry["project_model_path"]]

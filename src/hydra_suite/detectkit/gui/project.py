@@ -32,6 +32,11 @@ _MAX_RECENT = 20
 _KIT_NAME = "detectkit"
 _LEGACY_ARCHIVE_PREFIX = "legacy_"
 _PROJECT_MODELS_DIRNAME = "models"
+_MODEL_METADATA_SIDECAR_SUFFIXES = (
+    ".slice_meta.json",
+    ".canonical_meta.json",
+    ".runtime_meta.json",
+)
 # Every detector training role is usable for inference.  The old name and
 # two-role set reflected the original OBB-only overlay implementation; keeping
 # that policy here made a successfully trained direct detect/segment model look
@@ -184,6 +189,23 @@ def _dedupe_path(dest_dir: Path, desired_name: str) -> Path:
     return candidate
 
 
+def _copy_model_metadata_sidecars(source: Path, destination: Path) -> None:
+    """Copy inference metadata stored beside a model, preserving its naming convention."""
+    sidecars = [
+        (
+            source.with_suffix(source.suffix + suffix),
+            destination.with_suffix(destination.suffix + suffix),
+        )
+        for suffix in _MODEL_METADATA_SIDECAR_SUFFIXES
+    ]
+    sidecars.append(
+        (source.with_suffix(".v2meta.json"), destination.with_suffix(".v2meta.json"))
+    )
+    for src_sidecar, dst_sidecar in sidecars:
+        if src_sidecar.exists():
+            shutil.copy2(str(src_sidecar), str(dst_sidecar))
+
+
 def _path_within_project(project_dir: Path, candidate: str | Path) -> Path | None:
     try:
         resolved = Path(candidate).expanduser().resolve()
@@ -256,6 +278,7 @@ def _copy_project_artifact(
 
     destination = _dedupe_path(dest_dir, preferred_name or source_path.name)
     shutil.copy2(str(source_path), str(destination))
+    _copy_model_metadata_sidecars(source_path, destination)
     return str(destination)
 
 
@@ -559,6 +582,13 @@ def _export_entry_artifacts(
         return updated
 
     dest_dir = detectkit_models_dir(project_dir)
+    published_model = str(updated.get("published_model_path", "") or "").strip()
+    published_path = Path(published_model).expanduser() if published_model else None
+    metadata_source = (
+        published_path
+        if published_path is not None and published_path.exists()
+        else None
+    )
     copied: list[str] = []
     failed: list[str] = []
     total_artifacts = len(artifact_paths)
@@ -570,6 +600,7 @@ def _export_entry_artifacts(
         desired_name = _build_export_name(src_path, updated, index, total_artifacts)
         dst = _dedupe_path(dest_dir, desired_name)
         shutil.copy2(str(src_path), str(dst))
+        _copy_model_metadata_sidecars(metadata_source or src_path, dst)
         copied.append(str(dst))
 
     updated["project_model_paths"] = copied
