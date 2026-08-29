@@ -250,6 +250,15 @@ def on_semantic_escalation(window) -> None:
     worker.progress.connect(progress.setValue)
     worker.status.connect(progress.setLabelText)
 
+    def _stash_error(msg: str) -> None:
+        # error fires before finished/progress.close() -- stash and show
+        # from _finish, same reasoning as on_escalate_geometry's _stash_error:
+        # showing a QMessageBox here would stack it under the still-open
+        # progress dialog.
+        window._last_escalation_error = msg
+
+    worker.error.connect(_stash_error)
+
     def _handle_result(result) -> None:
         window._save_current_project()
         window._dataset_panel.refresh_sources(window._project)
@@ -275,10 +284,17 @@ def on_semantic_escalation(window) -> None:
     def _finish() -> None:
         progress.close()
         window._escalation_worker = None
+        window._escalation_progress_dialog = None
+
+        error_msg = window._last_escalation_error
+        window._last_escalation_error = None
+        if error_msg is not None:
+            QMessageBox.warning(window, "Semantic escalation", error_msg)
 
     worker.result_ready.connect(_handle_result)
     worker.finished.connect(_finish)
     window._escalation_worker = worker
+    window._escalation_progress_dialog = progress
     worker.start()
 
 
