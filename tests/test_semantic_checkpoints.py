@@ -47,3 +47,20 @@ def test_probe_succeeds_when_everything_is_present(tmp_path, monkeypatch):
     ok, reason = ck.probe_availability(cache_dir=tmp_path)
     assert ok is True
     assert reason == ""
+
+
+def test_labeler_refuses_to_construct_when_the_probe_fails(tmp_path, monkeypatch):
+    from hydra_suite.core.inference.semantic import sam3
+
+    monkeypatch.setattr(sam3, "probe_availability", lambda *a, **k: (False, "no ftfy"))
+    with pytest.raises(RuntimeError, match="no ftfy"):
+        sam3.Sam3SemanticLabeler.from_variant(cache_dir=tmp_path)
+
+
+def test_labeler_satisfies_the_protocol_without_weights():
+    from hydra_suite.core.inference.semantic.base import SemanticLabeler
+    from hydra_suite.core.inference.semantic.sam3 import Sam3SemanticLabeler
+
+    stub = Sam3SemanticLabeler(predictor=object(), device="cpu")
+    assert isinstance(stub, SemanticLabeler)
+    assert stub.name == "sam3"
