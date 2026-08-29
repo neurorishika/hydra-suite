@@ -66,11 +66,29 @@ def polygon_iou(a: np.ndarray, b: np.ndarray) -> float:
     finer resolution, which cancels out in the final IoU ratio.
 
     Returns 0.0 if either polygon has fewer than 3 points.
+
+    Disjoint axis-aligned bounding boxes short-circuit to 0.0 BEFORE any
+    canvas is allocated. Without that, two 20 px polygons at opposite
+    corners of a 4512^2 frame share a ~4512^2 combined bbox, which at 4x
+    supersampling is two (17680)^2 uint8 canvases -- ~625 MB and ~65 ms to
+    compute a guaranteed 0.0. ``merge_candidates`` runs this for every
+    candidate x survivor pair, and calibration repeats that over the whole
+    confidence x fraction grid, so the disjoint case is the common case.
     """
     supersample = 4
     pa = np.asarray(a, dtype=np.float64).reshape(-1, 2)
     pb = np.asarray(b, dtype=np.float64).reshape(-1, 2)
     if pa.shape[0] < 3 or pb.shape[0] < 3:
+        return 0.0
+
+    # Disjoint-bbox early-out. Uses >= / <= because polygons that merely
+    # touch along an edge have zero-area intersection anyway.
+    if (
+        pa[:, 0].min() >= pb[:, 0].max()
+        or pb[:, 0].min() >= pa[:, 0].max()
+        or pa[:, 1].min() >= pb[:, 1].max()
+        or pb[:, 1].min() >= pa[:, 1].max()
+    ):
         return 0.0
 
     x0 = int(np.floor(min(pa[:, 0].min(), pb[:, 0].min())))
