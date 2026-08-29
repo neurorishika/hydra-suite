@@ -205,13 +205,21 @@ which at the measured `reference_body_px = 80` yields a 533 px tile — essentia
 tile-752 configuration Evidence row 2 shows costs 5.7x for no gain. The two consumers'
 optima differ ~3x, so a single persisted value cannot serve both.
 
-The semantic fraction has a derivation rather than a fit: SAM3 needs an object to reach
-roughly **50 px at its 1008 px model input**, so
-`tile_px ≈ body_px * 1008 / 50 ≈ 20 * body_px`, i.e. a fraction of **0.05**. At
-`body_px = 80` that gives ~1600 px, consistent with the measured-good 1504. The 50 px
-figure is the one empirical constant in the tile rule; it is stated as such, exposed in
-the dialog, and calibration can move off it by varying tile size (at the cost of a
-rerun).
+**The fraction is calibrated, not asserted.** An earlier draft of this spec derived a
+fraction of 0.05 from a claim that SAM3 needs an object to reach ~50 px at its 1008 px
+input. That derivation was circular: the only tile size ever measured good was 1504 px at
+`reference_body_px = 80`, and `80 * 1008 / 1504 = 53.6`. The "50 px" was the measurement
+rewritten in different units, and the 1504 it then "predicted" was its own input. Only two
+tile sizes were ever tested, on one dataset, and no object-size-at-model-input sweep was
+run. There is no independent grounding for that constant and the spec does not assert one.
+
+What *is* defensible is the scale-invariance: tile size should track object size rather
+than be a fixed pixel count, so a fraction transfers across resolutions better than a raw
+tile size would. The specific value does not. Therefore the fraction becomes a
+**calibrated parameter alongside confidence** (see Calibration below), with
+`SEMANTIC_TILE_FRACTION_SEED = 0.05` used only as the dialog prefill when the user skips
+calibration — labelled in the UI as a starting guess from one dataset, not a
+recommendation.
 
 `reference_body_px` resolves from the first available of: the DetectKit project setting
 (`gui/models.py:120`, adoption helper `populate_measured_reference` at `:175`), the
@@ -243,9 +251,25 @@ deleting a spurious polygon is one click, a missed animal must be found by eye. 
 measured data the F1-optimal threshold missed 4.7 animals per frame where a recall-first
 threshold missed 1.0.
 
+**Calibration fits two parameters, not one: tile fraction and confidence.** Confidence is
+swept offline from one cached inference pass; tile fraction cannot be, because changing it
+changes the tiles. So the grid is an outer loop over fractions (one inference pass each,
+over the labelled frames only) and an inner offline sweep over confidence. This is the
+mechanism that removes the ungrounded constant from the design: the operating point is fit
+to the user's own frames on both axes, which is the same principle already applied to
+confidence.
+
 ```python
+SEMANTIC_TILE_FRACTION_SEED = 0.05          # dialog prefill only, ungrounded
+TILE_FRACTION_GRID = (0.03, 0.05, 0.10, None)   # None = full frame, no tiling
+CONFIDENCE_GRID = ...                        # as before
+
 @dataclass(frozen=True)
 class CalibrationPoint:
+    tile_fraction: float | None
+    tile_px: int | None                     # None when full-frame
+    tiles_per_frame: int
+    seconds_per_frame: float
     confidence: float
     missed_per_frame: float
     extra_per_frame: float
@@ -253,10 +277,33 @@ class CalibrationPoint:
     n_matched: int
 
 def calibrate(labeler, frames: Sequence[tuple[Path, list[LabelRecord]]],
-              prompt: str, *, tile_px, grid,
+              prompt: str, *, reference_body_px: float | None,
+              frame_wh: tuple[int, int],
+              tile_fractions=TILE_FRACTION_GRID, grid=CONFIDENCE_GRID,
               progress: Callable[[int, str], None] | None = None,
               should_stop: Callable[[], bool] | None = None) -> list[CalibrationPoint]
 ```
+
+`calibrate` returns the full 2-D frontier — one point per (fraction, confidence) pair.
+Tile px per fraction comes from `tile_size_for_mode`, so calibration and the real run tile
+identically. `None` is in the grid on purpose: on a rig where animals are already large at
+native resolution, tiling *hurts*, and the grid must be able to say so rather than
+assuming tiling is always right. Fractions are skipped (not failed) when
+`reference_body_px` is unknown, when the resulting tile exceeds the frame — full-frame
+already covers that — or when `plan_tiles` raises on the tile ceiling.
+
+**Recommendation is lexicographic and stated in the UI.** Among points clearing
+`MIN_RECALL`, take the fewest `tiles_per_frame` (inference cost over the whole project is
+roughly linear in it, and a full run is hours); break ties by the highest confidence
+(fewest polygons to delete). If no point clears the floor, recommend nothing, show the
+frontier, and say so. The user can pick any point off the table; the recommendation is a
+default, not a gate.
+
+**Cost is part of the output, not a footnote.** Each fraction's measured
+`seconds_per_frame` on the user's own frames is shown next to its error rates, and scaled
+to the project's frame count as an estimated run time. This replaces the archived
+dev-machine numbers the Cost section forbids quoting: the only timing a user ever sees is
+one measured on their data, on their hardware.
 
 `progress(pct, msg)` matches the existing convention (`sam2_escalation.py:158`).
 `calibrate` takes image paths and `LabelRecord`s, not an `OBBSource` — Core must not
@@ -278,8 +325,10 @@ blob's centroid can land inside a neighbour's label, and two predictions can cla
 label. So the assignment is greedy nearest-centroid with each label and each prediction
 used at most once.
 
-**Run inference once, sweep offline — with the merge redone per threshold.** Only tile
-size, if varied, costs a rerun. The cache holds **pre-merge, per-tile candidates**, not
+**One inference pass per tile fraction; confidence swept offline within each — with the
+merge redone per threshold.** This is why the grid is 2-D-outer/1-D-inner rather than a
+flat product: tile geometry is baked into the candidates, confidence is not. The cache
+holds **pre-merge, per-tile candidates**, not
 merged survivors: seam-drop and NMS are survivor-dependent, so post-filtering an already
 merged set does not reproduce a run at that threshold. Each swept threshold re-runs
 seam-drop + NMS over the cached candidates, which is pure geometry and cheap.
@@ -290,7 +339,8 @@ so.
 threshold on very little data. Three mechanisms, not five:
 
 - Refuse to recommend below a minimum matched-instance count; show the frontier and say
-  the data is insufficient.
+  the data is insufficient. The minimum applies to the *recommended* point's own matched
+  count, so a fraction that barely detects anything cannot win by accident.
 - Report per-frame ranges, not just means.
 - The dialog asks the user to confirm the labelled frames are **exhaustively** labelled;
   a partially labelled frame counts every real-but-unlabelled animal as a false positive
@@ -367,11 +417,19 @@ SAM2 guard.
 `dialogs/semantic_escalation_dialog.py` (`BaseDialog`), beside `escalate_sam2_dialog.py`:
 
 - Backend and variant combos, prompt line edit. The prompt is the user's to author.
-- Confidence, max instances, tiling group (mode, resolved tile size shown read-only with
-  its `reference_body_px` provenance and the semantic fraction, overlap, seam margin).
+- Confidence, max instances, tiling group (mode, tile fraction, resolved tile size shown
+  read-only with its `reference_body_px` provenance, overlap, seam margin). The tile
+  fraction prefills to `SEMANTIC_TILE_FRACTION_SEED` with the label *"starting guess from
+  one dataset — calibrate to fit your own"*; the spec does not let the UI present it as
+  a tuned value.
 - **Calibrate**, enabled whenever the selected sources contain a labelled frame at any
   geometry level, presented as the recommended next step. With no labelled frames the
   dialog invites the user to label a few first, and lets them proceed anyway.
+- Calibration results open a results view showing the 2-D frontier: one row per
+  (tile fraction, confidence) with missed/frame, extra/frame, recall, matched count,
+  tiles/frame and measured s/frame plus a projected run time for the selected sources.
+  The recommended row is preselected with its rule stated in one line; choosing any row
+  writes both the fraction and the confidence back into the dialog.
 - **Preview runs one tile**, not the frame — a full-frame preview would show near-zero
   detections and teach the user the feature is broken.
 - Projected total runtime shown before the run starts, computed from a measured
@@ -407,6 +465,16 @@ of seconds per frame, not an interactive one** — a 1000-frame source is many h
 MPS. Hence resumability, real cancellation, and documentation pointing large runs at the
 CUDA box. The dialog's runtime projection must come from a timed preview tile on the
 user's machine, never from these numbers.
+
+Calibration now supplies that measurement for free: it already runs the labeler over the
+labelled frames at each tile fraction, so `CalibrationPoint.seconds_per_frame` is a real
+timing on the user's hardware and data. When the user skips calibration, the dialog times
+a single tile before projecting. Neither path quotes the archived numbers.
+
+Calibration's own cost is `len(TILE_FRACTION_GRID)` passes over the labelled frames only —
+typically 3-5 frames, so single-digit minutes at the measured tens of seconds per frame,
+against a full run of hours. Progress is reported per fraction and the whole thing is
+cancellable.
 
 ## Evidence
 
@@ -457,6 +525,13 @@ Unit tests with a fake `SemanticLabeler` (no weights):
 - Tile resolution: `reference_body_px` provenance chain; semantic fraction independent
   of `SliceTrainingSettings.object_tile_fraction`; full-frame fallback when unresolved;
   `MAX_TILES_PER_FRAME` respected.
+- Tile-fraction grid: `None` yields one full-frame pass; a fraction whose tile exceeds
+  the frame is skipped, not duplicated as full-frame; a fraction breaching the tile
+  ceiling is skipped with a reason, not raised to the caller; `reference_body_px=None`
+  leaves full-frame as the only surviving point.
+- Recommendation ordering: among points clearing `MIN_RECALL`, fewest
+  `tiles_per_frame` wins; ties broken by highest confidence; no point clearing the floor
+  yields no recommendation with the frontier still returned.
 - `polygon_iou`: disjoint, identical, partial overlap, **non-convex** (the case
   `pairwise_obb_overlap` gets wrong), degenerate.
 - Calibration matching: one-to-one under a dense cluster where a blob centroid falls in
