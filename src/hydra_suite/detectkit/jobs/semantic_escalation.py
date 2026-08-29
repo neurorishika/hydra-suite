@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from hashlib import sha1
@@ -22,6 +23,7 @@ import cv2
 import numpy as np
 from PySide6.QtCore import Signal
 
+from hydra_suite.core.inference.semantic.calibration import CONFIDENCE_GRID
 from hydra_suite.core.inference.semantic.tiling import (
     DEFAULT_MERGE_IOU,
     DEFAULT_OVERLAP,
@@ -48,6 +50,13 @@ logger = logging.getLogger(__name__)
 
 CANDIDATES_FILENAME = "candidates.json"
 RUN_FILENAME = "run.json"
+# I4: candidates are CACHED at the bottom of the sweep grid, not at the run's
+# own confidence. Inference cost is identical either way -- the model runs on
+# every tile regardless and the threshold only filters what is KEPT -- but
+# caching at req.confidence would silently truncate the cache, so
+# rethreshold_staged DOWNWARD (the entire reason the cache exists) would
+# quietly return fewer instances than a fresh run at that threshold.
+CACHE_CONFIDENCE_FLOOR = CONFIDENCE_GRID[0]
 # A run staging nothing on a majority of frames is a prompt failure, not a
 # quiet success -- the dominant failure mode is a noun phrase the model does
 # not match, and it looks exactly like a clean run otherwise.
@@ -81,18 +90,78 @@ class SemanticEscalationResult:
     degenerate: int = 0  # contours with P < 3, dropped not fatal
     tile_px: int | None = None  # resolved tile size, None = full frame
     skipped: list[tuple[str, str]] = field(default_factory=list)
+    # I1: FRAMES, not instances. `labelled` counts instances staged, so it is
+    # the wrong denominator for the prompt-failure rule -- 40 frames x 10
+    # instances made `labelled + empty_images` 460, and the rule never fired.
+    frames_processed: int = 0
+    # I9: a cancelled run is a PARTIAL result. Without this flag the caller
+    # reports it as an unqualified success and the user may accept it
+    # believing the whole source was covered.
+    cancelled: bool = False
+    # I7: staged labels whose origin image could not be located; skipped
+    # rather than written as an image-less orphan label.
+    orphaned: int = 0
 
 
-def is_prompt_failure(result: SemanticEscalationResult, frames_processed: int) -> bool:
-    """True when the run should be reported as a PROMPT failure, not success."""
-    if frames_processed <= 0:
+def is_prompt_failure(
+    result: SemanticEscalationResult, frames_processed: int | None = None
+) -> bool:
+    """True when the run should be reported as a PROMPT failure, not success.
+
+    The denominator defaults to the run's own ``frames_processed``. Callers
+    should not compute one: ``labelled`` counts INSTANCES, so deriving frames
+    from it inflates the denominator and disarms the rule entirely (I1).
+    """
+    frames = result.frames_processed if frames_processed is None else frames_processed
+    if frames <= 0:
         return False
-    return result.empty_images >= PROMPT_FAILURE_FRACTION * frames_processed
+    return result.empty_images >= PROMPT_FAILURE_FRACTION * frames
 
 
 def prompt_slug(prompt: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", prompt.strip().lower()).strip("-")
     return (slug or "prompt")[:24]
+
+
+def staged_dirname_for(src: OBBSource, variant: str, prompt: str) -> str:
+    """The staging directory NAME a (source, variant, prompt) run targets.
+
+    Shared with the GUI so it can tell a RESUME of the same run (same
+    directory) from a REPLACE of a different one (different directory)
+    without duplicating the hashing rule.
+    """
+    # DEPARTURE 2: the PROMPT enters the hash. Without it two prompts on
+    # one source collide and the replaced-pending cleanup no-ops.
+    content_hash = sha1(
+        (str(Path(src.path).resolve()) + variant + prompt).encode("utf-8")
+    ).hexdigest()[:10]
+    return f"{src.name}-sam3-{prompt_slug(prompt)}-{content_hash}"
+
+
+def sources_pending_replacement(req: "SemanticEscalationRequest") -> list[str]:
+    """Selected sources whose staged escalation this run would DESTROY.
+
+    A source whose pending escalation is the very run being re-issued is a
+    RESUME and is not listed -- only a different prompt, a different variant,
+    or an unreviewed SAM2 result would be wiped, and the GUI must confirm
+    those before they are.
+    """
+    by_name = {s.name: s for s in req.project.sources}
+    project_root = Path(req.project.project_dir)
+    out: list[str] = []
+    for name in req.source_names:
+        src = by_name.get(name)
+        if src is None or src.pending_escalation is None:
+            continue
+        target = (
+            project_root
+            / "artifacts"
+            / "pending_escalations"
+            / staged_dirname_for(src, req.variant, req.prompt)
+        )
+        if Path(src.pending_escalation.staged_path) != target:
+            out.append(name)
+    return out
 
 
 def _fingerprint(
@@ -106,7 +175,10 @@ def _fingerprint(
         "overlap": float(req.overlap),
         "seam_margin_px": float(req.seam_margin_px),
         "max_instances": int(req.max_instances),
-        "confidence_floor": float(req.confidence),
+        # The floor the CACHE was collected at (not the run's display
+        # threshold): a cache collected at a higher floor is not
+        # interchangeable with one collected at the grid bottom.
+        "confidence_floor": float(CACHE_CONFIDENCE_FLOOR),
         "source_root": str(src_root.resolve()),
     }
 
@@ -252,28 +324,34 @@ def run_semantic_escalation(
     project_root = Path(req.project.project_dir)
     tile_px = req.tile_px or resolve_tile_px(req.reference_body_px, req.tile_fraction)
     result.tile_px = tile_px
-    slug = prompt_slug(req.prompt)
     counting_labeler = _DegenerateCountingLabeler(labeler)
 
     for si, src in enumerate(todo):
-        if src.pending_escalation is not None and not (overwrite or req.overwrite):
+        staged_dirname = staged_dirname_for(src, req.variant, req.prompt)
+        target_root = (
+            project_root / "artifacts" / "pending_escalations" / staged_dirname
+        )
+        # I2: a RESUME of this very run (same target directory) proceeds
+        # without overwrite -- the run.json fingerprint decides what is
+        # reusable. Only a REPLACE of a DIFFERENT staged result (another
+        # prompt, or an unreviewed SAM2 escalation) needs the caller's
+        # explicit consent, because it destroys unreviewed work.
+        would_replace = (
+            src.pending_escalation is not None
+            and Path(src.pending_escalation.staged_path) != target_root
+        )
+        if would_replace and not (overwrite or req.overwrite):
             result.skipped.append(
                 (
                     src.name,
-                    f"'{src.name}' already has a pending escalation; review it, or "
-                    "re-run with overwrite to replace it.",
+                    f"'{src.name}' already has a different pending escalation; "
+                    "review it, or re-run with overwrite to replace it.",
                 )
             )
             continue
 
         src_root = Path(src.path)
         images_dir = src_root / "images"
-        # DEPARTURE 2: the PROMPT enters the hash. Without it two prompts on
-        # one source collide and the replaced-pending cleanup no-ops.
-        content_hash = sha1(
-            (str(src_root.resolve()) + req.variant + req.prompt).encode("utf-8")
-        ).hexdigest()[:10]
-        staged_dirname = f"{src.name}-sam3-{slug}-{content_hash}"
         staged_root = ensure_bundle_subdirectory(
             project_root, f"artifacts/pending_escalations/{staged_dirname}"
         )
@@ -308,6 +386,7 @@ def run_semantic_escalation(
             # DEPARTURE 4: cancellation, honoured between images and (inside
             # collect_candidates) between tiles.
             if should_stop is not None and should_stop():
+                result.cancelled = True
                 break
             rel = str(img_path.relative_to(images_dir))
             if rel in cache["images"]:
@@ -326,7 +405,9 @@ def run_semantic_escalation(
                 image,
                 plan,
                 req.prompt,
-                confidence_threshold=req.confidence,
+                # I4: the CACHE floor, not req.confidence -- see
+                # CACHE_CONFIDENCE_FLOOR.
+                confidence_threshold=CACHE_CONFIDENCE_FLOOR,
                 max_instances=req.max_instances,
                 seam_margin_px=req.seam_margin_px,
                 should_stop=should_stop,
@@ -352,6 +433,10 @@ def run_semantic_escalation(
         result.empty_images += sum(
             1 for e in cache["images"].values() if not e["candidates"]
         )
+        # I1: the prompt-failure denominator. Frames actually inferred (the
+        # cache's key set), which under cancellation or resume is NOT
+        # len(images) either.
+        result.frames_processed += len(cache["images"])
         (staged_root / "classes.txt").write_text(f"{req.prompt.strip() or 'object'}\n")
         src.pending_escalation = PendingEscalation(
             staged_path=str(staged_root),
@@ -361,7 +446,6 @@ def run_semantic_escalation(
             primer_variant=req.variant,
             primer_prompt=req.prompt,
             primer_params={
-                "confidence": float(req.confidence),
                 "merge_iou": float(req.merge_iou),
                 "tile_px": tile_px,
                 "overlap": float(req.overlap),
@@ -372,7 +456,24 @@ def run_semantic_escalation(
         result.staged.append(src.name)
 
     result.degenerate += counting_labeler.count
+    if should_stop is not None and should_stop():
+        result.cancelled = True
     return result
+
+
+def _recorded_confidence_floor(staged_root: Path) -> float | None:
+    """The floor this staging dir's candidates were collected at, if recorded.
+
+    An OLD staging directory (collected at req.confidence, before I4) records
+    its own higher floor here, so it cannot pretend a downward re-threshold
+    is complete.
+    """
+    try:
+        data = json.loads((staged_root / RUN_FILENAME).read_text())
+    except Exception:
+        return None
+    value = data.get("confidence_floor")
+    return float(value) if isinstance(value, (int, float)) else None
 
 
 def rethreshold_staged(
@@ -389,6 +490,14 @@ def rethreshold_staged(
     if pending is None or pending.primer_kind != "sam3":
         raise ValueError(f"Source '{source.name}' has no staged SAM3 escalation.")
     staged_root = Path(pending.staged_path)
+    floor = _recorded_confidence_floor(staged_root)
+    if floor is not None and float(confidence) < floor - 1e-9:
+        raise ValueError(
+            f"This staged run's candidate cache was collected at confidence "
+            f">= {floor:.2f}, so re-thresholding down to {confidence:.2f} "
+            "would silently return a truncated set. Re-run the escalation to "
+            "collect candidates at a lower floor."
+        )
     cache = _load_cache(staged_root)
     if not cache["images"]:
         raise RuntimeError(
@@ -406,7 +515,68 @@ def rethreshold_staged(
     return written
 
 
-def labelled_frames_for(source: OBBSource) -> list[tuple[Path, list[LabelRecord]]]:
+def _label_path_for(images_dir: Path, labels_dir: Path, img_path: Path) -> Path:
+    return labels_dir / img_path.relative_to(images_dir).with_suffix(".txt")
+
+
+def has_labelled_frames(source: OBBSource) -> bool:
+    """True if any frame in *source* carries a non-empty label file.
+
+    Deliberately does NOT call ``labelled_frames_for``: answering "are there
+    any labels?" by decoding every labelled image cost the GUI thread a full
+    image-set decode every time the dialog opened. This is a label-FILE scan
+    and touches no pixels.
+    """
+    root = Path(source.path)
+    images_dir, labels_dir = root / "images", root / "labels"
+    if not images_dir.is_dir() or not labels_dir.is_dir():
+        return False
+    for img_path in images_dir.rglob("*"):
+        if img_path.suffix.lower() not in IMG_EXTS:
+            continue
+        label_path = _label_path_for(images_dir, labels_dir, img_path)
+        try:
+            if label_path.exists() and label_path.read_text().strip():
+                return True
+        except OSError:  # pragma: no cover - unreadable label file
+            continue
+    return False
+
+
+# Enough frames for a stable median without decoding a whole image set on the
+# GUI thread while the dialog is opening.
+MEDIAN_BODY_SAMPLE_FRAMES = 20
+
+
+def median_body_px_for(
+    sources, *, sample_frames: int = MEDIAN_BODY_SAMPLE_FRAMES
+) -> float:
+    """Median longest side, in px, of the existing labels across *sources*.
+
+    Link 2 of the ``reference_body_px`` resolution chain (project setting ->
+    this -> the user). Returns 0.0 when nothing can be measured. Without it,
+    a project with no ``slice_training.reference_body_px`` silently runs with
+    tiling OFF -- the measured-worst configuration (F1 0.719 -> 0.075).
+    """
+    sides: list[float] = []
+    for source in sources:
+        for _path, records in labelled_frames_for(source, limit=sample_frames):
+            for rec in records:
+                pts = np.asarray(rec.points, dtype=np.float32).reshape(-1, 2)
+                if pts.shape[0] < 2:
+                    continue
+                extent = pts.max(axis=0) - pts.min(axis=0)
+                longest = float(max(extent[0], extent[1]))
+                if longest > 0:
+                    sides.append(longest)
+    if not sides:
+        return 0.0
+    return float(np.median(np.asarray(sides, dtype=np.float64)))
+
+
+def labelled_frames_for(
+    source: OBBSource, *, limit: int = 0
+) -> list[tuple[Path, list[LabelRecord]]]:
     """(image path, LabelRecords) for every non-empty labelled frame.
 
     Uses ``gui/utils.parse_obb_label``, which already handles 5-field AABB,
@@ -424,7 +594,9 @@ def labelled_frames_for(source: OBBSource) -> list[tuple[Path, list[LabelRecord]
     for img_path in sorted(
         p for p in images_dir.rglob("*") if p.suffix.lower() in IMG_EXTS
     ):
-        label_path = labels_dir / img_path.relative_to(images_dir).with_suffix(".txt")
+        if limit and len(out) >= limit:
+            break
+        label_path = _label_path_for(images_dir, labels_dir, img_path)
         if not label_path.exists() or not label_path.read_text().strip():
             continue
         image = cv2.imread(str(img_path))
@@ -451,6 +623,108 @@ def labelled_frames_for(source: OBBSource) -> list[tuple[Path, list[LabelRecord]
             )
         )
     return out
+
+
+@dataclass
+class TilePreviewResult:
+    """What ONE tile of ONE frame produced, and how long it took."""
+
+    instances: int
+    seconds: float
+    tile_px: int | None
+    tiles_per_frame: int
+    image_name: str
+
+
+def preview_one_tile(
+    labeler,
+    source: OBBSource,
+    prompt: str,
+    *,
+    reference_body_px: float,
+    tile_fraction: float | None,
+    overlap: float = DEFAULT_OVERLAP,
+    seam_margin_px: float = DEFAULT_SEAM_MARGIN_PX,
+    confidence: float = 0.35,
+    max_instances: int = 0,
+) -> TilePreviewResult:
+    """Run *labeler* over exactly ONE tile of the first frame of *source*.
+
+    ONE tile, deliberately, not the whole frame: at the scales this feature
+    targets a full-frame pass returns near-zero detections, so a full-frame
+    preview would teach the user the feature is broken. The middle tile is
+    used rather than the first because a corner tile is the least likely to
+    contain an animal.
+
+    The MEASURED elapsed time is returned so the caller can project a run
+    without quoting any hardcoded figure.
+    """
+    images_dir = Path(source.path) / "images"
+    images = sorted(p for p in images_dir.rglob("*") if p.suffix.lower() in IMG_EXTS)
+    if not images:
+        raise RuntimeError(f"Source '{source.name}' has no images to preview.")
+    img_path = images[0]
+    image = cv2.imread(str(img_path))
+    if image is None:
+        raise RuntimeError(f"Could not read {img_path.name}.")
+    h, w = image.shape[:2]
+    tile_px = resolve_tile_px(reference_body_px, tile_fraction)
+    plan = (
+        plan_for_frame((h, w), tile_px, overlap) if tile_px else full_frame_plan((h, w))
+    )
+    tiles = list(plan.tiles)
+    x0, y0, x1, y1 = tiles[len(tiles) // 2]
+    started = time.perf_counter()
+    instances = labeler.label_image(
+        image[y0:y1, x0:x1],
+        prompt,
+        confidence_threshold=confidence,
+        max_instances=max_instances,
+    )
+    elapsed = time.perf_counter() - started
+    return TilePreviewResult(
+        instances=len(instances),
+        seconds=elapsed,
+        tile_px=tile_px,
+        tiles_per_frame=len(tiles),
+        image_name=img_path.name,
+    )
+
+
+class TilePreviewWorker(BaseWorker):
+    """QThread wrapper around preview_one_tile."""
+
+    result_ready = Signal(object)  # TilePreviewResult
+
+    def __init__(self, source, prompt, variant, params, labeler=None, parent=None):
+        super().__init__(parent)
+        self._source = source
+        self._prompt = prompt
+        self._variant = variant
+        self._params = dict(params)
+        self._labeler = labeler
+
+    def execute(self) -> None:
+        labeler = self._labeler
+        if labeler is None:
+            from hydra_suite.core.inference.semantic.sam3 import Sam3SemanticLabeler
+
+            labeler = Sam3SemanticLabeler.from_variant(self._variant)
+        self.result_ready.emit(
+            preview_one_tile(
+                labeler,
+                self._source,
+                self._prompt,
+                reference_body_px=self._params.get("reference_body_px", 0.0),
+                tile_fraction=self._params.get("tile_fraction"),
+                overlap=self._params.get("overlap", DEFAULT_OVERLAP),
+                seam_margin_px=self._params.get(
+                    "seam_margin_px", DEFAULT_SEAM_MARGIN_PX
+                ),
+                confidence=self._params.get("confidence", 0.35),
+                max_instances=self._params.get("max_instances", 0),
+            )
+        )
 
 
 class CalibrationWorker(BaseWorker):
@@ -538,12 +812,38 @@ class SemanticEscalationWorker(BaseWorker):
         self.result_ready.emit(result)
 
 
+def _origin_image_for(origin_images: Path, rel: Path) -> Path | None:
+    """The origin image a staged label at *rel* came from, or None."""
+    stem = origin_images / rel.parent / rel.stem
+    for ext in sorted(IMG_EXTS):
+        for candidate in (
+            stem.with_name(stem.name + ext),
+            stem.with_name(stem.name + ext.upper()),
+        ):
+            if candidate.is_file():
+                return candidate
+    return None
+
+
 def _unique_source_name(project, base: str) -> str:
-    existing = {s.name for s in project.sources}
-    if base not in existing:
+    """A name free in the project registry AND on disk.
+
+    De-duplicating against ``project.sources`` alone lets a name freed by
+    deleting a source reuse a stale on-disk directory that
+    ``ensure_bundle_subdirectory`` will happily return without clearing --
+    so the new sibling would inherit the deleted source's leftover labels.
+    """
+    project_root = Path(project.project_dir)
+
+    def _free(name: str) -> bool:
+        if any(s.name == name for s in project.sources):
+            return False
+        return not (project_root / "sources" / name).exists()
+
+    if _free(base):
         return base
     n = 2
-    while f"{base}-{n}" in existing:
+    while not _free(f"{base}-{n}"):
         n += 1
     return f"{base}-{n}"
 
@@ -599,19 +899,34 @@ def accept_pending_semantic_escalation(
     (sibling_root / "labels").mkdir(parents=True, exist_ok=True)
 
     origin_images = Path(source.path) / "images"
+    orphaned = 0
     for label_path in sorted(staged_labels.rglob("*.txt")):
         rel = label_path.relative_to(staged_labels)
+        # I7: the staged label's relative path already MIRRORS the image's
+        # (the job keys the cache on exactly that path), so this is a direct
+        # sibling lookup. The previous `origin_images.rglob(f"{rel.stem}.*")`
+        # walked the whole origin tree per label -- O(N^2), and
+        # nondeterministic whenever two nested subdirectories share a stem.
+        src_img = _origin_image_for(origin_images, rel)
+        if src_img is None:
+            # A label with no image is an orphan YOLO would choke on; skip it
+            # rather than ship it, and report the count.
+            logger.warning("No origin image for staged label %s; skipping it.", rel)
+            orphaned += 1
+            continue
         dst_label = sibling_root / "labels" / rel
         dst_label.parent.mkdir(parents=True, exist_ok=True)
         dst_label.write_bytes(label_path.read_bytes())
-        for img in origin_images.rglob(f"{rel.stem}.*"):
-            if img.suffix.lower() not in IMG_EXTS:
-                continue
-            dst_img = sibling_root / "images" / img.relative_to(origin_images)
-            dst_img.parent.mkdir(parents=True, exist_ok=True)
-            if not dst_img.exists():
-                _link_or_copy(img, dst_img)
-            break
+        dst_img = sibling_root / "images" / src_img.relative_to(origin_images)
+        dst_img.parent.mkdir(parents=True, exist_ok=True)
+        if not dst_img.exists():
+            _link_or_copy(src_img, dst_img)
+    if orphaned:
+        logger.warning(
+            "%d staged label(s) for '%s' had no origin image and were skipped.",
+            orphaned,
+            source.name,
+        )
 
     classes_src = staged_root / "classes.txt"
     (sibling_root / "classes.txt").write_text(
