@@ -908,3 +908,37 @@ def test_mixed_case_frames_survive_the_whole_run(tmp_path):
     result = run_semantic_escalation(_request(tmp_path, src), labeler)
     assert result.orphaned == 0, "a mixed-case frame was dropped as an orphan"
     assert result.labelled == 1
+
+
+def test_a_mid_run_failure_does_not_leave_a_pointer_to_a_deleted_dir(tmp_path):
+    """F7: the stale pending_escalation pointer must die with its directory.
+
+    The previous staged dir is removed up front but src.pending_escalation
+    is only replaced after the source finishes. A crash in between (here the
+    plan_for_frame ValueError at overlap 0.9) left the source pointing at a
+    directory that no longer exists.
+    """
+    from hydra_suite.detectkit.gui.models import PendingEscalation
+
+    src = _make_source(tmp_path, n_images=1)
+    old_dir = tmp_path / "artifacts" / "pending_escalations" / "old-staged"
+    (old_dir / "labels").mkdir(parents=True)
+    src.pending_escalation = PendingEscalation(
+        staged_path=str(old_dir),
+        target_level="polygon",
+        created_at="2026-01-01T00:00:00",
+    )
+
+    class _Exploding(ScriptedLabeler):
+        def label_image(self, *a, **k):
+            raise ValueError("tile plan exceeds the ceiling")
+
+    req = _request(tmp_path, src, overwrite=True)
+    with pytest.raises(ValueError):
+        run_semantic_escalation(req, _Exploding([]))
+
+    assert not old_dir.exists(), "the old staged dir should have been removed"
+    assert (
+        src.pending_escalation is None
+        or Path(src.pending_escalation.staged_path).exists()
+    ), "pending_escalation points at a deleted directory"

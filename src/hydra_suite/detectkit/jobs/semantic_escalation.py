@@ -412,6 +412,13 @@ def run_semantic_escalation(
             and _resolved(old_pending.staged_path) != staged_root
         ):
             remove_staged_escalation_dir(old_pending.staged_path, project_root)
+            # F7: the pointer dies with the directory. src.pending_escalation
+            # is only REPLACED at the end of a successful source, so any
+            # failure in between (e.g. plan_for_frame's ValueError above the
+            # tile ceiling at overlap 0.9) used to leave the source pointing
+            # at a directory that no longer exists -- the review dialog then
+            # offers a pending escalation that cannot be opened or dismissed.
+            src.pending_escalation = None
 
         # DEPARTURE 3: the wipe is CONDITIONAL on the fingerprint, so a
         # cancelled multi-hour run resumes instead of restarting.
