@@ -1,36 +1,33 @@
 # DetectKit SAM3 Semantic Escalation — Design
 
-**Date:** 2026-08-28
+**Date:** 2026-08-28 (revised 2026-08-29 after adversarial review)
 **Status:** Draft, pending review
 **Branch:** `feat/sam3-semantic-escalation` (from `main` @ 04da82fa)
-**Supersedes:** `2026-08-17-detectkit-semantic-escalation-design.md`, which was written
-against the August codebase and has since gone stale in its load-bearing sections.
 
 ## Summary
 
 Add **Semantic escalation** to DetectKit: the user types a noun phrase ("ant"), SAM3
 segments every matching instance across a source's frames, and the result is staged for
-review exactly like SAM2 escalation already is. Where the source already has labelled
-frames, a **calibration** pass measures SAM3 against those labels and recommends a
-confidence threshold, so the operating point is fitted to the user's data rather than
-inherited from ours.
+review. Where the source already has labelled frames, a **calibration** pass measures
+SAM3 against those labels and recommends a confidence threshold, so the operating point
+is fitted to the user's data rather than inherited from ours.
 
 The two escalations are complementary and both are kept. SAM2 escalation *converts*
-geometry the user already has — OBB/AABB boxes become segmentation masks — and cannot
-invent a label that isn't there. SAM3 semantic escalation *finds* instances from a
-prompt, including animals missing from the existing labels entirely. Accelerating the
-box-to-mask transition and recovering missed animals are different jobs, so they stay
-different actions.
+geometry the user already has — OBB/AABB boxes become segmentation masks, one output
+instance per input box — and cannot invent a label that isn't there. SAM3 semantic
+escalation *finds* instances from a prompt, including animals missing from the existing
+labels entirely. Accelerating the box-to-mask transition and recovering missed animals
+are different jobs, so they stay different actions.
 
 ## Scope
 
 **In scope**
 
 - A `SemanticLabeler` seam and a SAM3 backend behind it.
-- Tiled inference, reusing `utils/slice_geometry.py`.
-- Calibration against the source's existing labelled frames.
+- Tiled inference, reusing `utils/slice_geometry.py` for the grid.
+- Calibration against the source's existing labelled frames, at any geometry level.
 - A dialog: prompt, tiling controls, calibrate, single-tile preview.
-- Staging into the existing `PendingEscalation` review flow.
+- Staging + review, promoting to a **new sibling source** (see *Promotion*).
 - Renaming the SAM2 action so the two escalations are tellable apart.
 
 **Out of scope**
@@ -43,32 +40,65 @@ different actions.
 - Any change to TrackerKit, `core/inference` detection stages, or cache keys. The
   TrackerKit equivalence matrix is **not** a gate for this work.
 - Any change to SAM2 escalation's behaviour. It is renamed, not touched.
+- Any change to the X-AnyLabeling round trip (`dataset_panel.py:_prepare_xal_stage`).
 
 ## Architecture
 
-### Output: stage, don't derive
+### Promotion: a sibling source, not an in-place overwrite
 
-`run_semantic_escalation` mirrors `sam2_escalation.run_escalation` (`jobs/sam2_escalation.py:153`):
-write into `artifacts/pending_escalations/`, record a `PendingEscalation` on the source,
-and let `accept_pending_escalation` / `reject_pending_escalation` (`:299`, `:373`)
-promote or discard it. `review_escalations_dialog.py` gains a second producer.
+SAM2's `accept_pending_escalation` (`jobs/sam2_escalation.py:299`) does
+`rmtree(source/labels)` then `copytree(staged/labels, source/labels)` and sets
+`source.level`. That is correct for SAM2, whose staged labels are a lossless upgrade of
+the *same* instances.
 
-This is chosen over writing a sibling source for two reasons the measurements force:
-the output is deletion-heavy (below), so it must not reach a training source unreviewed;
-and SAM3 masks trace legs and antennae while tracking labels bound the body core, so
-merging the two conventions into one class would degrade YOLO training.
+It is wrong for SAM3, and this is the review finding that most shapes the design.
+SAM3's staged labels are a different instance set, a different geometry convention
+(masks trace legs and antennae; tracking labels bound the body core — median 1.7x area),
+and all class `0`. Reusing SAM2's accept would silently delete a user's curated OBB
+labels — exactly the harm this spec cites as its reason not to merge the two
+conventions.
+
+Therefore semantic escalation stages like SAM2 but **promotes differently**: accepting
+writes a **new sibling source** (`<name>-sam3-<prompt-slug>`, level `polygon`,
+`reviewed=False`) and leaves the original source untouched. The user then keeps, merges,
+or deletes it with the tools they already have. Concretely, semantic escalation gets its
+own `accept_pending_semantic_escalation` in `jobs/semantic_escalation.py`; SAM2's accept
+path is not modified, and the two are dispatched on `PendingEscalation.primer_kind`.
+
+Consequence: **`run_semantic_escalation` must not inherit SAM2's
+`level != "polygon"` filter** (`sam2_escalation.py:177-181`). Running a prompt against a
+polygon-level source to find animals the polygons missed is a primary use case, and
+under SAM2's filter it is silently dropped without even a `skipped` entry.
+
+### Staging
+
+Reuse the SAM2 staging mechanics: write into
+`artifacts/pending_escalations/<dirname>/`, record a `PendingEscalation` on the source,
+and extend `review_escalations_dialog.py` with a second producer.
 
 `PendingEscalation` needs generalising — it currently hardcodes `sam2_variant`
 (`gui/models.py:14-20`). Add `primer_kind` ("sam2" | "sam3"), `primer_variant`,
-`primer_prompt`, and `primer_params` (the resolved operating point), with `from_dict`
-back-filling `primer_kind="sam2"` from a legacy `sam2_variant` so existing projects load.
+`primer_prompt`, and `primer_params`, with `from_dict` back-filling `primer_kind="sam2"`
+and `primer_variant` from a legacy `sam2_variant` key so existing projects load with no
+migration. (`to_dict`/`from_dict` are hand-written with `d.get` defaults at
+`models.py:22-39`, and `DetectKitProject.load`'s coercion loop never touches nested
+source dicts, so this is safe.)
+
+Two staging details SAM2 gets right that semantic escalation must adjust:
+
+- The staging dirname hash is `sha1(str(src_root) + variant)` (`:198-201`). **The prompt
+  must enter the hash**, or two prompts on one source collide and the
+  replaced-pending cleanup at `:212-213` no-ops.
+- `remove_staged_escalation_dir(staged_root)` is called unconditionally before writing
+  (`:215`). Resumability (below) needs this to become conditional on a
+  fingerprint match.
 
 ### The seam
 
 ```
 core/inference/semantic/
     base.py          # SemanticLabeler protocol + SemanticInstance
-    checkpoints.py   # SAM3 catalog + HF download
+    checkpoints.py   # SAM3 catalog + HF download + availability probe
     sam3.py          # Sam3SemanticLabeler
     tiling.py        # seam-drop + cross-tile merge (grid comes from slice_geometry)
     calibration.py   # sweep confidence against labelled frames
@@ -77,7 +107,9 @@ core/inference/semantic/
 ```python
 @dataclass(frozen=True)
 class SemanticInstance:
-    polygon_px: np.ndarray   # (P, 2) float32, frame pixel space
+    polygon_px: np.ndarray   # (P, 2) float32, in the coordinate space of the
+                             # image passed to label_image -- tile-local under
+                             # tiled inference. tiling.py offsets to frame space.
     confidence: float
 
 class SemanticLabeler(Protocol):
@@ -85,23 +117,44 @@ class SemanticLabeler(Protocol):
     def name(self) -> str: ...
     def label_image(self, image_bgr, prompt, *, confidence_threshold,
                     max_instances=0) -> list[SemanticInstance]: ...
+                    # max_instances=0 means unlimited.
 ```
 
 `Sam3SemanticLabeler` wraps `SAM3SemanticPredictor` from `ultralytics.models.sam`
-(present in the installed 8.4.34). Checkpoints follow `sam2/checkpoints.py`: pinned
-catalog, `hf_hub_download` into `get_models_dir() / "sam3"`, offline error path,
-`available_variants()` as the GUI availability probe.
+(verified present in the installed 8.4.34). Checkpoints follow `sam2/checkpoints.py`:
+pinned catalog, `hf_hub_download` into `get_models_dir() / "sam3"`, offline error path.
+The catalog entry pins the HF repo id **and filename**, as `SAM2_VARIANTS` does.
+
+`sam3.pt` is 3.45 GB and is **not** in ultralytics' `GITHUB_ASSETS_NAMES` (verified), so
+it comes from the public `facebook/sam3` HF repo. Ultralytics AutoUpdate pip-installs
+`clip` and `ftfy` on first use, which is unacceptable for an offline or shared install:
+both are declared in a `sam3` extra, and the probe must fail loudly rather than let
+AutoUpdate run.
+
+**The availability probe is new code, not the SAM2 pattern.** `available_variants()`
+(`sam2/checkpoints.py:48-49`) just returns `list(SAM2_VARIANTS.keys())` — a static dict
+— so the tools-panel guard at `panels/tools_panel.py:172-181` never checks anything, and
+its "install the SAM2 checkpoints" tooltip is already misleading. Reusing it would give
+exactly the silent 3.45 GB download this spec forbids. `semantic/checkpoints.py`
+provides `probe_availability() -> tuple[bool, str]` checking, in order:
+`importlib.util.find_spec("ultralytics")` and the `SAM3SemanticPredictor` symbol,
+`find_spec("clip")` and `find_spec("ftfy")`, and `checkpoint_path(variant).exists()` —
+returning a reason string the tooltip shows. A missing checkpoint disables the button
+with "download it from the dialog", not a click-time surprise. Fixing the SAM2 tooltip
+is out of scope but should be noted in the PR.
 
 Device selection reuses the existing cuda -> mps -> cpu picker rather than duplicating
 it: move it from `sam2/executor.py:13-18` to `core/inference/torch_device.py`, leaving
-`resolve_sam2_device` as a thin alias so `sam2/` keeps working unchanged. One import
-site moves.
+`resolve_sam2_device` as a thin alias. Note this **does** break two existing tests:
+`tests/test_sam2_executor.py:9-18` monkeypatches `executor.TORCH_CUDA_AVAILABLE` and
+would no longer affect the aliased function. Those tests are repointed at the new module
+in the same commit — the spec's earlier claim that `sam2/` "keeps working unchanged" was
+wrong.
 
-Two facts the catalog must encode: `sam3.pt` is 3.45 GB and is **not** in ultralytics'
-`GITHUB_ASSETS_NAMES`, so it comes from the public `facebook/sam3` HF repo; and
-ultralytics AutoUpdate pip-installs `clip` and `ftfy` on first run, which is
-unacceptable for an offline or shared install — both must be declared in a `sam3` extra,
-and the probe must fail loudly rather than trigger AutoUpdate.
+Similarly, `mask_to_contour` moves to `core/inference/masks.py` — and **so does
+`clip_mask_to_polygon`**, its only module-mate (`sam2/masks.py` is 48 lines, two
+functions). Import sites: `jobs/sam2_escalation.py:17` and `tests/test_sam2_masks.py:3`,
+both of which import both names. Move the module wholesale; don't split it.
 
 ### Job result and prompt failure
 
@@ -124,13 +177,13 @@ completion dialog saying so and suggesting the prompt be retried in the preview.
 instances staged is never a green result.
 
 `degenerate` counts contours with fewer than 3 points. These are dropped and counted
-rather than passed to `write_label_file`, which refuses them (`data/al/labels.py:46-52`)
-and would otherwise abort a whole multi-hour run over one bad contour.
+rather than passed to `write_label_file`, whose `_polygon_points` raises on them
+(`data/al/labels.py:45-50`, uncaught in `run_escalation`) and would otherwise abort a
+multi-hour run over one bad contour.
 
 `skipped` carries `(source_name, reason)` pairs, mirroring `EscalationResult.skipped`
 (`jobs/sam2_escalation.py:106-114`) — primarily sources that already hold a pending
-escalation when `overwrite` was not requested. The same skip-vs-overwrite guard SAM2
-uses applies here.
+escalation when `overwrite` was not requested.
 
 ### Tiling
 
@@ -139,27 +192,48 @@ is ~18 px to the model, and detection collapses. Tiling is what makes the featur
 and on a rig where animals are already large at native resolution, tiling would instead
 *hurt*, which is why the tile size is derived from object scale rather than fixed.
 
-**The grid comes from `utils/slice_geometry.py`, not from new code.** That module exists
-precisely so training, inference, and preview tile identically, and it already provides
-what is needed: `tile_size_for_mode(geometry_mode="auto_object", ...)` computes
-`reference_body_px / object_tile_fraction` (`:104-128`), `plan_tiles` lays out the
-overlap grid with last-tile-flush-to-edge, and `MAX_TILES_PER_FRAME = 4096` (`:20`)
-caps pathological configurations. Semantic escalation adopts `object_tile_fraction` as
-its knob; it does **not** introduce a second object-size convention.
+**The grid comes from `utils/slice_geometry.py`, not from new code.** Verified: it
+provides `tile_size_for_mode(geometry_mode="auto_object", ...)` computing
+`reference_body_px / object_tile_fraction` (`:104-128`), `plan_tiles` returning
+frame-space `(x0, y0, x1, y1)` tiles with overlap and last-tile-flush-to-edge (`:42-44`),
+and `MAX_TILES_PER_FRAME = 4096` (`:20`).
+
+**Semantic escalation gets its own fraction, not `SliceTrainingSettings`'s.** Sharing
+`reference_body_px` is right; sharing the *fraction* is not.
+`SliceTrainingSettings.object_tile_fraction` defaults to `0.15` (`gui/models.py:119`),
+which at the measured `reference_body_px = 80` yields a 533 px tile — essentially the
+tile-752 configuration Evidence row 2 shows costs 5.7x for no gain. The two consumers'
+optima differ ~3x, so a single persisted value cannot serve both.
+
+The semantic fraction has a derivation rather than a fit: SAM3 needs an object to reach
+roughly **50 px at its 1008 px model input**, so
+`tile_px ≈ body_px * 1008 / 50 ≈ 20 * body_px`, i.e. a fraction of **0.05**. At
+`body_px = 80` that gives ~1600 px, consistent with the measured-good 1504. The 50 px
+figure is the one empirical constant in the tile rule; it is stated as such, exposed in
+the dialog, and calibration can move off it by varying tile size (at the cost of a
+rerun).
 
 `reference_body_px` resolves from the first available of: the DetectKit project setting
-(`gui/models.py:120`, which already has an adoption helper at `:178`), the median
-longest-side of the source's existing labels, or the user. If none resolve, tiling falls
-back to full-frame and the dialog says why rather than guessing.
+(`gui/models.py:120`, adoption helper `populate_measured_reference` at `:175`), the
+median longest-side of the source's existing labels, or the user. If none resolve,
+tiling falls back to full-frame and the dialog says why rather than guessing.
 
 New in `tiling.py`, because `slice_geometry` does not cover it:
 
 - **Seam drop.** Discard a detection whose polygon touches within `seam_margin_px` of a
   tile edge that is not a frame edge. With overlap, every object is interior to some
   tile, so the fragment is recovered from its neighbour instead of merged badly.
-- **Cross-tile merge.** `polygon_iou` NMS over survivors. `polygon_iou` does not exist
-  yet; add it beside `mask_to_contour`, which moves from `sam2/masks.py` to
-  `core/inference/masks.py` (sole current import site is `jobs/sam2_escalation.py`).
+- **Cross-tile merge.** Greedy NMS over survivors by `polygon_iou`.
+
+**`polygon_iou` is specified, not just named.** It does not exist yet (verified), and
+`utils/rotated_iou.py:pairwise_obb_overlap` cannot be reused: it is a 4-corner
+Sutherland-Hodgman convex clip, and SAM3 contours are arbitrary non-convex polygons with
+variable P, for which convex clipping silently returns garbage. `polygon_iou`
+rasterizes both polygons with `cv2.fillPoly` onto a shared bounding-box grid and counts
+pixels — the boring, correct choice given the polygons came from masks in the first
+place. It lives beside `mask_to_contour` in `core/inference/masks.py`. (Related but not
+reusable: `slice_geometry.polygon_area` `:186`, `clip_polygon_to_tile` `:215` —
+convex-only.)
 
 ### Calibration
 
@@ -179,18 +253,23 @@ class CalibrationPoint:
     n_matched: int
 
 def calibrate(labeler, frames: Sequence[tuple[Path, list[LabelRecord]]],
-              prompt: str, *, tile_px, grid, progress=None) -> list[CalibrationPoint]
+              prompt: str, *, tile_px, grid,
+              progress: Callable[[int, str], None] | None = None,
+              should_stop: Callable[[], bool] | None = None) -> list[CalibrationPoint]
 ```
 
+`progress(pct, msg)` matches the existing convention (`sam2_escalation.py:158`).
 `calibrate` takes image paths and `LabelRecord`s, not an `OBBSource` — Core must not
-import an app-layer type (CLAUDE.md dependency direction). The DetectKit job does the
-adaptation.
+import an app-layer type. (Core->Data is established and fine: 8 existing
+`from hydra_suite.data` imports under `core/`.)
 
 **Any geometry level.** Choosing an operating point needs instance *counts*, not masks,
-so polygon, OBB and AABB labels all work; matching happens at the level the labels
-provide. Note that the existing `sam2_prompts.read_boxes_from_label` cannot be reused —
-it accepts only 4- and 8-value lines and silently `continue`s on polygon lines
-(`jobs/sam2_prompts.py:56-60`); calibration must use a level-aware reader.
+so polygon, OBB and AABB labels all work. The DetectKit-side adapter reuses
+`detectkit/gui/utils.py:220 parse_obb_label`, which already handles 5-field AABB,
+9-field quad and odd-count polygon lines and returns pixel polygons. Do **not** reuse
+`sam2_prompts.read_boxes_from_label` — it accepts only 4- and 8-value lines and silently
+`continue`s on polygon lines (`jobs/sam2_prompts.py:49-60`) — and do not write a third
+reader.
 
 **Matching is one-to-one on centroid distance, gated by containment.** SAM3's masks run
 ~1.7x the labelled body-core area, so IoU penalises correct detections for a purely
@@ -199,93 +278,135 @@ blob's centroid can land inside a neighbour's label, and two predictions can cla
 label. So the assignment is greedy nearest-centroid with each label and each prediction
 used at most once.
 
-**Run inference once.** The confidence axis is swept offline over cached per-instance
-scores; only tile size, if varied, costs a rerun. This is what keeps calibration to
-minutes rather than hours.
+**Run inference once, sweep offline — with the merge redone per threshold.** Only tile
+size, if varied, costs a rerun. The cache holds **pre-merge, per-tile candidates**, not
+merged survivors: seam-drop and NMS are survivor-dependent, so post-filtering an already
+merged set does not reproduce a run at that threshold. Each swept threshold re-runs
+seam-drop + NMS over the cached candidates, which is pure geometry and cheap.
+`max_instances` truncates before the sweep and so is fixed for a cache; the dialog says
+so.
 
-**Honest limits, surfaced in the UI rather than buried here.** With a handful of
-correlated frames this fits a threshold on very little data:
+**Honest limits, surfaced in the UI.** With a handful of correlated frames this fits a
+threshold on very little data. Three mechanisms, not five:
 
 - Refuse to recommend below a minimum matched-instance count; show the frontier and say
   the data is insufficient.
 - Report per-frame ranges, not just means.
-- Leave-one-frame-out: recommend only if the per-frame choices agree; otherwise show the
-  spread.
-- Calibration assumes labelled frames are **exhaustively** labelled — a partially
-  labelled frame counts every real-but-unlabelled animal as a false positive and biases
-  the threshold upward. The dialog must ask the user to confirm this.
-- Frames labelled during active learning were selected *because they were hard*, so the
-  fitted threshold may be conservative for the easy majority.
+- The dialog asks the user to confirm the labelled frames are **exhaustively** labelled;
+  a partially labelled frame counts every real-but-unlabelled animal as a false positive
+  and biases the threshold upward.
 
-### Persist confidence
+Documented in the dialog's help text but not mechanised: frames labelled during active
+learning were selected *because they were hard*, so the fitted threshold may be
+conservative for the easy majority. (Leave-one-frame-out agreement was considered and
+cut — it is statistical theatre on 3 correlated frames.)
 
-`data/al/labels.py:_format_line` writes class and coordinates only (`:58-72`), so
-per-instance confidence is lost at write time. Staged output writes a sidecar carrying
-each instance's score.
+### The candidate cache and a re-thresholdable staged result
 
-Without it, the ~12 spurious polygons per frame at the recommended threshold arrive with
-no sort order, and moving the threshold after seeing results means re-running the whole
-source. With it, review sorts by confidence ascending, bulk-deletes a tail, and the
-threshold becomes a review-time slider over a single inference run. This is the
-difference between the calibration frontier being a blind one-shot commitment and a
-reversible knob.
+The same pre-merge candidate cache the sweep uses is written into the staging directory
+as `candidates.json` alongside `labels/`. It exists so a 30-hour run is not a one-shot
+commitment to one threshold.
+
+- It is keyed by image relative path and holds per-tile candidate polygons + scores.
+- The review dialog gains a **"Re-threshold"** action: pick a new confidence, re-run
+  seam-drop + NMS + label writing over the cache, no inference. Seconds, not hours.
+- It is **consumed at accept and never copied out.** Promotion writes only
+  `images/`/`labels/`/`classes.txt` into the new sibling source, so the cache cannot go
+  stale against user edits and cannot reach the X-AnyLabeling round trip
+  (`dataset_panel.py:_prepare_xal_stage:637-657` copies only those three, so a sidecar
+  would never survive it anyway — this is why the earlier "per-instance confidence
+  sidecar shipped with the labels" design is dropped).
+
+Re-thresholding is the only consumer. There is no per-instance confidence UI, no
+sorted-by-score review list, no polygon-level editor — `ReviewEscalationsDialog` is a
+per-source accept/reject checklist (105 lines) and `detectkit/gui/canvas.py` is
+view-only, so any of those would be a separate feature.
+
+### Cancellation and resumability
+
+Neither exists in the pattern being copied, so both are specified here.
+
+- `BaseWorker` (`widgets/workers.py`) has no cancel support. Use the existing DetectKit
+  precedent instead: a `_cancel` flag on the worker (`main_window.py:136-139`) wired via
+  `progress.canceled.connect(worker.cancel)` (`:1735`).
+- The SAM2 progress dialog is `QProgressDialog(msg, None, ...)` — second argument `None`
+  means **no cancel button** — and application-modal (`main_window.py:1851-1857`). For a
+  multi-hour run that is unacceptable: the semantic dialog gets a real cancel button.
+- `should_stop: Callable[[], bool]` threads worker -> `run_semantic_escalation` ->
+  per-tile check. A cancelled run leaves the partial staging directory in place and
+  reports how far it got.
+- **Resumability** requires making `remove_staged_escalation_dir` conditional. The
+  staging directory carries a `run.json` fingerprint (prompt, variant, tile geometry,
+  threshold, source content hash). On re-run: matching fingerprint -> skip images
+  already present in `candidates.json` and continue; mismatched -> wipe and start over.
+  Without this change, `run_escalation:215` wipes unconditionally and `overwrite=True`
+  — the flag a resumed run must pass — is exactly the wiping path.
 
 ## GUI
 
 ### Tools panel
 
-`_build_escalation_group` gains a second action and both get names that say what they
-do. SAM2's behaviour is unchanged — this is a label and signal rename only:
+`_build_escalation_group` (`panels/tools_panel.py:156`) gains a second action and both
+get names that say what they do. SAM2's behaviour is unchanged — a label and signal
+rename only:
 
 - Group title: `"SAM2 Escalation"` -> `"Escalation"`.
 - `"Escalate to segment (SAM2)"` -> **`"Geometry escalation (SAM2): boxes to masks"`**;
-  signal `escalate_sam2_requested` -> `escalate_geometry_requested`. It converts OBB/AABB
-  labels the user already has into segmentation masks.
-- New **`"Semantic escalation (SAM3): prompt to masks..."`** -> `semantic_escalation_requested`.
-  It finds instances from a noun phrase, including animals absent from the current labels.
-- Hint text distinguishes them explicitly: geometry escalation converts existing labels
-  and cannot add a missing animal; semantic escalation can, and needs no labels to start.
+  signal `escalate_sam2_requested` -> `escalate_geometry_requested` (`:103`, `:170`,
+  and the connection at `main_window.py:741`).
+- New **`"Semantic escalation (SAM3): prompt to masks..."`** ->
+  `semantic_escalation_requested`.
+- Hint text distinguishes them: geometry escalation converts existing labels and cannot
+  add a missing animal; semantic escalation can, and needs no labels to start.
 
-The new button is guarded by the same try-import-catalog pattern that disables the SAM2
-button with an explanatory tooltip when assets are missing. This matters more here: the
-SAM3 checkpoint is 3.45 GB, so the button must self-disable and say why rather than fail
-at click time or start a silent multi-gigabyte download.
+The new button's enablement comes from `probe_availability()`, not from the vacuous
+SAM2 guard.
 
 ### Dialog
 
-`dialogs/semantic_escalation_dialog.py` (`BaseDialog`), beside the existing
-`escalate_sam2_dialog.py`:
+`dialogs/semantic_escalation_dialog.py` (`BaseDialog`), beside `escalate_sam2_dialog.py`:
 
-- Backend and variant combos, prompt line edit. The prompt is the user's to author and
-  vary.
+- Backend and variant combos, prompt line edit. The prompt is the user's to author.
 - Confidence, max instances, tiling group (mode, resolved tile size shown read-only with
-  its `reference_body_px` provenance, overlap, seam margin).
+  its `reference_body_px` provenance and the semantic fraction, overlap, seam margin).
 - **Calibrate**, enabled whenever the selected sources contain a labelled frame at any
-  geometry level, and presented as the recommended next step. With no labelled frames the
+  geometry level, presented as the recommended next step. With no labelled frames the
   dialog invites the user to label a few first, and lets them proceed anyway.
 - **Preview runs one tile**, not the frame — a full-frame preview would show near-zero
-  detections and teach the user the feature is broken. One tile at the resolved geometry
-  is ~4 s; a tiled full frame is ~107 s and is not a preview.
-- Projected total runtime shown before the run starts.
+  detections and teach the user the feature is broken.
+- Projected total runtime shown before the run starts, computed from a measured
+  per-tile time on this machine (see *Cost* — the archived numbers are not fit to quote).
 
 ### Handlers
 
-Both escalation handlers and the existing `review_escalations_requested` handler
-(`main_window.py:745`) move into a new `gui/escalation_actions.py`; `main_window.py`
-(2152 lines) keeps signal connections only, per CLAUDE.md's thin-coordinator rule. The
-review dialog must be included in the move, or the extraction leaves the flow split
-across two files.
+`_on_escalate_to_segment_sam2` (`main_window.py:1769-1943`), the new semantic handler,
+and `_on_review_escalations` (`:1985-2010`) move into `gui/escalation_actions.py`;
+`main_window.py` keeps signal connections only. Honest accounting: this removes ~205 of
+2152 lines and does **not** bring `main_window.py` near CLAUDE.md's thin-coordinator
+target. It is done because the new handler would otherwise add a third escalation flow
+to an already-oversized file, not because it satisfies the rule.
+
+Also required, and easy to miss: `ReviewEscalationsDialog` hardcodes SAM2 in its intro
+text (`:45-49`) and item text (`f"({pending.sam2_variant}, staged ...)"`, `:60-61`).
+And `self._escalation_worker` (`main_window.py:706`) is a single slot guarding
+"a run is already in progress" (`:1778`) — the two escalation kinds share it
+deliberately, since both are heavyweight GPU jobs.
 
 ## Cost
 
-Measured on an M3 Max at 4512x4512: 1.3 s per full-frame inference warm, 24 s cold;
-**107 s/frame** at the recommended tiled configuration; a 78-frame source took **140
-minutes**. A 1000-frame source is ~30 h on MPS. This is a batch operation, not an
-interactive one.
+**The archived timings do not reconcile, and must be re-measured before any of them is
+shown to a user.** On an M3 Max at 4512x4512: the 3-frame runs at tile 1504 / overlap
+0.2 (16 tiles) measured **22 s/frame**, while the 78-frame full run at overlap 0.5
+(~36 tiles) measured **107 s/frame** and took 140 minutes. Tile count explains ~2.25x of
+a 4.9x gap; the remainder is unexplained (thermal, contention, per-image I/O). Likewise
+full-frame inference appears as both 1.3 s (warm, inference only) and 3.3 s (per frame,
+including a 4512² decode).
 
-Therefore: per-image resumability so a crash or cancel does not restart from zero,
-cancellation honoured between tiles, and documentation pointing large runs at the CUDA
-box.
+What survives the discrepancy and drives the design: this is a **batch operation at tens
+of seconds per frame, not an interactive one** — a 1000-frame source is many hours on
+MPS. Hence resumability, real cancellation, and documentation pointing large runs at the
+CUDA box. The dialog's runtime projection must come from a timed preview tile on the
+user's machine, never from these numbers.
 
 ## Evidence
 
@@ -304,8 +425,8 @@ mechanisms, and none of them is a default.**
    moved best F1 only 0.688-0.720 — hence tiling is designed in and wording is the
    user's to explore.
 2. **Smaller tiles are not better.** Tile 752 cost 5.7x tile 1504 for no gain. Only two
-   tile sizes were tested, so the tile rule is deliberately inherited from
-   `slice_geometry` rather than fitted here.
+   tile sizes were tested, which is why the tile rule is derived from SAM3's input
+   resolution rather than fitted to this curve.
 3. **Seam handling is worth ~40% of false positives** at held recall.
 4. **F1 is the wrong objective** — see Calibration.
 5. **Exemplars measured worse at every threshold**, damaging ranking rather than
@@ -331,18 +452,29 @@ threshold — but both are reasons not to trust the specific numbers.
 Unit tests with a fake `SemanticLabeler` (no weights):
 
 - Seam drop: interior-seam detection dropped, frame-edge detection kept.
-- Cross-tile merge: one object in two overlapping tiles yields one instance.
-- Tile resolution: `reference_body_px` provenance chain; full-frame fallback when
-  unresolved; `MAX_TILES_PER_FRAME` respected.
+- Cross-tile merge: one object in two overlapping tiles yields one instance; tile-local
+  polygons are offset to frame space.
+- Tile resolution: `reference_body_px` provenance chain; semantic fraction independent
+  of `SliceTrainingSettings.object_tile_fraction`; full-frame fallback when unresolved;
+  `MAX_TILES_PER_FRAME` respected.
+- `polygon_iou`: disjoint, identical, partial overlap, **non-convex** (the case
+  `pairwise_obb_overlap` gets wrong), degenerate.
 - Calibration matching: one-to-one under a dense cluster where a blob centroid falls in
   a neighbour's label; polygon, OBB and AABB labels all match; refusal below the minimum
   matched-instance count.
-- Calibration frontier monotone in confidence on canned detections.
-- `polygon_iou`: disjoint, identical, partial, degenerate.
-- Staging round-trip: `PendingEscalation` with `primer_kind="sam3"`, and a legacy dict
-  carrying only `sam2_variant`.
+- Calibration frontier monotone in confidence on canned candidates, **with merge redone
+  per threshold** (a test that post-filters a merged set must fail).
 - Degenerate contours (`P < 3`) are dropped and counted, never passed to
-  `write_label_file`, which refuses them (`data/al/labels.py:46-52`).
+  `write_label_file`.
+- Staging round-trip: `PendingEscalation` with `primer_kind="sam3"`; a legacy dict
+  carrying only `sam2_variant` loads as `primer_kind="sam2"`.
+- Staging dirname differs for two prompts on one source.
+- Promotion: accepting a semantic escalation creates a sibling source and leaves the
+  original's labels byte-identical.
+- Resume: matching `run.json` fingerprint skips completed images; mismatched wipes.
+- Cancellation: `should_stop` honoured between tiles; partial staging survives.
+- Moved modules: `tests/test_sam2_masks.py` and `tests/test_sam2_executor.py` repointed
+  and passing.
 
 **Not a gate:** the TrackerKit equivalence matrix.
 
