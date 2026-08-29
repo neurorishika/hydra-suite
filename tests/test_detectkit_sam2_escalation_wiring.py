@@ -153,15 +153,43 @@ def test_semantic_escalation_finish_defers_dialog_past_progress_close():
     handle_result_body = source[handle_result_start:finish_start]
     finish_body = source[finish_start:]
 
-    # _handle_result is allowed its own QMessageBox calls today (prompt-failure
-    # warning / success info) -- unlike the SAM2 path it does not open a
-    # second dialog on top of the progress dialog, so this is not a bug; the
-    # regression this guards is specifically that it must never open the
-    # (unrelated, heavier) ReviewEscalationsDialog before the progress dialog
-    # closes, and that the error path checked below stays deferred.
+    # Fixed by this task: _handle_result used to pop the prompt-failure
+    # warning / success info QMessageBox directly, stacking it under the
+    # still-open progress dialog -- the same bug class already fixed for
+    # worker.error. Both must now be deferred to _finish, exactly like
+    # on_escalate_geometry's result path.
     assert "ReviewEscalationsDialog" not in handle_result_body
+    assert "QMessageBox" not in handle_result_body
+    assert "window._last_escalation_result = result" in handle_result_body
+    assert "QMessageBox" in finish_body
+    assert "is_prompt_failure" in finish_body
     assert "progress.close()" in finish_body
     assert "window._escalation_worker = None" in finish_body
+
+
+def test_semantic_escalation_result_messages_deferred_past_progress_close():
+    """Specific regression guard for the Task-11-review fix: both the
+    prompt-failure warning and the success info box must come from _finish,
+    strictly after progress.close(), not from _handle_result. Reverting the
+    fix (moving either QMessageBox call back into _handle_result) must break
+    this test."""
+    import inspect
+
+    from hydra_suite.detectkit.gui import escalation_actions
+
+    source = inspect.getsource(escalation_actions.on_semantic_escalation)
+
+    finish_start = source.index("def _finish")
+    finish_body = source[finish_start:]
+    close_idx = finish_body.index("progress.close()")
+
+    prompt_failure_idx = finish_body.index("matched nothing on")
+    success_idx = finish_body.index("Staged {len(result.staged)}")
+
+    # Both result-driven messages must textually appear after progress.close()
+    # within _finish -- i.e. cannot fire before the progress dialog closes.
+    assert prompt_failure_idx > close_idx
+    assert success_idx > close_idx
 
 
 def test_semantic_escalation_error_deferred_past_progress_close():

@@ -260,8 +260,30 @@ def on_semantic_escalation(window) -> None:
     worker.error.connect(_stash_error)
 
     def _handle_result(result) -> None:
+        # Everything UI-facing (the prompt-failure warning, the success info
+        # box) is deferred to _finish, because the progress dialog is still
+        # open here -- a modal dialog opened from this slot would stack
+        # under it, same reasoning as on_escalate_geometry's _handle_result.
         window._save_current_project()
         window._dataset_panel.refresh_sources(window._project)
+        window._last_escalation_result = result
+
+    def _finish() -> None:
+        progress.close()
+        window._escalation_worker = None
+        window._escalation_progress_dialog = None
+
+        error_msg = window._last_escalation_error
+        window._last_escalation_error = None
+        if error_msg is not None:
+            QMessageBox.warning(window, "Semantic escalation", error_msg)
+            return
+
+        result = window._last_escalation_result
+        window._last_escalation_result = None
+        if result is None:
+            return
+
         frames = result.labelled + result.empty_images
         if is_prompt_failure(result, frames):
             QMessageBox.warning(
@@ -280,16 +302,6 @@ def on_semantic_escalation(window) -> None:
             f"{result.empty_images} empty frame(s), {result.degenerate} degenerate "
             f"contour(s) dropped. Review them before training.",
         )
-
-    def _finish() -> None:
-        progress.close()
-        window._escalation_worker = None
-        window._escalation_progress_dialog = None
-
-        error_msg = window._last_escalation_error
-        window._last_escalation_error = None
-        if error_msg is not None:
-            QMessageBox.warning(window, "Semantic escalation", error_msg)
 
     worker.result_ready.connect(_handle_result)
     worker.finished.connect(_finish)
