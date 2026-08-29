@@ -798,3 +798,76 @@ def test_orphaned_counts_cached_frames_whose_origin_image_is_gone(tmp_path):
     resumed = run_semantic_escalation(req, labeler)
     assert resumed.orphaned == 1
     assert resumed.labelled == 1  # only f0 still has an image behind it
+
+
+def _cached_images(staged: Path) -> set:
+    """Keys present in the staging dir's candidate cache (absent file = none)."""
+    path = staged / "candidates.json"
+    if not path.exists():
+        return set()
+    return set(json.loads(path.read_text())["images"])
+
+
+class _CountingLabeler(ScriptedLabeler):
+    """ScriptedLabeler that records how many tiles it was asked to label."""
+
+    def __init__(self, instances):
+        super().__init__(instances)
+        self.calls = 0
+
+    def label_image(self, image_bgr, prompt, **kw):
+        self.calls += 1
+        return super().label_image(image_bgr, prompt, **kw)
+
+
+def test_a_mid_frame_cancel_never_caches_the_partial_frame(tmp_path):
+    """F1: cancelling between tiles must not poison the candidate cache.
+
+    Before the fix, collect_candidates returned the tiles it had managed and
+    the job wrote that partial list under the frame's cache key as if the
+    frame were complete. On resume, `if rel in cache["images"]: continue`
+    trusted it forever: zero further inference, cancelled reported False,
+    and "re-run to carry on" did nothing.
+    """
+    src = _make_source(tmp_path, n_images=1)
+    # 400x400 frame, 100 px tiles, no overlap => 16 tiles.
+    labeler = _CountingLabeler([SemanticInstance(_blob(50, 50), 0.9)])
+    req = _request(tmp_path, src, reference_body_px=100.0, tile_fraction=1.0)
+    req.tile_px = 100
+
+    result = run_semantic_escalation(
+        req, labeler, should_stop=lambda: labeler.calls >= 3
+    )
+    assert result.cancelled is True
+    tiles_first = labeler.calls
+    assert 0 < tiles_first < 16, "the frame must have been cut off mid-way"
+
+    staged = Path(src.pending_escalation.staged_path)
+    assert _cached_images(staged) == set(), "a partial frame must NOT be cached"
+    assert result.frames_processed == 0
+
+    # Resume: same request, same staging dir, no cancel. It must actually
+    # redo the frame from tile zero rather than trusting a poisoned entry.
+    labeler2 = _CountingLabeler([SemanticInstance(_blob(50, 50), 0.9)])
+    result2 = run_semantic_escalation(req, labeler2)
+    assert result2.cancelled is False
+    assert labeler2.calls == 16, "resume did no inference: the cache was poisoned"
+    assert _cached_images(staged) == {"f0.png"}
+    assert result2.frames_processed == 1
+    assert result2.labelled > 0
+
+
+def test_a_completed_frame_is_still_cached_and_reused_on_resume(tmp_path):
+    """The complement: F1 must not disable legitimate resume."""
+    src = _make_source(tmp_path, n_images=2)
+    labeler = _CountingLabeler([SemanticInstance(_blob(200, 200), 0.9)])
+    req = _request(tmp_path, src)
+    # Frame 0 is one full-frame tile, so calls>=1 cancels BETWEEN images,
+    # after frame 0 has completed.
+    run_semantic_escalation(req, labeler, should_stop=lambda: labeler.calls >= 1)
+    staged = Path(src.pending_escalation.staged_path)
+    assert _cached_images(staged) == {"f0.png"}, "a COMPLETE frame must be cached"
+
+    labeler2 = _CountingLabeler([SemanticInstance(_blob(200, 200), 0.9)])
+    run_semantic_escalation(req, labeler2)
+    assert labeler2.calls == 1, "the completed frame must be reused, not redone"

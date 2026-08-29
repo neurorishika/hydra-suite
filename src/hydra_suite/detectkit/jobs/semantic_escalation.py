@@ -30,6 +30,7 @@ from hydra_suite.core.inference.semantic.tiling import (
     DEFAULT_SEAM_MARGIN_PX,
     SEMANTIC_TILE_FRACTION_SEED,
     TileCandidate,
+    TileCollectionCancelled,
     collect_candidates,
     full_frame_plan,
     merge_candidates,
@@ -452,18 +453,27 @@ def run_semantic_escalation(
                 if tile_px
                 else full_frame_plan((h, w))
             )
-            cands = collect_candidates(
-                counting_labeler,
-                image,
-                plan,
-                req.prompt,
-                # I4: the CACHE floor, not req.confidence -- see
-                # cache_confidence_floor (never ABOVE req.confidence).
-                confidence_threshold=floor,
-                max_instances=req.max_instances,
-                seam_margin_px=req.seam_margin_px,
-                should_stop=should_stop,
-            )
+            try:
+                cands = collect_candidates(
+                    counting_labeler,
+                    image,
+                    plan,
+                    req.prompt,
+                    # I4: the CACHE floor, not req.confidence -- see
+                    # cache_confidence_floor (never ABOVE req.confidence).
+                    confidence_threshold=floor,
+                    max_instances=req.max_instances,
+                    seam_margin_px=req.seam_margin_px,
+                    should_stop=should_stop,
+                )
+            except TileCollectionCancelled:
+                # F1: a half-tiled frame is NOT cached. Caching it would let
+                # the `rel in cache["images"]` resume check skip the frame
+                # forever, so "re-run to carry on" would do nothing and the
+                # staged labels would be silently truncated. Leaving the key
+                # absent makes the resume redo this frame from tile zero.
+                result.cancelled = True
+                break
             cache["images"][rel] = {
                 "hw": [h, w],
                 "candidates": _candidates_to_json(cands),

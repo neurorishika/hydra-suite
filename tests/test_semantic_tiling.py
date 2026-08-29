@@ -6,6 +6,7 @@ from hydra_suite.core.inference.semantic.tiling import (
     SEMANTIC_TILE_FRACTION_SEED,
     TILE_FRACTION_GRID,
     TileCandidate,
+    TileCollectionCancelled,
     candidate_tile_plans,
     collect_candidates,
     merge_candidates,
@@ -220,17 +221,46 @@ def test_merging_at_a_threshold_equals_merging_only_the_kept_subset():
     assert sorted(round(c.confidence, 2) for c in at_high) == [0.6, 0.75, 0.9]
 
 
-def test_should_stop_halts_between_tiles():
+def test_should_stop_halts_between_tiles_and_raises_rather_than_truncating():
+    """F1: a cancelled frame must be UNMISTAKABLE, not a short list.
+
+    A partial return is indistinguishable from a genuinely sparse frame, and
+    the escalation job cached it as complete -- so resume skipped the frame
+    forever. TileCollectionCancelled cannot be ignored by accident.
+    """
     plan = plan_for_frame((2000, 2000), 1000, 0.0)
     labeler = FakeLabeler([[] for _ in plan.tiles])
-    collect_candidates(
-        labeler,
-        np.zeros((2000, 2000, 3), dtype=np.uint8),
-        plan,
-        "ant",
-        confidence_threshold=0.0,
-        max_instances=0,
-        seam_margin_px=4,
-        should_stop=lambda: labeler.calls >= 2,
-    )
+    with pytest.raises(TileCollectionCancelled) as exc:
+        collect_candidates(
+            labeler,
+            np.zeros((2000, 2000, 3), dtype=np.uint8),
+            plan,
+            "ant",
+            confidence_threshold=0.0,
+            max_instances=0,
+            seam_margin_px=4,
+            should_stop=lambda: labeler.calls >= 2,
+        )
     assert labeler.calls == 2
+    assert exc.value.tiles_done == 2
+    assert exc.value.tiles_total == len(plan.tiles)
+
+
+def test_collect_candidates_returns_normally_when_never_cancelled():
+    """The completion path must NOT raise: only cancellation does."""
+    plan = plan_for_frame((2000, 2000), 1000, 0.0)
+    labeler = FakeLabeler([[] for _ in plan.tiles])
+    assert (
+        collect_candidates(
+            labeler,
+            np.zeros((2000, 2000, 3), dtype=np.uint8),
+            plan,
+            "ant",
+            confidence_threshold=0.0,
+            max_instances=0,
+            seam_margin_px=4,
+            should_stop=lambda: False,
+        )
+        == []
+    )
+    assert labeler.calls == len(plan.tiles)

@@ -33,6 +33,7 @@ from .base import SemanticLabeler
 from .tiling import (
     DEFAULT_OVERLAP,
     TILE_FRACTION_GRID,
+    TileCollectionCancelled,
     candidate_tile_plans,
     collect_candidates,
     merge_candidates,
@@ -161,12 +162,14 @@ def calibrate(
         )
         per_frame.append((Path(img_path), (h, w), label_polys, options))
         total_passes += len(options)
-    seen_frames = len(per_frame)
     total_passes = max(total_passes, 1)
 
     done_passes = 0
+    cancelled = False
+    completed_frames: set[int] = set()
     for fi, (img_path, _hw, label_polys, options) in enumerate(per_frame):
         if should_stop is not None and should_stop():
+            cancelled = True
             break
         if not options:
             continue
@@ -175,18 +178,30 @@ def calibrate(
             continue
         for opt in options:
             if should_stop is not None and should_stop():
+                cancelled = True
                 break
             started = time.perf_counter()
-            candidates = collect_candidates(
-                labeler,
-                image,
-                opt.plan,
-                prompt,
-                confidence_threshold=floor,
-                max_instances=max_instances,
-                seam_margin_px=seam_margin_px,
-                should_stop=should_stop,
-            )
+            try:
+                candidates = collect_candidates(
+                    labeler,
+                    image,
+                    opt.plan,
+                    prompt,
+                    confidence_threshold=floor,
+                    max_instances=max_instances,
+                    seam_margin_px=seam_margin_px,
+                    should_stop=should_stop,
+                )
+            except TileCollectionCancelled:
+                # F6: a cancelled frame is not a measured frame. Appending it
+                # (and bumping entry["n"]) let a cancel on the LAST frame slip
+                # past the `entry["n"] < seen_frames` completeness filter, so
+                # a fraction whose final frame was only part-inferred was
+                # reported with full standing -- understating its misses in
+                # exactly the frontier the user chooses an operating point
+                # from.
+                cancelled = True
+                break
             elapsed = time.perf_counter() - started
             entry = acc.setdefault(
                 opt.fraction,
@@ -208,6 +223,7 @@ def calibrate(
             entry["tiles_total"] += opt.tiles_per_frame
             entry["n"] += 1
             done_passes += 1
+            completed_frames.add(fi)
             if progress is not None:
                 progress(
                     min(100, int(100 * done_passes / total_passes)),
@@ -215,7 +231,13 @@ def calibrate(
                     f"tile {opt.tile_px or 'full frame'}",
                 )
         del image
+        if cancelled:
+            break
 
+    # F6: only frames that ran to completion for at least one fraction count
+    # towards the completeness denominator, so a cancel cannot inflate a
+    # fraction's standing.
+    seen_frames = len(completed_frames)
     points: list[CalibrationPoint] = []
     for fraction, entry in acc.items():
         if seen_frames and entry["n"] < seen_frames:

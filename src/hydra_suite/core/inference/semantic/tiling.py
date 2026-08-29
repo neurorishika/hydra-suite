@@ -38,6 +38,27 @@ DEFAULT_SEAM_MARGIN_PX = 4
 DEFAULT_MERGE_IOU = 0.5
 
 
+class TileCollectionCancelled(RuntimeError):
+    """``should_stop`` fired before every tile of a frame had been run.
+
+    Raised rather than returned as a partial list. A partial list is
+    indistinguishable from a genuinely sparse frame, and the escalation job
+    used to cache it under the frame's key as if the frame were complete --
+    after which ``if rel in cache["images"]: continue`` trusted it forever,
+    so a resume did zero further inference on that frame and re-thresholding
+    read the same truncated candidate set. An exception cannot be ignored by
+    accident; a flag in a return tuple can.
+    """
+
+    def __init__(self, tiles_done: int, tiles_total: int) -> None:
+        super().__init__(
+            f"Cancelled after {tiles_done}/{tiles_total} tile(s); "
+            "the frame's candidates are incomplete and must not be cached."
+        )
+        self.tiles_done = tiles_done
+        self.tiles_total = tiles_total
+
+
 @dataclass(frozen=True)
 class TileCandidate:
     """One surviving detection from one tile, in FRAME pixel space."""
@@ -182,12 +203,16 @@ def collect_candidates(
     Seam drop is purely geometric and so threshold-INDEPENDENT: applying it
     here once is exact, and lets the confidence sweep re-merge cached
     candidates without re-running inference.
+
+    Raises ``TileCollectionCancelled`` if *should_stop* fires before the last
+    tile: the caller must be unable to mistake a half-run frame for a
+    finished one.
     """
     frame_h, frame_w = image_bgr.shape[:2]
     out: list[TileCandidate] = []
     for ti, (x0, y0, x1, y1) in enumerate(plan.tiles):
         if should_stop is not None and should_stop():
-            break
+            raise TileCollectionCancelled(ti, len(plan.tiles))
         tile_img = image_bgr[y0:y1, x0:x1]
         instances = labeler.label_image(
             tile_img,
