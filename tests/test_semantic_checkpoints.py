@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 
 from hydra_suite.core.inference.semantic import checkpoints as ck
@@ -64,3 +65,39 @@ def test_labeler_satisfies_the_protocol_without_weights():
     stub = Sam3SemanticLabeler(predictor=object(), device="cpu")
     assert isinstance(stub, SemanticLabeler)
     assert stub.name == "sam3"
+
+
+def test_label_image_calls_the_predictor_with_a_text_list_prompt():
+    """Pins the `text=[prompt]` contract.
+
+    ultralytics' predictor.__call__ forwards unmatched kwargs into
+    SAM3SemanticPredictor.inference()'s **kwargs sink and silently drops
+    them: the concept-prompt keyword there is `text` (a list[str]), never
+    `prompt`. A regression back to `prompt=prompt` would make every call
+    run promptless, and predict.py:2288 does `len(text)` on it, so passing
+    a bare string (not wrapped in a list) would also be silently
+    misread as a one-char-per-class prompt. This test fails on either
+    regression without needing any real weights.
+    """
+    from hydra_suite.core.inference.semantic.sam3 import Sam3SemanticLabeler
+
+    class FakePredictor:
+        def __init__(self):
+            self.calls = []
+
+        def __call__(self, **kwargs):
+            self.calls.append(kwargs)
+            return []
+
+    fake = FakePredictor()
+    labeler = Sam3SemanticLabeler(predictor=fake, device="cpu")
+    image = np.zeros((4, 4, 3), dtype=np.uint8)
+
+    labeler.label_image(image, "ant")
+
+    assert len(fake.calls) == 1
+    call = fake.calls[0]
+    assert "text" in call, "must call the predictor with the `text` keyword"
+    assert "prompt" not in call, "`prompt` is silently dropped by ultralytics"
+    assert isinstance(call["text"], list), "must be a list, not a bare string"
+    assert call["text"] == ["ant"]
