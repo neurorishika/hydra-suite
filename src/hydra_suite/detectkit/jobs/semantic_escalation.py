@@ -664,21 +664,43 @@ def has_labelled_frames(source: OBBSource) -> bool:
 # Enough frames for a stable median without decoding a whole image set on the
 # GUI thread while the dialog is opening.
 MEDIAN_BODY_SAMPLE_FRAMES = 20
+# F4: a PROJECT-WIDE budget, not just a per-source one. The per-source limit
+# alone still decoded 20 frames x every source in the project on the GUI
+# thread at dialog open -- on 4512^2 frames that is seconds to minutes of a
+# frozen window with no feedback. The median only needs a sample, so the
+# sample is bounded globally and the truncation is SURFACED (see
+# measure_median_body_px), never silently applied.
+MEDIAN_BODY_TOTAL_FRAMES = 20
 
 
-def median_body_px_for(
-    sources, *, sample_frames: int = MEDIAN_BODY_SAMPLE_FRAMES
-) -> float:
-    """Median longest side, in px, of the existing labels across *sources*.
+def measure_median_body_px(
+    sources,
+    *,
+    sample_frames: int = MEDIAN_BODY_SAMPLE_FRAMES,
+    max_total_frames: int = MEDIAN_BODY_TOTAL_FRAMES,
+) -> tuple[float, int, bool]:
+    """(median longest side px, frames sampled, whether the budget truncated).
 
     Link 2 of the ``reference_body_px`` resolution chain (project setting ->
     this -> the user). Returns 0.0 when nothing can be measured. Without it,
     a project with no ``slice_training.reference_body_px`` silently runs with
     tiling OFF -- the measured-worst configuration (F1 0.719 -> 0.075).
+
+    ``max_total_frames`` bounds the decode across ALL sources; the caller is
+    expected to report the sample size so the cap is visible rather than a
+    silent change of what "median of your labels" means.
     """
     sides: list[float] = []
+    used = 0
+    truncated = False
     for source in sources:
-        for _path, records in labelled_frames_for(source, limit=sample_frames):
+        if used >= max_total_frames:
+            truncated = True
+            break
+        budget = min(sample_frames, max_total_frames - used)
+        frames = labelled_frames_for(source, limit=budget)
+        used += len(frames)
+        for _path, records in frames:
             for rec in records:
                 pts = np.asarray(rec.points, dtype=np.float32).reshape(-1, 2)
                 if pts.shape[0] < 2:
@@ -688,8 +710,15 @@ def median_body_px_for(
                 if longest > 0:
                     sides.append(longest)
     if not sides:
-        return 0.0
-    return float(np.median(np.asarray(sides, dtype=np.float64)))
+        return 0.0, used, truncated
+    return float(np.median(np.asarray(sides, dtype=np.float64))), used, truncated
+
+
+def median_body_px_for(
+    sources, *, sample_frames: int = MEDIAN_BODY_SAMPLE_FRAMES
+) -> float:
+    """The median alone; see ``measure_median_body_px`` for the sample size."""
+    return measure_median_body_px(sources, sample_frames=sample_frames)[0]
 
 
 def labelled_frames_for(
@@ -853,15 +882,23 @@ class TilePreviewWorker(BaseWorker):
 
 
 class CalibrationWorker(BaseWorker):
-    """QThread wrapper around calibrate(), cancellable between frames."""
+    """QThread wrapper around calibrate(), cancellable between frames.
+
+    F4: takes SOURCES, not decoded frames. The dialog used to build the
+    frame list itself -- ``labelled_frames_for`` cv2.imreads every labelled
+    image of every selected source, with no limit -- on the GUI thread,
+    before the progress dialog even existed. Two hundred 4512^2 frames is
+    minutes of a frozen window with no feedback and no cancel. The decode
+    now happens here, behind the progress dialog and under should_stop.
+    """
 
     result_ready = Signal(object)  # list[CalibrationPoint]
 
     def __init__(
-        self, frames, prompt, variant, params, labeler=None, parent=None
+        self, sources, prompt, variant, params, labeler=None, parent=None
     ) -> None:
         super().__init__(parent)
-        self._frames = frames
+        self._sources = list(sources)
         self._prompt = prompt
         self._variant = variant
         self._params = dict(params)
@@ -884,6 +921,20 @@ class CalibrationWorker(BaseWorker):
     def execute(self) -> None:
         from hydra_suite.core.inference.semantic.calibration import calibrate
 
+        frames: list = []
+        for i, source in enumerate(self._sources):
+            if self._cancel:
+                break
+            name = getattr(source, "name", "?")
+            self.status.emit(
+                f"Reading labelled frames from '{name}' "
+                f"({i + 1}/{len(self._sources)})..."
+            )
+            frames.extend(labelled_frames_for(source))
+        if self._cancel or not frames:
+            self.result_ready.emit([])
+            return
+
         labeler = self._labeler
         if labeler is None:
             from hydra_suite.core.inference.semantic.sam3 import Sam3SemanticLabeler
@@ -895,7 +946,7 @@ class CalibrationWorker(BaseWorker):
             )
         points = calibrate(
             labeler,
-            self._frames,
+            frames,
             self._prompt,
             # The GRID, not the dialog's single fraction: calibration exists
             # precisely to choose the fraction, so passing the current one

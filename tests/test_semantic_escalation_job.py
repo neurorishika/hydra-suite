@@ -942,3 +942,85 @@ def test_a_mid_run_failure_does_not_leave_a_pointer_to_a_deleted_dir(tmp_path):
         src.pending_escalation is None
         or Path(src.pending_escalation.staged_path).exists()
     ), "pending_escalation points at a deleted directory"
+
+
+def test_calibration_worker_decodes_frames_itself_not_on_the_gui_thread(tmp_path):
+    """F4: the decode belongs in the worker, behind the progress dialog.
+
+    `_run_calibration` used to build `[... labelled_frames_for(s) ...]` with
+    NO limit on the GUI thread, before the progress dialog existed --
+    cv2.imread of every labelled image of every selected source. 200 x
+    4512^2 frames is minutes of frozen UI with no feedback and no cancel.
+    """
+    import inspect
+
+    from hydra_suite.detectkit.gui.dialogs import semantic_escalation_dialog as dlg
+    from hydra_suite.detectkit.jobs.semantic_escalation import CalibrationWorker
+
+    src = _make_source(tmp_path, n_images=2)
+    root = Path(src.path)
+    for i in range(2):
+        (root / "labels" / f"f{i}.txt").write_text(
+            "0 0.4 0.4 0.6 0.4 0.6 0.6 0.4 0.6\n"
+        )
+
+    # The worker takes SOURCES and resolves the frames itself.
+    seen = {}
+
+    class _Recording(ScriptedLabeler):
+        pass
+
+    worker = CalibrationWorker(
+        [src], "ant", "sam3", {"reference_body_px": 80.0}, labeler=_Recording([])
+    )
+    worker.result_ready.connect(lambda pts: seen.setdefault("points", pts))
+    worker.execute()
+    assert "points" in seen and seen["points"], "the worker must resolve frames itself"
+
+    # And the GUI path no longer decodes anything before starting the worker.
+    src_text = inspect.getsource(dlg.SemanticEscalationDialog._run_calibration)
+    assert (
+        "labelled_frames_for" not in src_text
+    ), "the dialog is still decoding images on the GUI thread"
+    # The progress dialog must be constructed before the worker.
+    assert src_text.index("QProgressDialog(") < src_text.index("CalibrationWorker(")
+
+
+def test_body_size_measurement_is_capped_project_wide_and_says_so(tmp_path):
+    """F4, other half: `median_body_px_for` decoded 20 frames PER SOURCE.
+
+    At dialog open, on the GUI thread, across every source in the project.
+    The sample is now bounded globally; because that changes what "median of
+    your labels" measured over, the cap is surfaced in the provenance string
+    rather than applied silently.
+    """
+    from hydra_suite.detectkit.gui.escalation_actions import resolve_reference_body_px
+    from hydra_suite.detectkit.jobs.semantic_escalation import (
+        MEDIAN_BODY_TOTAL_FRAMES,
+        measure_median_body_px,
+    )
+
+    sources = []
+    for s in range(4):
+        src = _make_source(tmp_path, name=f"s{s}", n_images=15)
+        root = Path(src.path)
+        for i in range(15):
+            (root / "labels" / f"f{i}.txt").write_text(
+                "0 0.4 0.4 0.6 0.4 0.6 0.6 0.4 0.6\n"
+            )
+        sources.append(src)
+
+    median, sampled, truncated = measure_median_body_px(sources)
+    assert median > 0
+    assert sampled <= MEDIAN_BODY_TOTAL_FRAMES, "the project-wide cap is not applied"
+    assert truncated is True
+
+    class _P:
+        slice_training = None
+
+    project = _P()
+    project.sources = sources
+    value, origin = resolve_reference_body_px(project)
+    assert value == pytest.approx(median)
+    assert "capped sample" in origin, "the cap must be surfaced, not silent"
+    assert str(sampled) in origin

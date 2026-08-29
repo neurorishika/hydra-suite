@@ -311,10 +311,7 @@ class SemanticEscalationDialog(BaseDialog):
         from hydra_suite.detectkit.gui.dialogs.calibration_results_dialog import (
             CalibrationResultsDialog,
         )
-        from hydra_suite.detectkit.jobs.semantic_escalation import (
-            CalibrationWorker,
-            labelled_frames_for,
-        )
+        from hydra_suite.detectkit.jobs.semantic_escalation import CalibrationWorker
 
         if not self._exhaustive.isChecked():
             QMessageBox.information(
@@ -327,19 +324,19 @@ class SemanticEscalationDialog(BaseDialog):
             return
         if not self.confirm_checkpoint():
             return
-        frames = [
-            f
-            for s in self.selected_sources() or self._sources
-            for f in labelled_frames_for(s)
-        ]
-        if not frames:
-            QMessageBox.information(self, "Calibrate", "No labelled frames found.")
+        sources = self.selected_sources() or self._sources
+        if not sources:
+            QMessageBox.information(self, "Calibrate", "No sources selected.")
             return
 
-        progress = QProgressDialog("Calibrating…", "Cancel", 0, 100, self)
+        # F4: the progress dialog exists BEFORE any decoding starts. Reading
+        # the labelled frames is itself a cv2.imread of every labelled image
+        # of every selected source, so it belongs behind this, in the worker,
+        # under Cancel -- not on the GUI thread with the window frozen.
+        progress = QProgressDialog("Reading labelled frames…", "Cancel", 0, 100, self)
         progress.setMinimumDuration(0)
         worker = CalibrationWorker(
-            frames, self.prompt(), self.selected_variant(), self.parameters()
+            sources, self.prompt(), self.selected_variant(), self.parameters()
         )
         progress.canceled.connect(worker.cancel)
         worker.progress.connect(progress.setValue)
@@ -348,6 +345,13 @@ class SemanticEscalationDialog(BaseDialog):
         def _done(points) -> None:
             progress.close()
             self.calibration_points = points
+            if not points:
+                self.set_status(
+                    "Calibration produced nothing: no labelled frames were found "
+                    "in the selected source(s), or it was cancelled before the "
+                    "first frame finished."
+                )
+                return
             best, reason = recommend(points)
             results = CalibrationResultsDialog(
                 points,

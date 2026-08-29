@@ -384,18 +384,27 @@ def resolve_reference_body_px(project) -> tuple[float, str]:
     so any project without a slice-training reference silently ran with
     tiling OFF -- the measured-worst configuration.
     """
-    from hydra_suite.detectkit.jobs.semantic_escalation import median_body_px_for
+    from hydra_suite.detectkit.jobs.semantic_escalation import measure_median_body_px
 
     slice_settings = getattr(project, "slice_training", None)
     from_project = float(getattr(slice_settings, "reference_body_px", 0.0) or 0.0)
     if from_project > 0:
         return from_project, "the project's sliced-training reference body size"
     try:
-        measured = median_body_px_for(getattr(project, "sources", []) or [])
+        # F4: this decodes images on the GUI thread while the dialog opens, so
+        # the sample is capped project-wide. The cap is reported, not hidden:
+        # the field is editable and the user must be able to see the median
+        # rests on a sample rather than on every labelled frame.
+        measured, sampled, truncated = measure_median_body_px(
+            getattr(project, "sources", []) or []
+        )
     except Exception:  # pragma: no cover - unreadable labels
-        measured = 0.0
+        measured, sampled, truncated = 0.0, 0, False
     if measured > 0:
-        return measured, "the median longest side of your existing labels"
+        note = f"the median longest side of your existing labels ({sampled} frame"
+        note += "s" if sampled != 1 else ""
+        note += ", a capped sample)" if truncated else ")"
+        return measured, note
     return 0.0, "nothing found — enter one, or tiling stays off"
 
 
