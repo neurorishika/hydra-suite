@@ -1024,3 +1024,30 @@ def test_body_size_measurement_is_capped_project_wide_and_says_so(tmp_path):
     assert value == pytest.approx(median)
     assert "capped sample" in origin, "the cap must be surfaced, not silent"
     assert str(sampled) in origin
+
+
+def test_a_single_over_budget_source_is_reported_as_truncated(tmp_path):
+    """Adversarial re-review B1: `truncated` had a false negative.
+
+    The flag was set only at the top of the NEXT loop iteration, so one
+    source holding more frames than the whole budget -- the exact case the
+    cap exists for -- returned ``truncated=False`` and a provenance string
+    claiming an uncapped measurement.
+    """
+    from hydra_suite.detectkit.jobs.semantic_escalation import (
+        MEDIAN_BODY_TOTAL_FRAMES,
+        measure_median_body_px,
+    )
+
+    n = MEDIAN_BODY_TOTAL_FRAMES + 10
+    src = _make_source(tmp_path, name="solo", n_images=n)
+    root = Path(src.path)
+    for i in range(n):
+        (root / "labels" / f"f{i}.txt").write_text(
+            "0 0.4 0.4 0.6 0.4 0.6 0.6 0.4 0.6\n"
+        )
+
+    median, sampled, truncated = measure_median_body_px([src])
+    assert median > 0
+    assert sampled == MEDIAN_BODY_TOTAL_FRAMES
+    assert truncated is True, "a single over-budget source reported an uncapped sample"

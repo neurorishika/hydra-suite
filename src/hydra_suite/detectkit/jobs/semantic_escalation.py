@@ -698,7 +698,14 @@ def measure_median_body_px(
             truncated = True
             break
         budget = min(sample_frames, max_total_frames - used)
-        frames = labelled_frames_for(source, limit=budget)
+        # Ask for one MORE than the budget: if it comes back, this source had
+        # frames we are declining to read, which is exactly what `truncated`
+        # is supposed to tell the caller. Setting the flag only on the next
+        # iteration misses the single-source case the cap exists for.
+        frames = labelled_frames_for(source, limit=budget + 1)
+        if len(frames) > budget:
+            truncated = True
+            frames = frames[:budget]
         used += len(frames)
         for _path, records in frames:
             for rec in records:
