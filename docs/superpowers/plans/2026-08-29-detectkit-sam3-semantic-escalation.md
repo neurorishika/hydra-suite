@@ -521,9 +521,10 @@ def test_candidate_plans_cover_the_grid_and_always_include_full_frame():
 
 
 def test_candidate_plans_skip_fractions_that_degenerate_or_explode():
-    # Tiny frame: a 1600 px tile exceeds it, so that fraction would just be a
+    # Small frame: a 1600 px tile exceeds it, so that fraction would just be a
     # second full-frame pass -- skip it rather than pay for a duplicate.
-    opts = candidate_tile_plans((800, 800), 80.0)
+    # (0.10 -> 800 px, which fits inside a 900 px frame and is kept.)
+    opts = candidate_tile_plans((900, 900), 80.0)
     assert [o.fraction for o in opts if o.fraction is not None] == [0.10]
     # Unknown body size leaves full-frame as the only option.
     assert [o.fraction for o in candidate_tile_plans((4512, 4512), None)] == [None]
