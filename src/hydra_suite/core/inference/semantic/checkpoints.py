@@ -43,6 +43,13 @@ CHECKPOINT_SIZE_GB = 3.45
 # Imports ultralytics AutoUpdate would otherwise install behind our back.
 REQUIRED_PACKAGES = ("ultralytics", "clip", "ftfy")
 
+DEFAULT_INSTALL_HINT = "pip install 'hydra-suite[sam3]'"
+# `clip` is NOT in the sam3 extra and cannot be: it is a PEP 508 direct
+# reference, which PyPI rejects in uploaded metadata. Pointing at the extra
+# for it named an install that could never satisfy the check. Same command
+# as the user guide's install section.
+INSTALL_HINTS = {"clip": "pip install git+https://github.com/openai/CLIP.git"}
+
 
 def available_variants() -> list[str]:
     return list(SAM3_VARIANTS.keys())
@@ -101,8 +108,8 @@ def probe_availability(
         if _find_spec(pkg) is None:
             return Sam3Availability(
                 False,
-                f"Python package {pkg!r} is missing. Install the SAM3 extra: "
-                "pip install 'hydra-suite[sam3]'.",
+                f"Python package {pkg!r} is missing. Install it with: "
+                f"{INSTALL_HINTS.get(pkg, DEFAULT_INSTALL_HINT)}",
             )
     if not _has_predictor_symbol():
         return Sam3Availability(

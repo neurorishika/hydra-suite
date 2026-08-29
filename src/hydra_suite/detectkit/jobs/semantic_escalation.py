@@ -118,6 +118,33 @@ def is_prompt_failure(
     return result.empty_images >= PROMPT_FAILURE_FRACTION * frames
 
 
+def _resolved(path: str | Path) -> Path:
+    """The canonical form of *path*, matching ``bundle_paths``' own.
+
+    Every staging path the job writes comes back from
+    ``ensure_bundle_subdirectory`` -> ``bundle_paths``, which
+    ``.expanduser().resolve()``s the project root (data/project_bundle.py).
+    ``project_dir`` itself arrives UNRESOLVED (from QFileDialog, or from the
+    project JSON), so any project reached through a symlink -- macOS /tmp, a
+    symlinked home, a symlinked lab share -- compares unequal to its own
+    staging directory unless both sides are canonicalised here. That
+    mismatch made a resume look like a replacement of a different run.
+    """
+    return Path(path).expanduser().resolve()
+
+
+def cache_confidence_floor(confidence: float) -> float:
+    """The floor a run at *confidence* must collect its candidates at.
+
+    Normally the bottom of the sweep grid (see CACHE_CONFIDENCE_FLOOR), but
+    NEVER above the run's own threshold: the dialog allows confidences down
+    to 0.01, and collecting at 0.05 for a run at 0.02 would drop candidates
+    in [0.02, 0.05) that the run itself asked to keep -- a silently
+    truncated staged set, not just a truncated cache.
+    """
+    return min(float(CACHE_CONFIDENCE_FLOOR), float(confidence))
+
+
 def prompt_slug(prompt: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", prompt.strip().lower()).strip("-")
     return (slug or "prompt")[:24]
@@ -147,7 +174,7 @@ def sources_pending_replacement(req: "SemanticEscalationRequest") -> list[str]:
     those before they are.
     """
     by_name = {s.name: s for s in req.project.sources}
-    project_root = Path(req.project.project_dir)
+    project_root = _resolved(req.project.project_dir)
     out: list[str] = []
     for name in req.source_names:
         src = by_name.get(name)
@@ -159,13 +186,16 @@ def sources_pending_replacement(req: "SemanticEscalationRequest") -> list[str]:
             / "pending_escalations"
             / staged_dirname_for(src, req.variant, req.prompt)
         )
-        if Path(src.pending_escalation.staged_path) != target:
+        if _resolved(src.pending_escalation.staged_path) != target:
             out.append(name)
     return out
 
 
 def _fingerprint(
-    req: SemanticEscalationRequest, src_root: Path, tile_px: int | None
+    req: SemanticEscalationRequest,
+    src_root: Path,
+    tile_px: int | None,
+    floor: float,
 ) -> dict:
     return {
         "prompt": req.prompt,
@@ -178,7 +208,7 @@ def _fingerprint(
         # The floor the CACHE was collected at (not the run's display
         # threshold): a cache collected at a higher floor is not
         # interchangeable with one collected at the grid bottom.
-        "confidence_floor": float(CACHE_CONFIDENCE_FLOOR),
+        "confidence_floor": float(floor),
         "source_root": str(src_root.resolve()),
     }
 
@@ -260,11 +290,27 @@ class _DegenerateCountingLabeler:
 
 
 def _write_labels_from_candidates(
-    staged_root: Path, cache: dict, *, confidence: float, merge_iou: float
-) -> tuple[int, int]:
-    """(instances written, degenerate dropped) across every cached image."""
-    written = degenerate = 0
+    staged_root: Path,
+    cache: dict,
+    *,
+    confidence: float,
+    merge_iou: float,
+    origin_images: Path | None = None,
+) -> tuple[int, int, int]:
+    """(instances written, degenerate dropped, orphans skipped) per cache.
+
+    I7: a cached image whose ORIGIN file has since disappeared (a resume of a
+    run whose source was edited in between) would otherwise be written as a
+    staged label with no image behind it -- an orphan promotion has to throw
+    away silently. Counted here so the run can report it.
+    """
+    written = degenerate = orphaned = 0
+    check_origins = origin_images is not None and origin_images.is_dir()
     for rel, entry in cache["images"].items():
+        if check_origins and _origin_image_for(origin_images, Path(rel)) is None:
+            logger.warning("Cached frame %s has no origin image; skipping it.", rel)
+            orphaned += 1
+            continue
         h, w = entry["hw"]
         merged = merge_candidates(
             _candidates_from_json(entry["candidates"]),
@@ -297,7 +343,7 @@ def _write_labels_from_candidates(
             label_path, records, frame_size=(h, w), level=GeometryLevel.POLYGON
         )
         written += len(records)
-    return written, degenerate
+    return written, degenerate, orphaned
 
 
 def run_semantic_escalation(
@@ -321,7 +367,10 @@ def run_semantic_escalation(
     # DEPARTURE 1: no `level != "polygon"` filter. Finding animals the
     # existing polygons missed is a primary use case for this feature.
     todo = [by_name[n] for n in req.source_names if n in by_name]
-    project_root = Path(req.project.project_dir)
+    # Canonical, so every staged-path comparison below matches the paths
+    # ensure_bundle_subdirectory hands back (see _resolved).
+    project_root = _resolved(req.project.project_dir)
+    floor = cache_confidence_floor(req.confidence)
     tile_px = req.tile_px or resolve_tile_px(req.reference_body_px, req.tile_fraction)
     result.tile_px = tile_px
     counting_labeler = _DegenerateCountingLabeler(labeler)
@@ -338,7 +387,7 @@ def run_semantic_escalation(
         # explicit consent, because it destroys unreviewed work.
         would_replace = (
             src.pending_escalation is not None
-            and Path(src.pending_escalation.staged_path) != target_root
+            and _resolved(src.pending_escalation.staged_path) != target_root
         )
         if would_replace and not (overwrite or req.overwrite):
             result.skipped.append(
@@ -357,12 +406,15 @@ def run_semantic_escalation(
         )
 
         old_pending = src.pending_escalation
-        if old_pending is not None and old_pending.staged_path != str(staged_root):
+        if (
+            old_pending is not None
+            and _resolved(old_pending.staged_path) != staged_root
+        ):
             remove_staged_escalation_dir(old_pending.staged_path, project_root)
 
         # DEPARTURE 3: the wipe is CONDITIONAL on the fingerprint, so a
         # cancelled multi-hour run resumes instead of restarting.
-        fingerprint = _fingerprint(req, src_root, tile_px)
+        fingerprint = _fingerprint(req, src_root, tile_px, floor)
         run_path = staged_root / RUN_FILENAME
         stale = True
         if run_path.exists():
@@ -406,8 +458,8 @@ def run_semantic_escalation(
                 plan,
                 req.prompt,
                 # I4: the CACHE floor, not req.confidence -- see
-                # CACHE_CONFIDENCE_FLOOR.
-                confidence_threshold=CACHE_CONFIDENCE_FLOOR,
+                # cache_confidence_floor (never ABOVE req.confidence).
+                confidence_threshold=floor,
                 max_instances=req.max_instances,
                 seam_margin_px=req.seam_margin_px,
                 should_stop=should_stop,
@@ -425,11 +477,16 @@ def run_semantic_escalation(
                     f"{src.name}: {ii + 1}/{len(images)}",
                 )
 
-        written, degenerate = _write_labels_from_candidates(
-            staged_root, cache, confidence=req.confidence, merge_iou=req.merge_iou
+        written, degenerate, orphaned = _write_labels_from_candidates(
+            staged_root,
+            cache,
+            confidence=req.confidence,
+            merge_iou=req.merge_iou,
+            origin_images=images_dir,
         )
         result.labelled += written
         result.degenerate += degenerate
+        result.orphaned += orphaned
         result.empty_images += sum(
             1 for e in cache["images"].values() if not e["candidates"]
         )
@@ -446,6 +503,13 @@ def run_semantic_escalation(
             primer_variant=req.variant,
             primer_prompt=req.prompt,
             primer_params={
+                # The threshold the staged LABELS were written at -- distinct
+                # from confidence_floor (what the CACHE holds). The review
+                # dialog prefills its re-threshold prompt from this, and
+                # nothing else records it, so dropping it made the dialog
+                # claim a run at 0.60 was staged at its 0.35 default.
+                "confidence": float(req.confidence),
+                "confidence_floor": float(floor),
                 "merge_iou": float(req.merge_iou),
                 "tile_px": tile_px,
                 "overlap": float(req.overlap),
@@ -461,19 +525,39 @@ def run_semantic_escalation(
     return result
 
 
-def _recorded_confidence_floor(staged_root: Path) -> float | None:
+def recorded_confidence_floor(staged_root: str | Path) -> float | None:
     """The floor this staging dir's candidates were collected at, if recorded.
 
     An OLD staging directory (collected at req.confidence, before I4) records
     its own higher floor here, so it cannot pretend a downward re-threshold
-    is complete.
+    is complete. Public because the review dialog uses it as the MINIMUM of
+    its re-threshold input: offering a value the cache cannot honestly serve
+    only lets the user pick a refusal.
     """
+    staged_root = Path(staged_root)
     try:
         data = json.loads((staged_root / RUN_FILENAME).read_text())
     except Exception:
         return None
     value = data.get("confidence_floor")
     return float(value) if isinstance(value, (int, float)) else None
+
+
+def rethreshold_floor_for(sources) -> float:
+    """The lowest confidence a re-threshold of ALL *sources* can honour.
+
+    The HIGHEST recorded floor among them: a value below that would be
+    refused for at least one source, so offering it in the UI only lets the
+    user pick an error. Falls back to CACHE_CONFIDENCE_FLOOR when nothing
+    records one.
+    """
+    floors = [
+        recorded_confidence_floor(s.pending_escalation.staged_path)
+        for s in sources
+        if getattr(s, "pending_escalation", None) is not None
+    ]
+    known = [f for f in floors if f is not None]
+    return max(known) if known else float(CACHE_CONFIDENCE_FLOOR)
 
 
 def rethreshold_staged(
@@ -490,13 +574,26 @@ def rethreshold_staged(
     if pending is None or pending.primer_kind != "sam3":
         raise ValueError(f"Source '{source.name}' has no staged SAM3 escalation.")
     staged_root = Path(pending.staged_path)
-    floor = _recorded_confidence_floor(staged_root)
+    floor = recorded_confidence_floor(staged_root)
     if floor is not None and float(confidence) < floor - 1e-9:
+        # Two different situations, and the advice differs. Saying "re-run to
+        # collect at a lower floor" for the second was impossible advice: a
+        # re-run at the SAME confidence collects at the same floor.
+        remedy = (
+            "Re-run the escalation: it now collects down to "
+            f"{CACHE_CONFIDENCE_FLOOR:.2f}."
+            if floor > CACHE_CONFIDENCE_FLOOR + 1e-9
+            else (
+                "This is the collection floor, so a re-run at the same "
+                f"confidence would not change it -- re-run with a confidence "
+                f"of {confidence:.2f} or lower, which collects candidates "
+                "down to that value."
+            )
+        )
         raise ValueError(
             f"This staged run's candidate cache was collected at confidence "
             f">= {floor:.2f}, so re-thresholding down to {confidence:.2f} "
-            "would silently return a truncated set. Re-run the escalation to "
-            "collect candidates at a lower floor."
+            f"would silently return a truncated set. {remedy}"
         )
     cache = _load_cache(staged_root)
     if not cache["images"]:
@@ -504,8 +601,12 @@ def rethreshold_staged(
             f"The candidate cache for '{source.name}' is missing or empty; "
             "re-run the escalation."
         )
-    written, _degenerate = _write_labels_from_candidates(
-        staged_root, cache, confidence=confidence, merge_iou=merge_iou
+    written, _degenerate, _orphaned = _write_labels_from_candidates(
+        staged_root,
+        cache,
+        confidence=confidence,
+        merge_iou=merge_iou,
+        origin_images=Path(source.path) / "images",
     )
     pending.primer_params = {
         **pending.primer_params,

@@ -175,3 +175,25 @@ def test_label_image_calls_the_predictor_with_a_text_list_prompt():
     assert "prompt" not in call, "`prompt` is silently dropped by ultralytics"
     assert isinstance(call["text"], list), "must be a list, not a bare string"
     assert call["text"] == ["ant"]
+
+
+def test_missing_clip_names_an_install_that_can_actually_fix_it(tmp_path, monkeypatch):
+    """F: `clip` is NOT in the sam3 extra and cannot be.
+
+    It is a PEP 508 direct reference, which PyPI rejects in uploaded
+    metadata, so it was deliberately dropped from the extra -- leaving the
+    probe telling the user to run an install that could never satisfy it.
+    """
+    monkeypatch.setattr(
+        ck, "_find_spec", lambda name: None if name == "clip" else object()
+    )
+    avail = ck.probe_availability(cache_dir=tmp_path)
+    assert avail.usable is False
+    assert "clip" in avail.reason
+    assert "github.com/openai/CLIP.git" in avail.reason
+    assert "hydra-suite[sam3]" not in avail.reason
+    # The other deps DO come from the extra.
+    monkeypatch.setattr(
+        ck, "_find_spec", lambda name: None if name == "ftfy" else object()
+    )
+    assert "hydra-suite[sam3]" in ck.probe_availability(cache_dir=tmp_path).reason

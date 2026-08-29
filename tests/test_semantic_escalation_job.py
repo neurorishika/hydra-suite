@@ -661,3 +661,140 @@ def test_preview_runs_exactly_one_tile_and_reports_measured_time(tmp_path):
     assert res.instances == 3
     assert res.seconds > 0.0  # MEASURED, never a hardcoded figure
     assert res.image_name == "f0.png"
+
+
+# --- Fix wave regressions (blockers A-E) -------------------------------------
+
+
+def test_resume_is_honoured_through_a_symlinked_project_dir(tmp_path):
+    """BLOCKER A: `project_dir` arrives UNRESOLVED, staging paths do not.
+
+    ``ensure_bundle_subdirectory`` -> ``bundle_paths`` resolves the project
+    root, so a project reached through a symlink (macOS /tmp, a symlinked
+    home or lab share) recorded a RESOLVED ``staged_path`` and then compared
+    it against an UNRESOLVED target -- making the run refuse itself as a
+    replacement of a different escalation. ``tmp_path`` is already resolved,
+    which is exactly why no existing test caught this.
+    """
+    from hydra_suite.detectkit.jobs.semantic_escalation import (
+        sources_pending_replacement,
+    )
+
+    real = tmp_path / "real_project"
+    real.mkdir()
+    link = tmp_path / "link_project"
+    link.symlink_to(real, target_is_directory=True)
+
+    src = _make_source(link, n_images=2)
+    project = _Project(link, [src])
+    labeler = ScriptedLabeler([SemanticInstance(_blob(200, 200), 0.9)])
+    req = _request(link, src, project=project)
+
+    run_semantic_escalation(req, labeler)
+    assert src.pending_escalation is not None
+    staged = Path(src.pending_escalation.staged_path)
+    cached = set(json.loads((staged / "candidates.json").read_text())["images"])
+
+    # The very same run must be a RESUME: nothing pending replacement, no
+    # skip, and the candidate cache survives.
+    assert sources_pending_replacement(req) == []
+    resumed = run_semantic_escalation(req, labeler)
+    assert resumed.skipped == []
+    assert resumed.staged == [src.name]
+    assert Path(src.pending_escalation.staged_path) == staged
+    assert set(json.loads((staged / "candidates.json").read_text())["images"]) == cached
+
+
+def test_a_run_below_the_grid_floor_stages_every_instance(tmp_path):
+    """BLOCKER B: the cache floor must never sit ABOVE the run's own value.
+
+    The dialog allows confidences down to 0.01. Collecting at the grid
+    bottom (0.05) for a run at 0.02 dropped candidates in [0.02, 0.05)
+    before they reached the cache, so they could never become labels: the
+    run staged 1 instance where it had asked for 2.
+    """
+    src = _make_source(tmp_path, n_images=1)
+    labeler = ScriptedLabeler(
+        [
+            SemanticInstance(_blob(100, 100), 0.90),
+            SemanticInstance(_blob(300, 300), 0.03),
+        ]
+    )
+    result = run_semantic_escalation(_request(tmp_path, src, confidence=0.02), labeler)
+    assert result.labelled == 2
+    staged = Path(src.pending_escalation.staged_path)
+    cache = json.loads((staged / "candidates.json").read_text())
+    assert sorted(c["c"] for c in cache["images"]["f0.png"]["candidates"]) == [
+        0.03,
+        0.9,
+    ]
+    assert len((staged / "labels" / "f0.txt").read_text().strip().splitlines()) == 2
+    # The RECORDED floor is the one actually used, so rethreshold_staged
+    # refuses only what this cache genuinely cannot serve.
+    run_json = json.loads((staged / "run.json").read_text())
+    assert run_json["confidence_floor"] == pytest.approx(0.02)
+    assert rethreshold_staged(src, confidence=0.02, merge_iou=0.5) == 2
+
+
+def test_rethreshold_refusal_at_the_grid_floor_gives_reachable_advice(tmp_path):
+    """C: "re-run to collect at a lower floor" was impossible advice.
+
+    A re-run at the same confidence collects at the same floor, so the only
+    thing that helps is re-running at a LOWER confidence -- which the
+    message must say, and which the review dialog's minimum must reflect.
+    """
+    from hydra_suite.detectkit.jobs.semantic_escalation import rethreshold_floor_for
+
+    src = _make_source(tmp_path, n_images=1)
+    labeler = ScriptedLabeler([SemanticInstance(_blob(100, 100), 0.9)])
+    run_semantic_escalation(_request(tmp_path, src, confidence=0.35), labeler)
+    staged = Path(src.pending_escalation.staged_path)
+
+    assert rethreshold_floor_for([src]) == pytest.approx(0.05)
+    with pytest.raises(ValueError) as exc:
+        rethreshold_staged(src, confidence=0.02, merge_iou=0.5)
+    assert "0.02 or lower" in str(exc.value)
+
+    # A pre-I4 cache is the OTHER case: re-running does lower the floor.
+    run_json = json.loads((staged / "run.json").read_text())
+    run_json["confidence_floor"] = 0.35
+    (staged / "run.json").write_text(json.dumps(run_json))
+    assert rethreshold_floor_for([src]) == pytest.approx(0.35)
+    with pytest.raises(ValueError) as exc:
+        rethreshold_staged(src, confidence=0.20, merge_iou=0.5)
+    assert "0.05" in str(exc.value)
+
+
+def test_primer_params_record_the_confidence_the_labels_were_written_at(tmp_path):
+    """D: the review dialog prefills its re-threshold prompt from this.
+
+    Without it a run at 0.60 was reported to the user as being staged at the
+    0.35 default, and nothing else on disk records the label threshold.
+    """
+    src = _make_source(tmp_path, n_images=1)
+    labeler = ScriptedLabeler([SemanticInstance(_blob(100, 100), 0.9)])
+    run_semantic_escalation(_request(tmp_path, src, confidence=0.60), labeler)
+    params = src.pending_escalation.primer_params
+    assert params["confidence"] == pytest.approx(0.60)
+    # The CACHE floor is a different number and both are kept.
+    assert params["confidence_floor"] == pytest.approx(0.05)
+
+
+def test_orphaned_counts_cached_frames_whose_origin_image_is_gone(tmp_path):
+    """E: `result.orphaned` was declared and never assigned.
+
+    A resume whose source lost an image still holds that frame in the
+    candidate cache, so it would be written as a staged label with no image
+    behind it -- exactly what promotion has to throw away. The count is what
+    makes the GUI's orphan note renderable.
+    """
+    src = _make_source(tmp_path, n_images=2)
+    labeler = ScriptedLabeler([SemanticInstance(_blob(200, 200), 0.9)])
+    req = _request(tmp_path, src)
+    first = run_semantic_escalation(req, labeler)
+    assert first.orphaned == 0
+
+    (Path(src.path) / "images" / "f1.png").unlink()
+    resumed = run_semantic_escalation(req, labeler)
+    assert resumed.orphaned == 1
+    assert resumed.labelled == 1  # only f0 still has an image behind it

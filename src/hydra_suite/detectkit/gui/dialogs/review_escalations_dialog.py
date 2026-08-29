@@ -20,6 +20,7 @@ from hydra_suite.widgets.dialogs import BaseDialog
 from ...jobs.sam2_escalation import accept_pending_escalation, reject_pending_escalation
 from ...jobs.semantic_escalation import (
     accept_pending_semantic_escalation,
+    rethreshold_floor_for,
     rethreshold_staged,
 )
 
@@ -149,8 +150,18 @@ class ReviewEscalationsDialog(BaseDialog):
         current = float(
             targets[0].pending_escalation.primer_params.get("confidence", 0.35)
         )
+        # The MINIMUM is the candidate cache's own floor: anything below it
+        # is refused by rethreshold_staged, so offering it here would only
+        # let the user pick an error message.
+        minimum = rethreshold_floor_for(targets)
         value, ok = QInputDialog.getDouble(
-            self, "Re-threshold", "New confidence:", current, 0.01, 0.99, 2
+            self,
+            "Re-threshold",
+            f"New confidence (cache floor {minimum:.2f}):",
+            max(current, minimum),
+            minimum,
+            0.99,
+            2,
         )
         if not ok:
             return
