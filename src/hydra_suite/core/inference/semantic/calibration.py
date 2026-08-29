@@ -139,28 +139,40 @@ def calibrate(
     # is known upfront. Frame dimensions (not just reference_body_px) affect
     # tiles_per_frame, so this cannot be estimated from the first frame alone
     # without either overshooting or undershooting 100% under mixed sizes.
-    per_frame: list[tuple[np.ndarray, list, list]] = []
+    #
+    # Only the frame's PATH and dimensions are retained here, never the
+    # decoded pixels: a 4512^2 BGR frame is ~61 MB, so holding a 50-frame
+    # labelled set decoded would cost ~3 GB before a single inference pass.
+    # The image is re-read inside the fraction loop below, where exactly one
+    # frame is resident at a time.
+    per_frame: list[tuple[Path, tuple[int, int], list, list]] = []
     total_passes = 0
     for img_path, records in frames:
         image = cv2.imread(str(img_path))
         if image is None:
             continue
         h, w = image.shape[:2]
+        del image
         label_polys = [
             np.asarray(r.points, dtype=np.float32).reshape(-1, 2) for r in records
         ]
         options = candidate_tile_plans(
             (h, w), reference_body_px, fractions=tile_fractions, overlap=overlap
         )
-        per_frame.append((image, label_polys, options))
+        per_frame.append((Path(img_path), (h, w), label_polys, options))
         total_passes += len(options)
     seen_frames = len(per_frame)
     total_passes = max(total_passes, 1)
 
     done_passes = 0
-    for fi, (image, label_polys, options) in enumerate(per_frame):
+    for fi, (img_path, _hw, label_polys, options) in enumerate(per_frame):
         if should_stop is not None and should_stop():
             break
+        if not options:
+            continue
+        image = cv2.imread(str(img_path))
+        if image is None:
+            continue
         for opt in options:
             if should_stop is not None and should_stop():
                 break
@@ -202,6 +214,7 @@ def calibrate(
                     f"Calibrating frame {fi + 1}/{n_frames_total}, "
                     f"tile {opt.tile_px or 'full frame'}",
                 )
+        del image
 
     points: list[CalibrationPoint] = []
     for fraction, entry in acc.items():

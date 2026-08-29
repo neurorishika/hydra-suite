@@ -6,6 +6,8 @@ from hydra_suite.core.inference.semantic.calibration import (
     match_one_to_one,
     recommend,
 )
+from hydra_suite.data.al.escalation import LabelRecord
+from hydra_suite.utils.geometry_levels import GeometryLevel
 
 
 def _pt(
@@ -252,3 +254,80 @@ def test_frontier_rows_label_the_full_frame_option():
     rows = frontier_rows([_pt(frac=None, tiles=1)], recommended=None, project_frames=10)
     assert rows[0]["tile"] == "full frame"
     assert rows[0]["recommended"] is False
+
+
+def test_calibrate_holds_at_most_one_decoded_frame_in_memory(tmp_path):
+    """I8: the precompute pass used to retain every decoded frame.
+
+    ``per_frame`` held the decoded ``image`` for every labelled frame before
+    a single inference pass ran. At 4512^2 BGR that is ~61 MB each, so a
+    50-frame labelled set cost ~3 GB up front. Only the path and the frame
+    dimensions are needed to plan the tiles.
+    """
+    import gc
+    import weakref
+
+    import cv2
+    import numpy as np
+
+    from hydra_suite.core.inference.semantic import calibration as cal
+
+    n_frames = 5
+    paths = []
+    for i in range(n_frames):
+        path = tmp_path / f"f{i}.png"
+        cv2.imwrite(str(path), np.zeros((200, 200, 3), dtype=np.uint8))
+        paths.append(path)
+
+    alive: list = []
+    real_imread = cv2.imread
+
+    def _tracking_imread(*a, **k):
+        arr = real_imread(*a, **k)
+        alive.append(weakref.ref(arr))
+        return arr
+
+    peak = []
+
+    class _Peaking:
+        name = "fake"
+
+        def label_image(self, image_bgr, prompt, **k):
+            gc.collect()
+            peak.append(sum(1 for r in alive if r() is not None))
+            return []
+
+    frames = [
+        (
+            p,
+            [
+                LabelRecord(
+                    class_id=0,
+                    confidence=1.0,
+                    points=np.array(
+                        [[10, 10], [30, 10], [30, 30], [10, 30]], dtype=np.float32
+                    ),
+                    level=GeometryLevel.POLYGON,
+                )
+            ],
+        )
+        for p in paths
+    ]
+    original = cal.cv2.imread
+    cal.cv2.imread = _tracking_imread
+    try:
+        cal.calibrate(
+            _Peaking(),
+            frames,
+            "ant",
+            reference_body_px=20.0,
+            tile_fractions=(0.20, None),
+            seam_margin_px=2.0,
+            merge_iou=0.5,
+        )
+    finally:
+        cal.cv2.imread = original
+
+    assert peak, "the labeler must have been called"
+    # Exactly one frame resident at a time, regardless of how many there are.
+    assert max(peak) == 1, f"decoded frames held simultaneously: {max(peak)}"
