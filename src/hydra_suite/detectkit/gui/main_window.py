@@ -38,6 +38,7 @@ from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noq
 from hydra_suite.widgets.busy import BusyTaskError, run_blocking_with_busy_dialog
 from hydra_suite.widgets.workers import BaseWorker
 
+from . import escalation_actions
 from .canvas import OBBCanvas
 from .models import DetectKitProject, SliceTrainingSettings
 from .panels.dataset_panel import DatasetPanel
@@ -738,12 +739,15 @@ class DetectKitMainWindow(QMainWindow):
         self._dataset_panel.history_requested.connect(self._open_history_dialog)
         self._tools_panel.overlay_settings_changed.connect(self._on_overlay_changed)
         self._tools_panel.run_inference_requested.connect(self._run_inference_overlay)
-        self._tools_panel.escalate_sam2_requested.connect(
-            self._on_escalate_to_segment_sam2
+        self._tools_panel.escalate_geometry_requested.connect(
+            lambda: escalation_actions.on_escalate_geometry(self)
+        )
+        self._tools_panel.semantic_escalation_requested.connect(
+            lambda: escalation_actions.on_semantic_escalation(self)
         )
         self._tools_panel.mark_reviewed_requested.connect(self._on_mark_reviewed)
         self._tools_panel.review_escalations_requested.connect(
-            self._on_review_escalations
+            lambda: escalation_actions.on_review_escalations(self)
         )
 
     # ------------------------------------------------------------------
@@ -1766,183 +1770,6 @@ class DetectKitMainWindow(QMainWindow):
     # SAM2 escalation
     # ------------------------------------------------------------------
 
-    def _on_escalate_to_segment_sam2(self, preselect: "str | None" = None) -> None:
-        """Open the SAM2 escalate dialog and run a Sam2EscalationWorker."""
-        if self._project is None:
-            QMessageBox.information(
-                self,
-                "Escalate to segment (SAM2)",
-                "Open a project before escalating sources.",
-            )
-            return
-        if self._escalation_worker is not None:
-            QMessageBox.information(
-                self,
-                "Escalate to segment (SAM2)",
-                "An escalation run is already in progress.",
-            )
-            return
-
-        try:
-            from hydra_suite.detectkit.jobs.sam2_escalation import (
-                EscalationRequest,
-                Sam2EscalationWorker,
-            )
-
-            from .dialogs.escalate_sam2_dialog import EscalateSam2Dialog
-        except Exception as exc:  # pragma: no cover - optional SAM2 assets
-            QMessageBox.warning(
-                self,
-                "Escalate to segment (SAM2)",
-                f"SAM2 escalation is unavailable: {exc}",
-            )
-            return
-
-        dlg = EscalateSam2Dialog(self._project.sources, parent=self)
-        if preselect:
-            dlg.preselect_source(preselect)
-        if not dlg.exec():
-            return
-
-        source_names = dlg.selected_sources()
-        if not source_names:
-            QMessageBox.information(
-                self,
-                "Escalate to segment (SAM2)",
-                "Select at least one source to escalate.",
-            )
-            return
-
-        existing_by_name = {s.name: s for s in self._project.sources}
-        would_conflict = [
-            n
-            for n in source_names
-            if existing_by_name.get(n) is not None
-            and existing_by_name[n].pending_escalation is not None
-        ]
-        overwrite = False
-        if would_conflict:
-            reply = QMessageBox.question(
-                self,
-                "Escalate to segment (SAM2)",
-                (
-                    "The following source(s) already have a pending escalation "
-                    "awaiting review, which will be replaced:\n\n"
-                    f"{', '.join(would_conflict)}\n\n"
-                    "Continue and replace the staged result?"
-                ),
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            if reply != QMessageBox.Yes:
-                source_names = [n for n in source_names if n not in would_conflict]
-                if not source_names:
-                    return
-            else:
-                overwrite = True
-
-        request = EscalationRequest(
-            project=self._project,
-            source_names=source_names,
-            variant=dlg.selected_variant(),
-            overwrite=overwrite,
-        )
-
-        progress = QProgressDialog(
-            f"Escalating {len(source_names)} source(s) to segment…",
-            None,
-            0,
-            100,
-            self,
-        )
-        progress.setWindowTitle("Escalate to segment (SAM2)")
-        progress.setMinimumDuration(0)
-        progress.setWindowModality(Qt.ApplicationModal)
-        progress.setAttribute(Qt.WA_DeleteOnClose, True)
-        progress.setValue(0)
-
-        worker = Sam2EscalationWorker(request)
-        worker.progress.connect(progress.setValue)
-        worker.status.connect(progress.setLabelText)
-        worker.status.connect(lambda msg: self.statusBar().showMessage(msg, 3000))
-
-        def _stash_error(msg: str) -> None:
-            # error fires before finished/progress.close() -- stash and show
-            # from _finish, same reasoning as _handle_result below: showing a
-            # QMessageBox here would stack it under the still-open
-            # application-modal progress dialog.
-            self._last_escalation_error = msg
-
-        worker.error.connect(_stash_error)
-
-        def _handle_result(result: object) -> None:
-            # The worker set pending_escalation on existing sources on a
-            # background thread; persist + refresh immediately. Everything
-            # UI-facing (message boxes, the review dialog) is deferred to
-            # _finish, because the application-modal progress dialog is still
-            # open here -- a dialog opened from this slot would stack under it
-            # and be undismissable.
-            self._save_current_project()
-            self._dataset_panel.refresh_sources(self._project)
-            self._tools_panel.refresh_overview()
-            self._last_escalation_result = result
-
-        def _finish() -> None:
-            progress.close()
-            self._escalation_worker = None
-            self._escalation_progress_dialog = None
-
-            error_msg = self._last_escalation_error
-            self._last_escalation_error = None
-            if error_msg is not None:
-                QMessageBox.warning(self, "Escalate to segment (SAM2)", error_msg)
-                return
-
-            result = self._last_escalation_result
-            self._last_escalation_result = None
-            if result is None:
-                return
-
-            staged = list(getattr(result, "staged", []) or [])
-            primed = int(getattr(result, "primed", 0))
-            fell_back = int(getattr(result, "fell_back", 0))
-            skipped = list(getattr(result, "skipped", []) or [])
-            skipped_note = (
-                (
-                    "\n\nSkipped (already has a pending escalation, not "
-                    "overwritten): "
-                    + ", ".join(f"{name} ({reason})" for name, reason in skipped)
-                )
-                if skipped
-                else ""
-            )
-
-            if staged:
-                QMessageBox.information(
-                    self,
-                    "Escalate to segment (SAM2)",
-                    (
-                        f"Staged {len(staged)} source(s) for review: "
-                        f"{', '.join(staged)}.\n\n"
-                        f"{primed} instance(s) primed, {fell_back} fell back "
-                        f"to the original box.{skipped_note}"
-                    ),
-                )
-                self._on_review_escalations()
-            else:
-                QMessageBox.information(
-                    self,
-                    "Escalate to segment (SAM2)",
-                    f"No sources were staged for escalation.{skipped_note}",
-                )
-
-        worker.result_ready.connect(_handle_result)
-        worker.finished.connect(_finish)
-        self._escalation_worker = worker
-        self._escalation_progress_dialog = progress
-        progress.show()
-        worker.start()
-
     def _on_mark_reviewed(self) -> None:
         """Mark a selected unreviewed derived source as reviewed and persist."""
         if self._project is None:
@@ -1981,36 +1808,6 @@ class DetectKitMainWindow(QMainWindow):
         self._dataset_panel.refresh_sources(self._project)
         self._tools_panel.refresh_overview()
         self.statusBar().showMessage(f"Marked '{choice}' as reviewed.", 4000)
-
-    def _on_review_escalations(self) -> None:
-        """Open the review dialog for every source with a pending escalation,
-        regardless of when it was staged. Reachable independent of an
-        escalation run having just finished, so closing the dialog without
-        acting never strands a pending escalation."""
-        if self._project is None:
-            QMessageBox.information(self, "Review Escalations", "Open a project first.")
-            return
-
-        pending_sources = [
-            s for s in self._project.sources if s.pending_escalation is not None
-        ]
-        if not pending_sources:
-            QMessageBox.information(
-                self,
-                "Review Escalations",
-                "There are no pending escalations to review.",
-            )
-            return
-
-        from .dialogs.review_escalations_dialog import ReviewEscalationsDialog
-
-        review_dlg = ReviewEscalationsDialog(
-            pending_sources, parent=self, project_dir=self._project.project_dir
-        )
-        review_dlg.exec()
-        self._save_current_project()
-        self._dataset_panel.refresh_sources(self._project)
-        self._tools_panel.refresh_overview()
 
     def _refresh_prediction_overlay(self, *, force: bool = False) -> None:
         if self._project is None or not self._current_image_path:

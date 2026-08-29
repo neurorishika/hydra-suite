@@ -1,4 +1,11 @@
-"""Smoke tests for the SAM2-escalation GUI entry points (Task 10 wiring)."""
+"""Smoke tests for the escalation GUI entry points (Tasks 10-11 wiring).
+
+Task 11 renamed the SAM2 signal/button (geometry escalation) and added a
+SAM3 semantic-escalation sibling, and moved the escalate/review handlers out
+of MainWindow into module-level functions in ``escalation_actions.py`` --
+these tests were updated in that same task to point at the new names and
+locations rather than the retired ``MainWindow`` methods.
+"""
 
 from __future__ import annotations
 
@@ -26,15 +33,30 @@ def test_tools_panel_exposes_escalation_buttons(qapp):
     panel = ToolsPanel()
     assert hasattr(panel, "_btn_escalate_sam2")
     assert hasattr(panel, "_btn_mark_reviewed")
-    assert hasattr(panel, "escalate_sam2_requested")
+    assert hasattr(panel, "escalate_geometry_requested")
     assert hasattr(panel, "mark_reviewed_requested")
 
 
-def test_main_window_class_has_escalation_handlers():
+def test_tools_panel_exposes_semantic_escalation_button(qapp):
+    from hydra_suite.detectkit.gui.panels.tools_panel import ToolsPanel
+
+    panel = ToolsPanel()
+    assert hasattr(panel, "_btn_semantic")
+    assert hasattr(panel, "semantic_escalation_requested")
+
+
+def test_escalation_actions_module_has_handlers():
+    from hydra_suite.detectkit.gui import escalation_actions
     from hydra_suite.detectkit.gui.main_window import MainWindow
 
-    assert callable(getattr(MainWindow, "_on_escalate_to_segment_sam2", None))
+    assert callable(escalation_actions.on_escalate_geometry)
+    assert callable(escalation_actions.on_semantic_escalation)
+    assert callable(escalation_actions.on_review_escalations)
+    # _on_mark_reviewed was not moved -- it stays a MainWindow method.
     assert callable(getattr(MainWindow, "_on_mark_reviewed", None))
+    # The moved methods must no longer exist on MainWindow.
+    assert getattr(MainWindow, "_on_escalate_to_segment_sam2", None) is None
+    assert getattr(MainWindow, "_on_review_escalations", None) is None
 
 
 def test_escalate_dialog_preselect_source(qapp):
@@ -60,13 +82,7 @@ def test_tools_panel_exposes_review_escalations_button(qapp):
     assert hasattr(panel, "review_escalations_requested")
 
 
-def test_main_window_has_review_escalations_handler():
-    from hydra_suite.detectkit.gui.main_window import MainWindow
-
-    assert callable(getattr(MainWindow, "_on_review_escalations", None))
-
-
-def test_main_window_escalation_finish_defers_dialog_past_progress_close():
+def test_escalation_finish_defers_dialog_past_progress_close():
     """The review dialog (and any post-run message box) must NOT be opened
     from _handle_result, which fires while the application-modal progress
     dialog is still open -- a dialog opened there would stack under it and be
@@ -74,10 +90,10 @@ def test_main_window_escalation_finish_defers_dialog_past_progress_close():
     progress.close()."""
     import inspect
 
-    from hydra_suite.detectkit.gui.main_window import MainWindow
+    from hydra_suite.detectkit.gui import escalation_actions
 
-    source = inspect.getsource(MainWindow._on_escalate_to_segment_sam2)
-    assert "_on_review_escalations" in source
+    source = inspect.getsource(escalation_actions.on_escalate_geometry)
+    assert "on_review_escalations" in source
     assert 'getattr(result, "staged"' in source
 
     handle_result_start = source.index("def _handle_result")
@@ -93,20 +109,20 @@ def test_main_window_escalation_finish_defers_dialog_past_progress_close():
     assert "QMessageBox" not in handle_result_body
     assert (
         "ReviewEscalationsDialog" in finish_body
-        or "_on_review_escalations" in finish_body
+        or "on_review_escalations" in finish_body
     )
 
 
-def test_main_window_escalation_error_deferred_past_progress_close():
+def test_escalation_error_deferred_past_progress_close():
     """A worker error must not pop a QMessageBox directly from the error
     signal connection (which fires before progress.close()) -- it must be
     stashed and shown from _finish, after progress.close(), matching the
     result path's fix in this same task."""
     import inspect
 
-    from hydra_suite.detectkit.gui.main_window import MainWindow
+    from hydra_suite.detectkit.gui import escalation_actions
 
-    source = inspect.getsource(MainWindow._on_escalate_to_segment_sam2)
+    source = inspect.getsource(escalation_actions.on_escalate_geometry)
     assert "_last_escalation_error" in source
 
     error_connect_idx = source.index("worker.error.connect(")
