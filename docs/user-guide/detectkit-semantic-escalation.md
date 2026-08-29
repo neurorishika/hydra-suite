@@ -78,12 +78,16 @@ point — that's not a bug, it's calibration declining to guess.
 
 ## Running the escalation
 
-Semantic escalation is a batch job that runs at roughly **tens of seconds
-per frame** on modest hardware — the exact rate depends on your GPU, tile
-count, and image size, and calibration measures it directly on your own
-machine so you get a real number for your data rather than a guess. For
-anything beyond a handful of frames, **point the run at the CUDA box**
-rather than running it on a laptop.
+Semantic escalation is a batch job, not an interactive one — budget it in
+hours, not minutes, for anything beyond a handful of frames. This is exactly
+why it is cancellable and resumable (below): a run you can't finish in one
+sitting is still a run you can make progress on. No fixed per-frame time is
+quoted here, because the real rate depends on your GPU, tile count, and
+image size — **calibration measures the actual per-frame time on your own
+hardware and your own data**, and that measured number, not any figure in
+this page, is the one to plan a run from. For anything beyond a handful of
+frames, **point the run at the CUDA box** rather than running it on a
+laptop.
 
 The run is:
 
