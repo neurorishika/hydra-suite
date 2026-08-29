@@ -15,8 +15,12 @@ frames, a **calibration** pass measures SAM3 against those labels and recommends
 confidence threshold, so the operating point is fitted to the user's data rather than
 inherited from ours.
 
-Unlike SAM2 escalation, which promotes existing boxes to polygons and therefore needs
-labels to start, this produces labels from nothing.
+The two escalations are complementary and both are kept. SAM2 escalation *converts*
+geometry the user already has — OBB/AABB boxes become segmentation masks — and cannot
+invent a label that isn't there. SAM3 semantic escalation *finds* instances from a
+prompt, including animals missing from the existing labels entirely. Accelerating the
+box-to-mask transition and recovering missed animals are different jobs, so they stay
+different actions.
 
 ## Scope
 
@@ -27,6 +31,7 @@ labels to start, this produces labels from nothing.
 - Calibration against the source's existing labelled frames.
 - A dialog: prompt, tiling controls, calibrate, single-tile preview.
 - Staging into the existing `PendingEscalation` review flow.
+- Renaming the SAM2 action so the two escalations are tellable apart.
 
 **Out of scope**
 
@@ -37,6 +42,7 @@ labels to start, this produces labels from nothing.
 - Multi-class prompting. One run = one prompt = class `0`.
 - Any change to TrackerKit, `core/inference` detection stages, or cache keys. The
   TrackerKit equivalence matrix is **not** a gate for this work.
+- Any change to SAM2 escalation's behaviour. It is renamed, not touched.
 
 ## Architecture
 
@@ -86,11 +92,45 @@ class SemanticLabeler(Protocol):
 catalog, `hf_hub_download` into `get_models_dir() / "sam3"`, offline error path,
 `available_variants()` as the GUI availability probe.
 
+Device selection reuses the existing cuda -> mps -> cpu picker rather than duplicating
+it: move it from `sam2/executor.py:13-18` to `core/inference/torch_device.py`, leaving
+`resolve_sam2_device` as a thin alias so `sam2/` keeps working unchanged. One import
+site moves.
+
 Two facts the catalog must encode: `sam3.pt` is 3.45 GB and is **not** in ultralytics'
 `GITHUB_ASSETS_NAMES`, so it comes from the public `facebook/sam3` HF repo; and
 ultralytics AutoUpdate pip-installs `clip` and `ftfy` on first run, which is
 unacceptable for an offline or shared install — both must be declared in a `sam3` extra,
 and the probe must fail loudly rather than trigger AutoUpdate.
+
+### Job result and prompt failure
+
+```python
+@dataclass
+class SemanticEscalationResult:
+    staged: list[str] = field(default_factory=list)
+    labelled: int = 0          # instances staged
+    empty_images: int = 0      # frames where the model returned nothing
+    degenerate: int = 0        # contours with P < 3, dropped not fatal
+    tile_px: int | None = None # resolved tile size, None = full frame
+    skipped: list[tuple[str, str]] = field(default_factory=list)
+```
+
+`empty_images` is load-bearing, not a statistic. The dominant failure mode of this
+feature is a noun phrase the model does not match, and that failure is silent: the run
+completes, stages nothing, and looks like success. **A run whose `empty_images` is a
+majority of the frames processed must be reported as a prompt failure**, with the
+completion dialog saying so and suggesting the prompt be retried in the preview. Zero
+instances staged is never a green result.
+
+`degenerate` counts contours with fewer than 3 points. These are dropped and counted
+rather than passed to `write_label_file`, which refuses them (`data/al/labels.py:46-52`)
+and would otherwise abort a whole multi-hour run over one bad contour.
+
+`skipped` carries `(source_name, reason)` pairs, mirroring `EscalationResult.skipped`
+(`jobs/sam2_escalation.py:106-114`) — primarily sources that already hold a pending
+escalation when `overwrite` was not requested. The same skip-vs-overwrite guard SAM2
+uses applies here.
 
 ### Tiling
 
@@ -192,6 +232,27 @@ reversible knob.
 
 ## GUI
 
+### Tools panel
+
+`_build_escalation_group` gains a second action and both get names that say what they
+do. SAM2's behaviour is unchanged — this is a label and signal rename only:
+
+- Group title: `"SAM2 Escalation"` -> `"Escalation"`.
+- `"Escalate to segment (SAM2)"` -> **`"Geometry escalation (SAM2): boxes to masks"`**;
+  signal `escalate_sam2_requested` -> `escalate_geometry_requested`. It converts OBB/AABB
+  labels the user already has into segmentation masks.
+- New **`"Semantic escalation (SAM3): prompt to masks..."`** -> `semantic_escalation_requested`.
+  It finds instances from a noun phrase, including animals absent from the current labels.
+- Hint text distinguishes them explicitly: geometry escalation converts existing labels
+  and cannot add a missing animal; semantic escalation can, and needs no labels to start.
+
+The new button is guarded by the same try-import-catalog pattern that disables the SAM2
+button with an explanatory tooltip when assets are missing. This matters more here: the
+SAM3 checkpoint is 3.45 GB, so the button must self-disable and say why rather than fail
+at click time or start a silent multi-gigabyte download.
+
+### Dialog
+
 `dialogs/semantic_escalation_dialog.py` (`BaseDialog`), beside the existing
 `escalate_sam2_dialog.py`:
 
@@ -207,8 +268,13 @@ reversible knob.
   is ~4 s; a tiled full frame is ~107 s and is not a preview.
 - Projected total runtime shown before the run starts.
 
-Handlers go in a new `gui/escalation_actions.py` alongside the existing SAM2 and
-review-escalations handlers; `main_window.py` (2152 lines) keeps signal connections only.
+### Handlers
+
+Both escalation handlers and the existing `review_escalations_requested` handler
+(`main_window.py:745`) move into a new `gui/escalation_actions.py`; `main_window.py`
+(2152 lines) keeps signal connections only, per CLAUDE.md's thin-coordinator rule. The
+review dialog must be included in the move, or the extraction leaves the flow split
+across two files.
 
 ## Cost
 
