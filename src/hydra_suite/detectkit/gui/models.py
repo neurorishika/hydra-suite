@@ -172,6 +172,54 @@ class SliceTrainingSettings:
         )
 
 
+@dataclass
+class InferenceRunSettings:
+    """Runtime-only settings for a DetectKit dataset inference run.
+
+    These settings intentionally snapshot the project defaults instead of being
+    saved with the project.  A user can tune a slow or unusual source without
+    unexpectedly changing the next training job's SAHI configuration.
+    """
+
+    device: str = "auto"
+    confidence_threshold: float = 0.5
+    slice_settings: SliceTrainingSettings = field(default_factory=SliceTrainingSettings)
+
+    @classmethod
+    def from_project(
+        cls, project: "DetectKitProject", confidence_threshold: float
+    ) -> "InferenceRunSettings":
+        """Create an independent runtime snapshot from ``project`` defaults."""
+        return cls(
+            device=str(project.device or "auto"),
+            confidence_threshold=float(confidence_threshold),
+            slice_settings=SliceTrainingSettings.from_dict(
+                project.slice_settings.to_dict()
+            ),
+        )
+
+    def cache_key(self) -> tuple[object, ...]:
+        """Return the inference-affecting values used to validate cached overlays."""
+        settings = self.slice_settings
+        key: tuple[object, ...] = (
+            str(self.device or "auto").strip().lower(),
+            round(float(self.confidence_threshold), 4),
+            bool(settings.enabled),
+        )
+        if not settings.enabled:
+            return key
+        return key + (
+            str(settings.geometry_mode),
+            round(float(settings.object_tile_fraction), 4),
+            round(float(settings.reference_body_px), 2),
+            int(settings.slice_width),
+            int(settings.slice_height),
+            round(float(settings.overlap), 4),
+            tuple(round(float(value), 2) for value in settings.target_sizes),
+            round(float(settings.merge_threshold), 4),
+        )
+
+
 def populate_measured_reference(
     settings: SliceTrainingSettings, measured: float
 ) -> bool:

@@ -100,6 +100,7 @@ class ToolsPanel(QWidget):
 
     overlay_settings_changed = Signal()
     run_inference_requested = Signal()
+    inference_settings_requested = Signal()
     escalate_sam2_requested = Signal()
     mark_reviewed_requested = Signal()
     review_escalations_requested = Signal()
@@ -309,6 +310,11 @@ class ToolsPanel(QWidget):
         self._class_checkboxes_layout.setSpacing(2)
         v.addWidget(self._class_checkboxes_widget)
 
+        self._btn_inference_settings = QPushButton("Inference Settings…")
+        self._btn_inference_settings.setProperty("detectkitVariant", "quiet")
+        self._btn_inference_settings.clicked.connect(self.inference_settings_requested)
+        v.addWidget(self._btn_inference_settings)
+
         self._btn_run_inference = QPushButton("Run Inference")
         self._btn_run_inference.clicked.connect(self.run_inference_requested)
         v.addWidget(self._btn_run_inference)
@@ -452,6 +458,10 @@ class ToolsPanel(QWidget):
             visible_class_ids=visible_ids,
             active_model_path=self._active_model_path,
         )
+
+    def set_confidence_threshold(self, value: float) -> None:
+        """Synchronize the visible confidence control with runtime settings."""
+        self._conf_slider.setValue(max(0, min(100, round(float(value) * 100))))
 
     def set_active_model_path(self, primary: str, secondary: str | None = None) -> None:
         """Set the active model path and update the read-only display label."""

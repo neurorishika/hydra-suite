@@ -3,6 +3,7 @@
 from .active_learning import ActiveLearningDialog
 from .evaluation_dialog import EvaluationDialog
 from .history_dialog import HistoryDialog
+from .inference_settings import InferenceSettingsDialog
 from .new_project import NewProjectDialog
 from .source_manager import SourceManagerDialog
 from .source_validation import DetectKitSourceValidationDialog
@@ -12,6 +13,7 @@ __all__ = [
     "ActiveLearningDialog",
     "EvaluationDialog",
     "HistoryDialog",
+    "InferenceSettingsDialog",
     "NewProjectDialog",
     "SourceManagerDialog",
     "DetectKitSourceValidationDialog",

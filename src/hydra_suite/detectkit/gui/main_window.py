@@ -39,7 +39,7 @@ from hydra_suite.widgets.busy import BusyTaskError, run_blocking_with_busy_dialo
 from hydra_suite.widgets.workers import BaseWorker
 
 from .canvas import OBBCanvas
-from .models import DetectKitProject, SliceTrainingSettings
+from .models import DetectKitProject, InferenceRunSettings, SliceTrainingSettings
 from .panels.dataset_panel import DatasetPanel
 from .panels.tools_panel import ToolsPanel
 from .prediction_preview import (
@@ -696,9 +696,10 @@ class DetectKitMainWindow(QMainWindow):
         self._project: Optional[DetectKitProject] = None
         self._current_source_path = ""
         self._current_image_path = ""
-        self._last_prediction_request: tuple[str, str, float] | None = None
+        self._last_prediction_request: tuple[object, ...] | None = None
         self._dataset_predictions: dict[str, list[dict[str, object]]] = {}
-        self._dataset_prediction_signature: tuple[str, str, float] | None = None
+        self._dataset_prediction_signature: tuple[object, ...] | None = None
+        self._inference_settings_override: InferenceRunSettings | None = None
         self._inference_worker: Optional[_DetectKitDatasetInferenceWorker] = None
         self._inference_progress_dialog: Optional[QProgressDialog] = None
         self._portable_worker = None
@@ -738,6 +739,9 @@ class DetectKitMainWindow(QMainWindow):
         self._dataset_panel.history_requested.connect(self._open_history_dialog)
         self._tools_panel.overlay_settings_changed.connect(self._on_overlay_changed)
         self._tools_panel.run_inference_requested.connect(self._run_inference_overlay)
+        self._tools_panel.inference_settings_requested.connect(
+            self._open_inference_settings_dialog
+        )
         self._tools_panel.escalate_sam2_requested.connect(
             self._on_escalate_to_segment_sam2
         )
@@ -805,6 +809,10 @@ class DetectKitMainWindow(QMainWindow):
         act_run_inference = QAction("Run Inference", self)
         act_run_inference.triggered.connect(self._run_inference_overlay)
         tb.addAction(act_run_inference)
+
+        act_inference_settings = QAction("Inference Settings", self)
+        act_inference_settings.triggered.connect(self._open_inference_settings_dialog)
+        tb.addAction(act_inference_settings)
 
         act_history = QAction("History", self)
         act_history.triggered.connect(self._open_history_dialog)
@@ -1183,6 +1191,7 @@ class DetectKitMainWindow(QMainWindow):
         self._current_source_path = ""
         self._current_image_path = ""
         self._last_prediction_request = None
+        self._inference_settings_override = None
 
         linked_counts = detectkit_project_linked_reference_counts(proj)
         portability_status = (
@@ -1634,7 +1643,54 @@ class DetectKitMainWindow(QMainWindow):
                 4000,
             )
 
-    def _dataset_signature(self, settings) -> tuple[str, str, float] | None:
+    def _effective_inference_settings(self, overlay_settings) -> InferenceRunSettings:
+        """Return the active runtime override, or a project-default snapshot."""
+        if self._project is None:
+            raise RuntimeError("No DetectKit project is open.")
+        if self._inference_settings_override is not None:
+            # The existing confidence slider remains a quick adjustment even
+            # after the more detailed dialog has supplied runtime geometry.
+            return InferenceRunSettings(
+                device=self._inference_settings_override.device,
+                confidence_threshold=overlay_settings.confidence_threshold,
+                slice_settings=self._inference_settings_override.slice_settings,
+            )
+        return InferenceRunSettings.from_project(
+            self._project, overlay_settings.confidence_threshold
+        )
+
+    def _open_inference_settings_dialog(self) -> None:
+        """Let users tune the next dataset inference run without mutating training."""
+        if self._project is None:
+            QMessageBox.information(
+                self,
+                "Inference Settings",
+                "Open a project before changing inference settings.",
+            )
+            return
+
+        from .dialogs.inference_settings import InferenceSettingsDialog
+
+        overlay_settings = self._tools_panel.get_overlay_settings()
+        defaults = InferenceRunSettings.from_project(
+            self._project, overlay_settings.confidence_threshold
+        )
+        current = self._effective_inference_settings(overlay_settings)
+        dialog = InferenceSettingsDialog(current, defaults, parent=self)
+        if not dialog.exec():
+            return
+
+        self._inference_settings_override = dialog.settings()
+        self._tools_panel.set_confidence_threshold(
+            self._inference_settings_override.confidence_threshold
+        )
+        self._on_overlay_changed()
+        self.statusBar().showMessage(
+            "Inference settings applied for this window. Run Inference to refresh predictions.",
+            5000,
+        )
+
+    def _dataset_signature(self, settings) -> tuple[object, ...] | None:
         if self._project is None or not self._current_source_path:
             return None
         model_path = str(settings.active_model_path or "").strip()
@@ -1643,8 +1699,7 @@ class DetectKitMainWindow(QMainWindow):
         return (
             self._current_source_path,
             model_path,
-            round(float(settings.confidence_threshold), 4),
-        )
+        ) + self._effective_inference_settings(settings).cache_key()
 
     def _run_inference_overlay(self) -> None:
         """Run dataset-wide PyTorch inference for the active source."""
@@ -1712,11 +1767,13 @@ class DetectKitMainWindow(QMainWindow):
         progress.setAttribute(Qt.WA_DeleteOnClose, True)
         progress.setValue(0)
 
+        inference_settings = self._effective_inference_settings(settings)
+
         worker = _DetectKitDatasetInferenceWorker(
             image_paths,
             primary,
-            self._project.device or "auto",
-            settings.confidence_threshold,
+            inference_settings.device,
+            inference_settings.confidence_threshold,
             inference_kind=kind,
             secondary_model_path=(
                 secondary if kind in {"sequential", "sequential_segment"} else None
@@ -1727,7 +1784,7 @@ class DetectKitMainWindow(QMainWindow):
                 if kind == "sequential_segment"
                 else self._project.imgsz_seq_crop_obb
             ),
-            slice_settings=self._project.slice_settings,
+            slice_settings=inference_settings.slice_settings,
             imgsz_obb_direct=self._project.imgsz_obb_direct,
         )
         worker.progress.connect(progress.setValue)
