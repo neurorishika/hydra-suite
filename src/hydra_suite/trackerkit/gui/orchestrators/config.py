@@ -3379,12 +3379,29 @@ class ConfigOrchestrator:
             return True
         meta_task = str(metadata.get("task_family", "")).strip().lower()
         meta_role = _normalize_usage_role(metadata.get("usage_role", ""))
-        usage_role = _normalize_usage_role(usage_role)
         if not meta_task and not meta_role:
             return True
-        if task_family and meta_task and meta_task != task_family:
+        task_families = {
+            str(value).strip().lower()
+            for value in (
+                task_family
+                if isinstance(task_family, (list, tuple, set, frozenset))
+                else (task_family,)
+            )
+            if str(value).strip()
+        }
+        usage_roles = {
+            _normalize_usage_role(value)
+            for value in (
+                usage_role
+                if isinstance(usage_role, (list, tuple, set, frozenset))
+                else (usage_role,)
+            )
+            if str(value).strip()
+        }
+        if task_families and meta_task and meta_task not in task_families:
             return False
-        if usage_role and meta_role and meta_role != usage_role:
+        if usage_roles and meta_role and meta_role not in usage_roles:
             return False
         return True
 

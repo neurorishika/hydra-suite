@@ -81,6 +81,28 @@ def test_segment_passthrough_preserves_points(tmp_path):
     assert len(out.split()) == 11  # class + 5 points preserved
 
 
+@pytest.mark.parametrize(
+    "builder",
+    [derive_detect_dataset_from_obb, derive_segment_dataset_from_source],
+)
+def test_direct_derivations_preserve_slice_geometry(tmp_path, builder):
+    src = tmp_path / "sliced"
+    _mk_dataset(src, "0 0.1 0.1 0.9 0.1 0.9 0.9 0.1 0.9\n")
+    geometry = {
+        "geometry_mode": "auto_object",
+        "reference_body_px": 42.0,
+        "target_sizes": [200.0, 300.0, 400.0],
+    }
+    (src / "manifest.json").write_text(
+        json.dumps({"type": "sliced_obb", "slice_geometry": geometry}),
+        encoding="utf-8",
+    )
+
+    result = builder(src, tmp_path / "out", class_names=["object"])
+    manifest = json.loads((Path(result.dataset_dir) / "manifest.json").read_text())
+    assert manifest["slice_geometry"] == geometry
+
+
 def test_crop_segment_clips_and_renormalizes(tmp_path):
     src = tmp_path / "poly"
     _mk_dataset(src, "0 0.2 0.2 0.6 0.2 0.6 0.6 0.2 0.6 0.3 0.7\n")

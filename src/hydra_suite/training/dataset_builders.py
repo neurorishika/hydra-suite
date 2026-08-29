@@ -487,6 +487,16 @@ def _unique_dst_pair(out_dir: Path, split: str, img_path: Path) -> tuple[Path, P
     return dst_img, dst_lbl
 
 
+def _source_slice_geometry(dataset_dir: Path) -> dict | None:
+    """Return valid SAHI training geometry stamped on an input dataset, if any."""
+    try:
+        manifest = json.loads((dataset_dir / "manifest.json").read_text("utf-8"))
+        geometry = manifest.get("slice_geometry")
+        return dict(geometry) if isinstance(geometry, dict) and geometry else None
+    except (OSError, ValueError, TypeError):
+        return None
+
+
 def derive_detect_dataset_from_obb(
     obb_dataset_dir: str | Path,
     output_root: str | Path,
@@ -556,6 +566,8 @@ def derive_detect_dataset_from_obb(
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "counts": counts,
     }
+    if slice_geometry := _source_slice_geometry(src):
+        manifest["slice_geometry"] = slice_geometry
     manifest_path = out_dir / "manifest.json"
     _write_manifest(manifest_path, manifest)
     return DatasetBuildResult(
@@ -819,6 +831,8 @@ def derive_segment_dataset_from_source(
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "counts": counts,
     }
+    if slice_geometry := _source_slice_geometry(src):
+        manifest["slice_geometry"] = slice_geometry
     manifest_path = out_dir / "manifest.json"
     _write_manifest(manifest_path, manifest)
     return DatasetBuildResult(

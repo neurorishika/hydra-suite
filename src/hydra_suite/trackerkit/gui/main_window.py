@@ -2096,8 +2096,7 @@ class MainWindow(QMainWindow):
         # status label.
         arena_count = len({int(s.get("arena_id", 0)) for s in self.roi_shapes})
         self.roi_status_label.setText(
-            f"Generated {len(new_shapes)} arena shape(s) "
-            f"({arena_count} arena(s) total)"
+            f"Generated {len(new_shapes)} arena shape(s) ({arena_count} arena(s) total)"
         )
         self._update_roi_optimization_info()
         self._update_animals_per_arena_total_label()
@@ -2463,11 +2462,12 @@ class MainWindow(QMainWindow):
         selection right after import).
         """
         role = (role or "").strip().lower()
+        direct_roles = {"direct", "obb_direct", "detect_direct", "segment_direct"}
         if role == "seq_crop_obb":
             model_path = self._get_selected_yolo_crop_obb_model_path()
         elif role == "seq_detect":
             model_path = self._get_selected_yolo_detect_model_path()
-        elif role == "obb_direct":
+        elif role in direct_roles:
             model_path = self._get_selected_yolo_model_path()
         else:
             return
@@ -2477,7 +2477,7 @@ class MainWindow(QMainWindow):
         # Switch OBB mode to match the role of the model the user picked.
         panel = self._detection_panel
 
-        if role == "obb_direct":
+        if role in direct_roles:
             try:
                 panel.apply_slice_meta_for_model(model_path)
             except Exception:
@@ -2493,7 +2493,7 @@ class MainWindow(QMainWindow):
                 if role in ("seq_detect", "seq_crop_obb"):
                     if panel.combo_yolo_obb_mode.currentIndex() != 1:
                         panel.combo_yolo_obb_mode.setCurrentIndex(1)
-                elif role == "obb_direct":
+                elif role in direct_roles:
                     if panel.combo_yolo_obb_mode.currentIndex() != 0:
                         panel.combo_yolo_obb_mode.setCurrentIndex(0)
             except Exception:
@@ -2539,8 +2539,8 @@ class MainWindow(QMainWindow):
                 val = bool(tp["enforce_square"])
                 panel.chk_yolo_seq_square_crop.setChecked(val)
                 applied.append(f"square={val}")
-        elif role == "obb_direct":
-            # Direct OBB has no per-field UI for imgsz; metadata is logged
+        elif role in direct_roles:
+            # Direct detectors have no per-field UI for imgsz; metadata is logged
             # so users see what the model expects. The Ultralytics runtime
             # picks up the trained imgsz from the .pt automatically.
             if "imgsz" in tp:

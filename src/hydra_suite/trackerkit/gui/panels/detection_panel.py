@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hydra_suite.core.inference.model_paths import get_models_root_directory
 from hydra_suite.trackerkit.config.schemas import TrackerConfig
 from hydra_suite.trackerkit.gui.panels.reference_scale_preview import (
     ReferenceScalePreviewWidget,
@@ -678,7 +679,7 @@ class DetectionPanel(QWidget):
         self.combo_yolo_model.currentIndexChanged.connect(
             lambda _index: (
                 self._sync_model_selector_buttons(),
-                self._main_window._auto_apply_yolo_training_params("obb_direct"),
+                self._main_window._auto_apply_yolo_training_params("direct"),
                 self._kick_direct_task_inference(),
             )
         )
@@ -2108,16 +2109,19 @@ class DetectionPanel(QWidget):
     # =========================================================================
 
     def _refresh_yolo_model_combo(self, preferred_model_path: object = None) -> object:
-        """Populate direct OBB model combo from repository models."""
+        """Populate the direct-model combo with OBB, detect, and segment models."""
         self._main_window._populate_yolo_model_combo(
             self.combo_yolo_model,
             preferred_model_path=preferred_model_path,
             default_path="",
             include_none=False,
-            task_family="obb",
-            usage_role="obb_direct",
+            task_family={"obb", "detect", "segment"},
+            usage_role={"obb_direct", "detect_direct", "segment_direct"},
+            repository_dir=get_models_root_directory(),
+            recursive=True,
         )
         self._sync_model_selector_buttons()
+        self._main_window._auto_apply_yolo_training_params("direct")
         # The initial selection is made silently while signals are blocked
         # (QComboBox auto-selects the first item on addItem), so the
         # currentIndexChanged hook never fires for it — kick the checkpoint
@@ -2548,8 +2552,8 @@ class DetectionPanel(QWidget):
                 combo=self.combo_yolo_model,
                 refresh_callback=self._refresh_yolo_model_combo,
                 selection_callback=self._main_window._set_yolo_model_selection,
-                task_family="obb",
-                usage_role="obb_direct",
+                task_family=None,
+                usage_role=None,
                 dialog_title="Add Direct Model",
             )
             return

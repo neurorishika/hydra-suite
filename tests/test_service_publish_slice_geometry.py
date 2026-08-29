@@ -9,6 +9,7 @@ import json
 
 import pytest
 
+from hydra_suite.trackerkit.gui.orchestrators.config import ConfigOrchestrator
 from hydra_suite.training.contracts import (
     SourceDataset,
     TrainingHyperParams,
@@ -82,3 +83,26 @@ def test_returns_none_when_manifest_has_no_slice_geometry(tmp_path):
 def test_returns_none_when_manifest_missing(tmp_path):
     spec = _make_spec(role=TrainingRole.OBB_DIRECT, derived_dataset_dir=str(tmp_path))
     assert _slice_geometry_for_publish(spec) is None
+
+
+@pytest.mark.parametrize(
+    "task_family,usage_role",
+    [
+        ("obb", "obb_direct"),
+        ("detect", "detect_direct"),
+        ("segment", "segment_direct"),
+    ],
+)
+def test_direct_model_filter_accepts_each_direct_published_role(
+    task_family, usage_role
+):
+    assert ConfigOrchestrator._yolo_model_matches_filter(
+        {"task_family": task_family, "usage_role": usage_role},
+        task_family={"obb", "detect", "segment"},
+        usage_role={"obb_direct", "detect_direct", "segment_direct"},
+    )
+    assert not ConfigOrchestrator._yolo_model_matches_filter(
+        {"task_family": "detect", "usage_role": "seq_detect"},
+        task_family={"obb", "detect", "segment"},
+        usage_role={"obb_direct", "detect_direct", "segment_direct"},
+    )
