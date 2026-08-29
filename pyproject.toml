@@ -89,6 +89,11 @@ mps = [
 av = [
     "av>=12.0",
 ]
+sam3 = [
+    "ultralytics>=8.4.34",
+    "ftfy",
+    "clip @ git+https://github.com/openai/CLIP.git",
+]
 dev = [
     "pytest>=7.0",
     "pytest-cov",
