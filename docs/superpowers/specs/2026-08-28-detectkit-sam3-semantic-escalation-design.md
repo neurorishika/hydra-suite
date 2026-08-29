@@ -1,7 +1,7 @@
 # DetectKit SAM3 Semantic Escalation — Design
 
 **Date:** 2026-08-28 (revised 2026-08-29 after adversarial review)
-**Status:** Draft, pending review
+**Status:** Implemented — see docs/superpowers/plans/2026-08-29-detectkit-sam3-semantic-escalation.md
 **Branch:** `feat/sam3-semantic-escalation` (from `main` @ 04da82fa)
 
 ## Summary

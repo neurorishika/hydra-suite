@@ -1,6 +1,17 @@
 import numpy as np
+import pytest
 
 from hydra_suite.core.inference.semantic.base import SemanticInstance, SemanticLabeler
+from hydra_suite.core.inference.semantic.tiling import (
+    SEMANTIC_TILE_FRACTION_SEED,
+    TILE_FRACTION_GRID,
+    TileCandidate,
+    candidate_tile_plans,
+    collect_candidates,
+    merge_candidates,
+    plan_for_frame,
+    resolve_tile_px,
+)
 
 
 class FakeLabeler:
@@ -39,20 +50,6 @@ def test_semantic_instance_is_frozen():
         assert "frozen" in type(exc).__name__.lower()
     else:
         raise AssertionError("SemanticInstance must be frozen")
-
-
-import pytest
-
-from hydra_suite.core.inference.semantic.tiling import (
-    SEMANTIC_TILE_FRACTION_SEED,
-    TILE_FRACTION_GRID,
-    TileCandidate,
-    candidate_tile_plans,
-    collect_candidates,
-    merge_candidates,
-    plan_for_frame,
-    resolve_tile_px,
-)
 
 
 def _sq(x0, y0, side):
