@@ -139,6 +139,8 @@ class SemanticEscalationDialog(BaseDialog):
         self._btn_calibrate = QPushButton("Calibrate against labelled frames…")
         self._btn_calibrate.setEnabled(False)
         outer.addWidget(self._btn_calibrate)
+        self._btn_calibrate.clicked.connect(self._run_calibration)
+        self._refresh_calibration_enabled()
 
         self._btn_preview = QPushButton("Preview one tile")
         self._btn_preview.setToolTip(
@@ -224,6 +226,94 @@ class SemanticEscalationDialog(BaseDialog):
 
     def set_status(self, text: str) -> None:
         self._status.setText(text)
+
+    def _refresh_calibration_enabled(self) -> None:
+        from hydra_suite.detectkit.jobs.semantic_escalation import labelled_frames_for
+
+        # Calibration works at ANY geometry level -- it needs instance COUNTS,
+        # not masks -- so OBB and AABB sources qualify too.
+        has_labels = any(labelled_frames_for(s) for s in self._sources)
+        self.set_calibration_enabled(
+            has_labels,
+            "No labelled frames in these sources. Label a few (any geometry "
+            "level) to calibrate the threshold to your data — or proceed and "
+            "tune it by eye.",
+        )
+
+    def _run_calibration(self) -> None:
+        from PySide6.QtWidgets import QProgressDialog
+
+        from hydra_suite.core.inference.semantic.calibration import recommend
+        from hydra_suite.detectkit.gui.dialogs.calibration_results_dialog import (
+            CalibrationResultsDialog,
+        )
+        from hydra_suite.detectkit.jobs.semantic_escalation import (
+            CalibrationWorker,
+            labelled_frames_for,
+        )
+
+        if not self._exhaustive.isChecked():
+            QMessageBox.information(
+                self,
+                "Calibrate",
+                "Confirm your labelled frames are exhaustively labelled first. "
+                "An unlabelled real animal counts as a false positive and biases "
+                "the recommended threshold upward.",
+            )
+            return
+        frames = [
+            f
+            for s in self.selected_sources() or self._sources
+            for f in labelled_frames_for(s)
+        ]
+        if not frames:
+            QMessageBox.information(self, "Calibrate", "No labelled frames found.")
+            return
+
+        progress = QProgressDialog("Calibrating…", "Cancel", 0, 100, self)
+        progress.setMinimumDuration(0)
+        worker = CalibrationWorker(
+            frames, self.prompt(), self.selected_variant(), self.parameters()
+        )
+        progress.canceled.connect(worker.cancel)
+        worker.progress.connect(progress.setValue)
+        worker.status.connect(progress.setLabelText)
+
+        def _done(points) -> None:
+            progress.close()
+            self.calibration_points = points
+            best, reason = recommend(points)
+            results = CalibrationResultsDialog(
+                points,
+                best,
+                reason,
+                project_frames=self._project_frame_count(),
+                parent=self,
+            )
+            results.exec()
+            chosen = results.chosen()
+            if chosen is None:
+                self.set_status(reason or "Calibration finished; no point chosen.")
+                return
+            self.apply_calibration_choice(chosen)
+            tile_desc = (
+                "full frame"
+                if chosen.tile_fraction is None
+                else f"tile fraction {chosen.tile_fraction:.2f} "
+                f"({chosen.tile_px} px, {chosen.tiles_per_frame} tiles/frame)"
+            )
+            self.set_status(
+                f"Using {tile_desc} at confidence {chosen.confidence:.2f}: misses "
+                f"{chosen.missed_per_frame:.1f} animal(s)/frame, leaves "
+                f"{chosen.extra_per_frame:.1f} polygon(s)/frame to delete "
+                f"(recall {chosen.recall:.1%}, {chosen.n_matched} matched, "
+                f"{chosen.seconds_per_frame:.1f} s/frame measured here)."
+            )
+
+        worker.result_ready.connect(_done)
+        worker.finished.connect(progress.close)
+        self._calibration_worker = worker  # keep a reference alive
+        worker.start()
 
     def accept(self) -> None:  # noqa: D102
         if not self.prompt():

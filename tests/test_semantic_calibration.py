@@ -226,3 +226,29 @@ def test_calibrate_averages_tiles_per_frame_across_mixed_frame_sizes(tmp_path):
     matches = [p for p in points if p.tile_fraction == frac]
     assert matches
     assert all(p.tiles_per_frame == expected_avg for p in matches)
+
+
+def test_frontier_rows_are_sorted_and_project_the_run_time():
+    from hydra_suite.detectkit.gui.dialogs.calibration_results_dialog import (
+        frontier_rows,
+    )
+
+    cheap = _pt(frac=0.10, tiles=4, conf=0.30, secs=6.0)
+    dear = _pt(frac=0.03, tiles=36, conf=0.20, secs=50.0)
+    rows = frontier_rows([dear, cheap], recommended=cheap, project_frames=1000)
+    # Cheapest tiling first, then descending confidence within a tiling.
+    assert rows[0]["tile"] == "0.10 (4 tiles/frame)"
+    assert rows[0]["recommended"] is True
+    # 6 s/frame x 1000 frames = 100 minutes, shown as hours:minutes.
+    assert rows[0]["projected"] == "1 h 40 m"
+    assert rows[1]["projected"] == "13 h 53 m"
+
+
+def test_frontier_rows_label_the_full_frame_option():
+    from hydra_suite.detectkit.gui.dialogs.calibration_results_dialog import (
+        frontier_rows,
+    )
+
+    rows = frontier_rows([_pt(frac=None, tiles=1)], recommended=None, project_frames=10)
+    assert rows[0]["tile"] == "full frame"
+    assert rows[0]["recommended"] is False

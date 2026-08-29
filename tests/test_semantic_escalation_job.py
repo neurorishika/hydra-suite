@@ -261,3 +261,30 @@ def test_accept_refuses_when_the_staging_dir_is_gone(tmp_path):
     shutil.rmtree(src.pending_escalation.staged_path)
     with pytest.raises(RuntimeError, match="missing on disk"):
         accept_pending_semantic_escalation(src, project, tmp_path)
+
+
+def test_labelled_frames_reads_every_geometry_level(tmp_path):
+    from hydra_suite.detectkit.jobs.semantic_escalation import labelled_frames_for
+
+    src = _make_source(tmp_path, n_images=3)
+    labels = Path(src.path) / "labels"
+    labels.joinpath("f0.txt").write_text("0 0.5 0.5 0.1 0.1\n")  # AABB
+    labels.joinpath("f1.txt").write_text(
+        "0 0.4 0.4 0.5 0.4 0.5 0.5 0.4 0.5\n"  # OBB quad
+    )
+    labels.joinpath("f2.txt").write_text(
+        "0 0.1 0.1 0.2 0.1 0.25 0.2 0.15 0.25 0.08 0.2\n"  # 5-point polygon
+    )
+    frames = labelled_frames_for(src)
+    assert len(frames) == 3
+    for _path, records in frames:
+        assert len(records) == 1
+        assert records[0].points.shape[1] == 2
+
+
+def test_labelled_frames_skips_empty_label_files(tmp_path):
+    from hydra_suite.detectkit.jobs.semantic_escalation import labelled_frames_for
+
+    src = _make_source(tmp_path, n_images=2)
+    (Path(src.path) / "labels" / "f0.txt").write_text("0 0.5 0.5 0.1 0.1\n")
+    assert len(labelled_frames_for(src)) == 1

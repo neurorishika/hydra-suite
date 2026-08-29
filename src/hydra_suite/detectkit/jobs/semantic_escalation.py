@@ -406,6 +406,98 @@ def rethreshold_staged(
     return written
 
 
+def labelled_frames_for(source: OBBSource) -> list[tuple[Path, list[LabelRecord]]]:
+    """(image path, LabelRecords) for every non-empty labelled frame.
+
+    Uses ``gui/utils.parse_obb_label``, which already handles 5-field AABB,
+    9-field quad and odd-count polygon lines. Deliberately NOT
+    ``sam2_prompts.read_boxes_from_label``, which accepts only 4- and
+    8-value lines and silently drops polygon lines (jobs/sam2_prompts.py:49-60)
+    -- calibration must work at ANY geometry level, because choosing an
+    operating point needs instance COUNTS, not masks.
+    """
+    from hydra_suite.detectkit.gui.utils import parse_obb_label
+
+    root = Path(source.path)
+    images_dir, labels_dir = root / "images", root / "labels"
+    out: list[tuple[Path, list[LabelRecord]]] = []
+    for img_path in sorted(
+        p for p in images_dir.rglob("*") if p.suffix.lower() in IMG_EXTS
+    ):
+        label_path = labels_dir / img_path.relative_to(images_dir).with_suffix(".txt")
+        if not label_path.exists() or not label_path.read_text().strip():
+            continue
+        image = cv2.imread(str(img_path))
+        if image is None:
+            continue
+        h, w = image.shape[:2]
+        parsed = parse_obb_label(label_path, w, h)
+        if not parsed:
+            continue
+        out.append(
+            (
+                img_path,
+                [
+                    LabelRecord(
+                        class_id=int(d["class_id"]),
+                        confidence=1.0,
+                        points=np.asarray(d["polygon_px"], dtype=np.float32).reshape(
+                            -1, 2
+                        ),
+                        level=GeometryLevel.POLYGON,
+                    )
+                    for d in parsed
+                ],
+            )
+        )
+    return out
+
+
+class CalibrationWorker(BaseWorker):
+    """QThread wrapper around calibrate(), cancellable between frames."""
+
+    result_ready = Signal(object)  # list[CalibrationPoint]
+
+    def __init__(
+        self, frames, prompt, variant, params, labeler=None, parent=None
+    ) -> None:
+        super().__init__(parent)
+        self._frames = frames
+        self._prompt = prompt
+        self._variant = variant
+        self._params = dict(params)
+        self._labeler = labeler
+        self._cancel = False
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+    def execute(self) -> None:
+        from hydra_suite.core.inference.semantic.calibration import calibrate
+
+        labeler = self._labeler
+        if labeler is None:
+            from hydra_suite.core.inference.semantic.sam3 import Sam3SemanticLabeler
+
+            labeler = Sam3SemanticLabeler.from_variant(self._variant)
+        points = calibrate(
+            labeler,
+            self._frames,
+            self._prompt,
+            # The GRID, not the dialog's single fraction: calibration exists
+            # precisely to choose the fraction, so passing the current one
+            # would make the answer its own input.
+            reference_body_px=self._params.get("reference_body_px", 0.0),
+            overlap=self._params.get("overlap", DEFAULT_OVERLAP),
+            seam_margin_px=self._params.get("seam_margin_px", DEFAULT_SEAM_MARGIN_PX),
+            merge_iou=self._params.get("merge_iou", DEFAULT_MERGE_IOU),
+            max_instances=self._params.get("max_instances", 0),
+            progress=lambda pct, msg: (self.progress.emit(pct), self.status.emit(msg)),
+            should_stop=lambda: self._cancel,
+        )
+        self.result_ready.emit(points)
+
+
 class SemanticEscalationWorker(BaseWorker):
     """QThread wrapper around run_semantic_escalation, with cancellation."""
 
