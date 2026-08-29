@@ -184,7 +184,7 @@ def test_semantic_escalation_result_messages_deferred_past_progress_close():
     close_idx = finish_body.index("progress.close()")
 
     prompt_failure_idx = finish_body.index("matched nothing on")
-    success_idx = finish_body.index("Staged {len(result.staged)}")
+    success_idx = finish_body.index("{len(result.staged)} source(s) over")
 
     # Both result-driven messages must textually appear after progress.close()
     # within _finish -- i.e. cannot fire before the progress dialog closes.
@@ -223,26 +223,32 @@ def test_semantic_escalation_error_deferred_past_progress_close():
     assert "window._escalation_progress_dialog = None" in finish_body
 
 
-def test_semantic_escalation_dialog_refuses_empty_prompt_or_no_source(qapp):
+def test_semantic_escalation_dialog_refuses_empty_prompt_or_no_source(
+    qapp, monkeypatch
+):
     """Headless behavioral check for SemanticEscalationDialog.accept(): an
     empty prompt or no selected source must refuse to close-as-accepted.
     QMessageBox.warning is monkeypatched to a no-op because triggering a real
     modal QMessageBox under QT_QPA_PLATFORM=offscreen opens a real (invisible)
     event loop that hangs waiting for a click that will never come -- the
     same class of hang test_detectkit_review_escalations_dialog.py already
-    works around. No dlg.exec() is called anywhere in this test."""
+    works around. No dlg.exec() is called anywhere in this test.
+
+    The patch goes through `monkeypatch`, NOT a bare assignment onto the real
+    PySide6 QMessageBox class: that assignment was never undone and silenced
+    QMessageBox.warning for every later test module in the same pytest
+    process."""
     import hydra_suite.detectkit.gui.dialogs.semantic_escalation_dialog as mod
     from hydra_suite.detectkit.gui.dialogs.semantic_escalation_dialog import (
         SemanticEscalationDialog,
     )
 
-    mod.QMessageBox.warning = staticmethod(lambda *args, **kwargs: None)
-
-    class _Src:
-        def __init__(self, name, level="obb", path="/tmp/nonexistent"):
-            self.name = name
-            self.level = level
-            self.path = path
+    monkeypatch.setattr(mod.QMessageBox, "warning", staticmethod(lambda *a, **k: None))
+    # The dialog now probes the checkpoint on accept() (C1); a machine without
+    # the 3.45 GB weights must not turn that into a modal question here.
+    monkeypatch.setattr(
+        mod, "probe_availability", lambda *a, **k: _Availability(True, "")
+    )
 
     dlg = SemanticEscalationDialog([_Src("a"), _Src("b")], reference_body_px=40.0)
 
@@ -261,3 +267,309 @@ def test_semantic_escalation_dialog_refuses_empty_prompt_or_no_source(qapp):
     dlg._list.setCurrentRow(0)
     dlg.accept()
     assert dlg.result() == 1
+
+
+from hydra_suite.detectkit.gui.dialogs.semantic_escalation_dialog import (  # noqa: E402
+    SemanticEscalationDialog,
+)
+
+
+class _Src:
+    def __init__(self, name, level="obb", path="/tmp/nonexistent"):
+        self.name = name
+        self.level = level
+        self.path = path
+
+
+class _Availability:
+    """Stand-in for checkpoints.Sam3Availability in dialog tests."""
+
+    def __init__(self, usable, reason, checkpoint_missing=False):
+        self.usable = usable
+        self.reason = reason
+        self.checkpoint_missing = checkpoint_missing
+
+    @property
+    def actionable(self):
+        return self.usable or self.checkpoint_missing
+
+
+def test_semantic_dialog_asks_before_a_missing_checkpoint_download(qapp, monkeypatch):
+    """C1: the 3.45 GB download is surfaced BEFORE the run starts.
+
+    Previously the tools-panel button was disabled whenever the checkpoint
+    was absent, and the only place that could have offered the download was
+    this dialog -- behind that disabled button. So the feature was
+    unreachable on any machine without a pre-placed checkpoint.
+    """
+    import hydra_suite.detectkit.gui.dialogs.semantic_escalation_dialog as mod
+    from hydra_suite.core.inference.semantic.checkpoints import CHECKPOINT_SIZE_GB
+
+    monkeypatch.setattr(
+        mod,
+        "probe_availability",
+        lambda *a, **k: _Availability(False, "not here yet", checkpoint_missing=True),
+    )
+    asked = []
+    monkeypatch.setattr(
+        mod.QMessageBox,
+        "question",
+        staticmethod(
+            lambda parent, title, text, *a, **k: (
+                asked.append(text),
+                mod.QMessageBox.No,
+            )[1]
+        ),
+    )
+    monkeypatch.setattr(mod.QMessageBox, "warning", staticmethod(lambda *a, **k: None))
+
+    dlg = SemanticEscalationDialog([_Src("a")], reference_body_px=40.0)
+    # The pending download is visible in the dialog, with its size, before
+    # anything is clicked.
+    assert f"{CHECKPOINT_SIZE_GB:.2f} GB" in dlg._checkpoint_note.text()
+
+    dlg._prompt.setText("ant")
+    dlg._list.setCurrentRow(0)
+    dlg.accept()
+    assert asked, "accept() must ask before starting a 3.45 GB download"
+    assert f"{CHECKPOINT_SIZE_GB:.2f}" in asked[0]
+    assert dlg.result() != 1, "declining the download must not start the run"
+
+    # Confirming lets the run start.
+    monkeypatch.setattr(
+        mod.QMessageBox, "question", staticmethod(lambda *a, **k: mod.QMessageBox.Yes)
+    )
+    dlg.accept()
+    assert dlg.result() == 1
+
+
+def test_semantic_dialog_still_refuses_a_broken_install(qapp, monkeypatch):
+    """A missing DEPENDENCY is not a missing checkpoint: no download offer."""
+    import hydra_suite.detectkit.gui.dialogs.semantic_escalation_dialog as mod
+
+    monkeypatch.setattr(
+        mod, "probe_availability", lambda *a, **k: _Availability(False, "no ftfy")
+    )
+    warned = []
+    monkeypatch.setattr(
+        mod.QMessageBox,
+        "warning",
+        staticmethod(lambda parent, title, text, *a, **k: warned.append(text)),
+    )
+    monkeypatch.setattr(
+        mod.QMessageBox,
+        "question",
+        staticmethod(
+            lambda *a, **k: (_ for _ in ()).throw(
+                AssertionError("must not offer a download")
+            )
+        ),
+    )
+    dlg = SemanticEscalationDialog([_Src("a")], reference_body_px=40.0)
+    dlg._prompt.setText("ant")
+    dlg._list.setCurrentRow(0)
+    dlg.accept()
+    assert dlg.result() != 1
+    assert warned and "no ftfy" in warned[0]
+
+
+def test_tools_panel_enables_the_button_when_only_the_checkpoint_is_missing(
+    qapp, monkeypatch
+):
+    """C1 at the other end: the button must not gate on `usable` alone."""
+    import hydra_suite.core.inference.semantic.checkpoints as ck
+    from hydra_suite.detectkit.gui.panels.tools_panel import ToolsPanel
+
+    monkeypatch.setattr(
+        ck,
+        "probe_availability",
+        lambda *a, **k: ck.Sam3Availability(
+            False, "not downloaded yet", checkpoint_missing=True
+        ),
+    )
+    panel = ToolsPanel()
+    assert panel._btn_semantic.isEnabled() is True
+    assert "download" in panel._btn_semantic.toolTip().lower()
+
+    monkeypatch.setattr(
+        ck, "probe_availability", lambda *a, **k: ck.Sam3Availability(False, "no ftfy")
+    )
+    broken = ToolsPanel()
+    assert broken._btn_semantic.isEnabled() is False
+    assert broken._btn_semantic.toolTip() == "no ftfy"
+
+
+def test_semantic_dialog_exposes_an_editable_reference_body_size(qapp, monkeypatch):
+    """I6 link 3: the chain used to dead-end with no way to enter a value."""
+    import hydra_suite.detectkit.gui.dialogs.semantic_escalation_dialog as mod
+
+    monkeypatch.setattr(
+        mod, "probe_availability", lambda *a, **k: _Availability(True, "")
+    )
+    dlg = SemanticEscalationDialog(
+        [_Src("a")],
+        reference_body_px=0.0,
+        body_px_origin="nothing found — enter one, or tiling stays off",
+    )
+    assert dlg.parameters()["reference_body_px"] == 0.0
+    assert "tiling is off" in dlg._tile_label.text()
+    assert "nothing found" in dlg._body_origin_label.text()
+
+    dlg._reference_body.setValue(80.0)
+    assert dlg.parameters()["reference_body_px"] == 80.0
+    # 80 px body / 0.05 fraction = 1600 px tiles: tiling is now ON.
+    assert "1600 px" in dlg._tile_label.text()
+
+
+def test_semantic_dialog_preview_button_is_connected(qapp, monkeypatch):
+    """I3: the button was created, tooltipped, laid out -- and never wired.
+
+    The shipped user guide tells users to press it.
+    """
+    import hydra_suite.detectkit.gui.dialogs.semantic_escalation_dialog as mod
+
+    monkeypatch.setattr(
+        mod, "probe_availability", lambda *a, **k: _Availability(True, "")
+    )
+    dlg = SemanticEscalationDialog([_Src("a")], reference_body_px=40.0)
+    # The button really is connected: disconnecting succeeds (it raises
+    # RuntimeError on an unconnected signal, which is how the dead button
+    # would be caught).
+    dlg._btn_preview.clicked.disconnect()
+
+    calls = []
+    monkeypatch.setattr(dlg, "_run_preview", lambda: calls.append(1))
+    dlg._btn_preview.clicked.connect(dlg._run_preview)
+    dlg._btn_preview.click()
+    assert calls == [1]
+
+    # And it reaches _run_preview specifically, not some unrelated slot.
+    import inspect
+
+    assert "_run_preview" in inspect.getsource(mod.SemanticEscalationDialog.__init__)
+    assert "TilePreviewWorker" in inspect.getsource(
+        mod.SemanticEscalationDialog._run_preview
+    )
+
+
+# --- I2 / I9 / I6: the semantic handler's seams ------------------------------
+
+
+def test_semantic_handler_never_hardcodes_overwrite_true():
+    """I2: `overwrite=True` disarmed the job's already-pending guard.
+
+    A resume needs no overwrite (the job compares staging directories), so a
+    hardcoded True only ever meant "silently wipe whatever else is staged" --
+    including an unreviewed SAM2 escalation or a previous prompt's SAM3
+    result. The behavioural half of this is pinned in
+    tests/test_semantic_escalation_job.py
+    (test_a_different_pending_escalation_is_skipped_without_overwrite,
+    test_an_unreviewed_sam2_escalation_is_not_silently_destroyed); this pins
+    that the GUI asks rather than deciding for the user.
+    """
+    import inspect
+
+    from hydra_suite.detectkit.gui import escalation_actions
+
+    source = inspect.getsource(escalation_actions.on_semantic_escalation)
+    assert "overwrite=True" not in source
+    assert "sources_pending_replacement" in source
+    # The consent, and the fact overwrite is only set after it.
+    question_idx = source.index("QMessageBox.question")
+    set_idx = source.index("request.overwrite = True")
+    assert set_idx > question_idx
+    assert "will be destroyed" in source
+
+
+def test_semantic_handler_reports_a_cancelled_run_distinctly():
+    """I9: a cancelled run was reported as unqualified success."""
+    import inspect
+
+    from hydra_suite.detectkit.gui import escalation_actions
+
+    source = inspect.getsource(escalation_actions.on_semantic_escalation)
+    assert "result.cancelled" in source
+    assert "CANCELLED" in source
+
+
+def test_semantic_handler_refreshes_the_overview_like_the_sam2_path():
+    import inspect
+
+    from hydra_suite.detectkit.gui import escalation_actions
+
+    source = inspect.getsource(escalation_actions.on_semantic_escalation)
+    assert "window._tools_panel.refresh_overview()" in source
+
+
+def test_reference_body_px_resolution_chain(tmp_path):
+    """I6: project setting -> median of existing labels -> the user."""
+    import cv2
+    import numpy as np
+
+    from hydra_suite.detectkit.gui.escalation_actions import resolve_reference_body_px
+    from hydra_suite.detectkit.gui.models import OBBSource
+
+    root = tmp_path / "sources" / "s"
+    (root / "images").mkdir(parents=True)
+    (root / "labels").mkdir(parents=True)
+    cv2.imwrite(
+        str(root / "images" / "f0.png"), np.zeros((400, 400, 3), dtype=np.uint8)
+    )
+    src = OBBSource(path=str(root), name="s", level="obb")
+
+    class _Slice:
+        reference_body_px = 0.0
+
+    class _Project:
+        project_dir = str(tmp_path)
+        sources = [src]
+        slice_training = _Slice()
+
+    project = _Project()
+
+    # Link 3: nothing resolves -- and the dialog must say so, not proceed
+    # quietly with tiling off.
+    value, origin = resolve_reference_body_px(project)
+    assert value == 0.0
+    assert "enter one" in origin
+
+    # Link 2: the median longest side of the source's existing labels.
+    # 400 px frame, AABB w=0.2 -> 80 px.
+    (root / "labels" / "f0.txt").write_text("0 0.5 0.5 0.2 0.05\n")
+    value, origin = resolve_reference_body_px(project)
+    assert value == pytest.approx(80.0, abs=1.0)
+    assert "existing labels" in origin
+
+    # Link 1: the project setting wins outright.
+    _Slice.reference_body_px = 55.0
+    value, origin = resolve_reference_body_px(project)
+    assert value == 55.0
+    assert "sliced-training" in origin
+
+
+def test_gui_handler_uses_frames_processed_as_the_denominator(tmp_path):
+    """Goes through the CALLER's arithmetic, which the unit test above cannot.
+
+    The existing unit test passed the denominator by hand, so it could never
+    catch the caller computing it wrongly.
+    """
+    import inspect
+
+    from hydra_suite.detectkit.gui import escalation_actions
+
+    src_text = inspect.getsource(escalation_actions.on_semantic_escalation)
+    assert "result.frames_processed" in src_text
+    assert "result.labelled + result.empty_images" not in src_text
+
+
+def test_the_dialog_asks_for_labels_without_decoding_images():
+    """I8, other end: the has-labels check must not be labelled_frames_for."""
+    import inspect
+
+    from hydra_suite.detectkit.gui.dialogs import semantic_escalation_dialog as mod
+
+    source = inspect.getsource(
+        mod.SemanticEscalationDialog._refresh_calibration_enabled
+    )
+    assert "has_labelled_frames" in source
+    assert "labelled_frames_for" not in source

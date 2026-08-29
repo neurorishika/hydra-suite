@@ -20,6 +20,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hydra_suite.core.inference.semantic.checkpoints import (
+    CHECKPOINT_SIZE_GB,
+    probe_availability,
+)
 from hydra_suite.core.inference.semantic.tiling import (
     DEFAULT_MERGE_IOU,
     DEFAULT_OVERLAP,
@@ -28,6 +32,17 @@ from hydra_suite.core.inference.semantic.tiling import (
     resolve_tile_px,
 )
 from hydra_suite.widgets.dialogs import BaseDialog
+
+
+def _humanise_seconds(seconds: float) -> str:
+    """A rough duration, from a MEASURED number of seconds."""
+    seconds = max(0.0, float(seconds))
+    if seconds < 90:
+        return f"{seconds:.0f} s"
+    minutes = seconds / 60.0
+    if minutes < 90:
+        return f"{minutes:.0f} min"
+    return f"{minutes / 60.0:.1f} h"
 
 
 class SemanticEscalationDialog(BaseDialog):
@@ -39,7 +54,13 @@ class SemanticEscalationDialog(BaseDialog):
     polygons.
     """
 
-    def __init__(self, sources, reference_body_px: float, parent=None) -> None:
+    def __init__(
+        self,
+        sources,
+        reference_body_px: float,
+        parent=None,
+        body_px_origin: str = "",
+    ) -> None:
         super().__init__(
             "Semantic escalation (SAM3)",
             parent=parent,
@@ -49,8 +70,9 @@ class SemanticEscalationDialog(BaseDialog):
             ),
         )
         self._sources = list(sources)
-        self._reference_body_px = float(reference_body_px or 0.0)
+        self._body_px_origin = body_px_origin
         self.calibration_points: list = []
+        self._preview_worker = None
 
         container = QWidget()
         outer = QVBoxLayout(container)
@@ -104,6 +126,28 @@ class SemanticEscalationDialog(BaseDialog):
         self._merge_iou.setValue(DEFAULT_MERGE_IOU)
         form.addRow("Cross-tile merge IoU:", self._merge_iou)
 
+        # I6: link 3 of the reference_body_px resolution chain (project
+        # setting -> median of the source's existing labels -> THE USER).
+        # Without an editable control the chain dead-ends and an unresolved
+        # value silently switches tiling off -- the measured-worst
+        # configuration (F1 0.719 -> 0.075).
+        self._reference_body = QDoubleSpinBox()
+        self._reference_body.setRange(0.0, 4096.0)
+        self._reference_body.setDecimals(1)
+        self._reference_body.setSingleStep(5.0)
+        self._reference_body.setSpecialValueText("unknown (tiling off)")
+        self._reference_body.setValue(float(reference_body_px or 0.0))
+        self._reference_body.setToolTip(
+            "The typical longest side of one animal, in pixels. Tile size = "
+            "this / tile fraction. With no value, tiling is off — which is "
+            "the worst measured configuration for small animals."
+        )
+        self._reference_body.valueChanged.connect(self._refresh_tile_label)
+        form.addRow("Reference body size (px):", self._reference_body)
+        self._body_origin_label = QLabel(body_px_origin or "entered by you")
+        self._body_origin_label.setWordWrap(True)
+        form.addRow("  from:", self._body_origin_label)
+
         # The fraction is a CALIBRATED parameter. The seed is presented as a
         # guess, never as a tuned or recommended value -- it was back-derived
         # from one measured configuration on one dataset.
@@ -145,9 +189,22 @@ class SemanticEscalationDialog(BaseDialog):
         self._btn_preview = QPushButton("Preview one tile")
         self._btn_preview.setToolTip(
             "Runs ONE tile, not the whole frame: a full-frame preview shows "
-            "near-zero detections and teaches you the feature is broken."
+            "near-zero detections and teaches you the feature is broken. "
+            "Reports the instance count and the measured time for that tile."
         )
+        self._btn_preview.clicked.connect(self._run_preview)
         outer.addWidget(self._btn_preview)
+
+        # C1: the 3.45 GB download is surfaced HERE, before any run starts.
+        # The tools-panel button is enabled when only the checkpoint is
+        # missing precisely so this dialog can be reached to offer it.
+        self._checkpoint_note = QLabel("")
+        self._checkpoint_note.setWordWrap(True)
+        outer.addWidget(self._checkpoint_note)
+        self._refresh_checkpoint_note()
+        self._variant.currentTextChanged.connect(
+            lambda _t: self._refresh_checkpoint_note()
+        )
 
         self._status = QLabel("")
         self._status.setWordWrap(True)
@@ -167,6 +224,9 @@ class SemanticEscalationDialog(BaseDialog):
     def prompt(self) -> str:
         return self._prompt.text().strip()
 
+    def reference_body_px(self) -> float:
+        return float(self._reference_body.value())
+
     def parameters(self) -> dict:
         return {
             "confidence": float(self._confidence.value()),
@@ -174,16 +234,17 @@ class SemanticEscalationDialog(BaseDialog):
             "overlap": float(self._overlap.value()),
             "seam_margin_px": float(self._seam_margin.value()),
             "merge_iou": float(self._merge_iou.value()),
-            "reference_body_px": self._reference_body_px,
+            "reference_body_px": self.reference_body_px(),
             "tile_fraction": self.tile_fraction(),
         }
 
     def _refresh_tile_label(self) -> None:
-        tile_px = resolve_tile_px(self._reference_body_px, self.tile_fraction())
+        body_px = self.reference_body_px()
+        tile_px = resolve_tile_px(body_px, self.tile_fraction())
         if tile_px:
             self._tile_label.setText(
                 f"{tile_px} px (reference body size "
-                f"{self._reference_body_px:.0f} px / "
+                f"{body_px:.0f} px / "
                 f"{self.tile_fraction():.2f})"
             )
         elif self.tile_fraction() is None:
@@ -191,7 +252,8 @@ class SemanticEscalationDialog(BaseDialog):
         else:
             self._tile_label.setText(
                 "full frame — no reference body size is known, so tiling is off. "
-                "Set one in project settings for much better small-object recall."
+                "Enter one above (or set one in project settings) for much "
+                "better small-object recall."
             )
 
     def _project_frame_count(self) -> int:
@@ -228,11 +290,13 @@ class SemanticEscalationDialog(BaseDialog):
         self._status.setText(text)
 
     def _refresh_calibration_enabled(self) -> None:
-        from hydra_suite.detectkit.jobs.semantic_escalation import labelled_frames_for
+        from hydra_suite.detectkit.jobs.semantic_escalation import has_labelled_frames
 
         # Calibration works at ANY geometry level -- it needs instance COUNTS,
-        # not masks -- so OBB and AABB sources qualify too.
-        has_labels = any(labelled_frames_for(s) for s in self._sources)
+        # not masks -- so OBB and AABB sources qualify too. has_labelled_frames
+        # is a label-FILE scan: the old check decoded every labelled image
+        # on the GUI thread just to answer a yes/no.
+        has_labels = any(has_labelled_frames(s) for s in self._sources)
         self.set_calibration_enabled(
             has_labels,
             "No labelled frames in these sources. Label a few (any geometry "
@@ -260,6 +324,8 @@ class SemanticEscalationDialog(BaseDialog):
                 "An unlabelled real animal counts as a false positive and biases "
                 "the recommended threshold upward.",
             )
+            return
+        if not self.confirm_checkpoint():
             return
         frames = [
             f
@@ -315,11 +381,111 @@ class SemanticEscalationDialog(BaseDialog):
         self._calibration_worker = worker  # keep a reference alive
         worker.start()
 
+    # -- checkpoint download, surfaced before anything runs -----------------
+
+    def _refresh_checkpoint_note(self) -> None:
+        avail = probe_availability(self.selected_variant())
+        if avail.checkpoint_missing:
+            self._checkpoint_note.setText(
+                f"⚠ The {self.selected_variant()} checkpoint "
+                f"(~{CHECKPOINT_SIZE_GB:.2f} GB) is not on this machine yet. It "
+                "will be downloaded once, after you confirm, before the run "
+                "starts."
+            )
+        elif not avail.usable:
+            self._checkpoint_note.setText(f"⚠ {avail.reason}")
+        else:
+            self._checkpoint_note.setText("")
+
+    def confirm_checkpoint(self) -> bool:
+        """Ask before a 3.45 GB download. True = go ahead."""
+        avail = probe_availability(self.selected_variant())
+        if avail.usable:
+            return True
+        if not avail.checkpoint_missing:
+            QMessageBox.warning(self, "Semantic escalation", avail.reason)
+            return False
+        reply = QMessageBox.question(
+            self,
+            "Download the SAM3 checkpoint?",
+            f"The {self.selected_variant()} checkpoint (~{CHECKPOINT_SIZE_GB:.2f} "
+            "GB) has not been downloaded yet.\n\nIt will be downloaded once "
+            "and cached; the run cannot start without it. Download now?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        return reply == QMessageBox.Yes
+
+    # -- one-tile preview ---------------------------------------------------
+
+    def _run_preview(self) -> None:
+        from PySide6.QtWidgets import QProgressDialog
+
+        from hydra_suite.detectkit.jobs.semantic_escalation import TilePreviewWorker
+
+        if not self.prompt():
+            QMessageBox.information(self, "Preview one tile", "Enter a prompt first.")
+            return
+        sources = self.selected_sources() or self._sources
+        if not sources:
+            QMessageBox.information(self, "Preview one tile", "Select a source.")
+            return
+        if not self.confirm_checkpoint():
+            return
+
+        frames = self._project_frame_count()
+        progress = QProgressDialog("Running one tile…", None, 0, 0, self)
+        progress.setMinimumDuration(0)
+        self._btn_preview.setEnabled(False)
+
+        def _done(res) -> None:
+            progress.close()
+            tile_desc = (
+                "the full frame" if res.tile_px is None else f"a {res.tile_px} px tile"
+            )
+            # Every number below is MEASURED on the tile just run; nothing
+            # here is a hardcoded timing figure.
+            projection = ""
+            if frames:
+                total_s = res.seconds * res.tiles_per_frame * frames
+                projection = (
+                    f"\n\nAt that rate, {res.tiles_per_frame} tile(s)/frame x "
+                    f"{frames} frame(s) projects to about "
+                    f"{_humanise_seconds(total_s)} for the full run."
+                )
+            self.set_status(
+                f"Preview: {res.instances} instance(s) in {tile_desc} of "
+                f"{res.image_name}, in {res.seconds:.1f} s (measured)." + projection
+            )
+            QMessageBox.information(
+                self,
+                "Preview one tile",
+                f"{res.instances} instance(s) found in {tile_desc} of "
+                f"{res.image_name}.\n\nMeasured: {res.seconds:.1f} s for that "
+                f"one tile." + projection,
+            )
+
+        def _failed(msg: str) -> None:
+            progress.close()
+            QMessageBox.warning(self, "Preview one tile", msg)
+
+        worker = TilePreviewWorker(
+            sources[0], self.prompt(), self.selected_variant(), self.parameters()
+        )
+        worker.result_ready.connect(_done)
+        worker.error.connect(_failed)
+        worker.finished.connect(lambda: self._btn_preview.setEnabled(True))
+        worker.finished.connect(progress.close)
+        self._preview_worker = worker  # keep a reference alive
+        worker.start()
+
     def accept(self) -> None:  # noqa: D102
         if not self.prompt():
             QMessageBox.warning(self, "Semantic escalation", "Enter a prompt first.")
             return
         if not self.selected_sources():
             QMessageBox.warning(self, "Semantic escalation", "Select a source.")
+            return
+        if not self.confirm_checkpoint():
             return
         super().accept()
