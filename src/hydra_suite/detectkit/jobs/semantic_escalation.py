@@ -941,7 +941,22 @@ class SemanticEscalationWorker(BaseWorker):
 
 
 def _origin_image_for(origin_images: Path, rel: Path) -> Path | None:
-    """The origin image a staged label at *rel* came from, or None."""
+    """The origin image a staged label at *rel* came from, or None.
+
+    F5: *rel* is the cache key, which was derived from the real filename via
+    ``relative_to``, so it already CARRIES the true extension casing. Trying
+    it verbatim first is what makes mixed case work. The old code tried only
+    ``ext`` and ``ext.upper()``, so ``a.Jpg`` -- which passes the run scan's
+    ``suffix.lower() in IMG_EXTS`` and costs real GPU time -- matched
+    neither ``a.jpg`` nor ``a.JPG`` and was silently orphaned at promotion.
+    Invisible on macOS's case-insensitive filesystem; a data-loss bug on the
+    case-sensitive Linux lab shares this is deployed to. The ext loop is
+    retained as a fallback for callers that pass a stem-only or
+    differently-cased rel.
+    """
+    direct = origin_images / rel
+    if direct.is_file():
+        return direct
     stem = origin_images / rel.parent / rel.stem
     for ext in sorted(IMG_EXTS):
         for candidate in (

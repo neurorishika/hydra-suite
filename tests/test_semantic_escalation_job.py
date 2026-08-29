@@ -871,3 +871,40 @@ def test_a_completed_frame_is_still_cached_and_reused_on_resume(tmp_path):
     labeler2 = _CountingLabeler([SemanticInstance(_blob(200, 200), 0.9)])
     run_semantic_escalation(req, labeler2)
     assert labeler2.calls == 1, "the completed frame must be reused, not redone"
+
+
+def test_mixed_case_image_extensions_are_not_orphaned(tmp_path):
+    """F5: `a.Jpg` passes the run scan but the promotion lookup missed it.
+
+    `_origin_image_for` tried only `ext` and `ext.upper()`, so a file whose
+    extension is neither all-lower nor all-upper was scanned, inferred (GPU
+    time spent) and cached, then silently dropped as an orphan. Invisible on
+    macOS; real data loss on the case-sensitive Linux lab shares.
+    """
+    from hydra_suite.detectkit.jobs.semantic_escalation import _origin_image_for
+
+    images = tmp_path / "images"
+    (images / "sub").mkdir(parents=True)
+    for name in ("a.Jpg", "sub/b.PnG", "c.jpg", "d.JPG"):
+        (images / name).write_bytes(b"x")
+    for name in ("a.Jpg", "sub/b.PnG", "c.jpg", "d.JPG"):
+        assert _origin_image_for(images, Path(name)) == images / name, name
+    assert _origin_image_for(images, Path("missing.jpg")) is None
+
+
+def test_mixed_case_frames_survive_the_whole_run(tmp_path):
+    """End to end: scanned, inferred and PROMOTED, not counted as orphans.
+
+    NOTE: this one only FAILS pre-fix on a case-sensitive filesystem (the
+    Linux deployment target); macOS's case-insensitive FS masks it. The unit
+    test above is the filesystem-independent regression guard.
+    """
+    src = _make_source(tmp_path, n_images=0)
+    root = Path(src.path)
+    cv2.imwrite(
+        str(root / "images" / "frame.Png"), np.zeros((400, 400, 3), dtype=np.uint8)
+    )
+    labeler = ScriptedLabeler([SemanticInstance(_blob(200, 200), 0.9)])
+    result = run_semantic_escalation(_request(tmp_path, src), labeler)
+    assert result.orphaned == 0, "a mixed-case frame was dropped as an orphan"
+    assert result.labelled == 1
