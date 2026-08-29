@@ -72,9 +72,17 @@ class CalibrationResultsDialog(BaseDialog):
     """Pick an operating point off the measured frontier."""
 
     def __init__(
-        self, points, recommended, reason: str, *, project_frames: int, parent=None
+        self,
+        points,
+        recommended,
+        reason: str,
+        *,
+        project_frames: int,
+        partial: bool = False,
+        parent=None,
     ) -> None:
         super().__init__("Calibration results", parent=parent)
+        self.partial = bool(partial)
         self._rows = frontier_rows(points, recommended, project_frames)
         self._chosen = None
 
@@ -93,6 +101,21 @@ class CalibrationResultsDialog(BaseDialog):
         )
         headline.setWordWrap(True)
         outer.addWidget(headline)
+
+        # F6: a cancelled sweep is not a finished one. Fractions whose frames
+        # were only part-inferred are dropped, so what survives is measured on
+        # FEWER frames than you asked for -- comparable between rows, but a
+        # thinner sample than the dialog otherwise implies.
+        if self.partial:
+            warning = QLabel(
+                "\u26a0 PARTIAL — this calibration was cancelled before it "
+                "finished. Only fully-inferred frames are counted, so these "
+                "rows rest on fewer frames than you selected. Re-run to "
+                "completion before trusting the recommendation."
+            )
+            warning.setWordWrap(True)
+            warning.setStyleSheet("color: #b36b00; font-weight: bold;")
+            outer.addWidget(warning)
 
         self._table = QTableWidget(len(self._rows), len(COLUMNS))
         self._table.setHorizontalHeaderLabels([label for _key, label in COLUMNS])

@@ -354,6 +354,8 @@ class SemanticEscalationDialog(BaseDialog):
                 best,
                 reason,
                 project_frames=self._project_frame_count(),
+                # F6: a cancelled sweep must SAY it is partial.
+                partial=worker.cancelled,
                 parent=self,
             )
             results.exec()

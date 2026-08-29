@@ -871,6 +871,16 @@ class CalibrationWorker(BaseWorker):
     def cancel(self) -> None:
         self._cancel = True
 
+    @property
+    def cancelled(self) -> bool:
+        """True if this sweep was cut short, so its frontier is PARTIAL.
+
+        Read by the results dialog: calibrate() drops fractions whose frames
+        were not fully inferred, which keeps the surviving rows comparable
+        but leaves them resting on fewer frames than the user selected.
+        """
+        return self._cancel
+
     def execute(self) -> None:
         from hydra_suite.core.inference.semantic.calibration import calibrate
 

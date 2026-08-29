@@ -1,5 +1,6 @@
 import numpy as np
 
+from hydra_suite.core.inference.semantic.base import SemanticInstance
 from hydra_suite.core.inference.semantic.calibration import (
     CONFIDENCE_GRID,
     CalibrationPoint,
@@ -331,3 +332,131 @@ def test_calibrate_holds_at_most_one_decoded_frame_in_memory(tmp_path):
     assert peak, "the labeler must have been called"
     # Exactly one frame resident at a time, regardless of how many there are.
     assert max(peak) == 1, f"decoded frames held simultaneously: {max(peak)}"
+
+
+class _ScriptedByCallLabeler:
+    """Returns a detection only on the designated call indices (0-based)."""
+
+    def __init__(self, hits):
+        self.calls = 0
+        self._hits = set(hits)
+
+    @property
+    def name(self):
+        return "scripted"
+
+    def label_image(
+        self, image_bgr, prompt, *, confidence_threshold=0.0, max_instances=0
+    ):
+        idx = self.calls
+        self.calls += 1
+        return [SemanticInstance(_sq(30, 30), 0.9)] if idx in self._hits else []
+
+
+def _calibrate_two_frames(tmp_path, labeler, should_stop=None):
+    """One 0.5 fraction over two 400x400 frames = 9 tiles each, 18 calls.
+
+    Frame 0 carries no labels; frame 1 carries one at (230, 230), which only
+    the LAST tile (200, 200, 400, 400) can produce -- a tile-local (30, 30)
+    detection offset into frame space.
+    """
+    import cv2
+
+    from hydra_suite.core.inference.semantic.calibration import calibrate
+
+    paths = []
+    for i in range(2):
+        q = tmp_path / f"f{i}.png"
+        cv2.imwrite(str(q), np.zeros((400, 400, 3), dtype=np.uint8))
+        paths.append(q)
+    label = LabelRecord(
+        class_id=0,
+        confidence=1.0,
+        points=_sq(230, 230),
+        level=GeometryLevel.POLYGON,
+    )
+    return calibrate(
+        labeler,
+        [(paths[0], []), (paths[1], [label])],
+        "ant",
+        reference_body_px=100.0,
+        tile_fractions=(0.5,),
+        seam_margin_px=2,
+        merge_iou=0.5,
+        should_stop=should_stop,
+    )
+
+
+def test_a_cancel_inside_the_last_frame_does_not_count_that_frame(tmp_path):
+    """F6: a cancel on the LAST frame slipped past the completeness filter.
+
+    The inner loop appended the entry and bumped ``entry["n"]`` BEFORE the
+    next ``should_stop`` check, so ``entry["n"] < seen_frames`` dropped every
+    incomplete fraction EXCEPT one cancelled on the final frame -- that one
+    survived with full standing, its per-frame error rates computed over a
+    frame whose late tiles were never run. The missed animal in those tiles
+    is therefore reported, but averaged as if the frame had been searched.
+
+    Here frame 1's only label is findable solely by tile 8. Cancelling after
+    12 calls (frame 1, tile 3) must DISCARD frame 1, not count it as a frame
+    on which the animal was missed.
+    """
+
+    # Cells above the detection's own 0.9 score legitimately miss it; the
+    # comparison is over the cells where the detection is admissible.
+    def _admissible(points):
+        return [p for p in points if p.confidence <= 0.9]
+
+    complete = _calibrate_two_frames(tmp_path, _ScriptedByCallLabeler({17}))
+    assert complete, "the uncancelled sweep must produce a frontier"
+    assert all(p.missed_per_frame == 0.0 for p in _admissible(complete))
+
+    labeler = _ScriptedByCallLabeler({17})
+    points = _calibrate_two_frames(
+        tmp_path, labeler, should_stop=lambda: labeler.calls >= 12
+    )
+    assert labeler.calls == 12, "the sweep was not cut short inside frame 1"
+    assert points, "frame 0 completed, so its measurement must survive"
+    # Pre-fix this was 0.5: the un-searched frame 1 was counted, so the label
+    # its last tile would have found was booked as a miss.
+    assert all(
+        p.missed_per_frame == 0.0 for p in _admissible(points)
+    ), "a frame cancelled mid-tiling was counted as a searched frame"
+
+
+def test_calibration_results_dialog_marks_a_cancelled_sweep_as_partial(qtbot=None):
+    """F6, other half: a cancelled calibration must SAY so in the results."""
+    import pytest
+
+    pytest.importorskip("PySide6.QtWidgets")
+    from PySide6.QtWidgets import QApplication, QLabel
+
+    from hydra_suite.detectkit.gui.dialogs.calibration_results_dialog import (
+        CalibrationResultsDialog,
+    )
+
+    app = QApplication.instance() or QApplication([])
+    pts = [_pt()]
+
+    def _labels(partial):
+        dlg = CalibrationResultsDialog(
+            pts, pts[0], "", project_frames=100, partial=partial
+        )
+        text = " ".join(w.text() for w in dlg.findChildren(QLabel))
+        dlg.deleteLater()
+        return text
+
+    assert "PARTIAL" in _labels(True)
+    assert "cancelled" in _labels(True).lower()
+    assert "PARTIAL" not in _labels(False)
+    del app
+
+
+def test_calibration_worker_exposes_its_cancelled_state():
+    """The dialog reads `worker.cancelled` to decide the partial marker."""
+    from hydra_suite.detectkit.jobs.semantic_escalation import CalibrationWorker
+
+    w = CalibrationWorker([], "ant", "sam3", {}, labeler=object())
+    assert w.cancelled is False
+    w.cancel()
+    assert w.cancelled is True
