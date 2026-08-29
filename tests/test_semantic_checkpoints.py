@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -27,35 +29,107 @@ def test_probe_reports_missing_checkpoint_without_downloading(tmp_path, monkeypa
         raise AssertionError("probe must never download")
 
     monkeypatch.setattr(ck, "hf_hub_download", _boom)
-    ok, reason = ck.probe_availability(cache_dir=tmp_path)
-    assert ok is False
-    assert "checkpoint" in reason.lower()
+    monkeypatch.setattr(ck, "_find_spec", lambda name: object())
+    monkeypatch.setattr(ck, "_has_predictor_symbol", lambda: True)
+    avail = ck.probe_availability(cache_dir=tmp_path)
+    assert avail.usable is False
+    assert "checkpoint" in avail.reason.lower()
+    # C1: the STRUCTURED distinction. A missing checkpoint is not the same
+    # kind of unavailable as a missing dependency: the download offer lives
+    # inside the dialog behind the button, so gating the button on
+    # `usable` alone made the whole feature unreachable.
+    assert avail.checkpoint_missing is True
+    assert avail.actionable is True
 
 
 def test_probe_reports_a_missing_python_dependency(tmp_path, monkeypatch):
     monkeypatch.setattr(
         ck, "_find_spec", lambda name: None if name == "ftfy" else object()
     )
-    ok, reason = ck.probe_availability(cache_dir=tmp_path)
-    assert ok is False
-    assert "ftfy" in reason
+    avail = ck.probe_availability(cache_dir=tmp_path)
+    assert avail.usable is False
+    assert "ftfy" in avail.reason
+    # A genuinely unusable install: NOT confusable with a missing checkpoint,
+    # so the GUI keeps the button disabled here.
+    assert avail.checkpoint_missing is False
+    assert avail.actionable is False
 
 
 def test_probe_succeeds_when_everything_is_present(tmp_path, monkeypatch):
     monkeypatch.setattr(ck, "_find_spec", lambda name: object())
     monkeypatch.setattr(ck, "_has_predictor_symbol", lambda: True)
     (tmp_path / f"{ck.DEFAULT_VARIANT}.pt").write_bytes(b"x")
-    ok, reason = ck.probe_availability(cache_dir=tmp_path)
-    assert ok is True
-    assert reason == ""
+    avail = ck.probe_availability(cache_dir=tmp_path)
+    assert avail.usable is True
+    assert avail.reason == ""
+    assert avail.checkpoint_missing is False
 
 
 def test_labeler_refuses_to_construct_when_the_probe_fails(tmp_path, monkeypatch):
     from hydra_suite.core.inference.semantic import sam3
 
-    monkeypatch.setattr(sam3, "probe_availability", lambda *a, **k: (False, "no ftfy"))
+    monkeypatch.setattr(
+        sam3,
+        "probe_availability",
+        lambda *a, **k: ck.Sam3Availability(False, "no ftfy"),
+    )
     with pytest.raises(RuntimeError, match="no ftfy"):
         sam3.Sam3SemanticLabeler.from_variant(cache_dir=tmp_path)
+
+
+def test_labeler_tolerates_only_a_missing_checkpoint_not_a_missing_dep(
+    tmp_path, monkeypatch
+):
+    """C1 / deferred-minor-3: the from_variant guard keys on the STRUCTURED
+    field, not on the substring "not downloaded" in a human-readable reason.
+
+    The old guard read `"not downloaded" not in reason`, so rewording the
+    probe's message -- which C1 does -- would have silently turned the
+    tolerated case into a hard failure.
+    """
+    from hydra_suite.core.inference.semantic import sam3
+
+    calls = []
+    monkeypatch.setattr(
+        sam3,
+        "ensure_checkpoint",
+        lambda *a, **k: (calls.append(1), tmp_path / "sam3.pt")[1],
+    )
+    monkeypatch.setattr(
+        sam3,
+        "probe_availability",
+        # A reason that contains NEITHER "not downloaded" nor "unavailable".
+        lambda *a, **k: ck.Sam3Availability(
+            False, "the weights are absent", checkpoint_missing=True
+        ),
+    )
+    # Must get PAST the guard. Whatever happens afterwards (the real
+    # ultralytics import/ctor) is not this test's business -- what matters is
+    # that no RuntimeError names the probe's reason, and that
+    # ensure_checkpoint was reached.
+    try:
+        sam3.Sam3SemanticLabeler.from_variant(cache_dir=tmp_path)
+    except Exception as exc:  # pragma: no cover - depends on optional assets
+        assert "the weights are absent" not in str(exc)
+    assert calls, "ensure_checkpoint must be reached for a missing checkpoint"
+
+
+def test_ensure_checkpoint_never_reads_the_whole_file_into_memory(
+    tmp_path, monkeypatch
+):
+    """Minor: `dest.write_bytes(src.read_bytes())` peaked at 3.45 GB RSS."""
+    src = tmp_path / "hf" / "sam3.pt"
+    src.parent.mkdir()
+    src.write_bytes(b"weights")
+
+    def _no_read_bytes(self, *a, **k):  # pragma: no cover - failure path
+        raise AssertionError("must not slurp the checkpoint into memory")
+
+    monkeypatch.setattr(ck, "hf_hub_download", lambda **k: str(src))
+    monkeypatch.setattr(Path, "read_bytes", _no_read_bytes)
+    dest = ck.ensure_checkpoint(cache_dir=tmp_path / "cache")
+    assert dest.exists()
+    assert dest.stat().st_size == len(b"weights")
 
 
 def test_labeler_satisfies_the_protocol_without_weights():

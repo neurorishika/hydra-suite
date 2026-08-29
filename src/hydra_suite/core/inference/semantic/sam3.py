@@ -41,9 +41,12 @@ class Sam3SemanticLabeler:
         allow_download: bool = True,
         cache_dir: Path | None = None,
     ) -> "Sam3SemanticLabeler":
-        ok, reason = probe_availability(variant, cache_dir)
-        if not ok and "not downloaded" not in reason:
-            raise RuntimeError(f"SAM3 is unavailable: {reason}")
+        avail = probe_availability(variant, cache_dir)
+        # A merely-undownloaded checkpoint is tolerated (ensure_checkpoint
+        # below fetches it); anything else is fatal. Keyed on the structured
+        # flag, never on a substring of the human-readable reason.
+        if not avail.usable and not avail.checkpoint_missing:
+            raise RuntimeError(f"SAM3 is unavailable: {avail.reason}")
         ckpt = ensure_checkpoint(
             variant, allow_download=allow_download, cache_dir=cache_dir
         )

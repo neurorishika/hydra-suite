@@ -12,8 +12,11 @@ disable the action with a reason instead of failing at click time.
 from __future__ import annotations
 
 import importlib.util
+import os
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 from huggingface_hub import hf_hub_download
 
@@ -33,6 +36,9 @@ SAM3_VARIANTS: dict[str, Sam3Entry] = {
 }
 
 DEFAULT_VARIANT = "sam3"
+
+# Stated wherever the download is offered, so its size is never a surprise.
+CHECKPOINT_SIZE_GB = 3.45
 
 # Imports ultralytics AutoUpdate would otherwise install behind our back.
 REQUIRED_PACKAGES = ("ultralytics", "clip", "ftfy")
@@ -64,29 +70,55 @@ def checkpoint_path(
     return _cache_dir(cache_dir) / f"{variant}.pt"
 
 
+class Sam3Availability(NamedTuple):
+    """Structured probe result.
+
+    ``usable`` alone conflates two very different states, and the GUI must
+    tell them apart: a missing Python dependency is genuinely unusable and
+    the action stays disabled, whereas a merely-undownloaded checkpoint is
+    one confirmed download away from working -- gating the action on it
+    made the feature unreachable, because the only place offering the
+    download sat BEHIND the disabled button.
+    """
+
+    usable: bool
+    reason: str
+    checkpoint_missing: bool = False
+
+    @property
+    def actionable(self) -> bool:
+        """True when the user can start a run (possibly after a download)."""
+        return self.usable or self.checkpoint_missing
+
+
 def probe_availability(
     variant: str = DEFAULT_VARIANT, cache_dir: Path | None = None
-) -> tuple[bool, str]:
-    """(usable, reason). Never downloads, never imports ultralytics lazily."""
+) -> Sam3Availability:
+    """Structured availability. Never downloads, never imports ultralytics."""
     if variant not in SAM3_VARIANTS:
-        return False, f"Unknown SAM3 variant {variant!r}."
+        return Sam3Availability(False, f"Unknown SAM3 variant {variant!r}.")
     for pkg in REQUIRED_PACKAGES:
         if _find_spec(pkg) is None:
-            return False, (
+            return Sam3Availability(
+                False,
                 f"Python package {pkg!r} is missing. Install the SAM3 extra: "
-                "pip install 'hydra-suite[sam3]'."
+                "pip install 'hydra-suite[sam3]'.",
             )
     if not _has_predictor_symbol():
-        return False, (
+        return Sam3Availability(
+            False,
             "The installed ultralytics has no SAM3SemanticPredictor "
-            "(needs >= 8.4.34)."
+            "(needs >= 8.4.34).",
         )
     if not checkpoint_path(variant, cache_dir).exists():
-        return False, (
-            f"The SAM3 checkpoint ({variant}, ~3.45 GB) is not downloaded. "
-            "Download it once from the semantic escalation dialog."
+        return Sam3Availability(
+            False,
+            f"The SAM3 checkpoint ({variant}, ~{CHECKPOINT_SIZE_GB:.2f} GB) has "
+            "not been downloaded yet. It will be downloaded once, with your "
+            "confirmation, before the first run starts.",
+            checkpoint_missing=True,
         )
-    return True, ""
+    return Sam3Availability(True, "")
 
 
 def ensure_checkpoint(
@@ -112,5 +144,11 @@ def ensure_checkpoint(
     entry = SAM3_VARIANTS[variant]
     dest.parent.mkdir(parents=True, exist_ok=True)
     src = Path(hf_hub_download(repo_id=entry.repo_id, filename=entry.filename))
-    dest.write_bytes(src.read_bytes())
+    # NOT dest.write_bytes(src.read_bytes()): that holds all 3.45 GB in RAM at
+    # once and can OOM a 16 GB laptop. Hardlink when the HF cache is on the
+    # same volume (also avoids doubling disk usage), else stream a copy.
+    try:
+        os.link(src, dest)
+    except OSError:
+        shutil.copyfile(src, dest)
     return dest

@@ -197,12 +197,24 @@ class ToolsPanel(QWidget):
                 probe_availability,
             )
 
-            ok, reason = probe_availability()
+            avail = probe_availability()
         except Exception as exc:  # pragma: no cover - optional SAM3 assets
-            ok, reason = False, str(exc)
-        if not ok:
+            from hydra_suite.core.inference.semantic.checkpoints import Sam3Availability
+
+            avail = Sam3Availability(False, str(exc))
+        # `usable` alone would disable the button whenever the 3.45 GB
+        # checkpoint is absent -- but the only offer to download it is inside
+        # the dialog BEHIND this button, so the feature would be unreachable
+        # on any machine without a pre-placed checkpoint. A missing checkpoint
+        # therefore enables the button and warns; a missing dependency does not.
+        if avail.checkpoint_missing:
+            self._btn_semantic.setToolTip(
+                avail.reason + " Click to configure the run; the dialog asks "
+                "before downloading anything."
+            )
+        elif not avail.usable:
             self._btn_semantic.setEnabled(False)
-            self._btn_semantic.setToolTip(reason)
+            self._btn_semantic.setToolTip(avail.reason)
         v.addWidget(self._btn_semantic)
 
         self._btn_mark_reviewed = QPushButton("Mark reviewed…")
