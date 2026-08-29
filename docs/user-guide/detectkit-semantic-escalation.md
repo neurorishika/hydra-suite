@@ -16,6 +16,32 @@ operations. Both live under `detectkit`, in the same "Escalation" section.
 Use geometry escalation to upgrade what you have; use semantic escalation
 to find what you don't.
 
+## Installing SAM3
+
+Semantic escalation is an optional extra. Two steps, because one of SAM3's
+dependencies is not on PyPI:
+
+```bash
+pip install 'hydra-suite[sam3]'
+pip install git+https://github.com/openai/CLIP.git
+```
+
+The second line installs OpenAI's `clip` package. It cannot be listed as a
+dependency of the `sam3` extra — PyPI rejects direct URL references in
+uploaded package metadata — so it has to be installed by hand. Without it,
+DetectKit disables the semantic escalation button and the tooltip names the
+missing package.
+
+### The model checkpoint (3.45 GB, downloaded once)
+
+The `sam3` checkpoint is about **3.45 GB** and is fetched from the public
+`facebook/sam3` Hugging Face repository the first time you run. DetectKit
+never downloads it behind your back: if it is not already on the machine,
+the escalation dialog shows a warning up front and asks for confirmation
+before the run (or a one-tile preview, or calibration) starts. The button
+stays enabled in that state — the download offer is inside the dialog, so
+disabling the button would put it out of reach.
+
 ## The prompt
 
 The prompt is a short noun phrase (the default is `ant`). It is yours to
@@ -23,6 +49,19 @@ vary, but **wording matters far less than tile size**. If results look
 wrong, try the "Preview one tile" button with a different prompt before
 assuming the prompt is the problem — tiling (below) is usually the bigger
 lever.
+
+### "Preview one tile"
+
+The preview runs the model over **exactly one tile** of one frame — not the
+whole frame. That is deliberate: at the scales this feature is for, a
+full-frame pass finds almost nothing, so a full-frame preview would just
+teach you the feature is broken.
+
+It reports the number of instances found in that tile **and the time that
+tile actually took on this machine**, plus a rough projection of the full run
+from that measurement (tile time x tiles per frame x frames selected). Both
+numbers are measured on the tile you just ran; no timing figure in DetectKit
+or in this page is hardcoded.
 
 ## Calibration: fitting the run to your data, not the other way around
 
@@ -50,6 +89,22 @@ a full re-run** (tile geometry is baked into what gets inferred), while
 detection in a cache, and re-thresholding it to a different confidence is
 free (no inference, just re-filtering the cache). Calibrate confidence
 liberally; calibrate tile fraction only when you actually plan to re-run.
+
+### Reference body size, and where it comes from
+
+Tiling needs to know roughly how large one animal is, in pixels: the tile
+edge is `reference body size / tile fraction`. DetectKit resolves it from
+the first of these that yields a value:
+
+1. the project's sliced-training reference body size,
+2. the **median longest side of the labels you already have** in the
+   selected sources, then
+3. **you** — the dialog's "Reference body size (px)" field is editable, and
+   shows which of the three it was prefilled from.
+
+If none of them resolves, tiling switches **off**, which is the worst
+configuration measured for small animals. The dialog says so explicitly
+rather than proceeding quietly.
 
 ### The exhaustive-labelling checkbox
 
@@ -100,7 +155,15 @@ The run is:
   starts a fresh run.
 - **Re-thresholdable for free** — as noted above, once a run has produced
   a candidate cache, you can change the confidence threshold and get new
-  results instantly, with no new inference.
+  results instantly, with no new inference. Candidates are cached down to
+  the bottom of the calibration grid, not down to the confidence you ran at,
+  so re-thresholding *downward* is complete rather than truncated. (A cache
+  staged by an older version records the higher floor it was collected at,
+  and DetectKit refuses to re-threshold below it rather than quietly
+  returning a short list.)
+- **Reported honestly when cancelled** — a cancelled run says so, and says
+  how many frames it got through, instead of reporting a partial result as
+  a clean success.
 
 ## Accepting results: a new sibling source, never in place
 

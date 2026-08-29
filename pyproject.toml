@@ -89,10 +89,14 @@ mps = [
 av = [
     "av>=12.0",
 ]
+# NOTE: SAM3 also needs OpenAI's `clip`, which is NOT on PyPI. It is
+# deliberately absent from this extra: a PEP 508 direct reference
+# (`clip @ git+https://...`) is rejected in uploaded PyPI metadata and would
+# break `twine upload` for the WHOLE package, not just this extra. Install it
+# manually -- see docs/user-guide/detectkit-semantic-escalation.md.
 sam3 = [
     "ultralytics>=8.4.34",
     "ftfy",
-    "clip @ git+https://github.com/openai/CLIP.git",
 ]
 dev = [
     "pytest>=7.0",
