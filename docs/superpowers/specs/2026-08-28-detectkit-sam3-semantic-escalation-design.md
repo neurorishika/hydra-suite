@@ -285,8 +285,9 @@ def calibrate(labeler, frames: Sequence[tuple[Path, list[LabelRecord]]],
 ```
 
 `calibrate` returns the full 2-D frontier — one point per (fraction, confidence) pair.
-Tile px per fraction comes from `tile_size_for_mode`, so calibration and the real run tile
-identically. `None` is in the grid on purpose: on a rig where animals are already large at
+Tile px per fraction is `reference_body_px / fraction` under the same 64-4096 clamps
+`tile_size_for_mode` applies, and both calibration and the real run go through the one
+`resolve_tile_px` helper, so they tile identically. `None` is in the grid on purpose: on a rig where animals are already large at
 native resolution, tiling *hurts*, and the grid must be able to say so rather than
 assuming tiling is always right. Fractions are skipped (not failed) when
 `reference_body_px` is unknown, when the resulting tile exceeds the frame — full-frame

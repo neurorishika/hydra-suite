@@ -19,7 +19,8 @@
 - **TrackerKit equivalence matrix is NOT a gate** for this work. Nothing here touches TrackerKit, `core/inference` detection stages, or cache keys.
 - **One run = one prompt = class `0`.** No multi-class prompting.
 - `max_instances=0` means unlimited, everywhere.
-- **Semantic tile fraction is `0.05`** and is independent of `SliceTrainingSettings.object_tile_fraction` (`0.15`). Never read the training fraction for semantic escalation.
+- **The semantic tile fraction is CALIBRATED, not asserted.** `SEMANTIC_TILE_FRACTION_SEED = 0.05` is a dialog prefill only — a value back-derived from one measured-good config on one dataset. Never present it in code comments, docstrings or UI as derived, tuned, or recommended. Calibration sweeps `TILE_FRACTION_GRID` and the user picks.
+- Semantic tiling is independent of `SliceTrainingSettings.object_tile_fraction` (`0.15`). Never read the training fraction for semantic escalation.
 - **SAM3 checkpoint:** HF repo `facebook/sam3`, 3.45 GB, NOT in ultralytics' `GITHUB_ASSETS_NAMES`. Ultralytics AutoUpdate would pip-install `clip` and `ftfy` on first use — the availability probe must fail loudly before that can happen.
 - **Format before committing:** `make format` (autopep8 → black → isort). Pre-commit hooks run black/isort/flake8 on staged Python.
 - Commit after every task. Small commits.
@@ -450,17 +451,19 @@ git commit -m "feat(semantic): add SemanticLabeler seam and SemanticInstance"
 
 The grid comes from `utils/slice_geometry.py` (`plan_tiles` returns frame-space `(x0, y0, x1, y1)` tiles with overlap and last-tile-flush; `MAX_TILES_PER_FRAME = 4096`). This module adds only what that one does not cover.
 
-The semantic tile fraction is `0.05`, **derived not fitted**: SAM3 letterboxes to 1008 px and needs an object to reach ~50 px at that input, so `tile_px ≈ body_px * 1008 / 50 ≈ 20 * body_px`. At the measured `body_px = 80` that is ~1600 px, consistent with the measured-good 1504. It must NOT read `SliceTrainingSettings.object_tile_fraction` (`0.15`), which would yield a 533 px tile — the configuration measured to cost 5.7x for no gain.
+**On the tile fraction — read this before writing the constant.** An earlier draft claimed `0.05` was derived from SAM3 needing ~50 px per object at its 1008 px input. That was circular: the only measured-good tile was 1504 px at `body_px = 80`, and `80 * 1008 / 1504 = 53.6`, so the "50 px" was that one measurement in different units and the 1504 it "predicted" was its own input. This module therefore ships `SEMANTIC_TILE_FRACTION_SEED = 0.05` as a **seed only**, plus a `TILE_FRACTION_GRID` that calibration (Task 7) sweeps against the user's own labelled frames. Do not reintroduce a derivation comment. It must still never read `SliceTrainingSettings.object_tile_fraction` (`0.15` → a 533 px tile, the configuration measured to cost 5.7x for no gain).
 
 **Files:**
 - Create: `src/hydra_suite/core/inference/semantic/tiling.py`
 - Test: `tests/test_semantic_tiling.py` (extend)
 
 **Interfaces:**
-- Consumes: `SemanticInstance`, `SemanticLabeler` (Task 3); `polygon_iou` (Task 1); `hydra_suite.utils.slice_geometry.{plan_tiles, tile_size_for_mode, SlicePlan, MAX_TILES_PER_FRAME}`.
+- Consumes: `SemanticInstance`, `SemanticLabeler` (Task 3); `polygon_iou` (Task 1); `hydra_suite.utils.slice_geometry.{plan_tiles, SlicePlan, MAX_TILES_PER_FRAME}`.
 - Produces:
-  - `SEMANTIC_OBJECT_TILE_FRACTION: float = 0.05`, `SAM3_MODEL_INPUT_PX = 1008`, `SEMANTIC_TARGET_OBJECT_PX = 50.0`
-  - `resolve_tile_px(reference_body_px: float, fraction: float = SEMANTIC_OBJECT_TILE_FRACTION) -> int | None`
+  - `SEMANTIC_TILE_FRACTION_SEED: float = 0.05`, `TILE_FRACTION_GRID: tuple[float | None, ...] = (0.03, 0.05, 0.10, None)`
+  - `resolve_tile_px(reference_body_px: float | None, fraction: float | None) -> int | None` (`None` fraction = full frame)
+  - `TilePlanOption(fraction, tile_px, plan, tiles_per_frame)` and `candidate_tile_plans(frame_hw, reference_body_px, *, fractions=TILE_FRACTION_GRID, overlap=DEFAULT_OVERLAP) -> list[TilePlanOption]`
+  - `full_frame_plan(frame_hw) -> SlicePlan` — the shared "do not tile" plan
   - `TileCandidate(polygon_px: np.ndarray, confidence: float, tile_index: int)` — polygon in FRAME space
   - `collect_candidates(labeler, image_bgr, plan, prompt, *, confidence_threshold, max_instances, seam_margin_px, should_stop=None, progress=None) -> list[TileCandidate]`
   - `merge_candidates(candidates, *, confidence_threshold, iou_threshold) -> list[SemanticInstance]`
@@ -474,8 +477,10 @@ Append to `tests/test_semantic_tiling.py`:
 import pytest
 
 from hydra_suite.core.inference.semantic.tiling import (
-    SEMANTIC_OBJECT_TILE_FRACTION,
+    SEMANTIC_TILE_FRACTION_SEED,
+    TILE_FRACTION_GRID,
     TileCandidate,
+    candidate_tile_plans,
     collect_candidates,
     merge_candidates,
     plan_for_frame,
@@ -490,16 +495,51 @@ def _sq(x0, y0, side):
     )
 
 
-def test_tile_px_derives_from_body_size_not_the_training_fraction():
-    # 80 px body / 0.05 -> 1600. The TRAINING fraction (0.15) would give 533,
-    # the configuration measured to cost 5.7x for no gain.
-    assert resolve_tile_px(80.0) == 1600
-    assert SEMANTIC_OBJECT_TILE_FRACTION == 0.05
+def test_tile_px_scales_with_body_size_and_ignores_the_training_fraction():
+    # The fraction is an ARGUMENT, not a tuned constant. The TRAINING fraction
+    # (0.15) would give 533, the config measured to cost 5.7x for no gain.
+    assert resolve_tile_px(80.0, 0.05) == 1600
+    assert resolve_tile_px(80.0, 0.10) == 800
+    assert SEMANTIC_TILE_FRACTION_SEED == 0.05
 
 
-def test_tile_px_is_none_when_body_size_is_unknown():
-    assert resolve_tile_px(0.0) is None
-    assert resolve_tile_px(-1.0) is None
+def test_tile_px_is_none_when_body_size_or_fraction_is_unknown():
+    assert resolve_tile_px(0.0, 0.05) is None
+    assert resolve_tile_px(-1.0, 0.05) is None
+    assert resolve_tile_px(80.0, None) is None      # None fraction = full frame
+    assert resolve_tile_px(None, 0.05) is None
+
+
+def test_candidate_plans_cover_the_grid_and_always_include_full_frame():
+    opts = candidate_tile_plans((4512, 4512), 80.0)
+    assert None in TILE_FRACTION_GRID
+    by_frac = {o.fraction: o for o in opts}
+    assert by_frac[None].tile_px is None
+    assert by_frac[None].tiles_per_frame == 1
+    # Finer fraction -> smaller tile -> more tiles.
+    assert by_frac[0.03].tiles_per_frame > by_frac[0.10].tiles_per_frame
+
+
+def test_candidate_plans_skip_fractions_that_degenerate_or_explode():
+    # Tiny frame: a 1600 px tile exceeds it, so that fraction would just be a
+    # second full-frame pass -- skip it rather than pay for a duplicate.
+    opts = candidate_tile_plans((800, 800), 80.0)
+    assert [o.fraction for o in opts if o.fraction is not None] == [0.10]
+    # Unknown body size leaves full-frame as the only option.
+    assert [o.fraction for o in candidate_tile_plans((4512, 4512), None)] == [None]
+    # A fraction that breaches MAX_TILES_PER_FRAME is skipped, not raised.
+    assert all(o.tiles_per_frame <= 4096 for o in candidate_tile_plans((40000, 40000), 20.0))
+
+
+def test_full_frame_plan_has_no_interior_seams():
+    opt = next(o for o in candidate_tile_plans((2000, 2000), None) if o.fraction is None)
+    at_edge = SemanticInstance(_sq(0, 400, 6), 0.9)
+    cands = collect_candidates(
+        FakeLabeler([[at_edge]]), np.zeros((2000, 2000, 3), dtype=np.uint8),
+        opt.plan, "ant", confidence_threshold=0.0, max_instances=0,
+        seam_margin_px=4,
+    )
+    assert len(cands) == 1
 
 
 def test_plan_covers_the_frame_with_overlap():
@@ -617,17 +657,16 @@ from .base import SemanticInstance, SemanticLabeler
 
 logger = logging.getLogger(__name__)
 
-# SAM3 letterboxes its input to this resolution.
-SAM3_MODEL_INPUT_PX = 1008
-# An object needs roughly this many pixels AT THE MODEL INPUT to be found.
-# This is the one empirical constant in the tile rule; everything else is
-# derived from it, and calibration can move off it by varying tile size.
-SEMANTIC_TARGET_OBJECT_PX = 50.0
-# tile_px = body_px * SAM3_MODEL_INPUT_PX / SEMANTIC_TARGET_OBJECT_PX
-#         = body_px / SEMANTIC_OBJECT_TILE_FRACTION
-SEMANTIC_OBJECT_TILE_FRACTION = round(
-    SEMANTIC_TARGET_OBJECT_PX / SAM3_MODEL_INPUT_PX, 2
-)  # 0.05
+# Tile edge = reference_body_px / fraction. The fraction is a CALIBRATED
+# parameter, not a tuned constant: the seed below was back-derived from a
+# single measured-good configuration (1504 px tile at body 80 px) on a single
+# dataset, and has no independent grounding. It exists to prefill the dialog
+# when the user skips calibration. Calibration sweeps TILE_FRACTION_GRID
+# against the user's own labelled frames and the user picks the point.
+SEMANTIC_TILE_FRACTION_SEED = 0.05
+# None means "no tiling, one full-frame pass" -- the right answer on a rig
+# where animals are already large at native resolution, where tiling HURTS.
+TILE_FRACTION_GRID: tuple[float | None, ...] = (0.03, 0.05, 0.10, None)
 
 DEFAULT_OVERLAP = 0.5
 DEFAULT_SEAM_MARGIN_PX = 4
@@ -644,26 +683,90 @@ class TileCandidate:
 
 
 def resolve_tile_px(
-    reference_body_px: float,
-    fraction: float = SEMANTIC_OBJECT_TILE_FRACTION,
+    reference_body_px: float | None,
+    fraction: float | None,
 ) -> int | None:
-    """Tile edge length in pixels, or None when object scale is unknown.
+    """Tile edge in pixels; None means "full frame, no tiling".
 
-    Deliberately NOT ``SliceTrainingSettings.object_tile_fraction``: the
-    sliced-training optimum and the SAM3 optimum differ by ~3x, so one
-    persisted fraction cannot serve both. A None result means the caller
-    falls back to full-frame inference and says so, rather than guessing.
+    None is returned for an unknown object scale AND for ``fraction=None``,
+    which is the grid's explicit no-tiling option. Deliberately never reads
+    ``SliceTrainingSettings.object_tile_fraction``: the sliced-training
+    optimum and the SAM3 optimum differ by ~3x, so one persisted fraction
+    cannot serve both.
     """
+    if fraction is None:
+        return None
     if reference_body_px is None or float(reference_body_px) <= 0:
         return None
     frac = max(0.01, min(0.9, float(fraction)))
     return int(max(64, min(4096, round(float(reference_body_px) / frac))))
 
 
+@dataclass(frozen=True)
+class TilePlanOption:
+    """One tiling configuration to calibrate: a fraction and its concrete plan."""
+
+    fraction: float | None  # None = full frame
+    tile_px: int | None
+    plan: SlicePlan
+    tiles_per_frame: int
+
+
+def candidate_tile_plans(
+    frame_hw,
+    reference_body_px: float | None,
+    *,
+    fractions: Sequence[float | None] = TILE_FRACTION_GRID,
+    overlap: float = DEFAULT_OVERLAP,
+) -> list[TilePlanOption]:
+    """Resolve the calibration grid into concrete, non-degenerate tile plans.
+
+    Skips (never raises for) fractions that cannot apply on this frame: an
+    unknown object scale, a tile at least as large as the frame -- which
+    would merely duplicate the full-frame pass -- and any geometry breaching
+    ``MAX_TILES_PER_FRAME``. Full frame is always present, so the grid can
+    always answer "do not tile".
+    """
+    frame_h, frame_w = int(frame_hw[0]), int(frame_hw[1])
+    out: list[TilePlanOption] = []
+    for frac in fractions:
+        tile_px = resolve_tile_px(reference_body_px, frac)
+        if frac is not None and tile_px is None:
+            continue
+        if tile_px is not None and tile_px >= min(frame_w, frame_h):
+            logger.info(
+                "Skipping tile fraction %s: tile %d px covers the %dx%d frame; "
+                "the full-frame option already measures this.",
+                frac, tile_px, frame_w, frame_h,
+            )
+            continue
+        try:
+            plan = (
+                full_frame_plan((frame_h, frame_w))
+                if tile_px is None
+                else plan_for_frame((frame_h, frame_w), tile_px, overlap)
+            )
+        except ValueError as exc:
+            logger.info("Skipping tile fraction %s: %s", frac, exc)
+            continue
+        out.append(TilePlanOption(frac, tile_px, plan, len(plan.tiles)))
+    return out
+
+
 def plan_for_frame(frame_hw, tile_px: int, overlap: float) -> SlicePlan:
     """Tile plan for one frame. Raises ValueError above the tile ceiling."""
     return plan_tiles(frame_hw, int(tile_px), int(tile_px), float(overlap),
                       float(overlap))
+
+
+def full_frame_plan(frame_hw) -> SlicePlan:
+    """The no-tiling plan: one tile covering the frame, hence no interior seams.
+
+    Kept here so the job, calibration and the grid all express "do not tile"
+    the same way rather than each open-coding a degenerate plan.
+    """
+    frame_h, frame_w = int(frame_hw[0]), int(frame_hw[1])
+    return plan_tiles((frame_h, frame_w), frame_w, frame_h, 0.0, 0.0)
 
 
 def _touches_interior_seam(
@@ -768,7 +871,7 @@ def merge_candidates(
 - [ ] **Step 4: Run to verify they pass**
 
 Run: `python -m pytest tests/test_semantic_tiling.py -q`
-Expected: PASS (10 tests).
+Expected: PASS (14 tests).
 
 - [ ] **Step 5: Commit**
 
@@ -1172,13 +1275,15 @@ Report the frontier of **missed vs. to-delete per frame**, not F1: deleting a sp
 
 Matching is one-to-one on centroid distance gated by containment, not IoU: SAM3's masks trace legs and antennae and run ~1.7x the labelled body-core area, so IoU penalises correct detections for a purely conventional reason. Centroid distance alone is not enough — in a dense cluster a blob's centroid lands inside a neighbour's label, and two predictions claim one label.
 
+**Calibration fits TWO parameters: tile fraction and confidence.** This is what replaces the ungrounded `0.05` constant. Confidence can be swept offline from cached candidates; tile fraction cannot, because it changes the tiles. So the loop is an outer pass per tile fraction (one inference pass over the labelled frames each) and an inner offline confidence sweep within each. Each point carries its measured `seconds_per_frame`, which is also the only run-time projection the UI is allowed to show (the archived dev-machine timings do not reconcile and must never be quoted).
+
 **Files:**
 - Create: `src/hydra_suite/core/inference/semantic/calibration.py`
 - Test: `tests/test_semantic_calibration.py`
 
 **Interfaces:**
-- Consumes: `TileCandidate`, `merge_candidates`, `collect_candidates`, `plan_for_frame` (Task 4); `hydra_suite.data.al.escalation.LabelRecord`.
-- Produces: `CalibrationPoint(confidence, missed_per_frame, extra_per_frame, recall, n_matched)`; `MIN_MATCHED_INSTANCES = 20`; `CONFIDENCE_GRID: tuple[float, ...]`; `match_one_to_one(pred_polys, label_polys) -> list[tuple[int, int]]`; `calibrate(labeler, frames, prompt, *, tile_px, overlap, seam_margin_px, merge_iou, max_instances=0, progress=None, should_stop=None) -> list[CalibrationPoint]`; `recommend(points, *, min_matched=MIN_MATCHED_INSTANCES) -> tuple[CalibrationPoint | None, str]`.
+- Consumes: `TileCandidate`, `merge_candidates`, `collect_candidates`, `candidate_tile_plans`, `TILE_FRACTION_GRID`, `DEFAULT_OVERLAP` (Task 4); `hydra_suite.data.al.escalation.LabelRecord`.
+- Produces: `CalibrationPoint(tile_fraction, tile_px, tiles_per_frame, seconds_per_frame, confidence, missed_per_frame, extra_per_frame, recall, n_matched)`; `MIN_MATCHED_INSTANCES = 20`; `MIN_RECALL = 0.90`; `CONFIDENCE_GRID: tuple[float, ...]`; `match_one_to_one(pred_polys, label_polys) -> list[tuple[int, int]]`; `calibrate(labeler, frames, prompt, *, reference_body_px, tile_fractions=TILE_FRACTION_GRID, overlap=DEFAULT_OVERLAP, seam_margin_px, merge_iou, max_instances=0, progress=None, should_stop=None) -> list[CalibrationPoint]`; `recommend(points, *, min_matched=MIN_MATCHED_INSTANCES, min_recall=MIN_RECALL) -> tuple[CalibrationPoint | None, str]`.
 - `frames` is `Sequence[tuple[Path, list[LabelRecord]]]` — paths and records, never an `OBBSource`: Core must not import an app-layer type.
 
 - [ ] **Step 1: Write the failing calibration tests**
@@ -1197,12 +1302,40 @@ from hydra_suite.core.inference.semantic.calibration import (
 )
 
 
+def _pt(*, frac=0.05, tiles=16, conf=0.2, missed=1.0, extra=5.0, recall=0.95,
+        matched=70, secs=22.0):
+    return CalibrationPoint(
+        tile_fraction=frac, tile_px=None if frac is None else int(80 / frac),
+        tiles_per_frame=tiles, seconds_per_frame=secs, confidence=conf,
+        missed_per_frame=missed, extra_per_frame=extra, recall=recall,
+        n_matched=matched,
+    )
+
+
 def _sq(cx, cy, side=20.0):
     h = side / 2.0
     return np.array(
         [[cx - h, cy - h], [cx + h, cy - h], [cx + h, cy + h], [cx - h, cy + h]],
         dtype=np.float32,
     )
+
+
+class _CountingLabeler:
+    """Detects nothing; counts one call per tile. Deliberately local to this
+    file rather than imported from another test module -- ``tests/`` is not a
+    package here."""
+
+    def __init__(self):
+        self.calls = 0
+
+    @property
+    def name(self):
+        return "counting"
+
+    def label_image(self, image_bgr, prompt, *, confidence_threshold=0.0,
+                    max_instances=0):
+        self.calls += 1
+        return []
 
 
 def test_each_label_and_prediction_is_used_at_most_once():
@@ -1245,11 +1378,7 @@ def test_confidence_grid_is_ascending_and_bounded():
 
 
 def test_recommend_refuses_below_the_minimum_matched_count():
-    points = [
-        CalibrationPoint(confidence=c, missed_per_frame=1.0, extra_per_frame=5.0,
-                         recall=0.9, n_matched=3)
-        for c in (0.2, 0.4)
-    ]
+    points = [_pt(conf=c, matched=3) for c in (0.2, 0.4)]
     best, reason = recommend(points)
     assert best is None
     assert "insufficient" in reason.lower()
@@ -1258,11 +1387,64 @@ def test_recommend_refuses_below_the_minimum_matched_count():
 def test_recommend_prefers_recall_over_f1():
     # A point that misses 1/frame with 30 extra beats one that misses 5/frame
     # with 2 extra, even though the latter has better F1.
-    recall_first = CalibrationPoint(0.20, 1.0, 30.0, 0.958, 70)
-    f1_optimal = CalibrationPoint(0.60, 5.0, 2.0, 0.79, 60)
+    recall_first = _pt(conf=0.20, missed=1.0, extra=30.0, recall=0.958, matched=70)
+    f1_optimal = _pt(conf=0.60, missed=5.0, extra=2.0, recall=0.79, matched=60)
     best, reason = recommend([f1_optimal, recall_first])
     assert best is recall_first
     assert reason == ""
+
+
+def test_recommend_prefers_the_cheapest_tiling_that_clears_the_recall_floor():
+    # 4 tiles/frame is ~4x cheaper over a whole project than 16. If both clear
+    # the floor, cost wins -- a full run is hours.
+    cheap = _pt(frac=0.10, tiles=4, conf=0.20, recall=0.95, secs=6.0)
+    dear = _pt(frac=0.03, tiles=36, conf=0.20, recall=0.97, secs=50.0)
+    best, reason = recommend([dear, cheap])
+    assert best is cheap and reason == ""
+
+
+def test_recommend_breaks_tile_ties_on_highest_confidence():
+    low = _pt(frac=0.05, tiles=16, conf=0.20, recall=0.96, extra=30.0)
+    high = _pt(frac=0.05, tiles=16, conf=0.45, recall=0.93, extra=8.0)
+    best, _ = recommend([low, high])
+    assert best is high
+
+
+def test_recommend_ignores_cheap_points_that_miss_the_recall_floor():
+    # Full frame is cheapest of all, and on a tiled rig it finds nothing.
+    full_frame = _pt(frac=None, tiles=1, conf=0.20, recall=0.05, matched=4, secs=3.0)
+    tiled = _pt(frac=0.05, tiles=16, conf=0.20, recall=0.95, matched=70)
+    best, _ = recommend([full_frame, tiled])
+    assert best is tiled
+
+
+def test_recommend_excludes_points_below_the_matched_floor():
+    # A cheap configuration that finds almost nothing can post a perfect
+    # recall on 4 matches. The floor must exclude it from eligibility, not
+    # merely veto the frontier's best-matched point.
+    thin = _pt(frac=None, tiles=1, conf=0.20, recall=1.0, matched=4, secs=3.0)
+    solid = _pt(frac=0.05, tiles=16, conf=0.20, recall=0.95, matched=70)
+    best, reason = recommend([thin, solid])
+    assert best is solid and reason == ""
+
+
+def test_calibrate_runs_one_inference_pass_per_tile_fraction(tmp_path):
+    import cv2
+    from hydra_suite.core.inference.semantic.calibration import calibrate
+    from hydra_suite.core.inference.semantic.tiling import candidate_tile_plans
+
+    img = tmp_path / "f0.png"
+    cv2.imwrite(str(img), np.zeros((2000, 2000, 3), dtype=np.uint8))
+    labeler = _CountingLabeler()
+    opts = candidate_tile_plans((2000, 2000), 80.0)
+    points = calibrate(
+        labeler, [(img, [])], "ant", reference_body_px=80.0,
+        seam_margin_px=4, merge_iou=0.5,
+    )
+    assert labeler.calls == sum(o.tiles_per_frame for o in opts)
+    assert {p.tile_fraction for p in points} == {o.fraction for o in opts}
+    assert len(points) == len(opts) * len(CONFIDENCE_GRID)
+    assert all(p.seconds_per_frame >= 0.0 for p in points)
 ```
 
 - [ ] **Step 2: Run to verify they fail**
@@ -1273,10 +1455,15 @@ Expected: FAIL — module not found.
 - [ ] **Step 3: Implement `calibration.py`**
 
 ```python
-"""Fit the confidence threshold to the user's own labelled frames.
+"""Fit the operating point to the user's own labelled frames.
 
-Two design commitments, both forced by measurement:
+Three design commitments:
 
+* TWO parameters are fitted, tile fraction AND confidence. There is no
+  defensible dev-side value for the tile fraction: the seed in ``tiling``
+  was back-derived from one measured configuration on one dataset. Tile
+  geometry is baked into the candidates, so it costs one inference pass per
+  fraction (outer loop); confidence is swept offline from the cache (inner).
 * The objective is the MISSED-vs-TO-DELETE frontier, not F1. Deleting a
   spurious polygon is one click; a missed animal must be found by eye. The
   F1-optimal threshold missed 4.7 animals/frame where a recall-first one
@@ -1289,6 +1476,7 @@ Two design commitments, both forced by measurement:
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
@@ -1297,7 +1485,13 @@ import cv2
 import numpy as np
 
 from .base import SemanticLabeler
-from .tiling import collect_candidates, merge_candidates, plan_for_frame
+from .tiling import (
+    DEFAULT_OVERLAP,
+    TILE_FRACTION_GRID,
+    candidate_tile_plans,
+    collect_candidates,
+    merge_candidates,
+)
 
 # Refuse to recommend a threshold fitted on fewer matched instances than this.
 MIN_MATCHED_INSTANCES = 20
@@ -1310,6 +1504,12 @@ CONFIDENCE_GRID: tuple[float, ...] = tuple(
 
 @dataclass(frozen=True)
 class CalibrationPoint:
+    """One (tile fraction, confidence) cell of the calibration frontier."""
+
+    tile_fraction: float | None  # None = full frame, no tiling
+    tile_px: int | None
+    tiles_per_frame: int
+    seconds_per_frame: float  # MEASURED on this machine and this data
     confidence: float
     missed_per_frame: float
     extra_per_frame: float
@@ -1362,71 +1562,106 @@ def calibrate(
     frames: Sequence[tuple[Path, list]],
     prompt: str,
     *,
-    tile_px: int | None,
-    overlap: float,
+    reference_body_px: float | None,
+    tile_fractions: Sequence[float | None] = TILE_FRACTION_GRID,
+    overlap: float = DEFAULT_OVERLAP,
     seam_margin_px: float,
     merge_iou: float,
     max_instances: int = 0,
     progress: Callable[[int, str], None] | None = None,
     should_stop: Callable[[], bool] | None = None,
 ) -> list[CalibrationPoint]:
-    """Sweep the confidence grid against *frames*' existing labels.
+    """Sweep tile fraction x confidence against *frames*' existing labels.
 
-    Inference runs ONCE per frame at the lowest grid threshold; the sweep
-    then re-merges the cached candidates per threshold. ``frames`` carries
-    image paths and ``LabelRecord``s (not an app-layer source type) so this
-    module stays inside the Core -> Data dependency direction.
+    One inference pass per (frame, tile fraction); the confidence grid is
+    then swept offline by re-merging that pass's cached candidates. Wall
+    time per fraction is measured and reported, because it is the only
+    run-time projection the UI is permitted to show.
+
+    ``frames`` carries image paths and ``LabelRecord``s (not an app-layer
+    source type) so this module stays inside the Core -> Data direction.
+    Frames of differing size are handled by keeping only fractions that
+    resolved on EVERY frame -- a fraction measured on a subset would have
+    incomparable cost and error rates.
     """
     floor = CONFIDENCE_GRID[0]
-    per_frame: list[tuple[list, list[np.ndarray]]] = []
+    # fraction -> (per-frame candidates+labels, total seconds, tiles, tile_px)
+    acc: dict[float | None, dict] = {}
+    seen_frames = 0
+    n_frames_total = max(len(frames), 1)
     for fi, (img_path, records) in enumerate(frames):
         if should_stop is not None and should_stop():
             break
         image = cv2.imread(str(img_path))
         if image is None:
             continue
+        seen_frames += 1
         h, w = image.shape[:2]
-        plan = (
-            plan_for_frame((h, w), tile_px, overlap)
-            if tile_px
-            else plan_for_frame((h, w), max(h, w), 0.0)
-        )
-        candidates = collect_candidates(
-            labeler, image, plan, prompt,
-            confidence_threshold=floor, max_instances=max_instances,
-            seam_margin_px=seam_margin_px, should_stop=should_stop,
-        )
         label_polys = [
             np.asarray(r.points, dtype=np.float32).reshape(-1, 2) for r in records
         ]
-        per_frame.append((candidates, label_polys))
-        if progress is not None:
-            progress(int(100 * (fi + 1) / max(len(frames), 1)),
-                     f"Calibrating {fi + 1}/{len(frames)}")
-
-    n_frames = max(len(per_frame), 1)
-    points: list[CalibrationPoint] = []
-    for conf in CONFIDENCE_GRID:
-        matched = missed = extra = total_labels = 0
-        for candidates, label_polys in per_frame:
-            merged = merge_candidates(
-                candidates, confidence_threshold=conf, iou_threshold=merge_iou
-            )
-            preds = [m.polygon_px for m in merged]
-            pairs = match_one_to_one(preds, label_polys)
-            matched += len(pairs)
-            missed += len(label_polys) - len(pairs)
-            extra += len(preds) - len(pairs)
-            total_labels += len(label_polys)
-        points.append(
-            CalibrationPoint(
-                confidence=conf,
-                missed_per_frame=missed / n_frames,
-                extra_per_frame=extra / n_frames,
-                recall=(matched / total_labels) if total_labels else 0.0,
-                n_matched=matched,
-            )
+        options = candidate_tile_plans(
+            (h, w), reference_body_px, fractions=tile_fractions, overlap=overlap
         )
+        for oi, opt in enumerate(options):
+            if should_stop is not None and should_stop():
+                break
+            started = time.perf_counter()
+            candidates = collect_candidates(
+                labeler, image, opt.plan, prompt,
+                confidence_threshold=floor, max_instances=max_instances,
+                seam_margin_px=seam_margin_px, should_stop=should_stop,
+            )
+            elapsed = time.perf_counter() - started
+            entry = acc.setdefault(
+                opt.fraction,
+                {"frames": [], "seconds": 0.0, "tiles": opt.tiles_per_frame,
+                 "tile_px": opt.tile_px, "n": 0},
+            )
+            entry["frames"].append((candidates, label_polys))
+            entry["seconds"] += elapsed
+            entry["n"] += 1
+            if progress is not None:
+                done = fi * len(options) + oi + 1
+                progress(
+                    int(100 * done / (n_frames_total * max(len(options), 1))),
+                    f"Calibrating frame {fi + 1}/{n_frames_total}, "
+                    f"tile {opt.tile_px or 'full frame'}",
+                )
+
+    points: list[CalibrationPoint] = []
+    for fraction, entry in acc.items():
+        if seen_frames and entry["n"] < seen_frames:
+            # Resolved on only some frames (mixed frame sizes) -- dropping it
+            # is honest; reporting a partial average would not be comparable.
+            continue
+        n_frames = max(entry["n"], 1)
+        seconds_per_frame = entry["seconds"] / n_frames
+        for conf in CONFIDENCE_GRID:
+            matched = missed = extra = total_labels = 0
+            for candidates, label_polys in entry["frames"]:
+                merged = merge_candidates(
+                    candidates, confidence_threshold=conf, iou_threshold=merge_iou
+                )
+                preds = [m.polygon_px for m in merged]
+                pairs = match_one_to_one(preds, label_polys)
+                matched += len(pairs)
+                missed += len(label_polys) - len(pairs)
+                extra += len(preds) - len(pairs)
+                total_labels += len(label_polys)
+            points.append(
+                CalibrationPoint(
+                    tile_fraction=fraction,
+                    tile_px=entry["tile_px"],
+                    tiles_per_frame=entry["tiles"],
+                    seconds_per_frame=seconds_per_frame,
+                    confidence=conf,
+                    missed_per_frame=missed / n_frames,
+                    extra_per_frame=extra / n_frames,
+                    recall=(matched / total_labels) if total_labels else 0.0,
+                    n_matched=matched,
+                )
+            )
     return points
 
 
@@ -1436,37 +1671,43 @@ def recommend(
     min_matched: int = MIN_MATCHED_INSTANCES,
     min_recall: float = MIN_RECALL,
 ) -> tuple[CalibrationPoint | None, str]:
-    """Highest confidence that still clears the recall floor, or a refusal.
+    """The cheapest tiling that clears the recall floor, or a refusal.
 
-    Refuses (returns ``(None, reason)``) when the best point matched fewer
-    than *min_matched* instances -- a threshold fitted on a handful of
-    correlated frames is not a recommendation, and the caller shows the
-    frontier instead.
+    Lexicographic, and stated as such in the UI: among points clearing
+    *min_recall*, fewest ``tiles_per_frame`` wins -- inference cost over a
+    whole project is roughly linear in it and a full run is hours -- with
+    ties broken by the highest confidence (fewest polygons to delete).
+    Deliberately not the F1 maximum.
+
+    The ``min_matched`` floor is an ELIGIBILITY filter, not a veto on the
+    winner: a cheap configuration that finds almost nothing would otherwise
+    post a perfect recall on four matches and win on cost.
     """
     if not points:
         return None, "No calibration points; nothing to recommend."
-    best_matched = max(p.n_matched for p in points)
-    if best_matched < min_matched:
+    on_recall = [p for p in points if p.recall >= min_recall]
+    if not on_recall:
         return None, (
-            f"Insufficient data: only {best_matched} instance(s) matched across "
-            f"the labelled frames (need {min_matched}). The frontier below is "
-            "shown for inspection, but no threshold is recommended."
+            f"No configuration reached {min_recall:.0%} recall on these frames. "
+            "Try a different prompt, or a finer tile fraction."
         )
-    eligible = [p for p in points if p.recall >= min_recall]
+    eligible = [p for p in on_recall if p.n_matched >= min_matched]
     if not eligible:
+        best_matched = max(p.n_matched for p in on_recall)
         return None, (
-            f"No threshold reached {min_recall:.0%} recall on these frames. Try "
-            "a different prompt, or a smaller tile size."
+            f"Insufficient data: the best configuration reaching "
+            f"{min_recall:.0%} recall matched only {best_matched} instance(s) "
+            f"across the labelled frames (need {min_matched}). The frontier "
+            "below is shown for inspection, but no operating point is "
+            "recommended -- label a few more frames."
         )
-    # Highest confidence still clearing the recall floor = fewest extras to
-    # delete at acceptable misses. Deliberately not the F1 maximum.
-    return max(eligible, key=lambda p: p.confidence), ""
+    return min(eligible, key=lambda p: (p.tiles_per_frame, -p.confidence)), ""
 ```
 
 - [ ] **Step 4: Run to verify they pass**
 
 Run: `python -m pytest tests/test_semantic_calibration.py -q`
-Expected: PASS (7 tests).
+Expected: PASS (13 tests).
 
 - [ ] **Step 5: Commit**
 
@@ -1704,7 +1945,8 @@ def _request(tmp_path, src, **kw):
     defaults = dict(
         project=_Project(tmp_path, [src]), source_names=[src.name], variant="sam3",
         prompt="ant", confidence=0.1, max_instances=0, reference_body_px=20.0,
-        overlap=0.0, seam_margin_px=2.0, merge_iou=0.5, tile_px=None, overwrite=False,
+        overlap=0.0, seam_margin_px=2.0, merge_iou=0.5, tile_fraction=None,
+        tile_px=None, overwrite=False,
     )
     defaults.update(kw)
     return SemanticEscalationRequest(**defaults)
@@ -1855,8 +2097,10 @@ from hydra_suite.core.inference.semantic.tiling import (
     DEFAULT_MERGE_IOU,
     DEFAULT_OVERLAP,
     DEFAULT_SEAM_MARGIN_PX,
+    SEMANTIC_TILE_FRACTION_SEED,
     TileCandidate,
     collect_candidates,
+    full_frame_plan,
     merge_candidates,
     plan_for_frame,
     resolve_tile_px,
@@ -1893,7 +2137,10 @@ class SemanticEscalationRequest:
     overlap: float = DEFAULT_OVERLAP
     seam_margin_px: float = DEFAULT_SEAM_MARGIN_PX
     merge_iou: float = DEFAULT_MERGE_IOU
-    tile_px: int | None = None  # explicit override; None = derive from body px
+    # Calibrated by the dialog (Task 12); SEMANTIC_TILE_FRACTION_SEED is only
+    # the prefill when the user skips calibration. None = full frame.
+    tile_fraction: float | None = SEMANTIC_TILE_FRACTION_SEED
+    tile_px: int | None = None  # explicit override; wins over tile_fraction
     overwrite: bool = False
 
 
@@ -1925,6 +2172,7 @@ def _fingerprint(req: SemanticEscalationRequest, src_root: Path,
         "prompt": req.prompt,
         "variant": req.variant,
         "tile_px": tile_px,
+        "tile_fraction": req.tile_fraction,
         "overlap": float(req.overlap),
         "seam_margin_px": float(req.seam_margin_px),
         "max_instances": int(req.max_instances),
@@ -2018,7 +2266,9 @@ def run_semantic_escalation(
     # existing polygons missed is a primary use case for this feature.
     todo = [by_name[n] for n in req.source_names if n in by_name]
     project_root = Path(req.project.project_dir)
-    tile_px = req.tile_px or resolve_tile_px(req.reference_body_px)
+    tile_px = req.tile_px or resolve_tile_px(
+        req.reference_body_px, req.tile_fraction
+    )
     result.tile_px = tile_px
     slug = prompt_slug(req.prompt)
 
@@ -2084,7 +2334,7 @@ def run_semantic_escalation(
             plan = (
                 plan_for_frame((h, w), tile_px, req.overlap)
                 if tile_px
-                else plan_for_frame((h, w), max(h, w), 0.0)
+                else full_frame_plan((h, w))
             )
             cands = collect_candidates(
                 labeler, image, plan, req.prompt,
@@ -2199,7 +2449,7 @@ class SemanticEscalationWorker(BaseWorker):
 - [ ] **Step 4: Run to verify they pass**
 
 Run: `python -m pytest tests/test_semantic_escalation_job.py -q`
-Expected: PASS (10 tests).
+Expected: PASS (14 tests).
 
 - [ ] **Step 5: Commit**
 
@@ -2519,6 +2769,8 @@ Create `src/hydra_suite/detectkit/gui/dialogs/semantic_escalation_dialog.py`:
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -2539,6 +2791,7 @@ from hydra_suite.core.inference.semantic.tiling import (
     DEFAULT_MERGE_IOU,
     DEFAULT_OVERLAP,
     DEFAULT_SEAM_MARGIN_PX,
+    SEMANTIC_TILE_FRACTION_SEED,
     resolve_tile_px,
 )
 from hydra_suite.widgets.dialogs import BaseDialog
@@ -2618,15 +2871,27 @@ class SemanticEscalationDialog(BaseDialog):
         self._merge_iou.setValue(DEFAULT_MERGE_IOU)
         form.addRow("Cross-tile merge IoU:", self._merge_iou)
 
-        tile_px = resolve_tile_px(self._reference_body_px)
-        self._tile_label = QLabel(
-            f"{tile_px} px (from reference body size {self._reference_body_px:.0f} px)"
-            if tile_px
-            else "full frame — no reference body size is known, so tiling is off. "
-                 "Set one in project settings for much better small-object recall."
+        # The fraction is a CALIBRATED parameter. The seed is presented as a
+        # guess, never as a tuned or recommended value -- it was back-derived
+        # from one measured configuration on one dataset.
+        self._tile_fraction = QDoubleSpinBox()
+        self._tile_fraction.setRange(0.0, 0.90)
+        self._tile_fraction.setSingleStep(0.01)
+        self._tile_fraction.setDecimals(2)
+        self._tile_fraction.setSpecialValueText("full frame (no tiling)")
+        self._tile_fraction.setValue(SEMANTIC_TILE_FRACTION_SEED)
+        self._tile_fraction.setToolTip(
+            "Tile size = reference body size / this fraction. The default is a "
+            "starting guess from one dataset, not a tuned value — calibrate "
+            "against your own labelled frames to fit it."
         )
+        self._tile_fraction.valueChanged.connect(self._refresh_tile_label)
+        form.addRow("Tile fraction:", self._tile_fraction)
+
+        self._tile_label = QLabel("")
         self._tile_label.setWordWrap(True)
         form.addRow("Tile size:", self._tile_label)
+        self._refresh_tile_label()
         outer.addLayout(form)
 
         self._exhaustive = QCheckBox(
@@ -2675,7 +2940,49 @@ class SemanticEscalationDialog(BaseDialog):
             "seam_margin_px": float(self._seam_margin.value()),
             "merge_iou": float(self._merge_iou.value()),
             "reference_body_px": self._reference_body_px,
+            "tile_fraction": self.tile_fraction(),
         }
+
+    def _refresh_tile_label(self) -> None:
+        tile_px = resolve_tile_px(self._reference_body_px, self.tile_fraction())
+        if tile_px:
+            self._tile_label.setText(
+                f"{tile_px} px (reference body size "
+                f"{self._reference_body_px:.0f} px / "
+                f"{self.tile_fraction():.2f})"
+            )
+        elif self.tile_fraction() is None:
+            self._tile_label.setText("full frame — tiling off by choice.")
+        else:
+            self._tile_label.setText(
+                "full frame — no reference body size is known, so tiling is off. "
+                "Set one in project settings for much better small-object recall."
+            )
+
+    def _project_frame_count(self) -> int:
+        """Images across the selected sources — the run-time projection base."""
+        from hydra_suite.detectkit.gui.constants import IMG_EXTS
+
+        total = 0
+        for src in (self.selected_sources() or self._sources):
+            images = Path(src.path) / "images"
+            if images.is_dir():
+                total += sum(
+                    1 for p in images.rglob("*") if p.suffix.lower() in IMG_EXTS
+                )
+        return total
+
+    def tile_fraction(self) -> float | None:
+        value = float(self._tile_fraction.value())
+        return None if value <= 0.0 else value
+
+    def apply_calibration_choice(self, point) -> None:
+        """Write a chosen frontier point back into the dialog's controls."""
+        self._confidence.setValue(float(point.confidence))
+        self._tile_fraction.setValue(
+            0.0 if point.tile_fraction is None else float(point.tile_fraction)
+        )
+        self._refresh_tile_label()
 
     def set_calibration_enabled(self, enabled: bool, reason: str = "") -> None:
         self._btn_calibrate.setEnabled(enabled)
@@ -2989,16 +3296,17 @@ git commit -m "feat(detectkit): semantic escalation GUI, escalation handler extr
 
 ### Task 12: Wire calibration into the dialog
 
-Calibration is the feature's main claim — the operating point is fitted to the user's data, not inherited from ours. It runs on the same worker pattern as the escalation itself.
+Calibration is the feature's main claim — the operating point is fitted to the user's data, not inherited from ours. It fits BOTH parameters, tile fraction and confidence, which is what removes the ungrounded `0.05` from the design. It runs on the same worker pattern as the escalation itself.
 
 **Files:**
 - Modify: `src/hydra_suite/detectkit/gui/dialogs/semantic_escalation_dialog.py`
+- Create: `src/hydra_suite/detectkit/gui/dialogs/calibration_results_dialog.py`
 - Modify: `src/hydra_suite/detectkit/jobs/semantic_escalation.py` (add `CalibrationWorker` + the label-reading adapter)
 - Test: `tests/test_semantic_escalation_job.py` (extend)
 
 **Interfaces:**
-- Consumes: `calibrate`, `recommend`, `CalibrationPoint` (Task 7); `parse_obb_label` (`detectkit/gui/utils.py:220`).
-- Produces: `labelled_frames_for(source) -> list[tuple[Path, list[LabelRecord]]]`; `CalibrationWorker(request, labeler=None)` emitting `result_ready(list[CalibrationPoint])`.
+- Consumes: `calibrate`, `recommend`, `CalibrationPoint` (Task 7); `TILE_FRACTION_GRID` (Task 4); `parse_obb_label` (`detectkit/gui/utils.py:220`); `apply_calibration_choice` (Task 11).
+- Produces: `labelled_frames_for(source) -> list[tuple[Path, list[LabelRecord]]]`; `CalibrationWorker(frames, prompt, variant, params, labeler=None)` emitting `result_ready(list[CalibrationPoint])`; `CalibrationResultsDialog(points, recommended, reason, project_frames, parent)` with `chosen() -> CalibrationPoint | None`.
 
 - [ ] **Step 1: Write the failing adapter test**
 
@@ -3115,7 +3423,10 @@ class CalibrationWorker(BaseWorker):
             labeler,
             self._frames,
             self._prompt,
-            tile_px=resolve_tile_px(self._params.get("reference_body_px", 0.0)),
+            # The GRID, not the dialog's single fraction: calibration exists
+            # precisely to choose the fraction, so passing the current one
+            # would make the answer its own input.
+            reference_body_px=self._params.get("reference_body_px", 0.0),
             overlap=self._params.get("overlap", DEFAULT_OVERLAP),
             seam_margin_px=self._params.get("seam_margin_px", DEFAULT_SEAM_MARGIN_PX),
             merge_iou=self._params.get("merge_iou", DEFAULT_MERGE_IOU),
@@ -3162,6 +3473,9 @@ and add:
         from PySide6.QtWidgets import QProgressDialog
 
         from hydra_suite.core.inference.semantic.calibration import recommend
+        from hydra_suite.detectkit.gui.dialogs.calibration_results_dialog import (
+            CalibrationResultsDialog,
+        )
         from hydra_suite.detectkit.jobs.semantic_escalation import (
             CalibrationWorker,
             labelled_frames_for,
@@ -3194,17 +3508,27 @@ and add:
             progress.close()
             self.calibration_points = points
             best, reason = recommend(points)
-            if best is None:
-                self.set_status(reason)
+            results = CalibrationResultsDialog(
+                points, best, reason, project_frames=self._project_frame_count(),
+                parent=self,
+            )
+            results.exec()
+            chosen = results.chosen()
+            if chosen is None:
+                self.set_status(reason or "Calibration finished; no point chosen.")
                 return
-            self._confidence.setValue(best.confidence)
+            self.apply_calibration_choice(chosen)
+            tile_desc = (
+                "full frame" if chosen.tile_fraction is None
+                else f"tile fraction {chosen.tile_fraction:.2f} "
+                     f"({chosen.tile_px} px, {chosen.tiles_per_frame} tiles/frame)"
+            )
             self.set_status(
-                f"Recommended confidence {best.confidence:.2f}: misses "
-                f"{best.missed_per_frame:.1f} animal(s)/frame, leaves "
-                f"{best.extra_per_frame:.1f} polygon(s)/frame to delete "
-                f"(recall {best.recall:.1%}, {best.n_matched} matched). "
-                "Chosen for recall, not F1 — a spurious polygon is one click, "
-                "a missed animal must be found by eye."
+                f"Using {tile_desc} at confidence {chosen.confidence:.2f}: misses "
+                f"{chosen.missed_per_frame:.1f} animal(s)/frame, leaves "
+                f"{chosen.extra_per_frame:.1f} polygon(s)/frame to delete "
+                f"(recall {chosen.recall:.1%}, {chosen.n_matched} matched, "
+                f"{chosen.seconds_per_frame:.1f} s/frame measured here)."
             )
 
         worker.result_ready.connect(_done)
@@ -3213,7 +3537,165 @@ and add:
         worker.start()
 ```
 
-- [ ] **Step 6: Verify imports and run the full new test set**
+- [ ] **Step 6: Write the frontier-row test, then the results dialog**
+
+Append to `tests/test_semantic_calibration.py`:
+
+```python
+def test_frontier_rows_are_sorted_and_project_the_run_time():
+    from hydra_suite.detectkit.gui.dialogs.calibration_results_dialog import (
+        frontier_rows,
+    )
+
+    cheap = _pt(frac=0.10, tiles=4, conf=0.30, secs=6.0)
+    dear = _pt(frac=0.03, tiles=36, conf=0.20, secs=50.0)
+    rows = frontier_rows([dear, cheap], recommended=cheap, project_frames=1000)
+    # Cheapest tiling first, then descending confidence within a tiling.
+    assert rows[0]["tile"] == "0.10 (4 tiles/frame)"
+    assert rows[0]["recommended"] is True
+    # 6 s/frame x 1000 frames = 100 minutes, shown as hours:minutes.
+    assert rows[0]["projected"] == "1 h 40 m"
+    assert rows[1]["projected"] == "13 h 53 m"
+
+
+def test_frontier_rows_label_the_full_frame_option():
+    from hydra_suite.detectkit.gui.dialogs.calibration_results_dialog import (
+        frontier_rows,
+    )
+
+    rows = frontier_rows([_pt(frac=None, tiles=1)], recommended=None,
+                         project_frames=10)
+    assert rows[0]["tile"] == "full frame"
+    assert rows[0]["recommended"] is False
+```
+
+Run it (expect FAIL: module not found), then create
+`src/hydra_suite/detectkit/gui/dialogs/calibration_results_dialog.py`:
+
+```python
+"""The calibration frontier: every (tile fraction, confidence) measured.
+
+Shows what was measured on the user's OWN frames and hardware. It is the
+only place a run-time projection may come from -- the archived dev-machine
+timings do not reconcile and are never quoted (see the design doc's Cost
+section).
+"""
+
+from __future__ import annotations
+
+from typing import Sequence
+
+from PySide6.QtWidgets import QLabel, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
+
+from hydra_suite.widgets.dialogs import BaseDialog
+
+COLUMNS = [
+    ("tile", "Tiling"),
+    ("confidence", "Confidence"),
+    ("missed", "Missed /frame"),
+    ("extra", "To delete /frame"),
+    ("recall", "Recall"),
+    ("matched", "Matched"),
+    ("seconds", "s/frame (measured)"),
+    ("projected", "Projected run"),
+]
+
+
+def _humanise(seconds: float) -> str:
+    total = int(round(seconds))
+    hours, rem = divmod(total, 3600)
+    minutes = rem // 60
+    if hours:
+        return f"{hours} h {minutes:02d} m" if minutes >= 10 else f"{hours} h {minutes} m"
+    return f"{minutes} m" if minutes else f"{total} s"
+
+
+def frontier_rows(points, recommended, project_frames: int) -> list[dict]:
+    """Format the frontier: cheapest tiling first, confidence descending."""
+    ordered = sorted(
+        points, key=lambda p: (p.tiles_per_frame, -p.confidence)
+    )
+    rows = []
+    for p in ordered:
+        tile = (
+            "full frame" if p.tile_fraction is None
+            else f"{p.tile_fraction:.2f} ({p.tiles_per_frame} tiles/frame)"
+        )
+        rows.append(
+            {
+                "tile": tile,
+                "confidence": f"{p.confidence:.2f}",
+                "missed": f"{p.missed_per_frame:.1f}",
+                "extra": f"{p.extra_per_frame:.1f}",
+                "recall": f"{p.recall:.1%}",
+                "matched": str(p.n_matched),
+                "seconds": f"{p.seconds_per_frame:.1f}",
+                "projected": _humanise(p.seconds_per_frame * max(project_frames, 0)),
+                "recommended": recommended is not None and p is recommended,
+                "point": p,
+            }
+        )
+    return rows
+
+
+class CalibrationResultsDialog(BaseDialog):
+    """Pick an operating point off the measured frontier."""
+
+    def __init__(self, points, recommended, reason: str, *, project_frames: int,
+                 parent=None) -> None:
+        super().__init__("Calibration results", parent=parent)
+        self._rows = frontier_rows(points, recommended, project_frames)
+        self._chosen = None
+
+        container = QWidget()
+        outer = QVBoxLayout(container)
+        headline = QLabel(
+            reason if recommended is None else (
+                "Recommended: the cheapest tiling that still finds "
+                f"{recommended.recall:.0%} of your labelled animals, then the "
+                "highest confidence at that tiling. Chosen for recall, not F1 — "
+                "a spurious polygon is one click, a missed animal must be found "
+                "by eye. Pick any row to override."
+            )
+        )
+        headline.setWordWrap(True)
+        outer.addWidget(headline)
+
+        self._table = QTableWidget(len(self._rows), len(COLUMNS))
+        self._table.setHorizontalHeaderLabels([label for _key, label in COLUMNS])
+        self._table.setSelectionBehavior(QTableWidget.SelectRows)
+        self._table.setSelectionMode(QTableWidget.SingleSelection)
+        self._table.setEditTriggers(QTableWidget.NoEditTriggers)
+        for r, row in enumerate(self._rows):
+            for c, (key, _label) in enumerate(COLUMNS):
+                self._table.setItem(r, c, QTableWidgetItem(row[key]))
+            if row["recommended"]:
+                self._table.selectRow(r)
+        outer.addWidget(self._table)
+
+        note = QLabel(
+            "Timings are measured on this machine and these frames. Tile "
+            "fraction changes require re-running inference; confidence does "
+            "not — a staged run can be re-thresholded from its candidate cache."
+        )
+        note.setWordWrap(True)
+        outer.addWidget(note)
+        self.add_content(container)
+
+    def accept(self) -> None:
+        rows = {i.row() for i in self._table.selectedIndexes()}
+        if rows:
+            self._chosen = self._rows[sorted(rows)[0]]["point"]
+        super().accept()
+
+    def chosen(self):
+        return self._chosen
+```
+
+Run: `python -m pytest tests/test_semantic_calibration.py -q`
+Expected: PASS (15 tests).
+
+- [ ] **Step 7: Verify imports and run the full new test set**
 
 Run:
 
@@ -3227,12 +3709,12 @@ python -m pytest tests/test_semantic_masks.py tests/test_semantic_tiling.py \
 
 Expected: `ok`, then all tests pass.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 make format
 git add -A
-git commit -m "feat(detectkit): wire GT-based calibration into the semantic escalation dialog"
+git commit -m "feat(detectkit): calibrate tile fraction and confidence against the user's labelled frames"
 ```
 
 ---
@@ -3250,7 +3732,11 @@ Create `docs/user-guide/detectkit-semantic-escalation.md` covering, in this orde
 the difference between the two escalations (geometry converts what you have; semantic
 finds what you don't); the prompt is yours to vary and wording matters far less than
 tile size; why calibration is recommended and what the exhaustive-labelling checkbox
-means; that the recommendation optimises recall, not F1, and why; that the run is a
+means; **that calibration fits both the tile fraction and the confidence, and that the
+tile-fraction default is an unvalidated starting guess from one dataset rather than a
+tuned value — say this plainly, do not imply otherwise**; that changing the tile fraction
+costs a re-run while changing confidence does not; that the recommendation takes the
+cheapest tiling clearing the recall floor and optimises recall, not F1, and why; that the run is a
 batch job at tens of seconds per frame, is cancellable, and resumes; that
 re-thresholding is free and re-running is not; that accepting creates a **new sibling
 source** and never touches the original's labels; and that SAM3 masks trace legs and
@@ -3309,7 +3795,9 @@ git commit -m "docs(detectkit): semantic escalation user guide; mark spec implem
 
 **Spec coverage.** Every spec section maps to a task: Promotion → 10; Staging → 8, 9;
 The seam → 3, plus the two moves in 1 and 2; Job result and prompt failure → 9;
-Tiling → 4 (with `polygon_iou` in 1); Calibration → 7, 12; Candidate cache and
+Tiling → 4 (with `polygon_iou` in 1); Calibration (2-D: tile fraction x confidence) →
+4 (`TILE_FRACTION_GRID`, `candidate_tile_plans`), 7 (`calibrate`/`recommend`), 12
+(worker + frontier results dialog); Candidate cache and
 re-threshold → 9, 11; Cancellation and resumability → 9, 11; Tools panel → 11; Dialog →
 11, 12; Handlers → 11; Cost → 11 (the run is cancellable and resumable; the dialog's
 runtime projection is deliberately **not** taken from the unreconciled archived numbers,
@@ -3322,10 +3810,13 @@ seam-drop once at collection because it is threshold-independent. This is exact,
 `test_merge_is_redone_per_threshold_not_post_filtered` guards the part that isn't.
 
 The spec's "Projected total runtime shown before the run starts, computed from a measured
-per-tile time on this machine" is only partially delivered: Task 11's dialog has no timed
-preview tile yet. The preview button exists; wiring a timing readout to it is left to the
-implementer as part of Task 11 Step 2's preview handler, and the dialog must not display
-a projection derived from the archived 22-vs-107 s/frame numbers.
+per-tile time on this machine" is delivered on the **calibrated** path only: every
+`CalibrationPoint` carries a `seconds_per_frame` measured on the user's frames, and
+`CalibrationResultsDialog` projects it over the selected sources' image count (Task 12
+Step 6). On the **skip-calibration** path it is still only partial: Task 11's preview
+button exists but has no timing readout, which is left to the implementer as part of
+Task 11 Step 2's preview handler. Neither path may display a projection derived from the
+archived 22-vs-107 s/frame numbers.
 
 **Placeholder scan.** One intentional ellipsis remains: Task 11 Step 3's
 `on_escalate_geometry` and `on_review_escalations` bodies are *moves* of named,
@@ -3336,6 +3827,9 @@ line-referenced existing methods (`main_window.py:1769-1943` and `:1985-2010`) w
 and frame-space inside `TileCandidate` — asserted by
 `test_candidates_are_offset_into_frame_space`. `collect_candidates` and
 `merge_candidates` keep the same keyword names across Tasks 4, 7, and 9.
-`resolve_tile_px` returns `int | None` and every call site handles `None` by falling back
-to a single full-frame tile. `PendingEscalation.primer_params` is a plain `dict` in
+`resolve_tile_px(reference_body_px, fraction)` takes the fraction as an explicit second
+argument in Tasks 4, 9, 11 and 12 — there is no default, so no call site can silently
+inherit the seed. It returns `int | None`, and every call site handles `None` via the
+shared `full_frame_plan`. `CalibrationPoint.tile_fraction` is `float | None` with `None`
+meaning full frame in Tasks 4, 7 and 12 alike. `PendingEscalation.primer_params` is a plain `dict` in
 Tasks 8, 9, 10, and 11.
