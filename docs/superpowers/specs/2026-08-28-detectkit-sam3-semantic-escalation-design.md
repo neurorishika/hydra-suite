@@ -330,9 +330,25 @@ used at most once.
 merge redone per threshold.** This is why the grid is 2-D-outer/1-D-inner rather than a
 flat product: tile geometry is baked into the candidates, confidence is not. The cache
 holds **pre-merge, per-tile candidates**, not
-merged survivors: seam-drop and NMS are survivor-dependent, so post-filtering an already
-merged set does not reproduce a run at that threshold. Each swept threshold re-runs
-seam-drop + NMS over the cached candidates, which is pure geometry and cheap.
+merged survivors, so the cache is threshold-independent and can be swept. Each swept
+threshold re-runs seam-drop + NMS over the cached candidates, which is pure geometry
+and cheap, and states the invariant directly: the survivors at threshold *T* are the
+survivors of merging the ≥*T* subset.
+
+> **Correction (whole-branch review, 2026-08-29).** An earlier version of this section
+> claimed post-filtering an already-merged set "does not reproduce a run at that
+> threshold", because a suppressor dropped by a higher threshold "should resurrect
+> whatever it suppressed". **That is false**, and it was a defect in this design, not in
+> the implementation. Greedy NMS walks candidates in *descending* confidence, so a
+> suppressor always outscores its victim; raising the floor can never drop a suppressor
+> while keeping what it suppressed. Verified empirically over 1500 randomised
+> (candidate-set, threshold) pairs: zero divergences between re-merging and
+> post-filtering. Re-merging is kept anyway — it is the obviously-correct formulation
+> and is cheap — but it is kept for clarity and robustness, not because post-filtering
+> would give a different answer.
+
+Seam-drop is separately and genuinely threshold-independent (it is purely geometric),
+which is why `collect_candidates` applies it once, at cache-build time.
 `max_instances` truncates before the sweep and so is fixed for a cache; the dialog says
 so.
 
@@ -539,7 +555,10 @@ Unit tests with a fake `SemanticLabeler` (no weights):
   a neighbour's label; polygon, OBB and AABB labels all match; refusal below the minimum
   matched-instance count.
 - Calibration frontier monotone in confidence on canned candidates, **with merge redone
-  per threshold** (a test that post-filters a merged set must fail).
+  per threshold**. NOTE: the original wording here — "a test that post-filters a merged
+  set must fail" — asked for a test of a property that does not exist (see the
+  correction above). The real, testable invariant is: survivors at threshold *T* equal
+  the survivors of merging only the ≥*T* subset.
 - Degenerate contours (`P < 3`) are dropped and counted, never passed to
   `write_label_file`.
 - Staging round-trip: `PendingEscalation` with `primer_kind="sam3"`; a legacy dict

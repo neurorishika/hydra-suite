@@ -179,23 +179,45 @@ def test_merge_collapses_one_object_seen_in_two_overlapping_tiles():
     assert merged[0].confidence == 0.8  # the higher-scoring survivor wins
 
 
-def test_merge_is_redone_per_threshold_not_post_filtered():
-    # A high-scoring blob suppresses a lower one at threshold 0.0. Raising the
-    # threshold above the suppressor must RESURRECT the suppressed candidate,
-    # which post-filtering an already-merged set can never do.
+def test_merging_at_a_threshold_equals_merging_only_the_kept_subset():
+    """The REAL per-threshold invariant.
+
+    The old test here was named
+    ``test_merge_is_redone_per_threshold_not_post_filtered`` and claimed a
+    high threshold "resurrects" a candidate its suppressor had removed. That
+    property does not exist -- greedy NMS runs in descending confidence, so a
+    suppressor always outscores its victim -- and the test's second half
+    hand-filtered the suppressor out of the INPUT, which no threshold could
+    do. It therefore could not fail for the reason its name claimed.
+
+    What merge_candidates does guarantee, and what this pins, is that
+    thresholding is applied to the merge INPUT: survivors at T are exactly
+    the survivors of merging only the >=T candidates.
+    """
     cands = [
         TileCandidate(_sq(0, 0, 50), 0.40, 0),
         TileCandidate(_sq(2, 2, 50), 0.90, 1),
+        TileCandidate(_sq(400, 400, 50), 0.60, 2),
+        TileCandidate(_sq(402, 401, 50), 0.30, 3),
+        TileCandidate(_sq(800, 800, 50), 0.75, 4),
     ]
-    low = merge_candidates(cands, confidence_threshold=0.0, iou_threshold=0.5)
-    assert [c.confidence for c in low] == [0.90]
-    # Drop the suppressor by raising the bar past it in the other direction:
-    survivors = merge_candidates(
-        [c for c in cands if c.confidence < 0.5],
-        confidence_threshold=0.0,
-        iou_threshold=0.5,
-    )
-    assert [c.confidence for c in survivors] == [0.40]
+    for threshold in (0.0, 0.25, 0.35, 0.5, 0.65, 0.8, 0.95):
+        got = merge_candidates(cands, confidence_threshold=threshold, iou_threshold=0.5)
+        want = merge_candidates(
+            [c for c in cands if c.confidence >= threshold],
+            confidence_threshold=0.0,
+            iou_threshold=0.5,
+        )
+        assert [round(g.confidence, 4) for g in got] == [
+            round(w.confidence, 4) for w in want
+        ], f"threshold {threshold}"
+
+    # And concretely: at 0.5 the 0.30 candidate is gone, so the 0.60 one it
+    # was suppressed by survives alone rather than as a pair.
+    at_low = merge_candidates(cands, confidence_threshold=0.0, iou_threshold=0.5)
+    at_high = merge_candidates(cands, confidence_threshold=0.5, iou_threshold=0.5)
+    assert sorted(round(c.confidence, 2) for c in at_low) == [0.6, 0.75, 0.9]
+    assert sorted(round(c.confidence, 2) for c in at_high) == [0.6, 0.75, 0.9]
 
 
 def test_should_stop_halts_between_tiles():
