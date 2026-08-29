@@ -23,7 +23,11 @@ from PySide6.QtWidgets import (
 
 from hydra_suite.widgets.dialogs import BaseDialog
 
-from ..models import InferenceRunSettings, SliceTrainingSettings
+from ..models import (
+    INFERENCE_CONFIDENCE_FLOOR,
+    InferenceRunSettings,
+    SliceTrainingSettings,
+)
 
 
 def _device_options(current: str) -> list[str]:
@@ -83,7 +87,9 @@ class InferenceSettingsDialog(BaseDialog):
 
         note = QLabel(
             "These controls apply only to inference runs in this DetectKit window. "
-            "They do not change your project's training settings or metadata."
+            "They do not change your project's training settings or metadata. "
+            f"Predictions are retained at {INFERENCE_CONFIDENCE_FLOOR:.2f} and "
+            "filtered live by the display threshold."
         )
         note.setWordWrap(True)
         layout.addWidget(note)
@@ -96,11 +102,11 @@ class InferenceSettingsDialog(BaseDialog):
             "Auto chooses CUDA first, then MPS, then CPU on the current machine."
         )
         self.spin_confidence = QDoubleSpinBox()
-        self.spin_confidence.setRange(0.0, 1.0)
+        self.spin_confidence.setRange(INFERENCE_CONFIDENCE_FLOOR, 1.0)
         self.spin_confidence.setDecimals(2)
         self.spin_confidence.setSingleStep(0.01)
         compute_form.addRow("Compute device", self.combo_device)
-        compute_form.addRow("Confidence threshold", self.spin_confidence)
+        compute_form.addRow("Display confidence threshold", self.spin_confidence)
         layout.addWidget(compute)
 
         sahi = QGroupBox("Sliced inference (SAHI)")

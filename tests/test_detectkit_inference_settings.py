@@ -14,6 +14,7 @@ pytest.importorskip("PySide6")
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from hydra_suite.detectkit.gui.models import (  # noqa: E402
+    INFERENCE_CONFIDENCE_FLOOR,
     DetectKitProject,
     InferenceRunSettings,
     SliceTrainingSettings,
@@ -52,6 +53,25 @@ def test_runtime_inference_settings_cache_key_changes_for_sahi_geometry():
     old_key = settings.cache_key()
     settings.slice_settings.target_sizes = [400.0]
     assert settings.cache_key() != old_key
+
+
+def test_runtime_inference_settings_cache_key_excludes_display_confidence():
+    settings = InferenceRunSettings(confidence_threshold=0.25)
+    old_key = settings.cache_key()
+    settings.confidence_threshold = 0.75
+    assert settings.cache_key() == old_key
+
+
+def test_live_confidence_filter_reuses_low_floor_candidates():
+    from hydra_suite.detectkit.gui.main_window import _filter_detections_by_confidence
+
+    cached = [
+        {"confidence": INFERENCE_CONFIDENCE_FLOOR},
+        {"confidence": 0.49},
+        {"confidence": 0.91},
+    ]
+    assert len(_filter_detections_by_confidence(cached, 0.50)) == 1
+    assert len(_filter_detections_by_confidence(cached, 0.10)) == 2
 
 
 def test_inference_settings_dialog_is_runtime_only(qapp, tmp_path):

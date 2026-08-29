@@ -39,7 +39,12 @@ from hydra_suite.widgets.busy import BusyTaskError, run_blocking_with_busy_dialo
 from hydra_suite.widgets.workers import BaseWorker
 
 from .canvas import OBBCanvas
-from .models import DetectKitProject, InferenceRunSettings, SliceTrainingSettings
+from .models import (
+    INFERENCE_CONFIDENCE_FLOOR,
+    DetectKitProject,
+    InferenceRunSettings,
+    SliceTrainingSettings,
+)
 from .panels.dataset_panel import DatasetPanel
 from .panels.tools_panel import ToolsPanel
 from .prediction_preview import (
@@ -71,6 +76,18 @@ from .utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _filter_detections_by_confidence(
+    detections: list[dict[str, object]], confidence_threshold: float
+) -> list[dict[str, object]]:
+    """Return cached detections visible at the current display threshold."""
+    threshold = float(confidence_threshold)
+    return [
+        detection
+        for detection in detections
+        if float(detection.get("confidence", 0.0)) >= threshold
+    ]
 
 
 def _resolve_source_render_state(project, source_path):
@@ -1701,6 +1718,37 @@ class DetectKitMainWindow(QMainWindow):
             model_path,
         ) + self._effective_inference_settings(settings).cache_key()
 
+    def _visible_inference_stats(self, confidence_threshold: float) -> dict:
+        """Summarize cached candidates after applying the live display filter."""
+        per_image = {
+            image_path: _filter_detections_by_confidence(
+                detections, confidence_threshold
+            )
+            for image_path, detections in self._dataset_predictions.items()
+        }
+        detections = [
+            detection
+            for image_detections in per_image.values()
+            for detection in image_detections
+        ]
+        class_counts: dict[int, int] = {}
+        for detection in detections:
+            class_id = int(detection.get("class_id", 0))
+            class_counts[class_id] = class_counts.get(class_id, 0) + 1
+        count = len(detections)
+        return {
+            "per_image": per_image,
+            "image_count": len(per_image),
+            "detection_count": count,
+            "class_counts": class_counts,
+            "mean_confidence": (
+                sum(float(detection.get("confidence", 0.0)) for detection in detections)
+                / count
+                if count
+                else 0.0
+            ),
+        }
+
     def _run_inference_overlay(self) -> None:
         """Run dataset-wide PyTorch inference for the active source."""
         if self._project is None or not self._current_source_path:
@@ -1773,7 +1821,7 @@ class DetectKitMainWindow(QMainWindow):
             image_paths,
             primary,
             inference_settings.device,
-            inference_settings.confidence_threshold,
+            INFERENCE_CONFIDENCE_FLOOR,
             inference_kind=kind,
             secondary_model_path=(
                 secondary if kind in {"sequential", "sequential_segment"} else None
@@ -1803,12 +1851,13 @@ class DetectKitMainWindow(QMainWindow):
             self._dataset_predictions = dict(result.get("per_image", {}))
             self._dataset_prediction_signature = signature
             self._tools_panel.update_inference_stats(
-                result, class_names=self._project.class_names
+                self._visible_inference_stats(settings.confidence_threshold),
+                class_names=self._project.class_names,
             )
             self._refresh_prediction_overlay(force=True)
             self.statusBar().showMessage(
-                f"Inference complete: {result.get('detection_count', 0):,} "
-                f"detection(s) across {result.get('image_count', 0):,} image(s).",
+                f"Inference complete: {result.get('detection_count', 0):,} candidate(s) "
+                f"retained at ≥{INFERENCE_CONFIDENCE_FLOOR:.2f}.",
                 5000,
             )
 
@@ -2087,9 +2136,16 @@ class DetectKitMainWindow(QMainWindow):
             self._last_prediction_request = None
             return
 
-        detections = self._dataset_predictions.get(self._current_image_path, [])
+        detections = _filter_detections_by_confidence(
+            self._dataset_predictions.get(self._current_image_path, []),
+            settings.confidence_threshold,
+        )
         self._canvas.set_pred_detections(
             detections,
+            class_names=self._project.class_names,
+        )
+        self._tools_panel.update_inference_stats(
+            self._visible_inference_stats(settings.confidence_threshold),
             class_names=self._project.class_names,
         )
         self._last_prediction_request = signature

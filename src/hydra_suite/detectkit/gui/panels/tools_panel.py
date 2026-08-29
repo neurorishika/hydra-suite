@@ -26,6 +26,8 @@ from PySide6.QtWidgets import (
 if TYPE_CHECKING:
     from ..models import DetectKitProject
 
+from ..models import INFERENCE_CONFIDENCE_FLOOR
+
 logger = logging.getLogger(__name__)
 
 _PANEL_WIDTH = 280
@@ -297,7 +299,7 @@ class ToolsPanel(QWidget):
         v.addLayout(conf_row)
 
         self._conf_slider = QSlider(Qt.Orientation.Horizontal)
-        self._conf_slider.setRange(0, 100)
+        self._conf_slider.setRange(round(INFERENCE_CONFIDENCE_FLOOR * 100), 100)
         self._conf_slider.setValue(50)
         self._conf_slider.valueChanged.connect(self._on_conf_changed)
         v.addWidget(self._conf_slider)
@@ -461,7 +463,12 @@ class ToolsPanel(QWidget):
 
     def set_confidence_threshold(self, value: float) -> None:
         """Synchronize the visible confidence control with runtime settings."""
-        self._conf_slider.setValue(max(0, min(100, round(float(value) * 100))))
+        self._conf_slider.setValue(
+            max(
+                round(INFERENCE_CONFIDENCE_FLOOR * 100),
+                min(100, round(float(value) * 100)),
+            )
+        )
 
     def set_active_model_path(self, primary: str, secondary: str | None = None) -> None:
         """Set the active model path and update the read-only display label."""

@@ -8,6 +8,10 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_CLASS_NAME = "object"
+# Dataset inference retains candidates at this floor, then applies the UI
+# threshold live. Keeping this intentionally low makes a later slider change
+# useful without producing the extreme candidate counts of a 1e-4 model call.
+INFERENCE_CONFIDENCE_FLOOR = 0.01
 
 
 @dataclass
@@ -203,7 +207,6 @@ class InferenceRunSettings:
         settings = self.slice_settings
         key: tuple[object, ...] = (
             str(self.device or "auto").strip().lower(),
-            round(float(self.confidence_threshold), 4),
             bool(settings.enabled),
         )
         if not settings.enabled:
