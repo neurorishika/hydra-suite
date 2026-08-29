@@ -3,6 +3,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 
 from hydra_suite.core.inference.semantic.base import SemanticInstance
 from hydra_suite.detectkit.gui.models import OBBSource
@@ -189,3 +190,74 @@ def test_already_pending_source_is_skipped_without_overwrite(tmp_path):
     result = run_semantic_escalation(_request(tmp_path, src), labeler)
     assert result.staged == []
     assert result.skipped and result.skipped[0][0] == src.name
+
+
+from hydra_suite.detectkit.jobs.semantic_escalation import (
+    accept_pending_semantic_escalation,
+)
+
+
+def test_accept_creates_a_sibling_and_leaves_the_origin_untouched(tmp_path):
+    src = _make_source(tmp_path, n_images=2)
+    (Path(src.path) / "labels" / "f0.txt").write_text("0 0.1 0.1 0.2 0.2\n")
+    original = (Path(src.path) / "labels" / "f0.txt").read_bytes()
+    project = _Project(tmp_path, [src])
+    labeler = ScriptedLabeler([SemanticInstance(_blob(200, 200), 0.9)])
+    run_semantic_escalation(_request(tmp_path, src, project=project), labeler)
+
+    sibling = accept_pending_semantic_escalation(src, project, tmp_path)
+
+    assert sibling is not src
+    assert sibling in project.sources
+    assert sibling.level == "polygon"
+    assert sibling.reviewed is False
+    assert sibling.derived_from == src.name
+    assert (Path(src.path) / "labels" / "f0.txt").read_bytes() == original
+    assert src.pending_escalation is None
+
+
+def test_sibling_carries_images_and_the_prompt_as_its_class_name(tmp_path):
+    src = _make_source(tmp_path, n_images=2)
+    project = _Project(tmp_path, [src])
+    labeler = ScriptedLabeler([SemanticInstance(_blob(200, 200), 0.9)])
+    run_semantic_escalation(
+        _request(tmp_path, src, project=project, prompt="black ant"), labeler
+    )
+    sibling = accept_pending_semantic_escalation(src, project, tmp_path)
+    root = Path(sibling.path)
+    assert len(list((root / "images").rglob("*.png"))) == 2
+    assert len(list((root / "labels").rglob("*.txt"))) == 2
+    assert (root / "classes.txt").read_text().strip() == "black ant"
+
+
+def test_the_candidate_cache_never_reaches_the_sibling(tmp_path):
+    src = _make_source(tmp_path, n_images=1)
+    project = _Project(tmp_path, [src])
+    labeler = ScriptedLabeler([SemanticInstance(_blob(200, 200), 0.9)])
+    run_semantic_escalation(_request(tmp_path, src, project=project), labeler)
+    sibling = accept_pending_semantic_escalation(src, project, tmp_path)
+    assert not (Path(sibling.path) / "candidates.json").exists()
+    assert not (Path(sibling.path) / "run.json").exists()
+
+
+def test_accept_refuses_a_sam2_pending_record(tmp_path):
+    src = _make_source(tmp_path, n_images=1)
+    from hydra_suite.detectkit.gui.models import PendingEscalation
+
+    src.pending_escalation = PendingEscalation(
+        staged_path=str(tmp_path), primer_kind="sam2"
+    )
+    with pytest.raises(ValueError, match="not a SAM3"):
+        accept_pending_semantic_escalation(src, _Project(tmp_path, [src]), tmp_path)
+
+
+def test_accept_refuses_when_the_staging_dir_is_gone(tmp_path):
+    import shutil
+
+    src = _make_source(tmp_path, n_images=1)
+    project = _Project(tmp_path, [src])
+    labeler = ScriptedLabeler([SemanticInstance(_blob(200, 200), 0.9)])
+    run_semantic_escalation(_request(tmp_path, src, project=project), labeler)
+    shutil.rmtree(src.pending_escalation.staged_path)
+    with pytest.raises(RuntimeError, match="missing on disk"):
+        accept_pending_semantic_escalation(src, project, tmp_path)

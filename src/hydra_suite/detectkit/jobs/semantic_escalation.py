@@ -444,3 +444,103 @@ class SemanticEscalationWorker(BaseWorker):
             should_stop=lambda: self._cancel,
         )
         self.result_ready.emit(result)
+
+
+def _unique_source_name(project, base: str) -> str:
+    existing = {s.name for s in project.sources}
+    if base not in existing:
+        return base
+    n = 2
+    while f"{base}-{n}" in existing:
+        n += 1
+    return f"{base}-{n}"
+
+
+def accept_pending_semantic_escalation(
+    source: OBBSource,
+    project,
+    project_dir: str | Path | None = None,
+) -> OBBSource:
+    """Promote a staged SAM3 result to a NEW SIBLING SOURCE.
+
+    Deliberately NOT ``sam2_escalation.accept_pending_escalation``, which
+    rmtree's the origin's labels and copies the staged ones over them. That
+    is correct for SAM2 (a lossless upgrade of the SAME instances) and
+    destructive here: SAM3's output is a different instance set at a
+    different geometry convention (masks trace legs and antennae; tracking
+    labels bound the body core), all class 0. Merging the two conventions
+    into one source would degrade YOLO training -- and deleting the user's
+    curated labels to do it would be worse.
+
+    The staged labels and hardlinked images become a new source the user can
+    keep, merge, or delete with the tools they already have. The candidate
+    cache and run fingerprint stay behind in staging: they are consumed
+    here, never shipped, so they cannot go stale against later user edits.
+    """
+    from hydra_suite.data.al.export import _link_or_copy
+
+    pending = source.pending_escalation
+    if pending is None:
+        raise ValueError(f"Source '{source.name}' has no pending escalation.")
+    if pending.primer_kind != "sam3":
+        raise ValueError(
+            f"Source '{source.name}' has a {pending.primer_kind!r} pending "
+            "escalation, not a SAM3 one; use the SAM2 accept path."
+        )
+
+    staged_root = Path(pending.staged_path)
+    staged_labels = staged_root / "labels"
+    if not staged_labels.is_dir():
+        raise RuntimeError(
+            f"Staged escalation for '{source.name}' is missing on disk "
+            f"({staged_labels}); nothing was changed. Reject it and re-run."
+        )
+
+    project_root = Path(project.project_dir)
+    sibling_name = _unique_source_name(
+        project, f"{source.name}-sam3-{prompt_slug(pending.primer_prompt)}"
+    )
+    sibling_root = Path(
+        ensure_bundle_subdirectory(project_root, f"sources/{sibling_name}")
+    )
+    (sibling_root / "images").mkdir(parents=True, exist_ok=True)
+    (sibling_root / "labels").mkdir(parents=True, exist_ok=True)
+
+    origin_images = Path(source.path) / "images"
+    for label_path in sorted(staged_labels.rglob("*.txt")):
+        rel = label_path.relative_to(staged_labels)
+        dst_label = sibling_root / "labels" / rel
+        dst_label.parent.mkdir(parents=True, exist_ok=True)
+        dst_label.write_bytes(label_path.read_bytes())
+        for img in origin_images.rglob(f"{rel.stem}.*"):
+            if img.suffix.lower() not in IMG_EXTS:
+                continue
+            dst_img = sibling_root / "images" / img.relative_to(origin_images)
+            dst_img.parent.mkdir(parents=True, exist_ok=True)
+            if not dst_img.exists():
+                _link_or_copy(img, dst_img)
+            break
+
+    classes_src = staged_root / "classes.txt"
+    (sibling_root / "classes.txt").write_text(
+        classes_src.read_text() if classes_src.exists() else "object\n"
+    )
+
+    sibling = OBBSource(
+        path=str(sibling_root),
+        name=sibling_name,
+        validated=False,
+        original_path=source.path,
+        source_kind="detectkit_sam3",
+        imported=False,
+        level=GeometryLevel.POLYGON.label,
+        # Machine-derived and not yet human-confirmed: excluded from training
+        # until the user runs "Mark reviewed...".
+        reviewed=False,
+        derived_from=source.name,
+    )
+    project.sources.append(sibling)
+
+    remove_staged_escalation_dir(staged_root, project_dir or project_root)
+    source.pending_escalation = None
+    return sibling
