@@ -190,7 +190,7 @@ def test_missing_clip_names_an_install_that_can_actually_fix_it(tmp_path, monkey
     avail = ck.probe_availability(cache_dir=tmp_path)
     assert avail.usable is False
     assert "clip" in avail.reason
-    assert "github.com/openai/CLIP.git" in avail.reason
+    assert "github.com/ultralytics/CLIP.git" in avail.reason
     assert "hydra-suite[sam3]" not in avail.reason
     # The other deps DO come from the extra.
     monkeypatch.setattr(
@@ -358,3 +358,49 @@ def test_staging_follows_the_hf_snapshot_symlink_to_the_real_blob(
     assert not C.probe_availability(
         C.DEFAULT_VARIANT, cache_dir=tmp_path / "models"
     ).checkpoint_missing, "probe still says missing -> re-downloads forever"
+
+
+def test_the_wrong_clip_fork_is_caught_by_the_probe_not_by_a_crash(monkeypatch):
+    """CUDA-box finding: openai/CLIP is the wrong fork for SAM3.
+
+    ultralytics builds the text encoder with
+    `clip.simple_tokenizer.SimpleTokenizer()` and then CALLS it. openai/CLIP
+    ships that class with no `__call__`, so the probe said "ready", 3.45 GB
+    downloaded, the model loaded, and the run died with an opaque
+    `TypeError: 'SimpleTokenizer' object is not callable` deep inside the
+    text encoder. The probe must refuse up front instead.
+    """
+    import sys
+    import types
+
+    from hydra_suite.core.inference.semantic import checkpoints as C
+
+    def _install_clip(callable_tokenizer):
+        class _Tok:
+            if callable_tokenizer:
+
+                def __call__(self, text, context_length=77):
+                    return [0]
+
+        mod = types.ModuleType("clip.simple_tokenizer")
+        mod.SimpleTokenizer = _Tok
+        pkg = types.ModuleType("clip")
+        pkg.simple_tokenizer = mod
+        monkeypatch.setitem(sys.modules, "clip", pkg)
+        monkeypatch.setitem(sys.modules, "clip.simple_tokenizer", mod)
+
+    _install_clip(callable_tokenizer=False)
+    problem = C._clip_tokenizer_problem()
+    assert problem, "the wrong CLIP fork was accepted"
+    assert "ultralytics/CLIP.git" in problem, "no pointer to the fork that works"
+
+    _install_clip(callable_tokenizer=True)
+    assert C._clip_tokenizer_problem() == "", "the correct fork was rejected"
+
+
+def test_the_install_hint_names_the_fork_that_actually_works():
+    """The hint pointed at openai/CLIP, which cannot run SAM3."""
+    from hydra_suite.core.inference.semantic.checkpoints import INSTALL_HINTS
+
+    assert "ultralytics/CLIP.git" in INSTALL_HINTS["clip"]
+    assert "openai/CLIP" not in INSTALL_HINTS["clip"]

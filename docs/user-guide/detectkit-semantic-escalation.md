@@ -23,7 +23,7 @@ dependencies is not on PyPI:
 
 ```bash
 pip install 'hydra-suite[sam3]'
-pip install git+https://github.com/openai/CLIP.git
+pip install git+https://github.com/ultralytics/CLIP.git
 ```
 
 The second line installs OpenAI's `clip` package. It cannot be listed as a

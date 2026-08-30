@@ -49,7 +49,12 @@ DEFAULT_INSTALL_HINT = "pip install 'hydra-suite[sam3]'"
 # reference, which PyPI rejects in uploaded metadata. Pointing at the extra
 # for it named an install that could never satisfy the check. Same command
 # as the user guide's install section.
-INSTALL_HINTS = {"clip": "pip install git+https://github.com/openai/CLIP.git"}
+# ultralytics builds SAM3's text encoder with `clip.simple_tokenizer.
+# SimpleTokenizer()` and then CALLS it (build_sam3.py:159). openai/CLIP's
+# SimpleTokenizer has no __call__, so pointing users there yields a probe
+# that says "ready" and a run that dies with an opaque TypeError deep in the
+# text encoder. ultralytics' own fork adds the __call__. Verified on CUDA.
+INSTALL_HINTS = {"clip": "pip install git+https://github.com/ultralytics/CLIP.git"}
 
 # The weights live behind a licence gate, so "download it for you" is only
 # true once the user has accepted it and logged in on THIS machine.
@@ -113,6 +118,37 @@ class Sam3Availability(NamedTuple):
         return self.usable or self.checkpoint_missing
 
 
+def _clip_tokenizer_problem() -> str:
+    """Non-empty when the installed `clip` is the wrong fork for SAM3.
+
+    ultralytics constructs the text encoder with
+    ``clip.simple_tokenizer.SimpleTokenizer()`` and then CALLS it. openai/CLIP
+    ships that class without ``__call__``, so an otherwise healthy install
+    reports "ready", downloads 3.45 GB, loads the model, and only then dies
+    with ``TypeError: 'SimpleTokenizer' object is not callable`` from inside
+    the text encoder. Catch it while it is still a one-line fix.
+    """
+    try:
+        import clip.simple_tokenizer as st
+    except ImportError:
+        # Not installed at all -- that is the missing-package check's job,
+        # which runs first and gives the better message. Say nothing here.
+        return ""
+    try:
+        if callable(st.SimpleTokenizer()):
+            return ""
+    except Exception as exc:  # a clip that cannot even build its tokenizer
+        return (
+            f"The installed 'clip' package is unusable for SAM3 ({exc}). "
+            f"{INSTALL_HINTS['clip']}"
+        )
+    return (
+        "The installed 'clip' package is the wrong fork: SAM3 needs a "
+        "SimpleTokenizer that can be called, which openai/CLIP does not "
+        f"provide. Replace it with: {INSTALL_HINTS['clip']}"
+    )
+
+
 def probe_availability(
     variant: str = DEFAULT_VARIANT, cache_dir: Path | None = None
 ) -> Sam3Availability:
@@ -126,6 +162,9 @@ def probe_availability(
                 f"Python package {pkg!r} is missing. Install it with: "
                 f"{INSTALL_HINTS.get(pkg, DEFAULT_INSTALL_HINT)}",
             )
+    wrong_clip = _clip_tokenizer_problem()
+    if wrong_clip:
+        return Sam3Availability(False, wrong_clip)
     if not _has_predictor_symbol():
         return Sam3Availability(
             False,
