@@ -316,3 +316,45 @@ def test_the_probe_warns_that_the_weights_are_gated(tmp_path, monkeypatch):
     avail = C.probe_availability(C.DEFAULT_VARIANT, cache_dir=tmp_path)
     if avail.checkpoint_missing:
         assert "licence-gated" in avail.reason or "gated" in avail.reason
+
+
+def test_staging_follows_the_hf_snapshot_symlink_to_the_real_blob(
+    tmp_path, monkeypatch
+):
+    """CUDA-box finding: staging produced a DANGLING symlink.
+
+    `hf_hub_download` returns a path in the HF cache snapshot dir, which on
+    Linux is a symlink into `../../blobs/<sha>`. Hardlinking that entry
+    copied the symlink itself, so the staged checkpoint inherited a relative
+    target meaningless at its new location. `.exists()` was then False, the
+    probe reported "not downloaded", and the 3.3 GB download repeated on
+    every run while the feature could never start.
+    """
+    from hydra_suite.core.inference.semantic import checkpoints as C
+
+    # Rebuild the HF cache layout exactly: blobs/<sha> + a snapshot symlink
+    # whose target is RELATIVE, as huggingface_hub writes it.
+    cache = tmp_path / "hf"
+    blobs, snap = cache / "blobs", cache / "snapshots" / "rev"
+    blobs.mkdir(parents=True)
+    snap.mkdir(parents=True)
+    (blobs / "deadbeef").write_bytes(b"SAM3-WEIGHTS")
+    link = snap / "sam3.pt"
+    link.symlink_to(Path("..") / ".." / "blobs" / "deadbeef")
+    assert link.exists(), "fixture is wrong: the snapshot link must resolve here"
+
+    monkeypatch.setattr(C, "hf_hub_download", lambda **kw: str(link))
+
+    dest = C.ensure_checkpoint(C.DEFAULT_VARIANT, cache_dir=tmp_path / "models")
+
+    # The load-bearing assertion: the staged entry must be a REAL file, not a
+    # copy of HF's symlink. On Linux `os.link` preserves the symlink (verified
+    # on the CUDA box) and this fails without the fix; macOS resolves it, so
+    # this test only bites on the platform where the bug actually occurs.
+    assert not dest.is_symlink(), "staged HF's symlink instead of the blob"
+    assert dest.exists(), "staged a checkpoint that cannot be opened"
+    assert dest.read_bytes() == b"SAM3-WEIGHTS", "staged path is not the real blob"
+    # And the probe must now agree the checkpoint is present.
+    assert not C.probe_availability(
+        C.DEFAULT_VARIANT, cache_dir=tmp_path / "models"
+    ).checkpoint_missing, "probe still says missing -> re-downloads forever"
