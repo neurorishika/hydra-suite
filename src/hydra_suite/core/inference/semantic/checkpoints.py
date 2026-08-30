@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from huggingface_hub import hf_hub_download
+from huggingface_hub.errors import GatedRepoError, RepositoryNotFoundError
 
 from hydra_suite.paths import get_models_dir
 
@@ -49,6 +50,20 @@ DEFAULT_INSTALL_HINT = "pip install 'hydra-suite[sam3]'"
 # for it named an install that could never satisfy the check. Same command
 # as the user guide's install section.
 INSTALL_HINTS = {"clip": "pip install git+https://github.com/openai/CLIP.git"}
+
+# The weights live behind a licence gate, so "download it for you" is only
+# true once the user has accepted it and logged in on THIS machine.
+GATED_REPO_HINT = (
+    "The SAM3 weights are gated by Meta. Downloading them needs two one-off "
+    "steps on this machine:\n"
+    "  1. Open https://huggingface.co/{repo} and accept the licence.\n"
+    "  2. Authenticate: `hf auth login` (or set HF_TOKEN).\n"
+    "Then start the run again."
+)
+
+
+class Sam3DownloadNotAuthorized(RuntimeError):
+    """The SAM3 weights exist but this machine may not fetch them yet."""
 
 
 def available_variants() -> list[str]:
@@ -122,7 +137,10 @@ def probe_availability(
             False,
             f"The SAM3 checkpoint ({variant}, ~{CHECKPOINT_SIZE_GB:.2f} GB) has "
             "not been downloaded yet. It will be downloaded once, with your "
-            "confirmation, before the first run starts.",
+            "confirmation, before the first run starts. The weights are "
+            "licence-gated: if you have not accepted the licence at "
+            "https://huggingface.co/facebook/sam3 and run `hf auth login` on "
+            "this machine, the download will stop and tell you so.",
             checkpoint_missing=True,
         )
     return Sam3Availability(True, "")
@@ -150,7 +168,15 @@ def ensure_checkpoint(
         )
     entry = SAM3_VARIANTS[variant]
     dest.parent.mkdir(parents=True, exist_ok=True)
-    src = Path(hf_hub_download(repo_id=entry.repo_id, filename=entry.filename))
+    try:
+        src = Path(hf_hub_download(repo_id=entry.repo_id, filename=entry.filename))
+    except (GatedRepoError, RepositoryNotFoundError) as exc:
+        # facebook/sam3 is a GATED repo: without an accepted licence and a
+        # token, hf_hub_download raises a bare 401 that says nothing about
+        # what the user has to go and do. Verified on the CUDA box.
+        raise Sam3DownloadNotAuthorized(
+            GATED_REPO_HINT.format(repo=entry.repo_id)
+        ) from exc
     # NOT dest.write_bytes(src.read_bytes()): that holds all 3.45 GB in RAM at
     # once and can OOM a 16 GB laptop. Hardlink when the HF cache is on the
     # same volume (also avoids doubling disk usage), else stream a copy.

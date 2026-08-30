@@ -272,3 +272,47 @@ def test_workers_ask_for_the_cache_floor_not_the_ultralytics_default():
     assert src.count("from_variant(") == 3
     # Every from_variant call site passes an explicit floor.
     assert src.count("confidence_floor=") == 3
+
+
+def test_a_gated_repo_becomes_actionable_guidance_not_a_bare_401(tmp_path, monkeypatch):
+    """CUDA-box finding: `facebook/sam3` is licence-gated.
+
+    The probe promises the checkpoint "will be downloaded once, with your
+    confirmation". On a machine that has not accepted the licence, the real
+    `hf_hub_download` raises a bare 401 `GatedRepoError` that says nothing
+    about what the user must go and do. Every first-time user hits this.
+    """
+    import requests
+    from huggingface_hub.errors import GatedRepoError
+
+    from hydra_suite.core.inference.semantic import checkpoints as C
+
+    def _gated(**kwargs):
+        # GatedRepoError is an HfHubHTTPError: it demands a real response.
+        resp = requests.Response()
+        resp.status_code = 401
+        raise GatedRepoError(
+            "401 Client Error. Cannot access gated repo", response=resp
+        )
+
+    monkeypatch.setattr(C, "hf_hub_download", _gated)
+
+    with pytest.raises(C.Sam3DownloadNotAuthorized) as exc:
+        C.ensure_checkpoint(C.DEFAULT_VARIANT, cache_dir=tmp_path)
+
+    msg = str(exc.value)
+    assert "huggingface.co/facebook/sam3" in msg, "no link to the licence page"
+    assert "hf auth login" in msg, "no instruction to authenticate"
+    assert isinstance(exc.value, RuntimeError), "must stay catchable as RuntimeError"
+
+
+def test_the_probe_warns_that_the_weights_are_gated(tmp_path, monkeypatch):
+    """The 'we'll fetch it for you' promise must carry its precondition."""
+    from hydra_suite.core.inference.semantic import checkpoints as C
+
+    monkeypatch.setattr(C.importlib.util, "find_spec", lambda name: object())
+    monkeypatch.setattr(C, "_ultralytics_ok", lambda: (True, ""), raising=False)
+
+    avail = C.probe_availability(C.DEFAULT_VARIANT, cache_dir=tmp_path)
+    if avail.checkpoint_missing:
+        assert "licence-gated" in avail.reason or "gated" in avail.reason
