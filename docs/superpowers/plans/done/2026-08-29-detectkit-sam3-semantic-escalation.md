@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Status:** Shipped — merged to main.
+
 **Goal:** Let a DetectKit user type a noun phrase and have SAM3 find and segment every matching instance across a source's frames, staged for review and promoted to a new sibling source.
 
 **Architecture:** A Qt-free `SemanticLabeler` seam in `core/inference/semantic/` with a SAM3 backend, tiled with the existing `utils/slice_geometry.py` grid plus new seam-drop/NMS logic. A DetectKit job stages results into the existing `PendingEscalation` flow, caching pre-merge candidates so the confidence threshold stays adjustable after a multi-hour run. Promotion writes a **new sibling source** and never overwrites the origin's labels.
@@ -76,7 +78,7 @@
 - Consumes: nothing.
 - Produces: `hydra_suite.core.inference.masks.polygon_iou(a: np.ndarray, b: np.ndarray) -> float`; `clip_mask_to_polygon(mask, polygon_px) -> np.ndarray`; `mask_to_contour(mask, epsilon_frac=0.01, min_points=6, min_area=4.0) -> np.ndarray | None`.
 
-- [ ] **Step 1: Move the module and repoint its two importers**
+- [x] **Step 1: Move the module and repoint its two importers**
 
 ```bash
 git mv src/hydra_suite/core/inference/sam2/masks.py src/hydra_suite/core/inference/masks.py
@@ -91,12 +93,12 @@ Then change the module docstring's first line in `src/hydra_suite/core/inference
 """Binary-mask and polygon geometry shared by SAM2 and SAM3 escalation."""
 ```
 
-- [ ] **Step 2: Verify the move broke nothing**
+- [x] **Step 2: Verify the move broke nothing**
 
 Run: `python -m pytest tests/test_sam2_masks.py -q`
 Expected: PASS (same tests, new import path).
 
-- [ ] **Step 3: Write the failing `polygon_iou` tests**
+- [x] **Step 3: Write the failing `polygon_iou` tests**
 
 Create `tests/test_semantic_masks.py`:
 
@@ -146,12 +148,12 @@ def test_degenerate_polygon_iou_is_zero():
     assert polygon_iou(np.zeros((0, 2), dtype=np.float32), _square(0, 0, 10)) == 0.0
 ```
 
-- [ ] **Step 4: Run the tests to verify they fail**
+- [x] **Step 4: Run the tests to verify they fail**
 
 Run: `python -m pytest tests/test_semantic_masks.py -q`
 Expected: FAIL — `ImportError: cannot import name 'polygon_iou'`.
 
-- [ ] **Step 5: Implement `polygon_iou`**
+- [x] **Step 5: Implement `polygon_iou`**
 
 Append to `src/hydra_suite/core/inference/masks.py`:
 
@@ -194,12 +196,12 @@ def polygon_iou(a: np.ndarray, b: np.ndarray) -> float:
     return float(inter) / float(union)
 ```
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 Run: `python -m pytest tests/test_semantic_masks.py tests/test_sam2_masks.py -q`
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 make format
@@ -222,7 +224,7 @@ The picker at `sam2/executor.py:13-18` is duplicated-in-waiting. Moving it **doe
 - Consumes: `hydra_suite.utils.gpu_utils.{MPS_AVAILABLE, TORCH_CUDA_AVAILABLE}`.
 - Produces: `hydra_suite.core.inference.torch_device.resolve_torch_device() -> str` returning `"cuda"`, `"mps"`, or `"cpu"`. `sam2.executor.resolve_sam2_device` remains as an alias.
 
-- [ ] **Step 1: Create the new module**
+- [x] **Step 1: Create the new module**
 
 `src/hydra_suite/core/inference/torch_device.py`:
 
@@ -243,7 +245,7 @@ def resolve_torch_device() -> str:
     return "cpu"
 ```
 
-- [ ] **Step 2: Replace the body in `sam2/executor.py` with an alias**
+- [x] **Step 2: Replace the body in `sam2/executor.py` with an alias**
 
 In `src/hydra_suite/core/inference/sam2/executor.py`, delete the
 `from hydra_suite.utils.gpu_utils import MPS_AVAILABLE, TORCH_CUDA_AVAILABLE` line and
@@ -256,12 +258,12 @@ from hydra_suite.core.inference.torch_device import resolve_torch_device
 resolve_sam2_device = resolve_torch_device
 ```
 
-- [ ] **Step 3: Run the existing executor tests to see them fail**
+- [x] **Step 3: Run the existing executor tests to see them fail**
 
 Run: `python -m pytest tests/test_sam2_executor.py -q`
 Expected: FAIL — the tests patch `executor.TORCH_CUDA_AVAILABLE`, which no longer exists on that module.
 
-- [ ] **Step 4: Repoint the tests at the new module**
+- [x] **Step 4: Repoint the tests at the new module**
 
 In `tests/test_sam2_executor.py`, change the import of the executor module to also import
 the new one, and patch there instead:
@@ -296,12 +298,12 @@ def test_sam2_alias_points_at_the_shared_picker():
 
 Replace the two pre-existing device tests with these four; leave every other test in the file untouched.
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `python -m pytest tests/test_sam2_executor.py -q`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 make format
@@ -322,7 +324,7 @@ git commit -m "refactor(inference): extract shared torch device picker to torch_
 - Consumes: nothing.
 - Produces: `SemanticInstance(polygon_px: np.ndarray, confidence: float)` (frozen dataclass); `SemanticLabeler` Protocol with `name: str` property and `label_image(image_bgr, prompt, *, confidence_threshold=0.0, max_instances=0) -> list[SemanticInstance]`.
 
-- [ ] **Step 1: Write the failing contract test**
+- [x] **Step 1: Write the failing contract test**
 
 Create `tests/test_semantic_tiling.py` with just this to start:
 
@@ -365,12 +367,12 @@ def test_semantic_instance_is_frozen():
         raise AssertionError("SemanticInstance must be frozen")
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `python -m pytest tests/test_semantic_tiling.py -q`
 Expected: FAIL — `ModuleNotFoundError: hydra_suite.core.inference.semantic`.
 
-- [ ] **Step 3: Create the package and the seam**
+- [x] **Step 3: Create the package and the seam**
 
 `src/hydra_suite/core/inference/semantic/__init__.py`:
 
@@ -432,12 +434,12 @@ class SemanticLabeler(Protocol):
         """
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `python -m pytest tests/test_semantic_tiling.py -q`
 Expected: PASS (2 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 make format
@@ -469,7 +471,7 @@ The grid comes from `utils/slice_geometry.py` (`plan_tiles` returns frame-space 
   - `merge_candidates(candidates, *, confidence_threshold, iou_threshold) -> list[SemanticInstance]`
   - `plan_for_frame(frame_hw, tile_px, overlap) -> SlicePlan`
 
-- [ ] **Step 1: Write the failing tiling tests**
+- [x] **Step 1: Write the failing tiling tests**
 
 Append to `tests/test_semantic_tiling.py`:
 
@@ -626,12 +628,12 @@ def test_should_stop_halts_between_tiles():
     assert labeler.calls == 2
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `python -m pytest tests/test_semantic_tiling.py -q`
 Expected: FAIL — `ModuleNotFoundError: ...semantic.tiling`.
 
-- [ ] **Step 3: Implement `tiling.py`**
+- [x] **Step 3: Implement `tiling.py`**
 
 ```python
 """Tiled semantic inference: seam handling and cross-tile merge.
@@ -869,12 +871,12 @@ def merge_candidates(
     return [SemanticInstance(s.polygon_px, s.confidence) for s in survivors]
 ```
 
-- [ ] **Step 4: Run to verify they pass**
+- [x] **Step 4: Run to verify they pass**
 
 Run: `python -m pytest tests/test_semantic_tiling.py -q`
 Expected: PASS (14 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 make format
@@ -897,7 +899,7 @@ The SAM2 pattern must NOT be copied here. `sam2/checkpoints.py:48-49`'s `availab
 - Consumes: `hydra_suite.paths.get_models_dir`.
 - Produces: `Sam3Entry(repo_id, filename)`; `SAM3_VARIANTS: dict[str, Sam3Entry]`; `DEFAULT_VARIANT: str`; `available_variants() -> list[str]`; `checkpoint_path(variant, cache_dir=None) -> Path`; `ensure_checkpoint(variant, *, allow_download=True, cache_dir=None) -> Path`; `probe_availability(variant=DEFAULT_VARIANT, cache_dir=None) -> tuple[bool, str]`.
 
-- [ ] **Step 1: Write the failing probe tests**
+- [x] **Step 1: Write the failing probe tests**
 
 Create `tests/test_semantic_checkpoints.py`:
 
@@ -950,12 +952,12 @@ def test_probe_succeeds_when_everything_is_present(tmp_path, monkeypatch):
     assert reason == ""
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `python -m pytest tests/test_semantic_checkpoints.py -q`
 Expected: FAIL — module not found.
 
-- [ ] **Step 3: Implement `checkpoints.py`**
+- [x] **Step 3: Implement `checkpoints.py`**
 
 ```python
 """SAM3 checkpoint catalog + a probe that never triggers a download.
@@ -1075,12 +1077,12 @@ def ensure_checkpoint(
     return dest
 ```
 
-- [ ] **Step 4: Run to verify they pass**
+- [x] **Step 4: Run to verify they pass**
 
 Run: `python -m pytest tests/test_semantic_checkpoints.py -q`
 Expected: PASS (6 tests).
 
-- [ ] **Step 5: Add the `sam3` extra**
+- [x] **Step 5: Add the `sam3` extra**
 
 In `pyproject.toml`, under `[project.optional-dependencies]`, add:
 
@@ -1092,7 +1094,7 @@ sam3 = [
 ]
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 make format
@@ -1114,7 +1116,7 @@ This is the only task that needs the 3.45 GB weights, so it is the only one whos
 - Consumes: `SemanticInstance` (Task 3), `ensure_checkpoint`/`probe_availability` (Task 5), `resolve_torch_device` (Task 2), `mask_to_contour` (Task 1).
 - Produces: `Sam3SemanticLabeler` with `name` property, classmethod `from_variant(variant=DEFAULT_VARIANT, device=None, *, allow_download=True) -> Sam3SemanticLabeler`, and `label_image(...)` per the protocol.
 
-- [ ] **Step 1: Write the failing guard test**
+- [x] **Step 1: Write the failing guard test**
 
 Append to `tests/test_semantic_checkpoints.py`:
 
@@ -1136,12 +1138,12 @@ def test_labeler_satisfies_the_protocol_without_weights():
     assert stub.name == "sam3"
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `python -m pytest tests/test_semantic_checkpoints.py -q`
 Expected: FAIL — `...semantic.sam3` not found.
 
-- [ ] **Step 3: Implement `sam3.py`**
+- [x] **Step 3: Implement `sam3.py`**
 
 ```python
 """SAM3 promptable-concept-segmentation backend for the SemanticLabeler seam.
@@ -1239,12 +1241,12 @@ class Sam3SemanticLabeler:
         return out
 ```
 
-- [ ] **Step 4: Run to verify they pass**
+- [x] **Step 4: Run to verify they pass**
 
 Run: `python -m pytest tests/test_semantic_checkpoints.py -q`
 Expected: PASS (8 tests).
 
-- [ ] **Step 5: Manual integration check with real weights**
+- [x] **Step 5: Manual integration check with real weights**
 
 `conda activate hydra-mps`, then:
 
@@ -1260,7 +1262,7 @@ PY
 
 Expected: prints `sam3 0` (a blank frame legitimately yields nothing) without raising and without pip-installing anything. If it errors on a missing checkpoint, that is the first run downloading 3.45 GB — let it finish and re-run.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 make format
@@ -1287,7 +1289,7 @@ Matching is one-to-one on centroid distance gated by containment, not IoU: SAM3'
 - Produces: `CalibrationPoint(tile_fraction, tile_px, tiles_per_frame, seconds_per_frame, confidence, missed_per_frame, extra_per_frame, recall, n_matched)`; `MIN_MATCHED_INSTANCES = 20`; `MIN_RECALL = 0.90`; `CONFIDENCE_GRID: tuple[float, ...]`; `match_one_to_one(pred_polys, label_polys) -> list[tuple[int, int]]`; `calibrate(labeler, frames, prompt, *, reference_body_px, tile_fractions=TILE_FRACTION_GRID, overlap=DEFAULT_OVERLAP, seam_margin_px, merge_iou, max_instances=0, progress=None, should_stop=None) -> list[CalibrationPoint]`; `recommend(points, *, min_matched=MIN_MATCHED_INSTANCES, min_recall=MIN_RECALL) -> tuple[CalibrationPoint | None, str]`.
 - `frames` is `Sequence[tuple[Path, list[LabelRecord]]]` — paths and records, never an `OBBSource`: Core must not import an app-layer type.
 
-- [ ] **Step 1: Write the failing calibration tests**
+- [x] **Step 1: Write the failing calibration tests**
 
 Create `tests/test_semantic_calibration.py`:
 
@@ -1448,12 +1450,12 @@ def test_calibrate_runs_one_inference_pass_per_tile_fraction(tmp_path):
     assert all(p.seconds_per_frame >= 0.0 for p in points)
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `python -m pytest tests/test_semantic_calibration.py -q`
 Expected: FAIL — module not found.
 
-- [ ] **Step 3: Implement `calibration.py`**
+- [x] **Step 3: Implement `calibration.py`**
 
 ```python
 """Fit the operating point to the user's own labelled frames.
@@ -1705,12 +1707,12 @@ def recommend(
     return min(eligible, key=lambda p: (p.tiles_per_frame, -p.confidence)), ""
 ```
 
-- [ ] **Step 4: Run to verify they pass**
+- [x] **Step 4: Run to verify they pass**
 
 Run: `python -m pytest tests/test_semantic_calibration.py -q`
 Expected: PASS (13 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 make format
@@ -1732,7 +1734,7 @@ git commit -m "feat(semantic): recall-first calibration against the user's label
 - Consumes: nothing.
 - Produces: `PendingEscalation(staged_path, target_level, sam2_variant, created_at, primer_kind, primer_variant, primer_prompt, primer_params)` where `primer_kind ∈ {"sam2", "sam3"}` and `primer_params: dict`.
 
-- [ ] **Step 1: Write the failing round-trip tests**
+- [x] **Step 1: Write the failing round-trip tests**
 
 Create `tests/test_pending_escalation_model.py`:
 
@@ -1774,12 +1776,12 @@ def test_sam2_variant_stays_in_sync_for_legacy_readers():
     assert p.to_dict()["sam2_variant"] == "sam2.1-hiera-tiny"
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `python -m pytest tests/test_pending_escalation_model.py -q`
 Expected: FAIL — `PendingEscalation` has no `primer_kind`.
 
-- [ ] **Step 3: Generalise the dataclass**
+- [x] **Step 3: Generalise the dataclass**
 
 Replace `PendingEscalation` in `src/hydra_suite/detectkit/gui/models.py` with:
 
@@ -1839,13 +1841,13 @@ class PendingEscalation:
 
 `field` is already imported at `models.py:6`.
 
-- [ ] **Step 4: Run to verify they pass, and that nothing else broke**
+- [x] **Step 4: Run to verify they pass, and that nothing else broke**
 
 Run: `python -m pytest tests/test_pending_escalation_model.py tests/test_sam2_escalation.py -q`
 Expected: PASS. (If `tests/test_sam2_escalation.py` does not exist, run
 `python -m pytest tests/ -q -k escalation --collect-only` to find the right file and run that.)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 make format
@@ -1878,7 +1880,7 @@ Four things SAM2's `run_escalation` gets right for SAM2 but wrong for SAM3, all 
   - `is_prompt_failure(result, frames_processed) -> bool`
   - `CANDIDATES_FILENAME = "candidates.json"`, `RUN_FILENAME = "run.json"`
 
-- [ ] **Step 1: Write the failing job tests**
+- [x] **Step 1: Write the failing job tests**
 
 Create `tests/test_semantic_escalation_job.py`:
 
@@ -2060,12 +2062,12 @@ def test_already_pending_source_is_skipped_without_overwrite(tmp_path):
     assert result.skipped and result.skipped[0][0] == src.name
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `python -m pytest tests/test_semantic_escalation_job.py -q`
 Expected: FAIL — module not found.
 
-- [ ] **Step 3: Implement the job**
+- [x] **Step 3: Implement the job**
 
 Create `src/hydra_suite/detectkit/jobs/semantic_escalation.py`:
 
@@ -2447,12 +2449,12 @@ class SemanticEscalationWorker(BaseWorker):
         self.result_ready.emit(result)
 ```
 
-- [ ] **Step 4: Run to verify they pass**
+- [x] **Step 4: Run to verify they pass**
 
 Run: `python -m pytest tests/test_semantic_escalation_job.py -q`
 Expected: PASS (14 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 make format
@@ -2476,7 +2478,7 @@ Images are hardlinked, following `data/al/export.py:51-57`'s `_link_or_copy`, so
 - Consumes: Task 9's module; `hydra_suite.data.al.export._link_or_copy`.
 - Produces: `accept_pending_semantic_escalation(source: OBBSource, project, project_dir=None) -> OBBSource` returning the newly registered sibling. Rejection reuses the existing `sam2_escalation.reject_pending_escalation`.
 
-- [ ] **Step 1: Write the failing promotion tests**
+- [x] **Step 1: Write the failing promotion tests**
 
 Append to `tests/test_semantic_escalation_job.py`:
 
@@ -2554,12 +2556,12 @@ def test_accept_refuses_when_the_staging_dir_is_gone(tmp_path):
 Note: `_request` needs a `project` keyword — it already accepts `**kw` that overrides
 the `project` default, so this works unchanged.
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `python -m pytest tests/test_semantic_escalation_job.py -q -k accept or sibling or cache_never`
 Expected: FAIL — `accept_pending_semantic_escalation` not found.
 
-- [ ] **Step 3: Implement promotion**
+- [x] **Step 3: Implement promotion**
 
 Append to `src/hydra_suite/detectkit/jobs/semantic_escalation.py`:
 
@@ -2664,12 +2666,12 @@ def accept_pending_semantic_escalation(
     return sibling
 ```
 
-- [ ] **Step 4: Run to verify they pass**
+- [x] **Step 4: Run to verify they pass**
 
 Run: `python -m pytest tests/test_semantic_escalation_job.py -q`
 Expected: PASS (15 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 make format
@@ -2692,7 +2694,7 @@ git commit -m "feat(detectkit): promote semantic escalation to a sibling source,
 - Consumes: everything from Tasks 5, 7, 9, 10.
 - Produces: `ToolsPanel.escalate_geometry_requested`, `ToolsPanel.semantic_escalation_requested`; `escalation_actions.{on_escalate_geometry, on_semantic_escalation, on_review_escalations}(window)`.
 
-- [ ] **Step 1: Rename the SAM2 action and add the semantic one**
+- [x] **Step 1: Rename the SAM2 action and add the semantic one**
 
 In `src/hydra_suite/detectkit/gui/panels/tools_panel.py`:
 
@@ -2761,7 +2763,7 @@ In `src/hydra_suite/detectkit/gui/panels/tools_panel.py`:
         v.addWidget(self._btn_semantic)
 ```
 
-- [ ] **Step 2: Write the semantic escalation dialog**
+- [x] **Step 2: Write the semantic escalation dialog**
 
 Create `src/hydra_suite/detectkit/gui/dialogs/semantic_escalation_dialog.py`:
 
@@ -3003,7 +3005,7 @@ class SemanticEscalationDialog(BaseDialog):
         super().accept()
 ```
 
-- [ ] **Step 3: Extract the handlers**
+- [x] **Step 3: Extract the handlers**
 
 Create `src/hydra_suite/detectkit/gui/escalation_actions.py` and move
 `_on_escalate_to_segment_sam2` (`main_window.py:1769-1943`) and `_on_review_escalations`
@@ -3150,7 +3152,7 @@ callers of the removed method names and repoint them:
 grep -rn "_on_escalate_to_segment_sam2\|_on_review_escalations" src/ tests/
 ```
 
-- [ ] **Step 4: Make the review dialog primer-aware**
+- [x] **Step 4: Make the review dialog primer-aware**
 
 In `src/hydra_suite/detectkit/gui/dialogs/review_escalations_dialog.py`:
 
@@ -3264,7 +3266,7 @@ and the handler:
 Update the one construction site in `escalation_actions.on_review_escalations` to pass
 `project=window._project`.
 
-- [ ] **Step 5: Verify the GUI imports and the app still starts**
+- [x] **Step 5: Verify the GUI imports and the app still starts**
 
 Run:
 
@@ -3285,7 +3287,7 @@ Then launch `detectkit`, open a project with an OBB source, and confirm: the Esc
 group shows both buttons with the new labels; the SAM3 button is disabled with a reason
 if the checkpoint is absent; the dialog opens and refuses an empty prompt.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 make format
@@ -3309,7 +3311,7 @@ Calibration is the feature's main claim — the operating point is fitted to the
 - Consumes: `calibrate`, `recommend`, `CalibrationPoint` (Task 7); `TILE_FRACTION_GRID` (Task 4); `parse_obb_label` (`detectkit/gui/utils.py:220`); `apply_calibration_choice` (Task 11).
 - Produces: `labelled_frames_for(source) -> list[tuple[Path, list[LabelRecord]]]`; `CalibrationWorker(frames, prompt, variant, params, labeler=None)` emitting `result_ready(list[CalibrationPoint])`; `CalibrationResultsDialog(points, recommended, reason, project_frames, parent)` with `chosen() -> CalibrationPoint | None`.
 
-- [ ] **Step 1: Write the failing adapter test**
+- [x] **Step 1: Write the failing adapter test**
 
 Append to `tests/test_semantic_escalation_job.py`:
 
@@ -3341,12 +3343,12 @@ def test_labelled_frames_skips_empty_label_files(tmp_path):
     assert len(labelled_frames_for(src)) == 1
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `python -m pytest tests/test_semantic_escalation_job.py -q -k labelled_frames`
 Expected: FAIL — `labelled_frames_for` not found.
 
-- [ ] **Step 3: Implement the adapter and the calibration worker**
+- [x] **Step 3: Implement the adapter and the calibration worker**
 
 Append to `src/hydra_suite/detectkit/jobs/semantic_escalation.py`:
 
@@ -3439,12 +3441,12 @@ class CalibrationWorker(BaseWorker):
         self.result_ready.emit(points)
 ```
 
-- [ ] **Step 4: Run to verify they pass**
+- [x] **Step 4: Run to verify they pass**
 
 Run: `python -m pytest tests/test_semantic_escalation_job.py -q`
 Expected: PASS (17 tests).
 
-- [ ] **Step 5: Wire the Calibrate button in the dialog**
+- [x] **Step 5: Wire the Calibrate button in the dialog**
 
 In `SemanticEscalationDialog.__init__`, after building `self._btn_calibrate`, enable it
 based on the sources' labels and connect it:
@@ -3538,7 +3540,7 @@ and add:
         worker.start()
 ```
 
-- [ ] **Step 6: Write the frontier-row test, then the results dialog**
+- [x] **Step 6: Write the frontier-row test, then the results dialog**
 
 Append to `tests/test_semantic_calibration.py`:
 
@@ -3696,7 +3698,7 @@ class CalibrationResultsDialog(BaseDialog):
 Run: `python -m pytest tests/test_semantic_calibration.py -q`
 Expected: PASS (15 tests).
 
-- [ ] **Step 7: Verify imports and run the full new test set**
+- [x] **Step 7: Verify imports and run the full new test set**
 
 Run:
 
@@ -3710,7 +3712,7 @@ python -m pytest tests/test_semantic_masks.py tests/test_semantic_tiling.py \
 
 Expected: `ok`, then all tests pass.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 make format
@@ -3727,7 +3729,7 @@ git commit -m "feat(detectkit): calibrate tile fraction and confidence against t
 - Modify: `mkdocs.yml` (nav entry)
 - Modify: `docs/superpowers/specs/2026-08-28-detectkit-sam3-semantic-escalation-design.md` (status header)
 
-- [ ] **Step 1: Write the user-guide page**
+- [x] **Step 1: Write the user-guide page**
 
 Create `docs/user-guide/detectkit-semantic-escalation.md` covering, in this order:
 the difference between the two escalations (geometry converts what you have; semantic
@@ -3746,7 +3748,7 @@ gets settled. Point large runs at the CUDA box.
 
 Add it to `mkdocs.yml` under the DetectKit section of `nav`.
 
-- [ ] **Step 2: Run the gates**
+- [x] **Step 2: Run the gates**
 
 ```bash
 make format-check
@@ -3756,7 +3758,7 @@ make docs-check
 
 Expected: all pass. Fix anything they flag.
 
-- [ ] **Step 3: Confirm SAM3 on CUDA**
+- [x] **Step 3: Confirm SAM3 on CUDA**
 
 The spec lists this as a pre-implementation gate; MPS is confirmed, CUDA never has been.
 
@@ -3777,12 +3779,12 @@ PY
 Expected: prints `cuda` and `0`. If SAM3 does not run on CUDA, stop and report — the
 feature ships MPS-only and the docs must say so.
 
-- [ ] **Step 4: Update the spec status header**
+- [x] **Step 4: Update the spec status header**
 
 Change the spec's `**Status:**` line to
 `Implemented — see docs/superpowers/plans/2026-08-29-detectkit-sam3-semantic-escalation.md`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 make format
