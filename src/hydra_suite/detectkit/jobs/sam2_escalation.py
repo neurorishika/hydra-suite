@@ -14,7 +14,7 @@ import cv2
 import numpy as np
 from PySide6.QtCore import Signal
 
-from hydra_suite.core.inference.sam2.masks import clip_mask_to_polygon, mask_to_contour
+from hydra_suite.core.inference.masks import clip_mask_to_polygon, mask_to_contour
 from hydra_suite.data.al.escalation import LabelRecord
 from hydra_suite.data.al.labels import write_label_file
 from hydra_suite.data.project_bundle import ensure_bundle_subdirectory

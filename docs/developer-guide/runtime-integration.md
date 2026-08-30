@@ -293,7 +293,7 @@ source (see Workflow below) — it does not create a new source.
    directory and clears `pending_escalation`, leaving the source untouched. Both raise if the source has
    no pending escalation.
 7. This flow is driven from the GUI by the "Review escalations…" button in the Tools panel
-   (`ToolsPanel.review_escalations_requested` → `MainWindow._on_review_escalations`), which opens
+   (`ToolsPanel.review_escalations_requested` → `escalation_actions.on_review_escalations`), which opens
    `ReviewEscalationsDialog` (`gui/dialogs/review_escalations_dialog.py`) listing **every** source in
    the project with a non-`None` `pending_escalation`, not just sources from the escalation run that
    just finished — so a pending escalation left unresolved (e.g. the dialog was closed without acting

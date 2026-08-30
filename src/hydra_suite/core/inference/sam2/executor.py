@@ -5,17 +5,12 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from hydra_suite.utils.gpu_utils import MPS_AVAILABLE, TORCH_CUDA_AVAILABLE
+from hydra_suite.core.inference.torch_device import resolve_torch_device
 
 from .checkpoints import SAM2_VARIANTS, ensure_checkpoint
 
-
-def resolve_sam2_device() -> str:
-    if TORCH_CUDA_AVAILABLE:
-        return "cuda"
-    if MPS_AVAILABLE:
-        return "mps"
-    return "cpu"
+# Kept as a name for existing callers; the logic lives in torch_device.py.
+resolve_sam2_device = resolve_torch_device
 
 
 class Sam2SegmentExecutor:

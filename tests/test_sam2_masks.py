@@ -1,6 +1,6 @@
 import numpy as np
 
-from hydra_suite.core.inference.sam2.masks import clip_mask_to_polygon, mask_to_contour
+from hydra_suite.core.inference.masks import clip_mask_to_polygon, mask_to_contour
 
 
 def test_square_mask_yields_rectangular_contour():

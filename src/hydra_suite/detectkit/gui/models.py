@@ -12,12 +12,25 @@ DEFAULT_CLASS_NAME = "object"
 
 @dataclass
 class PendingEscalation:
-    """A staged (not-yet-reviewed) SAM2 escalation result awaiting accept/reject."""
+    """A staged (not-yet-reviewed) escalation result awaiting accept/reject.
+
+    ``primer_kind`` distinguishes the two producers: ``"sam2"`` converts
+    existing boxes to masks and promotes IN PLACE; ``"sam3"`` finds
+    instances from a prompt and promotes to a NEW SIBLING SOURCE. They
+    accept differently, so the kind is load-bearing, not decorative.
+
+    ``sam2_variant`` is retained so pre-existing projects and any legacy
+    reader keep working; it mirrors ``primer_variant`` for SAM2 records.
+    """
 
     staged_path: str = ""
     target_level: str = "polygon"
     sam2_variant: str = ""
     created_at: str = ""
+    primer_kind: str = "sam2"
+    primer_variant: str = ""
+    primer_prompt: str = ""
+    primer_params: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         """Serialize to a plain dictionary."""
@@ -26,16 +39,39 @@ class PendingEscalation:
             "target_level": self.target_level,
             "sam2_variant": self.sam2_variant,
             "created_at": self.created_at,
+            "primer_kind": self.primer_kind,
+            "primer_variant": self.primer_variant,
+            "primer_prompt": self.primer_prompt,
+            "primer_params": dict(self.primer_params),
         }
 
     @staticmethod
     def from_dict(d: dict) -> "PendingEscalation":
-        """Restore a PendingEscalation from a dictionary."""
+        """Restore a PendingEscalation, back-filling pre-primer records.
+
+        The back-fill triggers only when ``primer_kind`` is absent entirely
+        (a truly pre-Task-8 on-disk record) -- not merely falsy. Falling
+        back on emptiness alone would re-derive ``primer_variant`` from
+        ``sam2_variant`` on every round trip of an already-migrated record
+        that happens to carry an empty ``primer_variant`` by construction,
+        silently mutating a value the caller never asked to change.
+        """
+        legacy_variant = str(d.get("sam2_variant", ""))
+        is_legacy_record = "primer_kind" not in d
+        kind = str(d.get("primer_kind", "") or "sam2")
+        if is_legacy_record:
+            variant = legacy_variant
+        else:
+            variant = str(d.get("primer_variant", ""))
         return PendingEscalation(
             staged_path=str(d.get("staged_path", "")),
             target_level=str(d.get("target_level", "polygon") or "polygon"),
-            sam2_variant=str(d.get("sam2_variant", "")),
+            sam2_variant=legacy_variant or (variant if kind == "sam2" else ""),
             created_at=str(d.get("created_at", "")),
+            primer_kind=kind,
+            primer_variant=variant,
+            primer_prompt=str(d.get("primer_prompt", "")),
+            primer_params=dict(d.get("primer_params") or {}),
         )
 
 

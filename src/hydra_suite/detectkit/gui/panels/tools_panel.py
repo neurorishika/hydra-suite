@@ -100,7 +100,8 @@ class ToolsPanel(QWidget):
 
     overlay_settings_changed = Signal()
     run_inference_requested = Signal()
-    escalate_sam2_requested = Signal()
+    escalate_geometry_requested = Signal()
+    semantic_escalation_requested = Signal()
     mark_reviewed_requested = Signal()
     review_escalations_requested = Signal()
 
@@ -154,21 +155,25 @@ class ToolsPanel(QWidget):
         layout.addStretch(1)
 
     def _build_escalation_group(self) -> QGroupBox:
-        box = QGroupBox("SAM2 Escalation")
+        box = QGroupBox("Escalation")
         v = QVBoxLayout(box)
         v.setSpacing(6)
 
         hint = QLabel(
-            "Promote OBB/box sources to polygon-level segment sources using SAM2, "
-            "then review the primed results before training."
+            "Geometry escalation converts the boxes you already have into "
+            "masks — it cannot add an animal that was never labelled. "
+            "Semantic escalation finds instances from a prompt, including "
+            "animals missing from the current labels, and needs no labels to "
+            "start."
         )
         hint.setWordWrap(True)
         hint.setProperty("detectkitRole", "sectionHint")
         v.addWidget(hint)
 
-        self._btn_escalate_sam2 = QPushButton("Escalate to segment (SAM2)")
-        self._btn_escalate_sam2.clicked.connect(self.escalate_sam2_requested)
-        # Disable if the SAM2 catalog cannot be imported (missing dependency/assets).
+        self._btn_escalate_sam2 = QPushButton(
+            "Geometry escalation (SAM2): boxes to masks"
+        )
+        self._btn_escalate_sam2.clicked.connect(self.escalate_geometry_requested)
         try:
             from hydra_suite.core.inference.sam2.checkpoints import available_variants
 
@@ -180,6 +185,37 @@ class ToolsPanel(QWidget):
                 "escalation."
             )
         v.addWidget(self._btn_escalate_sam2)
+
+        self._btn_semantic = QPushButton("Semantic escalation (SAM3): prompt to masks…")
+        self._btn_semantic.clicked.connect(self.semantic_escalation_requested)
+        # A REAL probe, not the SAM2 pattern: available_variants() above only
+        # lists a static dict, so it would let a click start a silent 3.45 GB
+        # download. probe_availability checks deps AND the on-disk checkpoint
+        # without ever touching the network.
+        try:
+            from hydra_suite.core.inference.semantic.checkpoints import (
+                probe_availability,
+            )
+
+            avail = probe_availability()
+        except Exception as exc:  # pragma: no cover - optional SAM3 assets
+            from hydra_suite.core.inference.semantic.checkpoints import Sam3Availability
+
+            avail = Sam3Availability(False, str(exc))
+        # `usable` alone would disable the button whenever the 3.45 GB
+        # checkpoint is absent -- but the only offer to download it is inside
+        # the dialog BEHIND this button, so the feature would be unreachable
+        # on any machine without a pre-placed checkpoint. A missing checkpoint
+        # therefore enables the button and warns; a missing dependency does not.
+        if avail.checkpoint_missing:
+            self._btn_semantic.setToolTip(
+                avail.reason + " Click to configure the run; the dialog asks "
+                "before downloading anything."
+            )
+        elif not avail.usable:
+            self._btn_semantic.setEnabled(False)
+            self._btn_semantic.setToolTip(avail.reason)
+        v.addWidget(self._btn_semantic)
 
         self._btn_mark_reviewed = QPushButton("Mark reviewed…")
         self._btn_mark_reviewed.clicked.connect(self.mark_reviewed_requested)

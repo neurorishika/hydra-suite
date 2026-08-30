@@ -3,19 +3,32 @@ import sys
 import numpy as np
 import pytest
 
+from hydra_suite.core.inference import torch_device as td
 from hydra_suite.core.inference.sam2 import executor as ex
 
 
 def test_resolve_device_prefers_cuda(monkeypatch):
-    monkeypatch.setattr(ex, "TORCH_CUDA_AVAILABLE", True)
-    monkeypatch.setattr(ex, "MPS_AVAILABLE", False)
-    assert ex.resolve_sam2_device() == "cuda"
+    monkeypatch.setattr(td, "TORCH_CUDA_AVAILABLE", True)
+    monkeypatch.setattr(td, "MPS_AVAILABLE", True)
+    assert td.resolve_torch_device() == "cuda"
+
+
+def test_resolve_device_falls_back_to_mps(monkeypatch):
+    monkeypatch.setattr(td, "TORCH_CUDA_AVAILABLE", False)
+    monkeypatch.setattr(td, "MPS_AVAILABLE", True)
+    assert td.resolve_torch_device() == "mps"
 
 
 def test_resolve_device_falls_back_to_cpu(monkeypatch):
-    monkeypatch.setattr(ex, "TORCH_CUDA_AVAILABLE", False)
-    monkeypatch.setattr(ex, "MPS_AVAILABLE", False)
-    assert ex.resolve_sam2_device() == "cpu"
+    monkeypatch.setattr(td, "TORCH_CUDA_AVAILABLE", False)
+    monkeypatch.setattr(td, "MPS_AVAILABLE", False)
+    assert td.resolve_torch_device() == "cpu"
+
+
+def test_sam2_alias_points_at_the_shared_picker():
+    from hydra_suite.core.inference.sam2.executor import resolve_sam2_device
+
+    assert resolve_sam2_device is td.resolve_torch_device
 
 
 def test_segment_picks_highest_iou_mask():
