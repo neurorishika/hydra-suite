@@ -357,6 +357,11 @@ class DetectKitProject:
     active_model_path: str = ""
     training_history: list[dict[str, Any]] = field(default_factory=list)
     slice_settings: SliceTrainingSettings = field(default_factory=SliceTrainingSettings)
+    # Last-used SAM3 controls and the most recent measured calibration frontier.
+    # Plain dictionaries keep the project file forward-compatible with new SAM3
+    # parameters while retaining old projects' empty defaults.
+    semantic_escalation_settings: dict[str, Any] = field(default_factory=dict)
+    semantic_calibration: dict[str, Any] = field(default_factory=dict)
 
     @property
     def class_name(self) -> str:
@@ -410,6 +415,8 @@ class DetectKitProject:
                 proj.sources = [OBBSource.from_dict(s) for s in val]
             elif name == "slice_settings":
                 proj.slice_settings = SliceTrainingSettings.from_dict(val)
+            elif name in {"semantic_escalation_settings", "semantic_calibration"}:
+                setattr(proj, name, dict(val) if isinstance(val, dict) else {})
             else:
                 # Type-cast based on the default type.
                 default_val = getattr(proj, name)

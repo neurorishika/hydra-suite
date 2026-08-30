@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QComboBox,
     QLabel,
     QListWidget,
@@ -33,17 +34,20 @@ class EscalateSam2Dialog(BaseDialog):
         self._variant.setCurrentText(DEFAULT_VARIANT)
         layout.addWidget(self._variant)
 
-        layout.addWidget(QLabel("Sources to escalate:"))
+        layout.addWidget(QLabel("Sources to escalate (click to toggle selection):"))
         self._list = QListWidget()
+        self._list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
         for s in sources:
-            item = QListWidgetItem(s.name)
-            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            eligible = s.level != "polygon"
+            label = s.name if eligible else f"{s.name}  (already segment)"
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, s.name)
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
             if s.level == "polygon":
-                item.setFlags(item.flags() & ~Qt.ItemIsEnabled)  # already segment
-                item.setCheckState(Qt.Unchecked)
-            else:
-                item.setCheckState(Qt.Checked)
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+                item.setToolTip("This source already contains segmentation polygons.")
             self._list.addItem(item)
+            item.setSelected(eligible)
         layout.addWidget(self._list)
 
         container = QWidget()
@@ -57,23 +61,23 @@ class EscalateSam2Dialog(BaseDialog):
         return [
             self._list.item(i).text()
             for i in range(self._list.count())
-            if self._list.item(i).flags() & Qt.ItemIsEnabled
+            if self._list.item(i).flags() & Qt.ItemFlag.ItemIsEnabled
         ]
 
     def preselect_source(self, name: str) -> None:
-        """Check only the named source (used when launched from a role block)."""
+        """Select only the named source (used when launched from a role block)."""
         for i in range(self._list.count()):
             item = self._list.item(i)
-            if not (item.flags() & Qt.ItemIsEnabled):
+            if not (item.flags() & Qt.ItemFlag.ItemIsEnabled):
                 continue
-            item.setCheckState(Qt.Checked if item.text() == name else Qt.Unchecked)
+            item.setSelected(item.data(Qt.ItemDataRole.UserRole) == name)
 
     def selected_variant(self) -> str:
         return self._variant.currentText()
 
     def selected_sources(self) -> list[str]:
         return [
-            self._list.item(i).text()
+            self._list.item(i).data(Qt.ItemDataRole.UserRole)
             for i in range(self._list.count())
-            if self._list.item(i).checkState() == Qt.Checked
+            if self._list.item(i).isSelected()
         ]

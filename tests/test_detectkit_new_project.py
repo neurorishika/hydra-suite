@@ -199,6 +199,8 @@ def test_detectkit_main_window_side_panels_keep_readable_minimum_widths(qapp):
     assert window._dataset_panel.minimumWidth() >= 360
     assert window._right_tabs.minimumWidth() >= 480
     assert window._canvas.minimumWidth() >= 480
+    assert window._tools_panel.minimumWidth() >= 300
+    assert window._tools_panel.maximumWidth() > window._tools_panel.minimumWidth()
     assert window.minimumWidth() >= 1300
     assert window.splitter.childrenCollapsible() is False
     assert window.splitter.isCollapsible(0) is False
@@ -207,5 +209,24 @@ def test_detectkit_main_window_side_panels_keep_readable_minimum_widths(qapp):
 
     window.close()
     assert window.splitter.isCollapsible(2) is False
+
+    window.close()
+
+
+def test_detectkit_tools_panel_splitter_handle_resizes_panel(qapp):
+    window = MainWindow()
+    window.resize(1600, 900)
+    window._stack.setCurrentIndex(1)
+    window.show()
+    qapp.processEvents()
+
+    initial = window.splitter.sizes()
+    requested_tools_width = initial[2] + 120
+    window.splitter.setSizes([initial[0], initial[1] - 120, requested_tools_width])
+    qapp.processEvents()
+
+    resized = window.splitter.sizes()
+    assert resized[2] > initial[2]
+    assert resized[1] < initial[1]
 
     window.close()

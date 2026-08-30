@@ -222,6 +222,8 @@ def on_semantic_escalation(window) -> None:
         reference_body_px,
         parent=window,
         body_px_origin=body_px_origin,
+        project=window._project,
+        persist_callback=window._save_current_project,
     )
     if not dlg.exec():
         return

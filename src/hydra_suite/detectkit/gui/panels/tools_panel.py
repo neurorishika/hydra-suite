@@ -1,4 +1,4 @@
-"""DetectKit ToolsPanel — fixed 280px right panel with 4 collapsible groups."""
+"""DetectKit ToolsPanel — resizable right rail for workspace controls."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ from ..models import INFERENCE_CONFIDENCE_FLOOR
 
 logger = logging.getLogger(__name__)
 
-_PANEL_WIDTH = 280
+_PANEL_MIN_WIDTH = 300
 
 
 class OverlaySettings(NamedTuple):
@@ -98,7 +98,7 @@ class _CollapsibleSection(QWidget):
 
 
 class ToolsPanel(QWidget):
-    """Fixed-width right panel with Dataset Overview, Analysis, Overlay, Navigation."""
+    """Resizable right panel with dataset, overlay, and analysis controls."""
 
     overlay_settings_changed = Signal()
     run_inference_requested = Signal()
@@ -115,7 +115,8 @@ class ToolsPanel(QWidget):
         self._portability_status = "Unknown"
         self._linked_counts: dict[str, int] = {}
         self._active_model_path: str = ""
-        self.setFixedWidth(_PANEL_WIDTH)
+        self.setMinimumWidth(_PANEL_MIN_WIDTH)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         self.setProperty("detectkitRole", "panelShell")
         self._build_ui()
 
@@ -173,9 +174,8 @@ class ToolsPanel(QWidget):
         hint.setProperty("detectkitRole", "sectionHint")
         v.addWidget(hint)
 
-        self._btn_escalate_sam2 = QPushButton(
-            "Geometry escalation (SAM2): boxes to masks"
-        )
+        self._btn_escalate_sam2 = QPushButton("Geometry escalation (SAM2)…")
+        self._btn_escalate_sam2.setToolTip("Convert existing boxes to masks with SAM2.")
         self._btn_escalate_sam2.clicked.connect(self.escalate_geometry_requested)
         try:
             from hydra_suite.core.inference.sam2.checkpoints import available_variants
@@ -189,7 +189,10 @@ class ToolsPanel(QWidget):
             )
         v.addWidget(self._btn_escalate_sam2)
 
-        self._btn_semantic = QPushButton("Semantic escalation (SAM3): prompt to masks…")
+        self._btn_semantic = QPushButton("Semantic escalation (SAM3)…")
+        self._btn_semantic.setToolTip(
+            "Find prompted instances and create masks with SAM3."
+        )
         self._btn_semantic.clicked.connect(self.semantic_escalation_requested)
         # A REAL probe, not the SAM2 pattern: available_variants() above only
         # lists a static dict, so it would let a click start a silent 3.45 GB

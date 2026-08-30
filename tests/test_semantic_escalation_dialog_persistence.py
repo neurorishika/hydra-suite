@@ -1,0 +1,269 @@
+"""SAM3 dialog layout, persistence, and calibration-window regressions."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+import pytest
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+pytest.importorskip("PySide6")
+
+from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtWidgets import QApplication  # noqa: E402
+
+from hydra_suite.detectkit.gui.models import DetectKitProject, OBBSource  # noqa: E402
+
+
+@pytest.fixture(scope="module")
+def qapp():
+    app = QApplication.instance() or QApplication([])
+    yield app
+
+
+@pytest.fixture
+def available_checkpoint(monkeypatch):
+    from hydra_suite.detectkit.gui.dialogs import semantic_escalation_dialog as mod
+
+    class _Available:
+        usable = True
+        checkpoint_missing = False
+        reason = ""
+
+    monkeypatch.setattr(mod, "probe_availability", lambda *_a, **_k: _Available())
+
+
+def _source(name: str = "source") -> OBBSource:
+    return OBBSource(name=name, level="polygon", path="/tmp/nonexistent")
+
+
+def _point_dict() -> dict:
+    return {
+        "tile_fraction": 0.08,
+        "tile_px": 1000,
+        "tiles_per_frame": 9,
+        "seconds_per_frame": 2.5,
+        "confidence": 0.4,
+        "missed_per_frame": 0.2,
+        "extra_per_frame": 1.0,
+        "recall": 0.95,
+        "n_matched": 42,
+    }
+
+
+def test_semantic_dialog_restores_and_persists_project_settings(
+    qapp, available_checkpoint
+):
+    from hydra_suite.detectkit.gui.dialogs.semantic_escalation_dialog import (
+        SemanticEscalationDialog,
+    )
+
+    project = DetectKitProject(project_dir=Path("/tmp/project"))
+    project.semantic_escalation_settings = {
+        "prompt": "worker ant",
+        "confidence": 0.42,
+        "tile_fraction": 0.08,
+        "reference_body_px": 76.0,
+        "source_names": ["source"],
+        "exhaustive": True,
+    }
+    saves: list[dict] = []
+    dialog = SemanticEscalationDialog(
+        [_source()],
+        50.0,
+        project=project,
+        persist_callback=lambda: saves.append(
+            dict(project.semantic_escalation_settings)
+        ),
+    )
+
+    assert dialog.prompt() == "worker ant"
+    assert dialog.parameters()["confidence"] == pytest.approx(0.42)
+    assert dialog.parameters()["tile_fraction"] == pytest.approx(0.08)
+    assert dialog.parameters()["reference_body_px"] == pytest.approx(76.0)
+    assert [source.name for source in dialog.selected_sources()] == ["source"]
+
+    dialog._confidence.setValue(0.55)
+    dialog.accept()
+
+    assert project.semantic_escalation_settings["confidence"] == pytest.approx(0.55)
+    assert saves
+
+
+def test_semantic_dialog_restores_saved_calibration(qapp, available_checkpoint):
+    from hydra_suite.detectkit.gui.dialogs.semantic_escalation_dialog import (
+        SemanticEscalationDialog,
+    )
+
+    project = DetectKitProject(project_dir=Path("/tmp/project"))
+    project.semantic_calibration = {
+        "created_at": "2026-08-30T12:00:00+00:00",
+        "recommended_index": 0,
+        "reason": "saved recommendation",
+        "points": [_point_dict()],
+    }
+    dialog = SemanticEscalationDialog([_source()], 50.0, project=project)
+
+    assert len(dialog.calibration_points) == 1
+    assert dialog._btn_view_calibration.isEnabled()
+    assert dialog._btn_calibrate.text().startswith("Recalibrate")
+    assert "Saved calibration" in dialog._status.text()
+
+
+def test_completed_calibration_is_written_to_project(qapp, available_checkpoint):
+    from hydra_suite.core.inference.semantic.calibration import CalibrationPoint
+    from hydra_suite.detectkit.gui.dialogs.semantic_escalation_dialog import (
+        SemanticEscalationDialog,
+    )
+
+    project = DetectKitProject(project_dir=Path("/tmp/project"))
+    saves: list[bool] = []
+    dialog = SemanticEscalationDialog(
+        [_source()],
+        50.0,
+        project=project,
+        persist_callback=lambda: saves.append(True),
+    )
+    point = CalibrationPoint(**_point_dict())
+
+    dialog._store_calibration([point], point, "measured recommendation")
+
+    assert project.semantic_calibration["recommended_index"] == 0
+    assert project.semantic_calibration["points"] == [_point_dict()]
+    assert project.semantic_calibration["reason"] == "measured recommendation"
+    assert saves
+
+
+def test_semantic_dialog_uses_compact_multicolumn_settings(qapp, available_checkpoint):
+    from hydra_suite.detectkit.gui.dialogs.semantic_escalation_dialog import (
+        SemanticEscalationDialog,
+    )
+
+    dialog = SemanticEscalationDialog([_source()], 82.2)
+
+    assert dialog._settings_grid.columnCount() == 4
+    assert dialog.minimumWidth() >= 720
+    assert dialog.width() >= 800
+    assert dialog._tile_label.text().splitlines() == ["1644 px", "82 px / 0.05"]
+
+
+def test_recalibration_warns_before_replacing_saved_frontier(
+    qapp, available_checkpoint, monkeypatch
+):
+    from hydra_suite.detectkit.gui.dialogs import semantic_escalation_dialog as mod
+
+    project = DetectKitProject(project_dir=Path("/tmp/project"))
+    project.semantic_calibration = {
+        "created_at": "2026-08-30T12:00:00+00:00",
+        "recommended_index": 0,
+        "points": [_point_dict()],
+    }
+    dialog = mod.SemanticEscalationDialog([_source()], 50.0, project=project)
+    dialog._exhaustive.setChecked(True)
+    prompts: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        mod.QMessageBox,
+        "question",
+        staticmethod(
+            lambda _parent, title, text, *_a, **_k: (
+                prompts.append((title, text)),
+                mod.QMessageBox.StandardButton.No,
+            )[1]
+        ),
+    )
+    monkeypatch.setattr(
+        dialog,
+        "confirm_checkpoint",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("declining overwrite must stop before calibration")
+        ),
+    )
+
+    dialog._run_calibration()
+
+    assert prompts
+    assert "replace" in (prompts[0][0] + prompts[0][1]).lower()
+
+
+def test_calibration_progress_is_window_modal_and_raised(
+    qapp, available_checkpoint, monkeypatch
+):
+    from PySide6 import QtWidgets
+
+    from hydra_suite.detectkit.gui.dialogs import semantic_escalation_dialog as mod
+    from hydra_suite.detectkit.jobs import semantic_escalation as jobs
+
+    events: list[object] = []
+
+    class _Signal:
+        def connect(self, callback):
+            self.callback = callback
+
+    class _Progress:
+        def __init__(self, *_a, **_k):
+            self.canceled = _Signal()
+
+        def setWindowTitle(self, value):
+            events.append(("title", value))
+
+        def setMinimumDuration(self, _value):
+            pass
+
+        def setWindowModality(self, value):
+            events.append(("modality", value))
+
+        def setModal(self, value):
+            events.append(("modal", value))
+
+        def setAttribute(self, *_a):
+            pass
+
+        def setMinimumWidth(self, _value):
+            pass
+
+        def setValue(self, _value):
+            pass
+
+        def setLabelText(self, _value):
+            pass
+
+        def close(self):
+            events.append("close")
+
+        def show(self):
+            events.append("show")
+
+        def raise_(self):
+            events.append("raise")
+
+        def activateWindow(self):
+            events.append("activate")
+
+    class _Worker:
+        cancelled = False
+
+        def __init__(self, *_a, **_k):
+            self.progress = _Signal()
+            self.status = _Signal()
+            self.result_ready = _Signal()
+            self.finished = _Signal()
+
+        def cancel(self):
+            pass
+
+        def start(self):
+            events.append("start")
+
+    monkeypatch.setattr(QtWidgets, "QProgressDialog", _Progress)
+    monkeypatch.setattr(jobs, "CalibrationWorker", _Worker)
+    dialog = mod.SemanticEscalationDialog([_source()], 50.0)
+    dialog._exhaustive.setChecked(True)
+    monkeypatch.setattr(dialog, "confirm_checkpoint", lambda: True)
+
+    dialog._run_calibration()
+
+    assert ("modality", Qt.WindowModality.WindowModal) in events
+    assert ("modal", True) in events
+    assert events.index("show") < events.index("raise") < events.index("start")
+    assert events.index("activate") < events.index("start")

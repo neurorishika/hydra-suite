@@ -84,12 +84,21 @@ def test_main_window_on_overlay_changed_wires_derived_levels_to_canvas():
     assert "set_derived_levels_visible" in source
 
 
-def test_tools_panel_fixed_width(qapp):
+def test_tools_panel_is_resizable_with_readable_minimum(qapp):
     from hydra_suite.detectkit.gui.panels.tools_panel import ToolsPanel
 
     panel = ToolsPanel()
-    assert panel.maximumWidth() == 280
-    assert panel.minimumWidth() == 280
+    assert panel.minimumWidth() == 300
+    assert panel.maximumWidth() > panel.minimumWidth()
+    assert panel.sizePolicy().horizontalPolicy().name == "Preferred"
+
+
+def test_tools_panel_uses_compact_escalation_button_labels(qapp):
+    from hydra_suite.detectkit.gui.panels.tools_panel import ToolsPanel
+
+    panel = ToolsPanel()
+    assert panel._btn_escalate_sam2.text() == "Geometry escalation (SAM2)…"
+    assert panel._btn_semantic.text() == "Semantic escalation (SAM3)…"
 
 
 def test_tools_panel_set_project(qapp, tmp_path):

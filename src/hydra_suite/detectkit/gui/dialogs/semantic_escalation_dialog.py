@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialogButtonBox,
     QDoubleSpinBox,
-    QFormLayout,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -45,6 +50,14 @@ def _humanise_seconds(seconds: float) -> str:
     return f"{minutes / 60.0:.1f} h"
 
 
+def _saved_value(saved: dict, key: str, default, cast):
+    """Read a hand-editable persisted setting without making the dialog fragile."""
+    try:
+        return cast(saved.get(key, default))
+    except (TypeError, ValueError):
+        return default
+
+
 class SemanticEscalationDialog(BaseDialog):
     """Configure a SAM3 semantic escalation run.
 
@@ -60,6 +73,8 @@ class SemanticEscalationDialog(BaseDialog):
         reference_body_px: float,
         parent=None,
         body_px_origin: str = "",
+        project=None,
+        persist_callback=None,
     ) -> None:
         super().__init__(
             "Semantic escalation (SAM3)",
@@ -71,60 +86,103 @@ class SemanticEscalationDialog(BaseDialog):
         )
         self._sources = list(sources)
         self._body_px_origin = body_px_origin
-        self.calibration_points: list = []
+        self._project = project
+        self._persist_callback = persist_callback
+        saved = dict(getattr(project, "semantic_escalation_settings", {}) or {})
+        self._saved_calibration = dict(
+            getattr(project, "semantic_calibration", {}) or {}
+        )
+        self.calibration_points = self._restore_calibration_points(
+            self._saved_calibration
+        )
         self._preview_worker = None
 
         container = QWidget()
         outer = QVBoxLayout(container)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(10)
+
+        top = QHBoxLayout()
+        top.setSpacing(12)
+
+        sources_group = QGroupBox("Sources to escalate")
+        sources_layout = QVBoxLayout(sources_group)
 
         self._list = QListWidget()
         self._list.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
-        for src in self._sources:
+        selected_names = set(saved.get("source_names") or [])
+        for row, src in enumerate(self._sources):
             self._list.addItem(f"{src.name}  ({src.level})")
-        outer.addWidget(QLabel("Sources to escalate:"))
-        outer.addWidget(self._list)
+            if src.name in selected_names:
+                self._list.item(row).setSelected(True)
+        self._list.setMinimumSize(240, 180)
+        sources_layout.addWidget(self._list)
+        source_hint = QLabel("Click entries to toggle one or more sources.")
+        source_hint.setWordWrap(True)
+        sources_layout.addWidget(source_hint)
+        top.addWidget(sources_group, 2)
 
-        form = QFormLayout()
+        settings_group = QGroupBox("Run settings")
+        form = QGridLayout(settings_group)
+        self._settings_grid = form
+        form.setHorizontalSpacing(8)
+        form.setVerticalSpacing(7)
+        form.setColumnStretch(1, 1)
+        form.setColumnStretch(3, 1)
+
+        def add_field(row: int, pair: int, label: str, widget: QWidget) -> None:
+            column = pair * 2
+            form.addWidget(QLabel(label), row, column)
+            form.addWidget(widget, row, column + 1)
+
         self._variant = QComboBox()
         from hydra_suite.core.inference.semantic.checkpoints import available_variants
 
         self._variant.addItems(available_variants())
-        form.addRow("Model:", self._variant)
+        saved_variant = str(saved.get("variant", ""))
+        if self._variant.findText(saved_variant) >= 0:
+            self._variant.setCurrentText(saved_variant)
+        add_field(0, 0, "Model", self._variant)
 
-        self._prompt = QLineEdit("ant")
+        self._prompt = QLineEdit(str(saved.get("prompt", "ant") or "ant"))
         self._prompt.setToolTip(
             "A noun phrase. Wording matters far less than tile size — try "
             "variants in the preview if results look wrong."
         )
-        form.addRow("Prompt:", self._prompt)
+        add_field(0, 1, "Prompt", self._prompt)
 
         self._confidence = QDoubleSpinBox()
         self._confidence.setRange(0.01, 0.99)
         self._confidence.setSingleStep(0.05)
-        self._confidence.setValue(0.35)
-        form.addRow("Confidence:", self._confidence)
+        self._confidence.setValue(_saved_value(saved, "confidence", 0.35, float))
+        add_field(1, 0, "Confidence", self._confidence)
 
         self._max_instances = QSpinBox()
         self._max_instances.setRange(0, 10000)
         self._max_instances.setSpecialValueText("unlimited")
-        form.addRow("Max instances/tile:", self._max_instances)
+        self._max_instances.setValue(_saved_value(saved, "max_instances", 0, int))
+        add_field(1, 1, "Max instances/tile", self._max_instances)
 
         self._overlap = QDoubleSpinBox()
         self._overlap.setRange(0.0, 0.9)
         self._overlap.setSingleStep(0.1)
-        self._overlap.setValue(DEFAULT_OVERLAP)
-        form.addRow("Tile overlap:", self._overlap)
+        self._overlap.setValue(_saved_value(saved, "overlap", DEFAULT_OVERLAP, float))
+        add_field(2, 0, "Tile overlap", self._overlap)
 
         self._seam_margin = QSpinBox()
         self._seam_margin.setRange(0, 64)
-        self._seam_margin.setValue(int(DEFAULT_SEAM_MARGIN_PX))
-        form.addRow("Seam margin (px):", self._seam_margin)
+        self._seam_margin.setValue(
+            _saved_value(saved, "seam_margin_px", int(DEFAULT_SEAM_MARGIN_PX), int)
+        )
+        add_field(2, 1, "Seam margin (px)", self._seam_margin)
 
         self._merge_iou = QDoubleSpinBox()
         self._merge_iou.setRange(0.05, 0.95)
         self._merge_iou.setSingleStep(0.05)
-        self._merge_iou.setValue(DEFAULT_MERGE_IOU)
-        form.addRow("Cross-tile merge IoU:", self._merge_iou)
+        self._merge_iou.setValue(
+            _saved_value(saved, "merge_iou", DEFAULT_MERGE_IOU, float)
+        )
+        add_field(3, 0, "Merge IoU", self._merge_iou)
 
         # I6: link 3 of the reference_body_px resolution chain (project
         # setting -> median of the source's existing labels -> THE USER).
@@ -136,17 +194,29 @@ class SemanticEscalationDialog(BaseDialog):
         self._reference_body.setDecimals(1)
         self._reference_body.setSingleStep(5.0)
         self._reference_body.setSpecialValueText("unknown (tiling off)")
-        self._reference_body.setValue(float(reference_body_px or 0.0))
+        self._reference_body.setValue(
+            _saved_value(
+                saved,
+                "reference_body_px",
+                float(reference_body_px or 0.0),
+                float,
+            )
+        )
         self._reference_body.setToolTip(
             "The typical longest side of one animal, in pixels. Tile size = "
             "this / tile fraction. With no value, tiling is off — which is "
             "the worst measured configuration for small animals."
         )
         self._reference_body.valueChanged.connect(self._refresh_tile_label)
-        form.addRow("Reference body size (px):", self._reference_body)
-        self._body_origin_label = QLabel(body_px_origin or "entered by you")
+        add_field(3, 1, "Body size (px)", self._reference_body)
+        origin_text = (
+            "saved from the previous SAM3 dialog"
+            if "reference_body_px" in saved
+            else body_px_origin or "entered by you"
+        )
+        self._body_origin_label = QLabel(origin_text)
         self._body_origin_label.setWordWrap(True)
-        form.addRow("  from:", self._body_origin_label)
+        self._body_origin_label.setToolTip(self._body_origin_label.text())
 
         # The fraction is a CALIBRATED parameter. The seed is presented as a
         # guess, never as a tuned or recommended value -- it was back-derived
@@ -156,24 +226,35 @@ class SemanticEscalationDialog(BaseDialog):
         self._tile_fraction.setSingleStep(0.01)
         self._tile_fraction.setDecimals(2)
         self._tile_fraction.setSpecialValueText("full frame (no tiling)")
-        self._tile_fraction.setValue(SEMANTIC_TILE_FRACTION_SEED)
+        self._tile_fraction.setValue(
+            _saved_value(saved, "tile_fraction", SEMANTIC_TILE_FRACTION_SEED, float)
+        )
         self._tile_fraction.setToolTip(
             "Tile size = reference body size / this fraction. The default is a "
             "starting guess from one dataset, not a tuned value — calibrate "
             "against your own labelled frames to fit it."
         )
         self._tile_fraction.valueChanged.connect(self._refresh_tile_label)
-        form.addRow("Tile fraction:", self._tile_fraction)
+        add_field(4, 0, "Tile fraction", self._tile_fraction)
 
         self._tile_label = QLabel("")
         self._tile_label.setWordWrap(True)
-        form.addRow("Tile size:", self._tile_label)
+        self._tile_label.setMinimumWidth(180)
+        add_field(4, 1, "Resolved tile", self._tile_label)
         self._refresh_tile_label()
-        outer.addLayout(form)
+
+        origin = QLabel(f"Body-size source: {self._body_origin_label.text()}")
+        origin.setWordWrap(True)
+        origin.setToolTip(self._body_origin_label.toolTip())
+        form.addWidget(origin, 5, 0, 1, 4)
+        self._body_origin_display = origin
+        top.addWidget(settings_group, 5)
+        outer.addLayout(top, 1)
 
         self._exhaustive = QCheckBox(
-            "My labelled frames are exhaustively labelled (every animal is marked)"
+            "Labelled frames are exhaustive (every animal is marked)"
         )
+        self._exhaustive.setChecked(bool(saved.get("exhaustive", False)))
         self._exhaustive.setToolTip(
             "Calibration counts an unlabelled real animal as a false positive, "
             "which biases the recommended threshold upward."
@@ -182,9 +263,11 @@ class SemanticEscalationDialog(BaseDialog):
 
         self._btn_calibrate = QPushButton("Calibrate against labelled frames…")
         self._btn_calibrate.setEnabled(False)
-        outer.addWidget(self._btn_calibrate)
         self._btn_calibrate.clicked.connect(self._run_calibration)
         self._refresh_calibration_enabled()
+
+        self._btn_view_calibration = QPushButton("View saved calibration…")
+        self._btn_view_calibration.clicked.connect(self._view_saved_calibration)
 
         self._btn_preview = QPushButton("Preview one tile")
         self._btn_preview.setToolTip(
@@ -193,7 +276,12 @@ class SemanticEscalationDialog(BaseDialog):
             "Reports the instance count and the measured time for that tile."
         )
         self._btn_preview.clicked.connect(self._run_preview)
-        outer.addWidget(self._btn_preview)
+
+        actions = QHBoxLayout()
+        actions.addWidget(self._btn_calibrate, 2)
+        actions.addWidget(self._btn_view_calibration, 1)
+        actions.addWidget(self._btn_preview, 1)
+        outer.addLayout(actions)
 
         # C1: the 3.45 GB download is surfaced HERE, before any run starts.
         # The tools-panel button is enabled when only the checkpoint is
@@ -210,7 +298,11 @@ class SemanticEscalationDialog(BaseDialog):
         self._status.setWordWrap(True)
         outer.addWidget(self._status)
 
+        self._refresh_saved_calibration_ui()
+
         self.add_content(container)
+        self.setMinimumSize(720, 500)
+        self.resize(820, 560)
 
     # -- accessors used by the handler -------------------------------------
 
@@ -238,23 +330,159 @@ class SemanticEscalationDialog(BaseDialog):
             "tile_fraction": self.tile_fraction(),
         }
 
+    @staticmethod
+    def _restore_calibration_points(record: dict) -> list:
+        from hydra_suite.core.inference.semantic.calibration import CalibrationPoint
+
+        points = []
+        for raw in record.get("points", []) if isinstance(record, dict) else []:
+            try:
+                points.append(CalibrationPoint(**dict(raw)))
+            except (TypeError, ValueError):
+                continue
+        return points
+
+    def _settings_payload(self) -> dict:
+        return {
+            "variant": self.selected_variant(),
+            "prompt": self.prompt(),
+            "source_names": [src.name for src in self.selected_sources()],
+            "exhaustive": self._exhaustive.isChecked(),
+            # Persist 0.0 rather than None so QDoubleSpinBox can restore the
+            # explicit full-frame choice without special-case coercion.
+            "tile_fraction": float(self._tile_fraction.value()),
+            **{
+                key: value
+                for key, value in self.parameters().items()
+                if key != "tile_fraction"
+            },
+        }
+
+    def _persist_settings(self) -> None:
+        if self._project is None:
+            return
+        self._project.semantic_escalation_settings = self._settings_payload()
+        if self._persist_callback is not None:
+            self._persist_callback()
+
+    def _store_calibration(self, points, recommended, reason: str) -> None:
+        self.calibration_points = list(points)
+        if self._project is None:
+            self._refresh_saved_calibration_ui()
+            return
+        recommended_index = -1
+        if recommended is not None:
+            recommended_index = next(
+                (i for i, point in enumerate(points) if point is recommended), -1
+            )
+        self._saved_calibration = {
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "variant": self.selected_variant(),
+            "prompt": self.prompt(),
+            "source_names": [src.name for src in self.selected_sources()],
+            "parameters": self.parameters(),
+            "reason": str(reason or ""),
+            "recommended_index": recommended_index,
+            "points": [asdict(point) for point in points],
+        }
+        self._project.semantic_calibration = dict(self._saved_calibration)
+        self._persist_settings()
+        self._refresh_saved_calibration_ui()
+
+    def _saved_recommendation(self):
+        index = _saved_value(self._saved_calibration, "recommended_index", -1, int)
+        if 0 <= index < len(self.calibration_points):
+            return self.calibration_points[index]
+        return None
+
+    def _refresh_saved_calibration_ui(self) -> None:
+        available = bool(self.calibration_points)
+        self._btn_view_calibration.setEnabled(available)
+        self._btn_calibrate.setText(
+            "Recalibrate labelled frames…"
+            if available
+            else "Calibrate against labelled frames…"
+        )
+        if available and not self._status.text():
+            created = str(self._saved_calibration.get("created_at", ""))[:10]
+            when = f" from {created}" if created else ""
+            self.set_status(
+                f"Saved calibration{when}: {len(self.calibration_points)} "
+                "measured operating point(s)."
+            )
+
+    def _show_calibration_results(
+        self,
+        points,
+        recommended,
+        reason: str,
+        *,
+        partial: bool,
+    ) -> None:
+        from hydra_suite.detectkit.gui.dialogs.calibration_results_dialog import (
+            CalibrationResultsDialog,
+        )
+
+        results = CalibrationResultsDialog(
+            points,
+            recommended,
+            reason,
+            project_frames=self._project_frame_count(),
+            partial=partial,
+            parent=self,
+        )
+        results.exec()
+        chosen = results.chosen()
+        if chosen is None:
+            self.set_status(reason or "Calibration finished; no point chosen.")
+            return
+        self.apply_calibration_choice(chosen)
+        self._persist_settings()
+        tile_desc = (
+            "full frame"
+            if chosen.tile_fraction is None
+            else f"tile fraction {chosen.tile_fraction:.2f} "
+            f"({chosen.tile_px} px, {chosen.tiles_per_frame} tiles/frame)"
+        )
+        self.set_status(
+            f"Using {tile_desc} at confidence {chosen.confidence:.2f}: misses "
+            f"{chosen.missed_per_frame:.1f} animal(s)/frame, leaves "
+            f"{chosen.extra_per_frame:.1f} polygon(s)/frame to delete "
+            f"(recall {chosen.recall:.1%}, {chosen.n_matched} matched, "
+            f"{chosen.seconds_per_frame:.1f} s/frame measured here)."
+        )
+
+    def _view_saved_calibration(self) -> None:
+        if not self.calibration_points:
+            return
+        self._show_calibration_results(
+            self.calibration_points,
+            self._saved_recommendation(),
+            str(self._saved_calibration.get("reason", "")),
+            partial=False,
+        )
+
     def _refresh_tile_label(self) -> None:
         body_px = self.reference_body_px()
         tile_px = resolve_tile_px(body_px, self.tile_fraction())
         if tile_px:
             self._tile_label.setText(
-                f"{tile_px} px (reference body size "
-                f"{body_px:.0f} px / "
-                f"{self.tile_fraction():.2f})"
+                f"{tile_px} px\n{body_px:.0f} px / {self.tile_fraction():.2f}"
+            )
+            self._tile_label.setToolTip(
+                f"Tile size {tile_px} px = {body_px:.0f} px reference body "
+                f"size / {self.tile_fraction():.2f} tile fraction."
             )
         elif self.tile_fraction() is None:
             self._tile_label.setText("full frame — tiling off by choice.")
+            self._tile_label.setToolTip("")
         else:
             self._tile_label.setText(
                 "full frame — no reference body size is known, so tiling is off. "
                 "Enter one above (or set one in project settings) for much "
                 "better small-object recall."
             )
+            self._tile_label.setToolTip(self._tile_label.text())
 
     def _project_frame_count(self) -> int:
         """Images across the selected sources — the run-time projection base."""
@@ -308,9 +536,6 @@ class SemanticEscalationDialog(BaseDialog):
         from PySide6.QtWidgets import QProgressDialog
 
         from hydra_suite.core.inference.semantic.calibration import recommend
-        from hydra_suite.detectkit.gui.dialogs.calibration_results_dialog import (
-            CalibrationResultsDialog,
-        )
         from hydra_suite.detectkit.jobs.semantic_escalation import CalibrationWorker
 
         if not self._exhaustive.isChecked():
@@ -322,19 +547,40 @@ class SemanticEscalationDialog(BaseDialog):
                 "the recommended threshold upward.",
             )
             return
-        if not self.confirm_checkpoint():
-            return
         sources = self.selected_sources() or self._sources
         if not sources:
             QMessageBox.information(self, "Calibrate", "No sources selected.")
             return
+        if self.calibration_points:
+            created = str(self._saved_calibration.get("created_at", ""))[:10]
+            suffix = f" from {created}" if created else ""
+            reply = QMessageBox.question(
+                self,
+                "Replace saved calibration?",
+                "A saved calibration"
+                f"{suffix} already exists. Completing a new calibration will "
+                "replace its measured frontier and recommendation. Continue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+        if not self.confirm_checkpoint():
+            return
+
+        self._persist_settings()
 
         # F4: the progress dialog exists BEFORE any decoding starts. Reading
         # the labelled frames is itself a cv2.imread of every labelled image
         # of every selected source, so it belongs behind this, in the worker,
         # under Cancel -- not on the GUI thread with the window frozen.
         progress = QProgressDialog("Reading labelled frames…", "Cancel", 0, 100, self)
+        progress.setWindowTitle("SAM3 calibration")
         progress.setMinimumDuration(0)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setModal(True)
+        progress.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        progress.setMinimumWidth(420)
         worker = CalibrationWorker(
             sources, self.prompt(), self.selected_variant(), self.parameters()
         )
@@ -344,7 +590,6 @@ class SemanticEscalationDialog(BaseDialog):
 
         def _done(points) -> None:
             progress.close()
-            self.calibration_points = points
             if not points:
                 self.set_status(
                     "Calibration produced nothing: no labelled frames were found "
@@ -353,38 +598,23 @@ class SemanticEscalationDialog(BaseDialog):
                 )
                 return
             best, reason = recommend(points)
-            results = CalibrationResultsDialog(
+            # A cancelled/partial sweep is useful to inspect, but must not erase
+            # the last complete calibration stored with the project.
+            if not worker.cancelled:
+                self._store_calibration(points, best, reason)
+            self._show_calibration_results(
                 points,
                 best,
                 reason,
-                project_frames=self._project_frame_count(),
-                # F6: a cancelled sweep must SAY it is partial.
                 partial=worker.cancelled,
-                parent=self,
-            )
-            results.exec()
-            chosen = results.chosen()
-            if chosen is None:
-                self.set_status(reason or "Calibration finished; no point chosen.")
-                return
-            self.apply_calibration_choice(chosen)
-            tile_desc = (
-                "full frame"
-                if chosen.tile_fraction is None
-                else f"tile fraction {chosen.tile_fraction:.2f} "
-                f"({chosen.tile_px} px, {chosen.tiles_per_frame} tiles/frame)"
-            )
-            self.set_status(
-                f"Using {tile_desc} at confidence {chosen.confidence:.2f}: misses "
-                f"{chosen.missed_per_frame:.1f} animal(s)/frame, leaves "
-                f"{chosen.extra_per_frame:.1f} polygon(s)/frame to delete "
-                f"(recall {chosen.recall:.1%}, {chosen.n_matched} matched, "
-                f"{chosen.seconds_per_frame:.1f} s/frame measured here)."
             )
 
         worker.result_ready.connect(_done)
         worker.finished.connect(progress.close)
         self._calibration_worker = worker  # keep a reference alive
+        progress.show()
+        progress.raise_()
+        progress.activateWindow()
         worker.start()
 
     # -- checkpoint download, surfaced before anything runs -----------------
@@ -438,6 +668,8 @@ class SemanticEscalationDialog(BaseDialog):
             return
         if not self.confirm_checkpoint():
             return
+
+        self._persist_settings()
 
         frames = self._project_frame_count()
         progress = QProgressDialog("Running one tile…", None, 0, 0, self)
@@ -494,4 +726,5 @@ class SemanticEscalationDialog(BaseDialog):
             return
         if not self.confirm_checkpoint():
             return
+        self._persist_settings()
         super().accept()

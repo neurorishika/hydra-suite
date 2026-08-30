@@ -19,7 +19,7 @@ import logging
 import math
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import cv2
 import numpy as np
@@ -285,8 +285,11 @@ def _predict_direct(
     confidence_threshold: float,
     iou: float = _PREVIEW_IOU,
     emit_native_geometry: bool = False,
+    should_stop: Callable[[], bool] | None = None,
 ) -> Any:
     """Run direct-mode OBB inference on a single BGR frame; return the ``OBBResult``."""
+    if should_stop is not None and should_stop():
+        return None
     raw_floor = max(1e-4, float(confidence_threshold))
     results = executor.predict(
         [frame],
@@ -294,6 +297,8 @@ def _predict_direct(
         iou=float(iou),
         verbose=False,
     )
+    if should_stop is not None and should_stop():
+        return None
     if not results:
         return None
     return extract_obb_result(
@@ -316,6 +321,7 @@ def predict_sliced_obb_result(
     confidence_threshold: float,
     iou: float = _PREVIEW_IOU,
     task: str = "obb",
+    should_stop: Callable[[], bool] | None = None,
 ):
     """Executor-level sliced OBB inference on one BGR frame (preview/AL).
 
@@ -323,6 +329,9 @@ def predict_sliced_obb_result(
     tile, offsets detections into frame space, and merges cross-tile duplicates
     with the shipped cv2 oracle. Returns a frame-space ``OBBResult`` or None.
     """
+    if should_stop is not None and should_stop():
+        return None
+
     fh, fw = int(frame.shape[0]), int(frame.shape[1])
     tw, th = tile_size_for_mode(
         geometry_mode=geometry_mode,
@@ -334,9 +343,11 @@ def predict_sliced_obb_result(
     )
     plan = plan_tiles((fh, fw), tw, th, overlap, overlap)
     raw_floor = max(1e-4, float(confidence_threshold))
-    tiles_img = [
-        np.ascontiguousarray(frame[y0:y1, x0:x1]) for (x0, y0, x1, y1) in plan.tiles
-    ]
+    tiles_img = []
+    for x0, y0, x1, y1 in plan.tiles:
+        if should_stop is not None and should_stop():
+            return None
+        tiles_img.append(np.ascontiguousarray(frame[y0:y1, x0:x1]))
     if not tiles_img:
         return _predict_direct(
             executor,
@@ -344,10 +355,13 @@ def predict_sliced_obb_result(
             confidence_threshold=confidence_threshold,
             iou=iou,
             emit_native_geometry=task == "segment",
+            should_stop=should_stop,
         )
     batch_size = _slice_prediction_batch_size(executor)
     results = []
     for start in range(0, len(tiles_img), batch_size):
+        if should_stop is not None and should_stop():
+            return None
         results.extend(
             executor.predict(
                 tiles_img[start : start + batch_size],
@@ -356,6 +370,8 @@ def predict_sliced_obb_result(
                 verbose=False,
             )
         )
+        if should_stop is not None and should_stop():
+            return None
 
     # Route extraction + cross-tile merge through the SAME production seam the
     # ``Grid`` region source uses: ``extract_obb_result``'s native ``offset=``
@@ -398,6 +414,7 @@ def _sequential_obb_result(
     conf: float,
     iou: float,
     crop_pad_ratio: float,
+    should_stop: Callable[[], bool] | None = None,
 ) -> Any:
     """Two-stage OBB inference on one frame -> merged ``OBBResult``.
 
@@ -407,6 +424,9 @@ def _sequential_obb_result(
     are fed to the executor at their native size (no ``resize_crops_for_stage2``
     rescale, scale factor 1.0).
     """
+    if should_stop is not None and should_stop():
+        return None
+
     raw_floor = max(1e-4, float(conf))
 
     detect_results = detect_executor.predict(
@@ -415,6 +435,8 @@ def _sequential_obb_result(
         iou=float(iou),
         verbose=False,
     )
+    if should_stop is not None and should_stop():
+        return None
     if not detect_results:
         return None
     boxes = getattr(detect_results[0], "boxes", None)
@@ -431,12 +453,29 @@ def _sequential_obb_result(
     # explicit so the parallel to model_test_dialog is obvious.
     crops_for_stage2 = resize_crops_for_stage2(crops, 0)
 
-    obb_results = obb_executor.predict(
-        crops_for_stage2,
-        conf=raw_floor,
-        iou=float(iou),
-        verbose=False,
-    )
+    if should_stop is None:
+        obb_results = obb_executor.predict(
+            crops_for_stage2,
+            conf=raw_floor,
+            iou=float(iou),
+            verbose=False,
+        )
+    else:
+        obb_results = []
+        batch_size = _slice_prediction_batch_size(obb_executor)
+        for start in range(0, len(crops_for_stage2), batch_size):
+            if should_stop():
+                return None
+            obb_results.extend(
+                obb_executor.predict(
+                    crops_for_stage2[start : start + batch_size],
+                    conf=raw_floor,
+                    iou=float(iou),
+                    verbose=False,
+                )
+            )
+            if should_stop():
+                return None
 
     sub = []
     for i, r in enumerate(obb_results):
@@ -473,6 +512,7 @@ def predict_preview_detections_for_image(
     device: str,
     confidence_threshold: float,
     task: str = "obb",
+    should_stop: Callable[[], bool] | None = None,
 ) -> list[dict[str, object]]:
     """Run inference using a pre-loaded executor on a single image. For batch reuse.
 
@@ -480,6 +520,8 @@ def predict_preview_detections_for_image(
     is retained for call-site compatibility but no longer used (the executor is
     already bound to its compute runtime).
     """
+    if should_stop is not None and should_stop():
+        return []
     frame = cv2.imread(str(image_path))
     if frame is None:
         raise RuntimeError(f"Could not read image: {image_path}")
@@ -488,6 +530,7 @@ def predict_preview_detections_for_image(
         frame,
         confidence_threshold=confidence_threshold,
         emit_native_geometry=task == "segment",
+        should_stop=should_stop,
     )
     if obb is None:
         return []
@@ -552,6 +595,7 @@ def predict_obb_for_frame_sequential(
     conf: float,
     iou: float = _PREVIEW_IOU,
     crop_pad_ratio: float = 0.15,
+    should_stop: Callable[[], bool] | None = None,
 ) -> list[tuple[float, float, float, float, float, float]]:
     """Two-stage OBB prediction via the public inference helpers.
 
@@ -571,6 +615,7 @@ def predict_obb_for_frame_sequential(
         conf=conf,
         iou=iou,
         crop_pad_ratio=crop_pad_ratio,
+        should_stop=should_stop,
     )
     if merged is None:
         return []

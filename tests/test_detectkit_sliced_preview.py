@@ -111,6 +111,36 @@ def test_predict_sliced_bounds_mps_tile_batches(monkeypatch):
     assert max(len(batch) for batch in ex.calls) <= pp._MPS_SLICE_BATCH_SIZE
 
 
+def test_predict_sliced_stops_between_tile_batches(monkeypatch):
+    cancelled = False
+
+    class _CancellingExecutor(_MPSFakeExecutor):
+        def predict(self, images, **kw):
+            nonlocal cancelled
+            results = super().predict(images, **kw)
+            cancelled = True
+            return results
+
+    ex = _CancellingExecutor()
+    out = pp.predict_sliced_obb_result(
+        ex,
+        np.zeros((1024, 1024, 3), np.uint8),
+        geometry_mode="custom",
+        imgsz=640,
+        reference_body_px=0.0,
+        object_tile_fraction=0.15,
+        slice_width=128,
+        slice_height=128,
+        overlap=0.0,
+        merge_threshold=0.5,
+        confidence_threshold=0.25,
+        should_stop=lambda: cancelled,
+    )
+
+    assert out is None
+    assert len(ex.calls) == 1
+
+
 def test_predict_sliced_offsets_detection_into_frame_space(monkeypatch):
     # A single detection in tile (256,256)-(512,512) must land near frame (300,300).
     # The preview now applies the tile->frame offset via extract_obb_result's own

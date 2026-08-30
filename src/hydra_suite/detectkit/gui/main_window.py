@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from threading import Event
 from typing import Optional
 
 from PySide6.QtCore import Qt, QTimer, Signal
@@ -20,6 +21,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QProgressDialog,
+    QPushButton,
     QSplitter,
     QStackedWidget,
     QStatusBar,
@@ -151,12 +153,25 @@ class _DetectKitDatasetInferenceWorker(BaseWorker):
         self._stage2_image_size = int(stage2_image_size)
         self._slice_settings = slice_settings
         self._imgsz_obb_direct = int(imgsz_obb_direct)
-        self._cancel = False
+        self._cancel_event = Event()
 
     def cancel(self) -> None:
-        self._cancel = True
+        """Request cooperative cancellation at the next safe inference boundary."""
+        self._cancel_event.set()
+
+    def is_cancelled(self) -> bool:
+        """Return whether cancellation has been requested for this run."""
+        return self._cancel_event.is_set()
+
+    def _stop_if_cancelled(self) -> bool:
+        if not self.is_cancelled():
+            return False
+        self.status.emit("Inference cancelled.")
+        return True
 
     def execute(self) -> None:
+        if self._stop_if_cancelled():
+            return
         total = len(self._image_paths)
         if total == 0:
             self.success.emit(
@@ -195,12 +210,13 @@ class _DetectKitDatasetInferenceWorker(BaseWorker):
                 stage2_image_size=self._stage2_image_size,
             )
             runner = InferenceRunner(config)
+            if self._stop_if_cancelled():
+                return
 
             import cv2
 
             for index, image_path in enumerate(self._image_paths, start=1):
-                if self._cancel:
-                    self.status.emit("Inference cancelled.")
+                if self._stop_if_cancelled():
                     return
                 self.status.emit(
                     f"Running inference on image {index}/{total}: {Path(image_path).name}"
@@ -218,6 +234,8 @@ class _DetectKitDatasetInferenceWorker(BaseWorker):
                         exc_info=True,
                     )
                     detections = []
+                if self._stop_if_cancelled():
+                    return
                 per_image[image_path] = detections
                 for det in detections:
                     detection_count += 1
@@ -233,12 +251,13 @@ class _DetectKitDatasetInferenceWorker(BaseWorker):
             obb_model, obb_device = load_torch_model(
                 self._secondary_model_path, self._device_preference
             )
+            if self._stop_if_cancelled():
+                return
 
             import cv2
 
             for index, image_path in enumerate(self._image_paths, start=1):
-                if self._cancel:
-                    self.status.emit("Inference cancelled.")
+                if self._stop_if_cancelled():
                     return
                 self.status.emit(
                     f"Running inference on image {index}/{total}: {Path(image_path).name}"
@@ -255,6 +274,7 @@ class _DetectKitDatasetInferenceWorker(BaseWorker):
                         obb_device=obb_device,
                         conf=confidence_threshold,
                         iou=0.7,
+                        should_stop=self.is_cancelled,
                     )
                     import numpy as np
 
@@ -291,6 +311,8 @@ class _DetectKitDatasetInferenceWorker(BaseWorker):
                         exc_info=True,
                     )
                     detections = []
+                if self._stop_if_cancelled():
+                    return
                 per_image[image_path] = detections
                 for det in detections:
                     detection_count += 1
@@ -307,12 +329,13 @@ class _DetectKitDatasetInferenceWorker(BaseWorker):
             model, device = load_torch_model(
                 self._model_path, self._device_preference, task=task
             )
+            if self._stop_if_cancelled():
+                return
 
             slice_settings = self._slice_settings
             sliced = bool(slice_settings is not None and slice_settings.enabled)
             for index, image_path in enumerate(self._image_paths, start=1):
-                if self._cancel:
-                    self.status.emit("Inference cancelled.")
+                if self._stop_if_cancelled():
                     return
                 self.status.emit(
                     f"Running inference on image {index}/{total}: {Path(image_path).name}"
@@ -342,6 +365,7 @@ class _DetectKitDatasetInferenceWorker(BaseWorker):
                             merge_threshold=slice_settings.merge_threshold,
                             confidence_threshold=confidence_threshold,
                             task=task,
+                            should_stop=self.is_cancelled,
                         )
                         detections = (
                             dicts_from_obb_result(obb) if obb is not None else []
@@ -353,12 +377,15 @@ class _DetectKitDatasetInferenceWorker(BaseWorker):
                             device=device,
                             confidence_threshold=confidence_threshold,
                             task=task,
+                            should_stop=self.is_cancelled,
                         )
                 except Exception:
                     logger.warning(
                         "Dataset inference failed on %s", image_path, exc_info=True
                     )
                     detections = []
+                if self._stop_if_cancelled():
+                    return
                 per_image[image_path] = detections
                 for det in detections:
                     detection_count += 1
@@ -406,7 +433,7 @@ class _DetectKitPortableWorker(BaseWorker):
 _DATASET_PANEL_MIN_WIDTH = 360
 _DATASET_PANEL_MAX_WIDTH = 420
 _CANVAS_MIN_WIDTH = 480
-_TOOLS_PANEL_WIDTH = 280
+_TOOLS_PANEL_PREFERRED_WIDTH = 380
 _WORKSPACE_MIN_HEIGHT = 760
 _WORKSPACE_MIN_WIDTH = 1320
 
@@ -952,7 +979,6 @@ class DetectKitMainWindow(QMainWindow):
         self._right_tabs = canvas_shell
 
         self._tools_panel.setProperty("detectkitRole", "panelShell")
-        self._tools_panel.setFixedWidth(_TOOLS_PANEL_WIDTH)
         splitter.addWidget(self._tools_panel)  # index 2
 
         splitter.setCollapsible(0, False)
@@ -962,7 +988,11 @@ class DetectKitMainWindow(QMainWindow):
         splitter.setStretchFactor(1, 1)
         splitter.setStretchFactor(2, 0)
         splitter.setSizes(
-            [_DATASET_PANEL_MIN_WIDTH, _CANVAS_MIN_WIDTH + 220, _TOOLS_PANEL_WIDTH]
+            [
+                _DATASET_PANEL_MIN_WIDTH,
+                _CANVAS_MIN_WIDTH + 220,
+                _TOOLS_PANEL_PREFERRED_WIDTH,
+            ]
         )
 
         layout.addWidget(splitter, 1)
@@ -1841,15 +1871,30 @@ class DetectKitMainWindow(QMainWindow):
         )
         worker.progress.connect(progress.setValue)
         worker.status.connect(progress.setLabelText)
-        progress.canceled.connect(worker.cancel)
         worker.error.connect(
             lambda msg: QMessageBox.warning(self, "Run Inference", msg)
         )
+
+        def _request_cancel() -> None:
+            worker.cancel()
+            progress.setLabelText(
+                "Cancelling inference… waiting for the current model call to stop."
+            )
+            progress.setCancelButtonText("Cancelling…")
+            cancel_button = progress.findChild(QPushButton)
+            if cancel_button is not None:
+                cancel_button.setEnabled(False)
+            progress.show()
+            self.statusBar().showMessage("Cancelling inference…")
+
+        progress.canceled.connect(_request_cancel)
 
         def _finish() -> None:
             progress.close()
             self._inference_worker = None
             self._inference_progress_dialog = None
+            if worker.is_cancelled():
+                self.statusBar().showMessage("Inference cancelled.", 5000)
 
         def _handle_success(result: dict) -> None:
             self._dataset_predictions = dict(result.get("per_image", {}))

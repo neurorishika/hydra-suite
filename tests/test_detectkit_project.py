@@ -66,6 +66,26 @@ def test_project_roundtrip(tmp_path: Path):
     assert loaded.sources[0].name == "ds1"
 
 
+def test_project_roundtrip_preserves_semantic_settings_and_calibration(tmp_path: Path):
+    proj = DetectKitProject(project_dir=tmp_path)
+    proj.semantic_escalation_settings = {
+        "prompt": "ant",
+        "confidence": 0.42,
+        "tile_fraction": 0.08,
+    }
+    proj.semantic_calibration = {
+        "created_at": "2026-08-30T12:00:00+00:00",
+        "points": [{"confidence": 0.42, "tile_fraction": 0.08}],
+    }
+
+    project_file = tmp_path / "detectkit_project.json"
+    proj.save(project_file)
+    loaded = DetectKitProject.load(project_file)
+
+    assert loaded.semantic_escalation_settings == proj.semantic_escalation_settings
+    assert loaded.semantic_calibration == proj.semantic_calibration
+
+
 def test_project_loads_legacy_single_class_field(tmp_path: Path):
     proj_file = tmp_path / "detectkit_project.json"
     proj_file.write_text(
