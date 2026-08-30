@@ -40,7 +40,12 @@ from hydra_suite.widgets.workers import BaseWorker
 
 from . import escalation_actions
 from .canvas import OBBCanvas
-from .models import DetectKitProject, SliceTrainingSettings
+from .models import (
+    INFERENCE_CONFIDENCE_FLOOR,
+    DetectKitProject,
+    InferenceRunSettings,
+    SliceTrainingSettings,
+)
 from .panels.dataset_panel import DatasetPanel
 from .panels.tools_panel import ToolsPanel
 from .prediction_preview import (
@@ -72,6 +77,18 @@ from .utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _filter_detections_by_confidence(
+    detections: list[dict[str, object]], confidence_threshold: float
+) -> list[dict[str, object]]:
+    """Return cached detections visible at the current display threshold."""
+    threshold = float(confidence_threshold)
+    return [
+        detection
+        for detection in detections
+        if float(detection.get("confidence", 0.0)) >= threshold
+    ]
 
 
 def _resolve_source_render_state(project, source_path):
@@ -697,9 +714,10 @@ class DetectKitMainWindow(QMainWindow):
         self._project: Optional[DetectKitProject] = None
         self._current_source_path = ""
         self._current_image_path = ""
-        self._last_prediction_request: tuple[str, str, float] | None = None
+        self._last_prediction_request: tuple[object, ...] | None = None
         self._dataset_predictions: dict[str, list[dict[str, object]]] = {}
-        self._dataset_prediction_signature: tuple[str, str, float] | None = None
+        self._dataset_prediction_signature: tuple[object, ...] | None = None
+        self._inference_settings_override: InferenceRunSettings | None = None
         self._inference_worker: Optional[_DetectKitDatasetInferenceWorker] = None
         self._inference_progress_dialog: Optional[QProgressDialog] = None
         self._portable_worker = None
@@ -739,6 +757,9 @@ class DetectKitMainWindow(QMainWindow):
         self._dataset_panel.history_requested.connect(self._open_history_dialog)
         self._tools_panel.overlay_settings_changed.connect(self._on_overlay_changed)
         self._tools_panel.run_inference_requested.connect(self._run_inference_overlay)
+        self._tools_panel.inference_settings_requested.connect(
+            self._open_inference_settings_dialog
+        )
         self._tools_panel.escalate_geometry_requested.connect(
             lambda: escalation_actions.on_escalate_geometry(self)
         )
@@ -809,6 +830,10 @@ class DetectKitMainWindow(QMainWindow):
         act_run_inference = QAction("Run Inference", self)
         act_run_inference.triggered.connect(self._run_inference_overlay)
         tb.addAction(act_run_inference)
+
+        act_inference_settings = QAction("Inference Settings", self)
+        act_inference_settings.triggered.connect(self._open_inference_settings_dialog)
+        tb.addAction(act_inference_settings)
 
         act_history = QAction("History", self)
         act_history.triggered.connect(self._open_history_dialog)
@@ -1187,6 +1212,7 @@ class DetectKitMainWindow(QMainWindow):
         self._current_source_path = ""
         self._current_image_path = ""
         self._last_prediction_request = None
+        self._inference_settings_override = None
 
         linked_counts = detectkit_project_linked_reference_counts(proj)
         portability_status = (
@@ -1638,7 +1664,54 @@ class DetectKitMainWindow(QMainWindow):
                 4000,
             )
 
-    def _dataset_signature(self, settings) -> tuple[str, str, float] | None:
+    def _effective_inference_settings(self, overlay_settings) -> InferenceRunSettings:
+        """Return the active runtime override, or a project-default snapshot."""
+        if self._project is None:
+            raise RuntimeError("No DetectKit project is open.")
+        if self._inference_settings_override is not None:
+            # The existing confidence slider remains a quick adjustment even
+            # after the more detailed dialog has supplied runtime geometry.
+            return InferenceRunSettings(
+                device=self._inference_settings_override.device,
+                confidence_threshold=overlay_settings.confidence_threshold,
+                slice_settings=self._inference_settings_override.slice_settings,
+            )
+        return InferenceRunSettings.from_project(
+            self._project, overlay_settings.confidence_threshold
+        )
+
+    def _open_inference_settings_dialog(self) -> None:
+        """Let users tune the next dataset inference run without mutating training."""
+        if self._project is None:
+            QMessageBox.information(
+                self,
+                "Inference Settings",
+                "Open a project before changing inference settings.",
+            )
+            return
+
+        from .dialogs.inference_settings import InferenceSettingsDialog
+
+        overlay_settings = self._tools_panel.get_overlay_settings()
+        defaults = InferenceRunSettings.from_project(
+            self._project, overlay_settings.confidence_threshold
+        )
+        current = self._effective_inference_settings(overlay_settings)
+        dialog = InferenceSettingsDialog(current, defaults, parent=self)
+        if not dialog.exec():
+            return
+
+        self._inference_settings_override = dialog.settings()
+        self._tools_panel.set_confidence_threshold(
+            self._inference_settings_override.confidence_threshold
+        )
+        self._on_overlay_changed()
+        self.statusBar().showMessage(
+            "Inference settings applied for this window. Run Inference to refresh predictions.",
+            5000,
+        )
+
+    def _dataset_signature(self, settings) -> tuple[object, ...] | None:
         if self._project is None or not self._current_source_path:
             return None
         model_path = str(settings.active_model_path or "").strip()
@@ -1647,8 +1720,38 @@ class DetectKitMainWindow(QMainWindow):
         return (
             self._current_source_path,
             model_path,
-            round(float(settings.confidence_threshold), 4),
-        )
+        ) + self._effective_inference_settings(settings).cache_key()
+
+    def _visible_inference_stats(self, confidence_threshold: float) -> dict:
+        """Summarize cached candidates after applying the live display filter."""
+        per_image = {
+            image_path: _filter_detections_by_confidence(
+                detections, confidence_threshold
+            )
+            for image_path, detections in self._dataset_predictions.items()
+        }
+        detections = [
+            detection
+            for image_detections in per_image.values()
+            for detection in image_detections
+        ]
+        class_counts: dict[int, int] = {}
+        for detection in detections:
+            class_id = int(detection.get("class_id", 0))
+            class_counts[class_id] = class_counts.get(class_id, 0) + 1
+        count = len(detections)
+        return {
+            "per_image": per_image,
+            "image_count": len(per_image),
+            "detection_count": count,
+            "class_counts": class_counts,
+            "mean_confidence": (
+                sum(float(detection.get("confidence", 0.0)) for detection in detections)
+                / count
+                if count
+                else 0.0
+            ),
+        }
 
     def _run_inference_overlay(self) -> None:
         """Run dataset-wide PyTorch inference for the active source."""
@@ -1716,11 +1819,13 @@ class DetectKitMainWindow(QMainWindow):
         progress.setAttribute(Qt.WA_DeleteOnClose, True)
         progress.setValue(0)
 
+        inference_settings = self._effective_inference_settings(settings)
+
         worker = _DetectKitDatasetInferenceWorker(
             image_paths,
             primary,
-            self._project.device or "auto",
-            settings.confidence_threshold,
+            inference_settings.device,
+            INFERENCE_CONFIDENCE_FLOOR,
             inference_kind=kind,
             secondary_model_path=(
                 secondary if kind in {"sequential", "sequential_segment"} else None
@@ -1731,7 +1836,7 @@ class DetectKitMainWindow(QMainWindow):
                 if kind == "sequential_segment"
                 else self._project.imgsz_seq_crop_obb
             ),
-            slice_settings=self._project.slice_settings,
+            slice_settings=inference_settings.slice_settings,
             imgsz_obb_direct=self._project.imgsz_obb_direct,
         )
         worker.progress.connect(progress.setValue)
@@ -1750,12 +1855,13 @@ class DetectKitMainWindow(QMainWindow):
             self._dataset_predictions = dict(result.get("per_image", {}))
             self._dataset_prediction_signature = signature
             self._tools_panel.update_inference_stats(
-                result, class_names=self._project.class_names
+                self._visible_inference_stats(settings.confidence_threshold),
+                class_names=self._project.class_names,
             )
             self._refresh_prediction_overlay(force=True)
             self.statusBar().showMessage(
-                f"Inference complete: {result.get('detection_count', 0):,} "
-                f"detection(s) across {result.get('image_count', 0):,} image(s).",
+                f"Inference complete: {result.get('detection_count', 0):,} candidate(s) "
+                f"retained at ≥{INFERENCE_CONFIDENCE_FLOOR:.2f}.",
                 5000,
             )
 
@@ -1827,9 +1933,16 @@ class DetectKitMainWindow(QMainWindow):
             self._last_prediction_request = None
             return
 
-        detections = self._dataset_predictions.get(self._current_image_path, [])
+        detections = _filter_detections_by_confidence(
+            self._dataset_predictions.get(self._current_image_path, []),
+            settings.confidence_threshold,
+        )
         self._canvas.set_pred_detections(
             detections,
+            class_names=self._project.class_names,
+        )
+        self._tools_panel.update_inference_stats(
+            self._visible_inference_stats(settings.confidence_threshold),
             class_names=self._project.class_names,
         )
         self._last_prediction_request = signature
