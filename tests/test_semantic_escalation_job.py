@@ -6,10 +6,11 @@ import numpy as np
 import pytest
 
 from hydra_suite.core.inference.semantic.base import SemanticInstance
+from hydra_suite.data.al.merge import MergeMode
 from hydra_suite.detectkit.gui.models import OBBSource
+from hydra_suite.detectkit.jobs import staged_review as sr
 from hydra_suite.detectkit.jobs.semantic_escalation import (
     SemanticEscalationRequest,
-    accept_pending_semantic_escalation,
     is_prompt_failure,
     rethreshold_staged,
     run_semantic_escalation,
@@ -297,59 +298,36 @@ def test_an_unreviewed_sam2_escalation_is_not_silently_destroyed(tmp_path):
     assert (sam2_dir / "labels" / "f0.txt").exists()
 
 
-def test_accept_creates_a_sibling_and_leaves_the_origin_untouched(tmp_path):
-    src = _make_source(tmp_path, n_images=2)
-    (Path(src.path) / "labels" / "f0.txt").write_text("0 0.1 0.1 0.2 0.2\n")
-    original = (Path(src.path) / "labels" / "f0.txt").read_bytes()
-    project = _Project(tmp_path, [src])
-    labeler = ScriptedLabeler([SemanticInstance(_blob(200, 200), 0.9)])
-    run_semantic_escalation(_request(tmp_path, src, project=project), labeler)
-
-    sibling = accept_pending_semantic_escalation(src, project, tmp_path)
-
-    assert sibling is not src
-    assert sibling in project.sources
-    assert sibling.level == "polygon"
-    assert sibling.reviewed is False
-    assert sibling.derived_from == src.name
-    assert (Path(src.path) / "labels" / "f0.txt").read_bytes() == original
-    assert src.staged_review is None
-
-
-def test_sibling_carries_images_and_the_prompt_as_its_class_name(tmp_path):
-    src = _make_source(tmp_path, n_images=2)
-    project = _Project(tmp_path, [src])
-    labeler = ScriptedLabeler([SemanticInstance(_blob(200, 200), 0.9)])
-    run_semantic_escalation(
-        _request(tmp_path, src, project=project, prompt="black ant"), labeler
-    )
-    sibling = accept_pending_semantic_escalation(src, project, tmp_path)
-    root = Path(sibling.path)
-    assert len(list((root / "images").rglob("*.png"))) == 2
-    assert len(list((root / "labels").rglob("*.txt"))) == 2
-    assert (root / "classes.txt").read_text().strip() == "black ant"
+# --- accept_pending_semantic_escalation retirement --------------------------
+#
+# accept_pending_semantic_escalation built a whole NEW SIBLING SOURCE out of a
+# staged SAM3 run -- the originally reported bug: accepting a reviewed run
+# produced a new source instead of landing on the source the run was made
+# against. It is deleted (Task 13); frame-granular review
+# (jobs/staged_review.py's accept_frame/accept_all/finish_review) accepts
+# into the ORIGIN source instead, in place, one frame at a time.
+#
+# Tests below that asserted sibling-only mechanics -- new-source naming,
+# image copying/hardlinking into a sibling, and the candidate cache/run.json
+# never reaching a sibling -- are deleted outright rather than ported:
+# frame-granular accept never creates a source and never copies an image
+# (it writes into the origin's own labels/ in place), so none of that
+# machinery -- or its regression coverage -- has an equivalent in the new
+# path. `test_accepting_a_sam3_review_does_not_create_a_sibling_source` in
+# tests/test_detectkit_sam2_escalation_wiring.py is this behaviour change's
+# replacement regression test.
+#
+# `test_accept_refuses_a_sam2_pending_record` is deleted too: refusing to
+# accept a SAM2-produced pending record BY PRODUCER was exactly the
+# discrimination this refactor removes -- staged_review.py's accept path is
+# producer-agnostic by design (see its module docstring).
+#
+# `test_accept_refuses_when_the_staging_dir_is_gone` is ported below to
+# accept_frame, which raises the equivalent "nothing was changed" error when
+# the staged label file it needs is missing.
 
 
-def test_the_candidate_cache_never_reaches_the_sibling(tmp_path):
-    src = _make_source(tmp_path, n_images=1)
-    project = _Project(tmp_path, [src])
-    labeler = ScriptedLabeler([SemanticInstance(_blob(200, 200), 0.9)])
-    run_semantic_escalation(_request(tmp_path, src, project=project), labeler)
-    sibling = accept_pending_semantic_escalation(src, project, tmp_path)
-    assert not (Path(sibling.path) / "candidates.json").exists()
-    assert not (Path(sibling.path) / "run.json").exists()
-
-
-def test_accept_refuses_a_sam2_pending_record(tmp_path):
-    src = _make_source(tmp_path, n_images=1)
-    from hydra_suite.detectkit.gui.models import StagedReview
-
-    src.staged_review = StagedReview(staged_path=str(tmp_path), producer="sam2")
-    with pytest.raises(ValueError, match="not a SAM3"):
-        accept_pending_semantic_escalation(src, _Project(tmp_path, [src]), tmp_path)
-
-
-def test_accept_refuses_when_the_staging_dir_is_gone(tmp_path):
+def test_accept_frame_refuses_when_the_staging_dir_is_gone(tmp_path):
     import shutil
 
     src = _make_source(tmp_path, n_images=1)
@@ -357,8 +335,8 @@ def test_accept_refuses_when_the_staging_dir_is_gone(tmp_path):
     labeler = ScriptedLabeler([SemanticInstance(_blob(200, 200), 0.9)])
     run_semantic_escalation(_request(tmp_path, src, project=project), labeler)
     shutil.rmtree(src.staged_review.staged_path)
-    with pytest.raises(RuntimeError, match="missing on disk"):
-        accept_pending_semantic_escalation(src, project, tmp_path)
+    with pytest.raises(RuntimeError, match="missing"):
+        sr.accept_frame(src, "f0.txt", mode=MergeMode.OVERWRITE)
 
 
 def test_labelled_frames_reads_every_geometry_level(tmp_path):
@@ -514,75 +492,16 @@ def test_confidence_alone_does_not_invalidate_the_candidate_cache(tmp_path):
 
 
 # --- I7: promotion image lookup ---------------------------------------------
-
-
-def test_promotion_matches_nested_images_by_relative_path(tmp_path):
-    """I7: `origin_images.rglob(f"{rel.stem}.*")` walked the WHOLE tree.
-
-    Two nested subdirectories holding the same stem made the match
-    nondeterministic (whichever rglob yielded first won), and every label
-    paid a full-tree walk. This nested layout has that exact collision.
-    """
-    root = tmp_path / "sources" / "nested"
-    for sub in ("a", "b"):
-        (root / "images" / sub).mkdir(parents=True)
-        (root / "labels" / sub).mkdir(parents=True)
-    # Same stem in two subdirectories, with visibly different pixels.
-    cv2.imwrite(
-        str(root / "images" / "a" / "f0.png"), np.zeros((400, 400, 3), dtype=np.uint8)
-    )
-    cv2.imwrite(
-        str(root / "images" / "b" / "f0.png"),
-        np.full((400, 400, 3), 255, dtype=np.uint8),
-    )
-    (root / "classes.txt").write_text("object\n")
-    src = OBBSource(path=str(root), name="nested", level="polygon")
-    project = _Project(tmp_path, [src])
-    labeler = ScriptedLabeler([SemanticInstance(_blob(200, 200), 0.9)])
-    run_semantic_escalation(_request(tmp_path, src, project=project), labeler)
-
-    sibling = accept_pending_semantic_escalation(src, project, tmp_path)
-    sib = Path(sibling.path)
-    assert (sib / "labels" / "a" / "f0.txt").exists()
-    assert (sib / "labels" / "b" / "f0.txt").exists()
-    # Each image must be the one from its OWN subdirectory, not whichever
-    # rglob happened to yield first.
-    assert cv2.imread(str(sib / "images" / "a" / "f0.png")).mean() == 0
-    assert cv2.imread(str(sib / "images" / "b" / "f0.png")).mean() == 255
-
-
-def test_a_staged_label_with_no_origin_image_is_skipped_not_orphaned(tmp_path):
-    src = _make_source(tmp_path, n_images=1)
-    project = _Project(tmp_path, [src])
-    labeler = ScriptedLabeler([SemanticInstance(_blob(200, 200), 0.9)])
-    run_semantic_escalation(_request(tmp_path, src, project=project), labeler)
-    staged = Path(src.staged_review.staged_path)
-    # A staged label whose image no longer exists in the origin.
-    (staged / "labels" / "ghost.txt").write_text(
-        (staged / "labels" / "f0.txt").read_text()
-    )
-    sibling = accept_pending_semantic_escalation(src, project, tmp_path)
-    sib = Path(sibling.path)
-    assert not (sib / "labels" / "ghost.txt").exists()
-    assert (sib / "labels" / "f0.txt").exists()
-    # No label in the sibling is without its image.
-    for lbl in (sib / "labels").rglob("*.txt"):
-        rel = lbl.relative_to(sib / "labels")
-        assert (sib / "images" / rel.with_suffix(".png")).exists()
-
-
-def test_unique_source_name_avoids_a_stale_on_disk_directory(tmp_path):
-    src = _make_source(tmp_path, n_images=1)
-    project = _Project(tmp_path, [src])
-    # A leftover directory from a source the user DELETED from the project.
-    stale = tmp_path / "sources" / "src-sam3-ant"
-    (stale / "labels").mkdir(parents=True)
-    (stale / "labels" / "leftover.txt").write_text("0 0.1 0.1 0.2 0.2\n")
-    labeler = ScriptedLabeler([SemanticInstance(_blob(200, 200), 0.9)])
-    run_semantic_escalation(_request(tmp_path, src, project=project), labeler)
-    sibling = accept_pending_semantic_escalation(src, project, tmp_path)
-    assert Path(sibling.path) != stale
-    assert not (Path(sibling.path) / "labels" / "leftover.txt").exists()
+#
+# test_promotion_matches_nested_images_by_relative_path,
+# test_a_staged_label_with_no_origin_image_is_skipped_not_orphaned, and
+# test_unique_source_name_avoids_a_stale_on_disk_directory are deleted along
+# with accept_pending_semantic_escalation/_unique_source_name (see the block
+# above): all three pin sibling-only mechanics -- matching an origin image to
+# hardlink into a NEW source's images/, skipping a staged label with no
+# origin image when building that new source, and picking a free name/
+# directory for it. Frame-granular accept_frame never copies an image or
+# creates a source, so none of this has an equivalent to port.
 
 
 # --- I6 / I8: reference-body chain and the non-decoding has-labels check -----

@@ -163,8 +163,8 @@ def run_escalation(
     ``artifacts/pending_escalations/`` and records it on the source's
     ``staged_review`` field. It does NOT touch the source's own
     canonical labels and does NOT register any new source -- a caller (the
-    escalation review dialog) must call ``accept_pending_escalation`` or
-    ``reject_pending_escalation`` to promote or discard the staged result.
+    frame-granular review flow in ``jobs/staged_review.py``) accepts or
+    rejects individual staged frames to promote or discard the staged result.
 
     Re-running escalation over a source that already has a pending
     escalation is guarded: by default it's skipped (recorded in
@@ -295,97 +295,3 @@ def run_escalation(
         )
         result.staged.append(src.name)
     return result
-
-
-def accept_pending_escalation(
-    source: OBBSource,
-    project_dir: str | Path | None = None,
-) -> None:
-    """Promote *source*'s staged escalation result to its canonical labels.
-
-    Overwrites the source's ``labels/`` + ``classes.txt`` from the staged
-    copy, sets ``level``/``sam2_variant`` from the pending record, resets
-    ``reviewed`` to ``False`` (same meaning as any other machine-derived,
-    not-yet-human-confirmed result -- just attached to the existing source
-    instead of a new sibling), removes the staging directory, and clears
-    ``staged_review``.
-
-    Validates BEFORE deleting anything: refuses (raising ``RuntimeError``,
-    source left untouched) if the staging directory is missing on disk, or
-    if it is missing a label file for an image the source currently has a
-    label for (e.g. an image that failed to decode during escalation and was
-    silently skipped by ``run_escalation``) -- accepting such a staged result
-    would otherwise delete real labels with nothing staged to replace them.
-
-    *project_dir*, when given, bounds the staging-directory delete to that
-    project's ``artifacts/pending_escalations/`` (see ``_is_safe_to_delete``).
-
-    Raises ValueError if the source has no pending escalation.
-    """
-    pending = source.staged_review
-    if pending is None:
-        raise ValueError(f"Source '{source.name}' has no pending escalation.")
-
-    staged_root = Path(pending.staged_path)
-    staged_labels = staged_root / "labels"
-    if not staged_labels.is_dir():
-        raise RuntimeError(
-            f"Staged escalation for '{source.name}' is missing on disk "
-            f"({staged_labels}); nothing was changed. Reject this escalation "
-            "and re-run it."
-        )
-
-    source_root = Path(source.path)
-    source_labels = source_root / "labels"
-    existing_rel = (
-        {p.relative_to(source_labels) for p in source_labels.rglob("*.txt")}
-        if source_labels.is_dir()
-        else set()
-    )
-    staged_rel = {p.relative_to(staged_labels) for p in staged_labels.rglob("*.txt")}
-    missing = sorted(str(p) for p in existing_rel - staged_rel)
-    if missing:
-        raise RuntimeError(
-            f"Staged escalation for '{source.name}' is missing "
-            f"{len(missing)} label file(s) that exist in the source (likely "
-            "an unreadable image during escalation) -- refusing to accept, "
-            f"as this would delete those labels: {missing[:5]}"
-        )
-
-    # ignore_errors=False (the default): a partially-failed delete must raise
-    # HERE, before any copy has started. Swallowing it left the destination
-    # only half gone, and the copytree below then failed with FileExistsError
-    # -- wedging labels/ in a half-deleted state.
-    if source_labels.exists():
-        shutil.rmtree(source_labels)
-    shutil.copytree(staged_labels, source_labels)
-    classes_src = staged_root / "classes.txt"
-    if classes_src.exists():
-        shutil.copyfile(classes_src, source_root / "classes.txt")
-
-    source.level = pending.target_level
-    source.reviewed = False
-    source.sam2_variant = pending.producer_variant
-
-    remove_staged_escalation_dir(staged_root, project_dir)
-    source.staged_review = None
-
-
-def reject_pending_escalation(
-    source: OBBSource,
-    project_dir: str | Path | None = None,
-) -> None:
-    """Discard *source*'s staged escalation result, leaving it untouched.
-
-    *project_dir*, when given, bounds the staging-directory delete to that
-    project's ``artifacts/pending_escalations/`` (see ``_is_safe_to_delete``).
-    An out-of-bounds ``staged_path`` is left on disk and the pending state is
-    cleared anyway -- rejecting must always succeed.
-
-    Raises ValueError if the source has no pending escalation.
-    """
-    pending = source.staged_review
-    if pending is None:
-        raise ValueError(f"Source '{source.name}' has no pending escalation.")
-    remove_staged_escalation_dir(pending.staged_path, project_dir)
-    source.staged_review = None

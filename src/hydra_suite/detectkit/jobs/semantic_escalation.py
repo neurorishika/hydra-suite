@@ -395,11 +395,10 @@ def run_semantic_escalation(
 ) -> SemanticEscalationResult:
     """Stage prompt-driven polygon labels for each named source.
 
-    Never touches a source's own labels. Promotion is
-    ``accept_pending_semantic_escalation``, which writes a NEW SIBLING
-    SOURCE -- SAM3's output is a different instance set at a different
-    geometry convention, so overwriting in place (as SAM2 does) would
-    delete the user's curated labels.
+    Never touches a source's own labels. Promotion is frame-granular review
+    (``jobs/staged_review.py``): the user accepts or rejects individual
+    staged frames into the source the run was made against, rather than
+    promoting the whole staged run into a new sibling source.
     """
     result = SemanticEscalationResult()
     by_name = {s.name: s for s in req.project.sources}
@@ -1146,131 +1145,3 @@ def _origin_image_for(origin_images: Path, rel: Path) -> Path | None:
             if candidate.is_file():
                 return candidate
     return None
-
-
-def _unique_source_name(project, base: str) -> str:
-    """A name free in the project registry AND on disk.
-
-    De-duplicating against ``project.sources`` alone lets a name freed by
-    deleting a source reuse a stale on-disk directory that
-    ``ensure_bundle_subdirectory`` will happily return without clearing --
-    so the new sibling would inherit the deleted source's leftover labels.
-    """
-    project_root = Path(project.project_dir)
-
-    def _free(name: str) -> bool:
-        if any(s.name == name for s in project.sources):
-            return False
-        return not (project_root / "sources" / name).exists()
-
-    if _free(base):
-        return base
-    n = 2
-    while not _free(f"{base}-{n}"):
-        n += 1
-    return f"{base}-{n}"
-
-
-def accept_pending_semantic_escalation(
-    source: OBBSource,
-    project,
-    project_dir: str | Path | None = None,
-) -> OBBSource:
-    """Promote a staged SAM3 result to a NEW SIBLING SOURCE.
-
-    Deliberately NOT ``sam2_escalation.accept_pending_escalation``, which
-    rmtree's the origin's labels and copies the staged ones over them. That
-    is correct for SAM2 (a lossless upgrade of the SAME instances) and
-    destructive here: SAM3's output is a different instance set at a
-    different geometry convention (masks trace legs and antennae; tracking
-    labels bound the body core), all class 0. Merging the two conventions
-    into one source would degrade YOLO training -- and deleting the user's
-    curated labels to do it would be worse.
-
-    The staged labels and hardlinked images become a new source the user can
-    keep, merge, or delete with the tools they already have. The candidate
-    cache and run fingerprint stay behind in staging: they are consumed
-    here, never shipped, so they cannot go stale against later user edits.
-    """
-    from hydra_suite.data.al.export import _link_or_copy
-
-    pending = source.staged_review
-    if pending is None:
-        raise ValueError(f"Source '{source.name}' has no pending escalation.")
-    if pending.producer != "sam3":
-        raise ValueError(
-            f"Source '{source.name}' has a {pending.producer!r} pending "
-            "escalation, not a SAM3 one; use the SAM2 accept path."
-        )
-
-    staged_root = Path(pending.staged_path)
-    staged_labels = staged_root / "labels"
-    if not staged_labels.is_dir():
-        raise RuntimeError(
-            f"Staged escalation for '{source.name}' is missing on disk "
-            f"({staged_labels}); nothing was changed. Reject it and re-run."
-        )
-
-    project_root = Path(project.project_dir)
-    sibling_name = _unique_source_name(
-        project, f"{source.name}-sam3-{prompt_slug(pending.prompt)}"
-    )
-    sibling_root = Path(
-        ensure_bundle_subdirectory(project_root, f"sources/{sibling_name}")
-    )
-    (sibling_root / "images").mkdir(parents=True, exist_ok=True)
-    (sibling_root / "labels").mkdir(parents=True, exist_ok=True)
-
-    origin_images = Path(source.path) / "images"
-    orphaned = 0
-    for label_path in sorted(staged_labels.rglob("*.txt")):
-        rel = label_path.relative_to(staged_labels)
-        # I7: the staged label's relative path already MIRRORS the image's
-        # (the job keys the cache on exactly that path), so this is a direct
-        # sibling lookup. The previous `origin_images.rglob(f"{rel.stem}.*")`
-        # walked the whole origin tree per label -- O(N^2), and
-        # nondeterministic whenever two nested subdirectories share a stem.
-        src_img = _origin_image_for(origin_images, rel)
-        if src_img is None:
-            # A label with no image is an orphan YOLO would choke on; skip it
-            # rather than ship it, and report the count.
-            logger.warning("No origin image for staged label %s; skipping it.", rel)
-            orphaned += 1
-            continue
-        dst_label = sibling_root / "labels" / rel
-        dst_label.parent.mkdir(parents=True, exist_ok=True)
-        dst_label.write_bytes(label_path.read_bytes())
-        dst_img = sibling_root / "images" / src_img.relative_to(origin_images)
-        dst_img.parent.mkdir(parents=True, exist_ok=True)
-        if not dst_img.exists():
-            _link_or_copy(src_img, dst_img)
-    if orphaned:
-        logger.warning(
-            "%d staged label(s) for '%s' had no origin image and were skipped.",
-            orphaned,
-            source.name,
-        )
-
-    classes_src = staged_root / "classes.txt"
-    (sibling_root / "classes.txt").write_text(
-        classes_src.read_text() if classes_src.exists() else "object\n"
-    )
-
-    sibling = OBBSource(
-        path=str(sibling_root),
-        name=sibling_name,
-        validated=False,
-        original_path=source.path,
-        source_kind="detectkit_sam3",
-        imported=False,
-        level=GeometryLevel.POLYGON.label,
-        # Machine-derived and not yet human-confirmed: excluded from training
-        # until the user runs "Mark reviewed...".
-        reviewed=False,
-        derived_from=source.name,
-    )
-    project.sources.append(sibling)
-
-    remove_staged_escalation_dir(staged_root, project_dir or project_root)
-    source.staged_review = None
-    return sibling

@@ -5,13 +5,10 @@ import cv2
 import numpy as np
 import pytest
 
+from hydra_suite.data.al.merge import MergeMode
 from hydra_suite.detectkit.gui.models import OBBSource
-from hydra_suite.detectkit.jobs.sam2_escalation import (
-    EscalationRequest,
-    accept_pending_escalation,
-    reject_pending_escalation,
-    run_escalation,
-)
+from hydra_suite.detectkit.jobs import staged_review as sr
+from hydra_suite.detectkit.jobs.sam2_escalation import EscalationRequest, run_escalation
 
 
 class _FakeExec:
@@ -149,7 +146,11 @@ def test_rerun_with_overwrite_restages(tmp_path):
     assert Path(first_staged_path).is_dir()
 
 
-def test_accept_pending_escalation_promotes_labels_and_resets_reviewed(tmp_path):
+def test_accept_all_promotes_labels_and_finish_review_resets_reviewed(tmp_path):
+    """Ported from accept_pending_escalation's whole-source promote: same
+    promoted content, same `reviewed` reset, now via frame-granular
+    accept_all(mode=OVERWRITE) + finish_review rather than one wholesale
+    rmtree+copytree call."""
     src = _make_source(tmp_path)
     project = types.SimpleNamespace(project_dir=str(tmp_path), sources=[src])
     req = EscalationRequest(
@@ -161,12 +162,13 @@ def test_accept_pending_escalation_promotes_labels_and_resets_reviewed(tmp_path)
     ).read_text()
     staged_path = src.staged_review.staged_path
 
-    accept_pending_escalation(src)
+    accepted = sr.accept_all(src, mode=MergeMode.OVERWRITE)
+    sr.finish_review(src, tmp_path)
 
+    assert accepted == 1
     assert src.staged_review is None
     assert src.level == "polygon"
     assert src.reviewed is False
-    assert src.sam2_variant == "sam2.1-hiera-base_plus"
     assert (Path(src.path) / "labels" / "a.txt").read_text() == staged_label_text
     assert not Path(staged_path).exists()
 
@@ -207,10 +209,17 @@ def test_escalation_stages_nested_image_layout_correctly(tmp_path):
     assert len(staged_label.read_text().splitlines()) == 1
 
 
-def test_accept_refuses_when_staged_labels_missing_files(tmp_path):
-    """If staging skipped a label (e.g. an unreadable image during escalation),
-    accept must refuse rather than deleting that image's original label with
-    nothing to replace it."""
+def test_accept_frame_refuses_when_its_staged_label_is_missing(tmp_path):
+    """Ported from accept_pending_escalation's whole-source pre-check.
+
+    That whole-source check ("does staging have a label for every image the
+    source currently has one for") is gone by design: frame-granular
+    accept_frame only ever touches the ONE frame it is given, so it cannot
+    delete a label it has nothing staged to replace -- there is no wholesale
+    delete step left to guard against. What remains portable is the
+    per-frame guard: accepting a frame whose OWN staged label is missing
+    must refuse and leave the source untouched, exactly as Task 7 wired it.
+    """
     src = _make_source(tmp_path)
     # Add a second image/label pair.
     cv2.imwrite(
@@ -234,31 +243,23 @@ def test_accept_refuses_when_staged_labels_missing_files(tmp_path):
     original_b = (Path(src.path) / "labels" / "b.txt").read_text()
 
     with pytest.raises(RuntimeError):
-        accept_pending_escalation(src)
+        sr.accept_frame(src, "b.txt", mode=MergeMode.OVERWRITE)
 
-    # Nothing was touched -- refusal happens before any deletion.
+    # Nothing was touched -- refusal happens before any write, and the frame
+    # with a real staged label ('a.txt') is untouched too, since accept_frame
+    # was never asked to accept it.
     assert src.staged_review is not None
     assert (Path(src.path) / "labels" / "a.txt").read_text() == original_a
     assert (Path(src.path) / "labels" / "b.txt").read_text() == original_b
 
 
-def test_reject_pending_escalation_discards_staging_leaves_source_untouched(tmp_path):
-    src = _make_source(tmp_path)
-    original_label_text = (Path(src.path) / "labels" / "a.txt").read_text()
-    project = types.SimpleNamespace(project_dir=str(tmp_path), sources=[src])
-    req = EscalationRequest(
-        project=project, source_names=["orig"], variant="sam2.1-hiera-base_plus"
-    )
-    run_escalation(req, _FakeExec())
-    staged_path = src.staged_review.staged_path
-
-    reject_pending_escalation(src)
-
-    assert src.staged_review is None
-    assert src.level == "obb"
-    assert src.reviewed is True
-    assert (Path(src.path) / "labels" / "a.txt").read_text() == original_label_text
-    assert not Path(staged_path).exists()
+# test_reject_pending_escalation_discards_staging_leaves_source_untouched is
+# deleted, not ported: reject_pending_escalation is dead after the review
+# dialog's removal (finish_review calls remove_staged_escalation_dir
+# directly), and the property it pinned -- rejecting a frame changes nothing
+# on disk -- is already covered for the new path by
+# test_reject_changes_nothing_but_records_the_decision in
+# tests/test_detectkit_staged_review.py.
 
 
 def _make_multiclass_source(tmp_path):
@@ -296,7 +297,7 @@ def test_escalation_preserves_per_instance_class_ids(tmp_path):
     )
     assert [line.split()[0] for line in staged_lines] == ["0", "1"]
 
-    accept_pending_escalation(src)
+    sr.accept_frame(src, "a.txt", mode=MergeMode.OVERWRITE)
 
     promoted_lines = (Path(src.path) / "labels" / "a.txt").read_text().splitlines()
     assert [line.split()[0] for line in promoted_lines] == ["0", "1"]
@@ -323,7 +324,8 @@ def test_escalation_stages_non_jpg_png_images(tmp_path):
 
     assert (Path(src.staged_review.staged_path) / "labels" / "a.txt").exists()
 
-    accept_pending_escalation(src)  # must not refuse
+    sr.accept_frame(src, "a.txt", mode=MergeMode.OVERWRITE)  # must not refuse
+    sr.finish_review(src, tmp_path)
 
     assert src.level == "polygon"
     assert src.staged_review is None
@@ -343,12 +345,17 @@ def test_read_boxes_from_label_parses_class_id(tmp_path):
     assert [b.class_id for b in boxes] == [0, 2]
 
 
-def test_accept_fails_loudly_if_clearing_source_labels_fails(tmp_path, monkeypatch):
-    """A failed pre-copy delete must raise BEFORE any copy has started.
+def test_revert_review_fails_loudly_if_clearing_source_labels_fails(
+    tmp_path, monkeypatch
+):
+    """Ported from accept_pending_escalation's clearing-failure guard.
 
-    It used to be `rmtree(..., ignore_errors=True)`, which swallowed a
-    partial failure and let the following copytree blow up with
-    FileExistsError -- leaving labels/ half-deleted.
+    `revert_review` is now the only rmtree-then-copytree on a source's
+    labels (accept_frame's OVERWRITE/ADD_NEW paths write in place, never
+    rmtree). A failed pre-copy delete there must still raise BEFORE any copy
+    starts, exactly as it had to for the old wholesale accept -- an
+    unsuppressed rmtree that fails must not fall through to a copytree that
+    then blows up with FileExistsError, leaving labels/ half-deleted.
     """
     import shutil as _shutil
 
@@ -358,7 +365,11 @@ def test_accept_fails_loudly_if_clearing_source_labels_fails(tmp_path, monkeypat
         project=project, source_names=["orig"], variant="sam2.1-hiera-base_plus"
     )
     run_escalation(req, _FakeExec())
-    original = (Path(src.path) / "labels" / "a.txt").read_text()
+    staged_root = src.staged_review.staged_path
+    # accept_frame snapshots the pre-review labels/ and then writes the
+    # accepted content -- revert_review needs that snapshot to exist.
+    sr.accept_frame(src, "a.txt", mode=MergeMode.OVERWRITE)
+    post_accept = (Path(src.path) / "labels" / "a.txt").read_text()
 
     def _boom(*args, **kwargs):
         raise PermissionError("locked")
@@ -370,16 +381,15 @@ def test_accept_fails_loudly_if_clearing_source_labels_fails(tmp_path, monkeypat
     )
 
     with pytest.raises(PermissionError):
-        accept_pending_escalation(src)
+        sr.revert_review(src, staged_root)
 
     assert copied == []
-    assert (Path(src.path) / "labels" / "a.txt").read_text() == original
+    assert (Path(src.path) / "labels" / "a.txt").read_text() == post_accept
 
 
-def test_accept_works_when_source_has_no_labels_dir(tmp_path):
-    """The pre-copy delete is guarded on existence: a source with no labels/
-    (nothing to clear) must still accept cleanly rather than raising
-    FileNotFoundError from the now-unsuppressed rmtree."""
+def test_accept_frame_works_when_source_has_no_labels_dir(tmp_path):
+    """The pre-write mkdir is guarded on existence: a source with no labels/
+    at all must still accept a frame cleanly."""
     root = tmp_path / "sources" / "nolabels"
     (root / "images").mkdir(parents=True)
     cv2.imwrite(str(root / "images" / "a.jpg"), np.zeros((100, 100, 3), np.uint8))
@@ -391,7 +401,7 @@ def test_accept_works_when_source_has_no_labels_dir(tmp_path):
     )
     run_escalation(req, _FakeExec())
 
-    accept_pending_escalation(src)
+    sr.accept_frame(src, "a.txt", mode=MergeMode.OVERWRITE)
 
     assert src.level == "polygon"
     assert (Path(src.path) / "labels" / "a.txt").exists()
@@ -401,34 +411,28 @@ def test_reject_refuses_to_delete_out_of_bounds_staged_path(tmp_path):
     """staged_path round-trips through the saved project file, so it is
     untrusted input from disk. A path outside the project's
     artifacts/pending_escalations/ must be left alone (not recursively
-    deleted), and reject must still clear the pending state without raising.
+    deleted). Re-pointed at `remove_staged_escalation_dir` directly (rather
+    than through the now-deleted `reject_pending_escalation`): that is the
+    delete primitive `finish_review` calls, and it alone is what bounds this
+    rmtree -- losing this coverage would be a real regression.
     """
-    from hydra_suite.detectkit.gui.models import StagedReview
+    from hydra_suite.detectkit.jobs.sam2_escalation import remove_staged_escalation_dir
 
-    src = _make_source(tmp_path)
     outside = tmp_path / "precious"
     outside.mkdir()
     (outside / "keep.txt").write_text("do not delete\n")
-    src.staged_review = StagedReview(
-        staged_path=str(outside),
-        target_level="polygon",
-        producer="sam2",
-        producer_variant="sam2.1-hiera-base_plus",
-        created_at="2026-08-27T00:00:00",
-    )
 
-    reject_pending_escalation(src, tmp_path)
+    attempted = remove_staged_escalation_dir(str(outside), tmp_path)
 
-    assert src.staged_review is None
+    assert attempted is False
     assert (outside / "keep.txt").exists()
 
 
 def test_reject_refuses_to_delete_filesystem_root(tmp_path):
-    from hydra_suite.detectkit.gui.models import StagedReview
-    from hydra_suite.detectkit.jobs.sam2_escalation import _is_safe_to_delete
-
-    src = _make_source(tmp_path)
-    src.staged_review = StagedReview(staged_path="/")
+    from hydra_suite.detectkit.jobs.sam2_escalation import (
+        _is_safe_to_delete,
+        remove_staged_escalation_dir,
+    )
 
     assert _is_safe_to_delete("/", tmp_path) is False
     assert _is_safe_to_delete("/") is False
@@ -451,20 +455,22 @@ def test_reject_refuses_to_delete_filesystem_root(tmp_path):
     )
     assert _is_safe_to_delete(tmp_path / "somewhere" / "a-b-c") is False
 
-    reject_pending_escalation(src, tmp_path)  # must not raise
-    assert src.staged_review is None
+    # Re-pointed at remove_staged_escalation_dir directly, as above: it must
+    # refuse (not raise) on "/" too.
+    assert remove_staged_escalation_dir("/", tmp_path) is False
 
 
-def test_accept_without_pending_raises():
+def test_accept_frame_without_pending_review_raises():
     src = OBBSource(name="orig", level="obb")
     with pytest.raises(ValueError):
-        accept_pending_escalation(src)
+        sr.accept_frame(src, "a.txt", mode=MergeMode.OVERWRITE)
 
 
-def test_reject_without_pending_raises():
-    src = OBBSource(name="orig", level="obb")
-    with pytest.raises(ValueError):
-        reject_pending_escalation(src)
+# test_reject_without_pending_raises is deleted, not ported:
+# reject_pending_escalation is dead. Its lower-level replacement,
+# remove_staged_escalation_dir, is a delete PRIMITIVE with no "pending
+# review" concept to validate against -- it takes a bare path, and its
+# refuse-out-of-bounds behaviour is already covered by the two tests above.
 
 
 def test_worker_runs_with_injected_executor(tmp_path):

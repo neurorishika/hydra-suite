@@ -580,3 +580,11 @@ def test_the_dialog_asks_for_labels_without_decoding_images():
     )
     assert "has_labelled_frames" in source
     assert "labelled_frames_for" not in source
+
+
+def test_accepting_a_sam3_review_does_not_create_a_sibling_source(tmp_path):
+    """The originally reported symptom: accept used to spawn a new source."""
+    import hydra_suite.detectkit.jobs.semantic_escalation as se
+
+    assert not hasattr(se, "accept_pending_semantic_escalation")
+    assert not hasattr(se, "_unique_source_name")
