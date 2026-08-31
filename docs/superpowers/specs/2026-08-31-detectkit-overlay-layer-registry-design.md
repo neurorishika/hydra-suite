@@ -1,0 +1,220 @@
+# DetectKit Overlay Layer Registry — Design
+
+**Status:** pending implementation plan
+**Date:** 2026-08-31
+**Scope:** `src/hydra_suite/detectkit/gui/canvas.py`, `main_window.py`, new `gui/overlays/`
+
+## Problem
+
+`OBBCanvas` grew a third overlay layer (staged escalations, merged
+2026-08-31) beside ground truth and model predictions. Each layer is a
+hand-maintained triplet of parallel lists plus its own draw method, its own
+clear method, its own visibility flag, and its own branch in
+`_apply_visibility`:
+
+```
+_gt_obb_items   / _gt_label_items   / _gt_class_ids   + _gt_level_*  + _show_gt
+_pred_obb_items / _pred_label_items / _pred_class_ids               + _show_pred
+_esc_obb_items  / _esc_label_items  / _esc_class_ids  + _esc_level_* + _show_escalation
+```
+
+Three consequences, all observed rather than predicted:
+
+1. **Adding a layer means editing five places.** The escalation layer
+   touched `__init__`, `_draw_detections`, `_apply_visibility`,
+   `clear_all`, and added three public methods — none of it interesting,
+   all of it copy-adapted.
+2. **The branches are where the bugs were.** Of the four findings an
+   adversarial review raised against the escalation layer, two were
+   layer-bookkeeping defects: a clear that sat below an early `return`, and
+   a refresh that fired only incidentally.
+3. **The layer's semantics are implied by its method name, not stated.**
+   Whether a layer is class-filtered, which colour policy it uses, whether
+   its labels carry confidence, and what it stacks above are all encoded in
+   which of the three `set_*` methods you call.
+
+The canvas also conflates two responsibilities: *rendering shapes* and
+*knowing what ground truth, predictions and escalations are*. The three
+sources genuinely differ, and the differences currently leak into
+`show_image`:
+
+| | Ground truth | Model predictions | Staged escalation |
+|---|---|---|---|
+| Source of data | source `labels/` | in-memory inference cache | `staged_path/labels/` |
+| Class-id space | project's | project's | the staging dir's `classes.txt` |
+| Confidence available | no | yes | no (dropped on write) |
+| Lifecycle | permanent | transient, per model run | pending accept/reject |
+| Geometry level | source's `level` | project's | escalation's `target_level` |
+
+## Non-goals
+
+- Changing what any layer looks like on screen. This is a structural
+  refactor; the rendered output must be identical.
+- Editing shapes on the canvas. The canvas stays read-only.
+- Unifying the class filter across layers. It can only ever address project
+  class ids, so it stays a per-layer boolean, not a pluggable predicate.
+- Merging the per-class palette into the fixed-hue policy. A class colour
+  and a "this is a proposal" colour are different kinds of statement.
+
+## Design
+
+### 1. `OverlayLayer` — a layer as a value object
+
+New `gui/overlays/layer.py`, Qt-free apart from the colour type:
+
+```python
+class ColourPolicy(Enum):
+    PER_CLASS = auto()   # index the palette by class_id
+    FIXED = auto()       # one hue for the whole layer
+
+class LabelMode(Enum):
+    NAME = auto()                 # "worker ant"
+    NAME_AND_CLASS_ID = auto()    # "ant (0)"
+    NAME_AND_CONFIDENCE = auto()  # "ant (0.42)"
+
+@dataclass(frozen=True)
+class OverlayLayer:
+    key: str                      # "gt" | "pred" | "escalation" | ...
+    detections: list[dict]
+    native_level: GeometryLevel
+    class_names: list[str] | dict[int, str] | None
+    colour_policy: ColourPolicy
+    fixed_colour: QColor | None = None   # required iff policy is FIXED
+    z: int = 0                    # stacking; higher draws above
+    class_filtered: bool = True
+    label_mode: LabelMode = LabelMode.NAME_AND_CLASS_ID
+    emphasis: Emphasis | None = None     # e.g. the unreviewed hatch
+```
+
+`LabelMode` replaces today's `show_confidence` boolean, which could not
+express "this layer wants confidence but has none" — the gap that rendered
+`worker ant (0)` over every staged mask and read as confidence 0.00.
+
+### 2. `OBBCanvas` — a renderer that knows nothing about the domain
+
+Public surface collapses to four methods:
+
+```python
+def set_layer(self, layer: OverlayLayer) -> None      # add or replace by key
+def remove_layer(self, key: str) -> None
+def set_layer_visible(self, key: str, visible: bool) -> None
+def set_class_filter(self, visible_class_ids: set[int]) -> None
+```
+
+Internal state collapses to one registry:
+
+```python
+self._layers: dict[str, OverlayLayer]                       # by key
+self._items: dict[tuple[str, GeometryLevel], _LevelItems]   # scene items
+self._layer_visible: dict[str, bool]
+self._show_derived_levels: bool                             # stays global
+```
+
+`_apply_visibility` becomes one loop over `self._items` — no per-layer
+branch, no zipped parallel lists. `_levels_with_shapes` (already extracted)
+stays as the shared derivation. Drawing order is `sorted(by z, then key)`,
+so stacking is declared rather than emergent from call order.
+
+`set_layer` is idempotent by key: it removes that key's items and redraws.
+This is what makes "clear before refresh" structural instead of a rule each
+caller has to remember — the escalation layer's stale-mask bug becomes
+unrepresentable.
+
+### 3. Providers — one per data source, outside the canvas
+
+New `gui/overlays/providers.py`. Each provider answers one question: *given
+the current source and frame, what layer (if any) should be drawn?*
+
+```python
+class OverlayProvider(Protocol):
+    key: str
+    def build(self, ctx: FrameContext) -> OverlayLayer | None: ...
+```
+
+`FrameContext` carries what all three need — project, source path, image
+path, and the frame's `(h, w)` **taken from the loaded pixmap, not decoded
+again**. Three implementations:
+
+- `GroundTruthProvider` — `find_label_for_image`, project class-id map,
+  `_resolve_source_render_state` for level + the unreviewed hatch.
+- `PredictionProvider` — reads the existing `_dataset_predictions` cache;
+  `LabelMode.NAME_AND_CONFIDENCE`.
+- `StagedEscalationProvider` — `find_staged_label_for_image`,
+  `staged_class_names`, `_resolve_pending_level`, `class_filtered=False`,
+  `ColourPolicy.FIXED`.
+
+`MainWindow.show_image` becomes: build the context, ask each provider,
+`set_layer` or `remove_layer` per result. Every quirk in the table above
+lives in exactly one small class.
+
+### 4. Stable instance identity
+
+Each drawn item carries `item.setData(0, InstanceRef(layer_key, frame_rel,
+index))`. Nothing consumes it in this refactor.
+
+It is specified now because retrofitting identity later means revisiting
+every provider and every draw path, whereas adding it during a rewrite of
+those paths is nearly free. It is the precondition for per-instance
+accept/reject — clicking one magenta polygon and mapping it back to a line
+in a staged label file — which is the natural next request for a review
+overlay and is impossible without it.
+
+## Migration
+
+The three current `set_*`/`clear_*` method families are retired, not
+wrapped. They have exactly four callers between them (`show_image`,
+`_refresh_prediction_overlay`, `_refresh_escalation_overlay`,
+`_on_overlay_changed`), all in `main_window.py`, all rewritten here. Leaving
+compatibility shims would preserve the parallel-list mental model this
+refactor exists to delete.
+
+`OverlaySettings` keeps its per-layer booleans (`show_gt`, `show_pred`,
+`show_escalation`); `_on_overlay_changed` maps them onto
+`set_layer_visible(key, …)` calls.
+
+## Testing
+
+The risk in this change is a silent visual regression in the path that
+renders every frame, so the gate is characterization, not new assertions:
+
+1. **Golden-item characterization.** Before refactoring, add a test that
+   builds each of the three layers on a fixture frame and records, per
+   drawn item: level, pen colour/style/width, brush style/alpha, polygon
+   points, label text, and visibility. Commit that as the oracle. The
+   refactor must reproduce it exactly. (Committed golden, not a
+   before-vs-after comparison in one process — the same trap noted in
+   `project_shared_engine_param_builder`, where a post-collapse oracle was
+   tautological.)
+2. **Visibility-toggle matrix.** Every combination of the three layer
+   toggles x derived-levels x a class filter, asserted against the golden.
+   Today's tests cover these one at a time; the registry rewrite is exactly
+   where an untested combination regresses.
+3. **Provider unit tests**, replacing the current `inspect.getsource`
+   assertions in `tests/test_detectkit_staged_escalation_overlay.py` with
+   real behavioural ones — a provider is now a plain object that can be
+   called without a `MainWindow`.
+4. **Existing suites must pass unchanged:** `test_detectkit_canvas.py`,
+   `test_detectkit_staged_escalation_overlay.py`,
+   `test_detectkit_show_image_multi_level.py`, `test_detectkit_tools_panel.py`.
+
+No equivalence gate applies: this is GUI-only and touches nothing on the
+tracking pipeline path.
+
+## Cost and trigger
+
+Roughly 300 lines rewritten in `canvas.py`, three small provider classes,
+and a rewrite of the four call sites — plus the golden-characterization
+test, which is the larger half of the work and the reason to do this
+deliberately rather than opportunistically.
+
+Deliberately **not** scheduled on merge of this spec. Three layers is the
+point where the abstraction is guessable but not yet forced. Build it when
+either arrives:
+
+- a **fourth layer** (a second model's output, an AL escalation preview, a
+  diff between two labellers), or
+- the **first per-instance review interaction** (click-to-accept), which
+  needs §4 and would otherwise have to retrofit it.
+
+Until then the existing three-layer code is correct and tested, and this
+document is the record of what it should become.
