@@ -1116,7 +1116,7 @@ git commit -m "feat(detectkit): Show derived levels toggle wired into overlay se
 Run:
 ```bash
 conda activate hydra-mps
-python -m pytest tests/test_detectkit_geometry_derivation.py tests/test_detectkit_source_import.py \
+python -m pytest tests/test_geometry_derivation.py tests/test_detectkit_source_import.py \
   tests/test_detectkit_canvas.py tests/test_detectkit_canvas_dual_layer.py \
   tests/test_detectkit_tools_panel.py tests/test_detectkit_sam2_escalation_wiring.py -v
 ```

@@ -1,6 +1,6 @@
 # DetectKit Overlay Layer Registry — Design
 
-**Status:** implementation plan written — `docs/superpowers/plans/2026-08-31-detectkit-overlay-layer-registry.md`
+**Status:** Shipped — merged to main (83b2386c). Plan: `docs/superpowers/plans/done/2026-08-31-detectkit-overlay-layer-registry.md`
 **Date:** 2026-08-31
 **Scope:** `src/hydra_suite/detectkit/gui/canvas.py`, `main_window.py`, new `gui/overlays/`
 
@@ -338,4 +338,4 @@ Two consequences:
   registry is still worth its cost once that lands.
 
 Implementation plan:
-`docs/superpowers/plans/2026-08-31-detectkit-overlay-layer-registry.md`.
+`docs/superpowers/plans/done/2026-08-31-detectkit-overlay-layer-registry.md`.
