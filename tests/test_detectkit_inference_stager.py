@@ -223,3 +223,122 @@ def test_staging_over_an_open_review_is_refused(tmp_path, source):
             confidence=0.4,
             device="cpu",
         )
+
+
+def _wired_window(monkeypatch, tmp_path, predictions):
+    """A DetectKitMainWindow with just enough stubbed to run the handler.
+
+    Every modal is patched out: an unpatched QMessageBox in a GUI test hangs
+    the suite rather than failing it. `_project` MUST be set -- the handler's
+    first guard reads it, and a fresh window has it as None.
+    """
+    from types import SimpleNamespace
+
+    from PySide6.QtWidgets import QApplication
+
+    from hydra_suite.detectkit.gui import main_window as mw
+    from hydra_suite.detectkit.gui.models import OBBSource
+
+    # Repo Qt pattern, no pytest-qt (not installed). The caller is
+    # responsible for window.deleteLater() -- see the tests below.
+    QApplication.instance() or QApplication([])
+    window = mw.DetectKitMainWindow()
+    source = OBBSource(path=str(tmp_path / "src"), name="src")
+    window._project = SimpleNamespace(
+        project_dir=str(tmp_path), active_model_path="m.pt", sources=[source]
+    )
+    window._dataset_predictions = dict(predictions)
+    window._dataset_prediction_signature = ("sig", "m.pt")
+
+    monkeypatch.setattr(window, "_current_source_obj", lambda: source)
+    monkeypatch.setattr(window, "_dataset_signature", lambda settings: ("sig", "m.pt"))
+    monkeypatch.setattr(
+        window,
+        "_effective_inference_settings",
+        lambda settings: SimpleNamespace(device="mps"),
+    )
+    monkeypatch.setattr(
+        window._tools_panel,
+        "get_overlay_settings",
+        lambda: SimpleNamespace(confidence_threshold=0.40),
+    )
+    monkeypatch.setattr(window, "_save_current_project", lambda: None)
+    monkeypatch.setattr(window, "_sync_review_bar", lambda: None)
+    monkeypatch.setattr(window, "_refresh_overlays", lambda keys=None: None)
+    monkeypatch.setattr(
+        mw,
+        "detectkit_resolve_inference_models",
+        lambda project, model_path: ("sequential_segment", "p.pt", "s.pt"),
+    )
+    monkeypatch.setattr(
+        mw.QMessageBox, "information", staticmethod(lambda *a, **k: None)
+    )
+    monkeypatch.setattr(mw.QMessageBox, "warning", staticmethod(lambda *a, **k: None))
+    return mw, window
+
+
+def _det(conf):
+    return {
+        "class_id": 0,
+        "polygon_px": [(0, 0), (10, 0), (10, 10), (0, 10)],
+        "confidence": conf,
+    }
+
+
+def test_staging_action_refuses_when_no_predictions_are_held(monkeypatch, tmp_path):
+    mw, window = _wired_window(monkeypatch, tmp_path, {})
+    called: list = []
+    monkeypatch.setattr(mw, "stage_predictions", lambda *a, **k: called.append(a))
+
+    window._on_stage_predictions()
+    window.deleteLater()
+
+    assert called == []
+
+
+def test_staging_action_stages_only_what_is_visible_at_the_slider(
+    monkeypatch, tmp_path
+):
+    """The floor-retained candidates the user never saw must not be staged.
+
+    _dataset_predictions is held at INFERENCE_CONFIDENCE_FLOOR (0.01) so the
+    slider stays useful without re-running the model. Staging the raw dict
+    would stage candidates the user never reviewed while run.json claimed
+    the slider value.
+    """
+    mw, window = _wired_window(
+        monkeypatch, tmp_path, {"/img/a.png": [_det(0.9), _det(0.02)]}
+    )
+    seen: dict = {}
+    monkeypatch.setattr(
+        mw,
+        "stage_predictions",
+        lambda src, project_dir, per_image, **kw: seen.update(
+            per_image=per_image, kw=kw
+        ),
+    )
+
+    window._on_stage_predictions()
+    window.deleteLater()
+
+    assert [d["confidence"] for d in seen["per_image"]["/img/a.png"]] == [0.9]
+    assert seen["kw"]["confidence"] == 0.40
+
+
+def test_staging_action_records_the_real_kind_and_device(monkeypatch, tmp_path):
+    """OverlaySettings carries neither field; they come from the run's own
+    resolution. A sequential_segment run staged as obb_direct would declare
+    polygon labels at OBB level."""
+    mw, window = _wired_window(monkeypatch, tmp_path, {"/img/a.png": [_det(0.9)]})
+    seen: dict = {}
+    monkeypatch.setattr(
+        mw,
+        "stage_predictions",
+        lambda src, project_dir, per_image, **kw: seen.update(kw),
+    )
+
+    window._on_stage_predictions()
+    window.deleteLater()
+
+    assert seen["inference_kind"] == "sequential_segment"
+    assert seen["device"] == "mps"

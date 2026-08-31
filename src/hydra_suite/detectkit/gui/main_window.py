@@ -41,6 +41,7 @@ from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noq
 from hydra_suite.widgets.busy import BusyTaskError, run_blocking_with_busy_dialog
 from hydra_suite.widgets.workers import BaseWorker
 
+from ..jobs.inference_stager import stage_predictions
 from ..jobs.staged_review import (
     accept_all,
     accept_frame,
@@ -779,6 +780,9 @@ class DetectKitMainWindow(QMainWindow):
         self._tools_panel.mark_reviewed_requested.connect(self._on_mark_reviewed)
         self._tools_panel.review_escalations_requested.connect(
             self._on_go_to_staged_review
+        )
+        self._tools_panel.stage_predictions_requested.connect(
+            self._on_stage_predictions
         )
 
         self._review_bar.accept_overwrite_requested.connect(
@@ -1756,6 +1760,80 @@ class DetectKitMainWindow(QMainWindow):
             self._current_source_path,
             model_path,
         ) + self._effective_inference_settings(settings).cache_key()
+
+    def _on_stage_predictions(self) -> None:
+        """Turn the predictions currently on screen into a staged review.
+
+        ON SCREEN, not in memory. `_dataset_predictions` is deliberately
+        retained at INFERENCE_CONFIDENCE_FLOOR (0.01, models.py:12-14) so
+        that moving the slider is useful without re-running the model; the
+        slider is applied at DISPLAY time by
+        `_filter_detections_by_confidence`. Staging the raw dict would stage
+        hundreds of 0.01 candidates the user never saw, while run.json
+        recorded the slider value -- staging something other than what was
+        reviewed. Filter first, at exactly the displayed threshold.
+
+        The kind and device likewise come from the same resolution the
+        inference RUN used (`detectkit_resolve_inference_models` +
+        `_effective_inference_settings`), not from OverlaySettings, which
+        carries neither field.
+        """
+        source = self._current_source_obj()
+        if source is None or self._project is None:
+            QMessageBox.information(
+                self, "Stage Predictions", "Open a project and select a source first."
+            )
+            return
+
+        settings = self._tools_panel.get_overlay_settings()
+        signature = self._dataset_signature(settings)
+        if (
+            not self._dataset_predictions
+            or signature is None
+            or signature != self._dataset_prediction_signature
+        ):
+            QMessageBox.information(
+                self,
+                "Stage Predictions",
+                "There are no predictions for this source and model. Run "
+                "inference across the source first.",
+            )
+            return
+
+        threshold = float(settings.confidence_threshold)
+        visible = {
+            image_path: _filter_detections_by_confidence(dets, threshold)
+            for image_path, dets in self._dataset_predictions.items()
+        }
+
+        model_path = signature[1]
+        try:
+            kind, _primary, _secondary = detectkit_resolve_inference_models(
+                self._project, model_path
+            )
+            device = self._effective_inference_settings(settings).device
+        except RuntimeError as exc:
+            QMessageBox.information(self, "Stage Predictions", str(exc))
+            return
+
+        try:
+            stage_predictions(
+                source,
+                self._project.project_dir,
+                visible,
+                model_path=str(model_path),
+                inference_kind=str(kind),
+                confidence=threshold,
+                device=str(device),
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Stage Predictions", str(exc))
+            return
+        self._save_current_project()
+        self._sync_review_bar()
+        # "escalation" is the key in force until Task 14 renames it; that
+        # task's grep sweep picks this call up with the rest.
+        self._refresh_overlays(keys=("escalation",))
 
     def _visible_inference_stats(self, confidence_threshold: float) -> dict:
         """Summarize cached candidates after applying the live display filter."""
