@@ -18,6 +18,7 @@ import logging
 import shutil
 from datetime import datetime
 from pathlib import Path
+from typing import Sequence
 
 import cv2
 import numpy as np
@@ -55,12 +56,21 @@ def stage_predictions(
     inference_kind: str,
     confidence: float,
     device: str,
+    class_names: Sequence[str] = (),
 ) -> StagedReview:
     """Write dataset-inference predictions into the staging contract.
 
     `per_image` is exactly `_DetectKitDatasetInferenceWorker`'s payload:
     image path -> list of ``{class_id, polygon_px, confidence}`` dicts in
     PIXEL space.
+
+    ``class_id`` in those dicts indexes the PROJECT's class list (that is
+    what `PredictionProvider` renders against), NOT the source's own
+    ``classes.txt``. ``class_names`` must therefore be the project's class
+    names -- callers should pass ``project.class_names`` -- so the staged
+    ``classes.txt`` matches the ids actually written, and
+    `resolve_staged_class_ids` can do real name-based staged->source
+    mapping instead of degenerating to identity.
 
     The staged label's relative path mirrors the image's under ``images/``
     -- that mirroring IS the review's per-frame key, relied on by
@@ -100,7 +110,12 @@ def stage_predictions(
         try:
             rel = image.relative_to(images_dir)
         except ValueError:
-            rel = Path(image.name)
+            logger.warning(
+                "Skipping image outside the source's images/ directory "
+                "while staging: %s",
+                image,
+            )
+            continue
 
         frame = cv2.imread(str(image))
         if frame is None:
@@ -141,9 +156,8 @@ def stage_predictions(
             "threshold or re-run inference before staging."
         )
 
-    classes = Path(source.path) / "classes.txt"
     (staged_root / "classes.txt").write_text(
-        classes.read_text() if classes.is_file() else "object\n"
+        "".join(f"{name}\n" for name in class_names) if class_names else "object\n"
     )
 
     params = {

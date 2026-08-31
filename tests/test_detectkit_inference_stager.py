@@ -124,7 +124,17 @@ def test_run_json_records_the_model_confidence_and_device(tmp_path, source):
     assert run["params"]["device"] == "mps"
 
 
-def test_classes_txt_is_copied_from_the_source(tmp_path, source):
+def test_classes_txt_is_written_from_the_project_not_the_source(tmp_path, source):
+    """`class_id` in predictions indexes the PROJECT's class list.
+
+    A source whose own `classes.txt` differs in ORDER from the project's is
+    exactly the silent-corruption case: if the staged file were copied from
+    the source (as it used to be), `resolve_staged_class_ids` would map
+    staged->source by name against the wrong list and degenerate to
+    identity, applying raw model ids as source ids.
+    """
+    # The source's own classes.txt (order differs from the project's).
+    (Path(source.path) / "classes.txt").write_text("larva\nant\n")
     per_image = {str(Path(source.path) / "images" / "a.png"): _dets()}
 
     review = stage_predictions(
@@ -135,9 +145,10 @@ def test_classes_txt_is_copied_from_the_source(tmp_path, source):
         inference_kind="obb_direct",
         confidence=0.4,
         device="cpu",
+        class_names=["ant", "larva"],
     )
 
-    assert (Path(review.staged_path) / "classes.txt").read_text() == "ant\n"
+    assert (Path(review.staged_path) / "classes.txt").read_text() == "ant\nlarva\n"
 
 
 def test_staging_lands_inside_the_projects_pending_escalations_dir(tmp_path, source):
@@ -174,6 +185,58 @@ def test_frames_with_no_detections_are_not_staged(tmp_path, source):
 
     staged = list((Path(review.staged_path) / "labels").rglob("*.txt"))
     assert [p.name for p in staged] == ["b.txt"]
+
+
+def test_images_outside_images_dir_are_skipped_not_staged_at_the_flat_fallback(
+    tmp_path, source
+):
+    """An image outside the source's `images/` tree cannot be reviewed.
+
+    `review_key_for_image` requires the image to be under `images/`, so a
+    label staged for an out-of-tree image would be permanently unreachable
+    by per-frame Accept/Reject, and `accept_all` would fail looking up its
+    frame size. Skip it instead, exactly like an unreadable image.
+    """
+    stray = Path(source.path) / "stray.png"
+    Image.fromarray(np.zeros((100, 200, 3), dtype=np.uint8)).save(stray)
+    per_image = {
+        str(stray): _dets(),
+        str(Path(source.path) / "images" / "a.png"): _dets(),
+    }
+
+    review = stage_predictions(
+        source,
+        tmp_path,
+        per_image,
+        model_path="/m.pt",
+        inference_kind="obb_direct",
+        confidence=0.4,
+        device="cpu",
+    )
+
+    staged = list((Path(review.staged_path) / "labels").rglob("*.txt"))
+    assert [p.name for p in staged] == ["a.txt"]
+
+
+def test_staging_only_out_of_tree_images_is_refused_rather_than_a_stuck_review(
+    tmp_path, source
+):
+    stray = Path(source.path) / "stray.png"
+    Image.fromarray(np.zeros((100, 200, 3), dtype=np.uint8)).save(stray)
+    per_image = {str(stray): _dets()}
+
+    with pytest.raises(RuntimeError, match="no detections"):
+        stage_predictions(
+            source,
+            tmp_path,
+            per_image,
+            model_path="/m.pt",
+            inference_kind="obb_direct",
+            confidence=0.4,
+            device="cpu",
+        )
+
+    assert source.staged_review is None
 
 
 def test_staging_nothing_at_all_is_refused_rather_than_creating_a_dead_review(
@@ -245,7 +308,10 @@ def _wired_window(monkeypatch, tmp_path, predictions):
     window = mw.DetectKitMainWindow()
     source = OBBSource(path=str(tmp_path / "src"), name="src")
     window._project = SimpleNamespace(
-        project_dir=str(tmp_path), active_model_path="m.pt", sources=[source]
+        project_dir=str(tmp_path),
+        active_model_path="m.pt",
+        sources=[source],
+        class_names=["ant"],
     )
     window._dataset_predictions = dict(predictions)
     window._dataset_prediction_signature = ("sig", "m.pt")

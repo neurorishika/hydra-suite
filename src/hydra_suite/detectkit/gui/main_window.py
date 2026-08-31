@@ -1825,6 +1825,7 @@ class DetectKitMainWindow(QMainWindow):
                 inference_kind=str(kind),
                 confidence=threshold,
                 device=str(device),
+                class_names=self._project.class_names,
             )
         except Exception as exc:
             QMessageBox.warning(self, "Stage Predictions", str(exc))
