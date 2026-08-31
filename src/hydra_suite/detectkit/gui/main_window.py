@@ -95,6 +95,31 @@ def _filter_detections_by_confidence(
     ]
 
 
+def _resolve_pending_level(pending):
+    """Geometry level a staged escalation's labels are in.
+
+    ``PendingEscalation.target_level`` is load-bearing: SAM2 converts
+    existing boxes IN PLACE and can stage OBB, while SAM3 stages polygons.
+    Drawing an OBB quad as polygon-native gave it the polygon style AND a
+    derived OBB of the same quad -- a duplicate outline in the wrong style.
+
+    Like ``OBBSource.level`` this is an unvalidated string from project
+    JSON, so it degrades rather than raising: an unparseable value falls
+    back to POLYGON, which is what both producers stage by default.
+    """
+    from hydra_suite.training.geometry_levels import GeometryLevel
+
+    raw = str(getattr(pending, "target_level", "") or "")
+    try:
+        return GeometryLevel.from_str(raw)
+    except ValueError:
+        logger.warning(
+            "Unknown target_level %r on a staged escalation; rendering as polygon",
+            raw,
+        )
+        return GeometryLevel.POLYGON
+
+
 def _resolve_source_render_state(project, source_path):
     """Return (native_level, reviewed) for the OBBSource at *source_path* in
     *project*. Falls back to (GeometryLevel.OBB, True) if project is None,
@@ -2034,12 +2059,10 @@ class DetectKitMainWindow(QMainWindow):
         label would keep showing the PREVIOUS frame's masks, which on a
         review pass is the most misleading state possible.
 
-        SAM3/SAM2 stage POLYGON labels, so the layer is polygon-native and
-        the OBB/AABB drawn beneath are exactly the derivations a promotion
-        of these masks would produce.
+        The layer is drawn at the escalation's OWN target level, with the
+        levels beneath it derived -- exactly the shapes a promotion of these
+        labels would produce.
         """
-        from hydra_suite.training.geometry_levels import GeometryLevel
-
         self._canvas.clear_escalation_detections()
         source_path = self._current_source_path
         image_path = self._current_image_path
@@ -2069,7 +2092,7 @@ class DetectKitMainWindow(QMainWindow):
         self._canvas.set_escalation_detections(
             dets,
             class_names=staged_class_names(pending.staged_path),
-            native_level=GeometryLevel.POLYGON,
+            native_level=_resolve_pending_level(pending),
         )
 
     def show_image(self, source_path: str, image_path: str) -> None:
