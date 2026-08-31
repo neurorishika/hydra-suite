@@ -183,10 +183,17 @@ lives in exactly one small class.
 
 ### 4. Stable instance identity
 
-**Not implemented — see the Override note above.** Retained as a record.
+**Deliberately not implemented.** The user confirmed no per-instance review
+interaction (click-to-accept) is planned, which removes this section's only
+justification (see the Override note below). This is a final decision, not
+a deferral pending a future trigger — the section is kept only as a record
+of what retrofitting instance identity would cost if that assumption ever
+changes.
 
 Each drawn item would carry `item.setData(0, InstanceRef(layer_key,
-frame_rel, index))`. Nothing consumes it in this refactor.
+frame_rel, index))`. Nothing consumes it in this refactor, and nothing in
+the shipped registry (`OverlayLayer`, the three providers, `canvas.py`)
+stamps or reads one.
 
 It is specified now because retrofitting identity later means revisiting
 every provider and every draw path, whereas adding it during a rewrite of

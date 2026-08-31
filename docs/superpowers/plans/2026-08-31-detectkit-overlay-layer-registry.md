@@ -79,7 +79,7 @@
 
 **Sequencing rule that makes every task green:** Task 3 introduces the registry *underneath* the existing public methods, reimplementing them as thin adapters, **and rewrites in the same commit every test that reads the internals it deletes**. Tasks 5–7 migrate callers one at a time. Task 8 deletes the adapters. The spec's "retired, not wrapped" is satisfied at the end of the branch; the adapters never survive it.
 
-**Known pre-existing failure**, unrelated to this work — confirm it fails on `main` before blaming this branch: `tests/test_detectkit_dataset_panel.py::test_export_level_refresh_cannot_skip_identity_config_loading`. Also, `make docs-build` already fails on the retired `hydra_suite.core.detectors` module.
+**Update (post-execution):** `tests/test_detectkit_dataset_panel.py::test_export_level_refresh_cannot_skip_identity_config_loading` was expected to be a known pre-existing failure unrelated to this work; on this branch it passes (12/12 in that file). The suite ran clean. `make docs-build` still fails on the retired `hydra_suite.core.detectors` module, unrelated to this work.
 
 ---
 
@@ -2121,7 +2121,7 @@ for f in tests/test_detectkit_*.py tests/test_semantic_*.py \
   echo "== $f"; python -m pytest "$f" -q 2>&1 | tail -3
 done
 ```
-Expected: every file green except `tests/test_detectkit_dataset_panel.py::test_export_level_refresh_cannot_skip_identity_config_loading`, which fails on `main` too — verify that before blaming this branch. Run per-file, not `pytest tests/`: the whole suite never finishes (`project_main_suite_blockers`).
+Expected: every file green, including `tests/test_detectkit_dataset_panel.py::test_export_level_refresh_cannot_skip_identity_config_loading` — earlier drafts of this plan expected that test to be a known pre-existing failure, but on this branch the suite ran clean (12/12 in that file). Run per-file, not `pytest tests/`: the whole suite never finishes (`project_main_suite_blockers`).
 
 - [ ] **Step 5: Launch the app and click through**
 
@@ -2141,7 +2141,7 @@ The golden covers item properties; it cannot catch a wiring error that leaves a 
 ```bash
 black src/hydra_suite/detectkit tests/
 isort src/hydra_suite/detectkit tests/
-make lint-moderate
+make lint
 git add -A
 git commit -m "refactor(detectkit): retire the per-layer canvas method families"
 ```
