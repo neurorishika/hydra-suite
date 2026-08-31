@@ -139,6 +139,56 @@ def find_label_for_image(
     return None
 
 
+def find_staged_label_for_image(
+    image_path: Path,
+    source_path: str,
+    staged_path: str,
+) -> Optional[Path]:
+    """Locate a STAGED escalation label for *image_path*.
+
+    A staging directory has ``labels/`` but no ``images/``, so
+    ``find_label_for_image`` cannot mirror inside it -- the relative path has
+    to be taken from the SOURCE's images tree and applied to the staging
+    dir. Falls back to a stem match, then a recursive one, for flat sources.
+    """
+    staged_root = Path(staged_path)
+    labels_dir = staged_root / "labels"
+    if not labels_dir.is_dir():
+        return None
+
+    images_dir = Path(source_path) / "images"
+    if images_dir.is_dir():
+        try:
+            candidate = labels_dir / image_path.relative_to(images_dir).with_suffix(
+                ".txt"
+            )
+            if candidate.exists():
+                return candidate
+        except ValueError:
+            pass
+
+    candidate = labels_dir / f"{image_path.stem}.txt"
+    if candidate.exists():
+        return candidate
+    for found in labels_dir.rglob(f"{image_path.stem}.txt"):
+        return found
+    return None
+
+
+def staged_class_names(staged_path: str) -> list[str]:
+    """Class names from a staging dir's classes.txt (the escalation prompt).
+
+    The staged ids index THIS list, not the project's, so the overlay must
+    read it here rather than reuse the project's class names.
+    """
+    path = Path(staged_path) / "classes.txt"
+    try:
+        names = [ln.strip() for ln in path.read_text().splitlines() if ln.strip()]
+    except OSError:
+        return ["object"]
+    return names or ["object"]
+
+
 def labels_to_clear(
     source_path: str | Path, image_paths: list[Path] | None = None
 ) -> list[Path]:

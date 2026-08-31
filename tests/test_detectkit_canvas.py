@@ -376,3 +376,144 @@ def test_clear_all_then_apply_visibility_does_not_raise(qapp):
     )
     canvas.clear_all()
     canvas.set_overlay_visibility(show_gt=True, show_pred=True)  # must not raise
+
+
+# --- staged-escalation overlay ------------------------------------------
+# Before this layer existed, staged SAM3/SAM2 masks were accepted or
+# rejected sight-unseen: the review dialog is a text list and nothing ever
+# parsed staged_path/labels for display.
+
+
+def _poly():
+    return [(10.0, 10.0), (50.0, 5.0), (90.0, 40.0), (60.0, 90.0), (20.0, 60.0)]
+
+
+def test_escalation_layer_draws_native_plus_derived_levels(qapp):
+    from hydra_suite.training.geometry_levels import GeometryLevel
+
+    canvas = OBBCanvas()
+    canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
+    canvas.set_escalation_detections(
+        [{"class_id": 0, "polygon_px": _poly(), "confidence": 0.8}],
+        native_level=GeometryLevel.POLYGON,
+    )
+    assert set(canvas._esc_level_items.keys()) == {
+        GeometryLevel.POLYGON,
+        GeometryLevel.OBB,
+        GeometryLevel.AABB,
+    }
+    for level in canvas._esc_level_items:
+        assert len(canvas._esc_level_items[level]) == 1
+
+
+def test_escalation_layer_uses_its_own_colour_not_the_class_palette(qapp):
+    """A staged mask must never be mistaken for ground truth.
+
+    Class 0's palette entry is green and GT draws it green; the escalation
+    layer must draw the same class in its own hue.
+    """
+    from hydra_suite.detectkit.gui.canvas import _PALETTE, ESCALATION_COLOUR
+    from hydra_suite.training.geometry_levels import GeometryLevel
+
+    canvas = OBBCanvas()
+    canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
+    det = [{"class_id": 0, "polygon_px": _poly()}]
+    canvas.set_gt_detections_multi_level(det, native_level=GeometryLevel.POLYGON)
+    canvas.set_escalation_detections(det, native_level=GeometryLevel.POLYGON)
+
+    gt_pen = canvas._gt_level_items[GeometryLevel.POLYGON][0].pen().color()
+    esc_pen = canvas._esc_level_items[GeometryLevel.POLYGON][0].pen().color()
+    assert gt_pen == _PALETTE[0]
+    assert esc_pen == ESCALATION_COLOUR
+    assert esc_pen != gt_pen
+
+
+def test_escalation_layer_leaves_the_gt_layer_alone(qapp):
+    from hydra_suite.training.geometry_levels import GeometryLevel
+
+    canvas = OBBCanvas()
+    canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
+    det = [{"class_id": 0, "polygon_px": _poly()}]
+    canvas.set_gt_detections_multi_level(det, native_level=GeometryLevel.POLYGON)
+    before = len(canvas._gt_obb_items)
+    canvas.set_escalation_detections(det, native_level=GeometryLevel.POLYGON)
+    assert len(canvas._gt_obb_items) == before
+    canvas.clear_escalation_detections()
+    assert len(canvas._gt_obb_items) == before
+    assert canvas._esc_obb_items == []
+
+
+def test_escalation_layer_visibility_toggles_independently(qapp):
+    from hydra_suite.training.geometry_levels import GeometryLevel
+
+    canvas = OBBCanvas()
+    canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
+    det = [{"class_id": 0, "polygon_px": _poly()}]
+    canvas.set_gt_detections_multi_level(det, native_level=GeometryLevel.POLYGON)
+    canvas.set_escalation_detections(det, native_level=GeometryLevel.POLYGON)
+
+    canvas.set_escalation_visible(False)
+    assert not canvas._esc_level_items[GeometryLevel.POLYGON][0].isVisible()
+    assert canvas._gt_level_items[GeometryLevel.POLYGON][0].isVisible()
+    canvas.set_escalation_visible(True)
+    assert canvas._esc_level_items[GeometryLevel.POLYGON][0].isVisible()
+
+
+def test_escalation_derived_levels_follow_the_shared_derived_toggle(qapp):
+    from hydra_suite.training.geometry_levels import GeometryLevel
+
+    canvas = OBBCanvas()
+    canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
+    canvas.set_escalation_detections(
+        [{"class_id": 0, "polygon_px": _poly()}], native_level=GeometryLevel.POLYGON
+    )
+    canvas.set_derived_levels_visible(False)
+    assert canvas._esc_level_items[GeometryLevel.POLYGON][0].isVisible()
+    assert not canvas._esc_level_items[GeometryLevel.AABB][0].isVisible()
+
+
+def test_escalation_layer_ignores_the_class_filter(qapp):
+    """Staged class ids are the PROMPT's, not the project's.
+
+    classes.txt in a staging dir holds the noun phrase, so its ids do not
+    index the project's class list; filtering the layer by project class id
+    would hide masks for a class the user never deselected.
+    """
+    from hydra_suite.training.geometry_levels import GeometryLevel
+
+    canvas = OBBCanvas()
+    canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
+    canvas.set_escalation_detections(
+        [{"class_id": 0, "polygon_px": _poly()}], native_level=GeometryLevel.POLYGON
+    )
+    canvas.set_class_filter({7})
+    assert canvas._esc_level_items[GeometryLevel.POLYGON][0].isVisible()
+
+
+def test_escalation_labels_carry_the_confidence(qapp):
+    """Which masks a re-threshold would drop has to be readable off the frame."""
+    from hydra_suite.training.geometry_levels import GeometryLevel
+
+    canvas = OBBCanvas()
+    canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
+    canvas.set_escalation_detections(
+        [{"class_id": 0, "polygon_px": _poly(), "confidence": 0.42}],
+        class_names=["ant"],
+        native_level=GeometryLevel.POLYGON,
+    )
+    text = canvas._esc_level_label_items[GeometryLevel.POLYGON][0].toPlainText()
+    assert "0.42" in text and "ant" in text
+
+
+def test_clear_all_drops_the_escalation_layer(qapp):
+    from hydra_suite.training.geometry_levels import GeometryLevel
+
+    canvas = OBBCanvas()
+    canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
+    canvas.set_escalation_detections(
+        [{"class_id": 0, "polygon_px": _poly()}], native_level=GeometryLevel.POLYGON
+    )
+    canvas.clear_all()
+    assert canvas._esc_obb_items == []
+    assert canvas._esc_level_items == {}
+    canvas._apply_visibility()  # must not raise

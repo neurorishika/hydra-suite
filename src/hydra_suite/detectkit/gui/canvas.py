@@ -50,6 +50,11 @@ _PALETTE = [
     QColor(180, 220, 80),  # lime
 ]
 
+# The staged-escalation layer's single hue, deliberately OUTSIDE _PALETTE:
+# a staged SAM3/SAM2 mask is a proposal, not a labelled class, so the
+# distinction it must carry is "not ground truth" -- never a class identity.
+ESCALATION_COLOUR = QColor(255, 60, 199)  # magenta
+
 
 @dataclass(frozen=True)
 class _LevelStyle:
@@ -110,6 +115,18 @@ class OBBCanvas(QGraphicsView):
         self._gt_level_class_ids: dict = {}
         self._gt_native_level: Optional["GeometryLevel"] = None
         self._show_derived_levels: bool = True
+        # Staged-escalation layer (SAM3/SAM2 proposals awaiting review).
+        # Its own per-level buckets, mirroring the GT layer's, because a
+        # staged mask is drawn at its native level plus every derived level
+        # below it -- the OBB/AABB a promotion would actually produce.
+        self._esc_obb_items: list = []
+        self._esc_label_items: list = []
+        self._esc_class_ids: list[int] = []
+        self._esc_level_items: dict = {}
+        self._esc_level_label_items: dict = {}
+        self._esc_level_class_ids: dict = {}
+        self._esc_native_level: Optional["GeometryLevel"] = None
+        self._show_escalation: bool = True
         # Prediction layer (model output, dashed lines)
         self._pred_obb_items: list = []
         self._pred_label_items: list = []
@@ -191,8 +208,16 @@ class OBBCanvas(QGraphicsView):
         brush_style: "Qt.BrushStyle" = Qt.BrushStyle.NoBrush,
         fill_alpha: int = 255,
         show_labels: bool = True,
+        colour_override: "QColor | None" = None,
     ) -> None:
-        """Render *detections* into the given item lists."""
+        """Render *detections* into the given item lists.
+
+        ``colour_override`` paints every shape in one colour instead of the
+        per-class palette. Only the staged-escalation layer uses it: its
+        class ids come from a staging dir's classes.txt (the prompt), so
+        indexing the project's palette with them would assert a class
+        identity the staged labels do not carry.
+        """
         font = QFont()
         font.setPixelSize(DEFAULT_OBB_FONT_SIZE)
         lookup = self._build_class_lookup(class_names)
@@ -204,7 +229,11 @@ class OBBCanvas(QGraphicsView):
                 continue
             confidence = det.get("confidence", None)
 
-            colour = _PALETTE[class_id % len(_PALETTE)]
+            colour = (
+                colour_override
+                if colour_override is not None
+                else _PALETTE[class_id % len(_PALETTE)]
+            )
             qpoly = QPolygonF()
             for x, y in polygon_px:
                 qpoly.append(QPointF(x, y))
@@ -244,10 +273,14 @@ class OBBCanvas(QGraphicsView):
     def _apply_visibility(self) -> None:
         """Show/hide items based on visibility flags and class filter."""
 
-        def _set_layer(obb_items, label_items, class_ids, layer_visible):
+        def _set_layer(
+            obb_items, label_items, class_ids, layer_visible, *, class_filter=True
+        ):
             for obb, lbl, cid in zip(obb_items, label_items, class_ids):
                 visible = layer_visible and (
-                    not self._visible_class_ids or cid in self._visible_class_ids
+                    not class_filter
+                    or not self._visible_class_ids
+                    or cid in self._visible_class_ids
                 )
                 obb.setVisible(visible)
                 if lbl is not None:
@@ -267,6 +300,21 @@ class OBBCanvas(QGraphicsView):
                 self._gt_label_items,
                 self._gt_class_ids,
                 self._show_gt,
+            )
+
+        for level, items in self._esc_level_items.items():
+            level_visible = self._show_escalation and (
+                level == self._esc_native_level or self._show_derived_levels
+            )
+            _set_layer(
+                items,
+                self._esc_level_label_items[level],
+                self._esc_level_class_ids[level],
+                level_visible,
+                # Staged class ids index the STAGING dir's classes.txt (the
+                # prompt), not the project's class list, so the project
+                # class filter cannot meaningfully address them.
+                class_filter=False,
             )
 
         _set_layer(
@@ -327,26 +375,19 @@ class OBBCanvas(QGraphicsView):
             )
         self._apply_visibility()
 
-    def set_gt_detections_multi_level(
-        self,
-        detections: list[dict],
-        class_names: list[str] | dict[int, str] | None = None,
-        *,
-        native_level: "GeometryLevel",
-        reviewed: bool = True,
-    ) -> None:
-        """Draw ground-truth detections at *native_level*, plus every
-        derived level below it down to AABB, each in its own per-level
-        style. Only the native level's shapes carry a text label."""
-        from hydra_suite.training.geometry_levels import GeometryLevel
+    @staticmethod
+    def _levels_with_shapes(detections: list[dict], native_level):
+        """Yield (level, detections) from native down to AABB.
 
-        self.clear_gt_detections()
-        styles = _level_styles()
+        The derived levels are what a promotion of these shapes would
+        actually produce, so both the GT layer and the staged-escalation
+        layer derive them the same way rather than each open-coding it.
+        """
+        from hydra_suite.training.geometry_levels import GeometryLevel
 
         for level in (GeometryLevel.POLYGON, GeometryLevel.OBB, GeometryLevel.AABB):
             if level > native_level:
                 continue
-
             level_detections = []
             for det in detections:
                 polygon_px = det.get("polygon_px", [])
@@ -359,10 +400,95 @@ class OBBCanvas(QGraphicsView):
                 if not shape:
                     continue
                 level_detections.append({**det, "polygon_px": shape})
+            if level_detections:
+                yield level, level_detections
 
-            if not level_detections:
-                continue
+    def set_escalation_detections(
+        self,
+        detections: list[dict],
+        class_names: list[str] | dict[int, str] | None = None,
+        *,
+        native_level,
+    ) -> None:
+        """Draw staged escalation masks in ESCALATION_COLOUR.
 
+        A staged SAM3/SAM2 result used to be accepted or rejected entirely
+        sight-unseen -- the review dialog is a text list and nothing parsed
+        the staging dir's labels for display. This is the preview: the
+        proposed shape at its native level plus the OBB and AABB a
+        promotion would derive from it, all in one non-palette hue so it can
+        never be read as ground truth, and labelled with the per-instance
+        confidence so it is visible which masks a re-threshold would drop.
+        """
+        self.clear_escalation_detections()
+        styles = _level_styles()
+        for level, level_detections in self._levels_with_shapes(
+            detections, native_level
+        ):
+            style = styles[level]
+            obb_items: list = []
+            label_items: list = []
+            class_ids: list = []
+            self._draw_detections(
+                level_detections,
+                obb_items,
+                label_items,
+                class_ids,
+                class_names,
+                style.pen_style,
+                show_confidence=True,
+                brush_style=style.brush_style,
+                fill_alpha=style.fill_alpha,
+                show_labels=(level == native_level),
+                colour_override=ESCALATION_COLOUR,
+            )
+            self._esc_level_items[level] = obb_items
+            self._esc_level_label_items[level] = label_items
+            self._esc_level_class_ids[level] = class_ids
+            self._esc_obb_items.extend(obb_items)
+            self._esc_label_items.extend(label_items)
+            self._esc_class_ids.extend(class_ids)
+        self._esc_native_level = native_level
+        self._apply_visibility()
+
+    def set_escalation_visible(self, visible: bool) -> None:
+        """Toggle the staged-escalation layer."""
+        self._show_escalation = bool(visible)
+        self._apply_visibility()
+
+    def clear_escalation_detections(self) -> None:
+        """Remove all staged-escalation items from the scene."""
+        for item in self._esc_obb_items:
+            if item is not None:
+                self._scene.removeItem(item)
+        for item in self._esc_label_items:
+            if item is not None:
+                self._scene.removeItem(item)
+        self._esc_obb_items.clear()
+        self._esc_label_items.clear()
+        self._esc_class_ids.clear()
+        self._esc_level_items.clear()
+        self._esc_level_label_items.clear()
+        self._esc_level_class_ids.clear()
+        self._esc_native_level = None
+
+    def set_gt_detections_multi_level(
+        self,
+        detections: list[dict],
+        class_names: list[str] | dict[int, str] | None = None,
+        *,
+        native_level: "GeometryLevel",
+        reviewed: bool = True,
+    ) -> None:
+        """Draw ground-truth detections at *native_level*, plus every
+        derived level below it down to AABB, each in its own per-level
+        style. Only the native level's shapes carry a text label."""
+        self.clear_gt_detections()
+        styles = _level_styles()
+
+        for level, level_detections in self._levels_with_shapes(
+            detections, native_level
+        ):
             # Unreviewed native shapes get a hatched fill to flag them as
             # not-yet-confirmed, but MUST keep the level's own pen style --
             # hardcoding SolidLine here would collide with AABB's own
@@ -486,6 +612,13 @@ class OBBCanvas(QGraphicsView):
         self._pred_obb_items.clear()
         self._pred_label_items.clear()
         self._pred_class_ids.clear()
+        self._esc_obb_items.clear()
+        self._esc_label_items.clear()
+        self._esc_class_ids.clear()
+        self._esc_level_items.clear()
+        self._esc_level_label_items.clear()
+        self._esc_level_class_ids.clear()
+        self._esc_native_level = None
         self._zoom = 1.0
         self._fit_mode = True
         self.setCursor(Qt.CursorShape.ArrowCursor)
