@@ -175,9 +175,19 @@ def test_staged_provider_returns_none_without_a_pending_escalation(source_tree):
 
 
 def test_the_escalation_layer_stacks_below_predictions(source_tree, tmp_path):
-    """show_image draws GT, then the staged escalation, then predictions,
-    so dashed predictions sit ON TOP of magenta staged masks. The z values
-    must reproduce that -- this refactor does not change stacking."""
+    """Pins a DELIBERATE behaviour change, not pre-existing characterization.
+
+    Pre-refactor, stacking was pure scene-insertion order (no `setZValue`
+    anywhere in the old canvas): a plain `show_image` put staged escalation
+    masks BELOW predictions, but the post-dialog
+    `escalation_actions._refresh_escalation_overlay()` re-inserted the
+    escalation layer last, putting it ABOVE predictions on that one path --
+    i.e. the old behaviour was call-order-dependent and self-contradictory.
+    The registry's explicit z-order (gt=0, escalation=10, pred=20) makes
+    stacking consistent on every path: predictions always render above
+    staged masks. See the "Known deviations from pixel-identical" section
+    of docs/superpowers/specs/2026-08-31-detectkit-overlay-layer-registry-design.md
+    for the full rationale."""
     project = _project(source_tree, pending_escalation=_staged(tmp_path, "obb"))
     ctx = _ctx(
         project,

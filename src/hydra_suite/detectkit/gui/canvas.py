@@ -384,7 +384,7 @@ class OBBCanvas(QGraphicsView):
                 yield level, level_detections
 
     def set_derived_levels_visible(self, visible: bool) -> None:
-        """Toggle whether non-native (derived) GT levels are drawn."""
+        """Toggle whether non-native (derived) levels are drawn."""
         self._show_derived_levels = visible
         self._apply_visibility()
 

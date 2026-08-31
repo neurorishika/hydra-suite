@@ -56,6 +56,45 @@ sources genuinely differ, and the differences currently leak into
 - Merging the per-class palette into the fixed-hue policy. A class colour
   and a "this is a proposal" colour are different kinds of statement.
 
+## Known deviations from pixel-identical (accepted post-review)
+
+The "rendered output must be identical" non-goal above holds everywhere
+except the three cases below. An adversarial review of the finished branch
+found each; all three were accepted as intentional, and all three are
+visual-only, cheap to reverse, and unrelated to the goal of collapsing the
+three hand-maintained layers into one registry.
+
+1. **Escalation-layer stacking is now consistent, where it used to be
+   call-order-dependent.** The old canvas never called `setZValue`
+   anywhere, so stacking was pure scene-insertion order. On a plain
+   `show_image` that meant staged escalation masks sat *below* prediction
+   overlays (drawn later); but `escalation_actions.py`'s post-dialog
+   `_refresh_escalation_overlay()` re-inserted the escalation layer last,
+   putting it *above* predictions on that one path only. The old behaviour
+   was therefore self-contradictory depending on which code path last
+   touched the scene. The registry assigns explicit z-order (`gt=0`,
+   `escalation=10`, `pred=20`), so staged masks now render *below*
+   predictions on every path, always. The declared invariant going forward
+   is **predictions above staged masks**. If this proves wrong, the fix is
+   swapping two z constants in the registry — no data or layout risk.
+2. **A confidence-filtered-to-empty prediction cache now surfaces a status
+   message.** When an image has cached predictions but *all* fall below the
+   confidence threshold, the prediction provider returns `None`, so
+   `_last_prediction_request` becomes `None` and `show_image` now displays
+   "Image loaded. Click Run Inference to refresh overlay predictions."
+   where it previously stayed silent. Canvas pixels are identical either
+   way — nothing was drawn before and nothing is drawn now — only the
+   status text changed. **Known wart:** the message blames stale inference
+   when the confidence slider is the actual cause; a future pass should
+   give this case its own wording.
+3. **`update_inference_stats` now fires whenever a project exists,
+   including when the prediction overlay was just removed** (previously it
+   updated only on the successful-draw path). This is arguably a
+   correction rather than a regression: `_visible_inference_stats` is
+   dataset-wide and frame-independent, and the old code could leave stale
+   pre-filter counts on screen while the overlay showed nothing. It was
+   undeclared during the branch, so it is recorded here.
+
 ## Design
 
 ### 1. `OverlayLayer` — a layer as a value object

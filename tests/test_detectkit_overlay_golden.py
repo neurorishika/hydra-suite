@@ -85,6 +85,18 @@ def describe_scene(canvas: OBBCanvas) -> list[dict]:
                     "pen_cosmetic": pen.isCosmetic(),
                     "brush_style": int(brush.style().value),
                     "brush_alpha": brush.color().alpha(),
+                    # ORACLE GAP: brush.color().name() (the fill's hue) is not
+                    # recorded here, only its style and alpha. A fill painted
+                    # in the wrong hue with the right alpha would pass this
+                    # golden and every other test. There is no live bug today
+                    # -- canvas.py derives the fill colour from the pen colour
+                    # -- but closing this gap requires adding the field and
+                    # regenerating the golden, which must NOT be done outside
+                    # an intentional rendering change (a regenerated golden
+                    # recorded from post-refactor code would be tautological
+                    # for anything the refactor itself might have broken).
+                    # Add "brush_colour": brush.color().name() here the next
+                    # time the golden is legitimately regenerated.
                     "visible": item.isVisible(),
                 }
             )

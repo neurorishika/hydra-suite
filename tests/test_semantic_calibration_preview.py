@@ -33,15 +33,6 @@ def _polys(canvas, key):
     return [i for b in canvas.layer_items(key).values() for i in b.obb_items]
 
 
-def _labels(canvas, key):
-    return [
-        i
-        for b in canvas.layer_items(key).values()
-        for i in b.label_items
-        if i is not None
-    ]
-
-
 @pytest.fixture(scope="module")
 def qapp():
     return QApplication.instance() or QApplication([])
