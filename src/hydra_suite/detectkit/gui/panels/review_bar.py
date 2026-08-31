@@ -22,6 +22,7 @@ class ReviewBar(QWidget):
     next_undecided_requested = Signal()
     revert_requested = Signal()
     rethreshold_requested = Signal()
+    discard_requested = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -60,6 +61,12 @@ class ReviewBar(QWidget):
             "Rewrite the staged result at a different confidence, using the "
             "cached candidates. No inference -- seconds, not hours."
         )
+        self._btn_discard = QPushButton("Discard Review…")
+        self._btn_discard.setToolTip(
+            "This review's staged files are missing or empty, so it cannot "
+            "be decided, finished, or reverted. Discard it to close it "
+            "without changing this source's labels."
+        )
 
         for button in (
             self._btn_overwrite,
@@ -70,6 +77,7 @@ class ReviewBar(QWidget):
             self._btn_reject_all,
             self._btn_revert,
             self._btn_rethreshold,
+            self._btn_discard,
         ):
             layout.addWidget(button)
 
@@ -84,7 +92,9 @@ class ReviewBar(QWidget):
         self._btn_reject_all.clicked.connect(self.reject_all_requested)
         self._btn_revert.clicked.connect(self.revert_requested)
         self._btn_rethreshold.clicked.connect(self.rethreshold_requested)
+        self._btn_discard.clicked.connect(self.discard_requested)
 
+        self._btn_discard.hide()
         self.hide()
 
     # -- state ---------------------------------------------------------
@@ -106,12 +116,48 @@ class ReviewBar(QWidget):
         )
         self._btn_rethreshold.setEnabled(bool(can_rethreshold))
         self._btn_rethreshold.setVisible(bool(can_rethreshold))
+        self._set_decision_controls_enabled(True)
+        self._btn_discard.hide()
         self.show()
+
+    def set_empty_review_state(self, producer: str, detail: str) -> None:
+        """Show the bar for a review with no reviewable staged frames.
+
+        Reachable when a review's staging dir was deleted outside the app,
+        never populated (a cancelled run), or moved along with the project
+        to another machine (``staged_path`` is stored absolute). None of
+        `is_complete`/`revert_review`/`stage_predictions` can move such a
+        review forward, so the only control offered here is Discard.
+        """
+        self._summary.setText(
+            f"Staged review — {producer}: {detail} "
+            "(staged files are missing or empty)"
+        )
+        self._progress.setText("Cannot be decided, finished, or reverted.")
+        self._btn_rethreshold.setEnabled(False)
+        self._btn_rethreshold.setVisible(False)
+        self._set_decision_controls_enabled(False)
+        self._btn_discard.show()
+        self.show()
+
+    def _set_decision_controls_enabled(self, enabled: bool) -> None:
+        for button in (
+            self._btn_overwrite,
+            self._btn_add_new,
+            self._btn_reject,
+            self._btn_next,
+            self._btn_accept_all,
+            self._btn_reject_all,
+            self._btn_revert,
+        ):
+            button.setEnabled(enabled)
 
     def clear_review_state(self) -> None:
         """Hide the bar; the current source has no staged review."""
         self._summary.setText("")
         self._progress.setText("")
+        self._btn_discard.hide()
+        self._set_decision_controls_enabled(True)
         self.hide()
 
     # -- accessors used by MainWindow and by tests ----------------------
@@ -145,3 +191,6 @@ class ReviewBar(QWidget):
 
     def rethreshold_button(self) -> QPushButton:
         return self._btn_rethreshold
+
+    def discard_button(self) -> QPushButton:
+        return self._btn_discard

@@ -157,3 +157,123 @@ def test_next_undecided_selects_the_first_frame_without_a_decision(window, monke
     window._on_review_next_undecided()
 
     assert selected == ["b.txt"]
+
+
+def test_empty_review_state_shows_only_discard(bar):
+    """A zero-frame review (staging dir deleted/moved/missing) cannot be
+    decided, finished, or reverted -- offer only Discard, disable every
+    decision control so nothing else can be clicked into a dead end.
+    """
+    bar.set_review_state(
+        "sam3", "prompt 'ant'", decided=0, total=0, can_rethreshold=True
+    )
+    bar.set_empty_review_state("sam3", "prompt 'ant'")
+
+    assert not bar.isHidden()
+    assert bar.discard_button().isVisible()
+    for button_name in (
+        "accept_overwrite_button",
+        "accept_add_new_button",
+        "reject_button",
+        "next_undecided_button",
+        "accept_all_button",
+        "reject_all_button",
+        "revert_button",
+    ):
+        assert not getattr(bar, button_name)().isEnabled()
+    assert not bar.rethreshold_button().isVisible()
+
+
+def test_discard_button_emits_its_signal(bar):
+    bar.set_empty_review_state("sam2", "v")
+    seen = _fired(bar.discard_requested)
+
+    bar.discard_button().click()
+
+    assert len(seen) == 1
+
+
+def test_set_review_state_after_empty_state_re_enables_and_hides_discard(bar):
+    """A source-switch back to a normal review must not carry over the
+    empty-state's disabled controls or visible Discard button."""
+    bar.set_empty_review_state("sam2", "v")
+
+    bar.set_review_state("sam2", "v", decided=1, total=5, can_rethreshold=False)
+
+    assert not bar.discard_button().isVisible()
+    assert bar.accept_overwrite_button().isEnabled()
+
+
+def test_clearing_after_empty_state_hides_discard_too(bar):
+    bar.set_empty_review_state("sam2", "v")
+
+    bar.clear_review_state()
+
+    assert bar.isHidden()
+    assert not bar.discard_button().isVisible()
+
+
+def test_sync_review_bar_shows_empty_state_for_a_zero_frame_review(
+    window, monkeypatch, tmp_path
+):
+    """A source whose review has no staged frames (missing staging dir,
+    e.g. after the project was moved to another machine -- staged_path is
+    stored absolute) must render the escape-hatch state, not a normal
+    0/0 progress bar.
+    """
+    from types import SimpleNamespace
+
+    review = SimpleNamespace(
+        producer="sam3",
+        prompt="ant",
+        producer_variant="sam3",
+        staged_path=str(tmp_path / "gone"),
+    )
+    monkeypatch.setattr(
+        window,
+        "_current_source_obj",
+        lambda: SimpleNamespace(staged_review=review),
+    )
+    shown: list = []
+    monkeypatch.setattr(
+        window._review_bar,
+        "set_empty_review_state",
+        lambda producer, detail: shown.append((producer, detail)),
+    )
+    monkeypatch.setattr(
+        window._review_bar,
+        "set_review_state",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not be called")),
+    )
+
+    window._sync_review_bar()
+
+    assert shown == [("sam3", "prompt 'ant'")]
+
+
+def test_discard_clears_a_review_whose_staging_dir_does_not_exist(
+    window, monkeypatch, tmp_path
+):
+    """The escape hatch for BLOCKER 2: a review whose staged_path is gone
+    must be discardable through the handler, ending with
+    `source.staged_review is None` and no exception.
+    """
+    from hydra_suite.detectkit.gui.models import OBBSource, StagedReview
+
+    src_root = tmp_path / "sources" / "orig"
+    (src_root / "images").mkdir(parents=True)
+    (src_root / "labels").mkdir(parents=True)
+    source = OBBSource(path=str(src_root), name="orig", level="obb")
+    source.staged_review = StagedReview(
+        staged_path=str(tmp_path / "artifacts" / "pending_escalations" / "gone"),
+        target_level="polygon",
+        producer="sam3",
+    )
+    monkeypatch.setattr(window, "_current_source_obj", lambda: source)
+    monkeypatch.setattr(window, "_save_current_project", lambda: None)
+    monkeypatch.setattr(window, "_sync_review_bar", lambda: None)
+    monkeypatch.setattr(window._dataset_panel, "refresh_sources", lambda project: None)
+
+    window._on_review_discard()
+
+    assert source.staged_review is None

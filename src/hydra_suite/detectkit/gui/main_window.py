@@ -803,6 +803,7 @@ class DetectKitMainWindow(QMainWindow):
         )
         self._review_bar.revert_requested.connect(self._on_review_revert)
         self._review_bar.rethreshold_requested.connect(self._on_review_rethreshold)
+        self._review_bar.discard_requested.connect(self._on_review_discard)
 
     # ------------------------------------------------------------------
     # Toolbar
@@ -2158,6 +2159,11 @@ class DetectKitMainWindow(QMainWindow):
         for provider in PROVIDERS:
             self._canvas.remove_layer(provider.key)
         if not self._canvas.load_image(image_path):
+            # Sync the review bar to the NEW source even on load failure,
+            # so it does not keep showing the previous source's review
+            # while handlers already act on the updated current-source
+            # state above.
+            self._sync_review_bar()
             return
 
         self._refresh_overlays()
@@ -2211,10 +2217,20 @@ class DetectKitMainWindow(QMainWindow):
         if review is None:
             self._review_bar.clear_review_state()
             return
-        decided, total = review_progress(review.staged_path)
         detail = (
             f"prompt '{review.prompt}'" if review.prompt else review.producer_variant
         )
+        decided, total = review_progress(review.staged_path)
+        if total == 0:
+            # No staged frame this review can ever decide: is_complete
+            # needs total > 0, revert_review has no snapshot, and
+            # stage_predictions refuses to stage over an existing review --
+            # so without an escape hatch the source is stuck. Reachable if
+            # the staging dir was deleted outside the app, a run was
+            # cancelled before its first frame, or the project (and its
+            # ABSOLUTE staged_path) was moved to another machine.
+            self._review_bar.set_empty_review_state(review.producer, detail)
+            return
         self._review_bar.set_review_state(
             review.producer,
             detail,
@@ -2377,6 +2393,23 @@ class DetectKitMainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"{source.name}: {kept} instance(s) at confidence {value:.2f}.", 5000
         )
+
+    def _on_review_discard(self) -> None:
+        """Close an unfinishable (zero-frame) review without touching labels.
+
+        `finish_review` already degrades safely for this case: it deletes
+        whatever is at `staged_path` (a no-op if it is already missing,
+        via `remove_staged_escalation_dir`'s ignore_errors rmtree) and
+        clears the source's field regardless. No confirmation dialog --
+        there is nothing decided here to lose.
+        """
+        source = self._current_source_obj()
+        if source is None or getattr(source, "staged_review", None) is None:
+            return
+        finish_review(source, self._project.project_dir if self._project else None)
+        self._save_current_project()
+        self._sync_review_bar()
+        self._dataset_panel.refresh_sources(self._project)
 
     def _offer_finish_if_complete(self, source) -> None:
         if not is_complete(source):

@@ -376,6 +376,12 @@ def _write_labels_from_candidates(
                     level=GeometryLevel.POLYGON,
                 )
             )
+        if not records:
+            # Do not stage a label file for a zero-record frame: an empty
+            # staged label means "accept this to delete the frame's
+            # labels", which is not what running a prompt asks for. Same
+            # contract inference_stager.py already documents/enforces.
+            continue
         label_path = staged_root / "labels" / Path(rel).with_suffix(".txt")
         label_path.parent.mkdir(parents=True, exist_ok=True)
         write_label_file(

@@ -267,14 +267,20 @@ def run_escalation(
                             level=GeometryLevel.POLYGON,
                         )
                     )
-            staged_label_path = staged_root / "labels" / relative_label
-            staged_label_path.parent.mkdir(parents=True, exist_ok=True)
-            write_label_file(
-                staged_label_path,
-                records,
-                frame_size=(h, w),
-                level=GeometryLevel.POLYGON,
-            )
+            if records:
+                staged_label_path = staged_root / "labels" / relative_label
+                staged_label_path.parent.mkdir(parents=True, exist_ok=True)
+                write_label_file(
+                    staged_label_path,
+                    records,
+                    frame_size=(h, w),
+                    level=GeometryLevel.POLYGON,
+                )
+            # else: no staged label file for this frame. Frames with no
+            # detections are not staged at all -- an empty staged label
+            # would mean "accept this to delete the frame's labels", which
+            # is not what running SAM2 escalation asks for. Same contract
+            # inference_stager.py already documents/enforces.
             if progress:
                 progress(
                     int(100 * (si + (ii + 1) / max(len(images), 1)) / len(todo)),

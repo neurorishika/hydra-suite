@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 from pathlib import Path
 
@@ -107,24 +108,46 @@ def ensure_snapshot(source: OBBSource, staged_root: str | Path) -> None:
     (accepting staged classes can extend it). Restoring labels alone would
     leave a reverted source claiming a level its labels no longer have.
 
-    Idempotent by the existence of the snapshot directory: the second and
-    later accepts must NOT re-snapshot, or the snapshot would drift forward
-    to whatever the last accept produced and revert would be a no-op.
+    Idempotent by the existence of the COMPLETE snapshot directory: the
+    second and later accepts must NOT re-snapshot, or the snapshot would
+    drift forward to whatever the last accept produced and revert would be
+    a no-op.
+
+    Crash-atomic. `labels_before/` is built in a sibling temp directory and
+    `state_before.json` is written to a sibling temp file; each is only
+    made visible by an atomic `os.replace`, and the directory is replaced
+    LAST because idempotence is keyed on it. A process death mid-copytree
+    (or between the copy and the state write) would otherwise leave a
+    PARTIAL `labels_before/` that idempotence trusts forever: a later
+    `revert_review` would rmtree the real labels and install the partial
+    snapshot -- a PERMANENT loss. Keying on the finished directory instead
+    means a crash before the final replace leaves only an orphaned temp
+    entry, cleaned up here on the next call, and this function reruns from
+    scratch -- safe, because `ensure_snapshot` always runs before
+    `accept_frame` makes its first change, so the source is still in its
+    pre-review state on any retry.
     """
     root = Path(staged_root)
     snapshot = root / SNAPSHOT_DIR
     if snapshot.exists():
         return
 
+    tmp_snapshot = root / f"{SNAPSHOT_DIR}.tmp"
+    if tmp_snapshot.exists():
+        # Leftover from a previous crash mid-snapshot; it was never made
+        # visible, so it is not trustworthy state to resume from.
+        shutil.rmtree(tmp_snapshot)
+
     source_root = Path(source.path)
     source_labels = source_root / "labels"
     if source_labels.is_dir():
-        shutil.copytree(source_labels, snapshot)
+        shutil.copytree(source_labels, tmp_snapshot)
     else:
-        snapshot.mkdir(parents=True)
+        tmp_snapshot.mkdir(parents=True)
 
     classes = source_root / "classes.txt"
-    (root / SNAPSHOT_STATE).write_text(
+    tmp_state = root / f"{SNAPSHOT_STATE}.tmp"
+    tmp_state.write_text(
         json.dumps(
             {
                 "level": source.level,
@@ -134,6 +157,8 @@ def ensure_snapshot(source: OBBSource, staged_root: str | Path) -> None:
         ),
         encoding="utf-8",
     )
+    os.replace(tmp_state, root / SNAPSHOT_STATE)
+    os.replace(tmp_snapshot, snapshot)
 
 
 def revert_review(source: OBBSource, staged_root: str | Path) -> None:
@@ -212,15 +237,28 @@ def resolve_staged_class_ids(
     staged_names = _read_names(Path(staged_root) / "classes.txt") or ["object"]
 
     mapping: dict[int, int] = {}
-    appended = False
+    new_names: list[str] = []
     for staged_id, name in enumerate(staged_names):
         if name not in source_names:
             source_names.append(name)
-            appended = True
+            new_names.append(name)
         mapping[staged_id] = source_names.index(name)
 
-    if appended:
-        classes_path.write_text("\n".join(source_names) + "\n", encoding="utf-8")
+    if new_names:
+        # Append-only: never rebuild the file from parsed names. Rebuilding
+        # would compact a hand-edited classes.txt's blank/whitespace lines
+        # (e.g. "ant\n\nbeetle\n"), shifting every later name's raw LINE
+        # INDEX -- silently renumbering ids for any reader (this file's own
+        # `_read_names` included) that treats the file as index==id rather
+        # than re-deriving ids from this function.
+        existing = (
+            classes_path.read_text(encoding="utf-8") if classes_path.is_file() else ""
+        )
+        if existing and not existing.endswith("\n"):
+            existing += "\n"
+        classes_path.write_text(
+            existing + "".join(f"{name}\n" for name in new_names), encoding="utf-8"
+        )
     return mapping
 
 

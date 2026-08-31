@@ -1,4 +1,5 @@
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -144,15 +145,26 @@ def test_an_unknown_staged_class_is_appended_to_the_source(tmp_path):
 
 
 def test_appending_never_renumbers_an_existing_class(tmp_path):
-    source = _source(tmp_path, {}, classes="ant\nbeetle\n")
-    staged = _staging(tmp_path, {}, classes="larva\n")
+    # Deliberately NON-alphabetical ("zebra" before "ant"): every other
+    # class fixture in this file happens to be alphabetical, so a
+    # `sorted(source_names)` mutation injected into
+    # `resolve_staged_class_ids` -- the exact renumbering catastrophe FIX 4
+    # guards against -- would pass unnoticed against an alphabetical
+    # fixture. AND the staged set includes an EXISTING name ("ant"), not
+    # only a brand-new one: an append-only fix keeps the raw file bytes
+    # untouched regardless of internal ordering, so a sort mutation cannot
+    # be caught by inspecting file content alone -- only the MAPPING for a
+    # name that already exists at a non-sorted position exposes it (sorted
+    # would relocate "ant" from raw index 1 to index 0).
+    source = _source(tmp_path, {}, classes="zebra\nant\n")
+    staged = _staging(tmp_path, {}, classes="ant\nlarva\n")
 
     mapping = sr.resolve_staged_class_ids(source, staged)
 
-    assert mapping == {0: 2}
+    assert mapping == {0: 1, 1: 2}
     assert (Path(source.path) / "classes.txt").read_text().splitlines()[:2] == [
+        "zebra",
         "ant",
-        "beetle",
     ]
 
 
@@ -626,3 +638,128 @@ def test_accept_all_propagates_a_missing_image_error_and_stays_recoverable(tmp_p
 
     assert (Path(source.path) / "labels" / "a.txt").read_text() == original_a
     assert sr.read_decisions(staged) == {}
+
+
+def test_review_key_for_image_uses_the_full_relative_path_not_the_basename(tmp_path):
+    """`sub/f0001.png` must key as `sub/f0001.txt`, not `f0001.txt`.
+
+    Every other fixture in this file is flat, so basename == relative path
+    and a bug that dropped the parent directory would go unnoticed. The
+    nested-path coverage that DOES exist
+    (`test_accept_frame_finds_a_nested_image_by_relative_path`) goes through
+    `accept_frame`, which never calls `review_key_for_image` -- it is given
+    `rel` directly. This calls the function itself.
+    """
+    source_path = tmp_path / "src"
+    (source_path / "images" / "sub").mkdir(parents=True)
+    image_path = source_path / "images" / "sub" / "f0001.png"
+    image_path.write_bytes(b"")
+
+    key = sr.review_key_for_image(str(source_path), str(image_path))
+
+    assert key == "sub/f0001.txt"
+
+
+def test_accepting_an_empty_staged_label_still_overwrites_current_semantics(tmp_path):
+    """Pin `accept_frame`'s CURRENT behaviour on an empty staged label file.
+
+    The producers (`semantic_escalation.py`, `sam2_escalation.py`,
+    `inference_stager.py`) are all fixed to never WRITE a zero-record
+    staged label in the first place (the empty-staged-label-deletes-GT
+    regression). This test does not re-guard that -- it guards the other
+    half: IF an empty staged label somehow exists on disk (a hand-edited
+    staging dir, a bug in a future producer, a partially-written file from
+    an external tool), `accept_frame` must not have some other silent
+    surprise. Today it applies the empty result under OVERWRITE exactly as
+    it would any other staged content -- i.e. it DOES clear the frame's
+    labels. Pinned explicitly so a change to this semantic is a deliberate,
+    reviewed decision, not an accident.
+    """
+    source, staged = _wired(
+        tmp_path,
+        {"a.txt": _obb_line(0, 0, 20, 20)},
+        {"a.txt": ""},
+    )
+
+    sr.accept_frame(source, "a.txt", mode=MergeMode.OVERWRITE)
+
+    out = read_label_file(Path(source.path) / "labels" / "a.txt", (100, 200))
+    assert out == []
+
+
+def test_ensure_snapshot_is_crash_atomic(tmp_path, monkeypatch):
+    """A death mid-copytree must not leave a partial `labels_before/` that
+    idempotence would trust forever.
+    """
+    source = _source(tmp_path, {"a.txt": "original\n", "b.txt": "second\n"})
+    staged = _staging(tmp_path, {"a.txt": ""})
+
+    real_copytree = shutil.copytree
+    calls = {"n": 0}
+
+    def _flaky_copytree(src, dst, *a, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # Simulate a crash partway through: create the destination with
+            # only SOME of the source's contents, then blow up before the
+            # real copytree (or the caller) can finish or publish it.
+            Path(dst).mkdir(parents=True)
+            (Path(dst) / "a.txt").write_text("original\n")
+            raise OSError("simulated crash mid-copytree")
+        return real_copytree(src, dst, *a, **k)
+
+    monkeypatch.setattr(sr.shutil, "copytree", _flaky_copytree)
+
+    with pytest.raises(OSError, match="simulated crash"):
+        sr.ensure_snapshot(source, staged)
+
+    # No PARTIAL snapshot is visible under the real name.
+    assert not (staged / sr.SNAPSHOT_DIR).exists()
+    assert not (staged / sr.SNAPSHOT_STATE).exists()
+
+    # A subsequent successful call produces a COMPLETE snapshot -- the
+    # leftover temp dir from the crash is cleaned up first, not resumed
+    # from or trusted.
+    sr.ensure_snapshot(source, staged)
+
+    assert not (staged / f"{sr.SNAPSHOT_DIR}.tmp").exists()
+    assert not (staged / f"{sr.SNAPSHOT_STATE}.tmp").exists()
+    assert (staged / sr.SNAPSHOT_DIR / "a.txt").read_text() == "original\n"
+    assert (staged / sr.SNAPSHOT_DIR / "b.txt").read_text() == "second\n"
+    state = json.loads((staged / sr.SNAPSHOT_STATE).read_text())
+    assert state["level"] == "obb"
+
+    # And revert works normally off that complete snapshot.
+    (Path(source.path) / "labels" / "a.txt").write_text("changed\n")
+    sr.revert_review(source, staged)
+    assert (Path(source.path) / "labels" / "a.txt").read_text() == "original\n"
+
+
+def test_snapshot_state_survives_two_accepts_and_a_revert(tmp_path):
+    """Extends `test_snapshot_is_taken_once_and_never_overwritten`, which
+    only checks `labels_before/`. A class-extending accept followed by a
+    second accept must still leave `classes.txt` AND `level` reverting to
+    their PRE-review values, not the state after either accept.
+    """
+    source, staged = _wired(
+        tmp_path,
+        {"a.txt": _obb_line(0, 0, 20, 20), "b.txt": _obb_line(0, 0, 20, 20)},
+        {"a.txt": _obb_line(60, 60, 80, 80)},
+        level="obb",
+    )
+    _image(source, "b")
+    (staged / "labels" / "b.txt").write_text(_obb_line(70, 70, 90, 90))
+    (Path(source.path) / "classes.txt").write_text("ant\n")
+    (staged / "classes.txt").write_text("ant\nlarva\n")
+
+    sr.accept_frame(source, "a.txt", mode=MergeMode.ADD_NEW)
+    sr.accept_frame(source, "b.txt", mode=MergeMode.ADD_NEW)
+
+    # classes.txt now carries the appended name; level is unpromoted (both
+    # staged and source are "obb").
+    assert (Path(source.path) / "classes.txt").read_text() == "ant\nlarva\n"
+
+    sr.revert_review(source, staged)
+
+    assert (Path(source.path) / "classes.txt").read_text() == "ant\n"
+    assert source.level == "obb"

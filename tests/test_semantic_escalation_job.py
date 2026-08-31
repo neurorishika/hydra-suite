@@ -131,6 +131,42 @@ def test_degenerate_contours_are_dropped_not_fatal(tmp_path):
     assert result.labelled == 1
 
 
+def test_no_label_file_is_staged_for_a_zero_record_frame(tmp_path):
+    """`write_label_file([])` creates a zero-byte file, and `staged_frames()`
+    would count it as a reviewable frame; `accept_frame(..., OVERWRITE)`
+    would then overwrite the source's real labels with nothing. Pin the
+    fix directly against `_write_labels_from_candidates`: a frame with no
+    surviving candidates gets no staged label file at all, matching the
+    contract `inference_stager.py` already documents ("Frames with no
+    detections are not staged at all").
+    """
+    from hydra_suite.detectkit.jobs.semantic_escalation import (
+        _write_labels_from_candidates,
+    )
+
+    staged_root = tmp_path / "staged"
+    (staged_root / "labels").mkdir(parents=True)
+    cache = {"images": {"f0.txt": {"hw": [400, 400], "candidates": []}}}
+
+    written, degenerate, orphaned = _write_labels_from_candidates(
+        staged_root, cache, confidence=0.0, merge_iou=0.5
+    )
+
+    assert written == 0
+    assert not (staged_root / "labels" / "f0.txt").exists()
+
+
+def test_a_run_with_no_detections_anywhere_stages_no_label_files(tmp_path):
+    """End-to-end version of the same regression through `run_semantic_escalation`."""
+    src = _make_source(tmp_path, n_images=3)
+
+    result = run_semantic_escalation(_request(tmp_path, src), ScriptedLabeler([]))
+
+    assert result.labelled == 0
+    staged_root = Path(src.staged_review.staged_path)
+    assert list((staged_root / "labels").glob("*.txt")) == []
+
+
 def test_candidates_cache_is_written_into_the_staging_dir(tmp_path):
     src = _make_source(tmp_path, n_images=1)
     labeler = ScriptedLabeler([SemanticInstance(_blob(200, 200), 0.9)])

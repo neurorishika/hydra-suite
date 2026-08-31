@@ -1,3 +1,4 @@
+import shutil
 import types
 from pathlib import Path
 
@@ -71,6 +72,34 @@ def test_escalation_stages_without_touching_canonical_labels(tmp_path):
     staged_label = Path(pending.staged_path) / "labels" / "a.txt"
     assert staged_label.exists() and len(staged_label.read_text().splitlines()) == 2
     assert (Path(pending.staged_path) / "classes.txt").read_text() == "ant\n"
+
+
+def test_no_label_file_is_staged_for_an_image_with_no_source_boxes(tmp_path):
+    """`write_label_file([])` creates a zero-byte file, and `staged_frames()`
+    would count it as a reviewable frame; `accept_frame(..., OVERWRITE)`
+    would then overwrite the source's real labels with nothing. A source
+    image with no boxes to escalate (an empty or absent label file) must
+    get no staged label file at all, matching the contract
+    `inference_stager.py` already documents ("Frames with no detections
+    are not staged at all").
+    """
+    src = _make_source(tmp_path)
+    # A second image with an empty label file: read_boxes_from_label
+    # returns [] for it, so `records` stays empty.
+    cv2.imwrite(
+        str(Path(src.path) / "images" / "b.jpg"), np.zeros((100, 100, 3), np.uint8)
+    )
+    (Path(src.path) / "labels" / "b.txt").write_text("")
+    project = types.SimpleNamespace(project_dir=str(tmp_path), sources=[src])
+    req = EscalationRequest(
+        project=project, source_names=["orig"], variant="sam2.1-hiera-base_plus"
+    )
+
+    result = run_escalation(req, _FakeExec())
+
+    staged_labels = Path(result.staged and src.staged_review.staged_path) / "labels"
+    assert (staged_labels / "a.txt").exists()
+    assert not (staged_labels / "b.txt").exists()
 
 
 class _BleedingExec:
@@ -389,17 +418,23 @@ def test_revert_review_fails_loudly_if_clearing_source_labels_fails(
 
 def test_accept_frame_works_when_source_has_no_labels_dir(tmp_path):
     """The pre-write mkdir is guarded on existence: a source with no labels/
-    at all must still accept a frame cleanly."""
-    root = tmp_path / "sources" / "nolabels"
-    (root / "images").mkdir(parents=True)
-    cv2.imwrite(str(root / "images" / "a.jpg"), np.zeros((100, 100, 3), np.uint8))
-    (root / "classes.txt").write_text("ant\n")
-    src = OBBSource(path=str(root), name="nolabels", level="obb")
+    at write time must still accept a frame cleanly.
+
+    Boxes still have to come from SOMEWHERE for SAM2 to escalate (it
+    prompts from the source's own OBBs), so `_make_source` -- which has
+    two boxes -- runs the escalation first; the source's labels/ dir is
+    then removed to exercise the guard `accept_frame` needs when it writes
+    the accepted content back. (Escalating a source with genuinely zero
+    boxes now stages nothing for that frame at all -- see
+    `test_no_label_file_is_staged_for_an_image_with_no_source_boxes`.)
+    """
+    src = _make_source(tmp_path)
     project = types.SimpleNamespace(project_dir=str(tmp_path), sources=[src])
     req = EscalationRequest(
-        project=project, source_names=["nolabels"], variant="sam2.1-hiera-base_plus"
+        project=project, source_names=["orig"], variant="sam2.1-hiera-base_plus"
     )
     run_escalation(req, _FakeExec())
+    shutil.rmtree(Path(src.path) / "labels")
 
     sr.accept_frame(src, "a.txt", mode=MergeMode.OVERWRITE)
 
