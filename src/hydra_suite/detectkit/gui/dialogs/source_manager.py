@@ -261,7 +261,7 @@ class SourceManagerDialog(BaseDialog):
         if row < 0 or row >= len(self._project.sources):
             return
         removed = self._project.sources.pop(row)
-        pending = removed.pending_escalation
+        pending = removed.staged_review
         if pending is not None and pending.staged_path:
             # Bounded delete: staged_path round-trips through the saved
             # project file, so it is untrusted input from disk.

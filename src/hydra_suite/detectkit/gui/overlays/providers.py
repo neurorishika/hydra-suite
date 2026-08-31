@@ -61,7 +61,7 @@ class OverlayProvider(Protocol):
 def resolve_pending_level(pending):
     """Geometry level a staged escalation's labels are in.
 
-    ``PendingEscalation.target_level`` is load-bearing: SAM2 converts
+    ``StagedReview.target_level`` is load-bearing: SAM2 converts
     existing boxes IN PLACE and can stage OBB, while SAM3 stages polygons.
     Drawing an OBB quad as polygon-native gave it the polygon style AND a
     derived OBB of the same quad -- a duplicate outline in the wrong style.
@@ -164,12 +164,12 @@ class PredictionProvider:
         )
 
 
-class StagedEscalationProvider:
+class StagedReviewProvider:
     key = "escalation"
 
     def build(self, ctx: FrameContext) -> Optional[OverlayLayer]:
         source = ctx.source()
-        pending = getattr(source, "pending_escalation", None) if source else None
+        pending = getattr(source, "staged_review", None) if source else None
         if pending is None or not str(getattr(pending, "staged_path", "")).strip():
             return None
         label_path = find_staged_label_for_image(
@@ -200,6 +200,6 @@ class StagedEscalationProvider:
 # the z values above encode the same stacking.
 PROVIDERS: tuple = (
     GroundTruthProvider(),
-    StagedEscalationProvider(),
+    StagedReviewProvider(),
     PredictionProvider(),
 )

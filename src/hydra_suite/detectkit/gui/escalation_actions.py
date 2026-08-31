@@ -64,7 +64,7 @@ def on_escalate_geometry(window, preselect: str | None = None) -> None:
         n
         for n in source_names
         if existing_by_name.get(n) is not None
-        and existing_by_name[n].pending_escalation is not None
+        and existing_by_name[n].staged_review is not None
     ]
     overwrite = False
     if would_conflict:
@@ -122,7 +122,7 @@ def on_escalate_geometry(window, preselect: str | None = None) -> None:
     worker.error.connect(_stash_error)
 
     def _handle_result(result: object) -> None:
-        # The worker set pending_escalation on existing sources on a
+        # The worker set staged_review on existing sources on a
         # background thread; persist + refresh immediately. Everything
         # UI-facing (message boxes, the review dialog) is deferred to
         # _finish, because the application-modal progress dialog is still
@@ -420,7 +420,7 @@ def on_review_escalations(window) -> None:
         return
 
     pending_sources = [
-        s for s in window._project.sources if s.pending_escalation is not None
+        s for s in window._project.sources if s.staged_review is not None
     ]
     if not pending_sources:
         QMessageBox.information(

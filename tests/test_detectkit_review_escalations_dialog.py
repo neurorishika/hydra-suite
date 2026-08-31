@@ -23,7 +23,7 @@ def qapp():
 
 
 def _make_pending_source(tmp_path, name="orig"):
-    from hydra_suite.detectkit.gui.models import OBBSource, PendingEscalation
+    from hydra_suite.detectkit.gui.models import OBBSource, StagedReview
 
     source_root = tmp_path / name
     (source_root / "labels").mkdir(parents=True)
@@ -44,10 +44,11 @@ def _make_pending_source(tmp_path, name="orig"):
         path=str(source_root),
         name=name,
         level="obb",
-        pending_escalation=PendingEscalation(
+        staged_review=StagedReview(
             staged_path=str(staged_root),
             target_level="polygon",
-            sam2_variant="sam2.1-hiera-base_plus",
+            producer="sam2",
+            producer_variant="sam2.1-hiera-base_plus",
             created_at="2026-08-27T00:00:00",
         ),
     )
@@ -78,7 +79,7 @@ def test_review_escalations_dialog_accept_checked_promotes_source(qapp, tmp_path
 
     assert dlg.accepted_names == ["orig"]
     assert dlg._list.count() == 0
-    assert src.pending_escalation is None
+    assert src.staged_review is None
     assert src.level == "polygon"
     assert src.reviewed is False
     assert (Path(src.path) / "labels" / "a.txt").exists()
@@ -90,7 +91,7 @@ def test_review_escalations_dialog_reject_checked_discards_staging(qapp, tmp_pat
     )
 
     src = _make_pending_source(tmp_path)
-    staged_path = src.pending_escalation.staged_path
+    staged_path = src.staged_review.staged_path
     dlg = ReviewEscalationsDialog([src])
     dlg._list.item(0).setCheckState(Qt.Checked)
 
@@ -98,7 +99,7 @@ def test_review_escalations_dialog_reject_checked_discards_staging(qapp, tmp_pat
 
     assert dlg.rejected_names == ["orig"]
     assert dlg._list.count() == 0
-    assert src.pending_escalation is None
+    assert src.staged_review is None
     assert src.level == "obb"
     assert not Path(staged_path).exists()
 
@@ -127,4 +128,4 @@ def test_review_escalations_dialog_skips_unchecked_rows(qapp, tmp_path, monkeypa
 
     assert dlg.accepted_names == []
     assert dlg._list.count() == 1
-    assert src.pending_escalation is not None
+    assert src.staged_review is not None

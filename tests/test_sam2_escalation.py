@@ -67,10 +67,10 @@ def test_escalation_stages_without_touching_canonical_labels(tmp_path):
     # No new OBBSource registered.
     assert [s.name for s in project.sources] == ["orig"]
 
-    pending = src.pending_escalation
+    pending = src.staged_review
     assert pending is not None
     assert pending.target_level == "polygon"
-    assert pending.sam2_variant == "sam2.1-hiera-base_plus"
+    assert pending.producer_variant == "sam2.1-hiera-base_plus"
     staged_label = Path(pending.staged_path) / "labels" / "a.txt"
     assert staged_label.exists() and len(staged_label.read_text().splitlines()) == 2
     assert (Path(pending.staged_path) / "classes.txt").read_text() == "ant\n"
@@ -100,7 +100,7 @@ def test_escalation_polygon_stays_within_original_obb_when_sam2_bleeds(tmp_path)
     result = run_escalation(req, _BleedingExec())
 
     assert result.primed == 2
-    staged_label = Path(src.pending_escalation.staged_path) / "labels" / "a.txt"
+    staged_label = Path(src.staged_review.staged_path) / "labels" / "a.txt"
     lines = staged_label.read_text().splitlines()
     assert len(lines) == 2
 
@@ -122,13 +122,13 @@ def test_rerun_without_overwrite_skips_existing_pending(tmp_path):
         project=project, source_names=["orig"], variant="sam2.1-hiera-base_plus"
     )
     run_escalation(req, _FakeExec())
-    first_staged_path = src.pending_escalation.staged_path
+    first_staged_path = src.staged_review.staged_path
 
     result2 = run_escalation(req, _FakeExec(), overwrite=False)
 
     assert result2.staged == []
     assert len(result2.skipped) == 1 and result2.skipped[0][0] == "orig"
-    assert src.pending_escalation.staged_path == first_staged_path  # untouched
+    assert src.staged_review.staged_path == first_staged_path  # untouched
 
 
 def test_rerun_with_overwrite_restages(tmp_path):
@@ -138,14 +138,14 @@ def test_rerun_with_overwrite_restages(tmp_path):
         project=project, source_names=["orig"], variant="sam2.1-hiera-base_plus"
     )
     run_escalation(req, _FakeExec())
-    first_staged_path = src.pending_escalation.staged_path
+    first_staged_path = src.staged_review.staged_path
 
     result2 = run_escalation(req, _FakeExec(), overwrite=True)
 
     assert result2.staged == ["orig"]
     assert result2.skipped == []
     # Same content-hashed staging dir reused, not accumulated.
-    assert src.pending_escalation.staged_path == first_staged_path
+    assert src.staged_review.staged_path == first_staged_path
     assert Path(first_staged_path).is_dir()
 
 
@@ -157,13 +157,13 @@ def test_accept_pending_escalation_promotes_labels_and_resets_reviewed(tmp_path)
     )
     run_escalation(req, _FakeExec())
     staged_label_text = (
-        Path(src.pending_escalation.staged_path) / "labels" / "a.txt"
+        Path(src.staged_review.staged_path) / "labels" / "a.txt"
     ).read_text()
-    staged_path = src.pending_escalation.staged_path
+    staged_path = src.staged_review.staged_path
 
     accept_pending_escalation(src)
 
-    assert src.pending_escalation is None
+    assert src.staged_review is None
     assert src.level == "polygon"
     assert src.reviewed is False
     assert src.sam2_variant == "sam2.1-hiera-base_plus"
@@ -202,9 +202,7 @@ def test_escalation_stages_nested_image_layout_correctly(tmp_path):
     result = run_escalation(req, _FakeExec())
 
     assert result.staged == ["nested"]
-    staged_label = (
-        Path(src.pending_escalation.staged_path) / "labels" / "train" / "a.txt"
-    )
+    staged_label = Path(src.staged_review.staged_path) / "labels" / "train" / "a.txt"
     assert staged_label.exists()
     assert len(staged_label.read_text().splitlines()) == 1
 
@@ -229,7 +227,7 @@ def test_accept_refuses_when_staged_labels_missing_files(tmp_path):
 
     # Simulate an image that failed to stage (e.g. cv2.imread returned None
     # during escalation): remove its staged label after the fact.
-    staged_b = Path(src.pending_escalation.staged_path) / "labels" / "b.txt"
+    staged_b = Path(src.staged_review.staged_path) / "labels" / "b.txt"
     staged_b.unlink()
 
     original_a = (Path(src.path) / "labels" / "a.txt").read_text()
@@ -239,7 +237,7 @@ def test_accept_refuses_when_staged_labels_missing_files(tmp_path):
         accept_pending_escalation(src)
 
     # Nothing was touched -- refusal happens before any deletion.
-    assert src.pending_escalation is not None
+    assert src.staged_review is not None
     assert (Path(src.path) / "labels" / "a.txt").read_text() == original_a
     assert (Path(src.path) / "labels" / "b.txt").read_text() == original_b
 
@@ -252,11 +250,11 @@ def test_reject_pending_escalation_discards_staging_leaves_source_untouched(tmp_
         project=project, source_names=["orig"], variant="sam2.1-hiera-base_plus"
     )
     run_escalation(req, _FakeExec())
-    staged_path = src.pending_escalation.staged_path
+    staged_path = src.staged_review.staged_path
 
     reject_pending_escalation(src)
 
-    assert src.pending_escalation is None
+    assert src.staged_review is None
     assert src.level == "obb"
     assert src.reviewed is True
     assert (Path(src.path) / "labels" / "a.txt").read_text() == original_label_text
@@ -292,7 +290,7 @@ def test_escalation_preserves_per_instance_class_ids(tmp_path):
     run_escalation(req, _FakeExec())
 
     staged_lines = (
-        (Path(src.pending_escalation.staged_path) / "labels" / "a.txt")
+        (Path(src.staged_review.staged_path) / "labels" / "a.txt")
         .read_text()
         .splitlines()
     )
@@ -323,12 +321,12 @@ def test_escalation_stages_non_jpg_png_images(tmp_path):
 
     run_escalation(req, _FakeExec())
 
-    assert (Path(src.pending_escalation.staged_path) / "labels" / "a.txt").exists()
+    assert (Path(src.staged_review.staged_path) / "labels" / "a.txt").exists()
 
     accept_pending_escalation(src)  # must not refuse
 
     assert src.level == "polygon"
-    assert src.pending_escalation is None
+    assert src.staged_review is None
 
 
 def test_read_boxes_from_label_parses_class_id(tmp_path):
@@ -405,31 +403,32 @@ def test_reject_refuses_to_delete_out_of_bounds_staged_path(tmp_path):
     artifacts/pending_escalations/ must be left alone (not recursively
     deleted), and reject must still clear the pending state without raising.
     """
-    from hydra_suite.detectkit.gui.models import PendingEscalation
+    from hydra_suite.detectkit.gui.models import StagedReview
 
     src = _make_source(tmp_path)
     outside = tmp_path / "precious"
     outside.mkdir()
     (outside / "keep.txt").write_text("do not delete\n")
-    src.pending_escalation = PendingEscalation(
+    src.staged_review = StagedReview(
         staged_path=str(outside),
         target_level="polygon",
-        sam2_variant="sam2.1-hiera-base_plus",
+        producer="sam2",
+        producer_variant="sam2.1-hiera-base_plus",
         created_at="2026-08-27T00:00:00",
     )
 
     reject_pending_escalation(src, tmp_path)
 
-    assert src.pending_escalation is None
+    assert src.staged_review is None
     assert (outside / "keep.txt").exists()
 
 
 def test_reject_refuses_to_delete_filesystem_root(tmp_path):
-    from hydra_suite.detectkit.gui.models import PendingEscalation
+    from hydra_suite.detectkit.gui.models import StagedReview
     from hydra_suite.detectkit.jobs.sam2_escalation import _is_safe_to_delete
 
     src = _make_source(tmp_path)
-    src.pending_escalation = PendingEscalation(staged_path="/")
+    src.staged_review = StagedReview(staged_path="/")
 
     assert _is_safe_to_delete("/", tmp_path) is False
     assert _is_safe_to_delete("/") is False
@@ -453,7 +452,7 @@ def test_reject_refuses_to_delete_filesystem_root(tmp_path):
     assert _is_safe_to_delete(tmp_path / "somewhere" / "a-b-c") is False
 
     reject_pending_escalation(src, tmp_path)  # must not raise
-    assert src.pending_escalation is None
+    assert src.staged_review is None
 
 
 def test_accept_without_pending_raises():

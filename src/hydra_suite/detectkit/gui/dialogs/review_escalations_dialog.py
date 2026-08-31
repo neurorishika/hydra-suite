@@ -64,17 +64,17 @@ class ReviewEscalationsDialog(BaseDialog):
 
         self._list = QListWidget()
         for src in pending_sources:
-            pending = src.pending_escalation
+            pending = src.staged_review
             if pending is None:
                 continue
             detail = (
-                f"prompt '{pending.primer_prompt}'"
-                if pending.primer_kind == "sam3"
-                else pending.primer_variant or pending.sam2_variant
+                f"prompt '{pending.prompt}'"
+                if pending.producer == "sam3"
+                else pending.producer_variant
             )
             item = QListWidgetItem(
                 f"{src.name}  ->  {pending.target_level} "
-                f"[{pending.primer_kind}: {detail}, staged {pending.created_at}]"
+                f"[{pending.producer}: {detail}, staged {pending.created_at}]"
             )
             item.setData(Qt.UserRole, src)
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
@@ -117,7 +117,7 @@ class ReviewEscalationsDialog(BaseDialog):
             src = item.data(Qt.UserRole)
             try:
                 if accept:
-                    if src.pending_escalation.primer_kind == "sam3":
+                    if src.staged_review.producer == "sam3":
                         accept_pending_semantic_escalation(
                             src, self._project, self._project_dir
                         )
@@ -139,17 +139,14 @@ class ReviewEscalationsDialog(BaseDialog):
         targets = [
             self._list.item(r).data(Qt.UserRole)
             for r in rows
-            if self._list.item(r).data(Qt.UserRole).pending_escalation.primer_kind
-            == "sam3"
+            if self._list.item(r).data(Qt.UserRole).staged_review.producer == "sam3"
         ]
         if not targets:
             QMessageBox.information(
                 self, "Re-threshold", "Check a staged SAM3 result first."
             )
             return
-        current = float(
-            targets[0].pending_escalation.primer_params.get("confidence", 0.35)
-        )
+        current = float(targets[0].staged_review.params.get("confidence", 0.35))
         # The MINIMUM is the candidate cache's own floor: anything below it
         # is refused by rethreshold_staged, so offering it here would only
         # let the user pick an error message.
@@ -166,9 +163,7 @@ class ReviewEscalationsDialog(BaseDialog):
         if not ok:
             return
         for src in targets:
-            merge_iou = float(
-                src.pending_escalation.primer_params.get("merge_iou", 0.5)
-            )
+            merge_iou = float(src.staged_review.params.get("merge_iou", 0.5))
             try:
                 kept = rethreshold_staged(src, confidence=value, merge_iou=merge_iou)
             except Exception as exc:

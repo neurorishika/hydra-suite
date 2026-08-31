@@ -44,7 +44,7 @@ from hydra_suite.data.al.escalation import LabelRecord
 from hydra_suite.data.al.labels import write_label_file
 from hydra_suite.data.project_bundle import ensure_bundle_subdirectory
 from hydra_suite.detectkit.gui.constants import IMG_EXTS
-from hydra_suite.detectkit.gui.models import OBBSource, PendingEscalation
+from hydra_suite.detectkit.gui.models import OBBSource, StagedReview
 from hydra_suite.utils.geometry_levels import GeometryLevel
 from hydra_suite.widgets.workers import BaseWorker
 
@@ -189,7 +189,7 @@ def sources_pending_replacement(req: "SemanticEscalationRequest") -> list[str]:
     out: list[str] = []
     for name in req.source_names:
         src = by_name.get(name)
-        if src is None or src.pending_escalation is None:
+        if src is None or src.staged_review is None:
             continue
         target = (
             project_root
@@ -197,7 +197,7 @@ def sources_pending_replacement(req: "SemanticEscalationRequest") -> list[str]:
             / "pending_escalations"
             / staged_dirname_for(src, req.variant, req.prompt)
         )
-        if _resolved(src.pending_escalation.staged_path) != target:
+        if _resolved(src.staged_review.staged_path) != target:
             out.append(name)
     return out
 
@@ -216,7 +216,7 @@ def band_from_bounds(min_px2: float, max_px2: float) -> AreaBand | None:
 
 
 def band_from_params(params: dict | None) -> AreaBand | None:
-    """The area gate recorded on a staged run's ``primer_params``.
+    """The area gate recorded on a staged run's ``params``.
 
     Absent on runs staged before the gate existed, which is exactly the
     ungated behaviour those runs were produced under.
@@ -425,8 +425,8 @@ def run_semantic_escalation(
         # prompt, or an unreviewed SAM2 escalation) needs the caller's
         # explicit consent, because it destroys unreviewed work.
         would_replace = (
-            src.pending_escalation is not None
-            and _resolved(src.pending_escalation.staged_path) != target_root
+            src.staged_review is not None
+            and _resolved(src.staged_review.staged_path) != target_root
         )
         if would_replace and not (overwrite or req.overwrite):
             result.skipped.append(
@@ -444,19 +444,19 @@ def run_semantic_escalation(
             project_root, f"artifacts/pending_escalations/{staged_dirname}"
         )
 
-        old_pending = src.pending_escalation
+        old_pending = src.staged_review
         if (
             old_pending is not None
             and _resolved(old_pending.staged_path) != staged_root
         ):
             remove_staged_escalation_dir(old_pending.staged_path, project_root)
-            # F7: the pointer dies with the directory. src.pending_escalation
+            # F7: the pointer dies with the directory. src.staged_review
             # is only REPLACED at the end of a successful source, so any
             # failure in between (e.g. plan_for_frame's ValueError above the
             # tile ceiling at overlap 0.9) used to leave the source pointing
             # at a directory that no longer exists -- the review dialog then
             # offers a pending escalation that cannot be opened or dismissed.
-            src.pending_escalation = None
+            src.staged_review = None
 
         # DEPARTURE 3: the wipe is CONDITIONAL on the fingerprint, so a
         # cancelled multi-hour run resumes instead of restarting.
@@ -551,14 +551,14 @@ def run_semantic_escalation(
         # len(images) either.
         result.frames_processed += len(cache["images"])
         (staged_root / "classes.txt").write_text(f"{req.prompt.strip() or 'object'}\n")
-        src.pending_escalation = PendingEscalation(
+        src.staged_review = StagedReview(
             staged_path=str(staged_root),
             target_level=GeometryLevel.POLYGON.label,
             created_at=datetime.now().isoformat(),
-            primer_kind="sam3",
-            primer_variant=req.variant,
-            primer_prompt=req.prompt,
-            primer_params={
+            producer="sam3",
+            producer_variant=req.variant,
+            prompt=req.prompt,
+            params={
                 # The threshold the staged LABELS were written at -- distinct
                 # from confidence_floor (what the CACHE holds). The review
                 # dialog prefills its re-threshold prompt from this, and
@@ -612,9 +612,9 @@ def rethreshold_floor_for(sources) -> float:
     records one.
     """
     floors = [
-        recorded_confidence_floor(s.pending_escalation.staged_path)
+        recorded_confidence_floor(s.staged_review.staged_path)
         for s in sources
-        if getattr(s, "pending_escalation", None) is not None
+        if getattr(s, "staged_review", None) is not None
     ]
     known = [f for f in floors if f is not None]
     return max(known) if known else float(CACHE_CONFIDENCE_FLOOR)
@@ -630,8 +630,8 @@ def rethreshold_staged(
     post-filtering the previous labels, because suppression is
     survivor-dependent.
     """
-    pending = source.pending_escalation
-    if pending is None or pending.primer_kind != "sam3":
+    pending = source.staged_review
+    if pending is None or pending.producer != "sam3":
         raise ValueError(f"Source '{source.name}' has no staged SAM3 escalation.")
     staged_root = Path(pending.staged_path)
     floor = recorded_confidence_floor(staged_root)
@@ -666,11 +666,11 @@ def rethreshold_staged(
         cache,
         confidence=confidence,
         merge_iou=merge_iou,
-        area_band=band_from_params(pending.primer_params),
+        area_band=band_from_params(pending.params),
         origin_images=Path(source.path) / "images",
     )
-    pending.primer_params = {
-        **pending.primer_params,
+    pending.params = {
+        **pending.params,
         "confidence": float(confidence),
         "merge_iou": float(merge_iou),
     }
@@ -1194,12 +1194,12 @@ def accept_pending_semantic_escalation(
     """
     from hydra_suite.data.al.export import _link_or_copy
 
-    pending = source.pending_escalation
+    pending = source.staged_review
     if pending is None:
         raise ValueError(f"Source '{source.name}' has no pending escalation.")
-    if pending.primer_kind != "sam3":
+    if pending.producer != "sam3":
         raise ValueError(
-            f"Source '{source.name}' has a {pending.primer_kind!r} pending "
+            f"Source '{source.name}' has a {pending.producer!r} pending "
             "escalation, not a SAM3 one; use the SAM2 accept path."
         )
 
@@ -1213,7 +1213,7 @@ def accept_pending_semantic_escalation(
 
     project_root = Path(project.project_dir)
     sibling_name = _unique_source_name(
-        project, f"{source.name}-sam3-{prompt_slug(pending.primer_prompt)}"
+        project, f"{source.name}-sam3-{prompt_slug(pending.prompt)}"
     )
     sibling_root = Path(
         ensure_bundle_subdirectory(project_root, f"sources/{sibling_name}")
@@ -1272,5 +1272,5 @@ def accept_pending_semantic_escalation(
     project.sources.append(sibling)
 
     remove_staged_escalation_dir(staged_root, project_dir or project_root)
-    source.pending_escalation = None
+    source.staged_review = None
     return sibling

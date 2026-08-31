@@ -19,7 +19,7 @@ from hydra_suite.data.al.escalation import LabelRecord
 from hydra_suite.data.al.labels import write_label_file
 from hydra_suite.data.project_bundle import ensure_bundle_subdirectory
 from hydra_suite.detectkit.gui.constants import IMG_EXTS
-from hydra_suite.detectkit.gui.models import OBBSource, PendingEscalation
+from hydra_suite.detectkit.gui.models import OBBSource, StagedReview
 from hydra_suite.utils.geometry_levels import GeometryLevel
 from hydra_suite.widgets.workers import BaseWorker
 
@@ -38,7 +38,7 @@ def _is_safe_to_delete(
 ) -> bool:
     """True if *path* is a staging directory this module may recursively delete.
 
-    ``PendingEscalation.staged_path`` round-trips through the saved project
+    ``StagedReview.staged_path`` round-trips through the saved project
     file, so it is untrusted input from disk: a hand-edited or corrupted
     project could point it at ``/`` or at the source's own directory, and
     every deletion here is a recursive ``rmtree``. When *project_dir* is
@@ -104,7 +104,7 @@ class EscalationRequest:
 
 @dataclass
 class EscalationResult:
-    # Names of sources that received a fresh `pending_escalation` this run.
+    # Names of sources that received a fresh `staged_review` this run.
     staged: list[str] = field(default_factory=list)
     primed: int = 0
     fell_back: int = 0
@@ -161,7 +161,7 @@ def run_escalation(
 
     Writes the primed result to a per-source staging directory under
     ``artifacts/pending_escalations/`` and records it on the source's
-    ``pending_escalation`` field. It does NOT touch the source's own
+    ``staged_review`` field. It does NOT touch the source's own
     canonical labels and does NOT register any new source -- a caller (the
     escalation review dialog) must call ``accept_pending_escalation`` or
     ``reject_pending_escalation`` to promote or discard the staged result.
@@ -181,7 +181,7 @@ def run_escalation(
     ]
     project_root = Path(req.project.project_dir)
     for si, src in enumerate(todo):
-        if src.pending_escalation is not None and not overwrite:
+        if src.staged_review is not None and not overwrite:
             result.skipped.append(
                 (
                     src.name,
@@ -207,8 +207,8 @@ def run_escalation(
         # staging path (e.g. this is a re-escalation with a different SAM2
         # variant, which hashes to a different directory) must have its old
         # staging dir cleaned up -- otherwise it's orphaned forever, since
-        # nothing else ever revisits a replaced pending_escalation.
-        old_pending = src.pending_escalation
+        # nothing else ever revisits a replaced staged_review.
+        old_pending = src.staged_review
         if old_pending is not None and old_pending.staged_path != str(staged_root):
             remove_staged_escalation_dir(old_pending.staged_path, project_root)
 
@@ -286,10 +286,11 @@ def run_escalation(
             if (src_root / "classes.txt").exists()
             else "object\n"
         )
-        src.pending_escalation = PendingEscalation(
+        src.staged_review = StagedReview(
             staged_path=str(staged_root),
             target_level=GeometryLevel.POLYGON.label,
-            sam2_variant=req.variant,
+            producer="sam2",
+            producer_variant=req.variant,
             created_at=datetime.now().isoformat(),
         )
         result.staged.append(src.name)
@@ -307,7 +308,7 @@ def accept_pending_escalation(
     ``reviewed`` to ``False`` (same meaning as any other machine-derived,
     not-yet-human-confirmed result -- just attached to the existing source
     instead of a new sibling), removes the staging directory, and clears
-    ``pending_escalation``.
+    ``staged_review``.
 
     Validates BEFORE deleting anything: refuses (raising ``RuntimeError``,
     source left untouched) if the staging directory is missing on disk, or
@@ -321,7 +322,7 @@ def accept_pending_escalation(
 
     Raises ValueError if the source has no pending escalation.
     """
-    pending = source.pending_escalation
+    pending = source.staged_review
     if pending is None:
         raise ValueError(f"Source '{source.name}' has no pending escalation.")
 
@@ -364,10 +365,10 @@ def accept_pending_escalation(
 
     source.level = pending.target_level
     source.reviewed = False
-    source.sam2_variant = pending.sam2_variant
+    source.sam2_variant = pending.producer_variant
 
     remove_staged_escalation_dir(staged_root, project_dir)
-    source.pending_escalation = None
+    source.staged_review = None
 
 
 def reject_pending_escalation(
@@ -383,8 +384,8 @@ def reject_pending_escalation(
 
     Raises ValueError if the source has no pending escalation.
     """
-    pending = source.pending_escalation
+    pending = source.staged_review
     if pending is None:
         raise ValueError(f"Source '{source.name}' has no pending escalation.")
     remove_staged_escalation_dir(pending.staged_path, project_dir)
-    source.pending_escalation = None
+    source.staged_review = None
