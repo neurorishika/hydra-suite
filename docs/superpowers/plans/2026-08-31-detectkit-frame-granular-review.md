@@ -51,8 +51,13 @@ producer that stages into the same contract.
   add pytest-qt as a dependency.
 - **No equivalence gate applies** — nothing here touches the tracking pipeline. The
   gate is `python -m pytest` on the named test files.
+- **Environment:** activate `hydra-mps` before running anything
+  (`conda activate hydra-mps`). The base environment's `black` is broken against
+  pathspec 0.12.1, so `make format` fails there for reasons unrelated to any task.
 - **Every task ends with `make format` clean and a commit.** Run
-  `make format && make lint-moderate` before each commit; commit messages use the
+  `make format && make lint` before each commit (`make lint` is the moderate-severity
+  flake8 gate — note there is NO `lint-moderate` target, despite CLAUDE.md's pre-PR
+  checklist naming one); commit messages use the
   repo's `feat(detectkit):` / `refactor(detectkit):` / `test(detectkit):` prefixes.
 - **Commit as the configured git user.** Do not add a `Co-Authored-By: Claude` trailer.
 
@@ -201,7 +206,7 @@ def test_polygon_iou_lives_in_utils_so_data_can_import_it():
 
 ```bash
 python -m pytest tests/test_semantic_masks.py -q
-make format && make lint-moderate
+make format && make lint
 git add src/hydra_suite/utils/polygon_iou.py src/hydra_suite/core/inference/masks.py tests/test_semantic_masks.py
 git commit -m "refactor(utils): move polygon_iou down from core/inference to utils"
 ```
@@ -435,7 +440,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-make format && make lint-moderate
+make format && make lint
 git add src/hydra_suite/data/al/labels.py tests/test_al_label_reader.py
 git commit -m "feat(data): add read_label_file, the inverse of write_label_file"
 ```
@@ -763,7 +768,7 @@ Expected: PASS (all 12).
 - [ ] **Step 5: Commit**
 
 ```bash
-make format && make lint-moderate
+make format && make lint
 git add src/hydra_suite/data/al/merge.py tests/test_al_merge.py
 git commit -m "feat(data): add merge_records, the ADD_NEW/OVERWRITE merge primitive"
 ```
@@ -1092,7 +1097,7 @@ failure is an unrenamed call site — fix it, do not skip the test.
 - [ ] **Step 8: Commit**
 
 ```bash
-make format && make lint-moderate
+make format && make lint
 git add -A src/hydra_suite/detectkit tests
 git commit -m "refactor(detectkit): PendingEscalation -> StagedReview, producer is provenance only"
 ```
@@ -1454,7 +1459,7 @@ Expected: PASS (8).
 - [ ] **Step 5: Commit**
 
 ```bash
-make format && make lint-moderate
+make format && make lint
 git add src/hydra_suite/detectkit/jobs/staged_review.py tests/test_detectkit_staged_review.py
 git commit -m "feat(detectkit): add decisions.json and the pre-review snapshot"
 ```
@@ -1600,7 +1605,7 @@ Expected: PASS (12).
 - [ ] **Step 5: Commit**
 
 ```bash
-make format && make lint-moderate
+make format && make lint
 git add src/hydra_suite/detectkit/jobs/staged_review.py tests/test_detectkit_staged_review.py
 git commit -m "feat(detectkit): map staged class ids onto the source by name"
 ```
@@ -2362,7 +2367,7 @@ in-place acceptance — that behaviour change is the point of the design.
 - [ ] **Step 7: Commit**
 
 ```bash
-make format && make lint-moderate
+make format && make lint
 git add -A src/hydra_suite/detectkit tests/test_detectkit_staged_review.py tests/test_detectkit_review_escalations_dialog.py tests/test_detectkit_sam2_escalation_wiring.py
 git commit -m "feat(detectkit): producer-agnostic frame-granular accept with promotion"
 ```
@@ -2501,7 +2506,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-make format && make lint-moderate
+make format && make lint
 git add src/hydra_suite/detectkit/gui/overlays/providers.py tests/test_detectkit_overlay_providers.py
 git commit -m "feat(detectkit): hide the staged overlay on frames already decided"
 ```
@@ -2805,7 +2810,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-make format && make lint-moderate
+make format && make lint
 git add src/hydra_suite/detectkit/gui/panels/review_bar.py tests/test_detectkit_review_bar.py
 git commit -m "feat(detectkit): add the frame-granular review bar widget"
 ```
@@ -3255,7 +3260,7 @@ Expected: PASS.
 - [ ] **Step 8: Commit**
 
 ```bash
-make format && make lint-moderate
+make format && make lint
 git add -A src/hydra_suite/detectkit tests
 git commit -m "feat(detectkit): review bar replaces the per-source escalation dialog"
 ```
@@ -3662,7 +3667,7 @@ Expected: PASS (8).
 - [ ] **Step 5: Commit**
 
 ```bash
-make format && make lint-moderate
+make format && make lint
 git add src/hydra_suite/detectkit/jobs/inference_stager.py tests/test_detectkit_inference_stager.py
 git commit -m "feat(detectkit): stage dataset-inference predictions for review"
 ```
@@ -3917,7 +3922,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-make format && make lint-moderate
+make format && make lint
 git add -A src/hydra_suite/detectkit tests/test_detectkit_inference_stager.py
 git commit -m "feat(detectkit): add Stage Predictions for Review"
 ```
@@ -4036,7 +4041,7 @@ skipped.
 - [ ] **Step 6: Commit**
 
 ```bash
-make format && make lint-moderate
+make format && make lint
 git add -A src/hydra_suite/detectkit tests
 git commit -m "refactor(detectkit): delete the SAM3 sibling-source accept path"
 ```
@@ -4104,7 +4109,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-make format && make lint-moderate
+make format && make lint
 git add -A src/hydra_suite/detectkit tests
 git commit -m "refactor(detectkit): drop the PendingEscalation alias, key the layer 'staged'"
 ```
