@@ -385,3 +385,20 @@ def test_visibility_matrix_is_self_consistent(
         # class_filtered=False, so the filter can never reduce it
         expected = len(_ESC) * (2 if show_derived else 1)
         assert counts["escalation"] == expected
+
+
+def test_dialog_scene_is_buildable_from_layers_alone(qapp):
+    """The two calibration dialogs draw single-level filled GT and dashed
+    predictions. This is the shape the registry must express without the
+    transitional adapters -- and it must match the committed golden."""
+    from hydra_suite.detectkit.gui.dialogs._overlay_helpers import (
+        dialog_gt_layer,
+        dialog_pred_layer,
+    )
+
+    names = {0: "Ground truth", 2: "Prediction"}
+    canvas = OBBCanvas()
+    canvas.set_layer(dialog_gt_layer(_GT, names))
+    canvas.set_layer(dialog_pred_layer(_PRED, names))
+    expected = json.loads(GOLDEN.read_text())["dialog"]
+    assert describe_scene(canvas) == expected

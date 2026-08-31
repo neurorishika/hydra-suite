@@ -26,6 +26,8 @@ from hydra_suite.core.inference.semantic.tiling import merge_candidates
 from hydra_suite.detectkit.gui.canvas import OBBCanvas
 from hydra_suite.widgets.dialogs import BaseDialog
 
+from ._overlay_helpers import dialog_gt_layer, dialog_pred_layer
+
 COLUMNS = [
     ("tile", "Tiling"),
     ("confidence", "Confidence"),
@@ -240,9 +242,8 @@ class CalibrationResultsDialog(BaseDialog):
         self._render_preview()
 
     def _refresh_visibility(self) -> None:
-        self._canvas.set_overlay_visibility(
-            self._show_gt.isChecked(), self._show_predictions.isChecked()
-        )
+        self._canvas.set_layer_visible("gt", self._show_gt.isChecked())
+        self._canvas.set_layer_visible("pred", self._show_predictions.isChecked())
 
     def _render_preview(self) -> None:
         has_frames = bool(self._preview_frames)
@@ -312,8 +313,8 @@ class CalibrationResultsDialog(BaseDialog):
             for instance in merged
         ]
         labels = {0: "Ground truth", 2: "Prediction"}
-        self._canvas.set_gt_detections(gt_detections, labels, fill_alpha=65)
-        self._canvas.set_pred_detections(prediction_detections, labels, fill_alpha=55)
+        self._canvas.set_layer(dialog_gt_layer(gt_detections, labels))
+        self._canvas.set_layer(dialog_pred_layer(prediction_detections, labels))
         self._refresh_visibility()
         self._frame_label.setText(
             f"Frame {self._frame_index + 1} of {len(self._preview_frames)} · "

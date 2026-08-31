@@ -15,6 +15,8 @@ from PySide6.QtWidgets import (
 from hydra_suite.detectkit.gui.canvas import OBBCanvas
 from hydra_suite.widgets.dialogs import BaseDialog
 
+from ._overlay_helpers import dialog_gt_layer, dialog_pred_layer
+
 
 def _duration(seconds: float) -> str:
     seconds = max(0.0, float(seconds))
@@ -128,14 +130,13 @@ class SemanticFramePreviewDialog(BaseDialog):
             for item in self.result.predictions
         ]
         names = {0: "Ground truth", 2: "Prediction"}
-        self._canvas.set_gt_detections(ground_truth, names, fill_alpha=65)
-        self._canvas.set_pred_detections(predictions, names, fill_alpha=55)
+        self._canvas.set_layer(dialog_gt_layer(ground_truth, names))
+        self._canvas.set_layer(dialog_pred_layer(predictions, names))
         self._refresh_visibility()
 
     def _refresh_visibility(self) -> None:
-        self._canvas.set_overlay_visibility(
-            self._show_gt.isChecked(), self._show_predictions.isChecked()
-        )
+        self._canvas.set_layer_visible("gt", self._show_gt.isChecked())
+        self._canvas.set_layer_visible("pred", self._show_predictions.isChecked())
 
     def _fit_image(self) -> None:
         self._canvas.fit_in_view()
