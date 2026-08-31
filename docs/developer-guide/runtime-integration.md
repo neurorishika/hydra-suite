@@ -277,28 +277,36 @@ source (see Workflow below) — it does not create a new source.
    original box's rectangle as the polygon so no detection is ever dropped.
 5. Results are written to a **per-source staging directory** under
    `artifacts/pending_escalations/<source>-<variant>-<hash>/` (`run_escalation()`,
-   `detectkit/jobs/sam2_escalation.py`) and recorded on `OBBSource.pending_escalation`
-   (`PendingEscalation`: `staged_path`, `target_level`, `sam2_variant`, `created_at`). The source's own
+   `detectkit/jobs/sam2_escalation.py`) and recorded on `OBBSource.staged_review`
+   (`StagedReview`: `staged_path`, `target_level`, `sam2_variant`, `created_at` — the field was renamed
+   from `pending_escalation`/`PendingEscalation` because it now holds the staged output of any producer,
+   not just SAM2/SAM3 escalations; old project files with the old key/names still load, see
+   `docs/superpowers/specs/done/2026-08-31-detectkit-frame-granular-review-design.md`). The source's own
    canonical `labels/`/`classes.txt` are never touched during staging, and no new source is registered
    — the source list still shows exactly one entry for that source. Re-running escalation over a source
-   that already has a pending escalation is skipped by default (recorded in `EscalationResult.skipped`);
+   that already has a staged review is skipped by default (recorded in `EscalationResult.skipped`);
    passing `overwrite=True` replaces the staged directory in place.
-6. The user reviews and resolves the staged result via `accept_pending_escalation(source)` or
-   `reject_pending_escalation(source)` (same module). `accept_pending_escalation` validates the staged
-   directory is present and covers every label the source currently has, then promotes it into the
-   source's canonical `labels/`/`classes.txt` in place, sets `level`/`sam2_variant` from the pending
-   record, resets `reviewed=False` (same meaning as any other machine-derived, not-yet-confirmed
-   result — just applied to the existing source instead of a new sibling), removes the staging
-   directory, and clears `pending_escalation`. `reject_pending_escalation` discards the staged
-   directory and clears `pending_escalation`, leaving the source untouched. Both raise if the source has
-   no pending escalation.
+6. The user reviews the staged result **frame by frame**, via the review bar shown above the canvas
+   whenever the current source has a staged review (`detectkit/gui/panels/review_bar.py`), backed by
+   `detectkit/jobs/staged_review.py`. Per frame: **Replace** (`accept_frame(..., mode=MergeMode.OVERWRITE)`)
+   overwrites the frame's label with the staged one; **Add New**
+   (`accept_frame(..., mode=MergeMode.ADD_NEW)`) keeps the frame's existing labels and appends only
+   non-overlapping staged instances via `merge_records`; **Reject** discards the staged frame. **Accept
+   All**/**Reject All** apply the same over every undecided frame; **Next Undecided** jumps between them;
+   a `decided`/`total` counter tracks progress. Every accept applies **immediately** to the source's
+   canonical `labels/`/`classes.txt` — there is no separate "commit" step — and the first accept in a
+   review snapshots the source's pre-review state so **Revert Review** can restore it (available only
+   while the review is open; finishing the review deletes the staging directory and the snapshot with
+   it). If the staged geometry level is above the source's, the accept promotes the source (existing
+   labels lifted, never re-derived down); see the design spec's §3 for the promotion/lift distinction.
+   Finishing a review (every frame decided) removes the staging directory and clears `staged_review`.
 7. This flow is driven from the GUI by the "Review escalations…" button in the Tools panel
-   (`ToolsPanel.review_escalations_requested` → `escalation_actions.on_review_escalations`), which opens
-   `ReviewEscalationsDialog` (`gui/dialogs/review_escalations_dialog.py`) listing **every** source in
-   the project with a non-`None` `pending_escalation`, not just sources from the escalation run that
-   just finished — so a pending escalation left unresolved (e.g. the dialog was closed without acting
-   on it, or the project was closed and reopened) is still found and reopened later. The dialog also
-   opens automatically right after a run that staged at least one source.
+   (`ToolsPanel.review_escalations_requested` → `MainWindow._on_go_to_staged_review`), which switches to
+   the first source with an unfinished `staged_review` and shows its review bar — there is no longer a
+   separate review dialog (`ReviewEscalationsDialog` was retired; re-thresholding a staged run, previously
+   a dialog action, is now a review-bar button). A source with an unresolved staged review is still found
+   this way after the project is closed and reopened, since the state lives on `OBBSource.staged_review`,
+   not in transient UI.
 
 **Key properties:**
 
