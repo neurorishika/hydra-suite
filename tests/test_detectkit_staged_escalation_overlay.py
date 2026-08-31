@@ -83,14 +83,17 @@ def test_staged_class_names_come_from_the_staging_dirs_classes_txt(tmp_path):
 def test_the_staged_layer_refreshes_through_the_same_path_as_every_other():
     """The escalation layer's refresh used to fire only incidentally, and
     its clear used to sit below an early return. Both are structural now:
-    one _refresh_overlays call, one idempotent set_layer per key."""
+    one _refresh_overlays call, one idempotent set_layer per key.
+
+    `_refresh_escalation_overlay` (the old dedicated single-key refresh) had
+    zero production callers by the time the review dialog was retired --
+    the live path is `_after_review_change`, which refreshes "staged"
+    alongside "gt" in one `_refresh_overlays` call."""
     import inspect
 
     from hydra_suite.detectkit.gui.main_window import MainWindow
 
-    assert "_refresh_overlays" in inspect.getsource(
-        MainWindow._refresh_escalation_overlay
-    )
+    assert "_refresh_overlays" in inspect.getsource(MainWindow._after_review_change)
 
 
 def test_the_escalation_layer_is_cleared_even_when_the_frame_fails_to_load():
@@ -119,21 +122,23 @@ def test_the_overlay_does_not_decode_the_frame_a_third_time():
 
     from hydra_suite.detectkit.gui.main_window import MainWindow
 
-    assert "cv2.imread" not in inspect.getsource(MainWindow._refresh_escalation_overlay)
+    assert "cv2.imread" not in inspect.getsource(MainWindow._after_review_change)
     assert "cv2.imread" not in inspect.getsource(MainWindow.show_image)
 
 
 def test_reviewing_escalations_refreshes_the_overlay_directly():
-    """Accept/Reject cleared the overlay only INCIDENTALLY, via the dataset
-    panel resetting its selection to row 0. A selection-preserving refresh
-    would have left accepted or rejected masks on screen with nothing
-    anywhere calling for a redraw."""
+    """Accept/Reject must refresh the overlay DIRECTLY, not incidentally via
+    a selection reset -- a selection-preserving refresh would leave accepted
+    or rejected masks on screen with nothing calling for a redraw. This is
+    now MainWindow._after_review_change, shared by every review handler
+    (accept/reject/bulk/revert/rethreshold)."""
     import inspect
 
-    from hydra_suite.detectkit.gui import escalation_actions
+    from hydra_suite.detectkit.gui.main_window import MainWindow
 
-    source = inspect.getsource(escalation_actions.on_review_escalations)
-    assert "_refresh_escalation_overlay" in source
+    source = inspect.getsource(MainWindow._after_review_change)
+    assert "_refresh_overlays" in source
+    assert '"gt"' in source and '"staged"' in source
 
 
 def test_canvas_reports_the_loaded_image_size():

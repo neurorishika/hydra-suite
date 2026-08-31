@@ -25,7 +25,7 @@ from hydra_suite.detectkit.gui.overlays import (  # noqa: E402
     GroundTruthProvider,
     LabelMode,
     PredictionProvider,
-    StagedEscalationProvider,
+    StagedReviewProvider,
     resolve_pending_level,
     resolve_source_render_state,
 )
@@ -58,7 +58,7 @@ def _project(source_tree, **kw):
         name="src_a",
         level="polygon",
         reviewed=True,
-        pending_escalation=None,
+        staged_review=None,
     )
     for k, v in kw.items():
         setattr(source, k, v)
@@ -120,8 +120,12 @@ def test_prediction_provider_returns_none_with_no_predictions(source_tree):
 
 def _staged(tmp_path, target_level):
     staged = tmp_path / "staged"
+    # labels/f0001.txt, NOT labels/images/f0001.txt: the staged tree mirrors
+    # the source's images/ tree, and that mirroring IS the review key. The
+    # old nesting only resolved via find_staged_label_for_image's recursive
+    # fallback, which no longer agrees with the decisions key.
     _write(
-        staged / "labels" / "images" / "f0001.txt",
+        staged / "labels" / "f0001.txt",
         ["0 0.2 0.2 0.4 0.2 0.4 0.4 0.2 0.4"],
     )
     (staged / "classes.txt").write_text("prompt_a\n")
@@ -129,9 +133,9 @@ def _staged(tmp_path, target_level):
 
 
 def test_staged_provider_is_fixed_colour_and_unfiltered(source_tree, tmp_path):
-    project = _project(source_tree, pending_escalation=_staged(tmp_path, "obb"))
-    layer = StagedEscalationProvider().build(_ctx(project, source_tree))
-    assert layer.key == "escalation"
+    project = _project(source_tree, staged_review=_staged(tmp_path, "obb"))
+    layer = StagedReviewProvider().build(_ctx(project, source_tree))
+    assert layer.key == "staged"
     assert layer.colour_policy is ColourPolicy.FIXED
     assert layer.fixed_colour is not None
     assert layer.class_filtered is False
@@ -145,8 +149,8 @@ def test_staged_provider_honours_the_escalations_own_target_level(
 ):
     """A SAM2 run can stage OBB. Hardcoding POLYGON here once gave a staged
     OBB polygon styling plus a duplicate derived OBB outline."""
-    project = _project(source_tree, pending_escalation=_staged(tmp_path, "aabb"))
-    layer = StagedEscalationProvider().build(_ctx(project, source_tree))
+    project = _project(source_tree, staged_review=_staged(tmp_path, "aabb"))
+    layer = StagedReviewProvider().build(_ctx(project, source_tree))
     assert layer.native_level is GeometryLevel.AABB
 
 
@@ -157,20 +161,19 @@ def test_staged_provider_matches_source_across_str_and_path_types(
     comparing, matching main_window.py's _refresh_escalation_overlay
     lookup (str(s.path) == str(source_path)). If a Path ever reaches
     either side, a bare == would silently drop the escalation overlay."""
-    project = _project(source_tree, pending_escalation=_staged(tmp_path, "obb"))
+    project = _project(source_tree, staged_review=_staged(tmp_path, "obb"))
     project.sources[0].path = Path(project.sources[0].path)
     ctx = _ctx(project, source_tree)
     assert isinstance(ctx.source_path, str)
     assert isinstance(project.sources[0].path, Path)
-    layer = StagedEscalationProvider().build(ctx)
+    layer = StagedReviewProvider().build(ctx)
     assert layer is not None
-    assert layer.key == "escalation"
+    assert layer.key == "staged"
 
 
 def test_staged_provider_returns_none_without_a_pending_escalation(source_tree):
     assert (
-        StagedEscalationProvider().build(_ctx(_project(source_tree), source_tree))
-        is None
+        StagedReviewProvider().build(_ctx(_project(source_tree), source_tree)) is None
     )
 
 
@@ -188,16 +191,45 @@ def test_the_escalation_layer_stacks_below_predictions(source_tree, tmp_path):
     staged masks. See the "Known deviations from pixel-identical" section
     of docs/superpowers/specs/2026-08-31-detectkit-overlay-layer-registry-design.md
     for the full rationale."""
-    project = _project(source_tree, pending_escalation=_staged(tmp_path, "obb"))
+    project = _project(source_tree, staged_review=_staged(tmp_path, "obb"))
     ctx = _ctx(
         project,
         source_tree,
         predictions=[{"class_id": 0, "polygon_px": [(1, 1), (5, 1), (5, 5)]}],
     )
     gt = GroundTruthProvider().build(ctx)
-    esc = StagedEscalationProvider().build(ctx)
+    esc = StagedReviewProvider().build(ctx)
     pred = PredictionProvider().build(ctx)
     assert gt.z < esc.z < pred.z
+
+
+def test_staged_layer_disappears_once_the_frame_is_decided(source_tree, tmp_path):
+    from hydra_suite.detectkit.jobs.staged_review import (
+        ACCEPTED_ADD_NEW,
+        review_key_for_image,
+        write_decisions,
+    )
+
+    staged = _staged(tmp_path, "obb")
+    project = _project(source_tree, staged_review=staged)
+    ctx = _ctx(project, source_tree)
+    assert StagedReviewProvider().build(ctx) is not None
+
+    rel = review_key_for_image(source_tree.root, ctx.image_path)
+    assert rel == "f0001.txt"
+    write_decisions(staged.staged_path, {rel: ACCEPTED_ADD_NEW})
+
+    assert StagedReviewProvider().build(ctx) is None
+
+
+def test_a_decision_on_another_frame_does_not_hide_this_one(source_tree, tmp_path):
+    from hydra_suite.detectkit.jobs.staged_review import REJECTED, write_decisions
+
+    staged = _staged(tmp_path, "obb")
+    project = _project(source_tree, staged_review=staged)
+    write_decisions(staged.staged_path, {"some/other/frame.txt": REJECTED})
+
+    assert StagedReviewProvider().build(_ctx(project, source_tree)) is not None
 
 
 def test_resolve_native_level_and_reviewed_reads_the_matching_source():
@@ -249,20 +281,17 @@ def test_pending_level_parses_the_record_and_degrades_on_junk():
     """target_level is an unvalidated string from project JSON, exactly like
     OBBSource.level -- a hand-edited or future-version file must not crash
     the overlay on every image selection."""
-    from hydra_suite.detectkit.gui.models import PendingEscalation
+    from hydra_suite.detectkit.gui.models import StagedReview
     from hydra_suite.training.geometry_levels import GeometryLevel
 
+    assert resolve_pending_level(StagedReview(target_level="obb")) == GeometryLevel.OBB
     assert (
-        resolve_pending_level(PendingEscalation(target_level="obb"))
-        == GeometryLevel.OBB
-    )
-    assert (
-        resolve_pending_level(PendingEscalation(target_level="polygon"))
+        resolve_pending_level(StagedReview(target_level="polygon"))
         == GeometryLevel.POLYGON
     )
     # Junk degrades to POLYGON: a staged mask is a polygon unless the record
     # says otherwise, and both escalation producers stage polygons by default.
     assert (
-        resolve_pending_level(PendingEscalation(target_level="not_a_level"))
+        resolve_pending_level(StagedReview(target_level="not_a_level"))
         == GeometryLevel.POLYGON
     )

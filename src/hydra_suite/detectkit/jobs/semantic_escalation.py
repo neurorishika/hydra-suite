@@ -44,7 +44,7 @@ from hydra_suite.data.al.escalation import LabelRecord
 from hydra_suite.data.al.labels import write_label_file
 from hydra_suite.data.project_bundle import ensure_bundle_subdirectory
 from hydra_suite.detectkit.gui.constants import IMG_EXTS
-from hydra_suite.detectkit.gui.models import OBBSource, PendingEscalation
+from hydra_suite.detectkit.gui.models import OBBSource, StagedReview
 from hydra_suite.utils.geometry_levels import GeometryLevel
 from hydra_suite.widgets.workers import BaseWorker
 
@@ -189,7 +189,7 @@ def sources_pending_replacement(req: "SemanticEscalationRequest") -> list[str]:
     out: list[str] = []
     for name in req.source_names:
         src = by_name.get(name)
-        if src is None or src.pending_escalation is None:
+        if src is None or src.staged_review is None:
             continue
         target = (
             project_root
@@ -197,7 +197,7 @@ def sources_pending_replacement(req: "SemanticEscalationRequest") -> list[str]:
             / "pending_escalations"
             / staged_dirname_for(src, req.variant, req.prompt)
         )
-        if _resolved(src.pending_escalation.staged_path) != target:
+        if _resolved(src.staged_review.staged_path) != target:
             out.append(name)
     return out
 
@@ -216,7 +216,7 @@ def band_from_bounds(min_px2: float, max_px2: float) -> AreaBand | None:
 
 
 def band_from_params(params: dict | None) -> AreaBand | None:
-    """The area gate recorded on a staged run's ``primer_params``.
+    """The area gate recorded on a staged run's ``params``.
 
     Absent on runs staged before the gate existed, which is exactly the
     ungated behaviour those runs were produced under.
@@ -376,6 +376,12 @@ def _write_labels_from_candidates(
                     level=GeometryLevel.POLYGON,
                 )
             )
+        if not records:
+            # Do not stage a label file for a zero-record frame: an empty
+            # staged label means "accept this to delete the frame's
+            # labels", which is not what running a prompt asks for. Same
+            # contract inference_stager.py already documents/enforces.
+            continue
         label_path = staged_root / "labels" / Path(rel).with_suffix(".txt")
         label_path.parent.mkdir(parents=True, exist_ok=True)
         write_label_file(
@@ -395,11 +401,10 @@ def run_semantic_escalation(
 ) -> SemanticEscalationResult:
     """Stage prompt-driven polygon labels for each named source.
 
-    Never touches a source's own labels. Promotion is
-    ``accept_pending_semantic_escalation``, which writes a NEW SIBLING
-    SOURCE -- SAM3's output is a different instance set at a different
-    geometry convention, so overwriting in place (as SAM2 does) would
-    delete the user's curated labels.
+    Never touches a source's own labels. Promotion is frame-granular review
+    (``jobs/staged_review.py``): the user accepts or rejects individual
+    staged frames into the source the run was made against, rather than
+    promoting the whole staged run into a new sibling source.
     """
     result = SemanticEscalationResult()
     by_name = {s.name: s for s in req.project.sources}
@@ -425,8 +430,8 @@ def run_semantic_escalation(
         # prompt, or an unreviewed SAM2 escalation) needs the caller's
         # explicit consent, because it destroys unreviewed work.
         would_replace = (
-            src.pending_escalation is not None
-            and _resolved(src.pending_escalation.staged_path) != target_root
+            src.staged_review is not None
+            and _resolved(src.staged_review.staged_path) != target_root
         )
         if would_replace and not (overwrite or req.overwrite):
             result.skipped.append(
@@ -444,19 +449,19 @@ def run_semantic_escalation(
             project_root, f"artifacts/pending_escalations/{staged_dirname}"
         )
 
-        old_pending = src.pending_escalation
+        old_pending = src.staged_review
         if (
             old_pending is not None
             and _resolved(old_pending.staged_path) != staged_root
         ):
             remove_staged_escalation_dir(old_pending.staged_path, project_root)
-            # F7: the pointer dies with the directory. src.pending_escalation
+            # F7: the pointer dies with the directory. src.staged_review
             # is only REPLACED at the end of a successful source, so any
             # failure in between (e.g. plan_for_frame's ValueError above the
             # tile ceiling at overlap 0.9) used to leave the source pointing
             # at a directory that no longer exists -- the review dialog then
             # offers a pending escalation that cannot be opened or dismissed.
-            src.pending_escalation = None
+            src.staged_review = None
 
         # DEPARTURE 3: the wipe is CONDITIONAL on the fingerprint, so a
         # cancelled multi-hour run resumes instead of restarting.
@@ -551,14 +556,14 @@ def run_semantic_escalation(
         # len(images) either.
         result.frames_processed += len(cache["images"])
         (staged_root / "classes.txt").write_text(f"{req.prompt.strip() or 'object'}\n")
-        src.pending_escalation = PendingEscalation(
+        src.staged_review = StagedReview(
             staged_path=str(staged_root),
             target_level=GeometryLevel.POLYGON.label,
             created_at=datetime.now().isoformat(),
-            primer_kind="sam3",
-            primer_variant=req.variant,
-            primer_prompt=req.prompt,
-            primer_params={
+            producer="sam3",
+            producer_variant=req.variant,
+            prompt=req.prompt,
+            params={
                 # The threshold the staged LABELS were written at -- distinct
                 # from confidence_floor (what the CACHE holds). The review
                 # dialog prefills its re-threshold prompt from this, and
@@ -612,9 +617,9 @@ def rethreshold_floor_for(sources) -> float:
     records one.
     """
     floors = [
-        recorded_confidence_floor(s.pending_escalation.staged_path)
+        recorded_confidence_floor(s.staged_review.staged_path)
         for s in sources
-        if getattr(s, "pending_escalation", None) is not None
+        if getattr(s, "staged_review", None) is not None
     ]
     known = [f for f in floors if f is not None]
     return max(known) if known else float(CACHE_CONFIDENCE_FLOOR)
@@ -630,8 +635,8 @@ def rethreshold_staged(
     post-filtering the previous labels, because suppression is
     survivor-dependent.
     """
-    pending = source.pending_escalation
-    if pending is None or pending.primer_kind != "sam3":
+    pending = source.staged_review
+    if pending is None or pending.producer != "sam3":
         raise ValueError(f"Source '{source.name}' has no staged SAM3 escalation.")
     staged_root = Path(pending.staged_path)
     floor = recorded_confidence_floor(staged_root)
@@ -666,11 +671,11 @@ def rethreshold_staged(
         cache,
         confidence=confidence,
         merge_iou=merge_iou,
-        area_band=band_from_params(pending.primer_params),
+        area_band=band_from_params(pending.params),
         origin_images=Path(source.path) / "images",
     )
-    pending.primer_params = {
-        **pending.primer_params,
+    pending.params = {
+        **pending.params,
         "confidence": float(confidence),
         "merge_iou": float(merge_iou),
     }
@@ -1146,131 +1151,3 @@ def _origin_image_for(origin_images: Path, rel: Path) -> Path | None:
             if candidate.is_file():
                 return candidate
     return None
-
-
-def _unique_source_name(project, base: str) -> str:
-    """A name free in the project registry AND on disk.
-
-    De-duplicating against ``project.sources`` alone lets a name freed by
-    deleting a source reuse a stale on-disk directory that
-    ``ensure_bundle_subdirectory`` will happily return without clearing --
-    so the new sibling would inherit the deleted source's leftover labels.
-    """
-    project_root = Path(project.project_dir)
-
-    def _free(name: str) -> bool:
-        if any(s.name == name for s in project.sources):
-            return False
-        return not (project_root / "sources" / name).exists()
-
-    if _free(base):
-        return base
-    n = 2
-    while not _free(f"{base}-{n}"):
-        n += 1
-    return f"{base}-{n}"
-
-
-def accept_pending_semantic_escalation(
-    source: OBBSource,
-    project,
-    project_dir: str | Path | None = None,
-) -> OBBSource:
-    """Promote a staged SAM3 result to a NEW SIBLING SOURCE.
-
-    Deliberately NOT ``sam2_escalation.accept_pending_escalation``, which
-    rmtree's the origin's labels and copies the staged ones over them. That
-    is correct for SAM2 (a lossless upgrade of the SAME instances) and
-    destructive here: SAM3's output is a different instance set at a
-    different geometry convention (masks trace legs and antennae; tracking
-    labels bound the body core), all class 0. Merging the two conventions
-    into one source would degrade YOLO training -- and deleting the user's
-    curated labels to do it would be worse.
-
-    The staged labels and hardlinked images become a new source the user can
-    keep, merge, or delete with the tools they already have. The candidate
-    cache and run fingerprint stay behind in staging: they are consumed
-    here, never shipped, so they cannot go stale against later user edits.
-    """
-    from hydra_suite.data.al.export import _link_or_copy
-
-    pending = source.pending_escalation
-    if pending is None:
-        raise ValueError(f"Source '{source.name}' has no pending escalation.")
-    if pending.primer_kind != "sam3":
-        raise ValueError(
-            f"Source '{source.name}' has a {pending.primer_kind!r} pending "
-            "escalation, not a SAM3 one; use the SAM2 accept path."
-        )
-
-    staged_root = Path(pending.staged_path)
-    staged_labels = staged_root / "labels"
-    if not staged_labels.is_dir():
-        raise RuntimeError(
-            f"Staged escalation for '{source.name}' is missing on disk "
-            f"({staged_labels}); nothing was changed. Reject it and re-run."
-        )
-
-    project_root = Path(project.project_dir)
-    sibling_name = _unique_source_name(
-        project, f"{source.name}-sam3-{prompt_slug(pending.primer_prompt)}"
-    )
-    sibling_root = Path(
-        ensure_bundle_subdirectory(project_root, f"sources/{sibling_name}")
-    )
-    (sibling_root / "images").mkdir(parents=True, exist_ok=True)
-    (sibling_root / "labels").mkdir(parents=True, exist_ok=True)
-
-    origin_images = Path(source.path) / "images"
-    orphaned = 0
-    for label_path in sorted(staged_labels.rglob("*.txt")):
-        rel = label_path.relative_to(staged_labels)
-        # I7: the staged label's relative path already MIRRORS the image's
-        # (the job keys the cache on exactly that path), so this is a direct
-        # sibling lookup. The previous `origin_images.rglob(f"{rel.stem}.*")`
-        # walked the whole origin tree per label -- O(N^2), and
-        # nondeterministic whenever two nested subdirectories share a stem.
-        src_img = _origin_image_for(origin_images, rel)
-        if src_img is None:
-            # A label with no image is an orphan YOLO would choke on; skip it
-            # rather than ship it, and report the count.
-            logger.warning("No origin image for staged label %s; skipping it.", rel)
-            orphaned += 1
-            continue
-        dst_label = sibling_root / "labels" / rel
-        dst_label.parent.mkdir(parents=True, exist_ok=True)
-        dst_label.write_bytes(label_path.read_bytes())
-        dst_img = sibling_root / "images" / src_img.relative_to(origin_images)
-        dst_img.parent.mkdir(parents=True, exist_ok=True)
-        if not dst_img.exists():
-            _link_or_copy(src_img, dst_img)
-    if orphaned:
-        logger.warning(
-            "%d staged label(s) for '%s' had no origin image and were skipped.",
-            orphaned,
-            source.name,
-        )
-
-    classes_src = staged_root / "classes.txt"
-    (sibling_root / "classes.txt").write_text(
-        classes_src.read_text() if classes_src.exists() else "object\n"
-    )
-
-    sibling = OBBSource(
-        path=str(sibling_root),
-        name=sibling_name,
-        validated=False,
-        original_path=source.path,
-        source_kind="detectkit_sam3",
-        imported=False,
-        level=GeometryLevel.POLYGON.label,
-        # Machine-derived and not yet human-confirmed: excluded from training
-        # until the user runs "Mark reviewed...".
-        reviewed=False,
-        derived_from=source.name,
-    )
-    project.sources.append(sibling)
-
-    remove_staged_escalation_dir(staged_root, project_dir or project_root)
-    source.pending_escalation = None
-    return sibling

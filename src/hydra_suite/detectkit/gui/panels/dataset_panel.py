@@ -324,6 +324,37 @@ class DatasetPanel(QWidget):
         if row < self.image_list.count() - 1:
             self.image_list.setCurrentRow(row + 1)
 
+    def select_source_by_path(self, path: str) -> bool:
+        """Select the combo entry whose stored source path matches *path*."""
+        for i in range(self.source_combo.count()):
+            if self.source_combo.itemData(i) == path:
+                self.source_combo.setCurrentIndex(i)
+                return True
+        return False
+
+    def select_image_by_relative_label(self, rel: str) -> bool:
+        """Select the image whose label path under labels/ is *rel*.
+
+        The review's key is the label's relative path; the list holds image
+        paths. Matching on the stem-plus-parent rather than the extension is
+        what makes it work for the mixed-extension sources DetectKit imports.
+        """
+        source_path = self._selected_source_path()
+        if source_path is None:
+            return False
+        target = Path(rel).with_suffix("")
+        for row in range(self.image_list.count()):
+            item = self.image_list.item(row)
+            image_path = Path(str(item.data(Qt.UserRole)))
+            try:
+                candidate = image_path.relative_to(Path(source_path) / "images")
+            except ValueError:
+                candidate = Path(image_path.name)
+            if candidate.with_suffix("") == target:
+                self.image_list.setCurrentRow(row)
+                return True
+        return False
+
     # ------------------------------------------------------------------
     # Image deletion
     # ------------------------------------------------------------------

@@ -76,3 +76,12 @@ def test_early_out_preserves_overlap_and_exactifies_edge_touching():
     assert polygon_iou(_square(0, 0, 20), _square(20, 0, 20)) == 0.0
     # Bboxes overlap but shapes are far in one axis only.
     assert polygon_iou(_square(0, 0, 20), _square(0, 4000, 20)) == 0.0
+
+
+def test_polygon_iou_lives_in_utils_so_data_can_import_it():
+    """data/al/merge.py needs this; data/ may not import core.inference."""
+    from hydra_suite.core.inference.masks import polygon_iou as reexported
+    from hydra_suite.utils.polygon_iou import polygon_iou as moved
+
+    assert moved is reexported
+    assert moved.__module__ == "hydra_suite.utils.polygon_iou"

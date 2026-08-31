@@ -6,10 +6,11 @@ import numpy as np
 import pytest
 
 from hydra_suite.core.inference.semantic.base import SemanticInstance
+from hydra_suite.data.al.merge import MergeMode
 from hydra_suite.detectkit.gui.models import OBBSource
+from hydra_suite.detectkit.jobs import staged_review as sr
 from hydra_suite.detectkit.jobs.semantic_escalation import (
     SemanticEscalationRequest,
-    accept_pending_semantic_escalation,
     is_prompt_failure,
     rethreshold_staged,
     run_semantic_escalation,
@@ -99,13 +100,13 @@ def test_two_prompts_stage_into_different_directories(tmp_path):
     src = _make_source(tmp_path)
     labeler = ScriptedLabeler([SemanticInstance(_blob(200, 200), 0.9)])
     run_semantic_escalation(_request(tmp_path, src, prompt="ant"), labeler)
-    first = src.pending_escalation.staged_path
+    first = src.staged_review.staged_path
     run_semantic_escalation(
         _request(tmp_path, src, prompt="beetle", overwrite=True),
         labeler,
         overwrite=True,
     )
-    assert src.pending_escalation.staged_path != first
+    assert src.staged_review.staged_path != first
 
 
 def test_empty_images_are_counted_and_flagged_as_a_prompt_failure(tmp_path):
@@ -130,11 +131,47 @@ def test_degenerate_contours_are_dropped_not_fatal(tmp_path):
     assert result.labelled == 1
 
 
+def test_no_label_file_is_staged_for_a_zero_record_frame(tmp_path):
+    """`write_label_file([])` creates a zero-byte file, and `staged_frames()`
+    would count it as a reviewable frame; `accept_frame(..., OVERWRITE)`
+    would then overwrite the source's real labels with nothing. Pin the
+    fix directly against `_write_labels_from_candidates`: a frame with no
+    surviving candidates gets no staged label file at all, matching the
+    contract `inference_stager.py` already documents ("Frames with no
+    detections are not staged at all").
+    """
+    from hydra_suite.detectkit.jobs.semantic_escalation import (
+        _write_labels_from_candidates,
+    )
+
+    staged_root = tmp_path / "staged"
+    (staged_root / "labels").mkdir(parents=True)
+    cache = {"images": {"f0.txt": {"hw": [400, 400], "candidates": []}}}
+
+    written, degenerate, orphaned = _write_labels_from_candidates(
+        staged_root, cache, confidence=0.0, merge_iou=0.5
+    )
+
+    assert written == 0
+    assert not (staged_root / "labels" / "f0.txt").exists()
+
+
+def test_a_run_with_no_detections_anywhere_stages_no_label_files(tmp_path):
+    """End-to-end version of the same regression through `run_semantic_escalation`."""
+    src = _make_source(tmp_path, n_images=3)
+
+    result = run_semantic_escalation(_request(tmp_path, src), ScriptedLabeler([]))
+
+    assert result.labelled == 0
+    staged_root = Path(src.staged_review.staged_path)
+    assert list((staged_root / "labels").glob("*.txt")) == []
+
+
 def test_candidates_cache_is_written_into_the_staging_dir(tmp_path):
     src = _make_source(tmp_path, n_images=1)
     labeler = ScriptedLabeler([SemanticInstance(_blob(200, 200), 0.9)])
     run_semantic_escalation(_request(tmp_path, src), labeler)
-    cache = Path(src.pending_escalation.staged_path) / "candidates.json"
+    cache = Path(src.staged_review.staged_path) / "candidates.json"
     data = json.loads(cache.read_text())
     assert data["version"] == 1
     assert "f0.png" in data["images"]
@@ -149,7 +186,7 @@ def test_rethreshold_rewrites_labels_without_inference(tmp_path):
         ]
     )
     run_semantic_escalation(_request(tmp_path, src, confidence=0.1), labeler)
-    staged = Path(src.pending_escalation.staged_path) / "labels" / "f0.txt"
+    staged = Path(src.staged_review.staged_path) / "labels" / "f0.txt"
     assert len(staged.read_text().strip().splitlines()) == 2
     kept = rethreshold_staged(src, confidence=0.5, merge_iou=0.5)
     assert kept == 1
@@ -187,7 +224,7 @@ def test_fingerprint_mismatch_wipes_the_cache(tmp_path):
     src = _make_source(tmp_path, n_images=1)
     labeler = ScriptedLabeler([SemanticInstance(_blob(200, 200), 0.9)])
     run_semantic_escalation(_request(tmp_path, src, prompt="ant"), labeler)
-    staged = Path(src.pending_escalation.staged_path)
+    staged = Path(src.staged_review.staged_path)
     assert json.loads((staged / "run.json").read_text())["prompt"] == "ant"
 
     # Poison the cache with a candidate that no labeler produced, and
@@ -206,7 +243,7 @@ def test_fingerprint_mismatch_wipes_the_cache(tmp_path):
         _request(tmp_path, src, prompt="ant", seam_margin_px=17.0, overwrite=True),
         labeler,
     )
-    staged2 = Path(src.pending_escalation.staged_path)
+    staged2 = Path(src.staged_review.staged_path)
     assert staged2 == staged, "same prompt+variant must reuse the same staging dir"
     after = json.loads((staged2 / "candidates.json").read_text())
     # The poisoned entry is gone: the cache was WIPED and rebuilt, not resumed.
@@ -230,13 +267,13 @@ def test_a_matching_fingerprint_resumes_instead_of_wiping(tmp_path):
     run_semantic_escalation(req, labeler, should_stop=lambda: Counting.calls >= 1)
     cached_after_cancel = set(
         json.loads(
-            (Path(src.pending_escalation.staged_path) / "candidates.json").read_text()
+            (Path(src.staged_review.staged_path) / "candidates.json").read_text()
         )["images"]
     )
     assert len(cached_after_cancel) == 1
     run_semantic_escalation(req, labeler)
     cached = json.loads(
-        (Path(src.pending_escalation.staged_path) / "candidates.json").read_text()
+        (Path(src.staged_review.staged_path) / "candidates.json").read_text()
     )["images"]
     assert set(cached) == {"f0.png", "f1.png"}
 
@@ -246,13 +283,13 @@ def test_a_different_pending_escalation_is_skipped_without_overwrite(tmp_path):
     src = _make_source(tmp_path, n_images=1)
     labeler = ScriptedLabeler([SemanticInstance(_blob(200, 200), 0.9)])
     run_semantic_escalation(_request(tmp_path, src, prompt="ant"), labeler)
-    ant_staged = src.pending_escalation.staged_path
+    ant_staged = src.staged_review.staged_path
 
     # A different prompt would DESTROY the staged 'ant' result: refuse.
     result = run_semantic_escalation(_request(tmp_path, src, prompt="beetle"), labeler)
     assert result.staged == []
     assert result.skipped and result.skipped[0][0] == src.name
-    assert src.pending_escalation.staged_path == ant_staged
+    assert src.staged_review.staged_path == ant_staged
     assert Path(ant_staged).is_dir()
 
     # ... but re-issuing the SAME run is a resume and must NOT be refused.
@@ -279,7 +316,7 @@ def test_sources_pending_replacement_lists_only_real_replacements(tmp_path):
 
 def test_an_unreviewed_sam2_escalation_is_not_silently_destroyed(tmp_path):
     """I2 concretely: the GUI used to pass overwrite=True unconditionally."""
-    from hydra_suite.detectkit.gui.models import PendingEscalation
+    from hydra_suite.detectkit.gui.models import StagedReview
     from hydra_suite.detectkit.jobs.semantic_escalation import (
         sources_pending_replacement,
     )
@@ -288,9 +325,7 @@ def test_an_unreviewed_sam2_escalation_is_not_silently_destroyed(tmp_path):
     sam2_dir = tmp_path / "artifacts" / "pending_escalations" / "sam2-staged"
     (sam2_dir / "labels").mkdir(parents=True)
     (sam2_dir / "labels" / "f0.txt").write_text("0 0.1 0.1 0.2 0.2\n")
-    src.pending_escalation = PendingEscalation(
-        staged_path=str(sam2_dir), primer_kind="sam2"
-    )
+    src.staged_review = StagedReview(staged_path=str(sam2_dir), producer="sam2")
     req = _request(tmp_path, src, prompt="ant")
     assert sources_pending_replacement(req) == [src.name]
     labeler = ScriptedLabeler([SemanticInstance(_blob(200, 200), 0.9)])
@@ -299,70 +334,45 @@ def test_an_unreviewed_sam2_escalation_is_not_silently_destroyed(tmp_path):
     assert (sam2_dir / "labels" / "f0.txt").exists()
 
 
-def test_accept_creates_a_sibling_and_leaves_the_origin_untouched(tmp_path):
-    src = _make_source(tmp_path, n_images=2)
-    (Path(src.path) / "labels" / "f0.txt").write_text("0 0.1 0.1 0.2 0.2\n")
-    original = (Path(src.path) / "labels" / "f0.txt").read_bytes()
-    project = _Project(tmp_path, [src])
-    labeler = ScriptedLabeler([SemanticInstance(_blob(200, 200), 0.9)])
-    run_semantic_escalation(_request(tmp_path, src, project=project), labeler)
-
-    sibling = accept_pending_semantic_escalation(src, project, tmp_path)
-
-    assert sibling is not src
-    assert sibling in project.sources
-    assert sibling.level == "polygon"
-    assert sibling.reviewed is False
-    assert sibling.derived_from == src.name
-    assert (Path(src.path) / "labels" / "f0.txt").read_bytes() == original
-    assert src.pending_escalation is None
-
-
-def test_sibling_carries_images_and_the_prompt_as_its_class_name(tmp_path):
-    src = _make_source(tmp_path, n_images=2)
-    project = _Project(tmp_path, [src])
-    labeler = ScriptedLabeler([SemanticInstance(_blob(200, 200), 0.9)])
-    run_semantic_escalation(
-        _request(tmp_path, src, project=project, prompt="black ant"), labeler
-    )
-    sibling = accept_pending_semantic_escalation(src, project, tmp_path)
-    root = Path(sibling.path)
-    assert len(list((root / "images").rglob("*.png"))) == 2
-    assert len(list((root / "labels").rglob("*.txt"))) == 2
-    assert (root / "classes.txt").read_text().strip() == "black ant"
+# --- accept_pending_semantic_escalation retirement --------------------------
+#
+# accept_pending_semantic_escalation built a whole NEW SIBLING SOURCE out of a
+# staged SAM3 run -- the originally reported bug: accepting a reviewed run
+# produced a new source instead of landing on the source the run was made
+# against. It is deleted (Task 13); frame-granular review
+# (jobs/staged_review.py's accept_frame/accept_all/finish_review) accepts
+# into the ORIGIN source instead, in place, one frame at a time.
+#
+# Tests below that asserted sibling-only mechanics -- new-source naming,
+# image copying/hardlinking into a sibling, and the candidate cache/run.json
+# never reaching a sibling -- are deleted outright rather than ported:
+# frame-granular accept never creates a source and never copies an image
+# (it writes into the origin's own labels/ in place), so none of that
+# machinery -- or its regression coverage -- has an equivalent in the new
+# path. `test_accepting_a_sam3_review_does_not_create_a_sibling_source` in
+# tests/test_detectkit_sam2_escalation_wiring.py is this behaviour change's
+# replacement regression test.
+#
+# `test_accept_refuses_a_sam2_pending_record` is deleted too: refusing to
+# accept a SAM2-produced pending record BY PRODUCER was exactly the
+# discrimination this refactor removes -- staged_review.py's accept path is
+# producer-agnostic by design (see its module docstring).
+#
+# `test_accept_refuses_when_the_staging_dir_is_gone` is ported below to
+# accept_frame, which raises the equivalent "nothing was changed" error when
+# the staged label file it needs is missing.
 
 
-def test_the_candidate_cache_never_reaches_the_sibling(tmp_path):
-    src = _make_source(tmp_path, n_images=1)
-    project = _Project(tmp_path, [src])
-    labeler = ScriptedLabeler([SemanticInstance(_blob(200, 200), 0.9)])
-    run_semantic_escalation(_request(tmp_path, src, project=project), labeler)
-    sibling = accept_pending_semantic_escalation(src, project, tmp_path)
-    assert not (Path(sibling.path) / "candidates.json").exists()
-    assert not (Path(sibling.path) / "run.json").exists()
-
-
-def test_accept_refuses_a_sam2_pending_record(tmp_path):
-    src = _make_source(tmp_path, n_images=1)
-    from hydra_suite.detectkit.gui.models import PendingEscalation
-
-    src.pending_escalation = PendingEscalation(
-        staged_path=str(tmp_path), primer_kind="sam2"
-    )
-    with pytest.raises(ValueError, match="not a SAM3"):
-        accept_pending_semantic_escalation(src, _Project(tmp_path, [src]), tmp_path)
-
-
-def test_accept_refuses_when_the_staging_dir_is_gone(tmp_path):
+def test_accept_frame_refuses_when_the_staging_dir_is_gone(tmp_path):
     import shutil
 
     src = _make_source(tmp_path, n_images=1)
     project = _Project(tmp_path, [src])
     labeler = ScriptedLabeler([SemanticInstance(_blob(200, 200), 0.9)])
     run_semantic_escalation(_request(tmp_path, src, project=project), labeler)
-    shutil.rmtree(src.pending_escalation.staged_path)
-    with pytest.raises(RuntimeError, match="missing on disk"):
-        accept_pending_semantic_escalation(src, project, tmp_path)
+    shutil.rmtree(src.staged_review.staged_path)
+    with pytest.raises(RuntimeError, match="missing"):
+        sr.accept_frame(src, "f0.txt", mode=MergeMode.OVERWRITE)
 
 
 def test_labelled_frames_reads_every_geometry_level(tmp_path):
@@ -473,7 +483,7 @@ def test_candidates_are_cached_below_the_run_confidence(tmp_path):
         ]
     )
     run_semantic_escalation(_request(tmp_path, src, confidence=0.35), labeler)
-    staged = Path(src.pending_escalation.staged_path)
+    staged = Path(src.staged_review.staged_path)
     cache = json.loads((staged / "candidates.json").read_text())
     confs = sorted(c["c"] for c in cache["images"]["f0.png"]["candidates"])
     assert confs == [0.25, 0.9], "the 0.25 candidate must survive into the cache"
@@ -488,7 +498,7 @@ def test_rethreshold_refuses_to_go_below_the_recorded_cache_floor(tmp_path):
     src = _make_source(tmp_path, n_images=1)
     labeler = ScriptedLabeler([SemanticInstance(_blob(100, 100), 0.9)])
     run_semantic_escalation(_request(tmp_path, src, confidence=0.35), labeler)
-    staged = Path(src.pending_escalation.staged_path)
+    staged = Path(src.staged_review.staged_path)
     run_json = json.loads((staged / "run.json").read_text())
     assert run_json["confidence_floor"] == pytest.approx(0.05)
     run_json["confidence_floor"] = 0.35  # simulate a pre-I4 cache
@@ -518,75 +528,16 @@ def test_confidence_alone_does_not_invalidate_the_candidate_cache(tmp_path):
 
 
 # --- I7: promotion image lookup ---------------------------------------------
-
-
-def test_promotion_matches_nested_images_by_relative_path(tmp_path):
-    """I7: `origin_images.rglob(f"{rel.stem}.*")` walked the WHOLE tree.
-
-    Two nested subdirectories holding the same stem made the match
-    nondeterministic (whichever rglob yielded first won), and every label
-    paid a full-tree walk. This nested layout has that exact collision.
-    """
-    root = tmp_path / "sources" / "nested"
-    for sub in ("a", "b"):
-        (root / "images" / sub).mkdir(parents=True)
-        (root / "labels" / sub).mkdir(parents=True)
-    # Same stem in two subdirectories, with visibly different pixels.
-    cv2.imwrite(
-        str(root / "images" / "a" / "f0.png"), np.zeros((400, 400, 3), dtype=np.uint8)
-    )
-    cv2.imwrite(
-        str(root / "images" / "b" / "f0.png"),
-        np.full((400, 400, 3), 255, dtype=np.uint8),
-    )
-    (root / "classes.txt").write_text("object\n")
-    src = OBBSource(path=str(root), name="nested", level="polygon")
-    project = _Project(tmp_path, [src])
-    labeler = ScriptedLabeler([SemanticInstance(_blob(200, 200), 0.9)])
-    run_semantic_escalation(_request(tmp_path, src, project=project), labeler)
-
-    sibling = accept_pending_semantic_escalation(src, project, tmp_path)
-    sib = Path(sibling.path)
-    assert (sib / "labels" / "a" / "f0.txt").exists()
-    assert (sib / "labels" / "b" / "f0.txt").exists()
-    # Each image must be the one from its OWN subdirectory, not whichever
-    # rglob happened to yield first.
-    assert cv2.imread(str(sib / "images" / "a" / "f0.png")).mean() == 0
-    assert cv2.imread(str(sib / "images" / "b" / "f0.png")).mean() == 255
-
-
-def test_a_staged_label_with_no_origin_image_is_skipped_not_orphaned(tmp_path):
-    src = _make_source(tmp_path, n_images=1)
-    project = _Project(tmp_path, [src])
-    labeler = ScriptedLabeler([SemanticInstance(_blob(200, 200), 0.9)])
-    run_semantic_escalation(_request(tmp_path, src, project=project), labeler)
-    staged = Path(src.pending_escalation.staged_path)
-    # A staged label whose image no longer exists in the origin.
-    (staged / "labels" / "ghost.txt").write_text(
-        (staged / "labels" / "f0.txt").read_text()
-    )
-    sibling = accept_pending_semantic_escalation(src, project, tmp_path)
-    sib = Path(sibling.path)
-    assert not (sib / "labels" / "ghost.txt").exists()
-    assert (sib / "labels" / "f0.txt").exists()
-    # No label in the sibling is without its image.
-    for lbl in (sib / "labels").rglob("*.txt"):
-        rel = lbl.relative_to(sib / "labels")
-        assert (sib / "images" / rel.with_suffix(".png")).exists()
-
-
-def test_unique_source_name_avoids_a_stale_on_disk_directory(tmp_path):
-    src = _make_source(tmp_path, n_images=1)
-    project = _Project(tmp_path, [src])
-    # A leftover directory from a source the user DELETED from the project.
-    stale = tmp_path / "sources" / "src-sam3-ant"
-    (stale / "labels").mkdir(parents=True)
-    (stale / "labels" / "leftover.txt").write_text("0 0.1 0.1 0.2 0.2\n")
-    labeler = ScriptedLabeler([SemanticInstance(_blob(200, 200), 0.9)])
-    run_semantic_escalation(_request(tmp_path, src, project=project), labeler)
-    sibling = accept_pending_semantic_escalation(src, project, tmp_path)
-    assert Path(sibling.path) != stale
-    assert not (Path(sibling.path) / "labels" / "leftover.txt").exists()
+#
+# test_promotion_matches_nested_images_by_relative_path,
+# test_a_staged_label_with_no_origin_image_is_skipped_not_orphaned, and
+# test_unique_source_name_avoids_a_stale_on_disk_directory are deleted along
+# with accept_pending_semantic_escalation/_unique_source_name (see the block
+# above): all three pin sibling-only mechanics -- matching an origin image to
+# hardlink into a NEW source's images/, skipping a staged label with no
+# origin image when building that new source, and picking a free name/
+# directory for it. Frame-granular accept_frame never copies an image or
+# creates a source, so none of this has an equivalent to port.
 
 
 # --- I6 / I8: reference-body chain and the non-decoding has-labels check -----
@@ -706,8 +657,8 @@ def test_resume_is_honoured_through_a_symlinked_project_dir(tmp_path):
     req = _request(link, src, project=project)
 
     run_semantic_escalation(req, labeler)
-    assert src.pending_escalation is not None
-    staged = Path(src.pending_escalation.staged_path)
+    assert src.staged_review is not None
+    staged = Path(src.staged_review.staged_path)
     cached = set(json.loads((staged / "candidates.json").read_text())["images"])
 
     # The very same run must be a RESUME: nothing pending replacement, no
@@ -716,7 +667,7 @@ def test_resume_is_honoured_through_a_symlinked_project_dir(tmp_path):
     resumed = run_semantic_escalation(req, labeler)
     assert resumed.skipped == []
     assert resumed.staged == [src.name]
-    assert Path(src.pending_escalation.staged_path) == staged
+    assert Path(src.staged_review.staged_path) == staged
     assert set(json.loads((staged / "candidates.json").read_text())["images"]) == cached
 
 
@@ -737,7 +688,7 @@ def test_a_run_below_the_grid_floor_stages_every_instance(tmp_path):
     )
     result = run_semantic_escalation(_request(tmp_path, src, confidence=0.02), labeler)
     assert result.labelled == 2
-    staged = Path(src.pending_escalation.staged_path)
+    staged = Path(src.staged_review.staged_path)
     cache = json.loads((staged / "candidates.json").read_text())
     assert sorted(c["c"] for c in cache["images"]["f0.png"]["candidates"]) == [
         0.03,
@@ -763,7 +714,7 @@ def test_rethreshold_refusal_at_the_grid_floor_gives_reachable_advice(tmp_path):
     src = _make_source(tmp_path, n_images=1)
     labeler = ScriptedLabeler([SemanticInstance(_blob(100, 100), 0.9)])
     run_semantic_escalation(_request(tmp_path, src, confidence=0.35), labeler)
-    staged = Path(src.pending_escalation.staged_path)
+    staged = Path(src.staged_review.staged_path)
 
     assert rethreshold_floor_for([src]) == pytest.approx(0.05)
     with pytest.raises(ValueError) as exc:
@@ -789,7 +740,7 @@ def test_primer_params_record_the_confidence_the_labels_were_written_at(tmp_path
     src = _make_source(tmp_path, n_images=1)
     labeler = ScriptedLabeler([SemanticInstance(_blob(100, 100), 0.9)])
     run_semantic_escalation(_request(tmp_path, src, confidence=0.60), labeler)
-    params = src.pending_escalation.primer_params
+    params = src.staged_review.params
     assert params["confidence"] == pytest.approx(0.60)
     # The CACHE floor is a different number and both are kept.
     assert params["confidence_floor"] == pytest.approx(0.05)
@@ -857,7 +808,7 @@ def test_a_mid_frame_cancel_never_caches_the_partial_frame(tmp_path):
     tiles_first = labeler.calls
     assert 0 < tiles_first < 16, "the frame must have been cut off mid-way"
 
-    staged = Path(src.pending_escalation.staged_path)
+    staged = Path(src.staged_review.staged_path)
     assert _cached_images(staged) == set(), "a partial frame must NOT be cached"
     assert result.frames_processed == 0
 
@@ -880,7 +831,7 @@ def test_a_completed_frame_is_still_cached_and_reused_on_resume(tmp_path):
     # Frame 0 is one full-frame tile, so calls>=1 cancels BETWEEN images,
     # after frame 0 has completed.
     run_semantic_escalation(req, labeler, should_stop=lambda: labeler.calls >= 1)
-    staged = Path(src.pending_escalation.staged_path)
+    staged = Path(src.staged_review.staged_path)
     assert _cached_images(staged) == {"f0.png"}, "a COMPLETE frame must be cached"
 
     labeler2 = _CountingLabeler([SemanticInstance(_blob(200, 200), 0.9)])
@@ -928,17 +879,17 @@ def test_mixed_case_frames_survive_the_whole_run(tmp_path):
 def test_a_mid_run_failure_does_not_leave_a_pointer_to_a_deleted_dir(tmp_path):
     """F7: the stale pending_escalation pointer must die with its directory.
 
-    The previous staged dir is removed up front but src.pending_escalation
+    The previous staged dir is removed up front but src.staged_review
     is only replaced after the source finishes. A crash in between (here the
     plan_for_frame ValueError at overlap 0.9) left the source pointing at a
     directory that no longer exists.
     """
-    from hydra_suite.detectkit.gui.models import PendingEscalation
+    from hydra_suite.detectkit.gui.models import StagedReview
 
     src = _make_source(tmp_path, n_images=1)
     old_dir = tmp_path / "artifacts" / "pending_escalations" / "old-staged"
     (old_dir / "labels").mkdir(parents=True)
-    src.pending_escalation = PendingEscalation(
+    src.staged_review = StagedReview(
         staged_path=str(old_dir),
         target_level="polygon",
         created_at="2026-01-01T00:00:00",
@@ -954,8 +905,7 @@ def test_a_mid_run_failure_does_not_leave_a_pointer_to_a_deleted_dir(tmp_path):
 
     assert not old_dir.exists(), "the old staged dir should have been removed"
     assert (
-        src.pending_escalation is None
-        or Path(src.pending_escalation.staged_path).exists()
+        src.staged_review is None or Path(src.staged_review.staged_path).exists()
     ), "pending_escalation points at a deleted directory"
 
 
@@ -1087,7 +1037,7 @@ def test_the_area_band_gates_what_is_staged(tmp_path):
     req.area_max_px2 = 1400.0
     result = run_semantic_escalation(req, labeler)
     assert result.labelled == 1
-    params = src.pending_escalation.primer_params
+    params = src.staged_review.params
     assert params["area_min_px2"] == 120.0
     assert params["area_max_px2"] == 1400.0
 

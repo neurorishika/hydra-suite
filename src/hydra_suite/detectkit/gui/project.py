@@ -353,7 +353,7 @@ def make_detectkit_project_portable(project: DetectKitProject) -> dict[str, int]
             force_import=True,
         )
         # `replace` (not a fresh OBBSource) so localizing a source does not
-        # drop level/reviewed/derived_from/sam2_variant/pending_escalation.
+        # drop level/reviewed/derived_from/sam2_variant/staged_review.
         localized_sources.append(
             replace(
                 source,
@@ -453,7 +453,7 @@ def _serialize_project_state_paths(project: DetectKitProject) -> DetectKitProjec
     # `dataclasses.replace` (rather than a hand-listed constructor call) so
     # every OBBSource field -- present and future -- survives the round trip.
     # A six-field reconstruction here silently dropped level/reviewed/
-    # derived_from/sam2_variant/pending_escalation on every save.
+    # derived_from/sam2_variant/staged_review on every save.
     serialized.sources = [
         replace(
             source,

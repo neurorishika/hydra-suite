@@ -11,11 +11,7 @@ from hydra_suite.data.project_bundle import (
     export_project_bundle_archive,
     import_project_bundle_archive,
 )
-from hydra_suite.detectkit.gui.models import (
-    DetectKitProject,
-    OBBSource,
-    PendingEscalation,
-)
+from hydra_suite.detectkit.gui.models import DetectKitProject, OBBSource, StagedReview
 from hydra_suite.detectkit.gui.project import (
     create_project,
     default_project_parent_dir,
@@ -138,7 +134,7 @@ def test_save_open_project_preserves_all_obb_source_fields(tmp_path: Path) -> No
 
     `_serialize_project_state_paths`/`_deserialize_project_state_paths` used
     to rebuild each source from six hand-listed fields, silently discarding
-    level/reviewed/derived_from/sam2_variant/pending_escalation -- so a
+    level/reviewed/derived_from/sam2_variant/staged_review -- so a
     project saved right after a SAM2 escalation staged a result lost the
     staging record on the very next save (orphaning the staging directory),
     and an accepted escalation's level="polygon"/reviewed=False reverted to
@@ -149,10 +145,11 @@ def test_save_open_project_preserves_all_obb_source_fields(tmp_path: Path) -> No
     source_dir.mkdir(parents=True, exist_ok=True)
     staged_dir = tmp_path / "artifacts" / "pending_escalations" / "ds1-sam2-abc123"
     staged_dir.mkdir(parents=True, exist_ok=True)
-    pending = PendingEscalation(
+    pending = StagedReview(
         staged_path=str(staged_dir),
         target_level="polygon",
-        sam2_variant="sam2.1-hiera-base_plus",
+        producer="sam2",
+        producer_variant="sam2.1-hiera-base_plus",
         created_at="2026-08-27T00:00:00",
     )
     proj.sources = [
@@ -167,7 +164,7 @@ def test_save_open_project_preserves_all_obb_source_fields(tmp_path: Path) -> No
             reviewed=False,
             derived_from="ds0",
             sam2_variant="sam2.1-hiera-base_plus",
-            pending_escalation=pending,
+            staged_review=pending,
         )
     ]
     save_project(proj)
@@ -187,11 +184,11 @@ def test_save_open_project_preserves_all_obb_source_fields(tmp_path: Path) -> No
     assert restored.reviewed is False
     assert restored.derived_from == "ds0"
     assert restored.sam2_variant == "sam2.1-hiera-base_plus"
-    assert restored.pending_escalation is not None
-    assert Path(restored.pending_escalation.staged_path) == staged_dir
-    assert restored.pending_escalation.target_level == "polygon"
-    assert restored.pending_escalation.sam2_variant == "sam2.1-hiera-base_plus"
-    assert restored.pending_escalation.created_at == "2026-08-27T00:00:00"
+    assert restored.staged_review is not None
+    assert Path(restored.staged_review.staged_path) == staged_dir
+    assert restored.staged_review.target_level == "polygon"
+    assert restored.staged_review.producer_variant == "sam2.1-hiera-base_plus"
+    assert restored.staged_review.created_at == "2026-08-27T00:00:00"
 
 
 def test_default_project_parent_dir_uses_hydra_projects_root(

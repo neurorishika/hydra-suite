@@ -53,3 +53,97 @@ def test_project_training_history_persists(tmp_path):
     assert loaded.training_history == [
         {"run_id": "run_001", "project_model_path": "model.pt"}
     ]
+
+
+from hydra_suite.detectkit.gui.models import OBBSource, StagedReview
+
+
+def test_staged_review_round_trips():
+    review = StagedReview(
+        staged_path="/tmp/staging",
+        target_level="polygon",
+        producer="sam3",
+        producer_variant="sam3-large",
+        prompt="ant",
+        params={"confidence": 0.35},
+        created_at="2026-08-31T10:00:00",
+    )
+
+    restored = StagedReview.from_dict(review.to_dict())
+
+    assert restored == review
+
+
+def test_to_dict_writes_only_the_new_key_names():
+    d = StagedReview(producer="sam2", producer_variant="sam2.1_hiera_large").to_dict()
+
+    assert set(d) == {
+        "staged_path",
+        "target_level",
+        "producer",
+        "producer_variant",
+        "prompt",
+        "params",
+        "created_at",
+    }
+
+
+def test_from_dict_accepts_a_legacy_sam2_record():
+    legacy = {
+        "staged_path": "/tmp/s",
+        "target_level": "polygon",
+        "sam2_variant": "sam2.1_hiera_large",
+        "created_at": "2026-08-01T00:00:00",
+    }
+
+    review = StagedReview.from_dict(legacy)
+
+    assert review.producer == "sam2"
+    assert review.producer_variant == "sam2.1_hiera_large"
+    assert review.prompt == ""
+
+
+def test_from_dict_accepts_a_legacy_sam3_record():
+    legacy = {
+        "staged_path": "/tmp/s",
+        "target_level": "polygon",
+        "primer_kind": "sam3",
+        "primer_variant": "sam3-large",
+        "primer_prompt": "ant",
+        "primer_params": {"confidence": 0.35},
+        "created_at": "2026-08-01T00:00:00",
+    }
+
+    review = StagedReview.from_dict(legacy)
+
+    assert review.producer == "sam3"
+    assert review.producer_variant == "sam3-large"
+    assert review.prompt == "ant"
+    assert review.params == {"confidence": 0.35}
+
+
+def test_source_loads_a_legacy_pending_escalation_key():
+    src = OBBSource.from_dict(
+        {
+            "path": "/tmp/src",
+            "name": "src",
+            "pending_escalation": {
+                "staged_path": "/tmp/s",
+                "target_level": "polygon",
+                "primer_kind": "sam3",
+                "primer_prompt": "ant",
+            },
+        }
+    )
+
+    assert src.staged_review is not None
+    assert src.staged_review.producer == "sam3"
+
+
+def test_source_writes_the_new_key_name():
+    src = OBBSource(path="/tmp/src", name="src", staged_review=StagedReview())
+
+    d = src.to_dict()
+
+    assert "staged_review" in d
+    assert "pending_escalation" not in d

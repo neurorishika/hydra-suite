@@ -1,6 +1,7 @@
 # DetectKit Frame-Granular Review — Design
 
-**Status:** pending implementation plan
+**Status:** Shipped — implemented on branch `feat/detectkit-frame-granular-review`
+(merge sha not yet known at doc-close time; this branch has not been merged to `main`)
 **Date:** 2026-08-31
 **Scope:** `detectkit/jobs/`, `detectkit/gui/`, `data/al/`, new `data/al/merge.py`
 
@@ -152,8 +153,15 @@ its existing labels lifted: an OBB quad becomes a 4-point polygon.
 when given exactly 4 points, precisely so a promoted quad never reads back
 as an OBB — that machinery exists and is reused, not reinvented.
 
-If the staged level is **below** the source's, staged records are derived
-down with the existing `derive_down` (`data/al/escalation.py:103`).
+If the staged level is **below** the source's, this is an upward re-tag —
+e.g. an OBB quad encoded as a 4-point polygon — not a genuine level gap, so
+`derive_down` (`data/al/escalation.py:103`), which refuses upward
+derivation by design, does not apply. It is handled by
+`staged_review._lift`, which re-tags a record's declared level without
+moving a point (the points are already there; there is nothing to invent).
+`merge_records` itself stays strict and refuses records below its target
+level on purpose — accept-time code lifts before merging so that
+invariant never has to bend.
 
 Promotion is a property of the source, so the first accept that promotes
 sets `source.level` and the rest of the review proceeds at the new level.
@@ -307,6 +315,10 @@ beyond an opaque string key. It means:
   `OverlayProvider`), not to `canvas.py` — the registry was built precisely
   so that adding, removing, or merging a data source is a provider-level
   change with no `OBBCanvas` edit.
+
+**Post-implementation note (Task 15):** `StagedEscalationProvider` was
+renamed `StagedReviewProvider`, key `"staged"`, since it now serves all
+three producers (SAM2, SAM3, inference), not just escalations.
 
 This also means the original "layer count" framing in this section's first
 draft (predictions and escalations "becoming the same object" would reduce

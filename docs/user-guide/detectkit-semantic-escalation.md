@@ -169,25 +169,64 @@ The run is:
   how many frames it got through, instead of reporting a partial result as
   a clean success.
 
-## Accepting results: a new sibling source, never in place
+## Reviewing results: frame by frame, into the source you ran on
 
-When you review and accept a staged semantic escalation, DetectKit creates
-a **brand-new sibling source** alongside the one you escalated. **It never
-touches the original source's labels.** This is deliberate and is the
-whole reason the result lands in a new source rather than being merged in:
-SAM3's masks are a different instance set, at a different geometry
-convention, from your existing labels (see below) — merging them in place
-would risk silently degrading a dataset you've already curated. The new
-source starts unreviewed; you keep, merge, or delete it with the same
-tools you'd use for any other source, on your own schedule.
+A staged semantic escalation is reviewed **frame by frame**, and accepting
+a frame writes **into the source you escalated** — SAM3 no longer creates a
+sibling source. This is the same `StagedReview` flow used for geometry
+escalation (SAM2) and for staged dataset predictions (below); all three
+producers share one review path.
 
-## A convention gap that review has to settle
+While a source has a staged review, a **review bar** appears above the
+canvas with four operations, applied to the frame on screen:
+
+- **Replace** — the staged labels replace this frame's.
+- **Add New** — this frame's existing labels are kept; only the staged
+  instances that don't overlap one already there are appended.
+- **Reject** — the staged labels for this frame are discarded.
+- **Accept All / Reject All** — the same, over every frame not yet
+  decided.
+
+Plus **Next Undecided**, to jump to the next frame with an outstanding
+decision, and a `23/140 decided` counter showing review progress across
+the source.
+
+Accepts apply **immediately** to the source's real labels — the result
+appears on the ground-truth layer as you work, rather than accumulating
+into a pending set you review later. The staged (magenta) proposal
+disappears from a frame once it is decided.
+
+**Revert Review** restores the source's labels, geometry level, and class
+list to their state before the review started — but only while the review
+is open. Finishing the review (every frame decided) deletes the staging
+directory and the snapshot it depends on, so revert is no longer available
+after that point.
+
+### A convention gap review has to settle
 
 SAM3's masks trace an animal's full visible extent — legs, antennae, and
 all — while tracking-derived labels typically bound just the body core.
 These are two different, both-legitimate conventions for "the boundary of
 an animal," and semantic escalation does not attempt to reconcile them
-automatically. This is precisely why acceptance produces a reviewable
-sibling source rather than a silent merge: review is where you decide,
-for your dataset, which convention should stand — or whether the two need
-to be visually reconciled before you train on the combined set.
+automatically. Reviewing frame by frame, with **Replace** vs. **Add New**
+as an explicit per-frame choice, is where you decide which convention
+should stand for a given frame, or whether the two conventions need to be
+visually reconciled before you train on the result.
+
+### Accepting polygons into a box source promotes it
+
+SAM3 stages polygon-level masks. If the source you escalated is still at
+OBB (or AABB), accepting a staged polygon **promotes the source to
+polygon**: its existing box labels are lifted to 4-point polygons (no
+points move — an OBB quad is already a valid polygon), and the rest of the
+review proceeds at the new level. Promotion is a one-way, source-level
+change that happens on the first promoting accept, not per frame.
+
+## Staging dataset predictions for review
+
+Model inference (Batch Predict / dataset predictions) can also be staged
+for the same review flow, via **Stage Predictions for Review** in the
+Tools panel. Staging is explicit: merely running inference to preview
+predictions on the canvas does not create anything reviewable, and only
+the predictions currently visible at the confidence slider are staged —
+raise or lower the slider to the set you want reviewed before staging.
