@@ -96,15 +96,15 @@ def test_show_image_draws_the_pending_escalation_and_clears_it_otherwise():
     assert "find_staged_label_for_image" in refresh
 
 
-def test_escalation_overlay_is_a_polygon_native_layer():
-    """SAM3/SAM2 stage POLYGON labels, so the native level is POLYGON and the
-    OBB/AABB drawn under it are the derivations a promotion would produce."""
+def test_escalation_overlay_derives_the_levels_beneath_its_native_one():
+    """The layer draws at the escalation's native level plus every level
+    derived below it -- the shapes a promotion would actually produce."""
     import inspect
 
-    from hydra_suite.detectkit.gui.main_window import MainWindow
+    from hydra_suite.detectkit.gui.canvas import OBBCanvas
 
-    refresh = inspect.getsource(MainWindow._refresh_escalation_overlay)
-    assert "GeometryLevel.POLYGON" in refresh
+    setter = inspect.getsource(OBBCanvas.set_escalation_detections)
+    assert "_levels_with_shapes" in setter
 
 
 def test_the_escalation_layer_is_cleared_even_when_the_frame_fails_to_load():
@@ -157,3 +157,44 @@ def test_canvas_reports_the_loaded_image_size():
     assert canvas.image_size() is None
     canvas.set_image_array(np.zeros((37, 61, 3), dtype=np.uint8))
     assert canvas.image_size() == (37, 61)
+
+
+def test_the_overlay_renders_at_the_escalations_own_target_level():
+    """PendingEscalation.target_level is load-bearing, not decorative.
+
+    SAM2 can stage OBB (it converts existing boxes in place), and drawing an
+    OBB quad as polygon-native gave it the polygon style (dotted + filled)
+    AND a derived OBB of the very same quad -- a duplicated outline in the
+    wrong style. The level has to come from the record.
+    """
+    import inspect
+
+    from hydra_suite.detectkit.gui.main_window import MainWindow
+
+    refresh = inspect.getsource(MainWindow._refresh_escalation_overlay)
+    assert "_resolve_pending_level(pending)" in refresh
+    assert "GeometryLevel.POLYGON" not in refresh  # no longer hardcoded
+
+
+def test_pending_level_parses_the_record_and_degrades_on_junk():
+    """target_level is an unvalidated string from project JSON, exactly like
+    OBBSource.level -- a hand-edited or future-version file must not crash
+    the overlay on every image selection."""
+    from hydra_suite.detectkit.gui.main_window import _resolve_pending_level
+    from hydra_suite.detectkit.gui.models import PendingEscalation
+    from hydra_suite.training.geometry_levels import GeometryLevel
+
+    assert (
+        _resolve_pending_level(PendingEscalation(target_level="obb"))
+        == GeometryLevel.OBB
+    )
+    assert (
+        _resolve_pending_level(PendingEscalation(target_level="polygon"))
+        == GeometryLevel.POLYGON
+    )
+    # Junk degrades to POLYGON: a staged mask is a polygon unless the record
+    # says otherwise, and both escalation producers stage polygons by default.
+    assert (
+        _resolve_pending_level(PendingEscalation(target_level="not_a_level"))
+        == GeometryLevel.POLYGON
+    )
