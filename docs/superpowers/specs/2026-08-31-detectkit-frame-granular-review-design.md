@@ -214,13 +214,14 @@ a progress counter (`23/140 decided`). The staged proposals are already
 drawn via the overlay registry merged on 2026-08-31
 (`2026-08-31-detectkit-overlay-layer-registry-design.md`): `MainWindow`
 builds a `FrameContext` and asks `StagedEscalationProvider` (key
-`"escalation"`) for an `OverlayLayer`, which it hands to
-`canvas.set_layer("escalation", layer)` (or `canvas.remove_layer` when
-nothing is staged). Accepting a frame re-asks both `StagedEscalationProvider`
-and `GroundTruthProvider` and re-applies their layers via `set_layer`/
-`remove_layer`, so the change is visible where it happened. There is no
-`set_escalation_detections` or `set_gt_detections` to call any more — those
-methods were retired with the three-layer canvas.
+`"escalation"`) for an `OverlayLayer` (whose `.key` field carries
+`"escalation"`), which it hands to `canvas.set_layer(layer)` (single
+argument — the key comes from `layer.key`, not a separate parameter), or
+`canvas.remove_layer("escalation")` when nothing is staged. Accepting a
+frame re-asks both `StagedEscalationProvider` and `GroundTruthProvider` and
+re-applies their layers the same way, so the change is visible where it
+happened. There is no `set_escalation_detections` or `set_gt_detections` to
+call any more — those methods were retired with the three-layer canvas.
 
 The per-source checkbox dialog (`review_escalations_dialog.py`) is retired.
 Its one irreplaceable feature — SAM3 re-thresholding across sources — moves
