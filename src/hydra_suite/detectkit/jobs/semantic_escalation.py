@@ -953,6 +953,7 @@ class CalibrationWorker(BaseWorker):
         self._params = dict(params)
         self._labeler = labeler
         self._cancel = False
+        self.preview_frames: list = []
 
     def cancel(self) -> None:
         self._cancel = True
@@ -1007,6 +1008,7 @@ class CalibrationWorker(BaseWorker):
             max_instances=self._params.get("max_instances", 0),
             progress=lambda pct, msg: (self.progress.emit(pct), self.status.emit(msg)),
             should_stop=lambda: self._cancel,
+            preview_sink=self.preview_frames.extend,
         )
         self.result_ready.emit(points)
 

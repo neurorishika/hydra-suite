@@ -8,14 +8,22 @@ section).
 
 from __future__ import annotations
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
+    QHBoxLayout,
+    QHeaderView,
     QLabel,
+    QPushButton,
+    QSplitter,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
+from hydra_suite.core.inference.semantic.tiling import merge_candidates
+from hydra_suite.detectkit.gui.canvas import OBBCanvas
 from hydra_suite.widgets.dialogs import BaseDialog
 
 COLUMNS = [
@@ -87,12 +95,21 @@ class CalibrationResultsDialog(BaseDialog):
         *,
         project_frames: int,
         partial: bool = False,
+        preview_frames=None,
+        merge_iou: float = 0.5,
         parent=None,
     ) -> None:
         super().__init__("Calibration results", parent=parent)
         self.partial = bool(partial)
         self._rows = frontier_rows(points, recommended, project_frames)
         self._chosen = None
+        self._preview_frames = list(preview_frames or [])
+        self._merge_iou = float(merge_iou)
+        self._frame_index = 0
+        self._loaded_image_path = None
+
+        self.setMinimumSize(900, 650)
+        self.resize(1280, 860)
 
         container = QWidget()
         outer = QVBoxLayout(container)
@@ -125,17 +142,73 @@ class CalibrationResultsDialog(BaseDialog):
             warning.setStyleSheet("color: #b36b00; font-weight: bold;")
             outer.addWidget(warning)
 
+        splitter = QSplitter(Qt.Orientation.Vertical)
+
         self._table = QTableWidget(len(self._rows), len(COLUMNS))
         self._table.setHorizontalHeaderLabels([label for _key, label in COLUMNS])
         self._table.setSelectionBehavior(QTableWidget.SelectRows)
         self._table.setSelectionMode(QTableWidget.SingleSelection)
         self._table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Interactive
+        )
+        for column, width in enumerate((180, 100, 125, 135, 90, 90, 155, 125)):
+            self._table.setColumnWidth(column, width)
+        selected_row = 0
         for r, row in enumerate(self._rows):
             for c, (key, _label) in enumerate(COLUMNS):
                 self._table.setItem(r, c, QTableWidgetItem(row[key]))
             if row["recommended"]:
+                selected_row = r
                 self._table.selectRow(r)
-        outer.addWidget(self._table)
+        self._table.currentCellChanged.connect(self._on_row_changed)
+        splitter.addWidget(self._table)
+
+        preview = QWidget()
+        preview_layout = QVBoxLayout(preview)
+        preview_layout.setContentsMargins(0, 8, 0, 0)
+        preview_layout.setSpacing(8)
+
+        preview_header = QHBoxLayout()
+        self._previous_frame = QPushButton("◀ Previous frame")
+        self._previous_frame.setObjectName("calibrationPreviousFrame")
+        self._previous_frame.clicked.connect(lambda: self._step_frame(-1))
+        preview_header.addWidget(self._previous_frame)
+        self._frame_label = QLabel("")
+        self._frame_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        preview_header.addWidget(self._frame_label, 1)
+        self._next_frame = QPushButton("Next frame ▶")
+        self._next_frame.setObjectName("calibrationNextFrame")
+        self._next_frame.clicked.connect(lambda: self._step_frame(1))
+        preview_header.addWidget(self._next_frame)
+        self._show_gt = QCheckBox("Ground truth")
+        self._show_gt.setChecked(True)
+        self._show_gt.toggled.connect(self._refresh_visibility)
+        preview_header.addWidget(self._show_gt)
+        self._show_predictions = QCheckBox("Predictions")
+        self._show_predictions.setChecked(True)
+        self._show_predictions.toggled.connect(self._refresh_visibility)
+        preview_header.addWidget(self._show_predictions)
+        preview_layout.addLayout(preview_header)
+
+        self._preview_status = QLabel("")
+        self._preview_status.setWordWrap(True)
+        preview_layout.addWidget(self._preview_status)
+        self._canvas = OBBCanvas()
+        self._canvas.setObjectName("calibrationOverlayCanvas")
+        self._canvas.setMinimumHeight(260)
+        preview_layout.addWidget(self._canvas, 1)
+        self._preview_hint = QLabel(
+            "Green solid fill = ground truth · Blue dashed fill = prediction. "
+            "Ctrl+wheel or +/- zooms, drag pans, and double-click fits."
+        )
+        self._preview_hint.setWordWrap(True)
+        preview_layout.addWidget(self._preview_hint)
+        splitter.addWidget(preview)
+        splitter.setStretchFactor(0, 2)
+        splitter.setStretchFactor(1, 3)
+        splitter.setSizes([300, 480])
+        outer.addWidget(splitter, 1)
 
         note = QLabel(
             "Timings are measured on this machine and these frames. Tile "
@@ -145,6 +218,117 @@ class CalibrationResultsDialog(BaseDialog):
         note.setWordWrap(True)
         outer.addWidget(note)
         self.add_content(container)
+
+        if self._rows:
+            self._table.selectRow(selected_row)
+            self._render_preview()
+        else:
+            self._render_preview()
+
+    def _on_row_changed(self, row: int, _column: int, *_unused) -> None:
+        if row < 0:
+            return
+        self._frame_index = min(
+            self._frame_index, max(len(self._preview_frames) - 1, 0)
+        )
+        self._render_preview()
+
+    def _step_frame(self, amount: int) -> None:
+        if not self._preview_frames:
+            return
+        self._frame_index = (self._frame_index + amount) % len(self._preview_frames)
+        self._render_preview()
+
+    def _refresh_visibility(self) -> None:
+        self._canvas.set_overlay_visibility(
+            self._show_gt.isChecked(), self._show_predictions.isChecked()
+        )
+
+    def _render_preview(self) -> None:
+        has_frames = bool(self._preview_frames)
+        self._previous_frame.setEnabled(len(self._preview_frames) > 1)
+        self._next_frame.setEnabled(len(self._preview_frames) > 1)
+        self._show_gt.setEnabled(has_frames)
+        self._show_predictions.setEnabled(has_frames)
+        if not has_frames:
+            self._canvas.clear_all()
+            self._loaded_image_path = None
+            self._frame_label.setText("No visual preview")
+            self._preview_status.setText(
+                "Visual evidence is not available for this calibration. Re-run "
+                "calibration to generate explorable prediction overlays."
+            )
+            return
+
+        row = self._table.currentRow()
+        if row < 0 or row >= len(self._rows):
+            row = 0
+        point = self._rows[row]["point"]
+        self._frame_index %= len(self._preview_frames)
+        frame = self._preview_frames[self._frame_index]
+        candidates = frame.candidates_by_fraction.get(point.tile_fraction)
+        if candidates is None:
+            self._canvas.clear_all()
+            self._loaded_image_path = None
+            self._frame_label.setText(
+                f"Frame {self._frame_index + 1} of {len(self._preview_frames)} · "
+                f"{frame.image_path.name}"
+            )
+            self._preview_status.setText(
+                "This tiling was not measured on this frame, so no comparable "
+                "overlay is available."
+            )
+            return
+        if self._loaded_image_path != frame.image_path and not self._canvas.load_image(
+            str(frame.image_path)
+        ):
+            self._canvas.clear_all()
+            self._loaded_image_path = None
+            self._frame_label.setText(frame.image_path.name)
+            self._preview_status.setText(
+                f"The calibration image could not be read: {frame.image_path}"
+            )
+            return
+        self._loaded_image_path = frame.image_path
+
+        merged = merge_candidates(
+            candidates,
+            confidence_threshold=point.confidence,
+            iou_threshold=self._merge_iou,
+        )
+        gt_detections = [
+            {
+                "class_id": 0,
+                "polygon_px": item.polygon_px.tolist(),
+            }
+            for item in frame.ground_truth
+        ]
+        prediction_detections = [
+            {
+                "class_id": 2,
+                "polygon_px": instance.polygon_px.tolist(),
+                "confidence": instance.confidence,
+            }
+            for instance in merged
+        ]
+        labels = {0: "Ground truth", 2: "Prediction"}
+        self._canvas.set_gt_detections(gt_detections, labels, fill_alpha=65)
+        self._canvas.set_pred_detections(prediction_detections, labels, fill_alpha=55)
+        self._refresh_visibility()
+        self._frame_label.setText(
+            f"Frame {self._frame_index + 1} of {len(self._preview_frames)} · "
+            f"{frame.image_path.name}"
+        )
+        tiling = (
+            "full frame"
+            if point.tile_fraction is None
+            else f"tile fraction {point.tile_fraction:.2f} ({point.tile_px} px)"
+        )
+        self._preview_status.setText(
+            f"Selected calibration: {tiling}, confidence {point.confidence:.2f}. "
+            f"This frame has {len(gt_detections)} ground-truth and "
+            f"{len(prediction_detections)} predicted segment(s)."
+        )
 
     def accept(self) -> None:
         rows = {i.row() for i in self._table.selectedIndexes()}

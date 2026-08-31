@@ -102,6 +102,7 @@ class SemanticEscalationDialog(BaseDialog):
         self.calibration_points = self._restore_calibration_points(
             self._saved_calibration
         )
+        self.calibration_preview_frames: list = []
         self._preview_worker = None
 
         container = QWidget()
@@ -378,8 +379,11 @@ class SemanticEscalationDialog(BaseDialog):
         if self._persist_callback is not None:
             self._persist_callback()
 
-    def _store_calibration(self, points, recommended, reason: str) -> None:
+    def _store_calibration(
+        self, points, recommended, reason: str, preview_frames=None
+    ) -> None:
         self.calibration_points = list(points)
+        self.calibration_preview_frames = list(preview_frames or [])
         # The band belongs to the LABELS, not to the chosen operating point:
         # every point in one sweep shares it. Adopting it here (rather than
         # only in apply_calibration_choice) stops a recalibration that the
@@ -401,7 +405,7 @@ class SemanticEscalationDialog(BaseDialog):
             recommended_index = next(
                 (i for i, point in enumerate(points) if point is recommended), -1
             )
-        self._saved_calibration = {
+        saved = {
             "created_at": datetime.now(timezone.utc).isoformat(),
             "variant": self.selected_variant(),
             "prompt": self.prompt(),
@@ -411,6 +415,15 @@ class SemanticEscalationDialog(BaseDialog):
             "recommended_index": recommended_index,
             "points": [asdict(point) for point in points],
         }
+        if self.calibration_preview_frames:
+            from hydra_suite.detectkit.gui.calibration_preview_store import (
+                save_calibration_previews,
+            )
+
+            saved["preview_artifact"] = save_calibration_previews(
+                Path(self._project.project_dir), self.calibration_preview_frames
+            )
+        self._saved_calibration = saved
         self._project.semantic_calibration = dict(self._saved_calibration)
         self._persist_settings()
         self._refresh_saved_calibration_ui()
@@ -444,6 +457,8 @@ class SemanticEscalationDialog(BaseDialog):
         reason: str,
         *,
         partial: bool,
+        preview_frames=None,
+        merge_iou: float | None = None,
     ) -> None:
         from hydra_suite.detectkit.gui.dialogs.calibration_results_dialog import (
             CalibrationResultsDialog,
@@ -455,6 +470,10 @@ class SemanticEscalationDialog(BaseDialog):
             reason,
             project_frames=self._project_frame_count(),
             partial=partial,
+            preview_frames=preview_frames,
+            merge_iou=float(
+                self.parameters()["merge_iou"] if merge_iou is None else merge_iou
+            ),
             parent=self,
         )
         results.exec()
@@ -481,11 +500,28 @@ class SemanticEscalationDialog(BaseDialog):
     def _view_saved_calibration(self) -> None:
         if not self.calibration_points:
             return
+        if not self.calibration_preview_frames and self._project is not None:
+            artifact = str(self._saved_calibration.get("preview_artifact", ""))
+            if artifact:
+                from hydra_suite.detectkit.gui.calibration_preview_store import (
+                    load_calibration_previews,
+                )
+
+                self.calibration_preview_frames = load_calibration_previews(
+                    Path(self._project.project_dir), artifact
+                )
         self._show_calibration_results(
             self.calibration_points,
             self._saved_recommendation(),
             str(self._saved_calibration.get("reason", "")),
             partial=False,
+            preview_frames=self.calibration_preview_frames,
+            merge_iou=_saved_value(
+                dict(self._saved_calibration.get("parameters", {}) or {}),
+                "merge_iou",
+                self.parameters()["merge_iou"],
+                float,
+            ),
         )
 
     def _refresh_tile_label(self) -> None:
@@ -631,12 +667,15 @@ class SemanticEscalationDialog(BaseDialog):
             # A cancelled/partial sweep is useful to inspect, but must not erase
             # the last complete calibration stored with the project.
             if not worker.cancelled:
-                self._store_calibration(points, best, reason)
+                self._store_calibration(
+                    points, best, reason, preview_frames=worker.preview_frames
+                )
             self._show_calibration_results(
                 points,
                 best,
                 reason,
                 partial=worker.cancelled,
+                preview_frames=worker.preview_frames,
             )
 
         worker.result_ready.connect(_done)

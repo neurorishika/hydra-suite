@@ -140,6 +140,44 @@ def test_completed_calibration_is_written_to_project(qapp, available_checkpoint)
     assert saves
 
 
+def test_completed_calibration_persists_visual_preview_artifact(
+    qapp, available_checkpoint, tmp_path
+):
+    import cv2
+    import numpy as np
+
+    from hydra_suite.core.inference.semantic.calibration import (
+        CalibrationGroundTruth,
+        CalibrationPoint,
+        CalibrationPreviewFrame,
+    )
+    from hydra_suite.core.inference.semantic.tiling import TileCandidate
+    from hydra_suite.detectkit.gui.calibration_preview_store import (
+        load_calibration_previews,
+    )
+    from hydra_suite.detectkit.gui.dialogs.semantic_escalation_dialog import (
+        SemanticEscalationDialog,
+    )
+
+    image = tmp_path / "labelled.png"
+    cv2.imwrite(str(image), np.zeros((40, 50, 3), dtype=np.uint8))
+    polygon = np.asarray([[2, 2], [12, 2], [12, 12], [2, 12]], dtype=np.float32)
+    preview = CalibrationPreviewFrame(
+        image_path=image,
+        ground_truth=(CalibrationGroundTruth(0, polygon),),
+        candidates_by_fraction={0.08: (TileCandidate(polygon.copy(), 0.9, 0),)},
+    )
+    project = DetectKitProject(project_dir=tmp_path)
+    dialog = SemanticEscalationDialog([_source()], 50.0, project=project)
+    point = CalibrationPoint(**_point_dict())
+
+    dialog._store_calibration([point], point, "", preview_frames=[preview])
+
+    artifact = project.semantic_calibration["preview_artifact"]
+    assert (tmp_path / artifact).is_file()
+    assert len(load_calibration_previews(tmp_path, artifact)) == 1
+
+
 def test_semantic_dialog_uses_compact_multicolumn_settings(qapp, available_checkpoint):
     from hydra_suite.detectkit.gui.dialogs.semantic_escalation_dialog import (
         SemanticEscalationDialog,

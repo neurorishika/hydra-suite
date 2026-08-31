@@ -47,6 +47,7 @@ from .shape_prior import (
 from .tiling import (
     DEFAULT_OVERLAP,
     TILE_FRACTION_GRID,
+    TileCandidate,
     TileCollectionCancelled,
     candidate_tile_plans,
     collect_candidates,
@@ -87,6 +88,28 @@ class CalibrationPoint:
     mean_quality: float = 0.0
     median_iou: float = 0.0
     median_area_ratio: float = 0.0
+
+
+@dataclass(frozen=True)
+class CalibrationGroundTruth:
+    """One labelled polygon retained for visual calibration inspection."""
+
+    class_id: int
+    polygon_px: np.ndarray
+
+
+@dataclass(frozen=True)
+class CalibrationPreviewFrame:
+    """Reusable inference evidence for one labelled calibration frame.
+
+    Candidates are retained at the sweep's confidence floor and grouped by
+    tile fraction.  The results dialog can therefore render any table row by
+    re-thresholding and merging this cache; selecting rows never reruns SAM3.
+    """
+
+    image_path: Path
+    ground_truth: tuple[CalibrationGroundTruth, ...]
+    candidates_by_fraction: dict[float | None, tuple[TileCandidate, ...]]
 
 
 def _centroid(poly: np.ndarray) -> np.ndarray:
@@ -163,6 +186,7 @@ def calibrate(
     max_instances: int = 0,
     progress: Callable[[int, str], None] | None = None,
     should_stop: Callable[[], bool] | None = None,
+    preview_sink: Callable[[list[CalibrationPreviewFrame]], None] | None = None,
 ) -> list[CalibrationPoint]:
     """Sweep tile fraction x confidence against *frames*' existing labels.
 
@@ -176,6 +200,10 @@ def calibrate(
     Frames of differing size are handled by keeping only fractions that
     resolved on EVERY frame -- a fraction measured on a subset would have
     incomparable cost and error rates.
+
+    When ``preview_sink`` is supplied it receives the same low-threshold
+    candidates used by the metric sweep, grouped by labelled frame and tile
+    fraction. This adds no model calls and retains no decoded image arrays.
     """
     floor = CONFIDENCE_GRID[0]
     # fraction -> (per-frame candidates+labels, total seconds, total tiles, tile_px)
@@ -193,7 +221,7 @@ def calibrate(
     # labelled set decoded would cost ~3 GB before a single inference pass.
     # The image is re-read inside the fraction loop below, where exactly one
     # frame is resident at a time.
-    per_frame: list[tuple[Path, tuple[int, int], list, list]] = []
+    per_frame: list[tuple[Path, tuple[int, int], list, tuple, list]] = []
     total_passes = 0
     for img_path, records in frames:
         image = cv2.imread(str(img_path))
@@ -201,13 +229,18 @@ def calibrate(
             continue
         h, w = image.shape[:2]
         del image
-        label_polys = [
-            np.asarray(r.points, dtype=np.float32).reshape(-1, 2) for r in records
-        ]
+        ground_truth = tuple(
+            CalibrationGroundTruth(
+                class_id=int(r.class_id),
+                polygon_px=np.asarray(r.points, dtype=np.float32).reshape(-1, 2),
+            )
+            for r in records
+        )
+        label_polys = [item.polygon_px for item in ground_truth]
         options = candidate_tile_plans(
             (h, w), reference_body_px, fractions=tile_fractions, overlap=overlap
         )
-        per_frame.append((Path(img_path), (h, w), label_polys, options))
+        per_frame.append((Path(img_path), (h, w), label_polys, ground_truth, options))
         total_passes += len(options)
     total_passes = max(total_passes, 1)
 
@@ -216,13 +249,17 @@ def calibrate(
     # frontier's rows would not be comparable. None (no labels) leaves every
     # prediction admissible, exactly as before this gate existed.
     area_band = fit_area_band(
-        [g for _p, _hw, label_polys, _o in per_frame for g in label_polys]
+        [
+            g
+            for _p, _hw, label_polys, _ground_truth, _o in per_frame
+            for g in label_polys
+        ]
     )
 
     done_passes = 0
     cancelled = False
     completed_frames: set[int] = set()
-    for fi, (img_path, _hw, label_polys, options) in enumerate(per_frame):
+    for fi, (img_path, _hw, label_polys, ground_truth, options) in enumerate(per_frame):
         if should_stop is not None and should_stop():
             cancelled = True
             break
@@ -268,7 +305,7 @@ def calibrate(
                     "n": 0,
                 },
             )
-            entry["frames"].append((candidates, label_polys))
+            entry["frames"].append((img_path, candidates, ground_truth))
             entry["seconds"] += elapsed
             # tile_px is genuinely constant across frames for a given
             # fraction (it depends only on reference_body_px and the
@@ -307,7 +344,8 @@ def calibrate(
             qualities: list[float] = []
             ious: list[float] = []
             area_ratios: list[float] = []
-            for candidates, label_polys in entry["frames"]:
+            for _img_path, candidates, ground_truth in entry["frames"]:
+                label_polys = [item.polygon_px for item in ground_truth]
                 merged = merge_candidates(
                     candidates,
                     confidence_threshold=conf,
@@ -347,6 +385,23 @@ def calibrate(
                     ),
                 )
             )
+
+    if preview_sink is not None:
+        by_path: dict[Path, CalibrationPreviewFrame] = {}
+        for fraction, entry in acc.items():
+            if seen_frames and entry["n"] < seen_frames:
+                continue
+            for img_path, candidates, ground_truth in entry["frames"]:
+                frame = by_path.get(img_path)
+                if frame is None:
+                    frame = CalibrationPreviewFrame(
+                        image_path=img_path,
+                        ground_truth=ground_truth,
+                        candidates_by_fraction={},
+                    )
+                    by_path[img_path] = frame
+                frame.candidates_by_fraction[fraction] = tuple(candidates)
+        preview_sink(list(by_path.values()))
     return points
 
 

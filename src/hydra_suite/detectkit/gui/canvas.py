@@ -349,6 +349,7 @@ class OBBCanvas(QGraphicsView):
         class_names: list[str] | dict[int, str] | None = None,
         *,
         append: bool = False,
+        fill_alpha: int = 0,
     ) -> None:
         """Draw ground-truth OBB polygons (solid lines)."""
         if not append:
@@ -378,6 +379,12 @@ class OBBCanvas(QGraphicsView):
                 class_names,
                 Qt.PenStyle.SolidLine,
                 show_confidence=False,
+                brush_style=(
+                    Qt.BrushStyle.SolidPattern
+                    if fill_alpha > 0
+                    else Qt.BrushStyle.NoBrush
+                ),
+                fill_alpha=fill_alpha,
             )
             self._gt_obb_items.extend(obb_items[start:])
             self._gt_label_items.extend(label_items[start:])
@@ -391,6 +398,12 @@ class OBBCanvas(QGraphicsView):
                 class_names,
                 Qt.PenStyle.SolidLine,
                 show_confidence=False,
+                brush_style=(
+                    Qt.BrushStyle.SolidPattern
+                    if fill_alpha > 0
+                    else Qt.BrushStyle.NoBrush
+                ),
+                fill_alpha=fill_alpha,
             )
         self._apply_visibility()
 
@@ -552,6 +565,8 @@ class OBBCanvas(QGraphicsView):
         self,
         detections: list[dict],
         class_names: list[str] | dict[int, str] | None = None,
+        *,
+        fill_alpha: int = 0,
     ) -> None:
         """Draw model-prediction OBB polygons (dashed lines)."""
         self.clear_pred_detections()
@@ -563,6 +578,10 @@ class OBBCanvas(QGraphicsView):
             class_names,
             Qt.PenStyle.DashLine,
             show_confidence=True,
+            brush_style=(
+                Qt.BrushStyle.SolidPattern if fill_alpha > 0 else Qt.BrushStyle.NoBrush
+            ),
+            fill_alpha=fill_alpha,
         )
         self._apply_visibility()
 

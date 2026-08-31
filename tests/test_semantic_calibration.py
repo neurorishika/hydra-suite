@@ -185,6 +185,40 @@ def test_calibrate_runs_one_inference_pass_per_tile_fraction(tmp_path):
     assert all(p.seconds_per_frame >= 0.0 for p in points)
 
 
+def test_calibrate_exposes_rethresholdable_visual_evidence(tmp_path):
+    import cv2
+
+    from hydra_suite.core.inference.semantic.calibration import calibrate
+
+    img = tmp_path / "f0.png"
+    cv2.imwrite(str(img), np.zeros((256, 256, 3), dtype=np.uint8))
+    records = [
+        LabelRecord(
+            class_id=3,
+            confidence=1.0,
+            points=_sq(100, 100),
+            level=GeometryLevel.POLYGON,
+        )
+    ]
+    previews = []
+
+    calibrate(
+        _CountingLabeler(),
+        [(img, records)],
+        "ant",
+        reference_body_px=80.0,
+        tile_fractions=(None,),
+        seam_margin_px=4,
+        merge_iou=0.5,
+        preview_sink=previews.extend,
+    )
+
+    assert len(previews) == 1
+    assert previews[0].image_path == img
+    assert previews[0].ground_truth[0].class_id == 3
+    assert None in previews[0].candidates_by_fraction
+
+
 def test_calibrate_averages_tiles_per_frame_across_mixed_frame_sizes(tmp_path):
     # tiles_per_frame depends on FRAME DIMENSIONS, not just reference_body_px:
     # a 2000x2000 frame and a 4000x4000 frame tile differently at the same
