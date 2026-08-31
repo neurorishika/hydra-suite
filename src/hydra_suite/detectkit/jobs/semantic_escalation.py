@@ -24,6 +24,7 @@ import numpy as np
 from PySide6.QtCore import Signal
 
 from hydra_suite.core.inference.semantic.calibration import CONFIDENCE_GRID
+from hydra_suite.core.inference.semantic.shape_prior import AreaBand
 from hydra_suite.core.inference.semantic.tiling import (
     DEFAULT_MERGE_IOU,
     DEFAULT_OVERLAP,
@@ -80,6 +81,13 @@ class SemanticEscalationRequest:
     # the prefill when the user skips calibration. None = full frame.
     tile_fraction: float | None = SEMANTIC_TILE_FRACTION_SEED
     tile_px: int | None = None  # explicit override; wins over tile_fraction
+    # The label-derived area gate from calibration (shape_prior.AreaBand),
+    # flattened to two floats so it survives the request/params/JSON round
+    # trip. 0/0 disables it. It gates at MERGE time, not collection time, so
+    # it deliberately stays OUT of the cache fingerprint: changing it is a
+    # re-threshold, not a re-run.
+    area_min_px2: float = 0.0
+    area_max_px2: float = 0.0
     overwrite: bool = False
 
 
@@ -192,6 +200,32 @@ def sources_pending_replacement(req: "SemanticEscalationRequest") -> list[str]:
     return out
 
 
+def band_from_bounds(min_px2: float, max_px2: float) -> AreaBand | None:
+    """Rebuild the area gate from two persisted floats. 0/0 = no gate.
+
+    The median and label count are not persisted -- nothing downstream of
+    calibration uses them -- so they are reported as the bounds' midpoint
+    and 0 rather than invented.
+    """
+    lo, hi = float(min_px2 or 0.0), float(max_px2 or 0.0)
+    if lo <= 0.0 or hi <= lo:
+        return None
+    return AreaBand(min_px2=lo, max_px2=hi, median_px2=(lo + hi) / 2.0, n_labels=0)
+
+
+def band_from_params(params: dict | None) -> AreaBand | None:
+    """The area gate recorded on a staged run's ``primer_params``.
+
+    Absent on runs staged before the gate existed, which is exactly the
+    ungated behaviour those runs were produced under.
+    """
+    if not params:
+        return None
+    return band_from_bounds(
+        params.get("area_min_px2", 0.0), params.get("area_max_px2", 0.0)
+    )
+
+
 def _fingerprint(
     req: SemanticEscalationRequest,
     src_root: Path,
@@ -296,6 +330,7 @@ def _write_labels_from_candidates(
     *,
     confidence: float,
     merge_iou: float,
+    area_band: AreaBand | None = None,
     origin_images: Path | None = None,
 ) -> tuple[int, int, int]:
     """(instances written, degenerate dropped, orphans skipped) per cache.
@@ -317,6 +352,7 @@ def _write_labels_from_candidates(
             _candidates_from_json(entry["candidates"]),
             confidence_threshold=confidence,
             iou_threshold=merge_iou,
+            area_band=area_band,
         )
         records: list[LabelRecord] = []
         for inst in merged:
@@ -499,6 +535,7 @@ def run_semantic_escalation(
             cache,
             confidence=req.confidence,
             merge_iou=req.merge_iou,
+            area_band=band_from_bounds(req.area_min_px2, req.area_max_px2),
             origin_images=images_dir,
         )
         result.labelled += written
@@ -532,6 +569,10 @@ def run_semantic_escalation(
                 "overlap": float(req.overlap),
                 "seam_margin_px": float(req.seam_margin_px),
                 "max_instances": int(req.max_instances),
+                # The calibrated size gate, carried so a re-threshold
+                # replays under the SAME rule the run emitted under.
+                "area_min_px2": float(req.area_min_px2),
+                "area_max_px2": float(req.area_max_px2),
             },
         )
         result.staged.append(src.name)
@@ -623,6 +664,7 @@ def rethreshold_staged(
         cache,
         confidence=confidence,
         merge_iou=merge_iou,
+        area_band=band_from_params(pending.primer_params),
         origin_images=Path(source.path) / "images",
     )
     pending.primer_params = {

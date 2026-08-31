@@ -25,6 +25,10 @@ COLUMNS = [
     ("extra", "To delete /frame"),
     ("recall", "Recall"),
     ("matched", "Matched"),
+    # How WELL the matches match, not just how many. A configuration can
+    # post a high recall with masks covering whole regions or single legs;
+    # this column is where that shows.
+    ("quality", "Match quality"),
     ("seconds", "s/frame (measured)"),
     ("projected", "Projected run"),
 ]
@@ -59,6 +63,10 @@ def frontier_rows(points, recommended, project_frames: int) -> list[dict]:
                 "extra": f"{p.extra_per_frame:.1f}",
                 "recall": f"{p.recall:.1%}",
                 "matched": str(p.n_matched),
+                "quality": (
+                    f"{p.mean_quality:.2f} "
+                    f"(IoU {p.median_iou:.2f}, area {p.median_area_ratio:.2f})"
+                ),
                 "seconds": f"{p.seconds_per_frame:.1f}",
                 "projected": _humanise(p.seconds_per_frame * max(project_frames, 0)),
                 "recommended": recommended is not None and p is recommended,

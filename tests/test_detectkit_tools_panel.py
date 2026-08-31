@@ -42,6 +42,7 @@ def test_overlay_settings_namedtuple():
         show_gt=True,
         show_pred=False,
         show_derived_levels=True,
+        show_escalation=True,
         confidence_threshold=0.5,
         visible_class_ids=set(),
         active_model_path="",
@@ -196,3 +197,23 @@ def test_tools_panel_has_overview_progress(qapp):
 
     panel = ToolsPanel()
     assert hasattr(panel, "_overview_progress")
+
+
+def test_overlay_settings_includes_show_escalation_default_true(qapp):
+    """Default ON: a pending escalation is transient and awaiting review, so
+    the whole point is to see it without hunting for a toggle."""
+    from hydra_suite.detectkit.gui.panels.tools_panel import ToolsPanel
+
+    panel = ToolsPanel()
+    assert panel.get_overlay_settings().show_escalation is True
+    panel._chk_show_escalation.setChecked(False)
+    assert panel.get_overlay_settings().show_escalation is False
+
+
+def test_main_window_on_overlay_changed_wires_escalation_to_canvas():
+    import inspect
+
+    from hydra_suite.detectkit.gui.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._on_overlay_changed)
+    assert "set_escalation_visible" in source

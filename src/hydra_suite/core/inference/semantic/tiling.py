@@ -19,6 +19,7 @@ from hydra_suite.core.inference.masks import polygon_iou
 from hydra_suite.utils.slice_geometry import SlicePlan, plan_tiles
 
 from .base import SemanticInstance, SemanticLabeler
+from .shape_prior import AreaBand, in_band
 
 logger = logging.getLogger(__name__)
 
@@ -240,8 +241,9 @@ def merge_candidates(
     *,
     confidence_threshold: float,
     iou_threshold: float,
+    area_band: AreaBand | None = None,
 ) -> list[SemanticInstance]:
-    """Threshold then greedy-NMS the candidates into final instances.
+    """Threshold, area-gate, then greedy-NMS the candidates into instances.
 
     The invariant this upholds is: the survivors at threshold T are exactly
     the survivors of merging the >=T subset -- i.e. merging is applied to a
@@ -257,13 +259,25 @@ def merge_candidates(
     post-filtering provably agree (verified empirically over 1500
     randomised candidate-set/threshold pairs: zero divergences).
 
+    ``area_band`` -- the label-derived size gate from ``shape_prior`` --
+    is applied BEFORE suppression, and deliberately so: an arena-sized blob
+    outscores the real bodies it covers, so gating after NMS would let it
+    suppress them and then be dropped itself, losing both. The gate is
+    purely geometric and hence threshold-INDEPENDENT, exactly like the seam
+    drop, which is what lets a re-threshold replay cached candidates and
+    still agree with the run that produced them. ``None`` disables it.
+
     Re-merging is kept anyway because it is the obviously-correct
     formulation -- it states the invariant directly instead of relying on
     that argument staying true if the suppression rule is ever changed to
     something not confidence-ordered -- and it is cheap.
     """
     kept = sorted(
-        (c for c in candidates if c.confidence >= confidence_threshold),
+        (
+            c
+            for c in candidates
+            if c.confidence >= confidence_threshold and in_band(c.polygon_px, area_band)
+        ),
         key=lambda c: -c.confidence,
     )
     survivors: list[TileCandidate] = []

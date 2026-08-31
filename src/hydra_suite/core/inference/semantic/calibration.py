@@ -11,10 +11,15 @@ Three design commitments:
   spurious polygon is one click; a missed animal must be found by eye. The
   F1-optimal threshold missed 4.7 animals/frame where a recall-first one
   missed 1.0.
-* Matching is one-to-one nearest-centroid gated by containment, not IoU.
-  SAM3 masks trace legs and antennae (~1.7x the labelled body-core area),
-  so IoU penalises correct detections for a purely conventional reason --
-  but centroid distance alone lets one blob claim two labels in a cluster.
+* Matching is one-to-one, gated by containment AND by a size/shape prior
+  fitted to the user's own labels (``shape_prior``), and ranked by a graded
+  quality score rather than by centroid distance. The gate is the fix for a
+  real mistargeting bug: containment alone let an arena-sized blob or a
+  leg-sized fragment earn recall credit, and since ``recommend`` is
+  recall-first, calibration then SELECTED for whatever produced them. IoU
+  is still not a hard gate -- SAM3 masks trace legs and antennae at ~1.7x
+  the labelled body-core area -- but it enters the quality score, where a
+  systematic offset shifts every configuration equally.
 """
 
 from __future__ import annotations
@@ -27,9 +32,18 @@ from typing import Callable, Sequence
 import cv2
 import numpy as np
 
+from hydra_suite.core.inference.masks import polygon_iou
 from hydra_suite.data.al.escalation import LabelRecord
 
 from .base import SemanticLabeler
+from .shape_prior import (
+    MIN_MATCH_QUALITY,
+    AreaBand,
+    fit_area_band,
+    in_band,
+    match_quality,
+    polygon_area,
+)
 from .tiling import (
     DEFAULT_OVERLAP,
     TILE_FRACTION_GRID,
@@ -43,6 +57,10 @@ from .tiling import (
 MIN_MATCHED_INSTANCES = 20
 # Recall floor a point must clear to be recommendable.
 MIN_RECALL = 0.90
+# Mean match quality a point must clear to be recommendable. An ELIGIBILITY
+# filter in the same spirit as MIN_MATCHED_INSTANCES, not a new objective:
+# recall bought with mistargeted masks is not recall.
+MIN_MEAN_QUALITY = 0.35
 CONFIDENCE_GRID: tuple[float, ...] = tuple(
     round(float(c), 2) for c in np.arange(0.05, 0.96, 0.05)
 )
@@ -61,6 +79,14 @@ class CalibrationPoint:
     extra_per_frame: float
     recall: float
     n_matched: int
+    # The label-derived area gate this point was scored under. Persisted
+    # with the operating point so inference applies the SAME gate.
+    area_min_px2: float = 0.0
+    area_max_px2: float = 0.0
+    # Graded match quality over the matched pairs (0 when nothing matched).
+    mean_quality: float = 0.0
+    median_iou: float = 0.0
+    median_area_ratio: float = 0.0
 
 
 def _centroid(poly: np.ndarray) -> np.ndarray:
@@ -73,28 +99,49 @@ def _contains(poly: np.ndarray, point: np.ndarray) -> bool:
 
 
 def match_one_to_one(
-    pred_polys: Sequence[np.ndarray], label_polys: Sequence[np.ndarray]
+    pred_polys: Sequence[np.ndarray],
+    label_polys: Sequence[np.ndarray],
+    *,
+    area_band: AreaBand | None = None,
+    min_quality: float = MIN_MATCH_QUALITY,
 ) -> list[tuple[int, int]]:
-    """Greedy nearest-centroid pairing, each side used at most once.
+    """Greedy one-to-one pairing by descending match QUALITY.
 
-    A pair is admissible only if the prediction's centroid falls inside the
-    label, or the label's centroid falls inside the prediction -- the
-    containment gate that stops one oversized blob from claiming its
-    neighbour's label in a dense cluster.
+    Three conditions make a pair admissible:
+
+    * containment -- the prediction's centroid falls inside the label, or
+      the label's centroid inside the prediction. Stops one oversized blob
+      from claiming its neighbour's label in a dense cluster.
+    * the area band, when one is supplied -- see ``shape_prior``.
+    * ``min_quality`` -- a floor on the graded score, so a pair that is
+      technically admissible but plainly not the same object (a mask ~40x
+      the label's area still contains its centroid) is not counted a find.
+
+    Ranking by quality rather than by centroid distance also fixes cluster
+    pairing: the nearest centroid is not always the better fit, and a
+    distance-first greedy pass can hand a prediction to the wrong label and
+    strand the right one.
     """
     pred_c = [_centroid(p) for p in pred_polys]
     label_c = [_centroid(g) for g in label_polys]
+    admissible = [i for i, p in enumerate(pred_polys) if in_band(p, area_band)]
     pairs: list[tuple[float, int, int]] = []
-    for pi, pc in enumerate(pred_c):
+    for pi in admissible:
+        pc = pred_c[pi]
         for gi, gc in enumerate(label_c):
             if not (_contains(label_polys[gi], pc) or _contains(pred_polys[pi], gc)):
                 continue
-            pairs.append((float(np.hypot(*(pc - gc))), pi, gi))
-    pairs.sort()
+            quality = match_quality(pred_polys[pi], label_polys[gi])
+            if quality < min_quality:
+                continue
+            # Negated so a plain ascending sort puts the BEST pair first,
+            # with the centroid distance as a deterministic tie-break.
+            pairs.append((-quality, pi, gi))
+    pairs.sort(key=lambda t: (t[0], float(np.hypot(*(pred_c[t[1]] - label_c[t[2]])))))
     used_p: set[int] = set()
     used_g: set[int] = set()
     out: list[tuple[int, int]] = []
-    for _dist, pi, gi in pairs:
+    for _neg_q, pi, gi in pairs:
         if pi in used_p or gi in used_g:
             continue
         used_p.add(pi)
@@ -163,6 +210,14 @@ def calibrate(
         per_frame.append((Path(img_path), (h, w), label_polys, options))
         total_passes += len(options)
     total_passes = max(total_passes, 1)
+
+    # One band for the whole sweep, pooled over every labelled frame: the
+    # gate must not differ between the configurations being compared, or the
+    # frontier's rows would not be comparable. None (no labels) leaves every
+    # prediction admissible, exactly as before this gate existed.
+    area_band = fit_area_band(
+        [g for _p, _hw, label_polys, _o in per_frame for g in label_polys]
+    )
 
     done_passes = 0
     cancelled = False
@@ -249,16 +304,29 @@ def calibrate(
         tiles_per_frame = round(entry["tiles_total"] / n_frames)
         for conf in CONFIDENCE_GRID:
             matched = missed = extra = total_labels = 0
+            qualities: list[float] = []
+            ious: list[float] = []
+            area_ratios: list[float] = []
             for candidates, label_polys in entry["frames"]:
                 merged = merge_candidates(
-                    candidates, confidence_threshold=conf, iou_threshold=merge_iou
+                    candidates,
+                    confidence_threshold=conf,
+                    iou_threshold=merge_iou,
+                    area_band=area_band,
                 )
                 preds = [m.polygon_px for m in merged]
-                pairs = match_one_to_one(preds, label_polys)
+                pairs = match_one_to_one(preds, label_polys, area_band=area_band)
                 matched += len(pairs)
                 missed += len(label_polys) - len(pairs)
                 extra += len(preds) - len(pairs)
                 total_labels += len(label_polys)
+                for pi, gi in pairs:
+                    qualities.append(match_quality(preds[pi], label_polys[gi]))
+                    ious.append(polygon_iou(preds[pi], label_polys[gi]))
+                    pa = polygon_area(preds[pi])
+                    ga = polygon_area(label_polys[gi])
+                    if pa > 0 and ga > 0:
+                        area_ratios.append(min(pa, ga) / max(pa, ga))
             points.append(
                 CalibrationPoint(
                     tile_fraction=fraction,
@@ -270,6 +338,13 @@ def calibrate(
                     extra_per_frame=extra / n_frames,
                     recall=(matched / total_labels) if total_labels else 0.0,
                     n_matched=matched,
+                    area_min_px2=(area_band.min_px2 if area_band else 0.0),
+                    area_max_px2=(area_band.max_px2 if area_band else 0.0),
+                    mean_quality=(float(np.mean(qualities)) if qualities else 0.0),
+                    median_iou=(float(np.median(ious)) if ious else 0.0),
+                    median_area_ratio=(
+                        float(np.median(area_ratios)) if area_ratios else 0.0
+                    ),
                 )
             )
     return points
@@ -280,6 +355,7 @@ def recommend(
     *,
     min_matched: int = MIN_MATCHED_INSTANCES,
     min_recall: float = MIN_RECALL,
+    min_quality: float = MIN_MEAN_QUALITY,
 ) -> tuple[CalibrationPoint | None, str]:
     """The cheapest tiling that clears the recall floor, or a refusal.
 
@@ -289,9 +365,11 @@ def recommend(
     ties broken by the highest confidence (fewest polygons to delete).
     Deliberately not the F1 maximum.
 
-    The ``min_matched`` floor is an ELIGIBILITY filter, not a veto on the
-    winner: a cheap configuration that finds almost nothing would otherwise
-    post a perfect recall on four matches and win on cost.
+    The ``min_matched`` and ``min_quality`` floors are ELIGIBILITY filters,
+    not vetoes on the winner: a cheap configuration that finds almost
+    nothing would otherwise post a perfect recall on four matches and win on
+    cost, and one whose "finds" are mistargeted masks would post a high
+    recall it has not earned.
     """
     if not points:
         return None, "No calibration points; nothing to recommend."
@@ -301,9 +379,20 @@ def recommend(
             f"No configuration reached {min_recall:.0%} recall on these frames. "
             "Try a different prompt, or a finer tile fraction."
         )
-    eligible = [p for p in on_recall if p.n_matched >= min_matched]
+    on_quality = [p for p in on_recall if p.mean_quality >= min_quality]
+    if not on_quality:
+        best_quality = max(p.mean_quality for p in on_recall)
+        return None, (
+            f"Mistargeted: every configuration reaching {min_recall:.0%} recall "
+            f"did so with masks that match the labels poorly (best mean "
+            f"quality {best_quality:.2f}, need {min_quality:.2f}). The masks "
+            "are probably covering the wrong thing -- whole regions, or parts "
+            "of an animal. Try a more specific prompt, or a different tile "
+            "fraction."
+        )
+    eligible = [p for p in on_quality if p.n_matched >= min_matched]
     if not eligible:
-        best_matched = max(p.n_matched for p in on_recall)
+        best_matched = max(p.n_matched for p in on_quality)
         return None, (
             f"Insufficient data: the best configuration reaching "
             f"{min_recall:.0%} recall matched only {best_matched} instance(s) "
