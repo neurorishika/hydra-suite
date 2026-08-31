@@ -411,24 +411,30 @@ def accept_frame(
                 target_level,
             )
         else:
-            prior_text = source_label.read_text(encoding="utf-8")
-            if prior_text and not prior_text.endswith("\n"):
-                prior_text += "\n"
-            with source_label.open("w", encoding="utf-8") as fp:
-                fp.write(prior_text)
+            # Bytes, not text: read_text()/write_text() apply universal-
+            # newline translation, which would silently rewrite a CRLF
+            # label file to LF -- exactly the kind of drift this branch
+            # exists to avoid on lines the user never touched.
+            prior = source_label.read_bytes()
+            if prior and not prior.endswith(b"\n"):
+                prior += b"\n"
+            with source_label.open("wb") as fp:
+                fp.write(prior)
             # Append only. write_label_file truncates, so the survivors are
             # formatted into a temp buffer and appended.
             if survivors:
                 buffer = staged_root / ".append.tmp"
-                write_label_file(
-                    buffer,
-                    derive_down(survivors, target_level),
-                    (height, width),
-                    target_level,
-                )
-                with source_label.open("a", encoding="utf-8") as fp:
-                    fp.write(buffer.read_text(encoding="utf-8"))
-                buffer.unlink(missing_ok=True)
+                try:
+                    write_label_file(
+                        buffer,
+                        derive_down(survivors, target_level),
+                        (height, width),
+                        target_level,
+                    )
+                    with source_label.open("ab") as fp:
+                        fp.write(buffer.read_bytes())
+                finally:
+                    buffer.unlink(missing_ok=True)
 
     if promoting:
         _promote_source(source, target_level, skip=rel, frame_size=(height, width))

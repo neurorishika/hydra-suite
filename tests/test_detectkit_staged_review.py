@@ -248,6 +248,24 @@ def test_add_new_keeps_the_existing_lines_byte_for_byte(tmp_path):
     assert text.startswith(original)
 
 
+def test_add_new_preserves_crlf_line_endings_byte_for_byte(tmp_path):
+    """ "Verbatim" means bytes, not lines.
+
+    read_text() applies universal-newline translation, so a label file
+    hand-edited on Windows would come back LF-only -- every existing line
+    changed, in the one branch whose entire purpose is not to touch them.
+    """
+    original = _obb_line(0, 0, 20, 20).replace("\n", "\r\n")
+    source, _ = _wired(
+        tmp_path, {"a.txt": original}, {"a.txt": _obb_line(60, 60, 80, 80)}
+    )
+
+    sr.accept_frame(source, "a.txt", mode=MergeMode.ADD_NEW)
+
+    written = (Path(source.path) / "labels" / "a.txt").read_bytes()
+    assert written.startswith(original.encode())
+
+
 def test_reject_changes_nothing_but_records_the_decision(tmp_path):
     original = _obb_line(0, 0, 20, 20)
     source, staged = _wired(
