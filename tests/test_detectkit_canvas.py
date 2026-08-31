@@ -21,6 +21,19 @@ from hydra_suite.detectkit.gui.canvas import OBBCanvas  # noqa: E402
 from hydra_suite.detectkit.gui.utils import parse_obb_label  # noqa: E402
 
 
+def _polys(canvas, key):
+    return [i for b in canvas.layer_items(key).values() for i in b.obb_items]
+
+
+def _labels(canvas, key):
+    return [
+        i
+        for b in canvas.layer_items(key).values()
+        for i in b.label_items
+        if i is not None
+    ]
+
+
 @pytest.fixture()
 def qapp():
     app = QApplication.instance()
@@ -117,8 +130,8 @@ def test_canvas_uses_class_name_lookup_for_labels(qapp):
         class_names=["ant", "bee"],
     )
 
-    assert len(canvas._label_items) == 1
-    assert canvas._label_items[0].toPlainText() == "bee (1)"
+    assert len(_labels(canvas, "gt")) == 1
+    assert _labels(canvas, "gt")[0].toPlainText() == "bee (1)"
 
 
 class _StubWheelEvent:
@@ -186,13 +199,13 @@ def test_set_gt_detections_multi_level_polygon_native_draws_three_layers(qapp):
         native_level=GeometryLevel.POLYGON,
         reviewed=True,
     )
-    assert set(canvas._gt_level_items.keys()) == {
+    assert set(canvas.layer_items("gt")) == {
         GeometryLevel.POLYGON,
         GeometryLevel.OBB,
         GeometryLevel.AABB,
     }
     for level in (GeometryLevel.POLYGON, GeometryLevel.OBB, GeometryLevel.AABB):
-        assert len(canvas._gt_level_items[level]) == 1
+        assert len(canvas.layer_items("gt")[level].obb_items) == 1
 
 
 def test_set_gt_detections_multi_level_obb_native_draws_two_layers(qapp):
@@ -206,7 +219,7 @@ def test_set_gt_detections_multi_level_obb_native_draws_two_layers(qapp):
         native_level=GeometryLevel.OBB,
         reviewed=True,
     )
-    assert set(canvas._gt_level_items.keys()) == {GeometryLevel.OBB, GeometryLevel.AABB}
+    assert set(canvas.layer_items("gt")) == {GeometryLevel.OBB, GeometryLevel.AABB}
 
 
 def test_set_gt_detections_multi_level_aabb_native_draws_one_layer(qapp):
@@ -220,7 +233,7 @@ def test_set_gt_detections_multi_level_aabb_native_draws_one_layer(qapp):
         native_level=GeometryLevel.AABB,
         reviewed=True,
     )
-    assert set(canvas._gt_level_items.keys()) == {GeometryLevel.AABB}
+    assert set(canvas.layer_items("gt")) == {GeometryLevel.AABB}
 
 
 def test_set_gt_detections_multi_level_unreviewed_uses_hatched_brush_on_native_only(
@@ -238,8 +251,8 @@ def test_set_gt_detections_multi_level_unreviewed_uses_hatched_brush_on_native_o
         native_level=GeometryLevel.OBB,
         reviewed=False,
     )
-    native_item = canvas._gt_level_items[GeometryLevel.OBB][0]
-    derived_item = canvas._gt_level_items[GeometryLevel.AABB][0]
+    native_item = canvas.layer_items("gt")[GeometryLevel.OBB].obb_items[0]
+    derived_item = canvas.layer_items("gt")[GeometryLevel.AABB].obb_items[0]
     assert native_item.brush().style() == Qt.BrushStyle.BDiagPattern
     assert derived_item.brush().style() != Qt.BrushStyle.BDiagPattern
 
@@ -261,47 +274,12 @@ def test_set_gt_detections_multi_level_unreviewed_native_pen_differs_from_aabb(
         native_level=GeometryLevel.OBB,
         reviewed=False,
     )
-    native_item = canvas._gt_level_items[GeometryLevel.OBB][0]
-    aabb_item = canvas._gt_level_items[GeometryLevel.AABB][0]
+    native_item = canvas.layer_items("gt")[GeometryLevel.OBB].obb_items[0]
+    aabb_item = canvas.layer_items("gt")[GeometryLevel.AABB].obb_items[0]
     assert native_item.pen().style() != aabb_item.pen().style()
     assert native_item.pen().style() == Qt.PenStyle.DashLine
     # Fill override is preserved -- only the pen style itself was fixed.
     assert native_item.brush().style() == Qt.BrushStyle.BDiagPattern
-
-
-def test_set_gt_detections_append_after_multi_level_is_visibility_controlled(
-    qapp,
-):
-    """Regression: set_gt_detections(..., append=True) called after a
-    multi-level draw must route the new item into the native level's
-    bucket, or _apply_visibility (which iterates _gt_level_items once it's
-    populated) never visits it and show/hide toggles silently no-op on it."""
-    from hydra_suite.training.geometry_levels import GeometryLevel
-
-    canvas = OBBCanvas()
-    canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
-    quad = [(10.0, 10.0), (90.0, 20.0), (80.0, 90.0), (0.0, 80.0)]
-    canvas.set_gt_detections_multi_level(
-        [{"class_id": 0, "polygon_px": quad}],
-        native_level=GeometryLevel.OBB,
-        reviewed=True,
-    )
-    appended_quad = [(15.0, 15.0), (95.0, 25.0), (85.0, 95.0), (5.0, 85.0)]
-    canvas.set_gt_detections(
-        [{"class_id": 0, "polygon_px": appended_quad}], append=True
-    )
-
-    # The appended item must have landed in the native level's bucket, not
-    # only the flat list.
-    assert len(canvas._gt_level_items[GeometryLevel.OBB]) == 2
-    appended_item = canvas._gt_level_items[GeometryLevel.OBB][-1]
-    assert appended_item.isVisible() is True
-
-    canvas.set_overlay_visibility(show_gt=False, show_pred=True)
-    assert appended_item.isVisible() is False
-
-    canvas.set_overlay_visibility(show_gt=True, show_pred=True)
-    assert appended_item.isVisible() is True
 
 
 def test_set_derived_levels_visible_hides_non_native_layers_only(qapp):
@@ -317,13 +295,17 @@ def test_set_derived_levels_visible_hides_non_native_layers_only(qapp):
     )
 
     canvas.set_derived_levels_visible(False)
-    assert canvas._gt_level_items[GeometryLevel.POLYGON][0].isVisible() is True
-    assert canvas._gt_level_items[GeometryLevel.OBB][0].isVisible() is False
-    assert canvas._gt_level_items[GeometryLevel.AABB][0].isVisible() is False
+    assert (
+        canvas.layer_items("gt")[GeometryLevel.POLYGON].obb_items[0].isVisible() is True
+    )
+    assert canvas.layer_items("gt")[GeometryLevel.OBB].obb_items[0].isVisible() is False
+    assert (
+        canvas.layer_items("gt")[GeometryLevel.AABB].obb_items[0].isVisible() is False
+    )
 
     canvas.set_derived_levels_visible(True)
-    assert canvas._gt_level_items[GeometryLevel.OBB][0].isVisible() is True
-    assert canvas._gt_level_items[GeometryLevel.AABB][0].isVisible() is True
+    assert canvas.layer_items("gt")[GeometryLevel.OBB].obb_items[0].isVisible() is True
+    assert canvas.layer_items("gt")[GeometryLevel.AABB].obb_items[0].isVisible() is True
 
 
 def test_clear_gt_detections_clears_per_level_state(qapp):
@@ -336,15 +318,18 @@ def test_clear_gt_detections_clears_per_level_state(qapp):
         [{"class_id": 0, "polygon_px": quad}], native_level=GeometryLevel.OBB
     )
     canvas.clear_gt_detections()
-    assert canvas._gt_level_items == {}
-    assert canvas._gt_obb_items == []
+    assert canvas.layer_items("gt") == {}
+    assert _polys(canvas, "gt") == []
 
 
 def test_set_gt_detections_single_layer_still_works_unchanged(qapp):
     """Backward-compat: the old single-layer API is untouched for any
     caller that doesn't pass native_level/reviewed -- including its
-    visibility wiring, which _apply_visibility must still drive via the
-    flat _gt_obb_items list when _gt_level_items was never populated."""
+    visibility wiring, which _apply_visibility must still drive. In the
+    registry the single-level layer is one AABB-native bucket (nothing is
+    derived), not a flat list beside the per-level ones."""
+    from hydra_suite.training.geometry_levels import GeometryLevel
+
     canvas = OBBCanvas()
     canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
     canvas.set_gt_detections(
@@ -355,14 +340,15 @@ def test_set_gt_detections_single_layer_still_works_unchanged(qapp):
             }
         ]
     )
-    assert len(canvas._gt_obb_items) == 1
-    assert canvas._gt_level_items == {}  # single-layer path never touches this
+    assert len(_polys(canvas, "gt")) == 1
+    # The single-level layer occupies exactly one bucket and derives nothing.
+    assert set(canvas.layer_items("gt")) == {GeometryLevel.AABB}
 
     canvas.set_overlay_visibility(show_gt=False, show_pred=True)
-    assert canvas._gt_obb_items[0].isVisible() is False
+    assert _polys(canvas, "gt")[0].isVisible() is False
 
     canvas.set_overlay_visibility(show_gt=True, show_pred=True)
-    assert canvas._gt_obb_items[0].isVisible() is True
+    assert _polys(canvas, "gt")[0].isVisible() is True
 
 
 def test_clear_all_then_apply_visibility_does_not_raise(qapp):
@@ -397,13 +383,13 @@ def test_escalation_layer_draws_native_plus_derived_levels(qapp):
         [{"class_id": 0, "polygon_px": _poly(), "confidence": 0.8}],
         native_level=GeometryLevel.POLYGON,
     )
-    assert set(canvas._esc_level_items.keys()) == {
+    assert set(canvas.layer_items("escalation")) == {
         GeometryLevel.POLYGON,
         GeometryLevel.OBB,
         GeometryLevel.AABB,
     }
-    for level in canvas._esc_level_items:
-        assert len(canvas._esc_level_items[level]) == 1
+    for level in canvas.layer_items("escalation"):
+        assert len(canvas.layer_items("escalation")[level].obb_items) == 1
 
 
 def test_escalation_layer_uses_its_own_colour_not_the_class_palette(qapp):
@@ -421,8 +407,13 @@ def test_escalation_layer_uses_its_own_colour_not_the_class_palette(qapp):
     canvas.set_gt_detections_multi_level(det, native_level=GeometryLevel.POLYGON)
     canvas.set_escalation_detections(det, native_level=GeometryLevel.POLYGON)
 
-    gt_pen = canvas._gt_level_items[GeometryLevel.POLYGON][0].pen().color()
-    esc_pen = canvas._esc_level_items[GeometryLevel.POLYGON][0].pen().color()
+    gt_pen = canvas.layer_items("gt")[GeometryLevel.POLYGON].obb_items[0].pen().color()
+    esc_pen = (
+        canvas.layer_items("escalation")[GeometryLevel.POLYGON]
+        .obb_items[0]
+        .pen()
+        .color()
+    )
     assert gt_pen == _PALETTE[0]
     assert esc_pen == ESCALATION_COLOUR
     assert esc_pen != gt_pen
@@ -435,12 +426,12 @@ def test_escalation_layer_leaves_the_gt_layer_alone(qapp):
     canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
     det = [{"class_id": 0, "polygon_px": _poly()}]
     canvas.set_gt_detections_multi_level(det, native_level=GeometryLevel.POLYGON)
-    before = len(canvas._gt_obb_items)
+    before = len(_polys(canvas, "gt"))
     canvas.set_escalation_detections(det, native_level=GeometryLevel.POLYGON)
-    assert len(canvas._gt_obb_items) == before
+    assert len(_polys(canvas, "gt")) == before
     canvas.clear_escalation_detections()
-    assert len(canvas._gt_obb_items) == before
-    assert canvas._esc_obb_items == []
+    assert len(_polys(canvas, "gt")) == before
+    assert _polys(canvas, "escalation") == []
 
 
 def test_escalation_layer_visibility_toggles_independently(qapp):
@@ -453,10 +444,16 @@ def test_escalation_layer_visibility_toggles_independently(qapp):
     canvas.set_escalation_detections(det, native_level=GeometryLevel.POLYGON)
 
     canvas.set_escalation_visible(False)
-    assert not canvas._esc_level_items[GeometryLevel.POLYGON][0].isVisible()
-    assert canvas._gt_level_items[GeometryLevel.POLYGON][0].isVisible()
+    assert (
+        not canvas.layer_items("escalation")[GeometryLevel.POLYGON]
+        .obb_items[0]
+        .isVisible()
+    )
+    assert canvas.layer_items("gt")[GeometryLevel.POLYGON].obb_items[0].isVisible()
     canvas.set_escalation_visible(True)
-    assert canvas._esc_level_items[GeometryLevel.POLYGON][0].isVisible()
+    assert (
+        canvas.layer_items("escalation")[GeometryLevel.POLYGON].obb_items[0].isVisible()
+    )
 
 
 def test_escalation_derived_levels_follow_the_shared_derived_toggle(qapp):
@@ -468,8 +465,14 @@ def test_escalation_derived_levels_follow_the_shared_derived_toggle(qapp):
         [{"class_id": 0, "polygon_px": _poly()}], native_level=GeometryLevel.POLYGON
     )
     canvas.set_derived_levels_visible(False)
-    assert canvas._esc_level_items[GeometryLevel.POLYGON][0].isVisible()
-    assert not canvas._esc_level_items[GeometryLevel.AABB][0].isVisible()
+    assert (
+        canvas.layer_items("escalation")[GeometryLevel.POLYGON].obb_items[0].isVisible()
+    )
+    assert (
+        not canvas.layer_items("escalation")[GeometryLevel.AABB]
+        .obb_items[0]
+        .isVisible()
+    )
 
 
 def test_escalation_layer_ignores_the_class_filter(qapp):
@@ -487,7 +490,9 @@ def test_escalation_layer_ignores_the_class_filter(qapp):
         [{"class_id": 0, "polygon_px": _poly()}], native_level=GeometryLevel.POLYGON
     )
     canvas.set_class_filter({7})
-    assert canvas._esc_level_items[GeometryLevel.POLYGON][0].isVisible()
+    assert (
+        canvas.layer_items("escalation")[GeometryLevel.POLYGON].obb_items[0].isVisible()
+    )
 
 
 def test_escalation_labels_carry_the_confidence(qapp):
@@ -501,7 +506,11 @@ def test_escalation_labels_carry_the_confidence(qapp):
         class_names=["ant"],
         native_level=GeometryLevel.POLYGON,
     )
-    text = canvas._esc_level_label_items[GeometryLevel.POLYGON][0].toPlainText()
+    text = (
+        canvas.layer_items("escalation")[GeometryLevel.POLYGON]
+        .label_items[0]
+        .toPlainText()
+    )
     assert "0.42" in text and "ant" in text
 
 
@@ -514,8 +523,8 @@ def test_clear_all_drops_the_escalation_layer(qapp):
         [{"class_id": 0, "polygon_px": _poly()}], native_level=GeometryLevel.POLYGON
     )
     canvas.clear_all()
-    assert canvas._esc_obb_items == []
-    assert canvas._esc_level_items == {}
+    assert _polys(canvas, "escalation") == []
+    assert canvas.layer_items("escalation") == {}
     canvas._apply_visibility()  # must not raise
 
 
@@ -533,5 +542,9 @@ def test_a_detection_without_confidence_is_labelled_by_name_alone(qapp):
         class_names=["worker ant"],
         native_level=GeometryLevel.POLYGON,
     )
-    text = canvas._esc_level_label_items[GeometryLevel.POLYGON][0].toPlainText()
+    text = (
+        canvas.layer_items("escalation")[GeometryLevel.POLYGON]
+        .label_items[0]
+        .toPlainText()
+    )
     assert text == "worker ant"

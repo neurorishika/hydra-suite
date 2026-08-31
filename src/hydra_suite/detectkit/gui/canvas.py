@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from typing import Optional
 
 import cv2
 import numpy as np
@@ -31,10 +31,9 @@ from hydra_suite.utils.geometry_derivation import (
     min_area_rect_quad,
 )
 
+from .colors import ESCALATION_COLOUR
 from .constants import CANVAS_BG_COLOR, DEFAULT_OBB_FONT_SIZE, DEFAULT_OBB_LINE_WIDTH
-
-if TYPE_CHECKING:
-    from hydra_suite.training.geometry_levels import GeometryLevel
+from .overlays import ColourPolicy, Emphasis, LabelMode, LayerStyle, OverlayLayer
 
 logger = logging.getLogger(__name__)
 
@@ -50,17 +49,21 @@ _PALETTE = [
     QColor(180, 220, 80),  # lime
 ]
 
-# The staged-escalation layer's single hue, deliberately OUTSIDE _PALETTE:
-# a staged SAM3/SAM2 mask is a proposal, not a labelled class, so the
-# distinction it must carry is "not ground truth" -- never a class identity.
-ESCALATION_COLOUR = QColor(255, 60, 199)  # magenta
-
 
 @dataclass(frozen=True)
 class _LevelStyle:
     pen_style: "Qt.PenStyle"
     brush_style: "Qt.BrushStyle"
     fill_alpha: int  # 0-255; only used when brush_style != NoBrush
+
+
+@dataclass
+class _LevelItems:
+    """The scene items one layer drew at one geometry level."""
+
+    obb_items: list
+    label_items: list
+    class_ids: list[int]
 
 
 def _level_styles():
@@ -83,6 +86,26 @@ def _level_styles():
     }
 
 
+def _styles_for(layer: "OverlayLayer", level, native_level) -> _LevelStyle:
+    """The pen/brush a layer uses at one level.
+
+    An explicit ``layer.style`` wins outright (single-level layers: the
+    dialogs' filled GT and the dashed prediction layer). Otherwise the
+    per-level defaults apply, with Emphasis.UNREVIEWED substituting a
+    hatched fill on the NATIVE level only -- and keeping that level's own
+    pen style, because hardcoding SolidLine there once made an unreviewed
+    OBB-native quad indistinguishable from its derived AABB outline.
+    """
+    if layer.style is not None:
+        return _LevelStyle(
+            layer.style.pen_style, layer.style.brush_style, layer.style.fill_alpha
+        )
+    style = _level_styles()[level]
+    if layer.emphasis is Emphasis.UNREVIEWED and level == native_level:
+        return _LevelStyle(style.pen_style, Qt.BrushStyle.BDiagPattern, 140)
+    return style
+
+
 class OBBCanvas(QGraphicsView):
     """Read-only image viewer with oriented-bounding-box overlays."""
 
@@ -102,42 +125,13 @@ class OBBCanvas(QGraphicsView):
 
         # State
         self._pix_item: Optional[QGraphicsPixmapItem] = None
-        # GT layer (ground-truth, solid lines)
-        self._gt_obb_items: list = []
-        self._gt_label_items: list = []
-        self._gt_class_ids: list[int] = []
-        # Per-geometry-level GT sub-layers (native level down to AABB); the
-        # flat _gt_obb_items/_gt_label_items/_gt_class_ids lists below stay
-        # as a concatenation across all drawn levels, for _apply_visibility
-        # and clear_gt_detections' pre-existing flat-iteration callers.
-        self._gt_level_items: dict = {}
-        self._gt_level_label_items: dict = {}
-        self._gt_level_class_ids: dict = {}
-        self._gt_native_level: Optional["GeometryLevel"] = None
+        self._layers: dict[str, OverlayLayer] = {}
+        # (layer_key, level) -> _LevelItems. One flat registry; there is no
+        # per-layer branch anywhere below it.
+        self._items: dict[tuple, _LevelItems] = {}
+        self._layer_visible: dict[str, bool] = {}
         self._show_derived_levels: bool = True
-        # Staged-escalation layer (SAM3/SAM2 proposals awaiting review).
-        # Its own per-level buckets, mirroring the GT layer's, because a
-        # staged mask is drawn at its native level plus every derived level
-        # below it -- the OBB/AABB a promotion would actually produce.
-        self._esc_obb_items: list = []
-        self._esc_label_items: list = []
-        self._esc_class_ids: list[int] = []
-        self._esc_level_items: dict = {}
-        self._esc_level_label_items: dict = {}
-        self._esc_level_class_ids: dict = {}
-        self._esc_native_level: Optional["GeometryLevel"] = None
-        self._show_escalation: bool = True
-        # Prediction layer (model output, dashed lines)
-        self._pred_obb_items: list = []
-        self._pred_label_items: list = []
-        self._pred_class_ids: list[int] = []
-        # Visibility state
-        self._show_gt: bool = True
-        self._show_pred: bool = True
         self._visible_class_ids: set[int] = set()
-        # Backward-compat aliases (views of GT layer)
-        self._obb_items = self._gt_obb_items
-        self._label_items = self._gt_label_items
         self._zoom: float = 1.0
         self._min_zoom: float = 0.1
         self._max_zoom: float = 4.0
@@ -207,32 +201,75 @@ class OBBCanvas(QGraphicsView):
             return {int(k): str(v) for k, v in class_names.items()}
         return {idx: str(n) for idx, n in enumerate(class_names or ["object"])}
 
+    def set_layer(self, layer: "OverlayLayer") -> None:
+        """Add or replace the layer with ``layer.key``.
+
+        Idempotent by key: this removes that key's items before redrawing,
+        which is what makes "clear before refresh" structural instead of a
+        rule every caller has to remember.
+        """
+        self.remove_layer(layer.key)
+        self._layers[layer.key] = layer
+
+        if layer.derive_levels:
+            level_iter = self._levels_with_shapes(layer.detections, layer.native_level)
+        else:
+            level_iter = [(layer.native_level, layer.detections)]
+
+        for level, level_detections in level_iter:
+            style = _styles_for(layer, level, layer.native_level)
+            items = _LevelItems([], [], [])
+            self._draw_detections(
+                level_detections,
+                items,
+                layer,
+                style,
+                show_labels=(level == layer.native_level),
+            )
+            self._items[(layer.key, level)] = items
+        self._apply_visibility()
+
+    def remove_layer(self, key: str) -> None:
+        """Remove one layer's items. No-op if the key was never drawn."""
+        for (layer_key, _level), items in list(self._items.items()):
+            if layer_key != key:
+                continue
+            for item in items.obb_items:
+                if item is not None:
+                    self._scene.removeItem(item)
+            for item in items.label_items:
+                if item is not None:
+                    self._scene.removeItem(item)
+        self._items = {k: v for k, v in self._items.items() if k[0] != key}
+        self._layers.pop(key, None)
+
+    def set_layer_visible(self, key: str, visible: bool) -> None:
+        """Toggle a layer. Remembered even for a key not yet drawn --
+        _on_overlay_changed can fire before the first show_image."""
+        self._layer_visible[key] = bool(visible)
+        self._apply_visibility()
+
+    def layer_items(self, key: str) -> dict:
+        """The per-level item buckets one layer drew. Read-only accessor
+        for tests; production code never needs it."""
+        return {
+            level: items
+            for (layer_key, level), items in self._items.items()
+            if layer_key == key
+        }
+
     def _draw_detections(
         self,
         detections: list[dict],
-        obb_items: list,
-        label_items: list,
-        class_ids: list,
-        class_names: list[str] | dict[int, str] | None,
-        line_style: "Qt.PenStyle",
-        show_confidence: bool = False,
+        items: "_LevelItems",
+        layer: "OverlayLayer",
+        style: "_LevelStyle",
         *,
-        brush_style: "Qt.BrushStyle" = Qt.BrushStyle.NoBrush,
-        fill_alpha: int = 255,
         show_labels: bool = True,
-        colour_override: "QColor | None" = None,
     ) -> None:
-        """Render *detections* into the given item lists.
-
-        ``colour_override`` paints every shape in one colour instead of the
-        per-class palette. Only the staged-escalation layer uses it: its
-        class ids come from a staging dir's classes.txt (the prompt), so
-        indexing the project's palette with them would assert a class
-        identity the staged labels do not carry.
-        """
         font = QFont()
         font.setPixelSize(DEFAULT_OBB_FONT_SIZE)
-        lookup = self._build_class_lookup(class_names)
+        lookup = self._build_class_lookup(layer.class_names)
 
         for det in detections:
             class_id: int = det.get("class_id", 0)
@@ -241,9 +278,14 @@ class OBBCanvas(QGraphicsView):
                 continue
             confidence = det.get("confidence", None)
 
+            # A FIXED-policy layer paints one hue because its class ids do
+            # not address the project's classes: staged escalation ids index
+            # the STAGING dir's classes.txt (the prompt), so indexing the
+            # palette with them would assert a class identity the staged
+            # labels do not carry.
             colour = (
-                colour_override
-                if colour_override is not None
+                layer.fixed_colour
+                if layer.colour_policy is ColourPolicy.FIXED
                 else _PALETTE[class_id % len(_PALETTE)]
             )
             qpoly = QPolygonF()
@@ -253,159 +295,66 @@ class OBBCanvas(QGraphicsView):
 
             pen = QPen(colour, DEFAULT_OBB_LINE_WIDTH)
             pen.setCosmetic(True)
-            pen.setStyle(line_style)
+            pen.setStyle(style.pen_style)
 
-            if brush_style != Qt.BrushStyle.NoBrush:
+            if style.brush_style != Qt.BrushStyle.NoBrush:
                 fill_colour = QColor(colour)
-                fill_colour.setAlpha(fill_alpha)
-                brush = QBrush(fill_colour, brush_style)
+                fill_colour.setAlpha(style.fill_alpha)
+                brush = QBrush(fill_colour, style.brush_style)
             else:
                 brush = QBrush(Qt.BrushStyle.NoBrush)
 
             poly_item = self._scene.addPolygon(qpoly, pen, brush)
-            obb_items.append(poly_item)
-            class_ids.append(class_id)
+            poly_item.setZValue(layer.z)
+            items.obb_items.append(poly_item)
+            items.class_ids.append(class_id)
 
             if not show_labels:
-                label_items.append(None)
+                items.label_items.append(None)
                 continue
 
             label_name = lookup.get(class_id, f"class_{class_id}")
-            if show_confidence and confidence is not None:
-                label_text = f"{label_name} ({confidence:.2f})"
-            elif show_confidence:
-                # A layer that ASKED for confidence and has none must not
+            if layer.label_mode is LabelMode.NAME_AND_CONFIDENCE:
+                # A layer that asked for confidence and has none must NOT
                 # fall back to the class id: "(0)" beside a mask reads as a
                 # confidence of 0.00. Staged escalation labels carry no
-                # confidence (data/al/labels.py writes class id + coords
-                # only), so this is the live path for that layer.
-                label_text = label_name
+                # confidence -- data/al/labels.py writes class id + coords
+                # only -- so this is the live path for that layer.
+                label_text = (
+                    f"{label_name} ({confidence:.2f})"
+                    if confidence is not None
+                    else label_name
+                )
             else:
                 label_text = f"{label_name} ({class_id})"
             txt_item = QGraphicsTextItem(label_text)
             txt_item.setFont(font)
             txt_item.setDefaultTextColor(colour)
             txt_item.setPos(QPointF(*polygon_px[0]))
+            txt_item.setZValue(layer.z)
             self._scene.addItem(txt_item)
-            label_items.append(txt_item)
+            items.label_items.append(txt_item)
 
     def _apply_visibility(self) -> None:
-        """Show/hide items based on visibility flags and class filter."""
-
-        def _set_layer(
-            obb_items, label_items, class_ids, layer_visible, *, class_filter=True
-        ):
-            for obb, lbl, cid in zip(obb_items, label_items, class_ids):
+        """One loop over the registry. No per-layer branch."""
+        for (layer_key, level), items in self._items.items():
+            layer = self._layers.get(layer_key)
+            if layer is None:
+                continue
+            layer_visible = self._layer_visible.get(layer_key, True) and (
+                level == layer.native_level or self._show_derived_levels
+            )
+            for obb, lbl, cid in zip(
+                items.obb_items, items.label_items, items.class_ids
+            ):
                 visible = layer_visible and (
-                    not class_filter
+                    not layer.class_filtered
                     or not self._visible_class_ids
                     or cid in self._visible_class_ids
                 )
                 obb.setVisible(visible)
                 if lbl is not None:
                     lbl.setVisible(visible)
-
-        if self._gt_level_items:
-            for level, items in self._gt_level_items.items():
-                label_items = self._gt_level_label_items[level]
-                class_ids = self._gt_level_class_ids[level]
-                level_visible = self._show_gt and (
-                    level == self._gt_native_level or self._show_derived_levels
-                )
-                _set_layer(items, label_items, class_ids, level_visible)
-        else:
-            _set_layer(
-                self._gt_obb_items,
-                self._gt_label_items,
-                self._gt_class_ids,
-                self._show_gt,
-            )
-
-        for level, items in self._esc_level_items.items():
-            level_visible = self._show_escalation and (
-                level == self._esc_native_level or self._show_derived_levels
-            )
-            _set_layer(
-                items,
-                self._esc_level_label_items[level],
-                self._esc_level_class_ids[level],
-                level_visible,
-                # Staged class ids index the STAGING dir's classes.txt (the
-                # prompt), not the project's class list, so the project
-                # class filter cannot meaningfully address them.
-                class_filter=False,
-            )
-
-        _set_layer(
-            self._pred_obb_items,
-            self._pred_label_items,
-            self._pred_class_ids,
-            self._show_pred,
-        )
-
-    def set_gt_detections(
-        self,
-        detections: list[dict],
-        class_names: list[str] | dict[int, str] | None = None,
-        *,
-        append: bool = False,
-        fill_alpha: int = 0,
-    ) -> None:
-        """Draw ground-truth OBB polygons (solid lines)."""
-        if not append:
-            self.clear_gt_detections()
-
-        if append and self._gt_native_level is not None:
-            # A multi-level draw already populated the per-level GT
-            # buckets, so _apply_visibility takes the per-level branch
-            # (it iterates _gt_level_items, not the flat lists, whenever
-            # the former is non-empty). Appending only into the flat lists
-            # here would leave these items outside that iteration -- they'd
-            # never be visited by show/hide toggles or class filters. Route
-            # them into the native level's buckets instead, and mirror the
-            # newly drawn items into the flat lists too since those still
-            # serve as the flat concatenation other callers (e.g.
-            # clear_gt_detections) read.
-            native_level = self._gt_native_level
-            obb_items = self._gt_level_items.setdefault(native_level, [])
-            label_items = self._gt_level_label_items.setdefault(native_level, [])
-            class_ids = self._gt_level_class_ids.setdefault(native_level, [])
-            start = len(obb_items)
-            self._draw_detections(
-                detections,
-                obb_items,
-                label_items,
-                class_ids,
-                class_names,
-                Qt.PenStyle.SolidLine,
-                show_confidence=False,
-                brush_style=(
-                    Qt.BrushStyle.SolidPattern
-                    if fill_alpha > 0
-                    else Qt.BrushStyle.NoBrush
-                ),
-                fill_alpha=fill_alpha,
-            )
-            self._gt_obb_items.extend(obb_items[start:])
-            self._gt_label_items.extend(label_items[start:])
-            self._gt_class_ids.extend(class_ids[start:])
-        else:
-            self._draw_detections(
-                detections,
-                self._gt_obb_items,
-                self._gt_label_items,
-                self._gt_class_ids,
-                class_names,
-                Qt.PenStyle.SolidLine,
-                show_confidence=False,
-                brush_style=(
-                    Qt.BrushStyle.SolidPattern
-                    if fill_alpha > 0
-                    else Qt.BrushStyle.NoBrush
-                ),
-                fill_alpha=fill_alpha,
-            )
-        self._apply_visibility()
 
     @staticmethod
     def _levels_with_shapes(detections: list[dict], native_level):
@@ -435,160 +384,9 @@ class OBBCanvas(QGraphicsView):
             if level_detections:
                 yield level, level_detections
 
-    def set_escalation_detections(
-        self,
-        detections: list[dict],
-        class_names: list[str] | dict[int, str] | None = None,
-        *,
-        native_level,
-    ) -> None:
-        """Draw staged escalation masks in ESCALATION_COLOUR.
-
-        A staged SAM3/SAM2 result used to be accepted or rejected entirely
-        sight-unseen -- the review dialog is a text list and nothing parsed
-        the staging dir's labels for display. This is the preview: the
-        proposed shape at its native level plus the OBB and AABB a
-        promotion would derive from it, all in one non-palette hue so it can
-        never be read as ground truth, and labelled with the per-instance
-        confidence so it is visible which masks a re-threshold would drop.
-        """
-        self.clear_escalation_detections()
-        styles = _level_styles()
-        for level, level_detections in self._levels_with_shapes(
-            detections, native_level
-        ):
-            style = styles[level]
-            obb_items: list = []
-            label_items: list = []
-            class_ids: list = []
-            self._draw_detections(
-                level_detections,
-                obb_items,
-                label_items,
-                class_ids,
-                class_names,
-                style.pen_style,
-                show_confidence=True,
-                brush_style=style.brush_style,
-                fill_alpha=style.fill_alpha,
-                show_labels=(level == native_level),
-                colour_override=ESCALATION_COLOUR,
-            )
-            self._esc_level_items[level] = obb_items
-            self._esc_level_label_items[level] = label_items
-            self._esc_level_class_ids[level] = class_ids
-            self._esc_obb_items.extend(obb_items)
-            self._esc_label_items.extend(label_items)
-            self._esc_class_ids.extend(class_ids)
-        self._esc_native_level = native_level
-        self._apply_visibility()
-
-    def set_escalation_visible(self, visible: bool) -> None:
-        """Toggle the staged-escalation layer."""
-        self._show_escalation = bool(visible)
-        self._apply_visibility()
-
-    def clear_escalation_detections(self) -> None:
-        """Remove all staged-escalation items from the scene."""
-        for item in self._esc_obb_items:
-            if item is not None:
-                self._scene.removeItem(item)
-        for item in self._esc_label_items:
-            if item is not None:
-                self._scene.removeItem(item)
-        self._esc_obb_items.clear()
-        self._esc_label_items.clear()
-        self._esc_class_ids.clear()
-        self._esc_level_items.clear()
-        self._esc_level_label_items.clear()
-        self._esc_level_class_ids.clear()
-        self._esc_native_level = None
-
-    def set_gt_detections_multi_level(
-        self,
-        detections: list[dict],
-        class_names: list[str] | dict[int, str] | None = None,
-        *,
-        native_level: "GeometryLevel",
-        reviewed: bool = True,
-    ) -> None:
-        """Draw ground-truth detections at *native_level*, plus every
-        derived level below it down to AABB, each in its own per-level
-        style. Only the native level's shapes carry a text label."""
-        self.clear_gt_detections()
-        styles = _level_styles()
-
-        for level, level_detections in self._levels_with_shapes(
-            detections, native_level
-        ):
-            # Unreviewed native shapes get a hatched fill to flag them as
-            # not-yet-confirmed, but MUST keep the level's own pen style --
-            # hardcoding SolidLine here would collide with AABB's own
-            # SolidLine pen and make an unreviewed OBB-native quad visually
-            # merge with its derived AABB outline (they'd be indistinguishable).
-            style = (
-                _LevelStyle(styles[level].pen_style, Qt.BrushStyle.BDiagPattern, 140)
-                if (level == native_level and not reviewed)
-                else styles[level]
-            )
-            obb_items: list = []
-            label_items: list = []
-            class_ids: list = []
-            self._draw_detections(
-                level_detections,
-                obb_items,
-                label_items,
-                class_ids,
-                class_names,
-                style.pen_style,
-                show_confidence=False,
-                brush_style=style.brush_style,
-                fill_alpha=style.fill_alpha,
-                show_labels=(level == native_level),
-            )
-            self._gt_level_items[level] = obb_items
-            self._gt_level_label_items[level] = label_items
-            self._gt_level_class_ids[level] = class_ids
-            self._gt_obb_items.extend(obb_items)
-            self._gt_label_items.extend(label_items)
-            self._gt_class_ids.extend(class_ids)
-
-        self._gt_native_level = native_level
-        self._apply_visibility()
-
     def set_derived_levels_visible(self, visible: bool) -> None:
         """Toggle whether non-native (derived) GT levels are drawn."""
         self._show_derived_levels = visible
-        self._apply_visibility()
-
-    def set_pred_detections(
-        self,
-        detections: list[dict],
-        class_names: list[str] | dict[int, str] | None = None,
-        *,
-        fill_alpha: int = 0,
-    ) -> None:
-        """Draw model-prediction OBB polygons (dashed lines)."""
-        self.clear_pred_detections()
-        self._draw_detections(
-            detections,
-            self._pred_obb_items,
-            self._pred_label_items,
-            self._pred_class_ids,
-            class_names,
-            Qt.PenStyle.DashLine,
-            show_confidence=True,
-            brush_style=(
-                Qt.BrushStyle.SolidPattern if fill_alpha > 0 else Qt.BrushStyle.NoBrush
-            ),
-            fill_alpha=fill_alpha,
-        )
-        self._apply_visibility()
-
-    def set_overlay_visibility(self, show_gt: bool, show_pred: bool) -> None:
-        """Toggle GT and prediction layer visibility."""
-        self._show_gt = show_gt
-        self._show_pred = show_pred
         self._apply_visibility()
 
     def set_class_filter(self, visible_class_ids: set[int]) -> None:
@@ -596,67 +394,135 @@ class OBBCanvas(QGraphicsView):
         self._visible_class_ids = set(visible_class_ids)
         self._apply_visibility()
 
-    # Backward-compat aliases
-    def set_detections(
-        self,
-        detections: list[dict],
-        class_names: list[str] | dict[int, str] | None = None,
+    # ------------------------------------------------------------------
+    # TRANSITIONAL ADAPTERS -- deleted in Task 8 of this refactor. They
+    # exist only so the six call sites can migrate one at a time instead
+    # of in one unreviewable commit.
+    # ------------------------------------------------------------------
+
+    def set_gt_detections(self, detections, class_names=None, *, fill_alpha=0) -> None:
+        self.set_layer(
+            OverlayLayer(
+                key="gt",
+                detections=detections,
+                native_level=self._single_level(),
+                class_names=class_names,
+                colour_policy=ColourPolicy.PER_CLASS,
+                derive_levels=False,
+                style=LayerStyle(
+                    Qt.PenStyle.SolidLine,
+                    (
+                        Qt.BrushStyle.SolidPattern
+                        if fill_alpha > 0
+                        else Qt.BrushStyle.NoBrush
+                    ),
+                    fill_alpha,
+                ),
+                label_mode=LabelMode.NAME_AND_CLASS_ID,
+                z=0,
+            )
+        )
+
+    def set_gt_detections_multi_level(
+        self, detections, class_names=None, *, native_level, reviewed=True
     ) -> None:
-        """Backward-compatible alias: set GT detections."""
+        self.set_layer(
+            OverlayLayer(
+                key="gt",
+                detections=detections,
+                native_level=native_level,
+                class_names=class_names,
+                colour_policy=ColourPolicy.PER_CLASS,
+                label_mode=LabelMode.NAME_AND_CLASS_ID,
+                emphasis=None if reviewed else Emphasis.UNREVIEWED,
+                z=0,
+            )
+        )
+
+    def set_pred_detections(
+        self, detections, class_names=None, *, fill_alpha=0
+    ) -> None:
+        self.set_layer(
+            OverlayLayer(
+                key="pred",
+                detections=detections,
+                native_level=self._single_level(),
+                class_names=class_names,
+                colour_policy=ColourPolicy.PER_CLASS,
+                derive_levels=False,
+                style=LayerStyle(
+                    Qt.PenStyle.DashLine,
+                    (
+                        Qt.BrushStyle.SolidPattern
+                        if fill_alpha > 0
+                        else Qt.BrushStyle.NoBrush
+                    ),
+                    fill_alpha,
+                ),
+                label_mode=LabelMode.NAME_AND_CONFIDENCE,
+                z=20,
+            )
+        )
+
+    def set_escalation_detections(
+        self, detections, class_names=None, *, native_level
+    ) -> None:
+        self.set_layer(
+            OverlayLayer(
+                key="escalation",
+                detections=detections,
+                native_level=native_level,
+                class_names=class_names,
+                colour_policy=ColourPolicy.FIXED,
+                fixed_colour=ESCALATION_COLOUR,
+                class_filtered=False,
+                label_mode=LabelMode.NAME_AND_CONFIDENCE,
+                z=10,
+            )
+        )
+
+    def set_escalation_visible(self, visible: bool) -> None:
+        self.set_layer_visible("escalation", visible)
+
+    def set_overlay_visibility(self, show_gt: bool, show_pred: bool) -> None:
+        self.set_layer_visible("gt", show_gt)
+        self.set_layer_visible("pred", show_pred)
+
+    def clear_gt_detections(self) -> None:
+        self.remove_layer("gt")
+
+    def clear_pred_detections(self) -> None:
+        self.remove_layer("pred")
+
+    def clear_escalation_detections(self) -> None:
+        self.remove_layer("escalation")
+
+    def set_detections(self, detections, class_names=None) -> None:
         self.set_gt_detections(detections, class_names)
 
     def clear_detections(self) -> None:
-        """Backward-compatible alias: clear GT layer."""
-        self.clear_gt_detections()
+        self.remove_layer("gt")
 
-    def clear_gt_detections(self) -> None:
-        """Remove all GT polygon and label items from the scene."""
-        for item in self._gt_obb_items:
-            self._scene.removeItem(item)
-        for item in self._gt_label_items:
-            if item is not None:
-                self._scene.removeItem(item)
-        self._gt_obb_items.clear()
-        self._gt_label_items.clear()
-        self._gt_class_ids.clear()
-        self._gt_level_items.clear()
-        self._gt_level_label_items.clear()
-        self._gt_level_class_ids.clear()
-        self._gt_native_level = None
+    @staticmethod
+    def _single_level():
+        """The native level a non-deriving layer declares.
 
-    def clear_pred_detections(self) -> None:
-        """Remove all prediction polygon and label items from the scene."""
-        for item in self._pred_obb_items:
-            if item is not None:
-                self._scene.removeItem(item)
-        for item in self._pred_label_items:
-            if item is not None:
-                self._scene.removeItem(item)
-        self._pred_obb_items.clear()
-        self._pred_label_items.clear()
-        self._pred_class_ids.clear()
+        Single-level layers never derive, so the value only has to satisfy
+        `level == native_level` -- which is what makes the layer labelled
+        and keeps it visible when derived levels are hidden, matching the
+        old flat-list branch of _apply_visibility. AABB is the floor of the
+        ordering, so it can never be mistaken for a derived level.
+        """
+        from hydra_suite.utils.geometry_levels import GeometryLevel
+
+        return GeometryLevel.AABB
 
     def clear_all(self) -> None:
         """Remove everything from the scene."""
         self._scene.clear()
         self._pix_item = None
-        self._gt_obb_items.clear()
-        self._gt_label_items.clear()
-        self._gt_class_ids.clear()
-        self._gt_level_items.clear()
-        self._gt_level_label_items.clear()
-        self._gt_level_class_ids.clear()
-        self._gt_native_level = None
-        self._pred_obb_items.clear()
-        self._pred_label_items.clear()
-        self._pred_class_ids.clear()
-        self._esc_obb_items.clear()
-        self._esc_label_items.clear()
-        self._esc_class_ids.clear()
-        self._esc_level_items.clear()
-        self._esc_level_label_items.clear()
-        self._esc_level_class_ids.clear()
-        self._esc_native_level = None
+        self._layers.clear()
+        self._items.clear()
         self._zoom = 1.0
         self._fit_mode = True
         self.setCursor(Qt.CursorShape.ArrowCursor)

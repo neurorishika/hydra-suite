@@ -13,6 +13,20 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
+
+def _polys(canvas, key):
+    return [i for b in canvas.layer_items(key).values() for i in b.obb_items]
+
+
+def _labels(canvas, key):
+    return [
+        i
+        for b in canvas.layer_items(key).values()
+        for i in b.label_items
+        if i is not None
+    ]
+
+
 _DET = [{"class_id": 0, "polygon_px": [(0, 0), (10, 0), (10, 10), (0, 10)]}]
 _DET2 = [{"class_id": 1, "polygon_px": [(5, 5), (15, 5), (15, 15), (5, 15)]}]
 
@@ -28,8 +42,8 @@ def test_canvas_gt_items_populated(qapp):
 
     canvas = OBBCanvas()
     canvas.set_gt_detections(_DET)
-    assert len(canvas._gt_obb_items) == 1
-    assert len(canvas._gt_label_items) == 1
+    assert len(_polys(canvas, "gt")) == 1
+    assert len(_labels(canvas, "gt")) == 1
 
 
 def test_canvas_pred_items_populated(qapp):
@@ -37,8 +51,8 @@ def test_canvas_pred_items_populated(qapp):
 
     canvas = OBBCanvas()
     canvas.set_pred_detections(_DET2)
-    assert len(canvas._pred_obb_items) == 1
-    assert len(canvas._pred_label_items) == 1
+    assert len(_polys(canvas, "pred")) == 1
+    assert len(_labels(canvas, "pred")) == 1
 
 
 def test_canvas_gt_and_pred_independent(qapp):
@@ -47,8 +61,8 @@ def test_canvas_gt_and_pred_independent(qapp):
     canvas = OBBCanvas()
     canvas.set_gt_detections(_DET)
     canvas.set_pred_detections(_DET2)
-    assert len(canvas._gt_obb_items) == 1
-    assert len(canvas._pred_obb_items) == 1
+    assert len(_polys(canvas, "gt")) == 1
+    assert len(_polys(canvas, "pred")) == 1
 
 
 def test_canvas_clear_gt_does_not_clear_pred(qapp):
@@ -58,8 +72,8 @@ def test_canvas_clear_gt_does_not_clear_pred(qapp):
     canvas.set_gt_detections(_DET)
     canvas.set_pred_detections(_DET2)
     canvas.clear_gt_detections()
-    assert len(canvas._gt_obb_items) == 0
-    assert len(canvas._pred_obb_items) == 1
+    assert len(_polys(canvas, "gt")) == 0
+    assert len(_polys(canvas, "pred")) == 1
 
 
 def test_canvas_clear_pred_does_not_clear_gt(qapp):
@@ -69,8 +83,8 @@ def test_canvas_clear_pred_does_not_clear_gt(qapp):
     canvas.set_gt_detections(_DET)
     canvas.set_pred_detections(_DET2)
     canvas.clear_pred_detections()
-    assert len(canvas._pred_obb_items) == 0
-    assert len(canvas._gt_obb_items) == 1
+    assert len(_polys(canvas, "pred")) == 0
+    assert len(_polys(canvas, "gt")) == 1
 
 
 def test_canvas_set_overlay_visibility_hides_gt(qapp):
@@ -79,7 +93,7 @@ def test_canvas_set_overlay_visibility_hides_gt(qapp):
     canvas = OBBCanvas()
     canvas.set_gt_detections(_DET)
     canvas.set_overlay_visibility(show_gt=False, show_pred=True)
-    for item in canvas._gt_obb_items:
+    for item in _polys(canvas, "gt"):
         assert not item.isVisible()
 
 
@@ -89,7 +103,7 @@ def test_canvas_set_overlay_visibility_hides_pred(qapp):
     canvas = OBBCanvas()
     canvas.set_pred_detections(_DET)
     canvas.set_overlay_visibility(show_gt=True, show_pred=False)
-    for item in canvas._pred_obb_items:
+    for item in _polys(canvas, "pred"):
         assert not item.isVisible()
 
 
@@ -100,9 +114,9 @@ def test_canvas_set_overlay_visibility_shows_both(qapp):
     canvas.set_gt_detections(_DET)
     canvas.set_pred_detections(_DET2)
     canvas.set_overlay_visibility(show_gt=True, show_pred=True)
-    for item in canvas._gt_obb_items:
+    for item in _polys(canvas, "gt"):
         assert item.isVisible()
-    for item in canvas._pred_obb_items:
+    for item in _polys(canvas, "pred"):
         assert item.isVisible()
 
 
@@ -111,12 +125,11 @@ def test_canvas_set_class_filter(qapp):
     from hydra_suite.detectkit.gui.canvas import OBBCanvas
 
     canvas = OBBCanvas()
-    canvas.set_gt_detections(_DET)  # class_id=0
-    canvas.set_gt_detections(_DET2, append=True)  # class_id=1
+    canvas.set_gt_detections(_DET + _DET2)  # class_id 0 and 1
     canvas.set_class_filter({0})
     # class 0 should be visible, class 1 hidden
-    gt_visible = [i for i in canvas._gt_obb_items if i.isVisible()]
-    gt_hidden = [i for i in canvas._gt_obb_items if not i.isVisible()]
+    gt_visible = [i for i in _polys(canvas, "gt") if i.isVisible()]
+    gt_hidden = [i for i in _polys(canvas, "gt") if not i.isVisible()]
     assert len(gt_visible) == 1
     assert len(gt_hidden) == 1
 
@@ -127,7 +140,7 @@ def test_canvas_set_detections_backward_compat(qapp):
 
     canvas = OBBCanvas()
     canvas.set_detections(_DET)
-    assert len(canvas._gt_obb_items) == 1
+    assert len(_polys(canvas, "gt")) == 1
 
 
 def test_canvas_clear_detections_backward_compat(qapp):
@@ -137,14 +150,4 @@ def test_canvas_clear_detections_backward_compat(qapp):
     canvas = OBBCanvas()
     canvas.set_detections(_DET)
     canvas.clear_detections()
-    assert len(canvas._gt_obb_items) == 0
-
-
-def test_canvas_old_label_items_still_accessible(qapp):
-    """_label_items must remain a view of GT label items for backward compat."""
-    from hydra_suite.detectkit.gui.canvas import OBBCanvas
-
-    canvas = OBBCanvas()
-    canvas.set_detections(_DET, class_names=["ant"])
-    assert len(canvas._label_items) == 1
-    assert canvas._label_items[0].toPlainText() == "ant (0)"
+    assert len(_polys(canvas, "gt")) == 0

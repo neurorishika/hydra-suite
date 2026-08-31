@@ -200,3 +200,90 @@ def test_predictions_stack_above_staged_escalations(qapp):
     assert min(d["stack_index"] for d in others) < min(
         d["stack_index"] for d in magenta
     )
+
+
+from hydra_suite.detectkit.gui.overlays import (  # noqa: E402
+    ColourPolicy,
+    LabelMode,
+    OverlayLayer,
+)
+
+
+def _gt_layer(**kw):
+    base = dict(
+        key="gt",
+        detections=_GT,
+        native_level=GeometryLevel.POLYGON,
+        class_names=_NAMES,
+        colour_policy=ColourPolicy.PER_CLASS,
+        label_mode=LabelMode.NAME_AND_CLASS_ID,
+    )
+    base.update(kw)
+    return OverlayLayer(**base)
+
+
+def _pred_layer(**kw):
+    from PySide6.QtCore import Qt
+
+    from hydra_suite.detectkit.gui.overlays import LayerStyle
+
+    base = dict(
+        key="pred",
+        detections=_PRED,
+        native_level=GeometryLevel.AABB,
+        class_names=_NAMES,
+        colour_policy=ColourPolicy.PER_CLASS,
+        derive_levels=False,
+        style=LayerStyle(Qt.PenStyle.DashLine, Qt.BrushStyle.NoBrush, 0),
+        label_mode=LabelMode.NAME_AND_CONFIDENCE,
+        z=20,
+    )
+    base.update(kw)
+    return OverlayLayer(**base)
+
+
+def test_set_layer_replaces_by_key_instead_of_accumulating(qapp):
+    """The escalation layer's stale-mask bug was a caller forgetting to
+    clear before refreshing. set_layer makes that unrepresentable."""
+    canvas = OBBCanvas()
+    canvas.set_layer(_gt_layer())
+    once = len(canvas._scene.items())
+    canvas.set_layer(_gt_layer())
+    assert len(canvas._scene.items()) == once
+
+
+def test_remove_layer_removes_only_that_key(qapp):
+    canvas = OBBCanvas()
+    canvas.set_layer(_gt_layer())
+    gt_only = len(canvas._scene.items())
+    canvas.set_layer(_pred_layer())
+    assert len(canvas._scene.items()) > gt_only
+    canvas.remove_layer("pred")
+    assert len(canvas._scene.items()) == gt_only
+
+
+def test_remove_layer_is_a_no_op_for_an_unknown_key(qapp):
+    OBBCanvas().remove_layer("nope")  # must not raise
+
+
+def test_set_layer_visible_is_remembered_before_the_layer_is_drawn(qapp):
+    """_on_overlay_changed can fire before the first show_image. A
+    visibility call for a not-yet-drawn key must not be silently lost."""
+    canvas = OBBCanvas()
+    canvas.set_layer_visible("gt", False)
+    canvas.set_layer(_gt_layer())
+    assert all(
+        not i["visible"] for i in describe_scene(canvas) if i["type"] == "polygon"
+    )
+
+
+def test_layer_items_exposes_the_per_level_buckets(qapp):
+    canvas = OBBCanvas()
+    canvas.set_layer(_gt_layer(native_level=GeometryLevel.POLYGON))
+    buckets = canvas.layer_items("gt")
+    assert set(buckets) == {
+        GeometryLevel.POLYGON,
+        GeometryLevel.OBB,
+        GeometryLevel.AABB,
+    }
+    assert canvas.layer_items("absent") == {}

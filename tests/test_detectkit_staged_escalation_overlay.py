@@ -96,17 +96,6 @@ def test_show_image_draws_the_pending_escalation_and_clears_it_otherwise():
     assert "find_staged_label_for_image" in refresh
 
 
-def test_escalation_overlay_derives_the_levels_beneath_its_native_one():
-    """The layer draws at the escalation's native level plus every level
-    derived below it -- the shapes a promotion would actually produce."""
-    import inspect
-
-    from hydra_suite.detectkit.gui.canvas import OBBCanvas
-
-    setter = inspect.getsource(OBBCanvas.set_escalation_detections)
-    assert "_levels_with_shapes" in setter
-
-
 def test_the_escalation_layer_is_cleared_even_when_the_frame_fails_to_load():
     """`if not ok: return` fired BEFORE the refresh, so navigating to a
     corrupt frame left the previous frame's magenta masks floating over the
