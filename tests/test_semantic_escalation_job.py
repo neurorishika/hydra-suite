@@ -1051,3 +1051,55 @@ def test_a_single_over_budget_source_is_reported_as_truncated(tmp_path):
     assert median > 0
     assert sampled == MEDIAN_BODY_TOTAL_FRAMES
     assert truncated is True, "a single over-budget source reported an uncapped sample"
+
+
+def test_the_area_band_gates_what_is_staged(tmp_path):
+    """The calibrated size gate must reach inference, not stop at the frontier.
+
+    Without this, calibration would pick an operating point under one rule
+    and the 30-hour run would emit under another.
+    """
+    src = _make_source(tmp_path, n_images=1)
+    labeler = ScriptedLabeler(
+        [
+            SemanticInstance(_blob(100, 100, side=20.0), 0.9),  # a body
+            SemanticInstance(_blob(300, 300, side=350.0), 0.9),  # arena chunk
+            SemanticInstance(_blob(50, 50, side=3.0), 0.9),  # a leg
+        ]
+    )
+    req = _request(tmp_path, src, confidence=0.1)
+    req.area_min_px2 = 120.0
+    req.area_max_px2 = 1400.0
+    result = run_semantic_escalation(req, labeler)
+    assert result.labelled == 1
+    params = src.pending_escalation.primer_params
+    assert params["area_min_px2"] == 120.0
+    assert params["area_max_px2"] == 1400.0
+
+
+def test_rethreshold_keeps_the_bands_gate(tmp_path):
+    """A re-threshold replays cached candidates; the gate must replay too."""
+    src = _make_source(tmp_path, n_images=1)
+    labeler = ScriptedLabeler(
+        [
+            SemanticInstance(_blob(100, 100, side=20.0), 0.9),
+            SemanticInstance(_blob(300, 300, side=350.0), 0.9),
+        ]
+    )
+    req = _request(tmp_path, src, confidence=0.1)
+    req.area_min_px2 = 120.0
+    req.area_max_px2 = 1400.0
+    run_semantic_escalation(req, labeler)
+    assert rethreshold_staged(src, confidence=0.2, merge_iou=0.5) == 1
+
+
+def test_no_band_stages_everything_as_before(tmp_path):
+    src = _make_source(tmp_path, n_images=1)
+    labeler = ScriptedLabeler(
+        [
+            SemanticInstance(_blob(100, 100, side=20.0), 0.9),
+            SemanticInstance(_blob(300, 300, side=350.0), 0.9),
+        ]
+    )
+    result = run_semantic_escalation(_request(tmp_path, src, confidence=0.1), labeler)
+    assert result.labelled == 2

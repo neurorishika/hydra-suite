@@ -49,6 +49,11 @@ def _point_dict() -> dict:
         "extra_per_frame": 1.0,
         "recall": 0.95,
         "n_matched": 42,
+        "area_min_px2": 130.0,
+        "area_max_px2": 1500.0,
+        "mean_quality": 0.66,
+        "median_iou": 0.55,
+        "median_area_ratio": 0.71,
     }
 
 
@@ -267,3 +272,45 @@ def test_calibration_progress_is_window_modal_and_raised(
     assert ("modal", True) in events
     assert events.index("show") < events.index("raise") < events.index("start")
     assert events.index("activate") < events.index("start")
+
+
+def test_choosing_a_frontier_point_carries_its_area_band_into_the_request(
+    qapp, available_checkpoint
+):
+    """The gate calibration scored under must be the gate the run emits under.
+
+    ``parameters()`` is splatted straight into SemanticEscalationRequest, so
+    the band has to appear there or the 30-hour run silently reverts to the
+    ungated behaviour that produced the mistargeted masks.
+    """
+    from hydra_suite.core.inference.semantic.calibration import CalibrationPoint
+    from hydra_suite.detectkit.gui.dialogs.semantic_escalation_dialog import (
+        SemanticEscalationDialog,
+    )
+
+    dialog = SemanticEscalationDialog([_source()], 50.0)
+    assert dialog.parameters()["area_min_px2"] == 0.0  # ungated until calibrated
+
+    point = CalibrationPoint(**_point_dict())
+    dialog.apply_calibration_choice(point)
+    params = dialog.parameters()
+    assert params["area_min_px2"] == pytest.approx(130.0)
+    assert params["area_max_px2"] == pytest.approx(1500.0)
+
+
+def test_the_area_band_survives_a_settings_round_trip(qapp, available_checkpoint):
+    from hydra_suite.detectkit.gui.dialogs.semantic_escalation_dialog import (
+        SemanticEscalationDialog,
+    )
+
+    project = DetectKitProject(project_dir=Path("/tmp/project"))
+    project.semantic_escalation_settings = {
+        "area_min_px2": 130.0,
+        "area_max_px2": 1500.0,
+        "prompt": "ant",
+        "source_names": ["source"],
+    }
+    dialog = SemanticEscalationDialog([_source()], 50.0, project=project)
+    assert dialog.parameters()["area_min_px2"] == pytest.approx(130.0)
+    dialog.accept()
+    assert project.semantic_escalation_settings["area_max_px2"] == pytest.approx(1500.0)

@@ -21,6 +21,7 @@ def _pt(
     recall=0.95,
     matched=70,
     secs=22.0,
+    quality=0.6,
 ):
     return CalibrationPoint(
         tile_fraction=frac,
@@ -32,6 +33,11 @@ def _pt(
         extra_per_frame=extra,
         recall=recall,
         n_matched=matched,
+        area_min_px2=120.0,
+        area_max_px2=1400.0,
+        mean_quality=quality,
+        median_iou=quality,
+        median_area_ratio=quality,
     )
 
 
@@ -460,3 +466,116 @@ def test_calibration_worker_exposes_its_cancelled_state():
     assert w.cancelled is False
     w.cancel()
     assert w.cancelled is True
+
+
+def _band_for(side=20.0, n=10):
+    from hydra_suite.core.inference.semantic.shape_prior import fit_area_band
+
+    return fit_area_band([_sq(0, 0, side=side) for _ in range(n)])
+
+
+def test_an_arena_blob_no_longer_earns_recall_credit():
+    """The core mistargeting bug.
+
+    Containment alone let one huge region claim a label, and because
+    recommend() is recall-first, calibration then SELECTED for whatever
+    configuration produced such regions.
+    """
+    labels = [_sq(100, 100), _sq(130, 100), _sq(160, 100)]
+    blob = _sq(130, 100, side=400.0)
+    assert match_one_to_one([blob], labels) == []
+    assert len(match_one_to_one([blob], labels, area_band=_band_for())) == 0
+
+
+def test_a_subpart_sized_fragment_is_not_a_find():
+    labels = [_sq(100, 100, side=20.0)]
+    leg = _sq(103, 103, side=3.0)
+    assert match_one_to_one([leg], labels, area_band=_band_for()) == []
+
+
+def test_a_correct_body_still_matches_under_the_band():
+    labels = [_sq(100, 100, side=20.0)]
+    traced = _sq(101, 100, side=26.0)  # legs traced, ~1.7x area
+    assert len(match_one_to_one([traced], labels, area_band=_band_for())) == 1
+
+
+def test_pairs_rank_by_quality_not_centroid_distance():
+    """In a cluster the nearest centroid is not always the best fit.
+
+    Two labels; the prediction that is a size/shape match for label B sits
+    marginally closer to label A. Distance-first pairing hands it to A and
+    strands B; quality-first pairs each with its true partner.
+    """
+    label_a = _sq(100, 100, side=60.0)
+    label_b = _sq(118, 100, side=20.0)
+    small = _sq(112, 100, side=20.0)  # a body-B-shaped prediction
+    big = _sq(100, 100, side=60.0)  # an exact body-A prediction
+    pairs = dict(match_one_to_one([small, big], [label_a, label_b]))
+    assert pairs == {0: 1, 1: 0}
+
+
+def test_a_pair_below_the_quality_floor_is_not_counted_as_a_find():
+    """Containment admits it; the quality floor still rejects it.
+
+    A prediction ~39x the label's area contains that label's centroid, so
+    the old gate scored it as a find. It is not one, and no band is needed
+    to say so -- the graded score alone rejects it.
+    """
+    labels = [_sq(100, 100, side=20.0)]
+    assert match_one_to_one([_sq(100, 100, side=125.0)], labels) == []
+    # ... while a merely generous mask over the same label still counts.
+    assert len(match_one_to_one([_sq(100, 100, side=30.0)], labels)) == 1
+
+
+def test_calibration_points_carry_the_band_and_quality(tmp_path):
+    import cv2
+
+    from hydra_suite.core.inference.semantic.calibration import calibrate
+
+    img = tmp_path / "f.png"
+    cv2.imwrite(str(img), np.zeros((400, 400, 3), dtype=np.uint8))
+    label = LabelRecord(
+        class_id=0,
+        confidence=1.0,
+        points=_sq(230, 230),
+        level=GeometryLevel.POLYGON,
+    )
+
+    class _Finder:
+        name = "finder"
+
+        def label_image(self, image_bgr, prompt, **k):
+            return [SemanticInstance(_sq(30, 30), 0.9)]
+
+    points = calibrate(
+        _Finder(),
+        [(img, [label])],
+        "ant",
+        reference_body_px=100.0,
+        tile_fractions=(0.5,),
+        seam_margin_px=2,
+        merge_iou=0.5,
+    )
+    assert points
+    p = points[0]
+    assert p.area_min_px2 > 0 and p.area_max_px2 > p.area_min_px2
+    hit = [q for q in points if q.n_matched > 0]
+    assert hit, "the scripted detection should match the label"
+    assert 0.0 < hit[0].mean_quality <= 1.0
+    assert 0.0 < hit[0].median_iou <= 1.0
+    assert 0.0 < hit[0].median_area_ratio <= 1.0
+
+
+def test_recommend_refuses_a_point_whose_matches_are_mistargeted():
+    """Recall bought with blobs is not recall."""
+    sloppy = _pt(conf=0.20, recall=0.99, matched=90, tiles=4, quality=0.12)
+    honest = _pt(conf=0.20, recall=0.95, matched=70, tiles=16, quality=0.62)
+    best, reason = recommend([sloppy, honest])
+    assert best is honest and reason == ""
+
+
+def test_recommend_explains_a_frontier_that_is_entirely_mistargeted():
+    points = [_pt(conf=c, recall=0.99, matched=90, quality=0.05) for c in (0.2, 0.4)]
+    best, reason = recommend(points)
+    assert best is None
+    assert "quality" in reason.lower() or "mistarget" in reason.lower()

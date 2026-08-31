@@ -264,3 +264,95 @@ def test_collect_candidates_returns_normally_when_never_cancelled():
         == []
     )
     assert labeler.calls == len(plan.tiles)
+
+
+def test_merge_drops_out_of_band_candidates_before_nms():
+    """The area gate is geometric, so it belongs BEFORE suppression.
+
+    Filtering after NMS would let an arena-sized blob suppress the real
+    bodies it overlaps and then be dropped itself, losing them both.
+    """
+    from hydra_suite.core.inference.semantic.shape_prior import AreaBand
+    from hydra_suite.core.inference.semantic.tiling import (
+        TileCandidate,
+        merge_candidates,
+    )
+
+    def sq(cx, cy, side):
+        h = side / 2.0
+        return np.array(
+            [[cx - h, cy - h], [cx + h, cy - h], [cx + h, cy + h], [cx - h, cy + h]],
+            dtype=np.float32,
+        )
+
+    band = AreaBand(min_px2=100.0, max_px2=1600.0, median_px2=400.0, n_labels=10)
+    body = TileCandidate(sq(100, 100, 20.0), 0.5, 0)
+    blob = TileCandidate(sq(100, 100, 300.0), 0.9, 0)  # outscores and covers it
+    merged = merge_candidates(
+        [blob, body], confidence_threshold=0.1, iou_threshold=0.5, area_band=band
+    )
+    assert len(merged) == 1
+    assert merged[0].confidence == 0.5  # the body survived, not the blob
+
+
+def test_merge_without_a_band_is_unchanged():
+    from hydra_suite.core.inference.semantic.tiling import (
+        TileCandidate,
+        merge_candidates,
+    )
+
+    poly = np.array([[0, 0], [500, 0], [500, 500], [0, 500]], dtype=np.float32)
+    cands = [TileCandidate(poly, 0.9, 0)]
+    assert (
+        len(merge_candidates(cands, confidence_threshold=0.1, iou_threshold=0.5)) == 1
+    )
+
+
+def test_area_gate_is_threshold_independent():
+    """Re-thresholding replays CACHED candidates with no inference, so the
+    gate must commute with the confidence threshold or a re-threshold would
+    disagree with the run that produced the cache."""
+    from hydra_suite.core.inference.semantic.shape_prior import AreaBand
+    from hydra_suite.core.inference.semantic.tiling import (
+        TileCandidate,
+        merge_candidates,
+    )
+
+    rng = np.random.default_rng(3)
+    band = AreaBand(min_px2=100.0, max_px2=1600.0, median_px2=400.0, n_labels=10)
+    cands = []
+    for _ in range(60):
+        cx, cy = rng.uniform(0, 400, size=2)
+        side = rng.uniform(5, 60)
+        h = side / 2.0
+        cands.append(
+            TileCandidate(
+                np.array(
+                    [
+                        [cx - h, cy - h],
+                        [cx + h, cy - h],
+                        [cx + h, cy + h],
+                        [cx - h, cy + h],
+                    ],
+                    dtype=np.float32,
+                ),
+                float(rng.uniform(0.05, 0.95)),
+                0,
+            )
+        )
+    prefiltered = [
+        c
+        for c in cands
+        if band.min_px2
+        <= (
+            (c.polygon_px[:, 0].max() - c.polygon_px[:, 0].min())
+            * (c.polygon_px[:, 1].max() - c.polygon_px[:, 1].min())
+        )
+        <= band.max_px2
+    ]
+    for conf in (0.1, 0.3, 0.5, 0.7, 0.9):
+        a = merge_candidates(
+            cands, confidence_threshold=conf, iou_threshold=0.5, area_band=band
+        )
+        b = merge_candidates(prefiltered, confidence_threshold=conf, iou_threshold=0.5)
+        assert [x.confidence for x in a] == [x.confidence for x in b]

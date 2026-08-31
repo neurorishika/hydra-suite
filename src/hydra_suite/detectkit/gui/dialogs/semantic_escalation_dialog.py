@@ -89,6 +89,13 @@ class SemanticEscalationDialog(BaseDialog):
         self._project = project
         self._persist_callback = persist_callback
         saved = dict(getattr(project, "semantic_escalation_settings", {}) or {})
+        # Restored, not rebuilt: refitting the band would need the labelled
+        # frames re-read, and a reopened dialog must offer the same gate the
+        # last calibration chose.
+        self._area_band = (
+            _saved_value(saved, "area_min_px2", 0.0, float),
+            _saved_value(saved, "area_max_px2", 0.0, float),
+        )
         self._saved_calibration = dict(
             getattr(project, "semantic_calibration", {}) or {}
         )
@@ -328,6 +335,12 @@ class SemanticEscalationDialog(BaseDialog):
             "merge_iou": float(self._merge_iou.value()),
             "reference_body_px": self.reference_body_px(),
             "tile_fraction": self.tile_fraction(),
+            # The label-derived size gate from calibration. Not a control:
+            # it is FITTED to the user's labels, so there is nothing to
+            # type. 0/0 until a frontier point is chosen, which is exactly
+            # the ungated behaviour of a run that skipped calibration.
+            "area_min_px2": float(self._area_band[0]),
+            "area_max_px2": float(self._area_band[1]),
         }
 
     @staticmethod
@@ -503,6 +516,10 @@ class SemanticEscalationDialog(BaseDialog):
 
     def apply_calibration_choice(self, point) -> None:
         """Write a chosen frontier point back into the dialog's controls."""
+        self._area_band = (
+            float(getattr(point, "area_min_px2", 0.0) or 0.0),
+            float(getattr(point, "area_max_px2", 0.0) or 0.0),
+        )
         self._confidence.setValue(float(point.confidence))
         self._tile_fraction.setValue(
             0.0 if point.tile_fraction is None else float(point.tile_fraction)
