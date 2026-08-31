@@ -138,7 +138,7 @@ def test_accepting_a_frame_refreshes_both_layers(window, monkeypatch, tmp_path):
 
     window._on_review_accept(MergeMode.ADD_NEW)
 
-    assert refreshed and set(refreshed[-1]) == {"gt", "escalation"}
+    assert refreshed and set(refreshed[-1]) == {"gt", "staged"}
 
 
 def test_next_undecided_selects_the_first_frame_without_a_decision(window, monkeypatch):

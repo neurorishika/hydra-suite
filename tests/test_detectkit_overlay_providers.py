@@ -135,7 +135,7 @@ def _staged(tmp_path, target_level):
 def test_staged_provider_is_fixed_colour_and_unfiltered(source_tree, tmp_path):
     project = _project(source_tree, staged_review=_staged(tmp_path, "obb"))
     layer = StagedReviewProvider().build(_ctx(project, source_tree))
-    assert layer.key == "escalation"
+    assert layer.key == "staged"
     assert layer.colour_policy is ColourPolicy.FIXED
     assert layer.fixed_colour is not None
     assert layer.class_filtered is False
@@ -168,7 +168,7 @@ def test_staged_provider_matches_source_across_str_and_path_types(
     assert isinstance(project.sources[0].path, Path)
     layer = StagedReviewProvider().build(ctx)
     assert layer is not None
-    assert layer.key == "escalation"
+    assert layer.key == "staged"
 
 
 def test_staged_provider_returns_none_without_a_pending_escalation(source_tree):

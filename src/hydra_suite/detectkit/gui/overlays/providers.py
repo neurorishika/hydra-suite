@@ -165,7 +165,7 @@ class PredictionProvider:
 
 
 class StagedReviewProvider:
-    key = "escalation"
+    key = "staged"
 
     def build(self, ctx: FrameContext) -> Optional[OverlayLayer]:
         source = ctx.source()

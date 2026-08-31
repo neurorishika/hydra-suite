@@ -61,7 +61,7 @@ def _gt_multi(detections, *, native_level, reviewed=True, names=None):
 def _esc(detections, *, native_level, names=None):
     """The staged-escalation layer: fixed hue, unfiltered, confidence labels."""
     return _layer(
-        "escalation",
+        "staged",
         detections,
         level=native_level,
         names=names,
@@ -455,13 +455,13 @@ def test_escalation_layer_draws_native_plus_derived_levels(qapp):
             native_level=GeometryLevel.POLYGON,
         )
     )
-    assert set(canvas.layer_items("escalation")) == {
+    assert set(canvas.layer_items("staged")) == {
         GeometryLevel.POLYGON,
         GeometryLevel.OBB,
         GeometryLevel.AABB,
     }
-    for level in canvas.layer_items("escalation"):
-        assert len(canvas.layer_items("escalation")[level].obb_items) == 1
+    for level in canvas.layer_items("staged"):
+        assert len(canvas.layer_items("staged")[level].obb_items) == 1
 
 
 def test_escalation_layer_uses_its_own_colour_not_the_class_palette(qapp):
@@ -481,10 +481,7 @@ def test_escalation_layer_uses_its_own_colour_not_the_class_palette(qapp):
 
     gt_pen = canvas.layer_items("gt")[GeometryLevel.POLYGON].obb_items[0].pen().color()
     esc_pen = (
-        canvas.layer_items("escalation")[GeometryLevel.POLYGON]
-        .obb_items[0]
-        .pen()
-        .color()
+        canvas.layer_items("staged")[GeometryLevel.POLYGON].obb_items[0].pen().color()
     )
     assert gt_pen == _PALETTE[0]
     assert esc_pen == ESCALATION_COLOUR
@@ -501,9 +498,9 @@ def test_escalation_layer_leaves_the_gt_layer_alone(qapp):
     before = len(_polys(canvas, "gt"))
     canvas.set_layer(_esc(det, native_level=GeometryLevel.POLYGON))
     assert len(_polys(canvas, "gt")) == before
-    canvas.remove_layer("escalation")
+    canvas.remove_layer("staged")
     assert len(_polys(canvas, "gt")) == before
-    assert _polys(canvas, "escalation") == []
+    assert _polys(canvas, "staged") == []
 
 
 def test_escalation_layer_visibility_toggles_independently(qapp):
@@ -515,17 +512,13 @@ def test_escalation_layer_visibility_toggles_independently(qapp):
     canvas.set_layer(_gt_multi(det, native_level=GeometryLevel.POLYGON))
     canvas.set_layer(_esc(det, native_level=GeometryLevel.POLYGON))
 
-    canvas.set_layer_visible("escalation", False)
+    canvas.set_layer_visible("staged", False)
     assert (
-        not canvas.layer_items("escalation")[GeometryLevel.POLYGON]
-        .obb_items[0]
-        .isVisible()
+        not canvas.layer_items("staged")[GeometryLevel.POLYGON].obb_items[0].isVisible()
     )
     assert canvas.layer_items("gt")[GeometryLevel.POLYGON].obb_items[0].isVisible()
-    canvas.set_layer_visible("escalation", True)
-    assert (
-        canvas.layer_items("escalation")[GeometryLevel.POLYGON].obb_items[0].isVisible()
-    )
+    canvas.set_layer_visible("staged", True)
+    assert canvas.layer_items("staged")[GeometryLevel.POLYGON].obb_items[0].isVisible()
 
 
 def test_escalation_derived_levels_follow_the_shared_derived_toggle(qapp):
@@ -539,14 +532,8 @@ def test_escalation_derived_levels_follow_the_shared_derived_toggle(qapp):
         )
     )
     canvas.set_derived_levels_visible(False)
-    assert (
-        canvas.layer_items("escalation")[GeometryLevel.POLYGON].obb_items[0].isVisible()
-    )
-    assert (
-        not canvas.layer_items("escalation")[GeometryLevel.AABB]
-        .obb_items[0]
-        .isVisible()
-    )
+    assert canvas.layer_items("staged")[GeometryLevel.POLYGON].obb_items[0].isVisible()
+    assert not canvas.layer_items("staged")[GeometryLevel.AABB].obb_items[0].isVisible()
 
 
 def test_escalation_layer_ignores_the_class_filter(qapp):
@@ -566,9 +553,7 @@ def test_escalation_layer_ignores_the_class_filter(qapp):
         )
     )
     canvas.set_class_filter({7})
-    assert (
-        canvas.layer_items("escalation")[GeometryLevel.POLYGON].obb_items[0].isVisible()
-    )
+    assert canvas.layer_items("staged")[GeometryLevel.POLYGON].obb_items[0].isVisible()
 
 
 def test_escalation_labels_carry_the_confidence(qapp):
@@ -585,9 +570,7 @@ def test_escalation_labels_carry_the_confidence(qapp):
         )
     )
     text = (
-        canvas.layer_items("escalation")[GeometryLevel.POLYGON]
-        .label_items[0]
-        .toPlainText()
+        canvas.layer_items("staged")[GeometryLevel.POLYGON].label_items[0].toPlainText()
     )
     assert "0.42" in text and "ant" in text
 
@@ -603,8 +586,8 @@ def test_clear_all_drops_the_escalation_layer(qapp):
         )
     )
     canvas.clear_all()
-    assert _polys(canvas, "escalation") == []
-    assert canvas.layer_items("escalation") == {}
+    assert _polys(canvas, "staged") == []
+    assert canvas.layer_items("staged") == {}
     canvas._apply_visibility()  # must not raise
 
 
@@ -625,8 +608,6 @@ def test_a_detection_without_confidence_is_labelled_by_name_alone(qapp):
         )
     )
     text = (
-        canvas.layer_items("escalation")[GeometryLevel.POLYGON]
-        .label_items[0]
-        .toPlainText()
+        canvas.layer_items("staged")[GeometryLevel.POLYGON].label_items[0].toPlainText()
     )
     assert text == "worker ant"

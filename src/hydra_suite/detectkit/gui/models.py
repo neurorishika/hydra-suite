@@ -86,11 +86,6 @@ class StagedReview:
         )
 
 
-# Retained for one cycle so any out-of-tree import keeps resolving while the
-# rest of this plan lands. Deleted in the cleanup task.
-PendingEscalation = StagedReview
-
-
 def normalize_class_names(values: Any) -> list[str]:
     """Normalize class-name input into a non-empty ordered list."""
     if isinstance(values, str):

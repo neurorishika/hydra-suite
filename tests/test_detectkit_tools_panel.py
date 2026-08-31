@@ -216,4 +216,4 @@ def test_main_window_on_overlay_changed_wires_escalation_to_canvas():
     from hydra_suite.detectkit.gui.main_window import MainWindow
 
     source = inspect.getsource(MainWindow._on_overlay_changed)
-    assert 'set_layer_visible("escalation"' in source
+    assert 'set_layer_visible("staged"' in source

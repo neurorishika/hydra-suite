@@ -1670,7 +1670,7 @@ class DetectKitMainWindow(QMainWindow):
             self._sync_al_action_enabled()
         self._canvas.set_layer_visible("gt", settings.show_gt)
         self._canvas.set_layer_visible("pred", settings.show_pred)
-        self._canvas.set_layer_visible("escalation", settings.show_escalation)
+        self._canvas.set_layer_visible("staged", settings.show_escalation)
         self._canvas.set_class_filter(settings.visible_class_ids)
         self._canvas.set_derived_levels_visible(settings.show_derived_levels)
 
@@ -1831,9 +1831,7 @@ class DetectKitMainWindow(QMainWindow):
             return
         self._save_current_project()
         self._sync_review_bar()
-        # "escalation" is the key in force until Task 14 renames it; that
-        # task's grep sweep picks this call up with the rest.
-        self._refresh_overlays(keys=("escalation",))
+        self._refresh_overlays(keys=("staged",))
 
     def _visible_inference_stats(self, confidence_threshold: float) -> dict:
         """Summarize cached candidates after applying the live display filter."""
@@ -2084,9 +2082,6 @@ class DetectKitMainWindow(QMainWindow):
             self._last_prediction_request = None
             self._canvas.clear_all()
 
-    def _refresh_escalation_overlay(self) -> None:
-        self._refresh_overlays(keys=("escalation",))
-
     def _frame_context(self) -> "FrameContext | None":
         """Everything the providers need about the frame on screen.
 
@@ -2234,7 +2229,7 @@ class DetectKitMainWindow(QMainWindow):
         reviewing on the frame) and the staged proposal is now decided, so it
         must stop drawing. Neither refresh happens incidentally.
         """
-        self._refresh_overlays(keys=("gt", "escalation"))
+        self._refresh_overlays(keys=("gt", "staged"))
         self._sync_review_bar()
         self._save_current_project()
 
@@ -2400,7 +2395,7 @@ class DetectKitMainWindow(QMainWindow):
         self._save_current_project()
         self._dataset_panel.refresh_sources(self._project)
         self._tools_panel.refresh_overview()
-        self._refresh_overlays(keys=("gt", "escalation"))
+        self._refresh_overlays(keys=("gt", "staged"))
         self._sync_review_bar()
 
     def _on_go_to_staged_review(self) -> None:
