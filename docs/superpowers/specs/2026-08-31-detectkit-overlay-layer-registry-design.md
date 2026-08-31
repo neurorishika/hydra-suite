@@ -1,6 +1,6 @@
 # DetectKit Overlay Layer Registry — Design
 
-**Status:** pending implementation plan
+**Status:** implementation plan written — `docs/superpowers/plans/2026-08-31-detectkit-overlay-layer-registry.md`
 **Date:** 2026-08-31
 **Scope:** `src/hydra_suite/detectkit/gui/canvas.py`, `main_window.py`, new `gui/overlays/`
 
@@ -73,6 +73,12 @@ class LabelMode(Enum):
     NAME_AND_CONFIDENCE = auto()  # "ant (0.42)"
 
 @dataclass(frozen=True)
+class LayerStyle:
+    pen_style: Qt.PenStyle
+    brush_style: Qt.BrushStyle
+    fill_alpha: int               # 0-255; ignored when brush is NoBrush
+
+@dataclass(frozen=True)
 class OverlayLayer:
     key: str                      # "gt" | "pred" | "escalation" | ...
     detections: list[dict]
@@ -84,11 +90,39 @@ class OverlayLayer:
     class_filtered: bool = True
     label_mode: LabelMode = LabelMode.NAME_AND_CLASS_ID
     emphasis: Emphasis | None = None     # e.g. the unreviewed hatch
+    derive_levels: bool = True    # False => draw only at native_level
+    style: LayerStyle | None = None      # None => per-level default styles
+    frame_key: str | None = None         # for InstanceRef (§4)
 ```
 
 `LabelMode` replaces today's `show_confidence` boolean, which could not
 express "this layer wants confidence but has none" — the gap that rendered
 `worker ant (0)` over every staged mask and read as confidence 0.00.
+
+`derive_levels` and `style` exist because **not every layer is
+multi-level**. Two of the six call sites (§Migration) draw a single level
+with an explicit fill: `set_gt_detections(…, fill_alpha=65)` and
+`set_pred_detections(…, fill_alpha=55)`. The prediction layer today draws
+only its native level, dashed — running `_levels_with_shapes` over it would
+add derived outlines that are not on screen now, which the "identical
+rendering" non-goal forbids. `style=None` means "use `_level_styles()`,
+one style per level"; a non-`None` `style` applies to the single native
+level and requires `derive_levels=False`.
+
+`Emphasis.UNREVIEWED` substitutes `BDiagPattern`/alpha 140 on the
+**native level only**, keeping that level's own pen style. That rule lives
+in the renderer, not in any provider — hardcoding `SolidLine` there once
+made an unreviewed OBB-native quad indistinguishable from its derived AABB.
+
+The `LabelMode` assignment per layer is fixed and must not drift:
+
+| Layer | `LabelMode` | Renders today |
+|---|---|---|
+| Ground truth | `NAME_AND_CLASS_ID` | `ant (0)` |
+| Model predictions | `NAME_AND_CONFIDENCE` | `ant (0.42)` |
+| Staged escalation | `NAME_AND_CONFIDENCE` | `ant` — staged labels carry no confidence, and this mode degrades to the bare name rather than to the class id |
+
+`LabelMode.NAME` is therefore not needed and is not defined.
 
 ### 2. `OBBCanvas` — a renderer that knows nothing about the domain
 
@@ -162,11 +196,31 @@ overlay and is impossible without it.
 ## Migration
 
 The three current `set_*`/`clear_*` method families are retired, not
-wrapped. They have exactly four callers between them (`show_image`,
-`_refresh_prediction_overlay`, `_refresh_escalation_overlay`,
-`_on_overlay_changed`), all in `main_window.py`, all rewritten here. Leaving
-compatibility shims would preserve the parallel-list mental model this
-refactor exists to delete.
+wrapped — leaving permanent compatibility shims would preserve the
+parallel-list mental model this refactor exists to delete.
+
+They have **six** call sites, not four, and two of them are outside
+`main_window.py`:
+
+| Call site | Uses |
+|---|---|
+| `main_window.show_image` | `clear_gt/pred/escalation`, `set_gt_detections_multi_level` |
+| `main_window._refresh_prediction_overlay` | `clear_pred_detections`, `set_pred_detections` |
+| `main_window._refresh_escalation_overlay` | `clear_escalation_detections`, `set_escalation_detections` |
+| `main_window._on_overlay_changed` | `set_overlay_visibility`, `set_class_filter`, `set_derived_levels_visible`, `set_escalation_visible`, `clear_pred_detections` |
+| `dialogs/semantic_frame_preview_dialog.py:131-137` | `set_gt_detections(fill_alpha=65)`, `set_pred_detections(fill_alpha=55)`, `set_overlay_visibility` |
+| `dialogs/calibration_results_dialog.py:243,315-316` | same three |
+
+Two further public methods have **no production caller at all** and are
+deleted rather than ported: `set_gt_detections(append=True)` (only
+`tests/test_detectkit_canvas_dual_layer.py:115` and
+`tests/test_detectkit_canvas.py:290` reach it) and the back-compat aliases
+`set_detections`/`clear_detections`. Retiring `append` also deletes the
+flat-list-vs-per-level-bucket special case in `set_gt_detections`, which
+exists purely to keep appended items inside `_apply_visibility`'s iteration.
+
+`trackerkit/.../detection_panel.py:2050` calls `set_detections` on
+`reference_scale_preview`, a **different widget**. It is out of scope.
 
 `OverlaySettings` keeps its per-layer booleans (`show_gt`, `show_pred`,
 `show_escalation`); `_on_overlay_changed` maps them onto
@@ -189,10 +243,13 @@ renders every frame, so the gate is characterization, not new assertions:
    toggles x derived-levels x a class filter, asserted against the golden.
    Today's tests cover these one at a time; the registry rewrite is exactly
    where an untested combination regresses.
-3. **Provider unit tests**, replacing the current `inspect.getsource`
-   assertions in `tests/test_detectkit_staged_escalation_overlay.py` with
-   real behavioural ones — a provider is now a plain object that can be
-   called without a `MainWindow`.
+3. **Provider unit tests**, replacing `inspect.getsource` assertions with
+   real behavioural ones — a provider is a plain object callable without a
+   `MainWindow`. Every source-inspecting test that this refactor breaks **by
+   construction**, because it asserts on a method name that ceases to exist:
+   `test_detectkit_staged_escalation_overlay.py:94-95,106,119`,
+   `test_detectkit_tools_panel.py:85,219`,
+   `test_detectkit_show_image_multi_level.py:25-26`.
 4. **Existing suites must pass unchanged:** `test_detectkit_canvas.py`,
    `test_detectkit_staged_escalation_overlay.py`,
    `test_detectkit_show_image_multi_level.py`, `test_detectkit_tools_panel.py`.
@@ -216,5 +273,7 @@ either arrives:
 - the **first per-instance review interaction** (click-to-accept), which
   needs §4 and would otherwise have to retrofit it.
 
-Until then the existing three-layer code is correct and tested, and this
-document is the record of what it should become.
+**Override (2026-08-31):** scheduled by explicit user request ahead of
+either trigger, and ahead of the frame-granular review work it was
+originally sequenced behind. Implementation plan:
+`docs/superpowers/plans/2026-08-31-detectkit-overlay-layer-registry.md`.
