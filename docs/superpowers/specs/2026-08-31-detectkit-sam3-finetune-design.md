@@ -14,7 +14,7 @@ epoch of one fold**:
 | arm (held-out frame f008078)  | AP50  | AP75  | mean matched IoU |
 |-------------------------------|-------|-------|------------------|
 | YOLO-seg, best tile size      | 0.483 | 0.220 | 0.761            |
-| SAM3 zero-shot                | 0.447 | 0.001 | 0.584            |
+| SAM3 zero-shot                | 0.447 | 0.000 | 0.584            |
 | SAM3 + LoRA, **one epoch**    | 0.737 | 0.563 | 0.769            |
 
 **How much weight this evidence carries.** One fold, one epoch, 24 GT instances
@@ -27,8 +27,19 @@ so zero-shot's 0.584 is computed over the 62% it hit and is a selection effect;
 and the scorer's greedy argmax matching is not COCO matching (a prediction whose
 best GT is already taken becomes an FP even if a second GT would clear
 threshold), which deflates all arms but makes these numbers non-comparable to
-published COCO AP. Folds 2-3 and the AP-vs-epoch curve are in flight; this design
-is justified by the *direction* and by the mechanism below, not by 0.737.
+published COCO AP. **All three folds have since trained, and they are not identical.** Fold 3
+(`f008975` held out) ran a validation loss of ~2.5 at epoch 10 against ~0.85 on
+folds 1-2, converging to ~1.4-1.7 by epoch 40. Because the validation split *is*
+the held-out frame, that is a per-frame generalisation signal, not a training
+artifact — the divergence shrank with training rather than persisting, which
+reads as slower convergence on that split rather than a failure, but it is
+unresolved until the held-out AP for all three folds exists.
+
+**The 3-fold held-out AP is therefore a blocking input to the go decision**, not
+a footnote to it. If folds 2-3 do not show the same AP75 recovery as fold 1, the
+mechanism claim — not merely the magnitude — is in question, and this design
+should not proceed on fold 1 alone. `epochs` (below) is blocked on the same
+evaluation.
 
 The diagnosis is specific and it is what makes finetuning the right lever:
 **zero-shot SAM3 already localises the animals as well as a trained YOLO, but
@@ -46,7 +57,7 @@ through the stack that will ship.** The spike scored
 ultralytics' `SAM3SemanticPredictor.postprocess` multiplies
 `sigmoid(logits) * presence` and applies NMS at `iou=0.7`
 (`ultralytics/models/sam/predict.py:2299-2315`, pinned as `PREDICTOR_NMS_IOU`
-in `semantic/sam3.py:31`). Confidence thresholds are therefore **not comparable
+in `semantic/sam3.py:33`). Confidence thresholds are therefore **not comparable
 between the two stacks**, and no run has yet put a merged checkpoint through the
 ultralytics graph. Closing that gap is an acceptance criterion, not a follow-up:
 see "Acceptance".
@@ -157,6 +168,7 @@ class Sam3LoraParams:
     grad_accum: int = 8
     mixed_precision: str = "bf16"
     num_negatives: int = 3        # hard-negative prompts that must return nothing
+    negative_prompts: list[str] = field(default_factory=list)  # explicit; see §2
     # Which submodules receive adapters. Text encoder is False by default as a
     # precaution against eroding prompt discrimination -- untested here; the
     # spike froze it in every configuration.
@@ -230,12 +242,37 @@ instance-segmentation dataset of tiles:
   background are half of what "is it good" means, and the trainer's
   hard-negative prompts cover prompt discrimination, not empty scenes.
 - On a multi-class source the builder emits **only the selected class**.
+- **Negative prompts are named, not inferred.** SAM3 is trained with prompts that
+  must return nothing, so that the tuned model still discriminates concepts
+  instead of firing on any text. The spike's third-party trainer sampled these
+  from *other COCO categories* — unavailable here, because this builder emits a
+  single category by construction. So the source is explicit, in priority order:
+  1. `Sam3LoraParams.negative_prompts`, when the user supplies them.
+  2. Otherwise the **other class names of the source** (a multi-class source's
+     unselected classes are exactly the confusable concepts worth suppressing).
+  3. Otherwise a small curated out-of-domain pool (`"background"`, `"shadow"`,
+     `"debris"`), with any entry sharing a word with the selected prompt removed.
+  `num_negatives` samples from the resolved list per image. The resolved list is
+  written to the build manifest and the run record, because a model's prompt
+  discrimination is otherwise unexplainable after the fact.
 - `category.name` is `Sam3LoraParams.prompt`, so the concept the model is
   trained on and the concept escalation prompts with are the same string by
   construction.
 
 The split is by **frame**, never by tile: tiles from one frame overlap, so a
-tile-level split leaks pixels across train/valid.
+tile-level split leaks pixels across train/valid. Concretely, and this matters
+because the motivating project has only three labelled frames:
+
+- Ratio is `SplitConfig` as for every other role, applied to **frames**, shuffled
+  under `TrainingRunSpec.seed`, with at least one frame in each of train and val.
+- **2 frames:** 1/1, with a logged warning that val metrics come from a single
+  frame and are near-meaningless.
+- **1 frame:** train-only. Val is skipped, the run record records
+  `validation: "none"`, and the GUI says so. Refusing would block the exact
+  bootstrap case this feature exists to serve.
+- The spike's own leak (its `valid/` split *was* the held-out evaluation frame)
+  is a lesson, not a pattern: in production, val is drawn from the training
+  frames and evaluation is a separate concern.
 
 ### 2b. What this role does NOT get for free
 
@@ -245,16 +282,18 @@ must budget for:
 
 | # | Site | What happens today | Needed |
 |---|------|--------------------|--------|
-| 1 | `validation.py:439` | `validate_role_dataset` calls `inspect_obb_or_detect_dataset` **unconditionally, before any role branch**, and that inspector **raises** `RuntimeError("No valid OBB/detect dataset layout found…")` on a COCO layout (`dataset_inspector.py:233-247`). `service.build_role_dataset:400` calls it on every derived dataset. | Branch on the role **before** the inspector runs; add a COCO-layout validator. **This is a crash, not a gap** — the freshly built dataset fails validation immediately. |
+| 1 | `validation.py:439` | `validate_role_dataset` calls `inspect_obb_or_detect_dataset` **unconditionally, before any role branch**, and that inspector **raises** `RuntimeError("No valid OBB/detect dataset layout found…")` on a COCO layout (`dataset_inspector.py:233-247`). `service.build_role_dataset:400` calls it on every derived dataset. | Branch on the role **before** the inspector runs; add a COCO-layout validator. **This is a crash, not a gap** — the freshly built dataset fails validation immediately. Trap: the function's final fall-through returns `valid=True` for unhandled roles (`validation.py:463`), so branching early but forgetting the validator makes validation silently pass. |
 | 2 | `dataset_builders.py:1001-1016` | `role_min_level` raises `RuntimeError("Role has no geometry-level requirement")` for unknown roles, and `prepare_role_dataset:1044` calls it first thing. | `SEMANTIC_SAM3: GeometryLevel.POLYGON` in `_ROLE_MIN_LEVEL`. |
-| 3 | `model_publish.py:42`, `:72` | `_repo_dir_for_role` and `_task_usage_for_role` both raise `"Unsupported publish role"`. | Either extend both, or fork publish for this role — and say which. |
-| 4 | `service.py:465-472` | Auto-publish routes through `_publish_training_artifacts` → `publish_trained_model`, which hits #3. | A forked publish path must still register in `model_registry.json`. A directory scan of `<models>/sam3/` would be a **second registry convention**, in direct tension with `2026-07-29-model-registry-unification-design.md`. Registry, not scan. |
-| 5 | `dataset_builders.py:1031` | `prepare_role_dataset`'s first positional is `merged_obb_dataset_dir`; the service merges sources first (`service.py:328-347`). | Decide and state whether the SAM3 branch consumes the merged dir or a single raw source. "The chosen source" (singular) elsewhere in this spec implies the latter; the merge step then has to be skipped explicitly. |
-| 6 | `runner.py:2300` | Any role that falls past the custom-classify branches reaches `build_ultralytics_command`. | Dispatch `SEMANTIC_SAM3` **before** that fall-through, or it silently builds a nonsense `yolo` command. |
+| 3 | `model_publish.py:42`, `:72` | `_repo_dir_for_role` and `_task_usage_for_role` both raise `"Unsupported publish role"`. | **Decided: fork.** See §4. |
+| 4 | `service.py:465-472` | Auto-publish routes through `_publish_training_artifacts` → `publish_trained_model`, which hits #3. | The forked path registers in `model_registry.json` (§4 step 5). A directory scan would be a **second registry convention**, in tension with `2026-07-29-model-registry-unification-design.md`. Registry, not scan — and not into the download cache dir. |
+| 5 | `dataset_builders.py:1031` | `prepare_role_dataset`'s second positional is `merged_obb_dataset_dir` (`role` is first); the service merges sources first (`service.py:328-347`). | **Decided: a single raw source**, not the merged dir. Concept training is per-source; `TrainingOrchestrator.build_merged_obb_dataset` is skipped for this role, and the service path must not assume it ran. |
+| 6 | `runner.py:2261` | Any role that falls past the custom-classify branches reaches `build_ultralytics_command` (:2303). | Dispatch `SEMANTIC_SAM3` **before** that fall-through, or it silently builds a nonsense `yolo` command. |
+| 7 | `detectkit/gui/dialogs/training_dialog.py` | **2676 lines**, already >5x the 500-line guidance, with the six YOLO roles hard-wired: `_SELECTION_ROLE_MAP:55`, per-role dispatch :1892-1945, `_selected_roles:1928-1945`, merge-then-loop-roles :2041-2086. | A role card plus a ~20-knob `Sam3LoraParams` editor cannot go inline without making this worse. New `detectkit/gui/panels/sam3_training_panel.py`; the dialog gains a role entry and delegates. |
+| 8 | same dialog | No surface exists for the mandated label-quality acknowledgement, the CUDA-host requirement, or probe-driven disablement. | The panel owns all three; the action is disabled with `probe_sam3_training_availability()`'s reason rather than enabled-then-failing. |
 
 Only `TrainingRunSpec.sam3_params` genuinely slots in as-is: it mirrors
 `custom_params`, and `to_dict`'s `asdict` handles slots dataclasses
-(`contracts.py:196-217`).
+(`contracts.py:192-196`).
 
 ### 3. Trainer (`training/sam3_lora/`, Qt-free)
 
@@ -286,38 +325,98 @@ Objective and matcher are imported from Meta's package
 Optimiser state is not checkpointed; `resume_from` is unsupported for this role
 and rejected in preflight rather than silently ignored.
 
-### 4. Publish (`training/model_publish.py`)
+### 4. Publish — a fork, not an extension
+
+`publish_trained_model`'s naming scheme (`{stamp}_{size}_{species}_{info}{ext}`
+under a role directory, `model_publish.py:767-830`) does not fit a
+promptable-concept checkpoint, and both `_repo_dir_for_role:42` and
+`_task_usage_for_role:72` raise for an unknown role. **This role forks publish**
+rather than extending those two functions. Breakage-table row 3 asked the spec to
+decide; this is the decision.
 
 On success the trainer writes `adapters.pt` (~46 MB) into the run dir, and
-publish merges:
+`publish_sam3_model()` (new, in `training/sam3_lora/publish.py`) does:
 
 1. Load the base `sam3.pt` state dict (Meta layout, `detector.`-prefixed).
-2. Apply `merge_adapters` in that layout.
-3. Write `<models>/sam3/<run_id>_semantic_sam3.pt` plus a
-   `<artifact>.sam3_meta.json` sidecar:
+2. Apply `merge_adapters` in that layout (see "Adapter key mapping").
+3. Write the merged checkpoint **to a repository directory that is not the
+   download cache**. `get_models_dir()/"sam3"` is already
+   `checkpoints.py:_cache_dir` — where the licence-gated stock `sam3.pt` is
+   staged — so publishing there would mix a 3.4 GB artifact repository into the
+   stock checkpoint cache. Published models go to
+   `get_models_dir()/"sam3_finetuned"/<run_id>.pt`.
+4. Write the `<artifact>.sam3_meta.json` sidecar (below).
+5. **Register in `model_registry.json`.** The earlier draft omitted this step
+   while its own breakage table demanded "Registry, not scan" — an outright
+   self-contradiction. The entry carries `task_family: "semantic"`,
+   `usage_role: "semantic_sam3"`, the artifact path, the run id and the sidecar
+   path. `core/inference/model_paths.py:178-240` passes unknown usage-roles
+   through rather than crashing, so a new value is safe; `available_models()`
+   reads the registry the same way `model_paths.py:168` already does, and
+   performs **no directory scan**.
 
 ```json
 {
   "base_variant": "sam3",
   "prompt": "ant with color patch",
-  "tile_px": 1008,
+  "train_tile_px": 1007,
   "reference_body_px": 55.4,
   "object_tile_fraction": 0.055,
   "stripped_keys": ["backbone.vision_backbone...", "..."],
+  "tuned_fingerprints": {"<key>": "<sha256 of tensor bytes>"},
   "source_fingerprint": "<dataset fingerprint>",
   "label_quality_acknowledged": true
 }
 ```
 
-The adapters are retained in the run dir. They are the cheap artifact to keep
-for re-merging against a future base checkpoint; the 3.4 GB file is the
-disposable one.
+`train_tile_px` is named to prevent the conflation §2 warns about: it is a
+**frame-space** tile size, not SAM3's fixed 1008 px input. In the spike they
+coincided (55.4 / 0.055 ≈ 1007); they generally do not.
+
+The adapters are retained in the run dir. They are the cheap artifact to keep for
+re-merging against a future base checkpoint; the 3.4 GB file is the disposable
+one.
+
+### 4b. Adapter key mapping
+
+`merge_adapters` receives adapters trained against Meta's model, whose module
+paths are **un-prefixed**, and a base state dict whose keys are `detector.`-
+prefixed and also contain non-`detector` entries (which is why ultralytics
+filters them). The mapping contract is therefore explicit:
+
+- Adapter module path `P` merges into base key `f"detector.{P}.weight"`.
+- A merge that fails to resolve every adapter to exactly one base key is a
+  **hard error**, never a skip. A silent skip here is indistinguishable from a
+  successful merge and yields a checkpoint that is byte-different from base but
+  behaviourally identical to it.
+- Non-`detector` base keys are copied through untouched.
 
 ### 5. Escalation consumption
 
-- `checkpoints.py` grows `resolve_checkpoint(variant_or_model_key)` which
-  returns a stock variant's path **or** a published SAM3 artifact's path, and
-  `available_models()` returning stock variants plus published ones.
+`variant` is not a display string — it is baked into six places that a published
+model key would crash today:
+
+| Site | Today |
+|------|-------|
+| `semantic_escalation.py:164-174` | `variant` feeds the staging-dir hash |
+| `semantic_escalation.py:239` | recorded on the request |
+| `semantic_escalation.py:960, 1055, 1102` | three `from_variant` call sites |
+| `semantic_escalation_dialog.py:139-141, 351` | saved/restored dialog config |
+| `checkpoints.py:155-157` | `probe_availability` → "Unknown SAM3 variant" |
+| `checkpoints.py:196-200` | `ensure_checkpoint` raises `ValueError` |
+
+So:
+
+- `checkpoints.py` grows `resolve_checkpoint(variant_or_model_key)` returning a
+  stock variant's path **or** a published artifact's path, and `available_models()`
+  returning stock variants plus registry-published ones.
+- **`probe_availability` splits in two**: a variant-independent *dependency* probe
+  (packages, ultralytics symbol) and a *checkpoint* probe that accepts either kind
+  of key. Today it rejects anything not in `SAM3_VARIANTS`, so without this split
+  every published model is "unknown" and the action stays disabled.
+- All three `from_variant` call sites and the staging-hash input move to the
+  resolved key. The hash must stay stable for stock variants so existing pending
+  escalations still match.
 - `Sam3SemanticLabeler.from_variant` gains a `checkpoint:` override so the
   labeler can be built from a published artifact. Nothing else in the SAM3
   inference path changes.
@@ -340,15 +439,25 @@ worse masks, which is the hardest failure to notice.
 
 The guard therefore needs a stated mechanism, not an intention:
 
-1. **Publish** records in the sidecar the full **stripped key list** the merged
-   checkpoint contributes — i.e. the result of ultralytics' own transform,
+1. **Publish** records two things in the sidecar: the full **stripped key list**
+   the merged checkpoint contributes — the result of ultralytics' own transform,
    `{k.replace("detector.", ""): v for k, v in ckpt.items() if "detector" in k}`
-   (note: a substring test, not a prefix match), reduced to sorted key names.
-   A count alone cannot name what drifted; the list can.
-2. **Load** forces eager `setup_model()` at labeler construction rather than on
-   first inference, so the built model's `state_dict().keys()` is observable.
-3. **Assert** the sidecar's key set is a subset of the model's, and raise naming
-   the missing keys on mismatch.
+   (a substring test, not a prefix match), reduced to sorted key names — and
+   `tuned_fingerprints`, the SHA-256 of the raw bytes of **2-3 tensors the merge
+   actually changed**.
+2. **Load** forces eager `setup_model()` (it exists: `predict.py:2198`) at labeler
+   construction rather than on first inference, so the built model's tensors are
+   observable.
+3. **Assert both.** The key set is a subset of the model's *and* the fingerprinted
+   tensors in the live model match the sidecar. Raise naming what diverged.
+
+**Why the key check alone is insufficient.** A key-set assertion catches a
+*model-side* rename. It does not catch a change to ultralytics' *load-time
+transform*: if that filter changes, our merged checkpoint contributes zero tuned
+weights while the model's key namespace — and so the key assertion — is entirely
+unchanged. The guard would pass on exactly the failure it exists to catch. Only
+comparing tensor content proves that our weights, rather than the base weights,
+are the ones resident in the model.
 
 Reading the key index does **not** require materialising 3.4 GB: `torch.load`
 with `mmap=True` (or reading the zip directory) yields key names cheaply.
@@ -387,7 +496,7 @@ Before any weights load:
 
 ### 7. Things this design fixes the meaning of
 
-- **Determinism.** The trainer consumes `TrainingRunSpec.seed` (`contracts.py:203`)
+- **Determinism.** The trainer consumes `TrainingRunSpec.seed` (`contracts.py:182`)
   for torch/numpy/python RNG and the tile-order shuffle. Byte-identical reruns are
   **not** promised — cuDNN autotuning and bf16 reduction order are not pinned —
   but seed-controlled reruns are.
@@ -407,18 +516,24 @@ Before any weights load:
 1. **Tiling/COCO builder** — clip fractions at the `iscrowd` boundary in both
    directions; empty-tile retention; frame-level (not tile-level) split;
    `category.name` equals the prompt.
-2. **LoRA seam** — inject/merge round-trip on a toy `nn.Module`: merged weights
+2. **Negative-prompt resolution** — each of the three priority tiers; the
+   word-overlap filter on the curated pool; and that the resolved list reaches
+   the build manifest.
+3. **LoRA seam** — inject/merge round-trip on a toy `nn.Module`: merged weights
    equal base + BA*scale; `inject_adapters` returns the expected count; merging
    a zero-initialised adapter is a no-op on the base state dict.
-3. **Merged-checkpoint key layout** — the published artifact's keys are a
+4. **Merged-checkpoint key layout** — the published artifact's keys are a
    superset of what `build_sam3.py`'s `detector.`-strip produces, and
    the sidecar's `stripped_keys` matches. This is the test that actually protects the
    integration; it needs no GPU and no real weights, only key names.
-4. **Silent-load guard** — a deliberately renamed key raises instead of loading
-   partially.
-5. **Preflight** — each refusal path returns its structured reason and does not
+5. **Silent-load guard** — two cases, because one is the hole the first draft
+   left: a renamed key raises; **and** a checkpoint whose keys are all present but
+   whose tuned tensors equal the base's fails the fingerprint assertion.
+6. **Adapter key mapping** — an adapter that resolves to no base key is a hard
+   error, not a skip.
+7. **Preflight** — each refusal path returns its structured reason and does not
    import ultralytics or touch the network.
-6. **Availability probe** — a missing training dep yields a disabled action with
+8. **Availability probe** — a missing training dep yields a disabled action with
    a reason, never an AutoUpdate pip install.
 
 An end-to-end training test is not in the suite: it needs a licence-gated 3.4 GB
@@ -429,10 +544,19 @@ checkpoint and a 32 GB CUDA card. The manual gate is below.
 Automated tests cannot cover the integration that actually matters, so these are
 the conditions for calling the role done. Both run on mehek.
 
+0. **Three-fold held-out AP (blocking, and first).** Every fold's `last`
+   checkpoint scored on its own held-out frame. Go requires **all three folds**
+   to beat zero-shot SAM3 on AP75 by a wide margin (zero-shot is ~0.00; any fold
+   below 0.20 is a stop-and-investigate). One fold succeeding is not a result.
+
 1. **Stack-parity gate (blocking).** The merged checkpoint, loaded through the
-   **ultralytics** path, must reproduce the native-`sam3`-path AP on at least one
-   held-out frame within tolerance. This is the criterion the original spec was
-   missing: every number motivating this work was measured on the native stack,
+   **ultralytics** path, must reproduce the native-`sam3`-path result on the same
+   held-out frame: **AP50 and AP75 each within 0.05 absolute**, at matched
+   operating points, using `scratch/sam3_lora_spike/evaluate.py` for both. The
+   0.05 band is a judgement call, not a derived quantity — it is wide enough to
+   absorb the presence-multiplication and NMS differences between the stacks and
+   narrow enough that "the adapters did not load" (which would collapse AP75 to
+   ~0.00) cannot pass. This is the criterion the original spec was missing: every number motivating this work was measured on the native stack,
    and the two stacks score differently (presence multiplication, NMS at 0.7).
    Until this passes, nothing is known about what ships.
 
@@ -443,14 +567,19 @@ the conditions for calling the role done. Both run on mehek.
    path. Add the override first, then this gate is cheap.
 
 2. **Beats the tuned baseline (blocking).** Through the ultralytics path, on
-   held-out frames, the finetuned model beats the best-configured YOLO-seg arm on
-   AP75. AP50 parity is not sufficient — zero-shot already achieves that, and mask
+   **every** held-out frame, the finetuned model beats the best-configured
+   YOLO-seg arm on AP75 (the baseline to beat is 0.255 mean / 0.220 on f008078).
+   AP50 parity is not sufficient — zero-shot already achieves that, and mask
    geometry is the entire thesis.
 
-3. **Scale round-trip (blocking).** A model trained at `tile_px` X and escalated
-   at `tile_px` X reproduces its training-time quality; the sidecar prefill is
-   what guarantees it. A deliberate mismatch should visibly degrade — if it does
-   not, the scale coupling is not doing what this design claims.
+3. **Scale round-trip (blocking).** A model trained at `train_tile_px` X and
+   escalated at X must reproduce its training-time AP75 within the same 0.05
+   band; the sidecar prefill is what guarantees it. This gate tests that the
+   prefill contract works, nothing more.
+
+   A deliberate scale mismatch is run as a **diagnostic, never a blocker**. The
+   earlier draft made non-degradation-under-mismatch a failure, which would have
+   failed a scale-robust model — perverse. Record what mismatch does and move on.
 
 ## Risks
 
