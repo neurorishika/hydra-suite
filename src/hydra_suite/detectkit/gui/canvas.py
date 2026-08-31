@@ -154,6 +154,18 @@ class OBBCanvas(QGraphicsView):
     # Image loading
     # ------------------------------------------------------------------
 
+    def image_size(self) -> "tuple[int, int] | None":
+        """(h, w) of the loaded image, or None if nothing is loaded.
+
+        Exists so callers that need the frame's dimensions do not decode the
+        file again -- load_image already did, and at 4512^2 each decode is
+        ~100 ms of a keypress.
+        """
+        if self._pix_item is None:
+            return None
+        pixmap = self._pix_item.pixmap()
+        return int(pixmap.height()), int(pixmap.width())
+
     def load_image(self, image_path: str) -> bool:
         """Load an image from *image_path* via OpenCV."""
         bgr = cv2.imread(image_path)
@@ -261,6 +273,13 @@ class OBBCanvas(QGraphicsView):
             label_name = lookup.get(class_id, f"class_{class_id}")
             if show_confidence and confidence is not None:
                 label_text = f"{label_name} ({confidence:.2f})"
+            elif show_confidence:
+                # A layer that ASKED for confidence and has none must not
+                # fall back to the class id: "(0)" beside a mask reads as a
+                # confidence of 0.00. Staged escalation labels carry no
+                # confidence (data/al/labels.py writes class id + coords
+                # only), so this is the live path for that layer.
+                label_text = label_name
             else:
                 label_text = f"{label_name} ({class_id})"
             txt_item = QGraphicsTextItem(label_text)

@@ -105,3 +105,55 @@ def test_escalation_overlay_is_a_polygon_native_layer():
 
     refresh = inspect.getsource(MainWindow._refresh_escalation_overlay)
     assert "GeometryLevel.POLYGON" in refresh
+
+
+def test_the_escalation_layer_is_cleared_even_when_the_frame_fails_to_load():
+    """`if not ok: return` fired BEFORE the refresh, so navigating to a
+    corrupt frame left the previous frame's magenta masks floating over the
+    previous frame's pixmap with GT and predictions already gone."""
+    import inspect
+
+    from hydra_suite.detectkit.gui.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow.show_image)
+    clear_at = source.index("clear_escalation_detections")
+    bail_at = source.index("if not ok:")
+    assert clear_at < bail_at
+
+
+def test_the_overlay_does_not_decode_the_frame_a_third_time():
+    """canvas.load_image already decoded it; a second decode for (h, w) cost
+    ~100 ms per keypress on 4512^2 frames, and the escalation overlay added
+    a third."""
+    import inspect
+
+    from hydra_suite.detectkit.gui.main_window import MainWindow
+
+    assert "cv2.imread" not in inspect.getsource(MainWindow._refresh_escalation_overlay)
+    assert "cv2.imread" not in inspect.getsource(MainWindow.show_image)
+
+
+def test_reviewing_escalations_refreshes_the_overlay_directly():
+    """Accept/Reject cleared the overlay only INCIDENTALLY, via the dataset
+    panel resetting its selection to row 0. A selection-preserving refresh
+    would have left accepted or rejected masks on screen with nothing
+    anywhere calling for a redraw."""
+    import inspect
+
+    from hydra_suite.detectkit.gui import escalation_actions
+
+    source = inspect.getsource(escalation_actions.on_review_escalations)
+    assert "_refresh_escalation_overlay" in source
+
+
+def test_canvas_reports_the_loaded_image_size():
+    import numpy as np
+    from PySide6.QtWidgets import QApplication
+
+    from hydra_suite.detectkit.gui.canvas import OBBCanvas
+
+    QApplication.instance() or QApplication([])
+    canvas = OBBCanvas()
+    assert canvas.image_size() is None
+    canvas.set_image_array(np.zeros((37, 61, 3), dtype=np.uint8))
+    assert canvas.image_size() == (37, 61)

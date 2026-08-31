@@ -2057,12 +2057,10 @@ class DetectKitMainWindow(QMainWindow):
         )
         if label_path is None:
             return
-        import cv2
-
-        img = cv2.imread(image_path)
-        if img is None:
+        size = self._canvas.image_size()
+        if size is None:
             return
-        h, w = img.shape[:2]
+        h, w = size
         # No class_id_map: staged ids index the STAGING dir's classes.txt,
         # not the project's class list, so remapping them would mislabel.
         dets = parse_obb_label(label_path, w, h)
@@ -2085,41 +2083,45 @@ class DetectKitMainWindow(QMainWindow):
         self._last_prediction_request = None
         self._canvas.clear_gt_detections()
         self._canvas.clear_pred_detections()
+        # Cleared alongside GT and predictions, BEFORE the load can bail:
+        # otherwise navigating to an unreadable frame left the previous
+        # frame's staged masks floating over the previous frame's pixmap
+        # with everything else already gone.
+        self._canvas.clear_escalation_detections()
         ok = self._canvas.load_image(image_path)
         if not ok:
             return
 
         label_path = find_label_for_image(Path(image_path), source_path)
-        if label_path is not None:
-            import cv2
-
-            img = cv2.imread(image_path)
-            if img is not None:
-                h, w = img.shape[:2]
-                class_names = self._project.class_names if self._project else ["object"]
-                class_id_map = None
-                if self._project is not None:
-                    try:
-                        class_id_map = source_class_id_map(
-                            source_path, self._project.class_names
-                        )
-                    except Exception:
-                        class_id_map = {}
-                        logger.warning(
-                            "Skipping incompatible source labels for preview: %s",
-                            source_path,
-                            exc_info=True,
-                        )
-                dets = parse_obb_label(label_path, w, h, class_id_map=class_id_map)
-                native_level, reviewed = _resolve_source_render_state(
-                    self._project, source_path
-                )
-                self._canvas.set_gt_detections_multi_level(
-                    dets,
-                    class_names=class_names,
-                    native_level=native_level,
-                    reviewed=reviewed,
-                )
+        # Dimensions from the pixmap load_image just built. Decoding the
+        # file again here cost ~100 ms per keypress on 4512^2 frames.
+        size = self._canvas.image_size()
+        if label_path is not None and size is not None:
+            h, w = size
+            class_names = self._project.class_names if self._project else ["object"]
+            class_id_map = None
+            if self._project is not None:
+                try:
+                    class_id_map = source_class_id_map(
+                        source_path, self._project.class_names
+                    )
+                except Exception:
+                    class_id_map = {}
+                    logger.warning(
+                        "Skipping incompatible source labels for preview: %s",
+                        source_path,
+                        exc_info=True,
+                    )
+            dets = parse_obb_label(label_path, w, h, class_id_map=class_id_map)
+            native_level, reviewed = _resolve_source_render_state(
+                self._project, source_path
+            )
+            self._canvas.set_gt_detections_multi_level(
+                dets,
+                class_names=class_names,
+                native_level=native_level,
+                reviewed=reviewed,
+            )
 
         self._refresh_escalation_overlay()
 

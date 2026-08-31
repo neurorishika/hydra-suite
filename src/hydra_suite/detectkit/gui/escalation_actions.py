@@ -442,3 +442,9 @@ def on_review_escalations(window) -> None:
     window._save_current_project()
     window._dataset_panel.refresh_sources(window._project)
     window._tools_panel.refresh_overview()
+    # Directly, not incidentally. The staged-mask overlay happened to clear
+    # today only because refresh_sources resets the panel's selection to row
+    # 0, which re-enters show_image; a selection-preserving refresh would
+    # leave accepted or rejected masks on screen with nothing asking for a
+    # redraw. A re-threshold also rewrites the staged labels underneath us.
+    window._refresh_escalation_overlay()

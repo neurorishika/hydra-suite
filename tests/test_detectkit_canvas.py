@@ -517,3 +517,21 @@ def test_clear_all_drops_the_escalation_layer(qapp):
     assert canvas._esc_obb_items == []
     assert canvas._esc_level_items == {}
     canvas._apply_visibility()  # must not raise
+
+
+def test_a_detection_without_confidence_is_labelled_by_name_alone(qapp):
+    """Staged labels carry no confidence -- data/al/labels.py writes only the
+    class id and coordinates. Falling back to "name (class_id)" printed
+    "worker ant (0)" over every staged mask, and a (0) next to a mask reads
+    as confidence 0.00, which is the opposite of the truth."""
+    from hydra_suite.training.geometry_levels import GeometryLevel
+
+    canvas = OBBCanvas()
+    canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
+    canvas.set_escalation_detections(
+        [{"class_id": 0, "polygon_px": _poly()}],
+        class_names=["worker ant"],
+        native_level=GeometryLevel.POLYGON,
+    )
+    text = canvas._esc_level_label_items[GeometryLevel.POLYGON][0].toPlainText()
+    assert text == "worker ant"
