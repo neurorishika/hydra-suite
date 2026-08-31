@@ -1,7 +1,6 @@
 # DetectKit Frame-Granular Review — Design
 
-**Status:** Shipped — implemented on branch `feat/detectkit-frame-granular-review`
-(merge sha not yet known at doc-close time; this branch has not been merged to `main`)
+**Status:** Shipped — merged to main (293c45bb)
 **Date:** 2026-08-31
 **Scope:** `detectkit/jobs/`, `detectkit/gui/`, `data/al/`, new `data/al/merge.py`
 
