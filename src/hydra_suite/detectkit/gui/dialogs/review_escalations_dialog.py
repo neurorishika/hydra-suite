@@ -15,14 +15,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hydra_suite.data.al.merge import MergeMode
 from hydra_suite.widgets.dialogs import BaseDialog
 
-from ...jobs.sam2_escalation import accept_pending_escalation, reject_pending_escalation
-from ...jobs.semantic_escalation import (
-    accept_pending_semantic_escalation,
-    rethreshold_floor_for,
-    rethreshold_staged,
-)
+from ...jobs.semantic_escalation import rethreshold_floor_for, rethreshold_staged
+from ...jobs.staged_review import accept_all, finish_review, reject_all
 
 
 class ReviewEscalationsDialog(BaseDialog):
@@ -52,10 +49,9 @@ class ReviewEscalationsDialog(BaseDialog):
         layout = QVBoxLayout(container)
         intro = QLabel(
             "These sources have a staged segmentation result awaiting review.\n\n"
-            "Geometry (SAM2) results REPLACE the source's own labels — same "
-            "instances, upgraded to masks. Semantic (SAM3) results become a NEW "
-            "SIBLING source and leave the original untouched, because they are a "
-            "different instance set at a different geometry convention.\n\n"
+            "Accepting applies the staged result to the source's own labels, "
+            "in place — geometry (SAM2) and semantic (SAM3) results are both "
+            "reviewed and applied the same way.\n\n"
             "Accepted sources are marked unreviewed and are excluded from "
             'training until you use "Mark reviewed…" for them.'
         )
@@ -117,15 +113,12 @@ class ReviewEscalationsDialog(BaseDialog):
             src = item.data(Qt.UserRole)
             try:
                 if accept:
-                    if src.staged_review.producer == "sam3":
-                        accept_pending_semantic_escalation(
-                            src, self._project, self._project_dir
-                        )
-                    else:
-                        accept_pending_escalation(src, self._project_dir)
+                    accept_all(src, mode=MergeMode.OVERWRITE)
+                    finish_review(src, self._project_dir)
                     self.accepted_names.append(src.name)
                 else:
-                    reject_pending_escalation(src, self._project_dir)
+                    reject_all(src)
+                    finish_review(src, self._project_dir)
                     self.rejected_names.append(src.name)
             except Exception as exc:
                 QMessageBox.warning(self, "Review Escalations", str(exc))

@@ -23,12 +23,20 @@ def qapp():
 
 
 def _make_pending_source(tmp_path, name="orig"):
+    import numpy as np
+    from PIL import Image
+
     from hydra_suite.detectkit.gui.models import OBBSource, StagedReview
 
     source_root = tmp_path / name
     (source_root / "labels").mkdir(parents=True)
     (source_root / "images").mkdir(parents=True)
     (source_root / "classes.txt").write_text("ant\n", encoding="utf-8")
+
+    # accept_frame reads the frame size off the image, not the label.
+    Image.fromarray(np.zeros((100, 200, 3), dtype=np.uint8)).save(
+        source_root / "images" / "a.png"
+    )
 
     # Real staging layout: <project_dir>/artifacts/pending_escalations/<dir>.
     # accept/reject only delete paths with that shape (see
