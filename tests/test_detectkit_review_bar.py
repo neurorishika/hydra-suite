@@ -6,6 +6,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 pytest.importorskip("PySide6")
 
+from types import SimpleNamespace
+
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from hydra_suite.detectkit.gui.panels.review_bar import ReviewBar  # noqa: E402
@@ -89,3 +91,69 @@ def test_a_complete_review_says_so(bar):
     bar.set_review_state("sam2", "v", 10, 10, can_rethreshold=False)
 
     assert "complete" in bar.progress_text().lower()
+
+
+@pytest.fixture
+def window():
+    """A DetectKitMainWindow on a live QApplication, cleaned up after.
+
+    NO pytest-qt (not installed; no test in this repo uses it -- see the
+    fixture note above). These are the FIRST tests in the suite to construct
+    a DetectKitMainWindow, so run this file on its own the first time and
+    confirm it exits cleanly rather than aborting. If construction crashes
+    the interpreter, fall back to testing the handlers as unbound functions
+    against a SimpleNamespace stub and say so in the commit message.
+    """
+    from hydra_suite.detectkit.gui import main_window as mw
+
+    QApplication.instance() or QApplication([])
+    win = mw.DetectKitMainWindow()
+    yield win
+    win.deleteLater()
+
+
+def test_accepting_a_frame_refreshes_both_layers(window, monkeypatch, tmp_path):
+    """Accept must redraw GT (the change landed) and staged (it is decided).
+
+    Directly, not incidentally: a selection-preserving refresh would
+    otherwise leave the accepted proposal on screen with nothing asking for
+    a redraw.
+    """
+    from hydra_suite.data.al.merge import MergeMode
+    from hydra_suite.detectkit.gui import main_window as mw
+
+    refreshed: list = []
+    monkeypatch.setattr(
+        window, "_refresh_overlays", lambda keys=None: refreshed.append(keys)
+    )
+    monkeypatch.setattr(window, "_current_staged_rel", lambda: "a.txt")
+    # SimpleNamespace, not object(): _on_review_accept ends by calling
+    # _offer_finish_if_complete -> is_complete, which reads staged_review.
+    monkeypatch.setattr(
+        window, "_current_source_obj", lambda: SimpleNamespace(staged_review=None)
+    )
+    monkeypatch.setattr(window, "_save_current_project", lambda: None)
+    monkeypatch.setattr(window, "_sync_review_bar", lambda: None)
+    monkeypatch.setattr(mw, "accept_frame", lambda *a, **k: None)
+
+    window._on_review_accept(MergeMode.ADD_NEW)
+
+    assert refreshed and set(refreshed[-1]) == {"gt", "escalation"}
+
+
+def test_next_undecided_selects_the_first_frame_without_a_decision(window, monkeypatch):
+    from hydra_suite.detectkit.gui import main_window as mw
+
+    monkeypatch.setattr(mw, "staged_frames", lambda root: ["a.txt", "b.txt", "c.txt"])
+    monkeypatch.setattr(mw, "read_decisions", lambda root: {"a.txt": "rejected"})
+    selected: list = []
+    monkeypatch.setattr(
+        window._dataset_panel,
+        "select_image_by_relative_label",
+        lambda rel: selected.append(rel),
+    )
+    monkeypatch.setattr(window, "_current_staged_root", lambda: "/tmp/staging")
+
+    window._on_review_next_undecided()
+
+    assert selected == ["b.txt"]

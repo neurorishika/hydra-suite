@@ -51,12 +51,17 @@ def test_escalation_actions_module_has_handlers():
 
     assert callable(escalation_actions.on_escalate_geometry)
     assert callable(escalation_actions.on_semantic_escalation)
-    assert callable(escalation_actions.on_review_escalations)
+    # on_review_escalations was retired by the frame-granular review task:
+    # its one irreplaceable feature (SAM3 re-thresholding) moved to the
+    # review bar, and "jump to a staged review" is now
+    # MainWindow._on_go_to_staged_review.
+    assert getattr(escalation_actions, "on_review_escalations", None) is None
     # _on_mark_reviewed was not moved -- it stays a MainWindow method.
     assert callable(getattr(MainWindow, "_on_mark_reviewed", None))
     # The moved methods must no longer exist on MainWindow.
     assert getattr(MainWindow, "_on_escalate_to_segment_sam2", None) is None
     assert getattr(MainWindow, "_on_review_escalations", None) is None
+    assert callable(getattr(MainWindow, "_on_go_to_staged_review", None))
 
 
 def test_escalate_dialog_preselect_source(qapp):
@@ -93,7 +98,7 @@ def test_escalation_finish_defers_dialog_past_progress_close():
     from hydra_suite.detectkit.gui import escalation_actions
 
     source = inspect.getsource(escalation_actions.on_escalate_geometry)
-    assert "on_review_escalations" in source
+    assert "_on_go_to_staged_review" in source
     assert 'getattr(result, "staged"' in source
 
     handle_result_start = source.index("def _handle_result")
@@ -109,7 +114,7 @@ def test_escalation_finish_defers_dialog_past_progress_close():
     assert "QMessageBox" not in handle_result_body
     assert (
         "ReviewEscalationsDialog" in finish_body
-        or "on_review_escalations" in finish_body
+        or "_on_go_to_staged_review" in finish_body
     )
 
 

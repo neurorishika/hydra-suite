@@ -171,10 +171,12 @@ def on_escalate_geometry(window, preselect: str | None = None) -> None:
                     f"Staged {len(staged)} source(s) for review: "
                     f"{', '.join(staged)}.\n\n"
                     f"{primed} instance(s) primed, {fell_back} fell back "
-                    f"to the original box.{skipped_note}"
+                    f"to the original box.{skipped_note}\n\n"
+                    "Use the review bar on the annotation preview to accept "
+                    "or reject each frame."
                 ),
             )
-            on_review_escalations(window)
+            window._on_go_to_staged_review()
         else:
             QMessageBox.information(
                 window,
@@ -408,43 +410,3 @@ def resolve_reference_body_px(project) -> tuple[float, str]:
         note += ", a capped sample)" if truncated else ")"
         return measured, note
     return 0.0, "nothing found — enter one, or tiling stays off"
-
-
-def on_review_escalations(window) -> None:
-    """Open the review dialog for every source with a pending escalation,
-    regardless of when it was staged. Reachable independent of an
-    escalation run having just finished, so closing the dialog without
-    acting never strands a pending escalation."""
-    if window._project is None:
-        QMessageBox.information(window, "Review Escalations", "Open a project first.")
-        return
-
-    pending_sources = [
-        s for s in window._project.sources if s.staged_review is not None
-    ]
-    if not pending_sources:
-        QMessageBox.information(
-            window,
-            "Review Escalations",
-            "There are no pending escalations to review.",
-        )
-        return
-
-    from .dialogs.review_escalations_dialog import ReviewEscalationsDialog
-
-    review_dlg = ReviewEscalationsDialog(
-        pending_sources,
-        parent=window,
-        project=window._project,
-        project_dir=window._project.project_dir,
-    )
-    review_dlg.exec()
-    window._save_current_project()
-    window._dataset_panel.refresh_sources(window._project)
-    window._tools_panel.refresh_overview()
-    # Directly, not incidentally. The staged-mask overlay happened to clear
-    # today only because refresh_sources resets the panel's selection to row
-    # 0, which re-enters show_image; a selection-preserving refresh would
-    # leave accepted or rejected masks on screen with nothing asking for a
-    # redraw. A re-threshold also rewrites the staged labels underneath us.
-    window._refresh_escalation_overlay()
