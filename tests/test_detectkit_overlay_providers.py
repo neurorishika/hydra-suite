@@ -120,8 +120,12 @@ def test_prediction_provider_returns_none_with_no_predictions(source_tree):
 
 def _staged(tmp_path, target_level):
     staged = tmp_path / "staged"
+    # labels/f0001.txt, NOT labels/images/f0001.txt: the staged tree mirrors
+    # the source's images/ tree, and that mirroring IS the review key. The
+    # old nesting only resolved via find_staged_label_for_image's recursive
+    # fallback, which no longer agrees with the decisions key.
     _write(
-        staged / "labels" / "images" / "f0001.txt",
+        staged / "labels" / "f0001.txt",
         ["0 0.2 0.2 0.4 0.2 0.4 0.4 0.2 0.4"],
     )
     (staged / "classes.txt").write_text("prompt_a\n")
@@ -197,6 +201,35 @@ def test_the_escalation_layer_stacks_below_predictions(source_tree, tmp_path):
     esc = StagedReviewProvider().build(ctx)
     pred = PredictionProvider().build(ctx)
     assert gt.z < esc.z < pred.z
+
+
+def test_staged_layer_disappears_once_the_frame_is_decided(source_tree, tmp_path):
+    from hydra_suite.detectkit.jobs.staged_review import (
+        ACCEPTED_ADD_NEW,
+        review_key_for_image,
+        write_decisions,
+    )
+
+    staged = _staged(tmp_path, "obb")
+    project = _project(source_tree, staged_review=staged)
+    ctx = _ctx(project, source_tree)
+    assert StagedReviewProvider().build(ctx) is not None
+
+    rel = review_key_for_image(source_tree.root, ctx.image_path)
+    assert rel == "f0001.txt"
+    write_decisions(staged.staged_path, {rel: ACCEPTED_ADD_NEW})
+
+    assert StagedReviewProvider().build(ctx) is None
+
+
+def test_a_decision_on_another_frame_does_not_hide_this_one(source_tree, tmp_path):
+    from hydra_suite.detectkit.jobs.staged_review import REJECTED, write_decisions
+
+    staged = _staged(tmp_path, "obb")
+    project = _project(source_tree, staged_review=staged)
+    write_decisions(staged.staged_path, {"some/other/frame.txt": REJECTED})
+
+    assert StagedReviewProvider().build(_ctx(project, source_tree)) is not None
 
 
 def test_resolve_native_level_and_reviewed_reads_the_matching_source():
