@@ -67,11 +67,22 @@ def staged_frames(staged_root: str | Path) -> list[str]:
     decisions.json, which round-trips through JSON on every platform, and
     they mirror the source's images/ tree exactly (the same key
     `_origin_image_for` and `find_staged_label_for_image` already rely on).
+
+    Zero-byte staged label files are excluded. A producer never writes one
+    anymore (684a14fa), but a review staged on older code can still have
+    them on disk after an upgrade, and an empty file is not a proposal --
+    treating it as a review frame would let bulk operations (`accept_all`,
+    progress, `is_complete`) walk into it and, via `accept_frame`, overwrite
+    real ground truth with nothing.
     """
     labels = Path(staged_root) / "labels"
     if not labels.is_dir():
         return []
-    return sorted(p.relative_to(labels).as_posix() for p in labels.rglob("*.txt"))
+    return sorted(
+        p.relative_to(labels).as_posix()
+        for p in labels.rglob("*.txt")
+        if p.stat().st_size > 0
+    )
 
 
 def review_key_for_image(source_path: str | Path, image_path: str | Path) -> str | None:
@@ -391,6 +402,18 @@ def accept_frame(
         raise RuntimeError(
             f"Staged label '{rel}' is missing from {staged_root / 'labels'}; "
             "nothing was changed."
+        )
+    if staged_label.stat().st_size == 0:
+        # `staged_frames` already keeps empty labels out of bulk operations,
+        # but `_current_staged_rel` derives its key from the on-screen image
+        # rather than from `staged_frames`, so a user can still navigate
+        # straight to one and click Replace. An empty staged label is not a
+        # proposal -- there is nothing to accept -- and under OVERWRITE it
+        # would silently delete the user's hand-curated ground truth for
+        # this frame. Refuse instead; reject_frame still works normally.
+        raise RuntimeError(
+            f"Staged proposal for '{rel}' is empty; there is nothing to accept. "
+            "Reject this frame instead."
         )
 
     ensure_snapshot(source, staged_root)

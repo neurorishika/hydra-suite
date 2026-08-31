@@ -52,13 +52,20 @@ def test_decisions_read_as_empty_when_absent(tmp_path):
 
 
 def test_staged_frames_are_sorted_posix_relative_paths(tmp_path):
-    staged = _staging(tmp_path, {"b.txt": "", "sub/a.txt": ""})
+    # Non-empty filler content: an empty staged label is excluded by
+    # `staged_frames` (see test_staged_frames_excludes_zero_byte_labels),
+    # which is irrelevant to what this test is checking.
+    staged = _staging(tmp_path, {"b.txt": "content\n", "sub/a.txt": "content\n"})
 
     assert sr.staged_frames(staged) == ["b.txt", "sub/a.txt"]
 
 
 def test_review_progress_counts_decided_over_total(tmp_path):
-    staged = _staging(tmp_path, {"a.txt": "", "b.txt": "", "c.txt": ""})
+    # Non-empty filler content: an empty staged label is excluded by
+    # `staged_frames` and would not count toward the total.
+    staged = _staging(
+        tmp_path, {"a.txt": "content\n", "b.txt": "content\n", "c.txt": "content\n"}
+    )
     sr.write_decisions(staged, {"a.txt": sr.REJECTED})
 
     assert sr.review_progress(staged) == (1, 3)
@@ -660,20 +667,20 @@ def test_review_key_for_image_uses_the_full_relative_path_not_the_basename(tmp_p
     assert key == "sub/f0001.txt"
 
 
-def test_accepting_an_empty_staged_label_still_overwrites_current_semantics(tmp_path):
-    """Pin `accept_frame`'s CURRENT behaviour on an empty staged label file.
+def test_accepting_an_empty_staged_label_refuses_rather_than_overwrites(tmp_path):
+    """`accept_frame` must REFUSE an empty staged label, not apply it.
 
     The producers (`semantic_escalation.py`, `sam2_escalation.py`,
     `inference_stager.py`) are all fixed to never WRITE a zero-record
     staged label in the first place (the empty-staged-label-deletes-GT
-    regression). This test does not re-guard that -- it guards the other
-    half: IF an empty staged label somehow exists on disk (a hand-edited
-    staging dir, a bug in a future producer, a partially-written file from
-    an external tool), `accept_frame` must not have some other silent
-    surprise. Today it applies the empty result under OVERWRITE exactly as
-    it would any other staged content -- i.e. it DOES clear the frame's
-    labels. Pinned explicitly so a change to this semantic is a deliberate,
-    reviewed decision, not an accident.
+    regression, 684a14fa). But a review staged on OLDER code before an
+    upgrade can still have empty label files sitting on disk, and the user
+    can navigate straight to one (`_current_staged_rel` derives its key
+    from the on-screen image, not from `staged_frames`) and click Replace.
+    An empty proposal is not a proposal -- there is nothing to accept -- so
+    `accept_frame` must raise instead of silently deleting the user's
+    hand-curated ground truth under `MergeMode.OVERWRITE`. Rejecting such a
+    frame must still work; only accepting is refused.
     """
     source, staged = _wired(
         tmp_path,
@@ -681,10 +688,58 @@ def test_accepting_an_empty_staged_label_still_overwrites_current_semantics(tmp_
         {"a.txt": ""},
     )
 
-    sr.accept_frame(source, "a.txt", mode=MergeMode.OVERWRITE)
+    with pytest.raises(RuntimeError):
+        sr.accept_frame(source, "a.txt", mode=MergeMode.OVERWRITE)
 
     out = read_label_file(Path(source.path) / "labels" / "a.txt", (100, 200))
-    assert out == []
+    assert len(out) == 1
+
+
+def test_staged_frames_excludes_zero_byte_labels(tmp_path):
+    """A zero-byte staged label is not a review frame -- it is excluded from
+    `staged_frames`, so bulk operations, progress counting and "Next
+    Undecided" all skip it, while non-empty staged labels still surface
+    normally.
+    """
+    staged = _staging(
+        tmp_path,
+        {
+            "a.txt": _obb_line(0, 0, 20, 20),
+            "b.txt": "",
+            "c.txt": _obb_line(10, 10, 30, 30),
+        },
+    )
+
+    assert sr.staged_frames(staged) == ["a.txt", "c.txt"]
+
+
+def test_review_progress_all_empty_labels_reads_as_zero_frames(tmp_path):
+    """A staging dir whose labels are ALL zero-byte must report zero total
+    frames (routing it to the empty-review Discard path from 684a14fa),
+    not a review stuck at 0/N that can never be completed.
+    """
+    source, staged = _wired(tmp_path, {}, {"a.txt": "", "b.txt": ""})
+
+    decided, total = sr.review_progress(staged)
+    assert (decided, total) == (0, 0)
+    assert sr.is_complete(source) is False
+
+
+def test_reject_frame_still_works_on_an_empty_staged_label(tmp_path):
+    """Rejecting is how the user gets rid of an empty staged proposal; it
+    must keep working even though `accept_frame` now refuses it.
+    """
+    source, staged = _wired(
+        tmp_path,
+        {"a.txt": _obb_line(0, 0, 20, 20)},
+        {"a.txt": ""},
+    )
+
+    sr.reject_frame(source, "a.txt")
+
+    assert sr.read_decisions(staged) == {"a.txt": sr.REJECTED}
+    out = read_label_file(Path(source.path) / "labels" / "a.txt", (100, 200))
+    assert len(out) == 1
 
 
 def test_ensure_snapshot_is_crash_atomic(tmp_path, monkeypatch):
