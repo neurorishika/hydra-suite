@@ -92,7 +92,7 @@ class OverlayLayer:
     emphasis: Emphasis | None = None     # e.g. the unreviewed hatch
     derive_levels: bool = True    # False => draw only at native_level
     style: LayerStyle | None = None      # None => per-level default styles
-    frame_key: str | None = None         # for InstanceRef (§4)
+    frame_key: str | None = None         # for InstanceRef (§4; DROPPED)
 ```
 
 `LabelMode` replaces today's `show_confidence` boolean, which could not
@@ -183,8 +183,10 @@ lives in exactly one small class.
 
 ### 4. Stable instance identity
 
-Each drawn item carries `item.setData(0, InstanceRef(layer_key, frame_rel,
-index))`. Nothing consumes it in this refactor.
+**Not implemented — see the Override note above.** Retained as a record.
+
+Each drawn item would carry `item.setData(0, InstanceRef(layer_key,
+frame_rel, index))`. Nothing consumes it in this refactor.
 
 It is specified now because retrofitting identity later means revisiting
 every provider and every draw path, whereas adding it during a rewrite of
@@ -273,7 +275,21 @@ either arrives:
 - the **first per-instance review interaction** (click-to-accept), which
   needs §4 and would otherwise have to retrofit it.
 
-**Override (2026-08-31):** scheduled by explicit user request ahead of
-either trigger, and ahead of the frame-granular review work it was
-originally sequenced behind. Implementation plan:
+**Override (2026-08-31):** the user has confirmed that **neither trigger is
+planned** — no fourth layer, no per-instance interaction. The work is
+scheduled anyway, on the maintainability argument in the Problem section
+alone, and sequenced **after** the frame-granular review programme.
+
+Two consequences:
+
+- **§4 is dropped from implementation.** Stable instance identity was
+  justified solely as the precondition for per-instance accept/reject.
+  With that dead, stamping an `InstanceRef` onto every drawn item on the
+  hot draw path buys nothing. The section stays as the record of what
+  retrofitting it would cost.
+- The review programme may fold model predictions into staged reviews,
+  which would take the canvas from three layers to two. Re-confirm the
+  registry is still worth its cost once that lands.
+
+Implementation plan:
 `docs/superpowers/plans/2026-08-31-detectkit-overlay-layer-registry.md`.
