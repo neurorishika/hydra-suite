@@ -24,6 +24,10 @@ from hydra_suite.detectkit.jobs.semantic_escalation import (  # noqa: E402
 from hydra_suite.utils.geometry_levels import GeometryLevel  # noqa: E402
 
 
+def _polys(canvas, key):
+    return [i for b in canvas.layer_items(key).values() for i in b.obb_items]
+
+
 @pytest.fixture(scope="module")
 def qapp():
     return QApplication.instance() or QApplication([])
@@ -63,8 +67,8 @@ def test_complete_frame_dialog_shows_overlays_and_measured_estimates(qapp, tmp_p
     assert "source-a" in text
     assert "60 images" in text and "2 min" in text
     assert "120 images" in text and "4 min" in text
-    assert len(dialog._canvas._pred_obb_items) == 1
-    assert len(dialog._canvas._gt_obb_items) == 1
+    assert len(_polys(dialog._canvas, "pred")) == 1
+    assert len(_polys(dialog._canvas, "gt")) == 1
     assert dialog._canvas._pix_item is not None
 
 

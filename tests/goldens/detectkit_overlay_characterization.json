@@ -1,0 +1,904 @@
+{
+  "aabb_native": [
+    {
+      "type": "label",
+      "stack_index": 0,
+      "text": "worker (1)",
+      "colour": "#ff5050",
+      "pos": [
+        100.0,
+        100.0
+      ],
+      "font_px": 10,
+      "visible": true
+    },
+    {
+      "type": "polygon",
+      "stack_index": 1,
+      "points": [
+        [
+          100.0,
+          100.0
+        ],
+        [
+          150.0,
+          105.0
+        ],
+        [
+          145.0,
+          140.0
+        ],
+        [
+          95.0,
+          135.0
+        ],
+        [
+          100.0,
+          100.0
+        ]
+      ],
+      "pen_colour": "#ff5050",
+      "pen_style": 1,
+      "pen_width": 2,
+      "pen_cosmetic": true,
+      "brush_style": 0,
+      "brush_alpha": 255,
+      "visible": true
+    },
+    {
+      "type": "label",
+      "stack_index": 2,
+      "text": "ant (0)",
+      "colour": "#00ff00",
+      "pos": [
+        10.0,
+        10.0
+      ],
+      "font_px": 10,
+      "visible": true
+    },
+    {
+      "type": "polygon",
+      "stack_index": 3,
+      "points": [
+        [
+          10.0,
+          10.0
+        ],
+        [
+          60.0,
+          12.0
+        ],
+        [
+          58.0,
+          40.0
+        ],
+        [
+          8.0,
+          38.0
+        ],
+        [
+          10.0,
+          10.0
+        ]
+      ],
+      "pen_colour": "#00ff00",
+      "pen_style": 1,
+      "pen_width": 2,
+      "pen_cosmetic": true,
+      "brush_style": 0,
+      "brush_alpha": 255,
+      "visible": true
+    }
+  ],
+  "dialog": [
+    {
+      "type": "label",
+      "stack_index": 0,
+      "text": "class_3",
+      "colour": "#ffc800",
+      "pos": [
+        200.0,
+        200.0
+      ],
+      "font_px": 10,
+      "visible": true
+    },
+    {
+      "type": "polygon",
+      "stack_index": 1,
+      "points": [
+        [
+          200.0,
+          200.0
+        ],
+        [
+          240.0,
+          200.0
+        ],
+        [
+          240.0,
+          230.0
+        ],
+        [
+          200.0,
+          230.0
+        ],
+        [
+          200.0,
+          200.0
+        ]
+      ],
+      "pen_colour": "#ffc800",
+      "pen_style": 2,
+      "pen_width": 2,
+      "pen_cosmetic": true,
+      "brush_style": 1,
+      "brush_alpha": 55,
+      "visible": true
+    },
+    {
+      "type": "label",
+      "stack_index": 2,
+      "text": "Ground truth (0.87)",
+      "colour": "#00ff00",
+      "pos": [
+        12.0,
+        11.0
+      ],
+      "font_px": 10,
+      "visible": true
+    },
+    {
+      "type": "polygon",
+      "stack_index": 3,
+      "points": [
+        [
+          12.0,
+          11.0
+        ],
+        [
+          62.0,
+          13.0
+        ],
+        [
+          60.0,
+          41.0
+        ],
+        [
+          10.0,
+          39.0
+        ],
+        [
+          12.0,
+          11.0
+        ]
+      ],
+      "pen_colour": "#00ff00",
+      "pen_style": 2,
+      "pen_width": 2,
+      "pen_cosmetic": true,
+      "brush_style": 1,
+      "brush_alpha": 55,
+      "visible": true
+    },
+    {
+      "type": "label",
+      "stack_index": 4,
+      "text": "class_1 (1)",
+      "colour": "#ff5050",
+      "pos": [
+        100.0,
+        100.0
+      ],
+      "font_px": 10,
+      "visible": true
+    },
+    {
+      "type": "polygon",
+      "stack_index": 5,
+      "points": [
+        [
+          100.0,
+          100.0
+        ],
+        [
+          150.0,
+          105.0
+        ],
+        [
+          145.0,
+          140.0
+        ],
+        [
+          95.0,
+          135.0
+        ],
+        [
+          100.0,
+          100.0
+        ]
+      ],
+      "pen_colour": "#ff5050",
+      "pen_style": 1,
+      "pen_width": 2,
+      "pen_cosmetic": true,
+      "brush_style": 1,
+      "brush_alpha": 65,
+      "visible": true
+    },
+    {
+      "type": "label",
+      "stack_index": 6,
+      "text": "Ground truth (0)",
+      "colour": "#00ff00",
+      "pos": [
+        10.0,
+        10.0
+      ],
+      "font_px": 10,
+      "visible": true
+    },
+    {
+      "type": "polygon",
+      "stack_index": 7,
+      "points": [
+        [
+          10.0,
+          10.0
+        ],
+        [
+          60.0,
+          12.0
+        ],
+        [
+          58.0,
+          40.0
+        ],
+        [
+          8.0,
+          38.0
+        ],
+        [
+          10.0,
+          10.0
+        ]
+      ],
+      "pen_colour": "#00ff00",
+      "pen_style": 1,
+      "pen_width": 2,
+      "pen_cosmetic": true,
+      "brush_style": 1,
+      "brush_alpha": 65,
+      "visible": true
+    }
+  ],
+  "main_window": [
+    {
+      "type": "label",
+      "stack_index": 0,
+      "text": "larva",
+      "colour": "#ffc800",
+      "pos": [
+        200.0,
+        200.0
+      ],
+      "font_px": 10,
+      "visible": true
+    },
+    {
+      "type": "polygon",
+      "stack_index": 1,
+      "points": [
+        [
+          200.0,
+          200.0
+        ],
+        [
+          240.0,
+          200.0
+        ],
+        [
+          240.0,
+          230.0
+        ],
+        [
+          200.0,
+          230.0
+        ],
+        [
+          200.0,
+          200.0
+        ]
+      ],
+      "pen_colour": "#ffc800",
+      "pen_style": 2,
+      "pen_width": 2,
+      "pen_cosmetic": true,
+      "brush_style": 0,
+      "brush_alpha": 255,
+      "visible": true
+    },
+    {
+      "type": "label",
+      "stack_index": 2,
+      "text": "ant (0.87)",
+      "colour": "#00ff00",
+      "pos": [
+        12.0,
+        11.0
+      ],
+      "font_px": 10,
+      "visible": true
+    },
+    {
+      "type": "polygon",
+      "stack_index": 3,
+      "points": [
+        [
+          12.0,
+          11.0
+        ],
+        [
+          62.0,
+          13.0
+        ],
+        [
+          60.0,
+          41.0
+        ],
+        [
+          10.0,
+          39.0
+        ],
+        [
+          12.0,
+          11.0
+        ]
+      ],
+      "pen_colour": "#00ff00",
+      "pen_style": 2,
+      "pen_width": 2,
+      "pen_cosmetic": true,
+      "brush_style": 0,
+      "brush_alpha": 255,
+      "visible": true
+    },
+    {
+      "type": "polygon",
+      "stack_index": 4,
+      "points": [
+        [
+          295.0,
+          300.0
+        ],
+        [
+          360.0,
+          300.0
+        ],
+        [
+          360.0,
+          350.0
+        ],
+        [
+          295.0,
+          350.0
+        ],
+        [
+          295.0,
+          300.0
+        ]
+      ],
+      "pen_colour": "#ff3cc7",
+      "pen_style": 1,
+      "pen_width": 2,
+      "pen_cosmetic": true,
+      "brush_style": 0,
+      "brush_alpha": 255,
+      "visible": true
+    },
+    {
+      "type": "polygon",
+      "stack_index": 5,
+      "points": [
+        [
+          18.0,
+          20.0
+        ],
+        [
+          70.0,
+          20.0
+        ],
+        [
+          70.0,
+          50.0
+        ],
+        [
+          18.0,
+          50.0
+        ],
+        [
+          18.0,
+          20.0
+        ]
+      ],
+      "pen_colour": "#ff3cc7",
+      "pen_style": 1,
+      "pen_width": 2,
+      "pen_cosmetic": true,
+      "brush_style": 0,
+      "brush_alpha": 255,
+      "visible": true
+    },
+    {
+      "type": "label",
+      "stack_index": 6,
+      "text": "class_7",
+      "colour": "#ff3cc7",
+      "pos": [
+        300.0,
+        300.0
+      ],
+      "font_px": 10,
+      "visible": true
+    },
+    {
+      "type": "polygon",
+      "stack_index": 7,
+      "points": [
+        [
+          300.0,
+          300.0
+        ],
+        [
+          360.0,
+          310.0
+        ],
+        [
+          350.0,
+          350.0
+        ],
+        [
+          295.0,
+          340.0
+        ],
+        [
+          300.0,
+          300.0
+        ]
+      ],
+      "pen_colour": "#ff3cc7",
+      "pen_style": 2,
+      "pen_width": 2,
+      "pen_cosmetic": true,
+      "brush_style": 0,
+      "brush_alpha": 255,
+      "visible": true
+    },
+    {
+      "type": "label",
+      "stack_index": 8,
+      "text": "prompt_a",
+      "colour": "#ff3cc7",
+      "pos": [
+        20.0,
+        20.0
+      ],
+      "font_px": 10,
+      "visible": true
+    },
+    {
+      "type": "polygon",
+      "stack_index": 9,
+      "points": [
+        [
+          20.0,
+          20.0
+        ],
+        [
+          70.0,
+          22.0
+        ],
+        [
+          68.0,
+          50.0
+        ],
+        [
+          18.0,
+          48.0
+        ],
+        [
+          20.0,
+          20.0
+        ]
+      ],
+      "pen_colour": "#ff3cc7",
+      "pen_style": 2,
+      "pen_width": 2,
+      "pen_cosmetic": true,
+      "brush_style": 0,
+      "brush_alpha": 255,
+      "visible": true
+    },
+    {
+      "type": "polygon",
+      "stack_index": 10,
+      "points": [
+        [
+          95.0,
+          100.0
+        ],
+        [
+          150.0,
+          100.0
+        ],
+        [
+          150.0,
+          140.0
+        ],
+        [
+          95.0,
+          140.0
+        ],
+        [
+          95.0,
+          100.0
+        ]
+      ],
+      "pen_colour": "#ff5050",
+      "pen_style": 1,
+      "pen_width": 2,
+      "pen_cosmetic": true,
+      "brush_style": 0,
+      "brush_alpha": 255,
+      "visible": true
+    },
+    {
+      "type": "polygon",
+      "stack_index": 11,
+      "points": [
+        [
+          8.0,
+          10.0
+        ],
+        [
+          60.0,
+          10.0
+        ],
+        [
+          60.0,
+          40.0
+        ],
+        [
+          8.0,
+          40.0
+        ],
+        [
+          8.0,
+          10.0
+        ]
+      ],
+      "pen_colour": "#00ff00",
+      "pen_style": 1,
+      "pen_width": 2,
+      "pen_cosmetic": true,
+      "brush_style": 0,
+      "brush_alpha": 255,
+      "visible": true
+    },
+    {
+      "type": "polygon",
+      "stack_index": 12,
+      "points": [
+        [
+          146.4851,
+          140.1485
+        ],
+        [
+          95.0,
+          135.0
+        ],
+        [
+          98.5149,
+          99.8515
+        ],
+        [
+          150.0,
+          105.0
+        ],
+        [
+          146.4851,
+          140.1485
+        ]
+      ],
+      "pen_colour": "#ff5050",
+      "pen_style": 2,
+      "pen_width": 2,
+      "pen_cosmetic": true,
+      "brush_style": 0,
+      "brush_alpha": 255,
+      "visible": true
+    },
+    {
+      "type": "polygon",
+      "stack_index": 13,
+      "points": [
+        [
+          58.8786,
+          40.0351
+        ],
+        [
+          8.0,
+          38.0
+        ],
+        [
+          9.1214,
+          9.9649
+        ],
+        [
+          60.0,
+          12.0
+        ],
+        [
+          58.8786,
+          40.0351
+        ]
+      ],
+      "pen_colour": "#00ff00",
+      "pen_style": 2,
+      "pen_width": 2,
+      "pen_cosmetic": true,
+      "brush_style": 0,
+      "brush_alpha": 255,
+      "visible": true
+    },
+    {
+      "type": "label",
+      "stack_index": 14,
+      "text": "worker (1)",
+      "colour": "#ff5050",
+      "pos": [
+        100.0,
+        100.0
+      ],
+      "font_px": 10,
+      "visible": true
+    },
+    {
+      "type": "polygon",
+      "stack_index": 15,
+      "points": [
+        [
+          100.0,
+          100.0
+        ],
+        [
+          150.0,
+          105.0
+        ],
+        [
+          145.0,
+          140.0
+        ],
+        [
+          95.0,
+          135.0
+        ],
+        [
+          100.0,
+          100.0
+        ]
+      ],
+      "pen_colour": "#ff5050",
+      "pen_style": 3,
+      "pen_width": 2,
+      "pen_cosmetic": true,
+      "brush_style": 1,
+      "brush_alpha": 90,
+      "visible": true
+    },
+    {
+      "type": "label",
+      "stack_index": 16,
+      "text": "ant (0)",
+      "colour": "#00ff00",
+      "pos": [
+        10.0,
+        10.0
+      ],
+      "font_px": 10,
+      "visible": true
+    },
+    {
+      "type": "polygon",
+      "stack_index": 17,
+      "points": [
+        [
+          10.0,
+          10.0
+        ],
+        [
+          60.0,
+          12.0
+        ],
+        [
+          58.0,
+          40.0
+        ],
+        [
+          8.0,
+          38.0
+        ],
+        [
+          10.0,
+          10.0
+        ]
+      ],
+      "pen_colour": "#00ff00",
+      "pen_style": 3,
+      "pen_width": 2,
+      "pen_cosmetic": true,
+      "brush_style": 1,
+      "brush_alpha": 90,
+      "visible": true
+    }
+  ],
+  "unreviewed": [
+    {
+      "type": "polygon",
+      "stack_index": 0,
+      "points": [
+        [
+          95.0,
+          100.0
+        ],
+        [
+          150.0,
+          100.0
+        ],
+        [
+          150.0,
+          140.0
+        ],
+        [
+          95.0,
+          140.0
+        ],
+        [
+          95.0,
+          100.0
+        ]
+      ],
+      "pen_colour": "#ff5050",
+      "pen_style": 1,
+      "pen_width": 2,
+      "pen_cosmetic": true,
+      "brush_style": 0,
+      "brush_alpha": 255,
+      "visible": true
+    },
+    {
+      "type": "polygon",
+      "stack_index": 1,
+      "points": [
+        [
+          8.0,
+          10.0
+        ],
+        [
+          60.0,
+          10.0
+        ],
+        [
+          60.0,
+          40.0
+        ],
+        [
+          8.0,
+          40.0
+        ],
+        [
+          8.0,
+          10.0
+        ]
+      ],
+      "pen_colour": "#00ff00",
+      "pen_style": 1,
+      "pen_width": 2,
+      "pen_cosmetic": true,
+      "brush_style": 0,
+      "brush_alpha": 255,
+      "visible": true
+    },
+    {
+      "type": "label",
+      "stack_index": 2,
+      "text": "worker (1)",
+      "colour": "#ff5050",
+      "pos": [
+        100.0,
+        100.0
+      ],
+      "font_px": 10,
+      "visible": true
+    },
+    {
+      "type": "polygon",
+      "stack_index": 3,
+      "points": [
+        [
+          100.0,
+          100.0
+        ],
+        [
+          150.0,
+          105.0
+        ],
+        [
+          145.0,
+          140.0
+        ],
+        [
+          95.0,
+          135.0
+        ],
+        [
+          100.0,
+          100.0
+        ]
+      ],
+      "pen_colour": "#ff5050",
+      "pen_style": 2,
+      "pen_width": 2,
+      "pen_cosmetic": true,
+      "brush_style": 12,
+      "brush_alpha": 140,
+      "visible": true
+    },
+    {
+      "type": "label",
+      "stack_index": 4,
+      "text": "ant (0)",
+      "colour": "#00ff00",
+      "pos": [
+        10.0,
+        10.0
+      ],
+      "font_px": 10,
+      "visible": true
+    },
+    {
+      "type": "polygon",
+      "stack_index": 5,
+      "points": [
+        [
+          10.0,
+          10.0
+        ],
+        [
+          60.0,
+          12.0
+        ],
+        [
+          58.0,
+          40.0
+        ],
+        [
+          8.0,
+          38.0
+        ],
+        [
+          10.0,
+          10.0
+        ]
+      ],
+      "pen_colour": "#00ff00",
+      "pen_style": 2,
+      "pen_width": 2,
+      "pen_cosmetic": true,
+      "brush_style": 12,
+      "brush_alpha": 140,
+      "visible": true
+    }
+  ]
+}

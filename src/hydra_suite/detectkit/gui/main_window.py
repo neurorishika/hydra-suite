@@ -48,6 +48,7 @@ from .models import (
     InferenceRunSettings,
     SliceTrainingSettings,
 )
+from .overlays import PROVIDERS, FrameContext
 from .panels.dataset_panel import DatasetPanel
 from .panels.tools_panel import ToolsPanel
 from .prediction_preview import (
@@ -71,14 +72,7 @@ from .project import (
     project_exists,
     save_project,
 )
-from .utils import (
-    find_label_for_image,
-    find_staged_label_for_image,
-    list_images_in_source,
-    parse_obb_label,
-    source_class_id_map,
-    staged_class_names,
-)
+from .utils import list_images_in_source
 
 logger = logging.getLogger(__name__)
 
@@ -93,60 +87,6 @@ def _filter_detections_by_confidence(
         for detection in detections
         if float(detection.get("confidence", 0.0)) >= threshold
     ]
-
-
-def _resolve_pending_level(pending):
-    """Geometry level a staged escalation's labels are in.
-
-    ``PendingEscalation.target_level`` is load-bearing: SAM2 converts
-    existing boxes IN PLACE and can stage OBB, while SAM3 stages polygons.
-    Drawing an OBB quad as polygon-native gave it the polygon style AND a
-    derived OBB of the same quad -- a duplicate outline in the wrong style.
-
-    Like ``OBBSource.level`` this is an unvalidated string from project
-    JSON, so it degrades rather than raising: an unparseable value falls
-    back to POLYGON, which is what both producers stage by default.
-    """
-    from hydra_suite.training.geometry_levels import GeometryLevel
-
-    raw = str(getattr(pending, "target_level", "") or "")
-    try:
-        return GeometryLevel.from_str(raw)
-    except ValueError:
-        logger.warning(
-            "Unknown target_level %r on a staged escalation; rendering as polygon",
-            raw,
-        )
-        return GeometryLevel.POLYGON
-
-
-def _resolve_source_render_state(project, source_path):
-    """Return (native_level, reviewed) for the OBBSource at *source_path* in
-    *project*. Falls back to (GeometryLevel.OBB, True) if project is None,
-    no source matches, or the matched source's level string doesn't parse --
-    OBBSource.level is an unvalidated string loaded from project JSON, so a
-    hand-edited or future-version file must degrade gracefully here rather
-    than crashing show_image on every image selection."""
-    from hydra_suite.training.geometry_levels import GeometryLevel
-
-    if project is None:
-        return GeometryLevel.OBB, True
-
-    src_obj = next((s for s in project.sources if s.path == source_path), None)
-    if src_obj is None:
-        return GeometryLevel.OBB, True
-
-    try:
-        native_level = GeometryLevel.from_str(src_obj.level)
-    except ValueError:
-        logger.warning(
-            "Unknown geometry level %r for source %r; rendering as OBB",
-            src_obj.level,
-            source_path,
-        )
-        native_level = GeometryLevel.OBB
-
-    return native_level, src_obj.reviewed
 
 
 class _DetectKitDatasetInferenceWorker(BaseWorker):
@@ -1688,15 +1628,16 @@ class DetectKitMainWindow(QMainWindow):
         if self._project is not None:
             self._project.active_model_path = settings.active_model_path
             self._sync_al_action_enabled()
-        self._canvas.set_overlay_visibility(settings.show_gt, settings.show_pred)
+        self._canvas.set_layer_visible("gt", settings.show_gt)
+        self._canvas.set_layer_visible("pred", settings.show_pred)
+        self._canvas.set_layer_visible("escalation", settings.show_escalation)
         self._canvas.set_class_filter(settings.visible_class_ids)
         self._canvas.set_derived_levels_visible(settings.show_derived_levels)
-        self._canvas.set_escalation_visible(settings.show_escalation)
 
         signature = self._dataset_signature(settings)
 
         if signature is None:
-            self._canvas.clear_pred_detections()
+            self._canvas.remove_layer("pred")
             self._last_prediction_request = None
             return
 
@@ -1704,7 +1645,7 @@ class DetectKitMainWindow(QMainWindow):
             self._project,
             signature[1],
         ):
-            self._canvas.clear_pred_detections()
+            self._canvas.remove_layer("pred")
             self._last_prediction_request = None
             self.statusBar().showMessage(
                 "Selected model does not support direct preview overlays.",
@@ -1715,7 +1656,7 @@ class DetectKitMainWindow(QMainWindow):
         if signature == self._dataset_prediction_signature:
             self._refresh_prediction_overlay(force=True)
         else:
-            self._canvas.clear_pred_detections()
+            self._canvas.remove_layer("pred")
             self._last_prediction_request = None
             self.statusBar().showMessage(
                 "Inference settings changed. Click Run Inference to refresh overlay predictions.",
@@ -1989,36 +1930,13 @@ class DetectKitMainWindow(QMainWindow):
         self.statusBar().showMessage(f"Marked '{choice}' as reviewed.", 4000)
 
     def _refresh_prediction_overlay(self, *, force: bool = False) -> None:
-        if self._project is None or not self._current_image_path:
-            self._canvas.clear_pred_detections()
-            self._last_prediction_request = None
-            return
-
-        settings = self._tools_panel.get_overlay_settings()
-        signature = self._dataset_signature(settings)
-
-        if (
-            signature is None
-            or signature != self._dataset_prediction_signature
-            or self._current_image_path not in self._dataset_predictions
-        ):
-            self._canvas.clear_pred_detections()
-            self._last_prediction_request = None
-            return
-
-        detections = _filter_detections_by_confidence(
-            self._dataset_predictions.get(self._current_image_path, []),
-            settings.confidence_threshold,
-        )
-        self._canvas.set_pred_detections(
-            detections,
-            class_names=self._project.class_names,
-        )
-        self._tools_panel.update_inference_stats(
-            self._visible_inference_stats(settings.confidence_threshold),
-            class_names=self._project.class_names,
-        )
-        self._last_prediction_request = signature
+        self._refresh_overlays(keys=("pred",))
+        if self._project is not None:
+            settings = self._tools_panel.get_overlay_settings()
+            self._tools_panel.update_inference_stats(
+                self._visible_inference_stats(settings.confidence_threshold),
+                class_names=self._project.class_names,
+            )
 
     # ------------------------------------------------------------------
     # Image display
@@ -2053,50 +1971,70 @@ class DetectKitMainWindow(QMainWindow):
             self._canvas.clear_all()
 
     def _refresh_escalation_overlay(self) -> None:
-        """Overlay the current source's staged escalation masks, if any.
+        self._refresh_overlays(keys=("escalation",))
 
-        Cleared unconditionally first: without that, a frame with no staged
-        label would keep showing the PREVIOUS frame's masks, which on a
-        review pass is the most misleading state possible.
+    def _frame_context(self) -> "FrameContext | None":
+        """Everything the providers need about the frame on screen.
 
-        The layer is drawn at the escalation's OWN target level, with the
-        levels beneath it derived -- exactly the shapes a promotion of these
-        labels would produce.
+        The size comes from the pixmap load_image just built. Decoding the
+        file again per provider cost ~100 ms per keypress on 4512^2 frames.
         """
-        self._canvas.clear_escalation_detections()
-        source_path = self._current_source_path
-        image_path = self._current_image_path
-        if not source_path or not image_path or self._project is None:
-            return
-        source = next(
-            (s for s in self._project.sources if str(s.path) == str(source_path)), None
-        )
-        pending = getattr(source, "pending_escalation", None) if source else None
-        if pending is None or not str(getattr(pending, "staged_path", "")).strip():
-            return
-
-        label_path = find_staged_label_for_image(
-            Path(image_path), source_path, pending.staged_path
-        )
-        if label_path is None:
-            return
+        if not self._current_source_path or not self._current_image_path:
+            return None
         size = self._canvas.image_size()
         if size is None:
-            return
-        h, w = size
-        # No class_id_map: staged ids index the STAGING dir's classes.txt,
-        # not the project's class list, so remapping them would mislabel.
-        dets = parse_obb_label(label_path, w, h)
-        if not dets:
-            return
-        self._canvas.set_escalation_detections(
-            dets,
-            class_names=staged_class_names(pending.staged_path),
-            native_level=_resolve_pending_level(pending),
+            return None
+        settings = self._tools_panel.get_overlay_settings()
+        predictions: list[dict] = []
+        signature = self._dataset_signature(settings)
+        if (
+            self._project is not None
+            and signature is not None
+            and signature == self._dataset_prediction_signature
+            and self._current_image_path in self._dataset_predictions
+        ):
+            predictions = _filter_detections_by_confidence(
+                self._dataset_predictions.get(self._current_image_path, []),
+                settings.confidence_threshold,
+            )
+        return FrameContext(
+            project=self._project,
+            source_path=self._current_source_path,
+            image_path=self._current_image_path,
+            size=size,
+            predictions=predictions,
         )
 
+    def _refresh_overlays(self, keys: "tuple[str, ...] | None" = None) -> None:
+        """Ask each provider for its layer and set or remove it.
+
+        A provider returning None means "this layer does not apply to this
+        frame", which removes it. There is no path where a stale layer can
+        survive a frame change -- the bug that left the previous frame's
+        staged masks floating over the new pixmap.
+
+        PROVIDERS is iterated in draw order, which the z values also encode.
+        """
+        ctx = self._frame_context()
+        for provider in PROVIDERS:
+            if keys is not None and provider.key not in keys:
+                continue
+            layer = provider.build(ctx) if ctx is not None else None
+            if layer is None:
+                self._canvas.remove_layer(provider.key)
+            else:
+                self._canvas.set_layer(layer)
+            if provider.key == "pred":
+                self._last_prediction_request = (
+                    None
+                    if layer is None
+                    else self._dataset_signature(
+                        self._tools_panel.get_overlay_settings()
+                    )
+                )
+
     def show_image(self, source_path: str, image_path: str) -> None:
-        """Load an image and overlay GT labels."""
+        """Load an image and overlay GT labels, predictions and staged masks."""
         new_source = str(source_path or "")
         if new_source != self._current_source_path:
             self._dataset_predictions = {}
@@ -2104,52 +2042,16 @@ class DetectKitMainWindow(QMainWindow):
         self._current_source_path = new_source
         self._current_image_path = str(image_path or "")
         self._last_prediction_request = None
-        self._canvas.clear_gt_detections()
-        self._canvas.clear_pred_detections()
-        # Cleared alongside GT and predictions, BEFORE the load can bail:
-        # otherwise navigating to an unreadable frame left the previous
-        # frame's staged masks floating over the previous frame's pixmap
-        # with everything else already gone.
-        self._canvas.clear_escalation_detections()
-        ok = self._canvas.load_image(image_path)
-        if not ok:
+        # Every layer is removed BEFORE the load can bail: otherwise
+        # navigating to an unreadable frame left the previous frame's
+        # overlays floating over the previous frame's pixmap.
+        for provider in PROVIDERS:
+            self._canvas.remove_layer(provider.key)
+        if not self._canvas.load_image(image_path):
             return
 
-        label_path = find_label_for_image(Path(image_path), source_path)
-        # Dimensions from the pixmap load_image just built. Decoding the
-        # file again here cost ~100 ms per keypress on 4512^2 frames.
-        size = self._canvas.image_size()
-        if label_path is not None and size is not None:
-            h, w = size
-            class_names = self._project.class_names if self._project else ["object"]
-            class_id_map = None
-            if self._project is not None:
-                try:
-                    class_id_map = source_class_id_map(
-                        source_path, self._project.class_names
-                    )
-                except Exception:
-                    class_id_map = {}
-                    logger.warning(
-                        "Skipping incompatible source labels for preview: %s",
-                        source_path,
-                        exc_info=True,
-                    )
-            dets = parse_obb_label(label_path, w, h, class_id_map=class_id_map)
-            native_level, reviewed = _resolve_source_render_state(
-                self._project, source_path
-            )
-            self._canvas.set_gt_detections_multi_level(
-                dets,
-                class_names=class_names,
-                native_level=native_level,
-                reviewed=reviewed,
-            )
+        self._refresh_overlays()
 
-        self._refresh_escalation_overlay()
-
-        # If we already have predictions for this image from a previous Run Inference, restore them.
-        self._refresh_prediction_overlay(force=True)
         if (
             self._last_prediction_request is None
             and self._project is not None

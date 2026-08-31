@@ -211,9 +211,17 @@ running inference to look at it does not create reviewable state.
 A **review bar** above the canvas, visible only when the current source has
 a staged review: the four operations, a "next undecided frame" control, and
 a progress counter (`23/140 decided`). The staged proposals are already
-drawn by the escalation overlay layer merged on 2026-08-31; accepting a
-frame refreshes both that layer and the ground-truth layer so the change is
-visible where it happened.
+drawn via the overlay registry merged on 2026-08-31
+(`2026-08-31-detectkit-overlay-layer-registry-design.md`): `MainWindow`
+builds a `FrameContext` and asks `StagedEscalationProvider` (key
+`"escalation"`) for an `OverlayLayer` (whose `.key` field carries
+`"escalation"`), which it hands to `canvas.set_layer(layer)` (single
+argument — the key comes from `layer.key`, not a separate parameter), or
+`canvas.remove_layer("escalation")` when nothing is staged. Accepting a
+frame re-asks both `StagedEscalationProvider` and `GroundTruthProvider` and
+re-applies their layers the same way, so the change is visible where it
+happened. There is no `set_escalation_detections` or `set_gt_detections` to
+call any more — those methods were retired with the three-layer canvas.
 
 The per-source checkbox dialog (`review_escalations_dialog.py`) is retired.
 Its one irreplaceable feature — SAM3 re-thresholding across sources — moves
@@ -266,12 +274,43 @@ Each phase is independently mergeable and leaves the app working:
 
 ## Relationship to the overlay registry spec
 
-`2026-08-31-detectkit-overlay-layer-registry-design.md` is deliberately
-sequenced **after** this work. Its stated triggers are a fourth overlay
-layer or the first per-instance interaction; this design produces neither —
-per-instance work is out of scope, and folding predictions into staged
-reviews likely *reduces* the layer count, since the prediction layer and the
-escalation layer become the same object read from the same directory.
-Building the registry first would mean cutting an abstraction over a layer
-inventory that is about to change. Expect to amend that spec once this
-lands.
+**Amended 2026-08-31, after the registry shipped.** The registry spec
+(`2026-08-31-detectkit-overlay-layer-registry-design.md`) was originally
+sequenced **after** this work, on the reasoning below; the user then had it
+built anyway (see that spec's "Override" note), ahead of this design. Read
+this section as: what folding inference into staged reviews means for the
+registry as it now exists, not as a justification for build order.
+
+The registry replaced the three `set_*`/`clear_*` method families with a
+keyed registry (`OBBCanvas.set_layer`/`remove_layer`/`set_layer_visible`)
+and one provider per data source (`GroundTruthProvider`,
+`StagedEscalationProvider`, `PredictionProvider` in
+`detectkit/gui/overlays/providers.py`, listed in `PROVIDERS`). Each
+provider's `build(ctx: FrameContext) -> OverlayLayer | None` is the only
+place that knows its source's class-id space, confidence handling, and
+geometry level.
+
+Phase 5 of this design ("Inference as a producer") does **not** mean adding
+a canvas layer — the canvas has no notion of "escalation" or "prediction"
+beyond an opaque string key. It means:
+
+- Staged inference output lands in the same staging-directory contract as
+  SAM2/SAM3 (`labels/` + `classes.txt` + `run.json`), so it is drawn by the
+  **existing** `StagedEscalationProvider` — no new provider or layer key is
+  needed for the staged-review overlay itself.
+- The separate, always-on `PredictionProvider` (key `"pred"`, the
+  in-memory `_dataset_predictions` preview drawn with a dashed
+  `LayerStyle`) is unaffected by staging; it remains the live "run and
+  look" path described in §5 above, independent of `decisions.json`.
+- If a later change wants staged inference and the live preview to share
+  one code path, that is a change to `providers.py` (a new or merged
+  `OverlayProvider`), not to `canvas.py` — the registry was built precisely
+  so that adding, removing, or merging a data source is a provider-level
+  change with no `OBBCanvas` edit.
+
+This also means the original "layer count" framing in this section's first
+draft (predictions and escalations "becoming the same object" would reduce
+the canvas's layer count) doesn't hold post-registry: the canvas has no
+fixed layer count to reduce. What can shrink is the number of *providers*,
+which is exactly the kind of change the registry was designed to absorb
+without touching `canvas.py`.

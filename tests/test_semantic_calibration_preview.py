@@ -29,6 +29,10 @@ from hydra_suite.detectkit.gui.dialogs.calibration_results_dialog import (  # no
 )
 
 
+def _polys(canvas, key):
+    return [i for b in canvas.layer_items(key).values() for i in b.obb_items]
+
+
 @pytest.fixture(scope="module")
 def qapp():
     return QApplication.instance() or QApplication([])
@@ -101,20 +105,20 @@ def test_results_dialog_rethresholds_selected_row_and_navigates_frames(qapp, tmp
     )
 
     assert dialog._table.currentRow() == 0
-    assert len(dialog._canvas._pred_obb_items) == 1
+    assert len(_polys(dialog._canvas, "pred")) == 1
     assert "first.png" in dialog._frame_label.text()
 
     dialog._canvas._set_zoom(2.0)
     zoom_before_row_change = dialog._canvas._current_zoom()
     dialog._table.selectRow(1)
     qapp.processEvents()
-    assert len(dialog._canvas._pred_obb_items) == 2
+    assert len(_polys(dialog._canvas, "pred")) == 2
     assert dialog._canvas._current_zoom() == pytest.approx(zoom_before_row_change)
 
     dialog._next_frame.click()
     assert "Frame 2 of 2" in dialog._frame_label.text()
     assert "second.png" in dialog._frame_label.text()
-    assert len(dialog._canvas._gt_obb_items) == 1
+    assert len(_polys(dialog._canvas, "gt")) == 1
 
 
 def test_legacy_calibration_explains_that_visual_evidence_is_unavailable(qapp):

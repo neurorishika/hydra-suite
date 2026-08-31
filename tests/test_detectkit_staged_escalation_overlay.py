@@ -80,44 +80,34 @@ def test_staged_class_names_come_from_the_staging_dirs_classes_txt(tmp_path):
     assert staged_class_names(str(tmp_path / "missing")) == ["object"]
 
 
-def test_show_image_draws_the_pending_escalation_and_clears_it_otherwise():
+def test_the_staged_layer_refreshes_through_the_same_path_as_every_other():
+    """The escalation layer's refresh used to fire only incidentally, and
+    its clear used to sit below an early return. Both are structural now:
+    one _refresh_overlays call, one idempotent set_layer per key."""
     import inspect
 
     from hydra_suite.detectkit.gui.main_window import MainWindow
 
-    source = inspect.getsource(MainWindow.show_image)
-    assert "_refresh_escalation_overlay" in source
-
-    refresh = inspect.getsource(MainWindow._refresh_escalation_overlay)
-    # Cleared first, so a frame with no staged label cannot keep showing the
-    # previous frame's masks.
-    assert "clear_escalation_detections" in refresh
-    assert "set_escalation_detections" in refresh
-    assert "find_staged_label_for_image" in refresh
-
-
-def test_escalation_overlay_derives_the_levels_beneath_its_native_one():
-    """The layer draws at the escalation's native level plus every level
-    derived below it -- the shapes a promotion would actually produce."""
-    import inspect
-
-    from hydra_suite.detectkit.gui.canvas import OBBCanvas
-
-    setter = inspect.getsource(OBBCanvas.set_escalation_detections)
-    assert "_levels_with_shapes" in setter
+    assert "_refresh_overlays" in inspect.getsource(
+        MainWindow._refresh_escalation_overlay
+    )
 
 
 def test_the_escalation_layer_is_cleared_even_when_the_frame_fails_to_load():
     """`if not ok: return` fired BEFORE the refresh, so navigating to a
     corrupt frame left the previous frame's magenta masks floating over the
-    previous frame's pixmap with GT and predictions already gone."""
+    previous frame's pixmap with GT and predictions already gone.
+
+    Structurally now: the remove_layer loop over PROVIDERS runs before the
+    load_image bail, so no layer can outlive a failed frame change.
+    """
     import inspect
 
     from hydra_suite.detectkit.gui.main_window import MainWindow
 
     source = inspect.getsource(MainWindow.show_image)
-    clear_at = source.index("clear_escalation_detections")
-    bail_at = source.index("if not ok:")
+    clear_at = source.index("self._canvas.remove_layer(provider.key)")
+    bail_at = source.index("if not self._canvas.load_image(image_path):")
     assert clear_at < bail_at
 
 
@@ -157,44 +147,3 @@ def test_canvas_reports_the_loaded_image_size():
     assert canvas.image_size() is None
     canvas.set_image_array(np.zeros((37, 61, 3), dtype=np.uint8))
     assert canvas.image_size() == (37, 61)
-
-
-def test_the_overlay_renders_at_the_escalations_own_target_level():
-    """PendingEscalation.target_level is load-bearing, not decorative.
-
-    SAM2 can stage OBB (it converts existing boxes in place), and drawing an
-    OBB quad as polygon-native gave it the polygon style (dotted + filled)
-    AND a derived OBB of the very same quad -- a duplicated outline in the
-    wrong style. The level has to come from the record.
-    """
-    import inspect
-
-    from hydra_suite.detectkit.gui.main_window import MainWindow
-
-    refresh = inspect.getsource(MainWindow._refresh_escalation_overlay)
-    assert "_resolve_pending_level(pending)" in refresh
-    assert "GeometryLevel.POLYGON" not in refresh  # no longer hardcoded
-
-
-def test_pending_level_parses_the_record_and_degrades_on_junk():
-    """target_level is an unvalidated string from project JSON, exactly like
-    OBBSource.level -- a hand-edited or future-version file must not crash
-    the overlay on every image selection."""
-    from hydra_suite.detectkit.gui.main_window import _resolve_pending_level
-    from hydra_suite.detectkit.gui.models import PendingEscalation
-    from hydra_suite.training.geometry_levels import GeometryLevel
-
-    assert (
-        _resolve_pending_level(PendingEscalation(target_level="obb"))
-        == GeometryLevel.OBB
-    )
-    assert (
-        _resolve_pending_level(PendingEscalation(target_level="polygon"))
-        == GeometryLevel.POLYGON
-    )
-    # Junk degrades to POLYGON: a staged mask is a polygon unless the record
-    # says otherwise, and both escalation producers stage polygons by default.
-    assert (
-        _resolve_pending_level(PendingEscalation(target_level="not_a_level"))
-        == GeometryLevel.POLYGON
-    )
