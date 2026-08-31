@@ -1,4 +1,4 @@
-"""SemanticEscalationDialog — prompt, tiling, calibration, one-tile preview."""
+"""SemanticEscalationDialog — prompt, tiling, calibration, visual test frame."""
 
 from __future__ import annotations
 
@@ -37,17 +37,6 @@ from hydra_suite.core.inference.semantic.tiling import (
     resolve_tile_px,
 )
 from hydra_suite.widgets.dialogs import BaseDialog
-
-
-def _humanise_seconds(seconds: float) -> str:
-    """A rough duration, from a MEASURED number of seconds."""
-    seconds = max(0.0, float(seconds))
-    if seconds < 90:
-        return f"{seconds:.0f} s"
-    minutes = seconds / 60.0
-    if minutes < 90:
-        return f"{minutes:.0f} min"
-    return f"{minutes / 60.0:.1f} h"
 
 
 def _saved_value(saved: dict, key: str, default, cast):
@@ -277,11 +266,12 @@ class SemanticEscalationDialog(BaseDialog):
         self._btn_view_calibration = QPushButton("View saved calibration…")
         self._btn_view_calibration.clicked.connect(self._view_saved_calibration)
 
-        self._btn_preview = QPushButton("Preview one tile")
+        self._btn_preview = QPushButton("Test random image…")
         self._btn_preview.setToolTip(
-            "Runs ONE tile, not the whole frame: a full-frame preview shows "
-            "near-zero detections and teaches you the feature is broken. "
-            "Reports the instance count and the measured time for that tile."
+            "Chooses one random image from the selected sources, processes the "
+            "complete image with the current tiling and confidence settings, "
+            "then shows a zoomable prediction overlay and measured run-time "
+            "estimate. No labels are written."
         )
         self._btn_preview.clicked.connect(self._run_preview)
 
@@ -548,10 +538,14 @@ class SemanticEscalationDialog(BaseDialog):
 
     def _project_frame_count(self) -> int:
         """Images across the selected sources — the run-time projection base."""
+        return self._frame_count_for(self.selected_sources() or self._sources)
+
+    @staticmethod
+    def _frame_count_for(sources) -> int:
         from hydra_suite.detectkit.gui.constants import IMG_EXTS
 
         total = 0
-        for src in self.selected_sources() or self._sources:
+        for src in sources:
             images = Path(src.path) / "images"
             if images.is_dir():
                 total += sum(
@@ -721,69 +715,73 @@ class SemanticEscalationDialog(BaseDialog):
         )
         return reply == QMessageBox.Yes
 
-    # -- one-tile preview ---------------------------------------------------
+    # -- random complete-frame preview -------------------------------------
 
     def _run_preview(self) -> None:
         from PySide6.QtWidgets import QProgressDialog
 
-        from hydra_suite.detectkit.jobs.semantic_escalation import TilePreviewWorker
+        from hydra_suite.detectkit.jobs.semantic_escalation import FramePreviewWorker
 
         if not self.prompt():
-            QMessageBox.information(self, "Preview one tile", "Enter a prompt first.")
+            QMessageBox.information(self, "Test random image", "Enter a prompt first.")
             return
-        sources = self.selected_sources() or self._sources
+        sources = self.selected_sources()
         if not sources:
-            QMessageBox.information(self, "Preview one tile", "Select a source.")
+            QMessageBox.information(self, "Test random image", "Select a source.")
             return
         if not self.confirm_checkpoint():
             return
 
         self._persist_settings()
 
-        frames = self._project_frame_count()
-        progress = QProgressDialog("Running one tile…", None, 0, 0, self)
+        selected_frames = self._frame_count_for(sources)
+        project_frames = self._frame_count_for(self._sources)
+        progress = QProgressDialog("Choosing a random image…", "Cancel", 0, 100, self)
+        progress.setWindowTitle("SAM3 complete-frame check")
         progress.setMinimumDuration(0)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setModal(True)
         self._btn_preview.setEnabled(False)
 
         def _done(res) -> None:
             progress.close()
-            tile_desc = (
-                "the full frame" if res.tile_px is None else f"a {res.tile_px} px tile"
-            )
-            # Every number below is MEASURED on the tile just run; nothing
-            # here is a hardcoded timing figure.
-            projection = ""
-            if frames:
-                total_s = res.seconds * res.tiles_per_frame * frames
-                projection = (
-                    f"\n\nAt that rate, {res.tiles_per_frame} tile(s)/frame x "
-                    f"{frames} frame(s) projects to about "
-                    f"{_humanise_seconds(total_s)} for the full run."
-                )
             self.set_status(
-                f"Preview: {res.instances} instance(s) in {tile_desc} of "
-                f"{res.image_name}, in {res.seconds:.1f} s (measured)." + projection
+                f"Tested complete image {res.image_path.name}: "
+                f"{len(res.predictions)} prediction(s) in {res.seconds:.1f} s."
             )
-            QMessageBox.information(
-                self,
-                "Preview one tile",
-                f"{res.instances} instance(s) found in {tile_desc} of "
-                f"{res.image_name}.\n\nMeasured: {res.seconds:.1f} s for that "
-                f"one tile." + projection,
+            from hydra_suite.detectkit.gui.dialogs.semantic_frame_preview_dialog import (
+                SemanticFramePreviewDialog,
             )
+
+            preview = SemanticFramePreviewDialog(
+                res,
+                selected_frames=selected_frames,
+                project_frames=project_frames,
+                parent=self,
+            )
+            preview.exec()
 
         def _failed(msg: str) -> None:
             progress.close()
-            QMessageBox.warning(self, "Preview one tile", msg)
+            if worker.cancelled:
+                self.set_status("Random image check cancelled.")
+                return
+            QMessageBox.warning(self, "Test random image", msg)
 
-        worker = TilePreviewWorker(
-            sources[0], self.prompt(), self.selected_variant(), self.parameters()
+        worker = FramePreviewWorker(
+            sources, self.prompt(), self.selected_variant(), self.parameters()
         )
+        progress.canceled.connect(worker.cancel)
+        worker.progress.connect(progress.setValue)
+        worker.status.connect(progress.setLabelText)
         worker.result_ready.connect(_done)
         worker.error.connect(_failed)
         worker.finished.connect(lambda: self._btn_preview.setEnabled(True))
         worker.finished.connect(progress.close)
         self._preview_worker = worker  # keep a reference alive
+        progress.show()
+        progress.raise_()
+        progress.activateWindow()
         worker.start()
 
     def accept(self) -> None:  # noqa: D102

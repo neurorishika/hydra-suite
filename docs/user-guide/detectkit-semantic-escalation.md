@@ -38,7 +38,7 @@ The `sam3` checkpoint is about **3.45 GB** and is fetched from the public
 `facebook/sam3` Hugging Face repository the first time you run. DetectKit
 never downloads it behind your back: if it is not already on the machine,
 the escalation dialog shows a warning up front and asks for confirmation
-before the run (or a one-tile preview, or calibration) starts. The button
+before the run (or a random-image check, or calibration) starts. The button
 stays enabled in that state — the download offer is inside the dialog, so
 disabling the button would put it out of reach.
 
@@ -46,22 +46,26 @@ disabling the button would put it out of reach.
 
 The prompt is a short noun phrase (the default is `ant`). It is yours to
 vary, but **wording matters far less than tile size**. If results look
-wrong, try the "Preview one tile" button with a different prompt before
+wrong, try the "Test random image" button with a different prompt before
 assuming the prompt is the problem — tiling (below) is usually the bigger
 lever.
 
-### "Preview one tile"
+### "Test random image"
 
-The preview runs the model over **exactly one tile** of one frame — not the
-whole frame. That is deliberate: at the scales this feature is for, a
-full-frame pass finds almost nothing, so a full-frame preview would just
-teach you the feature is broken.
+The check chooses one random image from the selected sources and processes
+the **complete image with the current run settings**. If tiling is enabled,
+SAM3 runs every tile and merges the results exactly as it would during
+escalation; "complete image" does not mean tiling is bypassed.
 
-It reports the number of instances found in that tile **and the time that
-tile actually took on this machine**, plus a rough projection of the full run
-from that measurement (tile time x tiles per frame x frames selected). Both
-numbers are measured on the tile you just ran; no timing figure in DetectKit
-or in this page is hardcoded.
+The result opens as a zoomable, pannable overlay. Predictions are blue and
+dashed; existing ground-truth polygons are green when the sampled image is
+labelled. Nothing is written back to the source. DetectKit also reports the
+time the complete image actually took on this machine and extrapolates that
+measurement across the selected images (and the whole project when those
+counts differ). It is an estimate from one random image, so content and
+hardware-load differences can move the final run time. The per-image timing
+excludes one-time model loading; no timing figure in DetectKit or in this
+page is hardcoded.
 
 ## Calibration: fitting the run to your data, not the other way around
 

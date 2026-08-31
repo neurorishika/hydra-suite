@@ -9,6 +9,7 @@ from hydra_suite.core.inference.semantic.base import SemanticInstance
 from hydra_suite.detectkit.gui.models import OBBSource
 from hydra_suite.detectkit.jobs.semantic_escalation import (
     SemanticEscalationRequest,
+    accept_pending_semantic_escalation,
     is_prompt_failure,
     rethreshold_staged,
     run_semantic_escalation,
@@ -296,11 +297,6 @@ def test_an_unreviewed_sam2_escalation_is_not_silently_destroyed(tmp_path):
     result = run_semantic_escalation(req, labeler)
     assert result.staged == []
     assert (sam2_dir / "labels" / "f0.txt").exists()
-
-
-from hydra_suite.detectkit.jobs.semantic_escalation import (
-    accept_pending_semantic_escalation,
-)
 
 
 def test_accept_creates_a_sibling_and_leaves_the_origin_untouched(tmp_path):
@@ -629,11 +625,13 @@ def test_has_labelled_frames_never_decodes_an_image(tmp_path, monkeypatch):
     assert mod.has_labelled_frames(src) is True
 
 
-# --- I3: the one-tile preview ------------------------------------------------
+# --- Complete-frame visual preview -------------------------------------------
 
 
-def test_preview_runs_exactly_one_tile_and_reports_measured_time(tmp_path):
-    from hydra_suite.detectkit.jobs.semantic_escalation import preview_one_tile
+def test_preview_runs_every_tile_of_one_random_frame_and_returns_overlay(
+    tmp_path, monkeypatch
+):
+    import hydra_suite.detectkit.jobs.semantic_escalation as mod
 
     src = _make_source(tmp_path, n_images=2)
 
@@ -647,20 +645,37 @@ def test_preview_runs_exactly_one_tile_and_reports_measured_time(tmp_path):
             return super().label_image(image_bgr, *a, **k)
 
     labeler = Counting([SemanticInstance(_blob(50, 50), 0.9)] * 3)
-    res = preview_one_tile(
+    monkeypatch.setattr(mod.random, "choice", lambda choices: choices[-1])
+    (Path(src.path) / "labels" / "f1.txt").write_text(
+        "0 0.5 0.5 0.2 0.2\n", encoding="utf-8"
+    )
+    progress = []
+    res = mod.preview_random_frame(
         labeler,
-        src,
+        [src],
         "ant",
         reference_body_px=20.0,
         tile_fraction=0.10,  # 200 px tiles over a 400x400 frame
+        progress=lambda done, total: progress.append((done, total)),
     )
-    assert len(labeler.shapes) == 1, "exactly ONE tile, not a whole frame"
-    assert labeler.shapes[0] == (200, 200)
+    assert len(labeler.shapes) == res.tiles_per_frame
+    assert len(labeler.shapes) > 1, "the complete image must run every tile"
+    assert set(labeler.shapes) == {(200, 200)}
     assert res.tile_px == 200
-    assert res.tiles_per_frame > 1
-    assert res.instances == 3
+    assert res.predictions
+    assert len(res.ground_truth) == 1
     assert res.seconds > 0.0  # MEASURED, never a hardcoded figure
-    assert res.image_name == "f0.png"
+    assert res.image_path.name == "f1.png"
+    assert progress[-1] == (res.tiles_per_frame, res.tiles_per_frame)
+
+
+def test_complete_frame_preview_worker_can_be_cancelled_before_inference():
+    from hydra_suite.detectkit.jobs.semantic_escalation import FramePreviewWorker
+
+    worker = FramePreviewWorker([], "ant", "sam3", {}, labeler=object())
+    assert worker.cancelled is False
+    worker.cancel()
+    assert worker.cancelled is True
 
 
 # --- Fix wave regressions (blockers A-E) -------------------------------------

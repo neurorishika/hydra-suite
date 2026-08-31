@@ -432,6 +432,8 @@ def test_semantic_dialog_preview_button_is_connected(qapp, monkeypatch):
         mod, "probe_availability", lambda *a, **k: _Availability(True, "")
     )
     dlg = SemanticEscalationDialog([_Src("a")], reference_body_px=40.0)
+    assert dlg._btn_preview.text() == "Test random image…"
+    assert "complete image" in dlg._btn_preview.toolTip()
     # The button really is connected: disconnecting succeeds (it raises
     # RuntimeError on an unconnected signal, which is how the dead button
     # would be caught).
@@ -447,7 +449,7 @@ def test_semantic_dialog_preview_button_is_connected(qapp, monkeypatch):
     import inspect
 
     assert "_run_preview" in inspect.getsource(mod.SemanticEscalationDialog.__init__)
-    assert "TilePreviewWorker" in inspect.getsource(
+    assert "FramePreviewWorker" in inspect.getsource(
         mod.SemanticEscalationDialog._run_preview
     )
 

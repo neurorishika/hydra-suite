@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 import re
 import time
 from dataclasses import dataclass, field
@@ -23,6 +24,7 @@ import cv2
 import numpy as np
 from PySide6.QtCore import Signal
 
+from hydra_suite.core.inference.semantic.base import SemanticInstance
 from hydra_suite.core.inference.semantic.calibration import CONFIDENCE_GRID
 from hydra_suite.core.inference.semantic.shape_prior import AreaBand
 from hydra_suite.core.inference.semantic.tiling import (
@@ -822,44 +824,53 @@ def labelled_frames_for(
 
 
 @dataclass
-class TilePreviewResult:
-    """What ONE tile of ONE frame produced, and how long it took."""
+class FramePreviewResult:
+    """A complete randomly-selected frame processed with the run settings."""
 
-    instances: int
+    image_path: Path
+    source_name: str
+    predictions: list[SemanticInstance]
+    ground_truth: list[LabelRecord]
     seconds: float
     tile_px: int | None
     tiles_per_frame: int
-    image_name: str
 
 
-def preview_one_tile(
+def preview_random_frame(
     labeler,
-    source: OBBSource,
+    sources: list[OBBSource],
     prompt: str,
     *,
     reference_body_px: float,
     tile_fraction: float | None,
     overlap: float = DEFAULT_OVERLAP,
     seam_margin_px: float = DEFAULT_SEAM_MARGIN_PX,
+    merge_iou: float = DEFAULT_MERGE_IOU,
     confidence: float = 0.35,
     max_instances: int = 0,
-) -> TilePreviewResult:
-    """Run *labeler* over exactly ONE tile of the first frame of *source*.
+    progress: Callable[[int, int], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
+) -> FramePreviewResult:
+    """Process one random complete image exactly as escalation would.
 
-    ONE tile, deliberately, not the whole frame: at the scales this feature
-    targets a full-frame pass returns near-zero detections, so a full-frame
-    preview would teach the user the feature is broken. The middle tile is
-    used rather than the first because a corner tile is the least likely to
-    contain an animal.
-
-    The MEASURED elapsed time is returned so the caller can project a run
-    without quoting any hardcoded figure.
+    "Complete image" describes the user-facing unit: configured tiling is
+    still applied internally when enabled.  The measured duration therefore
+    includes every tile and the merge step, and can be multiplied directly
+    by a frame count for a transparent run-time estimate.
     """
-    images_dir = Path(source.path) / "images"
-    images = sorted(p for p in images_dir.rglob("*") if p.suffix.lower() in IMG_EXTS)
-    if not images:
-        raise RuntimeError(f"Source '{source.name}' has no images to preview.")
-    img_path = images[0]
+    choices: list[tuple[OBBSource, Path]] = []
+    for source in sources:
+        images_dir = Path(source.path) / "images"
+        choices.extend(
+            (source, path)
+            for path in sorted(images_dir.rglob("*"))
+            if path.suffix.lower() in IMG_EXTS
+        )
+    if not choices:
+        raise RuntimeError("The selected source(s) have no images to preview.")
+    if should_stop is not None and should_stop():
+        raise TileCollectionCancelled(0, 1)
+    source, img_path = random.choice(choices)
     image = cv2.imread(str(img_path))
     if image is None:
         raise RuntimeError(f"Could not read {img_path.name}.")
@@ -868,37 +879,76 @@ def preview_one_tile(
     plan = (
         plan_for_frame((h, w), tile_px, overlap) if tile_px else full_frame_plan((h, w))
     )
-    tiles = list(plan.tiles)
-    x0, y0, x1, y1 = tiles[len(tiles) // 2]
     started = time.perf_counter()
-    instances = labeler.label_image(
-        image[y0:y1, x0:x1],
+    candidates = collect_candidates(
+        labeler,
+        image,
+        plan,
         prompt,
-        confidence_threshold=confidence,
+        confidence_threshold=cache_confidence_floor(confidence),
         max_instances=max_instances,
+        seam_margin_px=seam_margin_px,
+        progress=progress,
+        should_stop=should_stop,
+    )
+    if should_stop is not None and should_stop():
+        raise RuntimeError("Complete-frame preview cancelled.")
+    predictions = merge_candidates(
+        candidates,
+        confidence_threshold=confidence,
+        iou_threshold=merge_iou,
     )
     elapsed = time.perf_counter() - started
-    return TilePreviewResult(
-        instances=len(instances),
+
+    ground_truth: list[LabelRecord] = []
+    images_dir = Path(source.path) / "images"
+    labels_dir = Path(source.path) / "labels"
+    label_path = _label_path_for(images_dir, labels_dir, img_path)
+    if label_path.is_file():
+        from hydra_suite.detectkit.gui.utils import parse_obb_label
+
+        for item in parse_obb_label(label_path, w, h):
+            ground_truth.append(
+                LabelRecord(
+                    class_id=int(item["class_id"]),
+                    confidence=1.0,
+                    points=np.asarray(item["polygon_px"], dtype=np.float32).reshape(
+                        -1, 2
+                    ),
+                    level=GeometryLevel.POLYGON,
+                )
+            )
+    return FramePreviewResult(
+        image_path=img_path,
+        source_name=source.name,
+        predictions=predictions,
+        ground_truth=ground_truth,
         seconds=elapsed,
         tile_px=tile_px,
-        tiles_per_frame=len(tiles),
-        image_name=img_path.name,
+        tiles_per_frame=len(plan.tiles),
     )
 
 
-class TilePreviewWorker(BaseWorker):
-    """QThread wrapper around preview_one_tile."""
+class FramePreviewWorker(BaseWorker):
+    """QThread wrapper around a random, complete-frame preview."""
 
-    result_ready = Signal(object)  # TilePreviewResult
+    result_ready = Signal(object)  # FramePreviewResult
 
-    def __init__(self, source, prompt, variant, params, labeler=None, parent=None):
+    def __init__(self, sources, prompt, variant, params, labeler=None, parent=None):
         super().__init__(parent)
-        self._source = source
+        self._sources = list(sources)
         self._prompt = prompt
         self._variant = variant
         self._params = dict(params)
         self._labeler = labeler
+        self._cancel = False
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+    @property
+    def cancelled(self) -> bool:
+        return self._cancel
 
     def execute(self) -> None:
         labeler = self._labeler
@@ -914,9 +964,9 @@ class TilePreviewWorker(BaseWorker):
                 ),
             )
         self.result_ready.emit(
-            preview_one_tile(
+            preview_random_frame(
                 labeler,
-                self._source,
+                self._sources,
                 self._prompt,
                 reference_body_px=self._params.get("reference_body_px", 0.0),
                 tile_fraction=self._params.get("tile_fraction"),
@@ -924,10 +974,21 @@ class TilePreviewWorker(BaseWorker):
                 seam_margin_px=self._params.get(
                     "seam_margin_px", DEFAULT_SEAM_MARGIN_PX
                 ),
+                merge_iou=self._params.get("merge_iou", DEFAULT_MERGE_IOU),
                 confidence=self._params.get("confidence", 0.35),
                 max_instances=self._params.get("max_instances", 0),
+                progress=lambda done, total: (
+                    self.progress.emit(int(100 * done / max(total, 1))),
+                    self.status.emit(f"Running tile {done}/{total}..."),
+                ),
+                should_stop=lambda: self._cancel,
             )
         )
+
+
+# Kept as an import-compatible alias for extensions written against the
+# earlier internal worker name. The UI now describes the complete-frame work.
+TilePreviewWorker = FramePreviewWorker
 
 
 class CalibrationWorker(BaseWorker):
