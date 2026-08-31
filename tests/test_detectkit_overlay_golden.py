@@ -30,6 +30,17 @@ from PySide6.QtWidgets import (  # noqa: E402
 )
 
 from hydra_suite.detectkit.gui.canvas import OBBCanvas  # noqa: E402
+from hydra_suite.detectkit.gui.colors import ESCALATION_COLOUR  # noqa: E402
+from hydra_suite.detectkit.gui.dialogs._overlay_helpers import (  # noqa: E402
+    dialog_gt_layer,
+    dialog_pred_layer,
+)
+from hydra_suite.detectkit.gui.overlays import (  # noqa: E402
+    ColourPolicy,
+    Emphasis,
+    LabelMode,
+    OverlayLayer,
+)
 from hydra_suite.utils.geometry_levels import GeometryLevel  # noqa: E402
 
 GOLDEN = Path(__file__).parent / "goldens" / "detectkit_overlay_characterization.json"
@@ -111,24 +122,69 @@ _ESC = [
 _NAMES = ["ant", "worker", "queen", "larva"]
 
 
+def _gt_layer(**kw):
+    base = dict(
+        key="gt",
+        detections=_GT,
+        native_level=GeometryLevel.POLYGON,
+        class_names=_NAMES,
+        colour_policy=ColourPolicy.PER_CLASS,
+        label_mode=LabelMode.NAME_AND_CLASS_ID,
+    )
+    base.update(kw)
+    return OverlayLayer(**base)
+
+
+def _pred_layer(**kw):
+    from PySide6.QtCore import Qt
+
+    from hydra_suite.detectkit.gui.overlays import LayerStyle
+
+    base = dict(
+        key="pred",
+        detections=_PRED,
+        native_level=GeometryLevel.AABB,
+        class_names=_NAMES,
+        colour_policy=ColourPolicy.PER_CLASS,
+        derive_levels=False,
+        style=LayerStyle(Qt.PenStyle.DashLine, Qt.BrushStyle.NoBrush, 0),
+        label_mode=LabelMode.NAME_AND_CONFIDENCE,
+        z=20,
+    )
+    base.update(kw)
+    return OverlayLayer(**base)
+
+
+def _escalation_layer(**kw):
+    base = dict(
+        key="escalation",
+        detections=_ESC,
+        native_level=GeometryLevel.OBB,
+        class_names=["prompt_a", "prompt_b"],
+        colour_policy=ColourPolicy.FIXED,
+        fixed_colour=ESCALATION_COLOUR,
+        class_filtered=False,
+        label_mode=LabelMode.NAME_AND_CONFIDENCE,
+        z=10,
+    )
+    base.update(kw)
+    return OverlayLayer(**base)
+
+
 def _build_main_window_scene(canvas: OBBCanvas) -> None:
     """show_image's exact call order (main_window.py:2107-2151):
     GT first, then the staged escalation, then predictions. Predictions
     therefore sit ON TOP of staged masks -- this scene is what pins that."""
-    canvas.set_gt_detections_multi_level(
-        _GT, class_names=_NAMES, native_level=GeometryLevel.POLYGON, reviewed=True
-    )
-    canvas.set_escalation_detections(
-        _ESC, class_names=["prompt_a", "prompt_b"], native_level=GeometryLevel.OBB
-    )
-    canvas.set_pred_detections(_PRED, class_names=_NAMES)
+    canvas.set_layer(_gt_layer())
+    canvas.set_layer(_escalation_layer())
+    canvas.set_layer(_pred_layer())
 
 
 def _build_unreviewed_scene(canvas: OBBCanvas) -> None:
     """show_image when _resolve_source_render_state says reviewed=False:
     the native level gets the BDiagPattern hatch, keeping its own pen."""
-    canvas.set_gt_detections_multi_level(
-        _GT, class_names=_NAMES, native_level=GeometryLevel.OBB, reviewed=False
+    canvas.set_layer(
+        _gt_layer(native_level=GeometryLevel.OBB, emphasis=Emphasis.UNREVIEWED)
     )
 
 
@@ -137,15 +193,13 @@ def _build_dialog_scene(canvas: OBBCanvas) -> None:
     calibration_results_dialog.py:315-316: single-level GT and predictions
     with explicit fills and dict class_names, no level derivation."""
     names = {0: "Ground truth", 2: "Prediction"}
-    canvas.set_gt_detections(_GT, names, fill_alpha=65)
-    canvas.set_pred_detections(_PRED, names, fill_alpha=55)
+    canvas.set_layer(dialog_gt_layer(_GT, names))
+    canvas.set_layer(dialog_pred_layer(_PRED, names))
 
 
 def _build_aabb_native_scene(canvas: OBBCanvas) -> None:
     """An AABB-native source: only one level exists, nothing is derived."""
-    canvas.set_gt_detections_multi_level(
-        _GT, class_names=_NAMES, native_level=GeometryLevel.AABB, reviewed=True
-    )
+    canvas.set_layer(_gt_layer(native_level=GeometryLevel.AABB))
 
 
 SCENES = {
@@ -200,46 +254,6 @@ def test_predictions_stack_above_staged_escalations(qapp):
     assert min(d["stack_index"] for d in others) < min(
         d["stack_index"] for d in magenta
     )
-
-
-from hydra_suite.detectkit.gui.overlays import (  # noqa: E402
-    ColourPolicy,
-    LabelMode,
-    OverlayLayer,
-)
-
-
-def _gt_layer(**kw):
-    base = dict(
-        key="gt",
-        detections=_GT,
-        native_level=GeometryLevel.POLYGON,
-        class_names=_NAMES,
-        colour_policy=ColourPolicy.PER_CLASS,
-        label_mode=LabelMode.NAME_AND_CLASS_ID,
-    )
-    base.update(kw)
-    return OverlayLayer(**base)
-
-
-def _pred_layer(**kw):
-    from PySide6.QtCore import Qt
-
-    from hydra_suite.detectkit.gui.overlays import LayerStyle
-
-    base = dict(
-        key="pred",
-        detections=_PRED,
-        native_level=GeometryLevel.AABB,
-        class_names=_NAMES,
-        colour_policy=ColourPolicy.PER_CLASS,
-        derive_levels=False,
-        style=LayerStyle(Qt.PenStyle.DashLine, Qt.BrushStyle.NoBrush, 0),
-        label_mode=LabelMode.NAME_AND_CONFIDENCE,
-        z=20,
-    )
-    base.update(kw)
-    return OverlayLayer(**base)
 
 
 def test_set_layer_replaces_by_key_instead_of_accumulating(qapp):
@@ -391,11 +405,6 @@ def test_dialog_scene_is_buildable_from_layers_alone(qapp):
     """The two calibration dialogs draw single-level filled GT and dashed
     predictions. This is the shape the registry must express without the
     transitional adapters -- and it must match the committed golden."""
-    from hydra_suite.detectkit.gui.dialogs._overlay_helpers import (
-        dialog_gt_layer,
-        dialog_pred_layer,
-    )
-
     names = {0: "Ground truth", 2: "Prediction"}
     canvas = OBBCanvas()
     canvas.set_layer(dialog_gt_layer(_GT, names))

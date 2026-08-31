@@ -31,9 +31,8 @@ from hydra_suite.utils.geometry_derivation import (
     min_area_rect_quad,
 )
 
-from .colors import ESCALATION_COLOUR
 from .constants import CANVAS_BG_COLOR, DEFAULT_OBB_FONT_SIZE, DEFAULT_OBB_LINE_WIDTH
-from .overlays import ColourPolicy, Emphasis, LabelMode, LayerStyle, OverlayLayer
+from .overlays import ColourPolicy, Emphasis, LabelMode, OverlayLayer
 
 logger = logging.getLogger(__name__)
 
@@ -393,129 +392,6 @@ class OBBCanvas(QGraphicsView):
         """Show only the given class IDs (empty set = show all)."""
         self._visible_class_ids = set(visible_class_ids)
         self._apply_visibility()
-
-    # ------------------------------------------------------------------
-    # TRANSITIONAL ADAPTERS -- deleted in Task 8 of this refactor. They
-    # exist only so the six call sites can migrate one at a time instead
-    # of in one unreviewable commit.
-    # ------------------------------------------------------------------
-
-    def set_gt_detections(self, detections, class_names=None, *, fill_alpha=0) -> None:
-        self.set_layer(
-            OverlayLayer(
-                key="gt",
-                detections=detections,
-                native_level=self._single_level(),
-                class_names=class_names,
-                colour_policy=ColourPolicy.PER_CLASS,
-                derive_levels=False,
-                style=LayerStyle(
-                    Qt.PenStyle.SolidLine,
-                    (
-                        Qt.BrushStyle.SolidPattern
-                        if fill_alpha > 0
-                        else Qt.BrushStyle.NoBrush
-                    ),
-                    fill_alpha,
-                ),
-                label_mode=LabelMode.NAME_AND_CLASS_ID,
-                z=0,
-            )
-        )
-
-    def set_gt_detections_multi_level(
-        self, detections, class_names=None, *, native_level, reviewed=True
-    ) -> None:
-        self.set_layer(
-            OverlayLayer(
-                key="gt",
-                detections=detections,
-                native_level=native_level,
-                class_names=class_names,
-                colour_policy=ColourPolicy.PER_CLASS,
-                label_mode=LabelMode.NAME_AND_CLASS_ID,
-                emphasis=None if reviewed else Emphasis.UNREVIEWED,
-                z=0,
-            )
-        )
-
-    def set_pred_detections(
-        self, detections, class_names=None, *, fill_alpha=0
-    ) -> None:
-        self.set_layer(
-            OverlayLayer(
-                key="pred",
-                detections=detections,
-                native_level=self._single_level(),
-                class_names=class_names,
-                colour_policy=ColourPolicy.PER_CLASS,
-                derive_levels=False,
-                style=LayerStyle(
-                    Qt.PenStyle.DashLine,
-                    (
-                        Qt.BrushStyle.SolidPattern
-                        if fill_alpha > 0
-                        else Qt.BrushStyle.NoBrush
-                    ),
-                    fill_alpha,
-                ),
-                label_mode=LabelMode.NAME_AND_CONFIDENCE,
-                z=20,
-            )
-        )
-
-    def set_escalation_detections(
-        self, detections, class_names=None, *, native_level
-    ) -> None:
-        self.set_layer(
-            OverlayLayer(
-                key="escalation",
-                detections=detections,
-                native_level=native_level,
-                class_names=class_names,
-                colour_policy=ColourPolicy.FIXED,
-                fixed_colour=ESCALATION_COLOUR,
-                class_filtered=False,
-                label_mode=LabelMode.NAME_AND_CONFIDENCE,
-                z=10,
-            )
-        )
-
-    def set_escalation_visible(self, visible: bool) -> None:
-        self.set_layer_visible("escalation", visible)
-
-    def set_overlay_visibility(self, show_gt: bool, show_pred: bool) -> None:
-        self.set_layer_visible("gt", show_gt)
-        self.set_layer_visible("pred", show_pred)
-
-    def clear_gt_detections(self) -> None:
-        self.remove_layer("gt")
-
-    def clear_pred_detections(self) -> None:
-        self.remove_layer("pred")
-
-    def clear_escalation_detections(self) -> None:
-        self.remove_layer("escalation")
-
-    def set_detections(self, detections, class_names=None) -> None:
-        self.set_gt_detections(detections, class_names)
-
-    def clear_detections(self) -> None:
-        self.remove_layer("gt")
-
-    @staticmethod
-    def _single_level():
-        """The native level a non-deriving layer declares.
-
-        Single-level layers never derive, so the value only has to satisfy
-        `level == native_level` -- which is what makes the layer labelled
-        and keeps it visible when derived levels are hidden, matching the
-        old flat-list branch of _apply_visibility. AABB is the floor of the
-        ordering, so it can never be mistaken for a derived level.
-        """
-        from hydra_suite.utils.geometry_levels import GeometryLevel
-
-        return GeometryLevel.AABB
 
     def clear_all(self) -> None:
         """Remove everything from the scene."""

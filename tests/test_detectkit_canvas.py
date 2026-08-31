@@ -18,7 +18,61 @@ from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from hydra_suite.detectkit.gui.canvas import OBBCanvas  # noqa: E402
+from hydra_suite.detectkit.gui.colors import ESCALATION_COLOUR  # noqa: E402
+from hydra_suite.detectkit.gui.overlays import (  # noqa: E402
+    ColourPolicy,
+    Emphasis,
+    LabelMode,
+    LayerStyle,
+    OverlayLayer,
+)
 from hydra_suite.detectkit.gui.utils import parse_obb_label  # noqa: E402
+from hydra_suite.utils.geometry_levels import GeometryLevel  # noqa: E402
+
+
+def _layer(key, detections, *, level=GeometryLevel.AABB, names=None, **kw):
+    """A single-level layer: no derivation, explicit solid style."""
+    base = dict(
+        key=key,
+        detections=detections,
+        native_level=level,
+        class_names=names,
+        colour_policy=ColourPolicy.PER_CLASS,
+        derive_levels=False,
+        style=LayerStyle(Qt.PenStyle.SolidLine, Qt.BrushStyle.NoBrush, 0),
+    )
+    base.update(kw)
+    return OverlayLayer(**base)
+
+
+def _gt_multi(detections, *, native_level, reviewed=True, names=None):
+    """The multi-level ground-truth layer show_image builds."""
+    return _layer(
+        "gt",
+        detections,
+        level=native_level,
+        names=names,
+        derive_levels=True,
+        style=None,
+        emphasis=None if reviewed else Emphasis.UNREVIEWED,
+    )
+
+
+def _esc(detections, *, native_level, names=None):
+    """The staged-escalation layer: fixed hue, unfiltered, confidence labels."""
+    return _layer(
+        "escalation",
+        detections,
+        level=native_level,
+        names=names,
+        derive_levels=True,
+        style=None,
+        colour_policy=ColourPolicy.FIXED,
+        fixed_colour=ESCALATION_COLOUR,
+        class_filtered=False,
+        label_mode=LabelMode.NAME_AND_CONFIDENCE,
+        z=10,
+    )
 
 
 def _polys(canvas, key):
@@ -120,14 +174,22 @@ def test_parse_obb_label_still_skips_degenerate_and_odd_length_lines(tmp_path: P
 
 def test_canvas_uses_class_name_lookup_for_labels(qapp):
     canvas = OBBCanvas()
-    canvas.set_detections(
-        [
-            {
-                "class_id": 1,
-                "polygon_px": [(10.0, 10.0), (40.0, 10.0), (40.0, 30.0), (10.0, 30.0)],
-            }
-        ],
-        class_names=["ant", "bee"],
+    canvas.set_layer(
+        _layer(
+            "gt",
+            [
+                {
+                    "class_id": 1,
+                    "polygon_px": [
+                        (10.0, 10.0),
+                        (40.0, 10.0),
+                        (40.0, 30.0),
+                        (10.0, 30.0),
+                    ],
+                }
+            ],
+            names=["ant", "bee"],
+        )
     )
 
     assert len(_labels(canvas, "gt")) == 1
@@ -194,10 +256,11 @@ def test_set_gt_detections_multi_level_polygon_native_draws_three_layers(qapp):
     canvas = OBBCanvas()
     canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
     polygon = [(10.0, 10.0), (50.0, 5.0), (90.0, 40.0), (60.0, 90.0), (20.0, 60.0)]
-    canvas.set_gt_detections_multi_level(
-        [{"class_id": 0, "polygon_px": polygon}],
-        native_level=GeometryLevel.POLYGON,
-        reviewed=True,
+    canvas.set_layer(
+        _gt_multi(
+            [{"class_id": 0, "polygon_px": polygon}],
+            native_level=GeometryLevel.POLYGON,
+        )
     )
     assert set(canvas.layer_items("gt")) == {
         GeometryLevel.POLYGON,
@@ -214,10 +277,8 @@ def test_set_gt_detections_multi_level_obb_native_draws_two_layers(qapp):
     canvas = OBBCanvas()
     canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
     quad = [(10.0, 10.0), (90.0, 20.0), (80.0, 90.0), (0.0, 80.0)]
-    canvas.set_gt_detections_multi_level(
-        [{"class_id": 0, "polygon_px": quad}],
-        native_level=GeometryLevel.OBB,
-        reviewed=True,
+    canvas.set_layer(
+        _gt_multi([{"class_id": 0, "polygon_px": quad}], native_level=GeometryLevel.OBB)
     )
     assert set(canvas.layer_items("gt")) == {GeometryLevel.OBB, GeometryLevel.AABB}
 
@@ -228,10 +289,10 @@ def test_set_gt_detections_multi_level_aabb_native_draws_one_layer(qapp):
     canvas = OBBCanvas()
     canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
     quad = [(10.0, 10.0), (90.0, 10.0), (90.0, 90.0), (10.0, 90.0)]
-    canvas.set_gt_detections_multi_level(
-        [{"class_id": 0, "polygon_px": quad}],
-        native_level=GeometryLevel.AABB,
-        reviewed=True,
+    canvas.set_layer(
+        _gt_multi(
+            [{"class_id": 0, "polygon_px": quad}], native_level=GeometryLevel.AABB
+        )
     )
     assert set(canvas.layer_items("gt")) == {GeometryLevel.AABB}
 
@@ -246,10 +307,12 @@ def test_set_gt_detections_multi_level_unreviewed_uses_hatched_brush_on_native_o
     canvas = OBBCanvas()
     canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
     quad = [(10.0, 10.0), (90.0, 20.0), (80.0, 90.0), (0.0, 80.0)]
-    canvas.set_gt_detections_multi_level(
-        [{"class_id": 0, "polygon_px": quad}],
-        native_level=GeometryLevel.OBB,
-        reviewed=False,
+    canvas.set_layer(
+        _gt_multi(
+            [{"class_id": 0, "polygon_px": quad}],
+            native_level=GeometryLevel.OBB,
+            reviewed=False,
+        )
     )
     native_item = canvas.layer_items("gt")[GeometryLevel.OBB].obb_items[0]
     derived_item = canvas.layer_items("gt")[GeometryLevel.AABB].obb_items[0]
@@ -269,10 +332,12 @@ def test_set_gt_detections_multi_level_unreviewed_native_pen_differs_from_aabb(
     canvas = OBBCanvas()
     canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
     quad = [(10.0, 10.0), (90.0, 20.0), (80.0, 90.0), (0.0, 80.0)]
-    canvas.set_gt_detections_multi_level(
-        [{"class_id": 0, "polygon_px": quad}],
-        native_level=GeometryLevel.OBB,
-        reviewed=False,
+    canvas.set_layer(
+        _gt_multi(
+            [{"class_id": 0, "polygon_px": quad}],
+            native_level=GeometryLevel.OBB,
+            reviewed=False,
+        )
     )
     native_item = canvas.layer_items("gt")[GeometryLevel.OBB].obb_items[0]
     aabb_item = canvas.layer_items("gt")[GeometryLevel.AABB].obb_items[0]
@@ -288,10 +353,11 @@ def test_set_derived_levels_visible_hides_non_native_layers_only(qapp):
     canvas = OBBCanvas()
     canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
     polygon = [(10.0, 10.0), (50.0, 5.0), (90.0, 40.0), (60.0, 90.0), (20.0, 60.0)]
-    canvas.set_gt_detections_multi_level(
-        [{"class_id": 0, "polygon_px": polygon}],
-        native_level=GeometryLevel.POLYGON,
-        reviewed=True,
+    canvas.set_layer(
+        _gt_multi(
+            [{"class_id": 0, "polygon_px": polygon}],
+            native_level=GeometryLevel.POLYGON,
+        )
     )
 
     canvas.set_derived_levels_visible(False)
@@ -314,40 +380,43 @@ def test_clear_gt_detections_clears_per_level_state(qapp):
     canvas = OBBCanvas()
     canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
     quad = [(10.0, 10.0), (90.0, 20.0), (80.0, 90.0), (0.0, 80.0)]
-    canvas.set_gt_detections_multi_level(
-        [{"class_id": 0, "polygon_px": quad}], native_level=GeometryLevel.OBB
+    canvas.set_layer(
+        _gt_multi([{"class_id": 0, "polygon_px": quad}], native_level=GeometryLevel.OBB)
     )
-    canvas.clear_gt_detections()
+    canvas.remove_layer("gt")
     assert canvas.layer_items("gt") == {}
     assert _polys(canvas, "gt") == []
 
 
 def test_set_gt_detections_single_layer_still_works_unchanged(qapp):
-    """Backward-compat: the old single-layer API is untouched for any
-    caller that doesn't pass native_level/reviewed -- including its
-    visibility wiring, which _apply_visibility must still drive. In the
-    registry the single-level layer is one AABB-native bucket (nothing is
-    derived), not a flat list beside the per-level ones."""
+    """A single-level GT layer occupies exactly one AABB-native bucket and
+    derives nothing -- and its visibility is still driven by
+    _apply_visibility, same as a multi-level layer."""
     from hydra_suite.training.geometry_levels import GeometryLevel
 
     canvas = OBBCanvas()
     canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
-    canvas.set_gt_detections(
-        [
-            {
-                "class_id": 0,
-                "polygon_px": [(1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (1.0, 2.0)],
-            }
-        ]
+    canvas.set_layer(
+        _layer(
+            "gt",
+            [
+                {
+                    "class_id": 0,
+                    "polygon_px": [(1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (1.0, 2.0)],
+                }
+            ],
+        )
     )
     assert len(_polys(canvas, "gt")) == 1
     # The single-level layer occupies exactly one bucket and derives nothing.
     assert set(canvas.layer_items("gt")) == {GeometryLevel.AABB}
 
-    canvas.set_overlay_visibility(show_gt=False, show_pred=True)
+    canvas.set_layer_visible("gt", False)
+    canvas.set_layer_visible("pred", True)
     assert _polys(canvas, "gt")[0].isVisible() is False
 
-    canvas.set_overlay_visibility(show_gt=True, show_pred=True)
+    canvas.set_layer_visible("gt", True)
+    canvas.set_layer_visible("pred", True)
     assert _polys(canvas, "gt")[0].isVisible() is True
 
 
@@ -357,11 +426,12 @@ def test_clear_all_then_apply_visibility_does_not_raise(qapp):
     canvas = OBBCanvas()
     canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
     quad = [(10.0, 10.0), (90.0, 20.0), (80.0, 90.0), (0.0, 80.0)]
-    canvas.set_gt_detections_multi_level(
-        [{"class_id": 0, "polygon_px": quad}], native_level=GeometryLevel.OBB
+    canvas.set_layer(
+        _gt_multi([{"class_id": 0, "polygon_px": quad}], native_level=GeometryLevel.OBB)
     )
     canvas.clear_all()
-    canvas.set_overlay_visibility(show_gt=True, show_pred=True)  # must not raise
+    canvas.set_layer_visible("gt", True)
+    canvas.set_layer_visible("pred", True)  # must not raise
 
 
 # --- staged-escalation overlay ------------------------------------------
@@ -379,9 +449,11 @@ def test_escalation_layer_draws_native_plus_derived_levels(qapp):
 
     canvas = OBBCanvas()
     canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
-    canvas.set_escalation_detections(
-        [{"class_id": 0, "polygon_px": _poly(), "confidence": 0.8}],
-        native_level=GeometryLevel.POLYGON,
+    canvas.set_layer(
+        _esc(
+            [{"class_id": 0, "polygon_px": _poly(), "confidence": 0.8}],
+            native_level=GeometryLevel.POLYGON,
+        )
     )
     assert set(canvas.layer_items("escalation")) == {
         GeometryLevel.POLYGON,
@@ -398,14 +470,14 @@ def test_escalation_layer_uses_its_own_colour_not_the_class_palette(qapp):
     Class 0's palette entry is green and GT draws it green; the escalation
     layer must draw the same class in its own hue.
     """
-    from hydra_suite.detectkit.gui.canvas import _PALETTE, ESCALATION_COLOUR
+    from hydra_suite.detectkit.gui.canvas import _PALETTE
     from hydra_suite.training.geometry_levels import GeometryLevel
 
     canvas = OBBCanvas()
     canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
     det = [{"class_id": 0, "polygon_px": _poly()}]
-    canvas.set_gt_detections_multi_level(det, native_level=GeometryLevel.POLYGON)
-    canvas.set_escalation_detections(det, native_level=GeometryLevel.POLYGON)
+    canvas.set_layer(_gt_multi(det, native_level=GeometryLevel.POLYGON))
+    canvas.set_layer(_esc(det, native_level=GeometryLevel.POLYGON))
 
     gt_pen = canvas.layer_items("gt")[GeometryLevel.POLYGON].obb_items[0].pen().color()
     esc_pen = (
@@ -425,11 +497,11 @@ def test_escalation_layer_leaves_the_gt_layer_alone(qapp):
     canvas = OBBCanvas()
     canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
     det = [{"class_id": 0, "polygon_px": _poly()}]
-    canvas.set_gt_detections_multi_level(det, native_level=GeometryLevel.POLYGON)
+    canvas.set_layer(_gt_multi(det, native_level=GeometryLevel.POLYGON))
     before = len(_polys(canvas, "gt"))
-    canvas.set_escalation_detections(det, native_level=GeometryLevel.POLYGON)
+    canvas.set_layer(_esc(det, native_level=GeometryLevel.POLYGON))
     assert len(_polys(canvas, "gt")) == before
-    canvas.clear_escalation_detections()
+    canvas.remove_layer("escalation")
     assert len(_polys(canvas, "gt")) == before
     assert _polys(canvas, "escalation") == []
 
@@ -440,17 +512,17 @@ def test_escalation_layer_visibility_toggles_independently(qapp):
     canvas = OBBCanvas()
     canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
     det = [{"class_id": 0, "polygon_px": _poly()}]
-    canvas.set_gt_detections_multi_level(det, native_level=GeometryLevel.POLYGON)
-    canvas.set_escalation_detections(det, native_level=GeometryLevel.POLYGON)
+    canvas.set_layer(_gt_multi(det, native_level=GeometryLevel.POLYGON))
+    canvas.set_layer(_esc(det, native_level=GeometryLevel.POLYGON))
 
-    canvas.set_escalation_visible(False)
+    canvas.set_layer_visible("escalation", False)
     assert (
         not canvas.layer_items("escalation")[GeometryLevel.POLYGON]
         .obb_items[0]
         .isVisible()
     )
     assert canvas.layer_items("gt")[GeometryLevel.POLYGON].obb_items[0].isVisible()
-    canvas.set_escalation_visible(True)
+    canvas.set_layer_visible("escalation", True)
     assert (
         canvas.layer_items("escalation")[GeometryLevel.POLYGON].obb_items[0].isVisible()
     )
@@ -461,8 +533,10 @@ def test_escalation_derived_levels_follow_the_shared_derived_toggle(qapp):
 
     canvas = OBBCanvas()
     canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
-    canvas.set_escalation_detections(
-        [{"class_id": 0, "polygon_px": _poly()}], native_level=GeometryLevel.POLYGON
+    canvas.set_layer(
+        _esc(
+            [{"class_id": 0, "polygon_px": _poly()}], native_level=GeometryLevel.POLYGON
+        )
     )
     canvas.set_derived_levels_visible(False)
     assert (
@@ -486,8 +560,10 @@ def test_escalation_layer_ignores_the_class_filter(qapp):
 
     canvas = OBBCanvas()
     canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
-    canvas.set_escalation_detections(
-        [{"class_id": 0, "polygon_px": _poly()}], native_level=GeometryLevel.POLYGON
+    canvas.set_layer(
+        _esc(
+            [{"class_id": 0, "polygon_px": _poly()}], native_level=GeometryLevel.POLYGON
+        )
     )
     canvas.set_class_filter({7})
     assert (
@@ -501,10 +577,12 @@ def test_escalation_labels_carry_the_confidence(qapp):
 
     canvas = OBBCanvas()
     canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
-    canvas.set_escalation_detections(
-        [{"class_id": 0, "polygon_px": _poly(), "confidence": 0.42}],
-        class_names=["ant"],
-        native_level=GeometryLevel.POLYGON,
+    canvas.set_layer(
+        _esc(
+            [{"class_id": 0, "polygon_px": _poly(), "confidence": 0.42}],
+            names=["ant"],
+            native_level=GeometryLevel.POLYGON,
+        )
     )
     text = (
         canvas.layer_items("escalation")[GeometryLevel.POLYGON]
@@ -519,8 +597,10 @@ def test_clear_all_drops_the_escalation_layer(qapp):
 
     canvas = OBBCanvas()
     canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
-    canvas.set_escalation_detections(
-        [{"class_id": 0, "polygon_px": _poly()}], native_level=GeometryLevel.POLYGON
+    canvas.set_layer(
+        _esc(
+            [{"class_id": 0, "polygon_px": _poly()}], native_level=GeometryLevel.POLYGON
+        )
     )
     canvas.clear_all()
     assert _polys(canvas, "escalation") == []
@@ -537,10 +617,12 @@ def test_a_detection_without_confidence_is_labelled_by_name_alone(qapp):
 
     canvas = OBBCanvas()
     canvas.set_image_array(np.zeros((100, 100, 3), dtype=np.uint8))
-    canvas.set_escalation_detections(
-        [{"class_id": 0, "polygon_px": _poly()}],
-        class_names=["worker ant"],
-        native_level=GeometryLevel.POLYGON,
+    canvas.set_layer(
+        _esc(
+            [{"class_id": 0, "polygon_px": _poly()}],
+            names=["worker ant"],
+            native_level=GeometryLevel.POLYGON,
+        )
     )
     text = (
         canvas.layer_items("escalation")[GeometryLevel.POLYGON]
