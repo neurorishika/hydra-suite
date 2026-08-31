@@ -314,3 +314,34 @@ def test_the_area_band_survives_a_settings_round_trip(qapp, available_checkpoint
     assert dialog.parameters()["area_min_px2"] == pytest.approx(130.0)
     dialog.accept()
     assert project.semantic_escalation_settings["area_max_px2"] == pytest.approx(1500.0)
+
+
+def test_a_fresh_calibration_replaces_the_band_even_if_no_point_is_chosen(
+    qapp, available_checkpoint
+):
+    """A stale band is worse than none: it gates NEW data by OLD label sizes.
+
+    Recalibrating on a changed label set and then closing the results dialog
+    without picking a point used to leave the previous run's band in place,
+    so the escalation ran against a size gate fitted to different animals.
+    The band is a property of the LABELS, not of the chosen operating point.
+    """
+    from hydra_suite.core.inference.semantic.calibration import CalibrationPoint
+    from hydra_suite.detectkit.gui.dialogs.semantic_escalation_dialog import (
+        SemanticEscalationDialog,
+    )
+
+    project = DetectKitProject(project_dir=Path("/tmp/project"))
+    project.semantic_escalation_settings = {
+        "area_min_px2": 130.0,
+        "area_max_px2": 1500.0,
+    }
+    dialog = SemanticEscalationDialog([_source()], 50.0, project=project)
+    assert dialog.parameters()["area_min_px2"] == pytest.approx(130.0)
+
+    fresh = CalibrationPoint(
+        **{**_point_dict(), "area_min_px2": 900.0, "area_max_px2": 9000.0}
+    )
+    dialog._store_calibration([fresh], None, "")
+    assert dialog.parameters()["area_min_px2"] == pytest.approx(900.0)
+    assert dialog.parameters()["area_max_px2"] == pytest.approx(9000.0)

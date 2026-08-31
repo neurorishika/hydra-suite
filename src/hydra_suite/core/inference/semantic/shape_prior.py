@@ -35,17 +35,21 @@ import numpy as np
 
 from hydra_suite.core.inference.masks import polygon_iou
 
-# Band = [LOW x median label area, HIGH x median label area], then widened
-# to contain every observed label (see fit_area_band). HIGH is generous on
-# purpose: it must clear the ~1.7x appendage overshoot with room to spare,
-# while still rejecting the multi-animal merges and arena chunks that are
-# an order of magnitude out.
+# The multipliers are applied to the label population's EXTREMES, not only
+# to its median (see fit_area_band). HIGH is generous on purpose: it must
+# clear the ~1.7x appendage overshoot with room to spare, while still
+# rejecting the multi-animal merges and arena chunks that are an order of
+# magnitude out.
 LOW_MULTIPLIER = 0.3
 HIGH_MULTIPLIER = 3.5
-# Slack applied when widening to the observed extremes, so a label sitting
-# exactly at the boundary is not admitted by a hair.
-OBSERVED_SLACK_LOW = 0.8
-OBSERVED_SLACK_HIGH = 1.25
+# Floor on the aspect-agreement term. A silhouette that traces legs and
+# antennae has a minAreaRect elongation near 1 while the body-core quad
+# labelling the same animal can be 8:1 -- the SAME conventional difference
+# that inflates the area by ~1.7x. Unbounded, that term dragged correct
+# configurations under MIN_MEAN_QUALITY and made recommend() refuse good
+# data while blaming the prompt. Bounded, shape can at most halve the
+# score, which still separates a spindly region from a compact body.
+SHAPE_TERM_FLOOR = 0.5
 # A pair scoring below this is garbage even though it is admissible; it must
 # not be counted as a find.
 MIN_MATCH_QUALITY = 0.1
@@ -73,18 +77,28 @@ def polygon_area(poly: np.ndarray) -> float:
 def fit_area_band(label_polys: Sequence[np.ndarray]) -> AreaBand | None:
     """Fit the admissible area range to *label_polys*. None if unfittable.
 
-    The multiplier band is widened until it contains every label with slack.
-    That invariant -- no ground-truth label is ever out of band -- is what
-    makes a HARD gate safe: without it, a dataset with one unusually large
-    animal would have calibration score the user's own labels as impossible.
+    The multipliers are applied to the population's EXTREMES -- the largest
+    label sets the ceiling, the smallest sets the floor -- so every animal
+    in the set gets the same headroom, not just the median one.
+
+    An earlier version anchored both bounds to the median and then merely
+    WIDENED them to contain the observed extremes (1.25x the largest). That
+    contained every label, but containing a label is not the point:
+    admitting a correct MASK over it is. On a size-skewed population (mixed
+    instars, castes, sexes), a label at 3x the median got a ceiling of
+    1.25x its own area, while the acknowledged appendage overshoot is
+    ~1.7x -- so the correct masks over the biggest animals were dropped at
+    inference on every frame, silently, forever. Anchoring to the extremes
+    makes the ceiling >= HIGH_MULTIPLIER x the largest label by
+    construction, which is the property that actually matters.
     """
     areas = [a for a in (polygon_area(p) for p in label_polys) if a > 0.0]
     if not areas:
         return None
     arr = np.asarray(areas, dtype=np.float64)
     median = float(np.median(arr))
-    lo = min(LOW_MULTIPLIER * median, OBSERVED_SLACK_LOW * float(arr.min()))
-    hi = max(HIGH_MULTIPLIER * median, OBSERVED_SLACK_HIGH * float(arr.max()))
+    lo = LOW_MULTIPLIER * min(median, float(arr.min()))
+    hi = HIGH_MULTIPLIER * max(median, float(arr.max()))
     return AreaBand(min_px2=lo, max_px2=hi, median_px2=median, n_labels=int(arr.size))
 
 
@@ -131,5 +145,9 @@ def match_quality(pred_poly: np.ndarray, label_poly: np.ndarray) -> float:
     if overlap <= 0.0:
         return 0.0
     area = _ratio(polygon_area(pred_poly), polygon_area(label_poly))
-    shape = _ratio(aspect_ratio(pred_poly), aspect_ratio(label_poly))
+    raw_shape = _ratio(aspect_ratio(pred_poly), aspect_ratio(label_poly))
+    # Bounded into [SHAPE_TERM_FLOOR, 1]: see SHAPE_TERM_FLOOR. Area is NOT
+    # bounded this way -- an area ratio of 0.02 really does mean the mask is
+    # not the animal, whereas an elongation mismatch routinely does not.
+    shape = SHAPE_TERM_FLOOR + (1.0 - SHAPE_TERM_FLOOR) * raw_shape
     return float((overlap * area * shape) ** (1.0 / 3.0))

@@ -120,3 +120,50 @@ def test_band_bounds_are_ordered():
     assert isinstance(band, AreaBand)
     assert 0 < band.min_px2 < band.median_px2 < band.max_px2
     assert band.n_labels == 1
+
+
+def test_a_correct_mask_on_a_larger_than_median_animal_stays_in_band():
+    """The ceiling must give EVERY label the appendage headroom, not just
+    contain it.
+
+    Widening the ceiling only to 1.25x the largest observed label admitted
+    that label but not a correct mask over it: SAM3 traces appendages at
+    ~1.7x, so on a size-skewed population (mixed instars, castes, sexes) the
+    correct masks over the big animals fell out of band and were dropped at
+    inference on every frame, silently, forever -- the expensive
+    false-negative class this gate is supposed to protect.
+    """
+    labels = [_sq(0, 0, side=10.0) for _ in range(20)]  # 100 px^2
+    labels += [_sq(0, 0, side=float(np.sqrt(300.0))) for _ in range(3)]  # 300 px^2
+    band = fit_area_band(labels)
+    biggest = 300.0
+    traced = _sq(0, 0, side=float(np.sqrt(biggest * 1.7)))
+    assert in_band(traced, band), (band.min_px2, band.max_px2, polygon_area(traced))
+
+
+def test_the_smallest_animal_keeps_its_headroom_too():
+    labels = [_sq(0, 0, side=10.0) for _ in range(20)]
+    labels += [_sq(0, 0, side=4.0) for _ in range(3)]  # 16 px^2, much smaller
+    band = fit_area_band(labels)
+    # A mask that under-traces the smallest animal by half is still it.
+    assert in_band(_sq(0, 0, side=float(np.sqrt(8.0))), band)
+
+
+def test_aspect_disagreement_can_at_most_halve_the_shape_term():
+    """An elongated animal labelled as a thin quad, masked with legs out.
+
+    The silhouette's minAreaRect elongation and the body-core quad's differ
+    for the SAME conventional reason the areas do. Unbounded, that term
+    dragged correct configurations under the mean-quality floor and made
+    recommend() refuse good data with a message blaming the prompt.
+    """
+    worm = _rect(100, 100, 80.0, 10.0)  # aspect 8
+    spiky = _rect(100, 100, 30.0, 28.0)  # aspect ~1, overlapping it
+    assert match_quality(spiky, worm) > 0.35
+
+
+def test_shape_still_discriminates_after_the_floor():
+    label = _sq(100, 100, side=20.0)
+    compact = _sq(100, 100, side=20.0)
+    spindly = _rect(100, 100, 100.0, 4.0)
+    assert match_quality(spindly, label) < 0.5 * match_quality(compact, label)

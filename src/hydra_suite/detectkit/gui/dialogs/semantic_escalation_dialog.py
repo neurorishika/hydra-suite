@@ -380,6 +380,19 @@ class SemanticEscalationDialog(BaseDialog):
 
     def _store_calibration(self, points, recommended, reason: str) -> None:
         self.calibration_points = list(points)
+        # The band belongs to the LABELS, not to the chosen operating point:
+        # every point in one sweep shares it. Adopting it here (rather than
+        # only in apply_calibration_choice) stops a recalibration that the
+        # user closes without picking a point from leaving the PREVIOUS
+        # run's band in place, gating new data by old animal sizes.
+        for point in points:
+            bounds = (
+                float(getattr(point, "area_min_px2", 0.0) or 0.0),
+                float(getattr(point, "area_max_px2", 0.0) or 0.0),
+            )
+            if bounds[1] > bounds[0] > 0.0:
+                self._area_band = bounds
+            break
         if self._project is None:
             self._refresh_saved_calibration_ui()
             return
