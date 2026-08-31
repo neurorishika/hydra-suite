@@ -4069,7 +4069,7 @@ git commit -m "refactor(detectkit): drop the PendingEscalation alias, key the la
 
 **Files:**
 - Modify: `docs/superpowers/specs/2026-08-31-detectkit-frame-granular-review-design.md`
-- Modify: `docs/superpowers/specs/2026-08-31-detectkit-overlay-layer-registry-design.md`
+- Modify: `docs/superpowers/specs/done/2026-08-31-detectkit-overlay-layer-registry-design.md` (shipped 83b2386c; now under done/)
 - Modify: `docs/user-guide/` DetectKit review documentation (find it with the grep below)
 - Move: this plan + the design spec into their `done/` subfolders
 
