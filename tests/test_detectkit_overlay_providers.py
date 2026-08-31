@@ -9,6 +9,7 @@ caller's source text contains.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -147,6 +148,23 @@ def test_staged_provider_honours_the_escalations_own_target_level(
     project = _project(source_tree, pending_escalation=_staged(tmp_path, "aabb"))
     layer = StagedEscalationProvider().build(_ctx(project, source_tree))
     assert layer.native_level is GeometryLevel.AABB
+
+
+def test_staged_provider_matches_source_across_str_and_path_types(
+    source_tree, tmp_path
+):
+    """FrameContext.source() must coerce both sides with str() before
+    comparing, matching main_window.py's _refresh_escalation_overlay
+    lookup (str(s.path) == str(source_path)). If a Path ever reaches
+    either side, a bare == would silently drop the escalation overlay."""
+    project = _project(source_tree, pending_escalation=_staged(tmp_path, "obb"))
+    project.sources[0].path = Path(project.sources[0].path)
+    ctx = _ctx(project, source_tree)
+    assert isinstance(ctx.source_path, str)
+    assert isinstance(project.sources[0].path, Path)
+    layer = StagedEscalationProvider().build(ctx)
+    assert layer is not None
+    assert layer.key == "escalation"
 
 
 def test_staged_provider_returns_none_without_a_pending_escalation(source_tree):

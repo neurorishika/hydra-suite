@@ -47,7 +47,8 @@ class FrameContext:
         if self.project is None:
             return None
         return next(
-            (s for s in self.project.sources if s.path == self.source_path), None
+            (s for s in self.project.sources if str(s.path) == str(self.source_path)),
+            None,
         )
 
 
