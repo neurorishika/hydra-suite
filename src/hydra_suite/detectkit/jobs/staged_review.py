@@ -164,3 +164,52 @@ def revert_review(source: OBBSource, staged_root: str | Path) -> None:
         (source_root / "classes.txt").write_text(str(state["classes_txt"]))
 
     write_decisions(root, {})
+
+
+def _read_names(path: Path) -> list[str]:
+    """Read class names from classes.txt, degrading to [] if absent."""
+    try:
+        return [
+            ln.strip()
+            for ln in path.read_text(encoding="utf-8").splitlines()
+            if ln.strip()
+        ]
+    except OSError:
+        return []
+
+
+def resolve_staged_class_ids(
+    source: OBBSource,
+    staged_root: str | Path,
+) -> dict[int, int]:
+    """Map staged class ids onto the source's, extending it when needed.
+
+    Frame-granular ADD_NEW puts two class-id spaces in one label file for
+    the first time: staged ids index the STAGING dir's classes.txt (SAM3's
+    are its prompt's, all class 0), source ids index the source's. The old
+    wholesale accept dodged this by copying classes.txt over the source's,
+    which is not available when only some frames are accepted.
+
+    Matching is BY NAME. A staged name the source does not have is APPENDED
+    to the source's classes.txt and takes the new id. Appending -- rather
+    than merging and re-sorting -- is what keeps every label already on disk
+    valid: no existing id is ever renumbered.
+
+    Idempotent: running it twice appends nothing the second time.
+    """
+    source_root = Path(source.path)
+    classes_path = source_root / "classes.txt"
+    source_names = _read_names(classes_path)
+    staged_names = _read_names(Path(staged_root) / "classes.txt") or ["object"]
+
+    mapping: dict[int, int] = {}
+    appended = False
+    for staged_id, name in enumerate(staged_names):
+        if name not in source_names:
+            source_names.append(name)
+            appended = True
+        mapping[staged_id] = source_names.index(name)
+
+    if appended:
+        classes_path.write_text("\n".join(source_names) + "\n", encoding="utf-8")
+    return mapping

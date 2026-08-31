@@ -124,3 +124,44 @@ def test_revert_without_a_snapshot_is_refused(tmp_path):
 
     with pytest.raises(RuntimeError, match="no snapshot"):
         sr.revert_review(source, staged)
+
+
+def test_matching_class_names_map_by_name(tmp_path):
+    source = _source(tmp_path, {}, classes="ant\nbeetle\n")
+    staged = _staging(tmp_path, {}, classes="beetle\n")
+
+    assert sr.resolve_staged_class_ids(source, staged) == {0: 1}
+
+
+def test_an_unknown_staged_class_is_appended_to_the_source(tmp_path):
+    source = _source(tmp_path, {}, classes="ant\n")
+    staged = _staging(tmp_path, {}, classes="ant\nlarva\n")
+
+    mapping = sr.resolve_staged_class_ids(source, staged)
+
+    assert mapping == {0: 0, 1: 1}
+    assert (Path(source.path) / "classes.txt").read_text() == "ant\nlarva\n"
+
+
+def test_appending_never_renumbers_an_existing_class(tmp_path):
+    source = _source(tmp_path, {}, classes="ant\nbeetle\n")
+    staged = _staging(tmp_path, {}, classes="larva\n")
+
+    mapping = sr.resolve_staged_class_ids(source, staged)
+
+    assert mapping == {0: 2}
+    assert (Path(source.path) / "classes.txt").read_text().splitlines()[:2] == [
+        "ant",
+        "beetle",
+    ]
+
+
+def test_resolution_is_idempotent(tmp_path):
+    source = _source(tmp_path, {}, classes="ant\n")
+    staged = _staging(tmp_path, {}, classes="larva\n")
+
+    first = sr.resolve_staged_class_ids(source, staged)
+    second = sr.resolve_staged_class_ids(source, staged)
+
+    assert first == second
+    assert (Path(source.path) / "classes.txt").read_text() == "ant\nlarva\n"
