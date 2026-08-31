@@ -533,3 +533,96 @@ def test_accept_is_producer_agnostic(tmp_path, producer):
     assert (Path(source.path) / "labels" / "a.txt").read_text() == (
         _obb_line(0, 0, 20, 20) + _obb_line(60, 60, 80, 80)
     )
+
+
+def test_accept_frame_finds_a_nested_image_by_relative_path(tmp_path):
+    """`_image_for`'s nested relative-path lookup, pinned through a real accept.
+
+    Every other accept_frame/accept_all test in this suite uses a flat key
+    ("a.txt"). A source's images/labels can be nested (images/train/...,
+    as source_import.py's materializer can produce), and `_image_for`
+    resolves the staged label's rel path directly against the source's own
+    images/ tree -- this is the only test that actually exercises that
+    nested lookup end to end through accept_frame, rather than only through
+    `staged_frames`' sorting (which never reaches `_image_for` at all).
+    """
+    source, staged = _wired(
+        tmp_path,
+        {},
+        {"train/a.txt": _obb_line(60, 60, 80, 80)},
+    )
+
+    sr.accept_frame(source, "train/a.txt", mode=MergeMode.ADD_NEW)
+
+    out = read_label_file(Path(source.path) / "labels" / "train" / "a.txt", (100, 200))
+    assert len(out) == 1
+    assert sr.read_decisions(staged)["train/a.txt"] == sr.ACCEPTED_ADD_NEW
+
+
+def test_accept_frame_raises_when_the_staged_frames_image_is_missing(tmp_path):
+    """The new behaviour, pinned: `accept_frame` RAISES on a ghost staged
+    label (no origin image), rather than silently skipping it as the old
+    sibling-source accept used to (it warned and counted the label
+    `orphaned`). `accept_frame` is an explicit user action on one named
+    frame, so silently doing nothing would be the worse failure here --
+    this is deliberate, not a regression to fix.
+    """
+    original = _obb_line(0, 0, 20, 20)
+    source = _source(tmp_path, {"a.txt": original})
+    staged = _staging(tmp_path, {"a.txt": _obb_line(60, 60, 80, 80)})
+    # No _image(source, "a") call: the staged label's origin image genuinely
+    # does not exist.
+    source.staged_review = StagedReview(
+        staged_path=str(staged), target_level="obb", producer="sam2"
+    )
+
+    with pytest.raises(RuntimeError, match="No image found"):
+        sr.accept_frame(source, "a.txt", mode=MergeMode.OVERWRITE)
+
+    assert (Path(source.path) / "labels" / "a.txt").read_text() == original
+    assert sr.read_decisions(staged) == {}
+
+
+def test_accept_all_propagates_a_missing_image_error_and_stays_recoverable(tmp_path):
+    """accept_all over a staging dir with one ghost frame aborts loudly
+    (Finding 2 above) rather than silently skipping it -- a user who hits
+    this rejects the ghost frame (`reject_frame`) to unblock the rest of a
+    bulk accept.
+
+    Pins the recovery story around that abort: the frame decided before the
+    ghost frame keeps its decision and its accepted content on disk, the
+    ghost frame itself never wrote anything, and `revert_review` -- using
+    the snapshot `accept_frame` took before the abort -- still restores the
+    source to its pre-review state.
+    """
+    original_a = _obb_line(0, 0, 20, 20)
+    source = _source(tmp_path, {"a.txt": original_a})
+    _image(source, "a")
+    # No _image(source, "ghost"): this staged label's image genuinely does
+    # not exist. "a.txt" sorts before "ghost.txt", so accept_all reaches and
+    # accepts it before hitting the ghost frame.
+    staged = _staging(
+        tmp_path,
+        {
+            "a.txt": _obb_line(60, 60, 80, 80),
+            "ghost.txt": _obb_line(60, 60, 80, 80),
+        },
+    )
+    source.staged_review = StagedReview(
+        staged_path=str(staged), target_level="obb", producer="sam2"
+    )
+
+    with pytest.raises(RuntimeError, match="No image found"):
+        sr.accept_all(source, mode=MergeMode.OVERWRITE)
+
+    # The frame accepted before the abort kept its decision and its content.
+    assert sr.read_decisions(staged)["a.txt"] == sr.ACCEPTED_OVERWRITE
+    assert (Path(source.path) / "labels" / "a.txt").read_text() != original_a
+    # The ghost frame itself never got a decision or wrote anything.
+    assert "ghost.txt" not in sr.read_decisions(staged)
+    assert not (Path(source.path) / "labels" / "ghost.txt").exists()
+
+    sr.revert_review(source, staged)
+
+    assert (Path(source.path) / "labels" / "a.txt").read_text() == original_a
+    assert sr.read_decisions(staged) == {}
