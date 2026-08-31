@@ -287,3 +287,101 @@ def test_layer_items_exposes_the_per_level_buckets(qapp):
         GeometryLevel.AABB,
     }
     assert canvas.layer_items("absent") == {}
+
+
+import itertools  # noqa: E402
+
+
+def _visible_counts(canvas) -> dict:
+    return {
+        key: sum(
+            1
+            for b in canvas.layer_items(key).values()
+            for o in b.obb_items
+            if o.isVisible()
+        )
+        for key in ("gt", "pred", "escalation")
+    }
+
+
+def test_hiding_gt_leaves_the_other_two_layers_fully_visible(qapp):
+    canvas = OBBCanvas()
+    _build_main_window_scene(canvas)
+    before = _visible_counts(canvas)
+    canvas.set_layer_visible("gt", False)
+    after = _visible_counts(canvas)
+    assert after["gt"] == 0
+    assert after["pred"] == before["pred"]
+    assert after["escalation"] == before["escalation"]
+
+
+def test_hiding_derived_levels_keeps_exactly_the_native_shapes(qapp):
+    """GT is POLYGON-native and escalation OBB-native in this scene, so
+    each keeps its own native bucket and loses the rest. Predictions never
+    derive, so they are untouched."""
+    canvas = OBBCanvas()
+    _build_main_window_scene(canvas)
+    canvas.set_derived_levels_visible(False)
+    assert _visible_counts(canvas) == {
+        "gt": len(_GT),
+        "escalation": len(_ESC),
+        "pred": len(_PRED),
+    }
+
+
+def test_the_class_filter_never_hides_the_escalation_layer(qapp):
+    """Staged class ids index the STAGING dir's classes.txt, not the
+    project's class list, so the project filter cannot address them."""
+    canvas = OBBCanvas()
+    _build_main_window_scene(canvas)
+    canvas.set_class_filter({999})
+    counts = _visible_counts(canvas)
+    assert counts["gt"] == 0
+    assert counts["escalation"] == len(_ESC) * 2  # OBB native + derived AABB
+
+
+def test_an_empty_class_filter_means_show_all(qapp):
+    canvas = OBBCanvas()
+    _build_main_window_scene(canvas)
+    canvas.set_class_filter({0})
+    filtered = _visible_counts(canvas)["gt"]
+    canvas.set_class_filter(set())
+    assert _visible_counts(canvas)["gt"] > filtered
+
+
+@pytest.mark.parametrize(
+    "show_gt,show_pred,show_esc,show_derived,class_filter",
+    list(
+        itertools.product(
+            [True, False],
+            [True, False],
+            [True, False],
+            [True, False],
+            [set(), {0}],
+        )
+    ),
+)
+def test_visibility_matrix_is_self_consistent(
+    qapp, show_gt, show_pred, show_esc, show_derived, class_filter
+):
+    """Broad sweep for crashes and cross-layer leakage: no combination may
+    make a hidden layer visible or a shown-and-unfiltered layer invisible."""
+    canvas = OBBCanvas()
+    _build_main_window_scene(canvas)
+    canvas.set_layer_visible("gt", show_gt)
+    canvas.set_layer_visible("pred", show_pred)
+    canvas.set_layer_visible("escalation", show_esc)
+    canvas.set_derived_levels_visible(show_derived)
+    canvas.set_class_filter(class_filter)
+
+    counts = _visible_counts(canvas)
+    if not show_gt:
+        assert counts["gt"] == 0
+    if not show_pred:
+        assert counts["pred"] == 0
+    if not show_esc:
+        assert counts["escalation"] == 0
+    if show_esc:
+        # class_filtered=False, so the filter can never reduce it
+        expected = len(_ESC) * (2 if show_derived else 1)
+        assert counts["escalation"] == expected
