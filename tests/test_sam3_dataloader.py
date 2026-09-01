@@ -57,22 +57,23 @@ def test_load_coco_split_raises_when_missing(tmp_path):
         dl._load_coco_split(tmp_path, "train")
 
 
-def test_segmentation_to_polygons_skips_crowd():
+def test_segmentation_to_polygons_keeps_crowd_flagged():
+    # Crowd instances stay in the object list (flagged, not dropped) --
+    # `Object.is_crowd` lets the loss handle them correctly, superseding an
+    # earlier design that dropped them and forced is_exhaustive=False.
     annotations = [
         {"segmentation": [[0, 0, 1, 0, 1, 1]], "iscrowd": 0},
         {"segmentation": [[2, 2, 3, 2, 3, 3]], "iscrowd": 1},
     ]
 
-    polygons = dl._segmentation_to_polygons(annotations)
+    instances = dl._segmentation_to_polygons(annotations)
 
-    assert len(polygons) == 1
-    np.testing.assert_allclose(polygons[0], [[0, 0], [1, 0], [1, 1]])
-
-
-def test_tile_is_exhaustive_false_when_crowd_present():
-    assert dl._tile_is_exhaustive([{"iscrowd": 0}]) is True
-    assert dl._tile_is_exhaustive([{"iscrowd": 0}, {"iscrowd": 1}]) is False
-    assert dl._tile_is_exhaustive([]) is True
+    assert len(instances) == 2
+    (poly0, crowd0), (poly1, crowd1) = instances
+    np.testing.assert_allclose(poly0, [[0, 0], [1, 0], [1, 1]])
+    assert crowd0 is False
+    np.testing.assert_allclose(poly1, [[2, 2], [3, 2], [3, 3]])
+    assert crowd1 is True
 
 
 def test_negative_prompts_not_required_when_num_negatives_zero(tmp_path):

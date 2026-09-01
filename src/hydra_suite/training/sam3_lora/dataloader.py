@@ -75,29 +75,28 @@ def _negative_prompts_for(dataset_dir: Path, params: Any) -> list[str]:
     )
 
 
-def _segmentation_to_polygons(annotations: list[dict]) -> list[np.ndarray]:
-    """Non-crowd instance polygons, in tile-pixel space (scaled to RES space
-    later, inside `build_datapoint`)."""
-    polygons: list[np.ndarray] = []
+def _segmentation_to_polygons(annotations: list[dict]) -> list[tuple[np.ndarray, bool]]:
+    """Instance polygons, in tile-pixel space (scaled to RES space later,
+    inside `build_datapoint`), paired with their `iscrowd` flag.
+
+    Earlier revisions dropped `iscrowd` instances from the object list
+    entirely and forced the tile's query to `is_exhaustive=False` to
+    compensate (COCO's own meaning of `iscrowd` is "present but
+    unannotated", not "absent", so silently omitting it would have taught
+    the model those pixels were background). That reasoning predated having
+    the real `sam3.train.data.sam3_image_dataset.Object` API to check: it
+    turns out `Object` has a first-class `is_crowd` field, so the instance
+    can stay present in the object list with `is_crowd=True` and the loss
+    handles it correctly -- no need to fall back to a non-exhaustive query.
+    """
+    polygons: list[tuple[np.ndarray, bool]] = []
     for ann in annotations:
-        if ann.get("iscrowd"):
-            continue
+        is_crowd = bool(ann.get("iscrowd"))
         for seg in ann.get("segmentation") or []:
             pts = np.asarray(seg, dtype=np.float32).reshape(-1, 2)
             if len(pts) >= 3:
-                polygons.append(pts)
+                polygons.append((pts, is_crowd))
     return polygons
-
-
-def _tile_is_exhaustive(annotations: list[dict]) -> bool:
-    """False iff the tile contains at least one `iscrowd` annotation.
-
-    Those instances are excluded from the object list by
-    `_segmentation_to_polygons` but are still physically present -- COCO's
-    own meaning of `iscrowd` is "present but unannotated", not "absent" -- so
-    the query must not claim to be exhaustive over this tile.
-    """
-    return not any(ann.get("iscrowd") for ann in annotations)
 
 
 def iter_split_datapoints(dataset_dir: Path, params: Any, split: str, *, seed: int = 0):
@@ -118,11 +117,11 @@ def iter_split_datapoints(dataset_dir: Path, params: Any, split: str, *, seed: i
         if tile_bgr is None:
             raise RuntimeError(f"Could not read SAM3 training tile: {img_path}")
         anns = by_image.get(image_meta["id"], [])
-        polygons = _segmentation_to_polygons(anns)
-        is_exhaustive = _tile_is_exhaustive(anns)
-        yield build_datapoint(
-            tile_bgr, params.prompt, polygons, transform, is_exhaustive=is_exhaustive
-        )
+        instances = _segmentation_to_polygons(anns)
+        # Every instance in the tile is now represented in `instances`
+        # (crowd or not -- see `_segmentation_to_polygons`), so the query
+        # over this tile is genuinely exhaustive.
+        yield build_datapoint(tile_bgr, params.prompt, instances, transform)
 
         n_neg = min(max(0, int(params.num_negatives)), len(negatives))
         for neg_prompt in (rng.sample(negatives, n_neg) if n_neg else []):

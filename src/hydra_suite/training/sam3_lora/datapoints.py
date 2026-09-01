@@ -43,27 +43,55 @@ def _scale_polygons_to_res(
     return [(poly.astype(np.float32) * scale) for poly in polygons]
 
 
+def _polygon_to_object(polygon: np.ndarray, is_crowd: bool) -> Any:
+    """Build one `sam3.train.data.sam3_image_dataset.Object` from a single
+    RES-space polygon (already scaled by `_scale_polygons_to_res`).
+
+    `Object.segment` accepts either an RLE dict or a mask; polygons rasterize
+    cleanly to a binary mask at RES x RES, so that is what is passed here
+    (no lazy RLE decode needed, since it is already a dense mask). `area` is
+    the mask's own pixel area (not the bbox area), matching COCO's
+    `annotation["area"]` semantics for a polygon instance.
+    """
+    import cv2
+    import torch
+    from sam3.train.data.sam3_image_dataset import Object
+
+    mask = np.zeros((RES, RES), dtype=np.uint8)
+    cv2.fillPoly(mask, [np.round(polygon).astype(np.int32)], color=1)
+    xs = polygon[:, 0]
+    ys = polygon[:, 1]
+    bbox = torch.as_tensor(
+        [float(xs.min()), float(ys.min()), float(xs.max()), float(ys.max())],
+        dtype=torch.float32,
+    )
+    return Object(
+        bbox=bbox,
+        area=float(mask.sum()),
+        segment=torch.from_numpy(mask),
+        is_crowd=is_crowd,
+    )
+
+
 def build_datapoint(
     tile_bgr: Any,
     prompt: str,
-    polygons: list,
+    instances: list[tuple[np.ndarray, bool]],
     transform: Any,
-    *,
-    is_exhaustive: bool = True,
 ) -> Any:
     """One COCO tile -> one Datapoint carrying a single text query.
 
-    `polygons` are the objects (already in Meta's expected object format) for
-    a positive query, in the tile's original pixel space -- they are scaled
-    to RES space here, alongside the image resize. Pass an empty list for a
-    negative query (a prompt that must return nothing).
+    `instances` are `(polygon, is_crowd)` pairs, in the tile's original pixel
+    space -- polygons are scaled to RES space here, alongside the image
+    resize, and turned into `sam3` `Object`s (see `_polygon_to_object`).
+    Pass an empty list for a negative query (a prompt that must return
+    nothing).
 
-    `is_exhaustive` must be False when the tile contains at least one
-    `iscrowd` (seam-clipped, partially-retained) instance: those instances
-    are excluded from `polygons` but are still physically present in the
-    tile, so an exhaustive query would teach the model that a partial animal
-    is background. COCO's own meaning of `iscrowd` is "present but
-    unannotated", not "absent" -- `is_exhaustive=False` matches that.
+    The query is always exhaustive: every instance in the tile -- crowd or
+    not -- is represented in `instances` (see `dataloader._segmentation_to_
+    polygons`), with crowd instances carrying `Object(is_crowd=True)` rather
+    than being omitted, so there is nothing left unaccounted for that would
+    make an exhaustive claim false.
     """
     import cv2
     from PIL import Image as PILImage
@@ -78,12 +106,18 @@ def build_datapoint(
     pil = PILImage.fromarray(cv2.cvtColor(tile_bgr, cv2.COLOR_BGR2RGB))
     if (w, h) != (RES, RES):
         pil = pil.resize((RES, RES), PILImage.BILINEAR)
+    polygons = [polygon for polygon, _is_crowd in instances]
+    crowd_flags = [is_crowd for _polygon, is_crowd in instances]
     scaled_polygons = _scale_polygons_to_res(polygons, w, h)
+    objects = [
+        _polygon_to_object(polygon, is_crowd)
+        for polygon, is_crowd in zip(scaled_polygons, crowd_flags)
+    ]
     query = FindQueryLoaded(
         query_text=prompt,
         image_id=0,
         object_ids_output=[],
-        is_exhaustive=is_exhaustive,
+        is_exhaustive=True,
         query_processing_order=0,
         inference_metadata=InferenceMetadata(
             coco_image_id=0,
@@ -96,7 +130,7 @@ def build_datapoint(
     )
     return Datapoint(
         find_queries=[query],
-        images=[Image(data=transform(pil), objects=scaled_polygons, size=(RES, RES))],
+        images=[Image(data=transform(pil), objects=objects, size=(RES, RES))],
         raw_images=[pil],
     )
 
@@ -104,12 +138,7 @@ def build_datapoint(
 def build_negative_datapoint(
     tile_bgr: Any, negative_prompt: str, transform: Any
 ) -> Any:
-    """A negative query datapoint: same structure, no objects.
-
-    Always exhaustive -- a negative prompt asks for a different concept than
-    whatever `iscrowd` instances might be in the tile, so the crowd caveat
-    that forces `is_exhaustive=False` on the positive query does not apply.
-    """
+    """A negative query datapoint: same structure, no objects, exhaustive."""
     return build_datapoint(tile_bgr, negative_prompt, [], transform)
 
 

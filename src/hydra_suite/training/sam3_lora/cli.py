@@ -136,8 +136,9 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
     # (2026-08-31): sam3/build_sam.py does not exist. The builder lives in
     # sam3/model_builder.py. Do not "correct" this back.
     from sam3.model_builder import build_sam3_image_model
+    from sam3.train.loss.loss_fns import Boxes, IABCEMdetr, Masks
     from sam3.train.loss.sam3_loss import Sam3LossWrapper
-    from sam3.train.matcher import BinaryHungarianMatcherV2
+    from sam3.train.matcher import BinaryHungarianMatcherV2, BinaryOneToManyMatcher
 
     device = torch.device("cuda")
     model = build_sam3_image_model(eval_mode=False)
@@ -149,10 +150,54 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
 
     trainable_params = [p for p in model.parameters() if p.requires_grad]
 
+    # Verified against the real Meta sam3 source on the CUDA box (2026-08-31,
+    # sam3-lora env): `inspect.signature` on `Sam3LossWrapper.__init__`,
+    # `Boxes.__init__`, `IABCEMdetr.__init__`, `Masks.__init__`,
+    # `BinaryHungarianMatcherV2.__init__`, `BinaryOneToManyMatcher.__init__`.
+    # `Sam3LossWrapper` has no zero-arg form -- `loss_fns_find` is required
+    # and positional-first. Values below are translated from Meta's own
+    # reference finetuning config,
+    # `sam3/train/configs/roboflow_v100/roboflow_v100_full_ft_100_images.yaml`
+    # (segmentation variant, since this trains masks). ONE matcher instance
+    # is built and shared between the loss wrapper and the training loop's
+    # own `outputs["indices"] = matcher(...)` calls below, rather than two
+    # diverging matchers.
     matcher = BinaryHungarianMatcherV2(
-        cost_class=2.0, cost_bbox=5.0, cost_giou=2.0, focal=True
+        focal=True,
+        cost_class=2.0,
+        cost_bbox=5.0,
+        cost_giou=2.0,
+        alpha=0.25,
+        gamma=2,
+        stable=False,
     )
-    loss_fn = Sam3LossWrapper()
+    loss_fn = Sam3LossWrapper(
+        loss_fns_find=[
+            Boxes(weight_dict={"loss_bbox": 5.0, "loss_giou": 2.0}),
+            IABCEMdetr(
+                weak_loss=False,
+                weight_dict={"loss_ce": 20.0, "presence_loss": 20.0},
+                pos_weight=10.0,
+                alpha=0.25,
+                gamma=2,
+                use_presence=True,
+                pos_focal=False,
+                pad_n_queries=200,
+                pad_scale_pos=1.0,
+            ),
+            Masks(
+                focal_alpha=0.25,
+                focal_gamma=2.0,
+                weight_dict={"loss_mask": 200.0, "loss_dice": 10.0},
+                compute_aux=False,
+            ),
+        ],
+        matcher=matcher,
+        o2m_weight=2.0,
+        o2m_matcher=BinaryOneToManyMatcher(alpha=0.3, threshold=0.4, topk=4),
+        use_o2m_matcher_on_o2m_aux=False,
+        loss_fn_semantic_seg=None,
+    )
 
     grad_accum = max(1, int(params.grad_accum))
     batch_size = max(1, int(params.batch))
