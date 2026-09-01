@@ -6,9 +6,12 @@ import pytest
 import hydra_suite.training.model_publish as mp
 from hydra_suite.core.inference.slice_meta import (
     available_slice_profiles,
+    normalized_slice_meta,
     primary_slice_profile,
     read_slice_meta,
+    remove_slice_profile,
     slice_meta_to_panel_values,
+    upsert_slice_profile,
     write_slice_meta,
 )
 from hydra_suite.training.contracts import TrainingRole
@@ -200,3 +203,33 @@ def test_missing_profile_falls_back_to_primary_and_legacy_sidecar_still_loads():
     values = slice_meta_to_panel_values(legacy)
     assert values["profile_id"] is None
     assert values["object_tile_fraction"] == 300.0 / 640.0
+
+
+def test_profile_management_preserves_training_geometry_and_other_profiles():
+    legacy = {"geometry_mode": "auto_object", "reference_body_px": 50.0}
+    meta = upsert_slice_profile(
+        legacy,
+        name="Balanced",
+        settings={"overlap": 0.2},
+        profile_id="balanced",
+        primary=True,
+    )
+    meta = upsert_slice_profile(
+        meta,
+        name="Fast scan",
+        settings={"overlap": 0.1},
+        profile_id="fast",
+    )
+    assert meta["training_geometry"] == legacy
+    assert meta["primary_profile_id"] == "balanced"
+    assert [p["id"] for p in meta["profiles"]] == ["balanced", "fast"]
+    trimmed = remove_slice_profile(meta, "balanced")
+    assert trimmed["primary_profile_id"] == "fast"
+    assert [p["id"] for p in trimmed["profiles"]] == ["fast"]
+    assert normalized_slice_meta(trimmed)["training_geometry"] == legacy
+
+
+def test_profile_management_refuses_duplicate_names():
+    meta = upsert_slice_profile({}, name="Balanced", settings={}, profile_id="first")
+    with pytest.raises(ValueError, match="already exists"):
+        upsert_slice_profile(meta, name="balanced", settings={}, profile_id="second")

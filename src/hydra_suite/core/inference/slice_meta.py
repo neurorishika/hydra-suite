@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import numpy as np
 
@@ -49,6 +50,86 @@ def training_geometry(meta: dict[str, Any]) -> dict[str, Any]:
     """Return v2 training geometry or a legacy flat payload, without mutation."""
     nested = meta.get("training_geometry")
     return dict(nested) if isinstance(nested, dict) else dict(meta)
+
+
+def new_profile_id(name: str) -> str:
+    """Create a stable-looking, collision-resistant user-visible profile id."""
+    slug = "-".join(
+        part
+        for part in "".join(ch.lower() if ch.isalnum() else " " for ch in name).split()
+        if part
+    )
+    return f"{slug[:32] or 'profile'}-{uuid4().hex[:8]}"
+
+
+def normalized_slice_meta(meta: dict[str, Any]) -> dict[str, Any]:
+    """Promote legacy metadata to the v2 document shape without inventing profiles."""
+    return {
+        "schema_version": SLICE_META_SCHEMA_VERSION,
+        "training_geometry": training_geometry(meta),
+        "primary_profile_id": str(meta.get("primary_profile_id", "") or ""),
+        "profiles": available_slice_profiles(meta),
+    }
+
+
+def upsert_slice_profile(
+    meta: dict[str, Any],
+    *,
+    name: str,
+    settings: dict[str, Any],
+    profile_id: str | None = None,
+    note: str = "",
+    measurement: dict[str, Any] | None = None,
+    primary: bool = False,
+) -> dict[str, Any]:
+    """Return v2 metadata with one explicitly user-approved profile upserted.
+
+    The caller owns persistence. This pure helper intentionally preserves every
+    other profile and never promotes a generated training default to calibration.
+    """
+    clean_name = str(name or "").strip()
+    if not clean_name:
+        raise ValueError("A SAHI profile needs a name.")
+    result = normalized_slice_meta(meta)
+    profiles = list(result["profiles"])
+    selected_id = str(profile_id or new_profile_id(clean_name)).strip()
+    if not selected_id:
+        raise ValueError("A SAHI profile needs an id.")
+    if any(
+        p["name"].casefold() == clean_name.casefold() and p["id"] != selected_id
+        for p in profiles
+    ):
+        raise ValueError(f"A SAHI profile named {clean_name!r} already exists.")
+    profile = {
+        "id": selected_id,
+        "name": clean_name,
+        "note": str(note or ""),
+        "settings": dict(settings),
+        "measurement": dict(measurement or {}),
+    }
+    replacement = next(
+        (i for i, old in enumerate(profiles) if old["id"] == selected_id), None
+    )
+    if replacement is None:
+        profiles.append(profile)
+    else:
+        profiles[replacement] = profile
+    result["profiles"] = profiles
+    if primary or not result["primary_profile_id"]:
+        result["primary_profile_id"] = selected_id
+    return result
+
+
+def remove_slice_profile(meta: dict[str, Any], profile_id: str) -> dict[str, Any]:
+    """Return v2 metadata with one profile removed, preserving all other data."""
+    result = normalized_slice_meta(meta)
+    profiles = [p for p in result["profiles"] if p["id"] != str(profile_id)]
+    if len(profiles) == len(result["profiles"]):
+        return result
+    result["profiles"] = profiles
+    if result["primary_profile_id"] == str(profile_id):
+        result["primary_profile_id"] = profiles[0]["id"] if profiles else ""
+    return result
 
 
 def available_slice_profiles(meta: dict[str, Any]) -> list[dict[str, Any]]:
