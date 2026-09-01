@@ -9,18 +9,26 @@ Checkpoint selection is always the LAST epoch's weights, never the epoch
 with the best validation loss: the spike found val loss anti-correlated with
 held-out AP (the fold with the worst val loss had the best held-out AP75).
 Do not add best-checkpoint selection or early stopping on val loss here.
+
+The training set is built and checked for emptiness BEFORE any `sam3` model
+is loaded: an empty dataloader must return `success: False`, never silently
+train nothing and report success (zero-initialised LoRA `lora_B` makes an
+untrained adapter a mathematical no-op, so a fake-success run would publish
+a "finetuned" checkpoint byte-identical to stock SAM3).
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import math
 import random
 from pathlib import Path
 from typing import Any, Callable
 
 import numpy as np
 
+from .dataloader import build_batches, try_build_batches
 from .lora import adapter_state_dict, inject_adapters, lora_config_from_params
 from .preflight import preflight
 
@@ -35,6 +43,21 @@ def _seed_everything(seed: int) -> None:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+
+
+def _cosine_with_warmup(warmup_steps: int, total_steps: int) -> Callable[[int], float]:
+    def _fn(step: int) -> float:
+        if warmup_steps > 0 and step < warmup_steps:
+            return float(step + 1) / float(warmup_steps)
+        span = max(1, total_steps - warmup_steps)
+        progress = min(max(float(step - warmup_steps) / float(span), 0.0), 1.0)
+        return 0.5 * (1.0 + math.cos(math.pi * progress))
+
+    return _fn
+
+
+def _targets_from_batch(batch: Any) -> Any:
+    return batch.get("targets") if isinstance(batch, dict) else batch
 
 
 def train_sam3_lora(
@@ -54,21 +77,32 @@ def train_sam3_lora(
     progress_cb = progress_cb or (lambda epoch, total: None)
     should_cancel = should_cancel or (lambda: False)
 
-    refusals = preflight(spec)
-    if refusals:
+    def _refuse(message: str) -> dict:
         return {
             "success": False,
-            "error_message": "; ".join(refusals),
+            "error_message": message,
             "artifact_path": None,
             "metrics_path": None,
             "canceled": False,
         }
+
+    refusals = preflight(spec)
+    if refusals:
+        return _refuse("; ".join(refusals))
 
     run_dir_path = Path(run_dir).expanduser().resolve()
     run_dir_path.mkdir(parents=True, exist_ok=True)
 
     params = spec.sam3_params
     _seed_everything(spec.seed)
+
+    # Build (and validate) the training set BEFORE touching `sam3` or the GPU.
+    train_batches = _build_dataloader(spec, params, split="train")
+    if not train_batches:
+        return _refuse(
+            "Training set produced zero batches; refusing to report success "
+            "for a run that trained nothing."
+        )
 
     # --- Lazy, training-only imports -----------------------------------
     import torch
@@ -91,9 +125,10 @@ def train_sam3_lora(
     )
     loss_fn = Sam3LossWrapper()
 
-    # --- Data ------------------------------------------------------------
-    train_batches = _build_dataloader(spec, params, split="train")
-    total_steps = max(1, len(train_batches) * params.epochs)
+    grad_accum = max(1, int(params.grad_accum))
+    n_batches = len(train_batches)
+    steps_per_epoch = -(-n_batches // grad_accum)  # ceil division
+    total_steps = max(1, steps_per_epoch * params.epochs)
     warmup_steps = min(50, total_steps // 4)
 
     optimizer = torch.optim.AdamW(trainable_params, lr=params.lr)
@@ -113,13 +148,14 @@ def train_sam3_lora(
     global_step = 0
     logging_steps = 10
     canceled = False
+    optimizer.zero_grad()
 
     for epoch in range(params.epochs):
         if should_cancel():
             canceled = True
             break
         model.train()
-        for batch in train_batches:
+        for micro_idx, batch in enumerate(train_batches):
             if should_cancel():
                 canceled = True
                 break
@@ -136,15 +172,18 @@ def train_sam3_lora(
                 loss_dict = loss_fn(outputs, targets)
                 loss = loss_dict["loss"] if isinstance(loss_dict, dict) else loss_dict
 
-            optimizer.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
-            optimizer.step()
-            scheduler.step()
+            (loss / grad_accum).backward()
 
-            if global_step % logging_steps == 0:
-                log_cb(f"epoch {epoch} step {global_step} loss {float(loss):.4f}")
-            global_step += 1
+            is_boundary = (micro_idx + 1) % grad_accum == 0
+            is_final_micro_batch = (micro_idx + 1) == n_batches
+            if is_boundary or is_final_micro_batch:
+                torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
+                optimizer.step()
+                scheduler.step()
+                optimizer.zero_grad()
+                if global_step % logging_steps == 0:
+                    log_cb(f"epoch {epoch} step {global_step} loss {float(loss):.4f}")
+                global_step += 1
 
         if canceled:
             break
@@ -162,55 +201,75 @@ def train_sam3_lora(
     artifact_path = run_dir_path / "adapters.pt"
     torch.save(adapter_state_dict(model), artifact_path)
 
-    val_stats = _evaluate(model, spec, params)
-    metrics_path = run_dir_path / "val_stats.json"
-    metrics_path.write_text(json.dumps(val_stats, indent=2), encoding="utf-8")
+    metrics_path = _evaluate_and_write(
+        model, spec, params, matcher, loss_fn, autocast_dtype, use_bf16, run_dir_path
+    )
 
     return {
         "success": True,
         "artifact_path": str(artifact_path),
-        "metrics_path": str(metrics_path),
+        "metrics_path": str(metrics_path) if metrics_path else None,
         "canceled": False,
     }
 
 
-def _cosine_with_warmup(warmup_steps: int, total_steps: int) -> Callable[[int], float]:
-    import math
-
-    def _fn(step: int) -> float:
-        if warmup_steps > 0 and step < warmup_steps:
-            return float(step + 1) / float(warmup_steps)
-        progress = float(step - warmup_steps) / float(
-            max(1, total_steps - warmup_steps)
-        )
-        progress = min(max(progress, 0.0), 1.0)
-        return 0.5 * (1.0 + math.cos(math.pi * progress))
-
-    return _fn
-
-
 def _build_dataloader(spec: Any, params: Any, *, split: str) -> list:
-    """Build the batched Datapoint list for `split` from the built COCO dataset.
-
-    Kept separate so it can be replaced/mocked without touching the training
-    loop's control flow.
+    """Read the built COCO split into batched Datapoints. Kept as a thin,
+    separately-mockable seam so tests can force a zero-batch run without a
+    real dataset or `sam3` install; the real implementation lives in
+    `dataloader.py` and never returns `[]` itself -- it raises instead.
     """
-    from .datapoints import collate_datapoints
-
-    del spec, params, split, collate_datapoints  # placeholder wiring point
-    return []
+    return build_batches(spec.derived_dataset_dir, params, split, seed=spec.seed)
 
 
-def _targets_from_batch(batch: Any) -> Any:
-    return batch.get("targets") if isinstance(batch, dict) else batch
+def _evaluate_and_write(
+    model: Any,
+    spec: Any,
+    params: Any,
+    matcher: Any,
+    loss_fn: Any,
+    autocast_dtype: Any,
+    use_bf16: bool,
+    run_dir_path: Path,
+) -> Path | None:
+    """Compute real validation-set loss, for reporting ONLY.
 
-
-def _evaluate(model: Any, spec: Any, params: Any) -> dict:
-    """Compute validation-set stats for reporting ONLY.
-
-    These numbers must never feed checkpoint selection (see module docstring)
-    -- they are written for the user/report, not consulted here to pick a
-    different epoch's weights.
+    Never influences checkpoint selection (see module docstring) -- this runs
+    strictly after the `adapters.pt` save above. If there is no validation
+    split (small datasets skip it -- see `dataset_build.py`'s `validation:
+    "none"` case), no file is written and `None` is returned rather than
+    fabricating a placeholder.
     """
-    del model, spec, params
-    return {"note": "validation stats are informational only; checkpoint is 'last'"}
+    import torch
+
+    val_batches = try_build_batches(
+        spec.derived_dataset_dir, params, "valid", seed=spec.seed
+    )
+    if not val_batches:
+        return None
+
+    model.eval()
+    total_loss = 0.0
+    with torch.no_grad():
+        for batch in val_batches:
+            targets = _targets_from_batch(batch)
+            with torch.autocast(
+                device_type="cuda", dtype=autocast_dtype, enabled=use_bf16
+            ):
+                outputs = model(batch)
+                outputs["indices"] = matcher(outputs, targets)
+                if "aux_outputs" in outputs:
+                    for aux in outputs["aux_outputs"]:
+                        aux["indices"] = matcher(aux, targets)
+                loss_dict = loss_fn(outputs, targets)
+                loss = loss_dict["loss"] if isinstance(loss_dict, dict) else loss_dict
+            total_loss += float(loss)
+
+    val_stats = {
+        "val_loss_mean": total_loss / len(val_batches),
+        "val_batches": len(val_batches),
+        "note": "informational only; checkpoint selection is always 'last'",
+    }
+    metrics_path = run_dir_path / "val_stats.json"
+    metrics_path.write_text(json.dumps(val_stats, indent=2), encoding="utf-8")
+    return metrics_path
