@@ -246,7 +246,9 @@ and needs no GPU or licence-gated weights.
 **Interfaces:**
 - Consumes: nothing.
 - Produces:
-  - `LoraConfig(rank: int, alpha: int, dropout: float, target_suffixes: tuple[str, ...])`
+  - `LoraConfig(rank: int, alpha: int, dropout: float, target_suffixes: tuple[str, ...], include_prefixes: tuple[str, ...] = (), exclude_prefixes: tuple[str, ...] = ())`
+  - `SUBMODULE_PREFIXES: dict[str, tuple[str, ...]]` mapping each `adapt_*` flag name to the dotted module-path prefixes it covers.
+  - `lora_config_from_params(params) -> LoraConfig` — turns the six `adapt_*` booleans into `include_prefixes`.
   - `inject_adapters(model: nn.Module, cfg: LoraConfig) -> int` — wraps matching `nn.Linear` modules, returns how many were wrapped.
   - `adapter_state_dict(model: nn.Module) -> dict[str, torch.Tensor]` — only `lora_A`/`lora_B` tensors, keyed by the wrapped module's dotted path.
   - `merge_adapters(base: dict[str, torch.Tensor], adapters: dict[str, torch.Tensor], cfg: LoraConfig, *, prefix: str = "detector.") -> dict[str, torch.Tensor]` — folds `W + (B @ A) * alpha / rank` into `f"{prefix}{path}.weight"`. Raises `KeyError` if an adapter resolves to no base key.
@@ -276,9 +278,9 @@ class Toy(nn.Module):
         self.other = nn.Linear(8, 8, bias=False)
 
 
-def _cfg(rank=2, alpha=4):
+def _cfg(rank=2, alpha=4, **kw):
     return LoraConfig(rank=rank, alpha=alpha, dropout=0.0,
-                      target_suffixes=("qkv",))
+                      target_suffixes=("qkv",), **kw)
 
 
 def test_inject_only_wraps_targeted_suffixes():
@@ -319,6 +321,52 @@ def test_unresolved_adapter_is_a_hard_error():
     with pytest.raises(KeyError):
         merge_adapters({"detector.somethingelse.weight": torch.randn(8, 8)},
                        adapter_state_dict(m), _cfg())
+
+
+class Nested(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.vision = Toy()
+        self.text = Toy()
+
+
+def test_include_prefixes_scope_injection():
+    m = Nested()
+    # The six adapt_* flags select submodules by PREFIX; without this the
+    # flags are dead parameters and the frozen text encoder gets adapted.
+    n = inject_adapters(m, _cfg(include_prefixes=("vision",)))
+    assert n == 1
+    keys = " ".join(adapter_state_dict(m).keys())
+    assert "vision" in keys and "text" not in keys
+
+
+def test_exclude_prefixes_win_over_include():
+    m = Nested()
+    n = inject_adapters(
+        m, _cfg(include_prefixes=("vision", "text"), exclude_prefixes=("text",)))
+    assert n == 1
+    assert "text" not in " ".join(adapter_state_dict(m).keys())
+
+
+def test_empty_include_prefixes_means_everything():
+    m = Nested()
+    assert inject_adapters(m, _cfg()) == 2
+
+
+def test_lora_config_from_params_maps_the_flags():
+    from hydra_suite.training.contracts import Sam3LoraParams
+    from hydra_suite.training.sam3_lora.lora import (
+        SUBMODULE_PREFIXES,
+        lora_config_from_params,
+    )
+
+    cfg = lora_config_from_params(
+        Sam3LoraParams(prompt="ant", adapt_text_encoder=False,
+                       adapt_vision_encoder=True))
+    for pref in SUBMODULE_PREFIXES["adapt_text_encoder"]:
+        assert pref not in cfg.include_prefixes
+    for pref in SUBMODULE_PREFIXES["adapt_vision_encoder"]:
+        assert pref in cfg.include_prefixes
 
 
 def test_non_targeted_base_keys_pass_through_untouched():
@@ -364,10 +412,56 @@ class LoraConfig:
     alpha: int
     dropout: float
     target_suffixes: tuple[str, ...]
+    # The six adapt_* flags select submodules by PREFIX, not suffix. Without
+    # these the flags cannot be expressed and every matching Linear is adapted
+    # -- including the text encoder we deliberately freeze.
+    include_prefixes: tuple[str, ...] = ()
+    exclude_prefixes: tuple[str, ...] = ()
 
     @property
     def scaling(self) -> float:
         return float(self.alpha) / float(self.rank)
+
+
+# Dotted module-path prefixes for each adapt_* flag, against the model Meta's
+# build_sam3_image_model returns. VERIFY these against a live model before
+# relying on them: print sorted({n.rsplit(".", 1)[0] for n, _ in
+# model.named_modules()}) and confirm each prefix matches something.
+SUBMODULE_PREFIXES: dict[str, tuple[str, ...]] = {
+    "adapt_vision_encoder": ("backbone.vision_backbone",),
+    "adapt_text_encoder": ("backbone.language_backbone",),
+    "adapt_geometry_encoder": ("backbone.geometry_encoder",),
+    "adapt_detr_encoder": ("transformer.encoder",),
+    "adapt_detr_decoder": ("transformer.decoder",),
+    "adapt_mask_decoder": ("mask_decoder", "sam_mask_decoder"),
+}
+
+
+def lora_config_from_params(params) -> "LoraConfig":
+    """Turn the six adapt_* booleans into an include-prefix list.
+
+    An empty include list means "everything", so a params object with all six
+    flags True yields () rather than the union -- same behaviour, fewer
+    string comparisons per module.
+    """
+    enabled = [f for f in SUBMODULE_PREFIXES if getattr(params, f)]
+    include: tuple[str, ...] = ()
+    if len(enabled) < len(SUBMODULE_PREFIXES):
+        include = tuple(
+            pref for flag in enabled for pref in SUBMODULE_PREFIXES[flag]
+        )
+    return LoraConfig(
+        rank=params.rank, alpha=params.alpha, dropout=params.dropout,
+        target_suffixes=TARGET_SUFFIXES, include_prefixes=include,
+    )
+
+
+# The Linear leaf names LoRA attaches to, across SAM3's ViT, CLIP-style text
+# tower and DETR transformer.
+TARGET_SUFFIXES: tuple[str, ...] = (
+    "q_proj", "k_proj", "v_proj", "out_proj", "qkv", "proj",
+    "fc1", "fc2", "c_fc", "c_proj", "linear1", "linear2",
+)
 
 
 class LoraLinear(nn.Module):
@@ -393,11 +487,17 @@ class LoraLinear(nn.Module):
 
 def inject_adapters(model: nn.Module, cfg: LoraConfig) -> int:
     """Wrap every nn.Linear whose dotted path ends in a target suffix."""
+    def _scoped(name: str) -> bool:
+        if cfg.exclude_prefixes and name.startswith(cfg.exclude_prefixes):
+            return False
+        return not cfg.include_prefixes or name.startswith(cfg.include_prefixes)
+
     targets = [
         (name, mod)
         for name, mod in model.named_modules()
         if isinstance(mod, nn.Linear)
         and name.split(".")[-1] in cfg.target_suffixes
+        and _scoped(name)
     ]
     for name, mod in targets:
         *parent_path, attr = name.split(".")
@@ -451,7 +551,7 @@ def merge_adapters(
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `python -m pytest tests/test_sam3_lora_seam.py -v`
-Expected: 5 passed
+Expected: 9 passed
 
 - [ ] **Step 5: Commit**
 
@@ -1378,7 +1478,11 @@ from sam3.train.data.sam3_image_dataset import (
     Datapoint, FindQueryLoaded, Image, InferenceMetadata)
 from sam3.train.data.collator import collate_fn_api
 
-RES = 1008  # SAM3's fixed input; tiles are resized to it
+from hydra_suite.core.inference.semantic.sam3 import PREDICTOR_IMGSZ
+
+# ONE definition of SAM3's input size, shared with the predictor overrides.
+# Training and serving must agree or the sidecar's imgsz guard fires.
+RES = PREDICTOR_IMGSZ
 
 
 def build_datapoint(tile_bgr, prompt, polygons, transform):
@@ -1700,7 +1804,7 @@ _repo_dir_for_role, which raises for any unsupported publish role."
 
 **Interfaces:**
 - Consumes: the sidecar from Task 9.
-- Produces: `resolve_checkpoint(key, cache_dir=None) -> Path`, `available_models() -> list[str]`, `probe_dependencies() -> Sam3Availability`, `probe_checkpoint(key, cache_dir=None) -> Sam3Availability`, and `Sam3SemanticLabeler.from_variant(..., checkpoint: Path | str | None = None)`.
+- Produces: `resolve_checkpoint(key, cache_dir=None) -> Path`, `available_models() -> list[str]`, `probe_dependencies() -> Sam3Availability`, `probe_checkpoint(key, cache_dir=None) -> Sam3Availability`, `assert_checkpoint_loaded(live_state_dict, meta, *, imgsz) -> None`, and `Sam3SemanticLabeler.from_variant(..., checkpoint: Path | str | None = None)`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1753,8 +1857,30 @@ def test_guard_passes_when_fingerprints_match():
 
     t = torch.randn(2, 2)
     fp = hashlib.sha256(t.numpy().tobytes()).hexdigest()
-    meta = {"stripped_keys": ["a.weight"], "tuned_fingerprints": {"a.weight": fp}}
-    assert_checkpoint_loaded({"a.weight": t}, meta) is None
+    meta = {"stripped_keys": ["a.weight"], "tuned_fingerprints": {"a.weight": fp},
+            "imgsz": 1008}
+    assert assert_checkpoint_loaded({"a.weight": t}, meta, imgsz=1008) is None
+
+
+def test_guard_refuses_an_imgsz_mismatch():
+    import hashlib
+
+    # A model finetuned at 1008 and served at 644 is a 1.56x train/serve scale
+    # mismatch. It loads CLEANLY -- keys and tensors all match -- so only an
+    # explicit check catches it. Rescaling silently is the failure mode.
+    t = torch.randn(2, 2)
+    fp = hashlib.sha256(t.numpy().tobytes()).hexdigest()
+    meta = {"stripped_keys": ["a.weight"], "tuned_fingerprints": {"a.weight": fp},
+            "imgsz": 1008}
+    with pytest.raises(RuntimeError, match="644"):
+        assert_checkpoint_loaded({"a.weight": t}, meta, imgsz=644)
+
+
+def test_stock_variant_without_a_sidecar_is_unguarded():
+    # A stock variant ships no sidecar and makes no claim; guarding it would
+    # refuse every un-finetuned run.
+    assert assert_checkpoint_loaded({"a.weight": torch.zeros(2, 2)},
+                                    None, imgsz=1008) is None
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -1772,16 +1898,25 @@ variant's path or a registry-published artifact's path, and `available_models()`
 returning stock variants plus registry entries with
 `usage_role == "semantic_sam3"`.
 
-In `sam3.py`: add `assert_checkpoint_loaded(live_state_dict, meta)` raising a
-`RuntimeError` naming any `stripped_keys` entry absent from the live model, and
-any `tuned_fingerprints` entry whose sha256 does not match. Add a `checkpoint:`
-parameter to `from_variant`; when it is a published artifact, force eager
-`setup_model()` and call the guard.
+In `sam3.py`: add `assert_checkpoint_loaded(live_state_dict, meta, *, imgsz)`
+raising a `RuntimeError` for any of three conditions, and returning `None` when
+`meta` is `None` (a stock variant ships no sidecar and makes no claim):
+
+1. a `stripped_keys` entry absent from the live model — a key-namespace rename;
+2. a `tuned_fingerprints` entry whose sha256 does not match — our weights are
+   not the ones resident, which a key check alone cannot detect;
+3. `meta["imgsz"] != imgsz` — **the train/serve scale mismatch**. This one loads
+   perfectly cleanly, so nothing else in the system would ever notice it. The
+   spec requires refusing rather than silently rescaling.
+
+Add a `checkpoint:` parameter to `from_variant`; when it names a published
+artifact, force eager `setup_model()`, read the sidecar, and call the guard with
+`imgsz=PREDICTOR_IMGSZ`.
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `python -m pytest tests/test_sam3_resolve_and_guard.py -v`
-Expected: 5 passed
+Expected: 7 passed
 
 - [ ] **Step 5: Commit**
 
@@ -1789,9 +1924,10 @@ Expected: 5 passed
 git add src/hydra_suite/core/inference/semantic/ tests/test_sam3_resolve_and_guard.py
 git commit -m "feat(semantic): resolve published SAM3 models + silent-load guard
 
-Verifies TENSOR CONTENT, not just key names: if ultralytics' load-time
-transform changes, the key namespace is unchanged and a key-only check passes
-on exactly the failure it targets."
+Three checks, each for a failure that is otherwise invisible: key names (a
+rename), tensor fingerprints (our weights are not the resident ones -- a key
+check passes on exactly this), and imgsz (a model finetuned at 1008 served at
+644 loads perfectly cleanly)."
 ```
 
 ---
