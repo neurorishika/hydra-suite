@@ -353,16 +353,35 @@ def test_empty_include_prefixes_means_everything():
     assert inject_adapters(m, _cfg()) == 2
 
 
+def test_every_submodule_prefix_is_nonempty():
+    from hydra_suite.training.sam3_lora.lora import SUBMODULE_PREFIXES
+
+    # A prefix matching no module silently disables its flag. These values were
+    # MEASURED against a live model; this pins the shape at least.
+    assert set(SUBMODULE_PREFIXES) == {
+        "adapt_vision_encoder", "adapt_text_encoder", "adapt_geometry_encoder",
+        "adapt_detr_encoder", "adapt_detr_decoder", "adapt_mask_decoder"}
+    assert all(v and all(isinstance(x, str) and x for x in v)
+               for v in SUBMODULE_PREFIXES.values())
+
+
 def test_lora_config_from_params_maps_the_flags():
-    from hydra_suite.training.contracts import Sam3LoraParams
+    from types import SimpleNamespace
+
     from hydra_suite.training.sam3_lora.lora import (
         SUBMODULE_PREFIXES,
         lora_config_from_params,
     )
 
-    cfg = lora_config_from_params(
-        Sam3LoraParams(prompt="ant", adapt_text_encoder=False,
-                       adapt_vision_encoder=True))
+    # Duck-typed, NOT Sam3LoraParams: that lands in Task 5, which runs AFTER
+    # this task. lora.py must not import contracts either -- it is a pure
+    # tensor seam with no SAM3 and no contracts dependency.
+    params = SimpleNamespace(
+        rank=8, alpha=16, dropout=0.0,
+        adapt_vision_encoder=True, adapt_text_encoder=False,
+        adapt_geometry_encoder=False, adapt_detr_encoder=False,
+        adapt_detr_decoder=False, adapt_mask_decoder=False)
+    cfg = lora_config_from_params(params)
     for pref in SUBMODULE_PREFIXES["adapt_text_encoder"]:
         assert pref not in cfg.include_prefixes
     for pref in SUBMODULE_PREFIXES["adapt_vision_encoder"]:
@@ -423,17 +442,32 @@ class LoraConfig:
         return float(self.alpha) / float(self.rank)
 
 
-# Dotted module-path prefixes for each adapt_* flag, against the model Meta's
-# build_sam3_image_model returns. VERIFY these against a live model before
-# relying on them: print sorted({n.rsplit(".", 1)[0] for n, _ in
-# model.named_modules()}) and confirm each prefix matches something.
+# Dotted module-path prefixes for each adapt_* flag, MEASURED against a live
+# build_sam3_image_model (293 nn.Linear modules). Two natural guesses are WRONG
+# and would match nothing, silently turning their flag into a no-op: the
+# geometry encoder is top-level `geometry_encoder`, NOT
+# `backbone.geometry_encoder`, and the mask decoder is `segmentation_head`, NOT
+# `mask_decoder`.
+#
+# Linear counts per prefix, so a mapping regression is detectable:
+#   backbone.vision_backbone.trunk   128
+#   backbone.language_backbone        73   (encoder 72 + resizer 1)
+#   transformer.decoder               42
+#   transformer.encoder.layers        24
+#   geometry_encoder                  18
+#   segmentation_head                  4
+#   dot_prod_scoring                   4   <- covered by NO flag, deliberately
+#
+# `dot_prod_scoring` (the text/vision similarity head) is named by no adapt_*
+# flag and is therefore never adapted. Add a flag if a future experiment wants
+# it; do not fold it into another.
 SUBMODULE_PREFIXES: dict[str, tuple[str, ...]] = {
     "adapt_vision_encoder": ("backbone.vision_backbone",),
     "adapt_text_encoder": ("backbone.language_backbone",),
-    "adapt_geometry_encoder": ("backbone.geometry_encoder",),
+    "adapt_geometry_encoder": ("geometry_encoder",),
     "adapt_detr_encoder": ("transformer.encoder",),
     "adapt_detr_decoder": ("transformer.decoder",),
-    "adapt_mask_decoder": ("mask_decoder", "sam_mask_decoder"),
+    "adapt_mask_decoder": ("segmentation_head",),
 }
 
 
@@ -551,7 +585,7 @@ def merge_adapters(
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `python -m pytest tests/test_sam3_lora_seam.py -v`
-Expected: 9 passed
+Expected: 11 passed
 
 - [ ] **Step 5: Commit**
 
@@ -812,6 +846,11 @@ class Sam3LoraParams:
     slice_height: int = 0  # custom mode only
     tile_overlap: float = 0.25
     keep_empty_tiles: bool = True
+    # Provenance does not survive a review (see the design's ordering
+    # dependency), so the user must affirm the labels are good before SAM3
+    # learns them -- including its own accepted output. Preflight refuses
+    # without it; the panel writes it; the dialog gates the run on it.
+    label_quality_acknowledged: bool = False
 ```
 
 Add to `TrainingRunSpec`, beside `custom_params`:
@@ -1353,12 +1392,13 @@ single-category dataset has no other category to sample them from."
 ## Task 8: The training loop
 
 **Files:**
+- Create: `src/hydra_suite/training/sam3_lora/datapoints.py`
 - Create: `src/hydra_suite/training/sam3_lora/train.py`
 - Create: `src/hydra_suite/training/sam3_lora/preflight.py`
 - Test: `tests/test_sam3_preflight.py`
 
 **Interfaces:**
-- Consumes: Tasks 3, 4, 5, 7.
+- Consumes: Tasks 3, 4, 5, 7, 7b (its resolved negative-prompt list feeds the negative queries).
 - Produces: `train_sam3_lora(spec, run_dir, *, log_cb=None, progress_cb=None, should_cancel=None) -> dict` with keys `success`, `artifact_path` (the `adapters.pt`), `metrics_path`, `canceled`.
 - Produces: `preflight(spec) -> list[str]` returning refusal reasons (empty means OK).
 
@@ -1379,7 +1419,10 @@ from hydra_suite.training.sam3_lora import preflight as pf
 
 
 def _spec(**kw):
-    p = Sam3LoraParams(prompt=kw.pop("prompt", "ant"))
+    # ack defaults False and preflight refuses without it, so the "healthy"
+    # baseline must set it or every test below passes for the wrong reason.
+    p = Sam3LoraParams(prompt=kw.pop("prompt", "ant"),
+                       label_quality_acknowledged=kw.pop("ack", True))
     base = dict(
         role=TrainingRole.SEMANTIC_SAM3,
         source_datasets=[SourceDataset(path="/tmp/x", level="polygon")],
@@ -1389,41 +1432,48 @@ def _spec(**kw):
     return TrainingRunSpec(**base)
 
 
-def test_empty_prompt_is_refused(monkeypatch):
+@pytest.fixture(autouse=True)
+def _healthy(monkeypatch):
     monkeypatch.setattr(pf, "_cuda_free_gb", lambda: 48.0)
     monkeypatch.setattr(pf, "_instance_count", lambda d: 100)
+    monkeypatch.setattr(pf, "_free_disk_gb", lambda p: 100.0)
+
+
+def test_empty_prompt_is_refused(monkeypatch):
     assert any("prompt" in r.lower() for r in pf.preflight(_spec(prompt="")))
 
 
 def test_non_cuda_is_refused(monkeypatch):
     monkeypatch.setattr(pf, "_cuda_free_gb", lambda: None)
-    monkeypatch.setattr(pf, "_instance_count", lambda d: 100)
     assert any("cuda" in r.lower() for r in pf.preflight(_spec()))
 
 
 def test_vram_band_between_refuse_and_warn_is_refused(monkeypatch):
     # 29 GB was the measured requirement; a 24-29 GB card must NOT pass.
     monkeypatch.setattr(pf, "_cuda_free_gb", lambda: 26.0)
-    monkeypatch.setattr(pf, "_instance_count", lambda d: 100)
     assert any("gb" in r.lower() for r in pf.preflight(_spec()))
 
 
 def test_too_few_instances_is_refused(monkeypatch):
-    monkeypatch.setattr(pf, "_cuda_free_gb", lambda: 48.0)
     monkeypatch.setattr(pf, "_instance_count", lambda d: 5)
     assert any("instance" in r.lower() for r in pf.preflight(_spec()))
 
 
 def test_resume_from_is_refused(monkeypatch):
-    monkeypatch.setattr(pf, "_cuda_free_gb", lambda: 48.0)
-    monkeypatch.setattr(pf, "_instance_count", lambda d: 100)
     assert any("resume" in r.lower()
                for r in pf.preflight(_spec(resume_from="/tmp/last.pt")))
 
 
-def test_healthy_spec_passes_and_imports_nothing_heavy(monkeypatch):
-    monkeypatch.setattr(pf, "_cuda_free_gb", lambda: 48.0)
-    monkeypatch.setattr(pf, "_instance_count", lambda d: 100)
+def test_unacknowledged_labels_are_refused():
+    assert any("acknowledge" in r.lower() for r in pf.preflight(_spec(ack=False)))
+
+
+def test_low_disk_is_refused(monkeypatch):
+    monkeypatch.setattr(pf, "_free_disk_gb", lambda p: 2.0)
+    assert any("disk" in r.lower() for r in pf.preflight(_spec()))
+
+
+def test_healthy_spec_passes_and_imports_nothing_heavy():
     sys.modules.pop("ultralytics", None)
     assert pf.preflight(_spec()) == []
     assert "ultralytics" not in sys.modules
@@ -1517,6 +1567,12 @@ Batches go through `collate_fn_api([...], dict_key="input", with_seg_masks=True)
 4. Builds the objective from **Meta's own** code — we do not reimplement it:
 
 ```python
+# VERIFY on the CUDA box before relying on these two paths. The datapoints
+# imports above are confirmed against the installed package via the spike; the
+# loss and matcher were reached through a third-party trainer, so their module
+# paths are reported, not verified. `python -c "from sam3.train.loss.sam3_loss
+# import Sam3LossWrapper; from sam3.train.matcher import
+# BinaryHungarianMatcherV2"` is the whole check.
 from sam3.train.loss.sam3_loss import Sam3LossWrapper
 from sam3.train.matcher import BinaryHungarianMatcherV2
 
@@ -1546,12 +1602,12 @@ matcher = BinaryHungarianMatcherV2(
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `python -m pytest tests/test_sam3_preflight.py -v`
-Expected: 6 passed
+Expected: 8 passed
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/hydra_suite/training/sam3_lora/train.py src/hydra_suite/training/sam3_lora/preflight.py tests/test_sam3_preflight.py
+git add src/hydra_suite/training/sam3_lora/datapoints.py src/hydra_suite/training/sam3_lora/train.py src/hydra_suite/training/sam3_lora/preflight.py tests/test_sam3_preflight.py
 git commit -m "feat(training): SAM3 LoRA training loop and preflight
 
 Uses Meta's own Sam3LossWrapper and BinaryHungarianMatcherV2. Preflight
@@ -1569,7 +1625,7 @@ cannot slip through into an OOM."
 
 **Interfaces:**
 - Consumes: `merge_adapters` (Task 3), `adapters.pt` (Task 8).
-- Produces: `publish_sam3_model(run_id, adapters_path, base_checkpoint, build_manifest, params, *, models_root=None) -> tuple[str, str]` returning `(artifact_path, sidecar_path)`.
+- Produces: `publish_sam3_model(run_id, adapters_path, base_checkpoint, build_manifest, params, source_fingerprint, *, models_root=None, registry_path=None) -> tuple[str, str]` returning **`(registry_key, artifact_path)`** — the same shape `publish_trained_model` returns, because `run_role_training` unpacks it as `(published_key, published_path)` (`service.py:463-472`). Returning `(artifact, sidecar)` instead would silently record the JSON sidecar as the published model path. The sidecar path is reachable from the registry entry.
 - Produces: `stripped_keys(state_dict) -> list[str]` reproducing ultralytics' transform.
 
 - [ ] **Step 1: Write the failing test**
@@ -1605,14 +1661,18 @@ def test_artifact_is_not_written_into_the_stock_cache(tmp_path):
     torch.save(base, tmp_path / "base.pt")
     torch.save({"qkv.lora_A": torch.zeros(2, 4), "qkv.lora_B": torch.zeros(4, 2)},
                tmp_path / "adapters.pt")
-    art, side = publish_sam3_model(
+    key, art = publish_sam3_model(
         run_id="r1", adapters_path=tmp_path / "adapters.pt",
         base_checkpoint=tmp_path / "base.pt",
         build_manifest={"tile_px": 1007, "reference_body_px": 55.4},
-        params=Sam3LoraParams(prompt="ant"), models_root=tmp_path / "models")
+        params=Sam3LoraParams(prompt="ant"), source_fingerprint="fp1",
+        models_root=tmp_path / "models")
     # get_models_dir()/"sam3" is checkpoints.py's DOWNLOAD CACHE.
     assert "sam3_finetuned" in str(art)
     assert "/sam3/" not in str(art)
+    # (key, artifact) -- NOT (artifact, sidecar); run_role_training unpacks
+    # this as (published_key, published_path).
+    assert key and str(art).endswith(".pt")
 
 
 def test_sidecar_records_the_guard_fields(tmp_path):
@@ -1620,19 +1680,23 @@ def test_sidecar_records_the_guard_fields(tmp_path):
     torch.save(base, tmp_path / "base.pt")
     torch.save({"qkv.lora_A": torch.randn(2, 4), "qkv.lora_B": torch.randn(4, 2)},
                tmp_path / "adapters.pt")
-    _, side = publish_sam3_model(
+    _, art = publish_sam3_model(
         run_id="r1", adapters_path=tmp_path / "adapters.pt",
         base_checkpoint=tmp_path / "base.pt",
         build_manifest={"tile_px": 1007, "reference_body_px": 55.4},
-        params=Sam3LoraParams(prompt="ant"), models_root=tmp_path / "models")
+        params=Sam3LoraParams(prompt="ant"), source_fingerprint="fp1",
+        models_root=tmp_path / "models")
     # The registry must land under models_root, never the user's real one.
     assert (tmp_path / "models" / "model_registry.json").exists()
+    side = str(art) + ".sam3_meta.json"
     meta = json.loads(open(side).read())
     assert meta["prompt"] == "ant"
     assert meta["train_tile_px"] == 1007
     assert meta["imgsz"] == 1008
     assert meta["stripped_keys"]
     assert meta["tuned_fingerprints"]  # sha256 of tensors the merge changed
+    assert meta["source_fingerprint"] == "fp1"
+    assert meta["reference_body_px"] == 55.4
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -1653,12 +1717,12 @@ Expected: FAIL — `ModuleNotFoundError: ...sam3_lora.publish`
    present in the merge but absent from base is the opposite problem and is a
    hard error.
 3. Write to `models_root/"sam3_finetuned"/f"{run_id}.pt"`.
-4. Write `<artifact>.sam3_meta.json` with `base_variant`, `prompt`,
+5. Write `<artifact>.sam3_meta.json` with `base_variant`, `prompt`,
    `train_tile_px`, `reference_body_px`, `object_tile_fraction`, `imgsz`
    (`PREDICTOR_IMGSZ`), `stripped_keys`, `tuned_fingerprints` (sha256 of the
    raw bytes of 2-3 tensors the merge changed), `source_fingerprint`,
    `label_quality_acknowledged`.
-5. Register in `model_registry.json` with `task_family="semantic"` and
+6. Register in `model_registry.json` with `task_family="semantic"` and
    `usage_role="semantic_sam3"` — a registry entry, never a directory scan.
    **The registry path must derive from `models_root`**, not from the global
    `get_yolo_model_registry_path()` (`core/inference/model_paths.py:165-167`)
@@ -1732,7 +1796,7 @@ def test_sam3_role_forks_to_publish_sam3_model(monkeypatch, tmp_path):
     monkeypatch.setattr(svc, "ensure_checkpoint", lambda *a, **k: "/tmp/base.pt")
     key, path = svc._publish_training_artifacts(
         spec=_spec(), artifact_paths=[str(tmp_path / "adapters.pt")],
-        publish_metadata={}, run_id="r1")
+        publish_metadata={}, run_id="r1", dataset_fingerprint_value="fp1")
     assert "sam3" in called
     # publish_trained_model raises "Unsupported publish role" for this role.
     assert "yolo" not in called
@@ -1749,7 +1813,7 @@ def test_other_roles_still_use_the_yolo_publisher(monkeypatch, tmp_path):
     svc._publish_training_artifacts(
         spec=_spec(TrainingRole.SEGMENT_DIRECT),
         artifact_paths=[str(tmp_path / "best.pt")],
-        publish_metadata={}, run_id="r1")
+        publish_metadata={}, run_id="r1", dataset_fingerprint_value="fp1")
     assert "yolo" in called and "sam3" not in called
 ```
 
@@ -1769,19 +1833,54 @@ branch at the top of `_publish_training_artifacts`:
         # Forked, not extended: publish_trained_model's naming scheme does not
         # fit a promptable-concept checkpoint, and _repo_dir_for_role raises
         # for this role. See the design's "Publish -- a fork, not an extension".
+        #
+        # The geometry the sidecar needs (tile_px, reference_body_px) is
+        # written by the BUILDER, not by publish_metadata -- which carries
+        # size/species-style fields only. Read it from the derived dataset dir,
+        # or the sidecar ships without geometry and Task 10b's prefill has
+        # nothing to prefill (which would make Gate 3 unpassable).
+        manifest_path = Path(spec.derived_dataset_dir) / "build_manifest.json"
+        manifest = dict(publish_metadata or {})
+        if manifest_path.exists():
+            manifest.update(json.loads(manifest_path.read_text()))
         return publish_sam3_model(
             run_id=run_id,
             adapters_path=Path(artifact_paths[0]),
             base_checkpoint=ensure_checkpoint("sam3", allow_download=False),
-            build_manifest=dict(publish_metadata or {}),
+            build_manifest=manifest,
             params=spec.sam3_params,
+            source_fingerprint=dataset_fingerprint_value,
         )
+```
+
+Add a test pinning the manifest read, since it is the link Gate 3 depends on:
+
+```python
+def test_builder_geometry_reaches_the_sidecar(monkeypatch, tmp_path):
+    import json
+
+    derived = tmp_path / "derived"
+    derived.mkdir()
+    (derived / "build_manifest.json").write_text(
+        json.dumps({"tile_px": 1007, "reference_body_px": 55.4}))
+    seen = {}
+    monkeypatch.setattr(svc, "publish_sam3_model",
+                        lambda **k: (seen.update(k), ("key", "/tmp/a.pt"))[1])
+    monkeypatch.setattr(svc, "ensure_checkpoint", lambda *a, **k: "/tmp/base.pt")
+    spec = _spec()
+    spec.derived_dataset_dir = str(derived)
+    svc._publish_training_artifacts(
+        spec=spec, artifact_paths=[str(tmp_path / "adapters.pt")],
+        publish_metadata={"species": "ant"}, run_id="r1",
+        dataset_fingerprint_value="fp1")
+    assert seen["build_manifest"]["tile_px"] == 1007
+    assert seen["source_fingerprint"] == "fp1"
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `python -m pytest tests/test_sam3_service_publish.py -v`
-Expected: 2 passed
+Expected: 3 passed
 
 - [ ] **Step 5: Commit**
 
@@ -1804,7 +1903,7 @@ _repo_dir_for_role, which raises for any unsupported publish role."
 
 **Interfaces:**
 - Consumes: the sidecar from Task 9.
-- Produces: `resolve_checkpoint(key, cache_dir=None) -> Path`, `available_models() -> list[str]`, `probe_dependencies() -> Sam3Availability`, `probe_checkpoint(key, cache_dir=None) -> Sam3Availability`, `assert_checkpoint_loaded(live_state_dict, meta, *, imgsz) -> None`, and `Sam3SemanticLabeler.from_variant(..., checkpoint: Path | str | None = None)`.
+- Produces: `resolve_checkpoint(key, cache_dir=None) -> Path`, `available_models() -> list[str]`, `probe_dependencies() -> Sam3Availability`, `probe_checkpoint(key, cache_dir=None) -> Sam3Availability`, `assert_checkpoint_loaded(live_state_dict, meta, *, imgsz=PREDICTOR_IMGSZ) -> None`, and `Sam3SemanticLabeler.from_variant(..., checkpoint: Path | str | None = None)`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1980,7 +2079,7 @@ def test_combo_lists_published_models(qapp, monkeypatch):
     from hydra_suite.detectkit.gui.dialogs import semantic_escalation_dialog as d
 
     monkeypatch.setattr(d, "available_models", lambda: ["sam3", "run123"])
-    dlg = d.SemanticEscalationDialog(sources=[], saved={})
+    dlg = d.SemanticEscalationDialog(sources=[], reference_body_px=55.0)
     items = [dlg._variant.itemText(i) for i in range(dlg._variant.count())]
     assert "run123" in items
 
@@ -1994,7 +2093,7 @@ def test_selecting_a_published_model_prefills_prompt_and_fraction(
     monkeypatch.setattr(d, "sidecar_for", lambda k: {
         "prompt": "ant with color patch", "object_tile_fraction": 0.055,
         "train_tile_px": 1007})
-    dlg = d.SemanticEscalationDialog(sources=[], saved={})
+    dlg = d.SemanticEscalationDialog(sources=[], reference_body_px=55.0)
     dlg.prefill_from_sidecar("run123")
     assert dlg.prompt() == "ant with color patch"
     assert abs(dlg.tile_fraction() - 0.055) < 1e-9
@@ -2008,7 +2107,7 @@ def test_prefill_is_a_default_not_a_lock(qapp, monkeypatch):
     monkeypatch.setattr(d, "available_models", lambda: ["sam3", "run123"])
     monkeypatch.setattr(d, "sidecar_for", lambda k: {"prompt": "x",
                                                      "object_tile_fraction": 0.05})
-    dlg = d.SemanticEscalationDialog(sources=[], saved={})
+    dlg = d.SemanticEscalationDialog(sources=[], reference_body_px=55.0)
     dlg.prefill_from_sidecar("run123")
     assert dlg._prompt.isEnabled()
     assert dlg._prompt.isReadOnly() is False
@@ -2040,13 +2139,25 @@ Expected: FAIL — `AttributeError: module ... has no attribute 'available_model
 
 - [ ] **Step 3: Write minimal implementation**
 
+`probe_dependencies` must go through the existing seams (`_find_spec`,
+`_has_predictor_symbol`, `_clip_tokenizer_problem`) so the test can patch one
+without the others doing real imports.
+
 In `checkpoints.py`, add `sidecar_for(model_key)` returning the parsed
 `<artifact>.sam3_meta.json` for a published key, or `None` for a stock variant.
 
-In the dialog, replace the `available_variants()` call at `:136-138` with
-`available_models()`, and connect `currentTextChanged` to
-`prefill_from_sidecar`, which sets prompt and tile fraction **without disabling
-the widgets** — prefill is a default, not a lock.
+In the dialog: **hoist the import to module scope**. Today
+`available_variants` is imported *inside* `__init__` (`:136`), which no test can
+monkeypatch — put `from ...checkpoints import available_models, sidecar_for` at
+the top of the module, as `service.py` already does for its publishers. Replace
+the `available_variants()` call with `available_models()`, and connect
+`currentTextChanged` to `prefill_from_sidecar`, which sets prompt and tile
+fraction **without disabling the widgets** — prefill is a default, not a lock.
+
+The constructor signature is
+`__init__(self, sources, reference_body_px, parent=None, body_px_origin="", project=None, persist_callback=None)`
+(`semantic_escalation_dialog.py:59-67`); there is no `saved` parameter — saved
+settings come from `project.semantic_escalation_settings` (`:80`).
 
 In `semantic_escalation.py`, add a small helper and route all three call sites
 through it, so the resolution rule lives in one place:
@@ -2208,12 +2319,12 @@ merges sources per geometry level and loops roles
 single raw source, per the design's breakage row 5.
 
 **Files:**
-- Modify: `src/hydra_suite/detectkit/gui/dialogs/training_dialog.py:55-61` (`_SELECTION_ROLE_MAP`), `:2026-2145` (`_build_role_datasets`), and the run path that builds `TrainingRunSpec`
+- Modify: `src/hydra_suite/detectkit/gui/dialogs/training_dialog.py:55-61` (`_SELECTION_ROLE_MAP`), `:499-509` (the mode/task combo items), `:1928-1945` (`_selected_roles`), the constructor (panel instantiation), and `:2026-2145` (`_build_role_datasets`)
 - Test: `tests/test_sam3_dialog_wiring.py`
 
 **Interfaces:**
 - Consumes: `Sam3TrainingPanel` (Task 11).
-- Produces: `_SELECTION_ROLE_MAP[("semantic", "polygon")] = ("semantic_sam3",)`, and `TrainingDialog._sam3_spec_for(source) -> TrainingRunSpec`.
+- Produces: a `"semantic"` mode combo item, a `chk_semantic_sam3` role checkbox, `self.sam3_panel`, `_SELECTION_ROLE_MAP[("semantic", "segment")] = ("semantic_sam3",)`, and the staticmethod `TrainingDialog._sam3_spec_for(source_path, params, derived_dir, seed) -> TrainingRunSpec`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2232,12 +2343,24 @@ import pytest
 pytest.importorskip("PySide6")
 
 
+def test_mode_combo_offers_semantic():
+    # Without a combo item the plan key is unreachable and no user can ever
+    # start a SAM3 run, however complete the plumbing behind it is.
+    from hydra_suite.detectkit.gui.dialogs.training_dialog import (
+        _SELECTION_DESCRIPTIONS,
+    )
+
+    assert ("semantic", "segment") in _SELECTION_DESCRIPTIONS
+
+
 def test_selection_map_has_the_semantic_entry():
     from hydra_suite.detectkit.gui.dialogs.training_dialog import (
         _SELECTION_ROLE_MAP,
     )
 
-    assert _SELECTION_ROLE_MAP[("semantic", "polygon")] == ("semantic_sam3",)
+    # "segment" is the existing task vocabulary for polygon-level output;
+    # inventing "polygon" would fork it.
+    assert _SELECTION_ROLE_MAP[("semantic", "segment")] == ("semantic_sam3",)
 
 
 def test_spec_carries_the_panel_params(monkeypatch):
@@ -2247,7 +2370,7 @@ def test_spec_carries_the_panel_params(monkeypatch):
     params = Sam3LoraParams(prompt="ant", epochs=4,
                             label_quality_acknowledged=True)
     spec = td.TrainingDialog._sam3_spec_for(
-        self=None, source_path="/tmp/src", params=params,
+        source_path="/tmp/src", params=params,
         derived_dir="/tmp/derived", seed=7)
     assert spec.role is TrainingRole.SEMANTIC_SAM3
     assert spec.sam3_params.prompt == "ant"
@@ -2263,7 +2386,7 @@ def test_unacknowledged_labels_block_the_run():
 
     with pytest.raises(ValueError, match="acknowledge"):
         td.TrainingDialog._sam3_spec_for(
-            self=None, source_path="/tmp/src",
+            source_path="/tmp/src",
             params=Sam3LoraParams(prompt="ant"),
             derived_dir="/tmp/derived", seed=7)
 ```
@@ -2271,17 +2394,47 @@ def test_unacknowledged_labels_block_the_run():
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `python -m pytest tests/test_sam3_dialog_wiring.py -v`
-Expected: FAIL — `KeyError: ('semantic', 'polygon')`
+Expected: FAIL — `KeyError: ('semantic', 'segment')`
 
 - [ ] **Step 3: Write minimal implementation**
 
-Add the `_SELECTION_ROLE_MAP` entry and a `_SELECTION_DESCRIPTIONS` entry
-beside it. Add a `@staticmethod`-style helper (it takes no real `self`, which is
-why the test can pass `self=None`):
+**Four things, and the first three are what make the feature reachable at all.**
+Adding only the role map would leave every test passing and no user able to
+start a run — the same unreachable-feature bug the previous tasks were added to
+fix.
+
+1. **A mode item and a task item.** The plan key is
+   `(mode_combo.currentData(), task_combo.currentData())`
+   (`training_dialog.py:1318, 1326-1330`), and today the combos offer only
+   `direct|sequential` (`:499-501`) and `obb|detect|segment` (`:507-509`).
+   Add a `"semantic"` mode item; reuse the **existing** `"segment"` task value
+   rather than inventing `"polygon"`, which is not in that vocabulary. So the
+   map entry is:
+
+```python
+_SELECTION_ROLE_MAP[("semantic", "segment")] = ("semantic_sam3",)
+_SELECTION_DESCRIPTIONS[("semantic", "segment")] = (
+    "Finetune SAM3 on this source's polygons (CUDA host, ~32 GB)."
+)
+```
+
+2. **A role entry in `_selected_roles`.** It is a hard-coded checkbox list
+   (`:1928-1945`) and `_apply_selection_roles` can only tick existing boxes —
+   add a `chk_semantic_sam3` alongside the six, so the role can actually be
+   selected.
+
+3. **Instantiate the panel.** Build `self.sam3_panel = Sam3TrainingPanel()` in
+   the dialog's constructor and place it in the role-options area, shown when
+   the semantic mode is active. Without this, the `panel.params()` call below
+   has no `panel`.
+
+4. **The spec builder.** A plain `@staticmethod` — do **not** give it a fake
+   `self` parameter: `self._sam3_spec_for(...)` would then fail to bind, since
+   staticmethods do not auto-bind.
 
 ```python
     @staticmethod
-    def _sam3_spec_for(self, source_path, params, derived_dir, seed):
+    def _sam3_spec_for(source_path, params, derived_dir, seed):
         """One raw source, no merge. Concept training is per-source."""
         if not params.label_quality_acknowledged:
             raise ValueError(
@@ -2302,13 +2455,13 @@ why the test can pass `self=None`):
 
 In `_build_role_datasets`, branch **before** the `build_merged_obb_dataset`
 loop: for `SEMANTIC_SAM3`, call
-`orchestrator.build_role_dataset(role, <raw source dir>, sam3_params=panel.params(), seed=..., split=...)`
+`orchestrator.build_role_dataset(role, <raw source dir>, sam3_params=self.sam3_panel.params(), seed=..., split=...)`
 once per selected source and skip merging entirely.
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `python -m pytest tests/test_sam3_dialog_wiring.py -v`
-Expected: 3 passed
+Expected: 4 passed
 
 - [ ] **Step 5: Commit**
 
