@@ -228,8 +228,13 @@ The `sam3` package itself, like `clip` above, is a git dependency and
 cannot be listed in a published PyPI extra (the same PEP 508 metadata
 constraint documented for `clip` earlier on this page), so it is always a
 manual install. The `sam3-train` extra covers everything else training
-needs beyond the `sam3` extra: `torchmetrics`, `scipy`, `einops`, and
-`decord`.
+needs beyond the `sam3` extra: `torchmetrics`, `scipy`, `einops`,
+`decord`, `iopath`, and the `numpy<2` pin that `sam3` itself requires.
+
+`iopath` is listed even though `sam3` declares it, because a *source
+checkout* of `sam3` placed on `PYTHONPATH` -- rather than a `pip install`
+of it -- never resolves that dependency, and the failure surfaces only
+once training reaches `sam3.train.loss`, as a bare `ModuleNotFoundError`.
 
 ### CUDA only, and not a small GPU
 

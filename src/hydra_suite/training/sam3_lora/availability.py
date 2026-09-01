@@ -12,7 +12,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-TRAINING_PACKAGES = ("sam3", "torch", "torchmetrics", "scipy", "einops", "decord")
+# `iopath` is a transitive import of `sam3.train.loss`, not a direct one of
+# ours. It is probed anyway: without it the probe would report the role usable
+# and training would then die on a bare ModuleNotFoundError partway in.
+TRAINING_PACKAGES = (
+    "sam3",
+    "torch",
+    "torchmetrics",
+    "scipy",
+    "einops",
+    "decord",
+    "iopath",
+)
 
 INSTALL_HINTS = {
     "sam3": "pip install git+https://github.com/facebookresearch/sam3.git",

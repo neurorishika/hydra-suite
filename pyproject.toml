@@ -106,10 +106,23 @@ sam3 = [
 # in sync with `TRAINING_PACKAGES` in
 # hydra_suite/training/sam3_lora/availability.py.
 sam3-train = [
+    # Meta's `sam3` itself is not on PyPI -- install it separately with
+    #   pip install git+https://github.com/facebookresearch/sam3.git
+    # A pip install of that repo resolves its own declared dependencies
+    # (timm, ftfy, regex, tqdm, typing_extensions, huggingface_hub and the
+    # numpy<2 pin). The packages below are the ones our trainer needs on top
+    # of those, plus `iopath`, which sam3 declares but which is missing when
+    # sam3 is used from a source checkout on PYTHONPATH rather than installed
+    # -- the configuration the spike ran, and the one that fails at import
+    # time inside sam3.train.loss with a bare ModuleNotFoundError.
     "torchmetrics",
     "scipy",
     "einops",
     "decord",
+    "iopath>=0.1.10",
+    # sam3 pins numpy<2; stating it here makes the conflict surface at
+    # install time rather than as a runtime ABI error mid-training.
+    "numpy>=1.26,<2",
 ]
 dev = [
     "pytest>=7.0",
