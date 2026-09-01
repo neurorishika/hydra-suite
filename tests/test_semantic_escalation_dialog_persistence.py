@@ -31,7 +31,7 @@ def available_checkpoint(monkeypatch):
         checkpoint_missing = False
         reason = ""
 
-    monkeypatch.setattr(mod, "probe_availability", lambda *_a, **_k: _Available())
+    monkeypatch.setattr(mod, "probe_checkpoint", lambda *_a, **_k: _Available())
 
 
 def _source(name: str = "source") -> OBBSource:

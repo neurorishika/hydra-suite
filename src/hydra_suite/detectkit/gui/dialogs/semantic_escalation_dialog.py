@@ -29,7 +29,7 @@ from hydra_suite.core.inference.semantic.checkpoints import (
     CHECKPOINT_SIZE_GB,
     available_models,
     available_variants,
-    probe_availability,
+    probe_checkpoint,
     sidecar_for,
 )
 from hydra_suite.core.inference.semantic.tiling import (
@@ -787,7 +787,12 @@ class SemanticEscalationDialog(BaseDialog):
     # -- checkpoint download, surfaced before anything runs -----------------
 
     def _refresh_checkpoint_note(self) -> None:
-        avail = probe_availability(self.selected_variant())
+        # probe_checkpoint, NOT probe_availability: the model dropdown now
+        # offers published finetuned registry keys alongside stock variants,
+        # and probe_availability rejects anything outside SAM3_VARIANTS as
+        # "Unknown SAM3 variant" -- which made every finetuned model
+        # unselectable. probe_checkpoint handles both key spaces.
+        avail = probe_checkpoint(self.selected_variant())
         if avail.checkpoint_missing:
             self._checkpoint_note.setText(
                 f"⚠ The {self.selected_variant()} checkpoint "
@@ -802,7 +807,7 @@ class SemanticEscalationDialog(BaseDialog):
 
     def confirm_checkpoint(self) -> bool:
         """Ask before a 3.45 GB download. True = go ahead."""
-        avail = probe_availability(self.selected_variant())
+        avail = probe_checkpoint(self.selected_variant())
         if avail.usable:
             return True
         if not avail.checkpoint_missing:

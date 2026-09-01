@@ -252,7 +252,7 @@ def test_semantic_escalation_dialog_refuses_empty_prompt_or_no_source(
     # The dialog now probes the checkpoint on accept() (C1); a machine without
     # the 3.45 GB weights must not turn that into a modal question here.
     monkeypatch.setattr(
-        mod, "probe_availability", lambda *a, **k: _Availability(True, "")
+        mod, "probe_checkpoint", lambda *a, **k: _Availability(True, "")
     )
 
     dlg = SemanticEscalationDialog([_Src("a"), _Src("b")], reference_body_px=40.0)
@@ -312,7 +312,7 @@ def test_semantic_dialog_asks_before_a_missing_checkpoint_download(qapp, monkeyp
 
     monkeypatch.setattr(
         mod,
-        "probe_availability",
+        "probe_checkpoint",
         lambda *a, **k: _Availability(False, "not here yet", checkpoint_missing=True),
     )
     asked = []
@@ -353,7 +353,7 @@ def test_semantic_dialog_still_refuses_a_broken_install(qapp, monkeypatch):
     import hydra_suite.detectkit.gui.dialogs.semantic_escalation_dialog as mod
 
     monkeypatch.setattr(
-        mod, "probe_availability", lambda *a, **k: _Availability(False, "no ftfy")
+        mod, "probe_checkpoint", lambda *a, **k: _Availability(False, "no ftfy")
     )
     warned = []
     monkeypatch.setattr(
@@ -409,7 +409,7 @@ def test_semantic_dialog_exposes_an_editable_reference_body_size(qapp, monkeypat
     import hydra_suite.detectkit.gui.dialogs.semantic_escalation_dialog as mod
 
     monkeypatch.setattr(
-        mod, "probe_availability", lambda *a, **k: _Availability(True, "")
+        mod, "probe_checkpoint", lambda *a, **k: _Availability(True, "")
     )
     dlg = SemanticEscalationDialog(
         [_Src("a")],
@@ -434,7 +434,7 @@ def test_semantic_dialog_preview_button_is_connected(qapp, monkeypatch):
     import hydra_suite.detectkit.gui.dialogs.semantic_escalation_dialog as mod
 
     monkeypatch.setattr(
-        mod, "probe_availability", lambda *a, **k: _Availability(True, "")
+        mod, "probe_checkpoint", lambda *a, **k: _Availability(True, "")
     )
     dlg = SemanticEscalationDialog([_Src("a")], reference_body_px=40.0)
     assert dlg._btn_preview.text() == "Test random image…"
@@ -646,3 +646,30 @@ def test_the_pointer_persist_slot_is_a_bound_method_of_the_window():
     body = ast.unparse(ast.Module(body=fn.body[1:], type_ignores=[]))
     assert "save_project(self._project)" in body
     assert "_save_current_project" not in body
+
+
+def test_semantic_dialog_accepts_a_published_finetuned_model_key(qapp, monkeypatch):
+    """The dropdown offers registry keys, so the gate must accept them.
+
+    ``probe_availability`` rejects anything outside ``SAM3_VARIANTS`` as
+    "Unknown SAM3 variant", which made every published finetuned model
+    unselectable: the dialog refused the key its own dropdown had listed.
+    The gate is ``probe_checkpoint``, which spans both key spaces.
+    """
+    import hydra_suite.detectkit.gui.dialogs.semantic_escalation_dialog as mod
+
+    key = "sam3_finetuned/whatever.pt"
+    seen = []
+
+    def _probe(k=None, *a, **kw):
+        seen.append(k)
+        return _Availability(True, "")
+
+    monkeypatch.setattr(mod, "probe_checkpoint", _probe)
+    dlg = SemanticEscalationDialog([_Src("a")], reference_body_px=40.0)
+    monkeypatch.setattr(dlg, "selected_variant", lambda: key)
+
+    dlg._refresh_checkpoint_note()
+    assert dlg._checkpoint_note.text() == ""
+    assert dlg.confirm_checkpoint() is True
+    assert key in seen, "the gate never probed the selected finetuned key"
