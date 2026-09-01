@@ -224,6 +224,75 @@ def test_cancellation_terminates_child(tmp_path, monkeypatch):
     assert process.terminated is True
 
 
+class _NeverEndingStdout:
+    """An iterator whose `__next__` blocks forever (like a real pipe with a
+    silent/hung child on the other end) until `stop` is set, at which point
+    it raises StopIteration -- simulating the pipe closing once the process
+    is killed."""
+
+    def __init__(self):
+        import threading as _threading
+
+        self._stop = _threading.Event()
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        # Block like a real blocking read on an open, silent pipe.
+        self._stop.wait()
+        raise StopIteration
+
+    def close_pipe(self):
+        self._stop.set()
+
+
+def test_cancellation_fires_promptly_with_no_child_output(tmp_path, monkeypatch):
+    """The case that was broken: should_cancel() must be polled on a timer,
+    not sampled once per line of child stdout -- a silent (or hung) child
+    that never writes anything must still be cancellable promptly."""
+    import time
+
+    _pass_preflight(monkeypatch)
+    run_dir = tmp_path / "run"
+
+    # No output at all, ever -- a pipe that blocks like a real silent child.
+    process = _FakeProcess([], returncode=0)
+    never_ending = _NeverEndingStdout()
+    process.stdout = never_ending
+
+    real_terminate = process.terminate
+
+    def _terminate_and_close_pipe():
+        real_terminate()
+        never_ending.close_pipe()
+
+    process.terminate = _terminate_and_close_pipe
+    monkeypatch.setattr(tr, "popen_conda", lambda *a, **k: process)
+
+    calls = {"n": 0}
+
+    def _should_cancel():
+        calls["n"] += 1
+        # Cancel on the second poll rather than the first, to prove this is
+        # actually being re-checked on a timer, not just short-circuiting
+        # once at the top.
+        return calls["n"] >= 2
+
+    start = time.monotonic()
+    result = tr.train_sam3_lora(
+        _healthy_spec(tmp_path), str(run_dir), should_cancel=_should_cancel
+    )
+    elapsed = time.monotonic() - start
+
+    assert result["canceled"] is True
+    assert result["success"] is False
+    assert process.terminated is True
+    assert calls["n"] >= 2
+    # Bounded by a handful of poll intervals, not minutes.
+    assert elapsed < 5.0
+
+
 def test_cancellation_kills_child_if_terminate_hangs(tmp_path, monkeypatch):
     _pass_preflight(monkeypatch)
     run_dir = tmp_path / "run"

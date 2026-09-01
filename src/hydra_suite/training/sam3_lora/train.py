@@ -25,8 +25,10 @@ from __future__ import annotations
 import json
 import os
 import platform
+import queue
 import signal
 import subprocess
+import threading
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -38,6 +40,14 @@ from .protocol import dispatch_record, parse_record
 
 # How long to wait for a graceful `terminate()` before escalating to `kill()`.
 TERMINATE_GRACE_S = 5.0
+
+# How often the main loop polls the stdout queue (and, on every poll, checks
+# `should_cancel()`). The child emits progress roughly once per epoch, which
+# can be minutes apart; sampling `should_cancel()` only when a line arrives
+# left Cancel unresponsive (or entirely inert against a silent/hung child)
+# for that whole window. Polling on a timer instead of on output arrival
+# decouples cancellation latency from the child's output cadence.
+CANCEL_POLL_INTERVAL_S = 0.2
 
 # How many trailing plain-text lines to keep for the error message on a
 # non-zero exit (the child's own stderr is merged into this stream).
@@ -137,12 +147,33 @@ def train_sam3_lora(
     tail_lines: list[str] = []
     stream_error: Optional[Exception] = None
 
+    assert process.stdout is not None
+    line_queue: "queue.Queue[tuple[str, Any]]" = queue.Queue()
+    reader_thread = threading.Thread(
+        target=_pump_stdout,
+        args=(process.stdout, line_queue),
+        daemon=True,
+    )
+    reader_thread.start()
+
     try:
-        assert process.stdout is not None
-        for raw_line in process.stdout:
+        while True:
             if should_cancel():
                 canceled = True
                 break
+            try:
+                kind, payload = line_queue.get(timeout=CANCEL_POLL_INTERVAL_S)
+            except queue.Empty:
+                # No output since the last poll -- but we still re-check
+                # `should_cancel()` on this timer regardless of whether the
+                # child has said anything, which is the whole point.
+                continue
+            if kind == "eof":
+                break
+            if kind == "error":
+                stream_error = payload
+                break
+            raw_line: str = payload
             line = raw_line.rstrip("\n")
             if not line:
                 continue
@@ -154,15 +185,18 @@ def train_sam3_lora(
             tail_lines.append(line)
             if len(tail_lines) > STDERR_TAIL_LINES:
                 tail_lines.pop(0)
-    except Exception as exc:  # noqa: BLE001 -- anything here (a decode
-        # error from stray non-UTF8 child output, or log_cb/progress_cb
-        # raising) must still reap the child below, never propagate past a
-        # live orphaned process. Re-raised after the child is reaped.
+    except Exception as exc:  # noqa: BLE001 -- anything here (log_cb or
+        # progress_cb raising) must still reap the child below, never
+        # propagate past a live orphaned process. Re-raised after the
+        # child is reaped.
         stream_error = exc
     finally:
         # Reap the child on EVERY exit path -- cancellation, a clean finish,
         # or an exception above -- so a raising caller can never orphan a
-        # live, multi-hour training process.
+        # live, multi-hour training process. This must happen BEFORE joining
+        # the reader thread below: the thread's blocking read only returns
+        # once the child's stdout pipe closes, which happens when the child
+        # exits (or is killed here), not before.
         if canceled or stream_error is not None:
             _terminate_then_kill(process)
         else:
@@ -170,6 +204,10 @@ def train_sam3_lora(
                 process.wait(timeout=TERMINATE_GRACE_S)
             except subprocess.TimeoutExpired:
                 _terminate_then_kill(process)
+        # The reader thread is daemonic and exits on its own once the pipe
+        # closes, so this join is best-effort cleanup, not a correctness
+        # requirement (the process is already reaped above either way).
+        reader_thread.join(timeout=TERMINATE_GRACE_S)
 
     if stream_error is not None:
         raise stream_error
@@ -205,6 +243,24 @@ def train_sam3_lora(
         "metrics_path": str(metrics_path) if metrics_path else None,
         "canceled": False,
     }
+
+
+def _pump_stdout(stdout: Any, line_queue: "queue.Queue[tuple[str, Any]]") -> None:
+    """Read `stdout` line-by-line on a background thread, feeding `line_queue`.
+
+    Runs entirely off the main loop so `should_cancel()` can be polled on a
+    timer (`CANCEL_POLL_INTERVAL_S`) instead of once per line -- a silent or
+    slow-to-produce-output child would otherwise never (or only very late)
+    get its cancellation checked.
+    """
+    try:
+        for raw_line in stdout:
+            line_queue.put(("line", raw_line))
+    except Exception as exc:  # noqa: BLE001 -- surfaced to the main thread
+        # via the queue rather than raised here, where nothing could react.
+        line_queue.put(("error", exc))
+    finally:
+        line_queue.put(("eof", None))
 
 
 def _terminate_then_kill(process: "subprocess.Popen[str]") -> None:
