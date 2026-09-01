@@ -49,6 +49,7 @@ from .tiling import (
     TILE_FRACTION_GRID,
     TileCandidate,
     TileCollectionCancelled,
+    TileProgressReporter,
     candidate_tile_plans,
     collect_candidates,
     merge_candidates,
@@ -208,11 +209,9 @@ def calibrate(
     floor = CONFIDENCE_GRID[0]
     # fraction -> (per-frame candidates+labels, total seconds, total tiles, tile_px)
     acc: dict[float | None, dict] = {}
-    n_frames_total = max(len(frames), 1)
-
     # Precompute per-frame tile-plan options before running any inference, so
-    # the total inference-pass count -- and hence the progress percentage --
-    # is known upfront. Frame dimensions (not just reference_body_px) affect
+    # the total tile count -- and hence the progress percentage and ETA -- is
+    # known upfront. Frame dimensions (not just reference_body_px) affect
     # tiles_per_frame, so this cannot be estimated from the first frame alone
     # without either overshooting or undershooting 100% under mixed sizes.
     #
@@ -221,8 +220,10 @@ def calibrate(
     # labelled set decoded would cost ~3 GB before a single inference pass.
     # The image is re-read inside the fraction loop below, where exactly one
     # frame is resident at a time.
+    if progress is not None:
+        progress(0, "Planning calibration tile work…")
     per_frame: list[tuple[Path, tuple[int, int], list, tuple, list]] = []
-    total_passes = 0
+    total_tiles = 0
     for img_path, records in frames:
         image = cv2.imread(str(img_path))
         if image is None:
@@ -241,8 +242,8 @@ def calibrate(
             (h, w), reference_body_px, fractions=tile_fractions, overlap=overlap
         )
         per_frame.append((Path(img_path), (h, w), label_polys, ground_truth, options))
-        total_passes += len(options)
-    total_passes = max(total_passes, 1)
+        total_tiles += sum(option.tiles_per_frame for option in options)
+    tile_progress = TileProgressReporter(total_tiles)
 
     # One band for the whole sweep, pooled over every labelled frame: the
     # gate must not differ between the configurations being compared, or the
@@ -256,7 +257,7 @@ def calibrate(
         ]
     )
 
-    done_passes = 0
+    done_tiles = 0
     cancelled = False
     completed_frames: set[int] = set()
     for fi, (img_path, _hw, label_polys, ground_truth, options) in enumerate(per_frame):
@@ -273,6 +274,25 @@ def calibrate(
                 cancelled = True
                 break
             started = time.perf_counter()
+            tiles_before_pass = done_tiles
+
+            def _report_tile(
+                done: int,
+                total: int,
+                *,
+                tiles_before_pass: int = tiles_before_pass,
+                frame_number: int = fi + 1,
+                tile_px: int | None = opt.tile_px,
+            ) -> None:
+                if progress is None:
+                    return
+                pct, message = tile_progress.report(
+                    tiles_before_pass + done,
+                    f"Calibrating frame {frame_number}/{len(per_frame)}, "
+                    f"tile {done}/{total} ({tile_px or 'full frame'})",
+                )
+                progress(pct, message)
+
             try:
                 candidates = collect_candidates(
                     labeler,
@@ -283,6 +303,7 @@ def calibrate(
                     max_instances=max_instances,
                     seam_margin_px=seam_margin_px,
                     should_stop=should_stop,
+                    progress=_report_tile,
                 )
             except TileCollectionCancelled:
                 # F6: a cancelled frame is not a measured frame. Appending it
@@ -314,14 +335,8 @@ def calibrate(
             # accumulated here and averaged below rather than captured once.
             entry["tiles_total"] += opt.tiles_per_frame
             entry["n"] += 1
-            done_passes += 1
+            done_tiles += opt.tiles_per_frame
             completed_frames.add(fi)
-            if progress is not None:
-                progress(
-                    min(100, int(100 * done_passes / total_passes)),
-                    f"Calibrating frame {fi + 1}/{n_frames_total}, "
-                    f"tile {opt.tile_px or 'full frame'}",
-                )
         del image
         if cancelled:
             break

@@ -601,6 +601,7 @@ def test_preview_runs_every_tile_of_one_random_frame_and_returns_overlay(
         "0 0.5 0.5 0.2 0.2\n", encoding="utf-8"
     )
     progress = []
+    statuses = []
     res = mod.preview_random_frame(
         labeler,
         [src],
@@ -608,6 +609,7 @@ def test_preview_runs_every_tile_of_one_random_frame_and_returns_overlay(
         reference_body_px=20.0,
         tile_fraction=0.10,  # 200 px tiles over a 400x400 frame
         progress=lambda done, total: progress.append((done, total)),
+        status=statuses.append,
     )
     assert len(labeler.shapes) == res.tiles_per_frame
     assert len(labeler.shapes) > 1, "the complete image must run every tile"
@@ -618,6 +620,25 @@ def test_preview_runs_every_tile_of_one_random_frame_and_returns_overlay(
     assert res.seconds > 0.0  # MEASURED, never a hardcoded figure
     assert res.image_path.name == "f1.png"
     assert progress[-1] == (res.tiles_per_frame, res.tiles_per_frame)
+    assert f"tile 1/{res.tiles_per_frame}" in statuses[0]
+    assert "ETA" in statuses[0]
+
+
+def test_escalation_reports_each_tile_with_a_running_eta(tmp_path):
+    src = _make_source(tmp_path, n_images=1)
+    updates = []
+
+    run_semantic_escalation(
+        _request(tmp_path, src, tile_fraction=0.10, overlap=0.0),
+        ScriptedLabeler([]),
+        progress=lambda pct, message: updates.append((pct, message)),
+    )
+
+    tile_updates = [(pct, message) for pct, message in updates if ", tile " in message]
+    assert len(tile_updates) == 4
+    assert "tile 1/4" in tile_updates[0][1]
+    assert "ETA" in tile_updates[0][1]
+    assert tile_updates[-1][0] == 100
 
 
 def test_complete_frame_preview_worker_can_be_cancelled_before_inference():

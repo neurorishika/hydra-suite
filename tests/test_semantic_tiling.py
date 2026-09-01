@@ -7,12 +7,25 @@ from hydra_suite.core.inference.semantic.tiling import (
     TILE_FRACTION_GRID,
     TileCandidate,
     TileCollectionCancelled,
+    TileProgressReporter,
     candidate_tile_plans,
     collect_candidates,
     merge_candidates,
     plan_for_frame,
     resolve_tile_px,
 )
+
+
+def test_tile_progress_reporter_includes_a_running_eta():
+    now = [10.0]
+    reporter = TileProgressReporter(4, clock=lambda: now[0])
+
+    now[0] = 12.0
+    pct, label = reporter.report(1, "Frame 1, tile 1/4")
+
+    assert pct == 25
+    assert "tile 1/4" in label
+    assert "ETA 6 s" in label
 
 
 class FakeLabeler:

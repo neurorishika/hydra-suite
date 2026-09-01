@@ -185,6 +185,34 @@ def test_calibrate_runs_one_inference_pass_per_tile_fraction(tmp_path):
     assert all(p.seconds_per_frame >= 0.0 for p in points)
 
 
+def test_calibration_reports_each_tile_with_a_running_eta(tmp_path):
+    import cv2
+
+    from hydra_suite.core.inference.semantic.calibration import calibrate
+
+    img = tmp_path / "f0.png"
+    cv2.imwrite(str(img), np.zeros((400, 400, 3), dtype=np.uint8))
+    updates = []
+
+    calibrate(
+        _CountingLabeler(),
+        [(img, [])],
+        "ant",
+        reference_body_px=20.0,
+        tile_fractions=(0.10,),
+        overlap=0.0,
+        seam_margin_px=4,
+        merge_iou=0.5,
+        progress=lambda pct, message: updates.append((pct, message)),
+    )
+
+    tile_updates = [(pct, message) for pct, message in updates if ", tile " in message]
+    assert len(tile_updates) == 4
+    assert "tile 1/4" in tile_updates[0][1]
+    assert "ETA" in tile_updates[0][1]
+    assert tile_updates[-1][0] == 100
+
+
 def test_calibrate_exposes_rethresholdable_visual_evidence(tmp_path):
     import cv2
 

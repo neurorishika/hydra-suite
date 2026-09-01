@@ -10,6 +10,7 @@ polygons into frame space, and merging duplicates across overlapping tiles.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from typing import Callable, Sequence
 
@@ -66,6 +67,47 @@ class TileCollectionCancelled(RuntimeError):
         )
         self.tiles_done = tiles_done
         self.tiles_total = tiles_total
+
+
+def _format_eta(seconds: float) -> str:
+    """Format a short, deliberately approximate remaining-duration label."""
+    rounded = max(0, int(round(seconds)))
+    if rounded < 60:
+        return "< 1 s" if rounded == 0 else f"{rounded} s"
+    minutes, seconds = divmod(rounded, 60)
+    if minutes < 60:
+        return f"{minutes}m {seconds:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes:02d}m"
+
+
+class TileProgressReporter:
+    """Turn completed tile counts into progress percentages and a live ETA.
+
+    Each SAM3 tile is an independent model invocation, so elapsed time per
+    completed tile is the most useful estimate available without guessing
+    from image dimensions or a fixed hardware-specific throughput.  Callers
+    provide an exact tile total whenever their work plan is known.
+    """
+
+    def __init__(
+        self, total_tiles: int, *, clock: Callable[[], float] = time.monotonic
+    ):
+        self._total_tiles = max(1, int(total_tiles))
+        self._clock = clock
+        self._started_at = clock()
+
+    def report(self, completed_tiles: int, description: str) -> tuple[int, str]:
+        """Return ``(percent, label)`` after a tile has completed."""
+        completed = min(max(0, int(completed_tiles)), self._total_tiles)
+        percent = min(100, int(100 * completed / self._total_tiles))
+        if completed == 0:
+            eta = "ETA estimating…"
+        else:
+            elapsed = max(0.0, self._clock() - self._started_at)
+            remaining = (self._total_tiles - completed) * elapsed / completed
+            eta = f"ETA {_format_eta(remaining)}"
+        return percent, f"{description} — {eta}"
 
 
 @dataclass(frozen=True)

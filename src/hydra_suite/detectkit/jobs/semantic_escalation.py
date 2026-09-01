@@ -39,6 +39,7 @@ from hydra_suite.core.inference.semantic.tiling import (
     SEMANTIC_TILE_FRACTION_SEED,
     TileCandidate,
     TileCollectionCancelled,
+    TileProgressReporter,
     collect_candidates,
     full_frame_plan,
     merge_candidates,
@@ -313,6 +314,64 @@ def _save_cache(staged_root: Path, cache: dict) -> None:
     (staged_root / CANDIDATES_FILENAME).write_text(json.dumps(cache))
 
 
+def _image_hw(path: Path) -> tuple[int, int] | None:
+    """Read image dimensions without decoding a full frame for ETA planning."""
+    try:
+        from PIL import Image
+
+        with Image.open(path) as image:
+            return int(image.height), int(image.width)
+    except Exception:
+        logger.warning("Could not read image dimensions for ETA planning: %s", path)
+        return None
+
+
+def _remaining_tile_count(
+    req: SemanticEscalationRequest,
+    src: OBBSource,
+    *,
+    project_root: Path,
+    tile_px: int | None,
+    floor: float,
+) -> int:
+    """Tile work still needed for one source, including resume-aware caching."""
+    src_root = Path(src.path)
+    staged_root = (
+        project_root
+        / "artifacts"
+        / "pending_escalations"
+        / staged_dirname_for(src, req.variant, req.prompt)
+    )
+    fingerprint = _fingerprint(req, src_root, tile_px, floor)
+    cache = {"images": {}}
+    run_path = staged_root / RUN_FILENAME
+    if run_path.exists():
+        try:
+            if json.loads(run_path.read_text()) == fingerprint:
+                cache = _load_cache(staged_root)
+        except Exception:
+            pass
+    images_dir = src_root / "images"
+    total = 0
+    for img_path in images_dir.rglob("*"):
+        if img_path.suffix.lower() not in IMG_EXTS:
+            continue
+        try:
+            rel = str(img_path.relative_to(images_dir))
+        except ValueError:  # pragma: no cover - defensive filesystem race
+            continue
+        if rel in cache["images"]:
+            continue
+        hw = _image_hw(img_path)
+        if hw is None:
+            continue
+        plan = (
+            plan_for_frame(hw, tile_px, req.overlap) if tile_px else full_frame_plan(hw)
+        )
+        total += len(plan.tiles)
+    return total
+
+
 def _candidates_to_json(cands: list[TileCandidate]) -> list[dict]:
     return [
         {
@@ -484,8 +543,29 @@ def run_semantic_escalation(
     tile_px = req.tile_px or resolve_tile_px(req.reference_body_px, req.tile_fraction)
     result.tile_px = tile_px
     counting_labeler = _DegenerateCountingLabeler(labeler)
+    if progress is not None:
+        progress(0, "Planning SAM3 tile work…")
+    remaining_tiles = sum(
+        _remaining_tile_count(
+            req, src, project_root=project_root, tile_px=tile_px, floor=floor
+        )
+        for src in todo
+        if not (
+            src.staged_review is not None
+            and _resolved(src.staged_review.staged_path)
+            != project_root
+            / "artifacts"
+            / "pending_escalations"
+            / staged_dirname_for(src, req.variant, req.prompt)
+            and not (overwrite or req.overwrite)
+        )
+    )
+    tile_progress = TileProgressReporter(remaining_tiles)
+    tiles_completed = 0
+    if progress is not None:
+        progress(0, f"Running SAM3 inference across {remaining_tiles} tile(s)…")
 
-    for si, src in enumerate(todo):
+    for src in todo:
         staged_dirname = staged_dirname_for(src, req.variant, req.prompt)
         target_root = (
             project_root / "artifacts" / "pending_escalations" / staged_dirname
@@ -571,6 +651,27 @@ def run_semantic_escalation(
                 else full_frame_plan((h, w))
             )
             try:
+                tiles_before_frame = tiles_completed
+                frame_total = len(images)
+
+                def _report_tile(
+                    done: int,
+                    total: int,
+                    *,
+                    tiles_before_frame: int = tiles_before_frame,
+                    source_name: str = src.name,
+                    frame_number: int = ii + 1,
+                    frame_total: int = frame_total,
+                ) -> None:
+                    if progress is None:
+                        return
+                    pct, message = tile_progress.report(
+                        tiles_before_frame + done,
+                        f"{source_name}: frame {frame_number}/{frame_total}, "
+                        f"tile {done}/{total}",
+                    )
+                    progress(pct, message)
+
                 cands = collect_candidates(
                     counting_labeler,
                     image,
@@ -582,6 +683,7 @@ def run_semantic_escalation(
                     max_instances=req.max_instances,
                     seam_margin_px=req.seam_margin_px,
                     should_stop=should_stop,
+                    progress=_report_tile,
                 )
             except TileCollectionCancelled:
                 # F1: a half-tiled frame is NOT cached. Caching it would let
@@ -591,18 +693,12 @@ def run_semantic_escalation(
                 # absent makes the resume redo this frame from tile zero.
                 result.cancelled = True
                 break
+            tiles_completed += len(plan.tiles)
             cache["images"][rel] = {
                 "hw": [h, w],
                 "candidates": _candidates_to_json(cands),
             }
             _save_cache(staged_root, cache)
-            if progress:
-                progress(
-                    int(
-                        100 * (si + (ii + 1) / max(len(images), 1)) / max(len(todo), 1)
-                    ),
-                    f"{src.name}: {ii + 1}/{len(images)}",
-                )
 
         written, degenerate, orphaned = _write_labels_from_candidates(
             staged_root,
@@ -929,6 +1025,7 @@ def preview_random_frame(
     confidence: float = 0.35,
     max_instances: int = 0,
     progress: Callable[[int, int], None] | None = None,
+    status: Callable[[str], None] | None = None,
     should_stop: Callable[[], bool] | None = None,
 ) -> FramePreviewResult:
     """Process one random complete image exactly as escalation would.
@@ -960,6 +1057,17 @@ def preview_random_frame(
         plan_for_frame((h, w), tile_px, overlap) if tile_px else full_frame_plan((h, w))
     )
     started = time.perf_counter()
+    tile_progress = TileProgressReporter(len(plan.tiles))
+
+    def _report_tile(done: int, total: int) -> None:
+        if progress is not None:
+            progress(done, total)
+        if status is not None:
+            _pct, message = tile_progress.report(
+                done, f"Segmenting {img_path.name}: tile {done}/{total}"
+            )
+            status(message)
+
     candidates = collect_candidates(
         labeler,
         image,
@@ -968,7 +1076,7 @@ def preview_random_frame(
         confidence_threshold=cache_confidence_floor(confidence),
         max_instances=max_instances,
         seam_margin_px=seam_margin_px,
-        progress=progress,
+        progress=_report_tile,
         should_stop=should_stop,
     )
     if should_stop is not None and should_stop():
@@ -1044,6 +1152,7 @@ class FramePreviewWorker(BaseWorker):
                     self._params.get("confidence", 0.35)
                 ),
             )
+        self.status.emit("Choosing a random image…")
         self.result_ready.emit(
             preview_random_frame(
                 labeler,
@@ -1058,10 +1167,10 @@ class FramePreviewWorker(BaseWorker):
                 merge_iou=self._params.get("merge_iou", DEFAULT_MERGE_IOU),
                 confidence=self._params.get("confidence", 0.35),
                 max_instances=self._params.get("max_instances", 0),
-                progress=lambda done, total: (
-                    self.progress.emit(int(100 * done / max(total, 1))),
-                    self.status.emit(f"Running tile {done}/{total}..."),
+                progress=lambda done, total: self.progress.emit(
+                    int(100 * done / max(total, 1))
                 ),
+                status=self.status.emit,
                 should_stop=lambda: self._cancel,
             )
         )
