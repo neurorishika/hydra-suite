@@ -53,6 +53,47 @@ _DIRECT_DETECTOR_ROLES = {
     TrainingRole.SEGMENT_DIRECT,
 }
 
+_ROLE_SOURCE_STAMP_FILENAME = ".source_stamp.json"
+
+
+def _guard_single_source_role_dataset(out_root: Path, source_dir: str) -> None:
+    """Refuse a `build_role_dataset` call that would silently overwrite a
+    previous call's output for a different source.
+
+    Mirrors the DetectKit training dialog's "Multiple Sources Not
+    Supported" guard (see `_build_role_datasets`), but at the service layer,
+    so a programmatic caller gets the same protection the GUI already has.
+    """
+    stamp_path = out_root / _ROLE_SOURCE_STAMP_FILENAME
+    if not stamp_path.exists():
+        return
+    try:
+        previous_source = json.loads(stamp_path.read_text(encoding="utf-8"))["source"]
+    except (json.JSONDecodeError, KeyError, OSError):
+        # A missing/corrupt stamp must never block a legitimate build; treat
+        # it as "no prior source recorded" rather than refusing.
+        return
+    resolved_current = str(Path(source_dir).expanduser().resolve())
+    if previous_source == resolved_current:
+        return
+    raise ValueError(
+        "SAM3 concept training supports exactly one labeled source dataset "
+        f"per derived output directory ({out_root}). A previous build "
+        f"derived this role's dataset from {previous_source!r}; refusing to "
+        f"silently overwrite it with a build from {resolved_current!r}. "
+        "Use a separate workspace (or run this role separately per source) "
+        "instead of reusing the same derived output directory for multiple "
+        "sources."
+    )
+
+
+def _stamp_role_dataset_source(out_root: Path, source_dir: str) -> None:
+    """Record the source that produced `out_root`'s contents, so a later
+    call can detect a would-be silent overwrite from a different source."""
+    stamp_path = out_root / _ROLE_SOURCE_STAMP_FILENAME
+    resolved_current = str(Path(source_dir).expanduser().resolve())
+    stamp_path.write_text(json.dumps({"source": resolved_current}), encoding="utf-8")
+
 
 def _result_artifact_paths(result: dict) -> list[str]:
     artifact_paths = result.get("artifact_paths")
@@ -416,6 +457,18 @@ class TrainingOrchestrator:
         """Derive a role-specific dataset (detect, crop-OBB, classify) from a merged OBB dataset."""
         out_root = self.workspace_root / "derived" / role.value
         out_root.mkdir(parents=True, exist_ok=True)
+        if role is TrainingRole.SEMANTIC_SAM3:
+            # SEMANTIC_SAM3 is derived directly per-source (it skips the
+            # cross-source merge step other roles use, see
+            # `_build_role_datasets` in the DetectKit training dialog), but
+            # `out_root` is keyed by role only, not by source. A second call
+            # for this role with a different source would silently overwrite
+            # `train/_annotations.coco.json` while both sources' images stay
+            # on disk, so only the last source's annotations would survive.
+            # The GUI already refuses this up front; enforce it here too so
+            # a programmatic/service-level caller cannot silently lose data
+            # (see docs/superpowers/specs/2026-08-31-detectkit-sam3-finetune-design.md).
+            _guard_single_source_role_dataset(out_root, merged_obb_dataset_dir)
         result = prepare_role_dataset(
             role=role,
             merged_obb_dataset_dir=merged_obb_dataset_dir,
@@ -438,6 +491,8 @@ class TrainingOrchestrator:
                 f"Derived dataset for role '{role.value}' is not valid for Ultralytics training.\n"
                 f"{format_validation_report(report)}"
             )
+        if role is TrainingRole.SEMANTIC_SAM3:
+            _stamp_role_dataset_source(out_root, merged_obb_dataset_dir)
         return result
 
     def run_role_training(
