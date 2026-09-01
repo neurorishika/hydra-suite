@@ -46,7 +46,7 @@ def test_all_direct_detector_roles_publish_slice_geometry(
     )
 
     sidecar = Path(stored).with_suffix(Path(stored).suffix + ".slice_meta.json")
-    assert json.loads(sidecar.read_text()) == geometry
+    assert json.loads(sidecar.read_text())["training_geometry"] == geometry
     assert mp.load_model_registry()["entries"][key]["slice_geometry"] == geometry
 
 
@@ -79,7 +79,10 @@ def test_slice_geometry_written_as_sidecar_and_registry(tmp_path, monkeypatch):
     stored_path = Path(stored)
     sidecar = stored_path.with_suffix(stored_path.suffix + ".slice_meta.json")
     assert sidecar.exists()
-    assert json.loads(sidecar.read_text())["reference_body_px"] == 42.0
+    assert (
+        json.loads(sidecar.read_text())["training_geometry"]["reference_body_px"]
+        == 42.0
+    )
     reg = mp.load_model_registry()
     assert reg["entries"][key]["slice_geometry"]["geometry_mode"] == "auto_object"
     assert reg["entries"][key]["slice_meta_sidecar"] == sidecar.name
@@ -114,8 +117,8 @@ def test_published_sidecar_is_read_back_by_read_slice_meta(tmp_path, monkeypatch
     )
     meta = read_slice_meta(stored)
     assert meta is not None
-    assert meta["reference_body_px"] == 42.0
-    assert meta["geometry_mode"] == "auto_object"
+    assert meta["training_geometry"]["reference_body_px"] == 42.0
+    assert meta["training_geometry"]["geometry_mode"] == "auto_object"
 
 
 def test_no_slice_geometry_writes_no_sidecar(tmp_path, monkeypatch):

@@ -854,13 +854,16 @@ def publish_trained_model(
         and role in _DIRECT_DETECTOR_ROLES
         and dst.suffix.lower() == ".pt"
     ):
+        from hydra_suite.core.inference.slice_meta import normalized_slice_meta
+
         # Append to the full name (foo.pt -> foo.pt.slice_meta.json) so the
         # name matches core.inference.slice_meta.read_slice_meta / the canonical
         # runtime_artifacts._meta_path convention. Replacing the suffix instead
         # would write foo.slice_meta.json, which TrackerKit would never find.
         slice_sidecar = dst.with_suffix(dst.suffix + ".slice_meta.json")
         slice_sidecar.write_text(
-            json.dumps(dict(slice_geometry), indent=2), encoding="utf-8"
+            json.dumps(normalized_slice_meta(dict(slice_geometry)), indent=2),
+            encoding="utf-8",
         )
         slice_geom_sidecar_name = slice_sidecar.name
 
