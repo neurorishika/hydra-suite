@@ -26,6 +26,7 @@ from PySide6.QtCore import Signal
 
 from hydra_suite.core.inference.semantic.base import SemanticInstance
 from hydra_suite.core.inference.semantic.calibration import CONFIDENCE_GRID
+from hydra_suite.core.inference.semantic.sam3 import PREDICTOR_IMGSZ
 from hydra_suite.core.inference.semantic.shape_prior import AreaBand
 from hydra_suite.core.inference.semantic.tiling import (
     DEFAULT_MERGE_IOU,
@@ -161,8 +162,14 @@ def prompt_slug(prompt: str) -> str:
     return (slug or "prompt")[:24]
 
 
-def staged_dirname_for(src: OBBSource, variant: str, prompt: str) -> str:
-    """The staging directory NAME a (source, variant, prompt) run targets.
+def staged_dirname_for(
+    src: OBBSource,
+    variant: str,
+    prompt: str,
+    *,
+    imgsz: int = PREDICTOR_IMGSZ,
+) -> str:
+    """The staging directory NAME a (source, variant, prompt, imgsz) run targets.
 
     Shared with the GUI so it can tell a RESUME of the same run (same
     directory) from a REPLACE of a different one (different directory)
@@ -170,8 +177,13 @@ def staged_dirname_for(src: OBBSource, variant: str, prompt: str) -> str:
     """
     # DEPARTURE 2: the PROMPT enters the hash. Without it two prompts on
     # one source collide and the replaced-pending cleanup no-ops.
+    # DEPARTURE 3: IMGSZ enters the hash. Candidates collected at one input
+    # size are not interchangeable with another's, and nothing else would
+    # invalidate them -- a silently stale cache reads as a successful reuse.
     content_hash = sha1(
-        (str(Path(src.path).resolve()) + variant + prompt).encode("utf-8")
+        (
+            str(Path(src.path).resolve()) + variant + prompt + f"|imgsz={int(imgsz)}"
+        ).encode("utf-8")
     ).hexdigest()[:10]
     return f"{src.name}-sam3-{prompt_slug(prompt)}-{content_hash}"
 
