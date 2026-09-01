@@ -279,7 +279,7 @@ class OBBCanvas(QGraphicsView):
 
             # A FIXED-policy layer paints one hue because its class ids do
             # not address the project's classes: staged escalation ids index
-            # the STAGING dir's classes.txt (the prompt), so indexing the
+            # the STAGING dir's classes.txt, so indexing the
             # palette with them would assert a class identity the staged
             # labels do not carry.
             colour = (

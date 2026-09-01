@@ -1155,3 +1155,92 @@ def test_the_pointer_survives_a_run_that_raises_on_a_later_source(tmp_path):
     pointer = saved["sources"][0]["staged_review"]
     assert pointer is not None
     assert Path(pointer["staged_path"], "labels").is_dir()
+
+
+# --- the prompt is not the class ------------------------------------------
+#
+# The staging dir's classes.txt used to be the PROMPT. The prompt is a noun
+# phrase chosen to make the model find things ("ant with color patch"); the
+# class is what the found things ARE in this project ("ant"). Writing the
+# prompt made accept append it to the source as a class the project has
+# never heard of -- and both the overlay (source_class_id_map) and the
+# training dataset builder DROP labels whose class is outside the project
+# scheme. The user's accepted 78-frame run rendered blank and would have
+# trained on nothing.
+
+
+def test_staged_classes_txt_is_the_assigned_class_not_the_prompt(tmp_path):
+    src = _make_source(tmp_path, n_images=1)
+    labeler = ScriptedLabeler([SemanticInstance(_blob(200, 200), 0.9)])
+    run_semantic_escalation(
+        _request(tmp_path, src, prompt="ant with color patch", class_name="ant"),
+        labeler,
+    )
+    staged = Path(src.staged_review.staged_path)
+    assert (staged / "classes.txt").read_text().strip() == "ant"
+
+
+def test_staged_classes_txt_falls_back_to_the_prompt(tmp_path):
+    """Pre-fix callers, and a project with no declared classes, still stage."""
+    src = _make_source(tmp_path, n_images=1)
+    labeler = ScriptedLabeler([SemanticInstance(_blob(200, 200), 0.9)])
+    run_semantic_escalation(
+        _request(tmp_path, src, prompt="ant with color patch", class_name=""), labeler
+    )
+    staged = Path(src.staged_review.staged_path)
+    assert (staged / "classes.txt").read_text().strip() == "ant with color patch"
+
+
+def test_the_class_is_not_in_the_cache_fingerprint(tmp_path):
+    """Which class the instances ARE is a labelling decision, not an
+    inference input: changing it must not wipe a cache full of candidates.
+    Same precedent as the area band -- a re-threshold, not a re-run."""
+
+    class Counting(ScriptedLabeler):
+        calls = 0
+
+        def label_image(self, *a, **k):
+            type(self).calls += 1
+            return super().label_image(*a, **k)
+
+    src = _make_source(tmp_path, n_images=1)
+    labeler = Counting([SemanticInstance(_blob(200, 200), 0.9)])
+    run_semantic_escalation(
+        _request(tmp_path, src, prompt="ant", class_name="ant"), labeler
+    )
+    after_first = Counting.calls
+    assert after_first > 0
+
+    run_semantic_escalation(
+        _request(tmp_path, src, prompt="ant", class_name="beetle"), labeler
+    )
+    assert Counting.calls == after_first  # resumed, no re-inference
+    staged = Path(src.staged_review.staged_path)
+    assert (staged / "classes.txt").read_text().strip() == "beetle"
+
+
+def test_accepting_a_run_leaves_the_source_inside_the_project_class_scheme(tmp_path):
+    """The regression end to end: accept, then map the source's labels the
+    way the canvas overlay and the dataset builder both do."""
+    from hydra_suite.training.class_mapping import build_class_id_map
+
+    src = _make_source(tmp_path, n_images=1)
+    (Path(src.path) / "classes.txt").write_text("ant\n")
+    project_classes = ["ant"]
+    labeler = ScriptedLabeler([SemanticInstance(_blob(200, 200), 0.9)])
+    run_semantic_escalation(
+        _request(tmp_path, src, prompt="ant with color patch", class_name="ant"),
+        labeler,
+    )
+    rel = sr.staged_frames(src.staged_review.staged_path)[0]
+    sr.accept_frame(src, rel, mode=MergeMode.OVERWRITE)
+
+    # No new class was invented, so every accepted label still maps.
+    source_names = (Path(src.path) / "classes.txt").read_text().split()
+    assert (Path(src.path) / "classes.txt").read_text().strip() == "ant"
+    class_id_map = build_class_id_map(["ant"], project_classes)
+    label = (Path(src.path) / "labels" / f"{Path(rel).stem}.txt").read_text()
+    ids = {int(line.split()[0]) for line in label.splitlines() if line.strip()}
+    assert ids, "accept wrote no labels"
+    assert all(class_id_map.get(i) is not None for i in ids)
+    assert source_names == ["ant"]

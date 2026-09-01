@@ -176,7 +176,10 @@ def find_staged_label_for_image(
 
 
 def staged_class_names(staged_path: str) -> list[str]:
-    """Class names from a staging dir's classes.txt (the escalation prompt).
+    """Class names from a staging dir's classes.txt.
+
+    That is the ASSIGNED project class for a run staged after the class/prompt
+    split, and the raw prompt for a staging directory written before it.
 
     The staged ids index THIS list, not the project's, so the overlay must
     read it here rather than reuse the project's class names.
