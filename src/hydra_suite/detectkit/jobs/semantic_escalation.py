@@ -26,6 +26,11 @@ from PySide6.QtCore import Signal
 
 from hydra_suite.core.inference.semantic.base import SemanticInstance
 from hydra_suite.core.inference.semantic.calibration import CONFIDENCE_GRID
+from hydra_suite.core.inference.semantic.checkpoints import (
+    SAM3_VARIANTS,
+    resolve_checkpoint,
+)
+from hydra_suite.core.inference.semantic.sam3 import PREDICTOR_IMGSZ
 from hydra_suite.core.inference.semantic.shape_prior import AreaBand
 from hydra_suite.core.inference.semantic.tiling import (
     DEFAULT_MERGE_IOU,
@@ -161,8 +166,14 @@ def prompt_slug(prompt: str) -> str:
     return (slug or "prompt")[:24]
 
 
-def staged_dirname_for(src: OBBSource, variant: str, prompt: str) -> str:
-    """The staging directory NAME a (source, variant, prompt) run targets.
+def staged_dirname_for(
+    src: OBBSource,
+    variant: str,
+    prompt: str,
+    *,
+    imgsz: int = PREDICTOR_IMGSZ,
+) -> str:
+    """The staging directory NAME a (source, variant, prompt, imgsz) run targets.
 
     Shared with the GUI so it can tell a RESUME of the same run (same
     directory) from a REPLACE of a different one (different directory)
@@ -170,10 +181,37 @@ def staged_dirname_for(src: OBBSource, variant: str, prompt: str) -> str:
     """
     # DEPARTURE 2: the PROMPT enters the hash. Without it two prompts on
     # one source collide and the replaced-pending cleanup no-ops.
+    # DEPARTURE 3: IMGSZ enters the hash. Candidates collected at one input
+    # size are not interchangeable with another's, and nothing else would
+    # invalidate them -- a silently stale cache reads as a successful reuse.
     content_hash = sha1(
-        (str(Path(src.path).resolve()) + variant + prompt).encode("utf-8")
+        (
+            str(Path(src.path).resolve()) + variant + prompt + f"|imgsz={int(imgsz)}"
+        ).encode("utf-8")
     ).hexdigest()[:10]
     return f"{src.name}-sam3-{prompt_slug(prompt)}-{content_hash}"
+
+
+def labeler_checkpoint_for(model_key: str):
+    """Resolve a UI model key to a checkpoint path.
+
+    Stock variants and published finetuned models are both selectable, so the
+    key is no longer necessarily a SAM3_VARIANTS entry.
+
+    DEVIATION from the literal brief: a stock variant resolves to ``None``,
+    not its on-disk path. ``Sam3SemanticLabeler.from_variant`` treats a
+    non-None ``checkpoint`` as "load exactly this artifact and require its
+    sidecar" (``_sidecar_for_checkpoint`` raises if the sidecar is missing),
+    which stock checkpoints never have -- and it also skips the
+    probe/ensure-download flow entirely. Always resolving to a path here
+    would turn every stock run into an immediate RuntimeError and silently
+    drop the "offer to download the 3.45 GB checkpoint" UX. Only a
+    published, finetuned registry key -- which DOES ship a sidecar -- should
+    flow through as an explicit checkpoint.
+    """
+    if model_key in SAM3_VARIANTS:
+        return None
+    return resolve_checkpoint(model_key)
 
 
 def sources_pending_replacement(req: "SemanticEscalationRequest") -> list[str]:
@@ -984,6 +1022,7 @@ class FramePreviewWorker(BaseWorker):
             # predictor floor is the same cache floor the run would use.
             labeler = Sam3SemanticLabeler.from_variant(
                 self._variant,
+                checkpoint=labeler_checkpoint_for(self._variant),
                 confidence_floor=cache_confidence_floor(
                     self._params.get("confidence", 0.35)
                 ),
@@ -1078,7 +1117,9 @@ class CalibrationWorker(BaseWorker):
             # F2: the sweep's own bottom cell, so cells 0.05-0.25 are not
             # all silently identical to 0.25.
             labeler = Sam3SemanticLabeler.from_variant(
-                self._variant, confidence_floor=CONFIDENCE_GRID[0]
+                self._variant,
+                checkpoint=labeler_checkpoint_for(self._variant),
+                confidence_floor=CONFIDENCE_GRID[0],
             )
         points = calibrate(
             labeler,
@@ -1132,6 +1173,7 @@ class SemanticEscalationWorker(BaseWorker):
             # nothing below 0.25 and every offline re-threshold below it lies.
             labeler = Sam3SemanticLabeler.from_variant(
                 self._request.variant,
+                checkpoint=labeler_checkpoint_for(self._request.variant),
                 confidence_floor=cache_confidence_floor(self._request.confidence),
             )
         self.status.emit(

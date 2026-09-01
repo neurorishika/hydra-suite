@@ -2,10 +2,48 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from typing import Any
 
 from .contracts import TrainingRole, ValidationIssue, ValidationReport
 from .dataset_inspector import DatasetInspection, inspect_obb_or_detect_dataset
+
+
+def validate_coco_dataset(
+    dataset_dir: str | Path, *, min_train: int = 1, min_val: int = 0
+) -> ValidationReport:
+    """Validate a COCO instance-segmentation layout (train/valid/_annotations.coco.json)."""
+    root = Path(dataset_dir)
+    issues: list[ValidationIssue] = []
+    stats: dict[str, Any] = {"root_dir": str(root)}
+    for split, floor in (("train", min_train), ("valid", min_val)):
+        ann = root / split / "_annotations.coco.json"
+        if not ann.exists():
+            if floor > 0:
+                issues.append(
+                    ValidationIssue(
+                        "error", "coco_missing_split", f"missing {ann}", str(ann)
+                    )
+                )
+            continue
+        data = json.loads(ann.read_text())
+        n_img = len(data.get("images", []))
+        n_ann = len(data.get("annotations", []))
+        stats[f"{split}_images"] = n_img
+        stats[f"{split}_annotations"] = n_ann
+        if n_img < floor or (floor > 0 and n_ann == 0):
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "coco_empty_split",
+                    f"{split}: {n_img} images, {n_ann} annotations",
+                    str(ann),
+                )
+            )
+    return ValidationReport(
+        valid=not any(i.severity == "error" for i in issues), issues=issues, stats=stats
+    )
 
 
 def _parse_label_lines(path: Path) -> list[list[str]]:
@@ -436,6 +474,10 @@ def validate_role_dataset(
     min_val: int = 1,
 ) -> ValidationReport:
     """Inspect and validate a derived dataset for the requested training role."""
+    # MUST precede inspect_obb_or_detect_dataset: that inspector RAISES on a
+    # COCO layout, so branching after it is a crash, not a fall-through.
+    if role is TrainingRole.SEMANTIC_SAM3:
+        return validate_coco_dataset(dataset_dir, min_train=min_train, min_val=0)
     inspection = inspect_obb_or_detect_dataset(dataset_dir)
     if role in {TrainingRole.OBB_DIRECT, TrainingRole.SEQ_CROP_OBB}:
         return validate_ultralytics_dataset(

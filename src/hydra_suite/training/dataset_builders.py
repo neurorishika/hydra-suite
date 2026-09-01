@@ -16,7 +16,13 @@ import cv2
 import numpy as np
 
 from .class_mapping import build_class_id_map, resolve_dataset_class_names
-from .contracts import DatasetBuildResult, SourceDataset, SplitConfig, TrainingRole
+from .contracts import (
+    DatasetBuildResult,
+    Sam3LoraParams,
+    SourceDataset,
+    SplitConfig,
+    TrainingRole,
+)
 from .dataset_inspector import (
     DatasetInspection,
     inspect_obb_or_detect_dataset,
@@ -1005,6 +1011,7 @@ _ROLE_MIN_LEVEL = {
     TrainingRole.SEQ_DETECT: GeometryLevel.AABB,
     TrainingRole.SEQ_CROP_OBB: GeometryLevel.OBB,
     TrainingRole.SEQ_CROP_SEGMENT: GeometryLevel.POLYGON,
+    TrainingRole.SEMANTIC_SAM3: GeometryLevel.POLYGON,
 }
 
 
@@ -1039,6 +1046,9 @@ def prepare_role_dataset(
     min_crop_size_px: int = 64,
     enforce_square: bool = True,
     merged_level: GeometryLevel = GeometryLevel.POLYGON,
+    sam3_params: "Sam3LoraParams | None" = None,
+    seed: int = 42,
+    split: SplitConfig | None = None,
 ) -> DatasetBuildResult:
     """Prepare role-specific dataset from the merged source."""
     required = role_min_level(role)
@@ -1091,6 +1101,29 @@ def prepare_role_dataset(
             pad_ratio=crop_pad_ratio,
             min_crop_size_px=min_crop_size_px,
             enforce_square=enforce_square,
+        )
+
+    if role is TrainingRole.SEMANTIC_SAM3:
+        # Concept training is PER SOURCE. The caller passes a single raw source
+        # dir here, NOT a merged OBB dataset -- see the dialog task, which skips
+        # build_merged_obb_dataset for this role.
+        from .sam3_lora.dataset_build import build_sam3_coco_dataset
+
+        if sam3_params is None:
+            raise ValueError("SEMANTIC_SAM3 requires sam3_params")
+        stats = build_sam3_coco_dataset(
+            merged_obb_dataset_dir,
+            out_root,
+            sam3_params,
+            class_name=class_name,
+            seed=seed,
+            split=split,
+        )
+        manifest_path = out_root / "build_manifest.json"
+        return DatasetBuildResult(
+            dataset_dir=str(out_root),
+            stats=stats,
+            manifest_path=str(manifest_path) if manifest_path.exists() else "",
         )
 
     raise RuntimeError(f"Unsupported training role for dataset preparation: {role}")

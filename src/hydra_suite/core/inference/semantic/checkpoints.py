@@ -12,6 +12,7 @@ disable the action with a reason instead of failing at click time.
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import shutil
 from dataclasses import dataclass
@@ -149,12 +150,13 @@ def _clip_tokenizer_problem() -> str:
     )
 
 
-def probe_availability(
-    variant: str = DEFAULT_VARIANT, cache_dir: Path | None = None
-) -> Sam3Availability:
-    """Structured availability. Never downloads, never imports ultralytics."""
-    if variant not in SAM3_VARIANTS:
-        return Sam3Availability(False, f"Unknown SAM3 variant {variant!r}.")
+def probe_dependencies() -> Sam3Availability:
+    """Variant-independent probe: Python deps + the ultralytics symbol only.
+
+    Never touches ``SAM3_VARIANTS`` or a checkpoint path, so it stays valid
+    for a published finetuned model's registry key -- which is never a
+    ``SAM3_VARIANTS`` entry and must not read as "Unknown SAM3 variant".
+    """
     for pkg in REQUIRED_PACKAGES:
         if _find_spec(pkg) is None:
             return Sam3Availability(
@@ -171,10 +173,31 @@ def probe_availability(
             "The installed ultralytics has no SAM3SemanticPredictor "
             "(needs >= 8.4.34).",
         )
-    if not checkpoint_path(variant, cache_dir).exists():
+    return Sam3Availability(True, "")
+
+
+def probe_checkpoint(
+    key: str = DEFAULT_VARIANT, cache_dir: Path | None = None
+) -> Sam3Availability:
+    """Checkpoint-presence probe for *key* (a stock variant or registry key)."""
+    deps = probe_dependencies()
+    if not deps.usable:
+        return deps
+    try:
+        path = resolve_checkpoint(key, cache_dir=cache_dir)
+    except ValueError as exc:
+        return Sam3Availability(False, str(exc))
+    if not path.exists():
+        if key not in SAM3_VARIANTS:
+            # Published artifacts are written at publish time; a missing
+            # file here is not "not yet downloaded" -- it is registered but
+            # absent, and there is no download to offer.
+            return Sam3Availability(
+                False, f"Registered SAM3 model {key!r} has no artifact at {path}."
+            )
         return Sam3Availability(
             False,
-            f"The SAM3 checkpoint ({variant}, ~{CHECKPOINT_SIZE_GB:.2f} GB) has "
+            f"The SAM3 checkpoint ({key}, ~{CHECKPOINT_SIZE_GB:.2f} GB) has "
             "not been downloaded yet. It will be downloaded once, with your "
             "confirmation, before the first run starts. The weights are "
             "licence-gated: if you have not accepted the licence at "
@@ -183,6 +206,109 @@ def probe_availability(
             checkpoint_missing=True,
         )
     return Sam3Availability(True, "")
+
+
+def probe_availability(
+    variant: str = DEFAULT_VARIANT, cache_dir: Path | None = None
+) -> Sam3Availability:
+    """Structured availability. Never downloads, never imports ultralytics.
+
+    Thin composition of :func:`probe_dependencies` + :func:`probe_checkpoint`,
+    kept for existing callers. New code should prefer those two directly --
+    this one still rejects anything outside ``SAM3_VARIANTS``, which is
+    correct for its historical stock-only callers but wrong for a published
+    finetuned model's registry key.
+    """
+    if variant not in SAM3_VARIANTS:
+        return Sam3Availability(False, f"Unknown SAM3 variant {variant!r}.")
+    deps = probe_dependencies()
+    if not deps.usable:
+        return deps
+    return probe_checkpoint(variant, cache_dir)
+
+
+def _registry_path_default() -> Path:
+    return Path(get_models_dir()) / "model_registry.json"
+
+
+def _load_registry(registry_path: Path | None = None) -> dict:
+    path = registry_path if registry_path is not None else _registry_path_default()
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _registry_semantic_models() -> list[str]:  # seam for tests
+    """Registry keys published with ``usage_role == "semantic_sam3"``.
+
+    Reads ``model_registry.json`` directly rather than importing
+    ``hydra_suite.training.sam3_lora.model_publish`` -- ``core/inference``
+    must never depend on ``training/``.
+    """
+    data = _load_registry()
+    if data.get("schema_version") != 2 or not isinstance(data.get("entries"), dict):
+        return []
+    out = []
+    for key, meta in data["entries"].items():
+        if isinstance(meta, dict) and meta.get("usage_role") == "semantic_sam3":
+            out.append(str(key))
+    return out
+
+
+def available_models() -> list[str]:
+    """Stock SAM3 variants plus registry-published finetuned models."""
+    return available_variants() + _registry_semantic_models()
+
+
+def sidecar_for(model_key: str) -> dict | None:
+    """The parsed ``<artifact>.sam3_meta.json`` sidecar for *model_key*.
+
+    Returns ``None`` for a stock variant (ships no sidecar, makes no claim)
+    or a key that is not in the registry.
+    """
+    data = _load_registry()
+    entries = data.get("entries") if isinstance(data.get("entries"), dict) else {}
+    meta = entries.get(model_key)
+    if not isinstance(meta, dict):
+        return None
+    sidecar_path = meta.get("sidecar_path")
+    if not sidecar_path:
+        return None
+    path = Path(sidecar_path)
+    if not path.exists():
+        return None
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return loaded if isinstance(loaded, dict) else None
+
+
+def resolve_checkpoint(
+    key: str = DEFAULT_VARIANT, cache_dir: Path | None = None
+) -> Path:
+    """Resolve a UI/CLI model key -- stock variant or registry key -- to a path.
+
+    Stock variants resolve under ``get_models_dir()/"sam3"/`` (the download
+    cache). Registry keys resolve to the ``stored_path`` recorded at publish
+    time under ``get_models_dir()/"sam3_finetuned"/`` -- a different root,
+    never conflated with the stock cache.
+    """
+    if key in SAM3_VARIANTS:
+        return checkpoint_path(key, cache_dir)
+    data = _load_registry()
+    entries = data.get("entries") if isinstance(data.get("entries"), dict) else {}
+    meta = entries.get(key)
+    if not isinstance(meta, dict) or "stored_path" not in meta:
+        raise ValueError(
+            f"Unknown SAM3 model {key!r}. Available: "
+            f"{', '.join(available_models())}."
+        )
+    return Path(meta["stored_path"])
 
 
 def ensure_checkpoint(

@@ -27,7 +27,10 @@ from PySide6.QtWidgets import (
 
 from hydra_suite.core.inference.semantic.checkpoints import (
     CHECKPOINT_SIZE_GB,
+    available_models,
+    available_variants,
     probe_availability,
+    sidecar_for,
 )
 from hydra_suite.core.inference.semantic.tiling import (
     DEFAULT_MERGE_IOU,
@@ -133,13 +136,25 @@ class SemanticEscalationDialog(BaseDialog):
             form.addWidget(widget, row, column + 1)
 
         self._variant = QComboBox()
-        from hydra_suite.core.inference.semantic.checkpoints import available_variants
-
-        self._variant.addItems(available_variants())
+        self._variant.addItems(available_models())
         saved_variant = str(saved.get("variant", ""))
         if self._variant.findText(saved_variant) >= 0:
             self._variant.setCurrentText(saved_variant)
         add_field(0, 0, "Model", self._variant)
+
+        # The dropdown is populated from available_models() = stock variants
+        # + registry-published finetuned models. Until a finetuned model is
+        # published that is exactly ["sam3"] -- one item, no explanation --
+        # which reads as "model selection was never built" rather than
+        # "nothing to select yet". Say so explicitly.
+        self._no_finetuned_hint = QLabel(
+            "No finetuned SAM3 models published yet — train one from the "
+            "DetectKit training dialog (Semantic mode)."
+        )
+        self._no_finetuned_hint.setWordWrap(True)
+        finetuned_present = len(available_models()) > len(available_variants())
+        self._no_finetuned_hint.setVisible(not finetuned_present)
+        form.addWidget(self._no_finetuned_hint, 6, 0, 1, 4)
 
         self._prompt = QLineEdit(str(saved.get("prompt", "ant") or "ant"))
         self._prompt.setToolTip(
@@ -221,7 +236,11 @@ class SemanticEscalationDialog(BaseDialog):
         self._tile_fraction = QDoubleSpinBox()
         self._tile_fraction.setRange(0.0, 0.90)
         self._tile_fraction.setSingleStep(0.01)
-        self._tile_fraction.setDecimals(2)
+        # 3 decimals (not 2): a published model's sidecar can record a
+        # measured object_tile_fraction like 0.055 that a finetuning run
+        # actually used, and 2 decimals would silently round that prefill
+        # (0.055 -> 0.06) before the user ever sees it.
+        self._tile_fraction.setDecimals(3)
         self._tile_fraction.setSpecialValueText("full frame (no tiling)")
         self._tile_fraction.setValue(
             _saved_value(saved, "tile_fraction", SEMANTIC_TILE_FRACTION_SEED, float)
@@ -291,6 +310,7 @@ class SemanticEscalationDialog(BaseDialog):
         self._variant.currentTextChanged.connect(
             lambda _t: self._refresh_checkpoint_note()
         )
+        self._variant.currentTextChanged.connect(self.prefill_from_sidecar)
 
         self._status = QLabel("")
         self._status.setWordWrap(True)
@@ -310,6 +330,53 @@ class SemanticEscalationDialog(BaseDialog):
 
     def selected_variant(self) -> str:
         return self._variant.currentText()
+
+    def prefill_from_sidecar(self, model_key: str) -> None:
+        """Default the prompt/tile-fraction fields from a published model's sidecar.
+
+        A prefill, never a lock: ``sidecar_for`` returns ``None`` for a stock
+        variant or an unregistered key (no-op), and the widgets stay enabled
+        and editable either way -- REFERENCE_BODY_SIZE precedent, a measured
+        value is sacrosanct but a derived one is only a starting point.
+        """
+        meta = sidecar_for(model_key)
+        if meta is None:
+            return
+        prompt = meta.get("prompt")
+        if prompt:
+            self._prompt.setText(str(prompt))
+        fraction = meta.get("object_tile_fraction")
+        if fraction is not None:
+            try:
+                self._tile_fraction.setValue(float(fraction))
+            except (TypeError, ValueError):
+                pass
+        # I3: the sidecar's reference_body_px is what this model was TRAINED
+        # at (the tile scale). The project's reference_body_px is an
+        # independent value (its own labels' median). Train/serve tile scale
+        # can silently diverge if they disagree -- warn, but never
+        # hard-refuse, since a deliberate re-scale is legitimate.
+        sidecar_body_px = meta.get("reference_body_px")
+        if sidecar_body_px is not None:
+            try:
+                sidecar_body_px = float(sidecar_body_px)
+            except (TypeError, ValueError):
+                sidecar_body_px = None
+        if sidecar_body_px:
+            current_body_px = float(self._reference_body.value())
+            if current_body_px <= 0:
+                self._reference_body.setValue(sidecar_body_px)
+            elif abs(current_body_px - sidecar_body_px) > 1e-6:
+                QMessageBox.warning(
+                    self,
+                    "Body Size Mismatch",
+                    f"This model was trained with reference_body_px="
+                    f"{sidecar_body_px:g}, but this project's Body size (px) "
+                    f"is {current_body_px:g}. Train/serve tile scale can "
+                    "diverge silently if these disagree -- verify this is "
+                    "intentional (e.g. a deliberate re-scale) before running.",
+                )
+        self._refresh_tile_label()
 
     def prompt(self) -> str:
         return self._prompt.text().strip()

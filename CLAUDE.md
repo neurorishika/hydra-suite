@@ -259,7 +259,7 @@ App layers → Core / Runtime / Data / Training / Utils → (no upward imports)
 | ClassKit | `hydra_suite.classkit` | Classification/embedding toolkit |
 | RefineKit | `hydra_suite.refinekit` | Interactive proofreading |
 | FilterKit | `hydra_suite.filterkit` | FilterKit tool |
-| DetectKit | `hydra_suite.detectkit` | Detection tool |
+| DetectKit | `hydra_suite.detectkit` | Detection tool (SAM3 LoRA finetuning training role is CUDA-only; inference from the published checkpoint has no such constraint) |
 | Shared Widgets | `hydra_suite.widgets` | Cross-kit UI components: BaseWorker, BaseDialog, WelcomePage |
 | Integrations | `hydra_suite.integrations` | External tool bridges (SLEAP, X-AnyLabeling) |
 | Core | `hydra_suite.core` | Detection, Kalman filter, assignment, post-processing, identity |

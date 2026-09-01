@@ -7,8 +7,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+from hydra_suite.core.inference.semantic.checkpoints import ensure_checkpoint
+
 from .contracts import (
     DatasetBuildResult,
+    Sam3LoraParams,
     SourceDataset,
     SplitConfig,
     TrainingRole,
@@ -30,6 +33,7 @@ from .registry import (
     new_run_id,
 )
 from .runner import run_training
+from .sam3_lora.publish import publish_sam3_model
 from .sliced_dataset import SliceBuildParams, build_sliced_obb_dataset
 from .validation import (
     format_validation_report,
@@ -48,6 +52,47 @@ _DIRECT_DETECTOR_ROLES = {
     TrainingRole.DETECT_DIRECT,
     TrainingRole.SEGMENT_DIRECT,
 }
+
+_ROLE_SOURCE_STAMP_FILENAME = ".source_stamp.json"
+
+
+def _guard_single_source_role_dataset(out_root: Path, source_dir: str) -> None:
+    """Refuse a `build_role_dataset` call that would silently overwrite a
+    previous call's output for a different source.
+
+    Mirrors the DetectKit training dialog's "Multiple Sources Not
+    Supported" guard (see `_build_role_datasets`), but at the service layer,
+    so a programmatic caller gets the same protection the GUI already has.
+    """
+    stamp_path = out_root / _ROLE_SOURCE_STAMP_FILENAME
+    if not stamp_path.exists():
+        return
+    try:
+        previous_source = json.loads(stamp_path.read_text(encoding="utf-8"))["source"]
+    except (json.JSONDecodeError, KeyError, OSError):
+        # A missing/corrupt stamp must never block a legitimate build; treat
+        # it as "no prior source recorded" rather than refusing.
+        return
+    resolved_current = str(Path(source_dir).expanduser().resolve())
+    if previous_source == resolved_current:
+        return
+    raise ValueError(
+        "SAM3 concept training supports exactly one labeled source dataset "
+        f"per derived output directory ({out_root}). A previous build "
+        f"derived this role's dataset from {previous_source!r}; refusing to "
+        f"silently overwrite it with a build from {resolved_current!r}. "
+        "Use a separate workspace (or run this role separately per source) "
+        "instead of reusing the same derived output directory for multiple "
+        "sources."
+    )
+
+
+def _stamp_role_dataset_source(out_root: Path, source_dir: str) -> None:
+    """Record the source that produced `out_root`'s contents, so a later
+    call can detect a would-be silent overwrite from a different source."""
+    stamp_path = out_root / _ROLE_SOURCE_STAMP_FILENAME
+    resolved_current = str(Path(source_dir).expanduser().resolve())
+    stamp_path.write_text(json.dumps({"source": resolved_current}), encoding="utf-8")
 
 
 def _result_artifact_paths(result: dict) -> list[str]:
@@ -89,6 +134,29 @@ def _publish_training_artifacts(
 ) -> tuple[str, str]:
     if not artifact_paths:
         return "", ""
+
+    if spec.role is TrainingRole.SEMANTIC_SAM3:
+        # Forked, not extended: publish_trained_model's naming scheme does not
+        # fit a promptable-concept checkpoint, and _repo_dir_for_role raises
+        # for this role. See the design's "Publish -- a fork, not an extension".
+        #
+        # The geometry the sidecar needs (tile_px, reference_body_px) is
+        # written by the BUILDER, not by publish_metadata -- which carries
+        # size/species-style fields only. Read it from the derived dataset dir,
+        # or the sidecar ships without geometry and Task 10b's prefill has
+        # nothing to prefill (which would make Gate 3 unpassable).
+        manifest_path = Path(spec.derived_dataset_dir) / "build_manifest.json"
+        manifest = dict(publish_metadata or {})
+        if manifest_path.exists():
+            manifest.update(json.loads(manifest_path.read_text()))
+        return publish_sam3_model(
+            run_id=run_id,
+            adapters_path=Path(artifact_paths[0]),
+            base_checkpoint=ensure_checkpoint("sam3", allow_download=False),
+            build_manifest=manifest,
+            params=spec.sam3_params,
+            source_fingerprint=dataset_fingerprint_value,
+        )
 
     raw_recommended_threshold = publish_metadata.get(
         "recommended_confidence_threshold",
@@ -382,10 +450,25 @@ class TrainingOrchestrator:
         min_crop_size_px: int = 64,
         enforce_square: bool = True,
         merged_level: GeometryLevel = GeometryLevel.POLYGON,
+        sam3_params: "Sam3LoraParams | None" = None,
+        seed: int = 42,
+        split: SplitConfig | None = None,
     ) -> DatasetBuildResult:
         """Derive a role-specific dataset (detect, crop-OBB, classify) from a merged OBB dataset."""
         out_root = self.workspace_root / "derived" / role.value
         out_root.mkdir(parents=True, exist_ok=True)
+        if role is TrainingRole.SEMANTIC_SAM3:
+            # SEMANTIC_SAM3 is derived directly per-source (it skips the
+            # cross-source merge step other roles use, see
+            # `_build_role_datasets` in the DetectKit training dialog), but
+            # `out_root` is keyed by role only, not by source. A second call
+            # for this role with a different source would silently overwrite
+            # `train/_annotations.coco.json` while both sources' images stay
+            # on disk, so only the last source's annotations would survive.
+            # The GUI already refuses this up front; enforce it here too so
+            # a programmatic/service-level caller cannot silently lose data
+            # (see docs/superpowers/specs/2026-08-31-detectkit-sam3-finetune-design.md).
+            _guard_single_source_role_dataset(out_root, merged_obb_dataset_dir)
         result = prepare_role_dataset(
             role=role,
             merged_obb_dataset_dir=merged_obb_dataset_dir,
@@ -396,6 +479,9 @@ class TrainingOrchestrator:
             min_crop_size_px=min_crop_size_px,
             enforce_square=enforce_square,
             merged_level=merged_level,
+            sam3_params=sam3_params,
+            seed=seed,
+            split=split,
         )
         report = validate_role_dataset(result.dataset_dir, role)
         result.stats = dict(result.stats)
@@ -405,6 +491,8 @@ class TrainingOrchestrator:
                 f"Derived dataset for role '{role.value}' is not valid for Ultralytics training.\n"
                 f"{format_validation_report(report)}"
             )
+        if role is TrainingRole.SEMANTIC_SAM3:
+            _stamp_role_dataset_source(out_root, merged_obb_dataset_dir)
         return result
 
     def run_role_training(

@@ -26,6 +26,9 @@ class TrainingRole(str, Enum):
     CLASSIFY_MULTIHEAD_CUSTOM = "classify_multihead_custom"
     CLASSIFY_MULTIHEAD_CUSTOM_SHARED = "classify_multihead_custom_shared"
 
+    # DetectKit promptable-concept segmentation
+    SEMANTIC_SAM3 = "semantic_sam3"
+
 
 @dataclass(slots=True)
 class SplitConfig:
@@ -128,6 +131,54 @@ class CustomCNNParams:
 
 
 @dataclass(slots=True)
+class Sam3LoraParams:
+    """SAM3 LoRA finetuning hyperparameters.
+
+    Defaults are measured on the spike (see the design doc's Why section), not
+    chosen by taste; where a value is a judgement call the comment says so.
+    """
+
+    prompt: str = ""  # required; there is no defensible default concept
+    negative_prompts: list[str] = field(default_factory=list)
+    rank: int = 16
+    alpha: int = 32
+    dropout: float = 0.1
+    lr: float = 5e-5
+    # AP75 plateaus by epoch ~9 (mean .642, sd .040); 40 buys nothing.
+    epochs: int = 10
+    # batch 2 OOMs at 1008 px on a 47 GB card; effective batch is batch*accum.
+    batch: int = 1
+    grad_accum: int = 8
+    mixed_precision: str = "bf16"
+    num_negatives: int = 3
+    # Which submodules receive adapters. The text encoder is False as a
+    # precaution against eroding prompt discrimination -- untested; the spike
+    # froze it in every configuration.
+    adapt_vision_encoder: bool = True
+    adapt_text_encoder: bool = False
+    adapt_geometry_encoder: bool = True
+    adapt_detr_encoder: bool = True
+    adapt_detr_decoder: bool = True
+    adapt_mask_decoder: bool = True
+    # Tiling, mirroring the SAHI sliced-training knobs.
+    geometry_mode: str = "auto_object"  # auto_object | auto_model | custom
+    object_tile_fraction: float = 0.055
+    slice_width: int = 0  # custom mode only; 0 => fall back to imgsz
+    slice_height: int = 0  # custom mode only
+    tile_overlap: float = 0.25
+    keep_empty_tiles: bool = True
+    # Provenance does not survive a review (see the design's ordering
+    # dependency), so the user must affirm the labels are good before SAM3
+    # learns them -- including its own accepted output. Preflight refuses
+    # without it; the panel writes it; the dialog gates the run on it.
+    label_quality_acknowledged: bool = False
+    # Which sidecar conda env to launch training in. Empty resolves to
+    # `resolve_sam3_env`'s default (`DEFAULT_SAM3_ENV`, or `HYDRA_SAM3_ENV`);
+    # travels with the spec so a run's env choice is recorded.
+    env_name: str = ""
+
+
+@dataclass(slots=True)
 class AugmentationProfile:
     """Augmentation settings for training."""
 
@@ -188,6 +239,7 @@ class TrainingRunSpec:
     publish_policy: PublishPolicy = field(default_factory=PublishPolicy)
     tiny_params: TinyHeadTailParams = field(default_factory=TinyHeadTailParams)
     custom_params: CustomCNNParams | None = None
+    sam3_params: Sam3LoraParams | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the run spec to a plain dict, converting the role enum to its string value."""
