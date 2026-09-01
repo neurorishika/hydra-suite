@@ -93,17 +93,40 @@ def assert_checkpoint_loaded(
 
     *meta* is ``None`` for a stock variant: it ships no sidecar and makes no
     claim about what should be resident, so there is nothing to guard.
+
+    The key check runs LIVE-TO-CHECKPOINT, not the reverse: every key the
+    live model exposes must be covered by the published checkpoint. The
+    opposite direction is not an invariant -- a checkpoint is legitimately a
+    SUPERSET of the semantic predictor's live state dict, carrying
+    non-persistent RoPE buffers (``*.attn.freqs_cis``) and the point-prompt
+    ``geometry_encoder.points_*`` projections that the semantic build never
+    instantiates. Requiring those to be resident refused every correctly
+    published model. Coverage still catches the failure this guard exists
+    for: if ultralytics' key transform drifts, the namespaces stop
+    overlapping and nearly every live key goes uncovered.
     """
     if meta is None:
         return
-    for key in meta.get("stripped_keys", []):
-        if key not in live_state_dict:
-            raise RuntimeError(
-                f"SAM3 finetuned checkpoint failed to load: key {key!r} "
-                "recorded at publish time is absent from the live model's "
-                "state dict. ultralytics' load transform likely changed, so "
-                "the checkpoint loaded nothing and the model is stock SAM3."
-            )
+    stripped = set(meta.get("stripped_keys", []))
+    live_keys = set(live_state_dict)
+    if not live_keys or not stripped:
+        # A coverage test over an empty set passes trivially -- exactly the
+        # silent no-op this guard exists to prevent.
+        raise RuntimeError(
+            "SAM3 finetuned checkpoint cannot be guarded: "
+            f"{len(live_keys)} live keys against {len(stripped)} recorded "
+            "checkpoint keys. An empty side makes the coverage check pass "
+            "vacuously -- refusing rather than serving unchecked."
+        )
+    uncovered = sorted(live_keys - stripped)
+    if uncovered:
+        raise RuntimeError(
+            "SAM3 finetuned checkpoint failed to load: "
+            f"{len(uncovered)} of {len(live_keys)} live model keys are not "
+            f"present in the published checkpoint (e.g. {uncovered[:3]}). "
+            "ultralytics' load transform likely changed, so those weights "
+            "stayed stock SAM3 rather than coming from the checkpoint."
+        )
     for key, expected_fp in meta.get("tuned_fingerprints", {}).items():
         # `tuned_fingerprints` keys are recorded in the STRIPPED namespace
         # (training.sam3_lora.publish.publish_sam3_model normalises them to
@@ -259,7 +282,13 @@ class Sam3SemanticLabeler:
         if checkpoint is not None:
             # Force eager model construction so there is a live state dict
             # to guard BEFORE the first inference call, not after.
-            predictor.setup_model(model=str(ckpt))
+            # No `model=` argument: ultralytics' `setup_model` treats that
+            # parameter as an already-constructed nn.Module and calls `.to()`
+            # on it (predict.py:458), so passing the checkpoint PATH raises
+            # AttributeError. Passing None makes it build from
+            # `self.args.model` -- which `predictor_overrides` already set to
+            # this same checkpoint.
+            predictor.setup_model()
             meta = _sidecar_for_checkpoint(ckpt)
             live_state_dict = predictor.model.state_dict()
             assert_checkpoint_loaded(live_state_dict, meta, imgsz=PREDICTOR_IMGSZ)

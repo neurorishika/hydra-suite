@@ -39,10 +39,36 @@ def test_guard_raises_when_tuned_tensors_are_absent(tmp_path):
         assert_checkpoint_loaded(live, meta)
 
 
-def test_guard_raises_on_a_missing_key(tmp_path):
-    meta = {"stripped_keys": ["a.weight", "b.weight"], "tuned_fingerprints": {}}
-    live = {"a.weight": torch.zeros(2, 2)}
+def test_guard_raises_on_an_uncovered_live_key(tmp_path):
+    # Coverage runs LIVE -> CHECKPOINT: a live key the checkpoint never
+    # carried means those weights stayed stock.
+    meta = {"stripped_keys": ["a.weight"], "tuned_fingerprints": {}}
+    live = {"a.weight": torch.zeros(2, 2), "b.weight": torch.zeros(2, 2)}
     with pytest.raises(RuntimeError, match="b.weight"):
+        assert_checkpoint_loaded(live, meta)
+
+
+def test_guard_passes_when_checkpoint_is_a_superset(tmp_path):
+    # Real, correct shape: the checkpoint carries non-persistent buffers and
+    # point-prompt modules the semantic build never instantiates.
+    meta = {
+        "stripped_keys": [
+            "a.weight",
+            "blocks.0.attn.freqs_cis",
+            "geometry_encoder.points_direct_project.weight",
+        ],
+        "tuned_fingerprints": {},
+    }
+    assert_checkpoint_loaded({"a.weight": torch.zeros(2, 2)}, meta)
+
+
+@pytest.mark.parametrize(
+    "live, stripped",
+    [({}, ["a.weight"]), ({"a.weight": torch.zeros(2, 2)}, [])],
+)
+def test_guard_refuses_a_vacuous_coverage_check(live, stripped):
+    meta = {"stripped_keys": stripped, "tuned_fingerprints": {}}
+    with pytest.raises(RuntimeError, match="vacuous"):
         assert_checkpoint_loaded(live, meta)
 
 
