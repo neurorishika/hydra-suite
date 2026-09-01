@@ -1103,4 +1103,27 @@ def prepare_role_dataset(
             enforce_square=enforce_square,
         )
 
+    if role is TrainingRole.SEMANTIC_SAM3:
+        # Concept training is PER SOURCE. The caller passes a single raw source
+        # dir here, NOT a merged OBB dataset -- see the dialog task, which skips
+        # build_merged_obb_dataset for this role.
+        from .sam3_lora.dataset_build import build_sam3_coco_dataset
+
+        if sam3_params is None:
+            raise ValueError("SEMANTIC_SAM3 requires sam3_params")
+        stats = build_sam3_coco_dataset(
+            merged_obb_dataset_dir,
+            out_root,
+            sam3_params,
+            class_name=class_name,
+            seed=seed,
+            split=split,
+        )
+        manifest_path = out_root / "build_manifest.json"
+        return DatasetBuildResult(
+            dataset_dir=str(out_root),
+            stats=stats,
+            manifest_path=str(manifest_path) if manifest_path.exists() else "",
+        )
+
     raise RuntimeError(f"Unsupported training role for dataset preparation: {role}")
