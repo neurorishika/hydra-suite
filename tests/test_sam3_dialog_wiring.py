@@ -56,3 +56,77 @@ def test_unacknowledged_labels_block_the_run():
             derived_dir="/tmp/derived",
             seed=7,
         )
+
+
+def test_run_path_carries_sam3_params_and_is_reachable(tmp_path, monkeypatch):
+    """C1 regression: the START button's actual code path, not just the builder.
+
+    Before the fix, `_start_training` required a non-empty ultralytics base
+    model for EVERY role (including semantic_sam3, which uses none) and
+    built a bare `TrainingRunSpec(...)` that never set `sam3_params=`. Either
+    bug alone aborts the whole multi-role run or reaches `preflight` with no
+    prompt/acknowledgement. This drives `_start_training` itself and inspects
+    the spec the worker was actually handed.
+    """
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+
+    from hydra_suite.detectkit.gui.dialogs import training_dialog as td
+    from hydra_suite.detectkit.gui.models import DetectKitProject, OBBSource
+    from hydra_suite.training.contracts import TrainingRole
+
+    proj = DetectKitProject(project_dir=tmp_path, class_names=["ant"])
+    src_dir = tmp_path / "ds1"
+    src_dir.mkdir()
+    proj.sources = [OBBSource(path=str(src_dir), name="ds1")]
+
+    dlg = td.TrainingDialog(proj)
+    dlg.chk_role_segment_direct.setChecked(False)  # default plan; not under test
+    dlg.chk_semantic_sam3.setChecked(True)
+    dlg.sam3_panel.prompt_edit.setText("ant")
+    dlg.sam3_panel.chk_ack.setChecked(True)
+
+    # Skip the real dataset build (no orchestrator/filesystem dataset here):
+    # only the spec-construction path in _start_training is under test.
+    monkeypatch.setattr(dlg, "_build_role_datasets", lambda silent=True: True)
+    dlg.role_dataset_dirs = {
+        TrainingRole.SEMANTIC_SAM3.value: str(tmp_path / "derived")
+    }
+    monkeypatch.setattr(dlg, "_get_orchestrator", lambda: object())
+    monkeypatch.setattr(dlg, "_write_to_project", lambda: None)
+
+    captured = {}
+
+    class _FakeWorker:
+        def __init__(self, orchestrator, role_entries):
+            captured["role_entries"] = role_entries
+            self.log_signal = _Signal()
+            self.role_started = _Signal()
+            self.role_finished = _Signal()
+            self.progress_signal = _Signal()
+            self.done_signal = _Signal()
+            self.finished = _Signal()
+
+        def isRunning(self):
+            return False
+
+        def start(self):
+            pass
+
+    class _Signal:
+        def connect(self, *_a, **_k):
+            pass
+
+    monkeypatch.setattr(td, "_TrainingWorker", _FakeWorker)
+
+    dlg._start_training()
+
+    entries = captured.get("role_entries")
+    assert entries, "no role_entries reached the worker -- run path is unreachable"
+    sam3_entries = [e for e in entries if e["role"] is TrainingRole.SEMANTIC_SAM3]
+    assert len(sam3_entries) == 1
+    spec = sam3_entries[0]["spec"]
+    assert spec.sam3_params is not None
+    assert spec.sam3_params.prompt == "ant"
+    assert spec.sam3_params.label_quality_acknowledged is True

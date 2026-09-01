@@ -2117,16 +2117,25 @@ QTabBar::tab:selected {
                 if role is TrainingRole.SEMANTIC_SAM3:
                     # Concept training is per-source: skip the merge entirely
                     # and derive one dataset per raw source (design breakage
-                    # row 5).
-                    sam3_params = self.sam3_panel.params()
-                    if not sam3_params.label_quality_acknowledged:
+                    # row 5). The service writes each role's derived dataset
+                    # to a single out_root keyed by role only (not by
+                    # source), so a second source would silently overwrite
+                    # the first source's annotations on disk while both
+                    # sources' images remain. Refuse rather than silently
+                    # lose data (see final whole-branch review, finding I1).
+                    if len(sources) > 1:
                         QMessageBox.warning(
                             self,
-                            "Label Quality",
-                            "Acknowledge the label-quality warning in the "
-                            "SAM3 tab before building this role's dataset.",
+                            "Multiple Sources Not Supported",
+                            "SAM3 concept training supports exactly one "
+                            "labeled source dataset at a time. Remove the "
+                            "extra sources (or run this role separately per "
+                            "source) before building/training this role.",
                         )
                         return False
+                    sam3_params = self.sam3_panel.params()
+                    # Label-quality acknowledgement is validated once, inside
+                    # _sam3_spec_for; do not duplicate the gate here.
                     built_dirs = []
                     for src in sources:
                         build = orchestrator.build_role_dataset(
@@ -2302,6 +2311,38 @@ QTabBar::tab:selected {
                     f"No dataset prepared for role: {role.value}",
                 )
                 return
+
+            if role is TrainingRole.SEMANTIC_SAM3:
+                # SAM3 LoRA finetuning needs no ultralytics base model, so it
+                # is exempt from the base-model requirement below, and its
+                # spec is built by the single source of truth for SAM3 specs
+                # (_sam3_spec_for) so the panel's prompt/acknowledgement
+                # actually reach the run (final whole-branch review, C1).
+                if not source_obb:
+                    QMessageBox.warning(
+                        self,
+                        "No Sources",
+                        "Add at least one labeled DetectKit source dataset.",
+                    )
+                    return
+                try:
+                    spec = self._sam3_spec_for(
+                        source_obb[0].path,
+                        self.sam3_panel.params(),
+                        ds,
+                        self.spin_seed.value(),
+                    )
+                except ValueError as exc:
+                    QMessageBox.warning(self, "Label Quality", str(exc))
+                    return
+                role_entries.append(
+                    {
+                        "role": role,
+                        "spec": spec,
+                        "publish_meta": self._publish_meta_for_role(role, "sam3"),
+                    }
+                )
+                continue
 
             base_model = self._base_model_for_role(role)
             if not base_model:

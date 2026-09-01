@@ -13,6 +13,11 @@ def test_probe_dependencies_is_variant_independent(monkeypatch):
     # probe_availability rejected anything not in SAM3_VARIANTS, so every
     # published model read as "Unknown SAM3 variant" and stayed disabled.
     monkeypatch.setattr(ck, "_find_spec", lambda n: object())
+    # Also stub the predictor-symbol seam: without this the test's outcome
+    # depends on whether the box's installed ultralytics happens to expose
+    # SAM3SemanticPredictor, making it pass/fail for an environmental reason
+    # unrelated to what it's checking (final whole-branch review, M1).
+    monkeypatch.setattr(ck, "_has_predictor_symbol", lambda: True)
     assert ck.probe_dependencies().usable
 
 

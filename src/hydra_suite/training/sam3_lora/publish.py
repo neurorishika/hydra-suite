@@ -52,15 +52,28 @@ def _tensor_sha256(tensor: torch.Tensor) -> str:
 def _load_base_checkpoint(base_checkpoint: Path) -> dict[str, torch.Tensor]:
     try:
         base = torch.load(base_checkpoint, map_location="cpu", weights_only=True)
-    except Exception as exc:
-        raise RuntimeError(
-            f"Failed to load SAM3 base checkpoint {base_checkpoint} with "
-            "weights_only=True. If the stock checkpoint is a wrapper carrying "
-            "non-tensor metadata (as its `base['model']` unwrap below "
-            "suggests it may be), retry with torch.load(..., "
-            "weights_only=False) -- only safe for a trusted, first-party "
-            "checkpoint."
-        ) from exc
+    except Exception as exc_weights_only:
+        # The stock SAM3 checkpoint is known (per the spike's reprefix.py)
+        # to be a wrapper dict carrying non-tensor metadata that
+        # weights_only=True's restricted unpickler rejects. Fall back to
+        # weights_only=False -- safe here because base_checkpoint is a
+        # trusted, first-party (Meta-distributed) artifact, not user input.
+        # If it *still* fails, that's a genuine corruption/missing-file
+        # error and must propagate, not be silenced.
+        logger.warning(
+            "SAM3 base checkpoint %s failed to load with weights_only=True "
+            "(%s); retrying with weights_only=False (trusted first-party "
+            "checkpoint).",
+            base_checkpoint,
+            exc_weights_only,
+        )
+        try:
+            base = torch.load(base_checkpoint, map_location="cpu", weights_only=False)
+        except Exception as exc_fallback:
+            raise RuntimeError(
+                f"Failed to load SAM3 base checkpoint {base_checkpoint} with "
+                "both weights_only=True and weights_only=False."
+            ) from exc_fallback
     if isinstance(base, dict) and "model" in base and isinstance(base["model"], dict):
         base = base["model"]
     return base

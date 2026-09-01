@@ -111,7 +111,11 @@ def train_sam3_lora(
 
     # --- Lazy, training-only imports -----------------------------------
     import torch
-    from sam3.build_sam import build_sam3_image_model
+
+    # NOTE: verified against the real Meta sam3 source on the CUDA box
+    # (2026-08-31): sam3/build_sam.py does not exist. The builder lives in
+    # sam3/model_builder.py. Do not "correct" this back.
+    from sam3.model_builder import build_sam3_image_model
     from sam3.train.loss.sam3_loss import Sam3LossWrapper
     from sam3.train.matcher import BinaryHungarianMatcherV2
 
