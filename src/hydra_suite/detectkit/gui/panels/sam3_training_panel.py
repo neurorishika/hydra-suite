@@ -12,6 +12,7 @@ training dependency must never raise at click time.
 
 from __future__ import annotations
 
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -34,6 +35,7 @@ from hydra_suite.training.sam3_lora.availability import (
     probe_sam3_training_availability,
 )
 from hydra_suite.training.sam3_lora.env import DEFAULT_SAM3_ENV
+from hydra_suite.widgets.workers import BaseWorker
 
 _GEOMETRY_MODES = ("auto_object", "auto_model", "custom")
 _PRECISIONS = ("bf16", "fp16", "fp32")
@@ -45,6 +47,30 @@ _PRECISIONS = ("bf16", "fp16", "fp32")
 _AUTO_PROBE_TIMEOUT_S = 5.0
 
 
+class _AvailabilityProbeWorker(BaseWorker):
+    """Runs `probe_sam3_training_availability` off the GUI thread.
+
+    The probe spawns a `conda run` subprocess and can take up to its
+    `timeout` to return; running it on `showEvent` synchronously froze the
+    GUI thread for that whole window on a panel's first show. This worker
+    exists solely so the automatic on-show probe never blocks the GUI --
+    the explicit "Check" button stays synchronous (see `check_availability`).
+    """
+
+    result: Signal = Signal(object)  # Sam3TrainingAvailability
+
+    def __init__(self, env_name: str, timeout: float, parent=None) -> None:
+        super().__init__(parent)
+        self._env_name = env_name
+        self._timeout = timeout
+
+    def execute(self) -> None:
+        availability = probe_sam3_training_availability(
+            env=self._env_name, timeout=self._timeout
+        )
+        self.result.emit((availability, self._env_name))
+
+
 class Sam3TrainingPanel(QWidget):
     """Owns the SAM3 LoRA hyperparameter widgets and the label-quality ack."""
 
@@ -52,6 +78,9 @@ class Sam3TrainingPanel(QWidget):
         super().__init__(parent)
         self._unavailable_reason = ""
         self._probed_once = False
+        self._is_destroyed = False
+        self._probe_worker: _AvailabilityProbeWorker | None = None
+        self.destroyed.connect(self._mark_destroyed)
         self._build_ui()
 
     # -- Qt lifecycle ------------------------------------------------------
@@ -59,17 +88,48 @@ class Sam3TrainingPanel(QWidget):
     def showEvent(self, event) -> None:  # noqa: N802 - Qt override
         super().showEvent(event)
         if not self._probed_once:
-            self.check_availability()
+            self._start_async_probe()
+
+    def _mark_destroyed(self, *_args) -> None:
+        self._is_destroyed = True
 
     # -- Availability probing -----------------------------------------------
+
+    def _start_async_probe(self) -> None:
+        """Kick off the on-show probe on a background thread.
+
+        Unlike `check_availability` (used by the explicit "Check" button,
+        which may stay synchronous), the automatic on-show probe must never
+        block the GUI thread -- the probe spawns a `conda run` subprocess
+        and can take up to `_AUTO_PROBE_TIMEOUT_S` to return.
+        """
+        self._probed_once = True
+        env_name = self.env_edit.text().strip() or DEFAULT_SAM3_ENV
+        self.env_status_label.setText(f"Checking {env_name!r}...")
+        worker = _AvailabilityProbeWorker(env_name, _AUTO_PROBE_TIMEOUT_S, self)
+        worker.result.connect(self._on_async_probe_result)
+        worker.finished.connect(worker.deleteLater)
+        self._probe_worker = worker
+        worker.start()
+
+    def _on_async_probe_result(self, payload: tuple) -> None:
+        # The worker thread may finish after the panel (or its owning
+        # dialog) has already been closed/destroyed; a queued signal
+        # delivered after that point must be a no-op, not a crash on a
+        # dead C++ widget.
+        if self._is_destroyed:
+            return
+        availability, env_name = payload
+        self._apply_availability(availability, env_name)
 
     def check_availability(self) -> Sam3TrainingAvailability:
         """Probe the sidecar env named in `self.env_edit` and reflect the result.
 
-        Spawns a `conda run` subprocess -- never called on every keystroke or
-        during widget construction; only on first show or an explicit "Check"
-        click, with a short timeout so a broken env cannot hang the GUI for
-        long.
+        Spawns a `conda run` subprocess synchronously -- this is the
+        explicit "Check" button's path, so a deliberate click may block
+        briefly with a short timeout. The automatic on-show probe never
+        calls this; it uses `_start_async_probe` instead so first show never
+        blocks the GUI thread.
         """
         self._probed_once = True
         env_name = self.env_edit.text().strip() or DEFAULT_SAM3_ENV
@@ -77,6 +137,12 @@ class Sam3TrainingPanel(QWidget):
         availability: Sam3TrainingAvailability = probe_sam3_training_availability(
             env=env_name, timeout=_AUTO_PROBE_TIMEOUT_S
         )
+        self._apply_availability(availability, env_name)
+        return availability
+
+    def _apply_availability(
+        self, availability: Sam3TrainingAvailability, env_name: str
+    ) -> None:
         if availability.usable:
             self._unavailable_reason = ""
             self.env_status_label.setText(f"{env_name!r} is usable.")
@@ -87,7 +153,6 @@ class Sam3TrainingPanel(QWidget):
                 f"{env_name!r} is unusable: {availability.reason}"
             )
             self._body.setEnabled(False)
-        return availability
 
     # -- UI construction -------------------------------------------------
 

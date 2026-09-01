@@ -101,6 +101,64 @@ def test_env_name_round_trips_through_params(qapp):
     assert panel.params().env_name == "another-env"
 
 
+def test_show_event_probes_asynchronously_without_blocking(qapp, monkeypatch):
+    """The on-show probe must run off the GUI thread: showEvent() must
+    return immediately, and the widget must not be enabled/disabled until
+    the background worker's result is delivered."""
+    import hydra_suite.detectkit.gui.panels.sam3_training_panel as mod
+
+    calls = {"n": 0}
+
+    def fake_probe(env=None, timeout=None, cache_dir=None):
+        calls["n"] += 1
+        assert env == mod.DEFAULT_SAM3_ENV
+        return mod.Sam3TrainingAvailability(False, "package 'sam3' is missing")
+
+    monkeypatch.setattr(mod, "probe_sam3_training_availability", fake_probe)
+    panel = mod.Sam3TrainingPanel()
+    panel.show()  # triggers showEvent -> _start_async_probe
+
+    # showEvent must not have called the probe on the GUI thread directly;
+    # it must have handed the work to the worker thread.
+    assert panel._probe_worker is not None
+    assert "Checking" in panel.env_status_label.text()
+
+    # The result only lands once the worker thread finishes AND the queued
+    # signal is delivered by the event loop.
+    assert panel._probe_worker.wait(2000)
+    qapp.processEvents()
+
+    assert calls["n"] == 1
+    assert "sam3" in panel.unavailable_reason()
+    assert not panel._body.isEnabled()
+
+    panel.close()
+
+
+def test_destroyed_panel_does_not_crash_on_late_probe_result(qapp, monkeypatch):
+    """A queued result delivered after the panel is destroyed must be a
+    silent no-op, not a crash against a dead C++ widget."""
+    import hydra_suite.detectkit.gui.panels.sam3_training_panel as mod
+
+    monkeypatch.setattr(
+        mod,
+        "probe_sam3_training_availability",
+        lambda **kwargs: mod.Sam3TrainingAvailability(True),
+    )
+    panel = mod.Sam3TrainingPanel()
+    panel.show()
+    worker = panel._probe_worker
+    assert worker is not None
+    assert worker.wait(2000)
+
+    # Destroy the panel BEFORE the queued `result` signal is delivered.
+    panel.close()
+    panel.deleteLater()
+    qapp.processEvents()  # deliver deleteLater + the queued probe result
+
+    # No exception raised above is the assertion.
+
+
 def test_check_availability_uses_the_env_edit_value(qapp, monkeypatch):
     import hydra_suite.detectkit.gui.panels.sam3_training_panel as mod
 
