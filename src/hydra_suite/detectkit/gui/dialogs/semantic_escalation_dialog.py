@@ -163,6 +163,34 @@ class SemanticEscalationDialog(BaseDialog):
         )
         add_field(0, 1, "Prompt", self._prompt)
 
+        # The prompt is a noun phrase tuned to make the MODEL find things;
+        # the class is what the found things ARE in this project. Conflating
+        # them wrote the prompt into the staging dir's classes.txt, so
+        # accepting the review appended a class the project had never heard
+        # of -- and the overlay and the training dataset builder both drop
+        # labels outside the project scheme, leaving the accepted work blank
+        # on canvas and absent from training.
+        self._class_name = QComboBox()
+        project_classes = [
+            str(name)
+            for name in (getattr(self._project, "class_names", None) or [])
+            if str(name).strip()
+        ]
+        self._class_name.addItems(project_classes)
+        saved_class = str(saved.get("class_name", "") or "")
+        if self._class_name.findText(saved_class) >= 0:
+            self._class_name.setCurrentText(saved_class)
+        # A project with no class list is not a state this dialog can
+        # invent a class for: disable rather than silently pick one, and
+        # `class_name()` then returns "" so the job falls back to the
+        # prompt -- the pre-fix behaviour, which at least stages something.
+        self._class_name.setEnabled(bool(project_classes))
+        self._class_name.setToolTip(
+            "The project class the staged instances will be labelled as. "
+            "This is what accept writes into the source -- not the prompt."
+        )
+        add_field(5, 0, "Assign to class", self._class_name)
+
         self._confidence = QDoubleSpinBox()
         self._confidence.setRange(0.01, 0.99)
         self._confidence.setSingleStep(0.05)
@@ -381,11 +409,20 @@ class SemanticEscalationDialog(BaseDialog):
     def prompt(self) -> str:
         return self._prompt.text().strip()
 
+    def class_name(self) -> str:
+        """The project class staged instances are labelled as.
+
+        Empty when the project declares no classes; the job then falls back
+        to the prompt, which is what pre-fix staging directories contain.
+        """
+        return self._class_name.currentText().strip()
+
     def reference_body_px(self) -> float:
         return float(self._reference_body.value())
 
     def parameters(self) -> dict:
         return {
+            "class_name": self.class_name(),
             "confidence": float(self._confidence.value()),
             "max_instances": int(self._max_instances.value()),
             "overlap": float(self._overlap.value()),

@@ -383,3 +383,54 @@ def test_a_fresh_calibration_replaces_the_band_even_if_no_point_is_chosen(
     dialog._store_calibration([fresh], None, "")
     assert dialog.parameters()["area_min_px2"] == pytest.approx(900.0)
     assert dialog.parameters()["area_max_px2"] == pytest.approx(9000.0)
+
+
+def test_dialog_offers_the_project_classes_separately_from_the_prompt(
+    qapp, available_checkpoint
+):
+    """The prompt is what the MODEL is asked to find; the class is what the
+    findings ARE. Conflating them staged the prompt as a class the project
+    had never heard of, which the overlay and the dataset builder both drop."""
+    from hydra_suite.detectkit.gui.dialogs.semantic_escalation_dialog import (
+        SemanticEscalationDialog,
+    )
+
+    project = DetectKitProject(project_dir=Path("/tmp/project"))
+    project.class_names = ["ant", "beetle"]
+    dialog = SemanticEscalationDialog([_source()], 50.0, project=project)
+
+    assert dialog._class_name.isEnabled()
+    assert [
+        dialog._class_name.itemText(i) for i in range(dialog._class_name.count())
+    ] == ["ant", "beetle"]
+    # Defaults to the first project class, NOT to the prompt.
+    assert dialog.class_name() == "ant"
+    assert dialog.parameters()["class_name"] == "ant"
+
+
+def test_dialog_restores_a_saved_class_assignment(qapp, available_checkpoint):
+    from hydra_suite.detectkit.gui.dialogs.semantic_escalation_dialog import (
+        SemanticEscalationDialog,
+    )
+
+    project = DetectKitProject(project_dir=Path("/tmp/project"))
+    project.class_names = ["ant", "beetle"]
+    project.semantic_escalation_settings = {"class_name": "beetle"}
+    dialog = SemanticEscalationDialog([_source()], 50.0, project=project)
+
+    assert dialog.class_name() == "beetle"
+
+
+def test_a_project_with_no_classes_disables_the_selector(qapp, available_checkpoint):
+    """Rather than silently inventing one: class_name() is then "" and the
+    job falls back to the prompt, the pre-split behaviour."""
+    from hydra_suite.detectkit.gui.dialogs.semantic_escalation_dialog import (
+        SemanticEscalationDialog,
+    )
+
+    project = DetectKitProject(project_dir=Path("/tmp/project"))
+    project.class_names = []
+    dialog = SemanticEscalationDialog([_source()], 50.0, project=project)
+
+    assert not dialog._class_name.isEnabled()
+    assert dialog.class_name() == ""

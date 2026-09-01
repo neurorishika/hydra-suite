@@ -78,6 +78,16 @@ class SemanticEscalationRequest:
     source_names: list[str]
     variant: str
     prompt: str
+    # The PROJECT CLASS the staged instances are, which is not the prompt.
+    # The prompt is a noun phrase chosen to make the model find things
+    # ("ant with color patch"); writing it into the staging dir's
+    # classes.txt made accept append it to the source as a NEW class the
+    # project does not have -- and both the overlay and the training
+    # dataset builder drop labels whose class is outside the project
+    # scheme, so the accepted work rendered blank and would have trained
+    # on nothing. Empty falls back to the prompt, which is what pre-fix
+    # staging directories on disk contain.
+    class_name: str = ""
     confidence: float = 0.35
     max_instances: int = 0
     reference_body_px: float = 0.0
@@ -612,7 +622,14 @@ def run_semantic_escalation(
         # cache's key set), which under cancellation or resume is NOT
         # len(images) either.
         result.frames_processed += len(cache["images"])
-        (staged_root / "classes.txt").write_text(f"{req.prompt.strip() or 'object'}\n")
+        # Deliberately NOT in `_fingerprint`: which class the instances ARE
+        # is a labelling decision, not an inference input, so changing it
+        # must not wipe a cache full of candidates. Same precedent as the
+        # area band -- a re-threshold, not a re-run. classes.txt is
+        # rewritten on every run including a resume, so the new class lands
+        # without re-inferring a single tile.
+        staged_class = req.class_name.strip() or req.prompt.strip() or "object"
+        (staged_root / "classes.txt").write_text(f"{staged_class}\n")
         src.staged_review = StagedReview(
             staged_path=str(staged_root),
             target_level=GeometryLevel.POLYGON.label,

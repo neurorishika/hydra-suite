@@ -230,8 +230,10 @@ def resolve_staged_class_ids(
     """Map staged class ids onto the source's, extending it when needed.
 
     Frame-granular ADD_NEW puts two class-id spaces in one label file for
-    the first time: staged ids index the STAGING dir's classes.txt (SAM3's
-    are its prompt's, all class 0), source ids index the source's. The old
+    the first time: staged ids index the STAGING dir's classes.txt (SAM3
+    stages a single class, id 0 -- the class assigned in the dialog, or the
+    raw prompt on a staging dir written before the class/prompt split),
+    source ids index the source's. The old
     wholesale accept dodged this by copying classes.txt over the source's,
     which is not available when only some frames are accepted.
 

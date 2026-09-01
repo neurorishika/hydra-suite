@@ -194,8 +194,9 @@ class StagedReviewProvider:
             return None
 
         h, w = ctx.size
-        # No class_id_map: staged ids index the STAGING dir's classes.txt,
-        # not the project's class list, so remapping them would mislabel.
+        # No class_id_map: staged ids index the STAGING dir's classes.txt
+        # (the assigned class, or the raw prompt on a pre-split staging
+        # dir), not the project's class list, so remapping would mislabel.
         dets = parse_obb_label(label_path, w, h)
         if not dets:
             return None
