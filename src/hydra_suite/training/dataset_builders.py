@@ -1005,6 +1005,7 @@ _ROLE_MIN_LEVEL = {
     TrainingRole.SEQ_DETECT: GeometryLevel.AABB,
     TrainingRole.SEQ_CROP_OBB: GeometryLevel.OBB,
     TrainingRole.SEQ_CROP_SEGMENT: GeometryLevel.POLYGON,
+    TrainingRole.SEMANTIC_SAM3: GeometryLevel.POLYGON,
 }
 
 

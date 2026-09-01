@@ -2258,6 +2258,26 @@ def _stream_ultralytics_output(proc, log_cb, progress_cb, should_cancel, command
     return None
 
 
+def _train_sam3_lora(
+    spec: TrainingRunSpec,
+    run_dir: str | Path,
+    *,
+    log_cb: LogCallback | None = None,
+    progress_cb: ProgressCallback | None = None,
+    should_cancel: CancelCheck | None = None,
+) -> dict:
+    """Dispatch to the SAM3 LoRA trainer (lazy import: `sam3` is training-only)."""
+    from hydra_suite.training.sam3_lora.train import train_sam3_lora
+
+    return train_sam3_lora(
+        spec,
+        run_dir,
+        log_cb=log_cb,
+        progress_cb=progress_cb,
+        should_cancel=should_cancel,
+    )
+
+
 def run_training(
     spec: TrainingRunSpec,
     run_dir: str | Path,
@@ -2293,6 +2313,15 @@ def run_training(
                 spec, custom_params=CustomCNNParams(backbone="tinyclassifier")
             )
         return _train_custom_classify(
+            spec,
+            run_dir,
+            log_cb=log_cb,
+            progress_cb=progress_cb,
+            should_cancel=should_cancel,
+        )
+
+    if spec.role is TrainingRole.SEMANTIC_SAM3:
+        return _train_sam3_lora(
             spec,
             run_dir,
             log_cb=log_cb,
