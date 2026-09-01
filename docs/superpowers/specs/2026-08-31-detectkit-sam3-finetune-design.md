@@ -467,9 +467,14 @@ escalation this project has ever run has fed SAM3 644 px tiles against a
 
 Consequences, in order of importance:
 
-1. **It degrades stock escalation today**, independent of anything here. Worth
-   measuring on its own.
-2. It makes the two stacks disagree on more than post-processing: the spike
+1. **It costs stock escalation a little — measured, not assumed.** Stock SAM3
+   over three unlabelled frames at conf >= 0.4 found 23/31/31 instances at 644
+   and 23/33/31 at 1008, with confidences rising from ~0.88-0.90 to ~0.91-0.93
+   and visibly similar masks. So this is a modest quality loss, not a
+   catastrophe; do not oversell it as the reason to act.
+2. **The sharper problem is train/serve scale mismatch**, which is what makes
+   this blocking rather than merely tidy. It makes the two stacks disagree on
+   more than post-processing: the spike
    measured at 1008 (Meta's default), the product serves at 644. A model
    finetuned at 1008 and served at 644 sees a **1.56x scale mismatch** — exactly
    the failure §2's scale-coupling rule exists to prevent, arriving through a
