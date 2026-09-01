@@ -7,10 +7,12 @@ message instead of letting ultralytics AutoUpdate pip-install packages.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from pathlib import Path
 
 import numpy as np
+import torch
 
 from hydra_suite.core.inference.masks import mask_to_contour
 from hydra_suite.core.inference.torch_device import resolve_torch_device
@@ -62,6 +64,83 @@ def predictor_overrides(
     }
 
 
+def _tensor_sha256(tensor: torch.Tensor) -> str:
+    # Same recipe as training.sam3_lora.publish._tensor_sha256: dtype-agnostic
+    # via a raw-byte view, so bf16 tensors (this repo's mixed_precision
+    # default) don't hit numpy's missing-bf16 TypeError.
+    return hashlib.sha256(
+        tensor.detach().cpu().contiguous().view(torch.uint8).numpy().tobytes()
+    ).hexdigest()
+
+
+def assert_checkpoint_loaded(
+    live_state_dict: dict,
+    meta: dict | None,
+    *,
+    imgsz: int = PREDICTOR_IMGSZ,
+) -> None:
+    """Refuse to proceed on a load that "succeeded" but changed nothing.
+
+    ultralytics' ``build_sam3.py`` loads a checkpoint with
+    ``load_state_dict(strict=False)`` and discards the return value, so a
+    checkpoint whose keys don't line up with the live model loads NOTHING
+    and reports success -- the resident weights stay stock. This guard
+    catches that (and the silent train/serve imgsz mismatch) by comparing
+    the live model's state dict against the sidecar's recorded expectations.
+
+    *meta* is ``None`` for a stock variant: it ships no sidecar and makes no
+    claim about what should be resident, so there is nothing to guard.
+    """
+    if meta is None:
+        return
+    for key in meta.get("stripped_keys", []):
+        if key not in live_state_dict:
+            raise RuntimeError(
+                f"SAM3 finetuned checkpoint failed to load: key {key!r} "
+                "recorded at publish time is absent from the live model's "
+                "state dict. ultralytics' load transform likely changed, so "
+                "the checkpoint loaded nothing and the model is stock SAM3."
+            )
+    for key, expected_fp in meta.get("tuned_fingerprints", {}).items():
+        actual_fp = _tensor_sha256(live_state_dict[key])
+        if actual_fp != expected_fp:
+            raise RuntimeError(
+                f"SAM3 finetuned checkpoint failed to load: tensor {key!r} "
+                f"has fingerprint {actual_fp}, expected {expected_fp}. The "
+                "key is present but holds different weights than the "
+                "published checkpoint -- the load likely fell back to base "
+                "weights while reporting success."
+            )
+    meta_imgsz = meta.get("imgsz")
+    if meta_imgsz is not None and meta_imgsz != imgsz:
+        raise RuntimeError(
+            f"SAM3 finetuned checkpoint was trained at imgsz={meta_imgsz} "
+            f"but is being served at imgsz={imgsz}. This loads perfectly "
+            "cleanly -- keys and tensors all match -- so nothing else in "
+            "the system would ever notice the train/serve scale mismatch. "
+            "Refusing rather than silently rescaling."
+        )
+
+
+def _sidecar_for_checkpoint(checkpoint: Path) -> dict | None:
+    """Read the ``<artifact>.sam3_meta.json`` sidecar next to *checkpoint*.
+
+    Mirrors the naming convention ``training.sam3_lora.publish`` writes
+    (``artifact_path.with_name(artifact_path.name + ".sam3_meta.json")``)
+    without importing that module -- this package must stay training-free.
+    """
+    import json
+
+    sidecar_path = checkpoint.with_name(checkpoint.name + ".sam3_meta.json")
+    if not sidecar_path.exists():
+        return None
+    try:
+        loaded = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return loaded if isinstance(loaded, dict) else None
+
+
 class Sam3SemanticLabeler:
     """Text-prompted instance segmentation via SAM3."""
 
@@ -82,6 +161,7 @@ class Sam3SemanticLabeler:
         allow_download: bool = True,
         cache_dir: Path | None = None,
         confidence_floor: float = DEFAULT_CONFIDENCE_FLOOR,
+        checkpoint: Path | str | None = None,
     ) -> "Sam3SemanticLabeler":
         """Build a labeler whose predictor keeps everything at or above
         *confidence_floor*.
@@ -90,16 +170,26 @@ class Sam3SemanticLabeler:
         what the candidate cache can ever contain, so it must be set to the
         lowest threshold any later offline re-threshold or calibration sweep
         will ask for.
+
+        *checkpoint*, when given, names a specific artifact to load -- a
+        published finetuned model's path, resolved by the caller via
+        ``resolve_checkpoint``. A ``None`` checkpoint reproduces today's
+        stock-variant behaviour exactly.
         """
-        avail = probe_availability(variant, cache_dir)
-        # A merely-undownloaded checkpoint is tolerated (ensure_checkpoint
-        # below fetches it); anything else is fatal. Keyed on the structured
-        # flag, never on a substring of the human-readable reason.
-        if not avail.usable and not avail.checkpoint_missing:
-            raise RuntimeError(f"SAM3 is unavailable: {avail.reason}")
-        ckpt = ensure_checkpoint(
-            variant, allow_download=allow_download, cache_dir=cache_dir
-        )
+        if checkpoint is None:
+            avail = probe_availability(variant, cache_dir)
+            # A merely-undownloaded checkpoint is tolerated (ensure_checkpoint
+            # below fetches it); anything else is fatal. Keyed on the
+            # structured flag, never on a substring of the human-readable
+            # reason.
+            if not avail.usable and not avail.checkpoint_missing:
+                raise RuntimeError(f"SAM3 is unavailable: {avail.reason}")
+            ckpt = ensure_checkpoint(
+                variant, allow_download=allow_download, cache_dir=cache_dir
+            )
+        else:
+            ckpt = Path(checkpoint)
+
         # Lazy import: only paid when semantic escalation actually runs.
         from ultralytics.models.sam import SAM3SemanticPredictor
 
@@ -107,6 +197,13 @@ class Sam3SemanticLabeler:
         predictor = SAM3SemanticPredictor(
             overrides=predictor_overrides(ckpt, dev, confidence_floor)
         )
+        if checkpoint is not None:
+            # Force eager model construction so there is a live state dict
+            # to guard BEFORE the first inference call, not after.
+            predictor.setup_model(model=str(ckpt))
+            meta = _sidecar_for_checkpoint(ckpt)
+            live_state_dict = predictor.model.state_dict()
+            assert_checkpoint_loaded(live_state_dict, meta, imgsz=PREDICTOR_IMGSZ)
         return cls(predictor, dev)
 
     def label_image(
