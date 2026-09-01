@@ -125,6 +125,17 @@ def assert_checkpoint_loaded(
                 "published checkpoint -- the load likely fell back to base "
                 "weights while reporting success."
             )
+    if "imgsz" in meta and meta["imgsz"] is None:
+        # An explicit ``null`` is not "absent" -- publish.py always writes a
+        # concrete imgsz, so a null here means the sidecar was corrupted or
+        # hand-edited. Silently skipping the comparison would defeat the
+        # very guard this field exists for.
+        raise RuntimeError(
+            "SAM3 finetuned checkpoint sidecar has imgsz=null. A published "
+            "artifact must record the training imgsz to be guarded against "
+            "a silent train/serve scale mismatch -- refusing rather than "
+            "skipping the check."
+        )
     meta_imgsz = meta.get("imgsz")
     if meta_imgsz is not None and meta_imgsz != imgsz:
         # This can only fire if PREDICTOR_IMGSZ changes between publish time

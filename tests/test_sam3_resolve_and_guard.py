@@ -98,10 +98,18 @@ def test_guard_against_a_real_published_sidecar(tmp_path):
     from hydra_suite.training.contracts import Sam3LoraParams
     from hydra_suite.training.sam3_lora.publish import publish_sam3_model
 
-    base = {"detector.qkv.weight": torch.randn(4, 4)}
+    # bf16 (not float32): both `_tensor_sha256` implementations normalise
+    # with `.float()` before hashing. With float32 fixtures that call is a
+    # no-op, so a dropped `.float()` on either side of the duplicated
+    # implementation would still agree by accident. bf16 fixtures make a
+    # dropped `.float()` change the hashed byte length and fail the assert.
+    base = {"detector.qkv.weight": torch.randn(4, 4, dtype=torch.bfloat16)}
     torch.save(base, tmp_path / "base.pt")
     torch.save(
-        {"qkv.lora_A": torch.randn(2, 4), "qkv.lora_B": torch.randn(4, 2)},
+        {
+            "qkv.lora_A": torch.randn(2, 4, dtype=torch.bfloat16),
+            "qkv.lora_B": torch.randn(4, 2, dtype=torch.bfloat16),
+        },
         tmp_path / "adapters.pt",
     )
     _, art = publish_sam3_model(
