@@ -52,8 +52,66 @@ def test_unavailable_backend_disables_with_a_reason(qapp, monkeypatch):
     monkeypatch.setattr(
         mod,
         "probe_sam3_training_availability",
-        lambda: mod.Sam3TrainingAvailability(False, "package 'sam3' is missing"),
+        lambda **kwargs: mod.Sam3TrainingAvailability(
+            False, "package 'sam3' is missing"
+        ),
     )
     panel = mod.Sam3TrainingPanel()
+    # The probe is never spawned at construction time (it's a subprocess and
+    # must not block the GUI thread on every panel creation) -- only on an
+    # explicit check.
+    assert panel.unavailable_reason() == ""
+    assert panel.isEnabled()
+
+    panel.check_availability()
     assert "sam3" in panel.unavailable_reason()
-    assert not panel.isEnabled()
+    # The body (hyperparameters, ack) is disabled, but the env row itself
+    # stays interactive so the user can fix the env name and re-check.
+    assert not panel._body.isEnabled()
+    assert panel.env_edit.isEnabled()
+    assert panel.isEnabled()
+
+
+def test_available_backend_enables_body(qapp, monkeypatch):
+    import hydra_suite.detectkit.gui.panels.sam3_training_panel as mod
+
+    monkeypatch.setattr(
+        mod,
+        "probe_sam3_training_availability",
+        lambda **kwargs: mod.Sam3TrainingAvailability(True),
+    )
+    panel = mod.Sam3TrainingPanel()
+    panel.check_availability()
+    assert panel.unavailable_reason() == ""
+    assert panel._body.isEnabled()
+
+
+def test_env_name_round_trips_through_params(qapp):
+    from hydra_suite.detectkit.gui.panels.sam3_training_panel import Sam3TrainingPanel
+    from hydra_suite.training.contracts import Sam3LoraParams
+
+    panel = Sam3TrainingPanel()
+    assert panel.params().env_name == "hydra-sam3"
+
+    panel.env_edit.setText("my-custom-env")
+    assert panel.params().env_name == "my-custom-env"
+
+    panel.set_params(Sam3LoraParams(env_name="another-env"))
+    assert panel.env_edit.text() == "another-env"
+    assert panel.params().env_name == "another-env"
+
+
+def test_check_availability_uses_the_env_edit_value(qapp, monkeypatch):
+    import hydra_suite.detectkit.gui.panels.sam3_training_panel as mod
+
+    seen = {}
+
+    def fake_probe(env=None, timeout=None, cache_dir=None):
+        seen["env"] = env
+        return mod.Sam3TrainingAvailability(True)
+
+    monkeypatch.setattr(mod, "probe_sam3_training_availability", fake_probe)
+    panel = mod.Sam3TrainingPanel()
+    panel.env_edit.setText("hydra-sam3-custom")
+    panel.check_availability()
+    assert seen["env"] == "hydra-sam3-custom"

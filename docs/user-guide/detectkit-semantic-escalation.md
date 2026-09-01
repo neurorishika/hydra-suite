@@ -211,55 +211,94 @@ lives in its own "SAM3" tab, which only appears once Semantic mode is
 selected — the mode also force-selects the `segment` task, since a SAM3
 checkpoint is only ever consumed as a segmentation model.
 
-### Installing the training dependencies
+### Three environments, not one
 
-Finetuning needs a larger, CUDA-only dependency stack. **Escalation
-(inference) needs none of it** — that is the entire point of publishing a
-merged checkpoint rather than shipping the training code path to every
-machine that just wants to run segmentation.
+Meta's `sam3` pins `numpy<2`, and DetectKit's own runtime (`hydra-mps` /
+`hydra-cuda`) needs numpy 2.x — those two dependency sets cannot coexist in
+one Python environment. Rather than fight that, SAM3 training runs as a
+**subprocess in a dedicated sidecar conda environment**, the same pattern
+already used for the SLEAP integration:
+
+- **`hydra-mps` / `hydra-cuda`** — the environment DetectKit itself runs
+  in. It never installs `sam3` or any of its training dependencies, and its
+  numpy version is untouched by anything below.
+- **`hydra-sam3`** (the sidecar) — a separate conda env that owns `sam3`,
+  its `numpy<2` pin, and the training loop. The GUI launches training in
+  this env as a child process (`conda run -n hydra-sam3 ...`) and streams
+  its progress back; it never imports `sam3` itself.
+- **Neither** — escalation (inference with a published checkpoint) needs
+  none of this. That is the whole point of publishing a merged checkpoint
+  rather than shipping the training code path to every machine that just
+  wants to run segmentation.
+
+The SAM3 training tab has an env row (default `hydra-sam3`) where you name
+which conda env to launch training in, and a "Check" button that probes
+whether that env can actually import what training needs — it reports the
+child's real failure text (e.g. a missing package name) rather than a
+generic "unavailable", so you know exactly what to fix. The probe spawns a
+subprocess and is not run automatically on every keystroke; it runs once
+when the tab is first shown and whenever you click "Check".
+
+#### Building the `hydra-sam3` env
+
+This recipe is verified on macOS and mirrors the CUDA-box setup (swap the
+`torch`/`torchvision` install line for a CUDA wheel there):
 
 ```bash
-pip install 'hydra-suite[sam3,sam3-train]'
-pip install git+https://github.com/ultralytics/CLIP.git
-pip install git+https://github.com/facebookresearch/sam3.git
+conda create -n hydra-sam3 python=3.12 'numpy<2'
+conda run -n hydra-sam3 pip install torch torchvision
+conda run -n hydra-sam3 pip install 'setuptools<81'
+conda run -n hydra-sam3 pip install einops torchmetrics scipy decord iopath \
+    opencv-python-headless pillow platformdirs pandas numba
+conda run -n hydra-sam3 pip install git+https://github.com/facebookresearch/sam3.git
+conda run -n hydra-sam3 pip install -e /path/to/hydra-suite
 ```
 
-The `sam3` package itself, like `clip` above, is a git dependency and
-cannot be listed in a published PyPI extra (the same PEP 508 metadata
-constraint documented for `clip` earlier on this page), so it is always a
-manual install. The `sam3-train` extra covers everything else training
-needs beyond the `sam3` extra: `torchmetrics`, `scipy`, `einops`,
-`decord`, `iopath`, and the `numpy<2` pin that `sam3` itself requires.
+Two of these pins are not obvious, and were found the hard way:
 
-`iopath` is listed even though `sam3` declares it, because a *source
-checkout* of `sam3` placed on `PYTHONPATH` -- rather than a `pip install`
-of it -- never resolves that dependency, and the failure surfaces only
-once training reaches `sam3.train.loss`, as a bare `ModuleNotFoundError`.
+- **`setuptools<81`** — setuptools 81 removed `pkg_resources`, which
+  `sam3/model_builder.py:8` imports at module scope. Without this pin,
+  `import sam3` fails immediately with `ModuleNotFoundError:
+  No module named 'pkg_resources'`, regardless of what else is installed.
+- **`pandas`/`numba`** — training's in-env CLI runs as
+  `python -m hydra_suite.training.sam3_lora.cli`, and importing
+  `hydra_suite` this way eagerly imports `hydra_suite.training.service`,
+  which pulls in numba, pandas, and cv2 even though the CLI itself needs
+  none of them for the training loop. The sidecar env just needs to
+  actually have them installed.
 
-!!! warning "Install the training extra into a dedicated environment"
+If you run any of the `conda run` commands above by hand (rather than
+through the DetectKit GUI, which sets this itself), also set
+**`KMP_DUPLICATE_LIB_OK=TRUE`** in the shell first — without it, a bare
+`import torch` aborts with `OMP Error #15` (double-linked libomp), which
+looks like a torch install problem but isn't one.
 
-    `numpy<2` is a hard constraint of `sam3`, and most current
-    environments carry numpy 2.x -- the `hydra-mps` dev environment on a
-    workstation, for example, ships 2.3.5. Running
-    `pip install 'hydra-suite[sam3-train]'` there will **downgrade numpy
-    across the whole environment**, which can break unrelated packages
-    compiled against the 2.x ABI.
+### Platform: a runtime probe, not a hardcoded gate
 
-    Training is CUDA-only and never runs on a workstation, so the extra
-    has no reason to be installed there. Put it in a dedicated environment
-    on the training machine (e.g. a `hydra-sam3` conda env) rather than in
-    a shared or general-purpose one. Inference needs none of these
-    packages -- that is the point of publishing a merged checkpoint.
+Training is gated on whether the `hydra-sam3` env can actually import
+`sam3` — checked live by the probe above, never hardcoded to a platform.
 
-### CUDA only, and not a small GPU
+- **CUDA works today.** A `hydra-sam3`-style env on a CUDA box (e.g. an
+  RTX 6000 Ada, 48 GB) imports `sam3` cleanly and trains end to end.
+- **macOS (MPS) is currently blocked, but by packaging, not memory.**
+  `sam3/__init__.py` reaches `import triton` at module scope, via the
+  video-tracker import path (`model_builder.py` →
+  `sam1_task_predictor.py` → `sam3_tracker_base.py` →
+  `sam3_tracker_utils.py` → `edt.py`). `triton` ships no macOS wheel, so
+  `import sam3` fails on any Mac today, even though the kernel it guards
+  belongs to SAM3's video tracker and the image-training path never calls
+  it. This is **not** a memory problem — Apple unified memory (up to
+  512 GB, 128 GB on a typical workstation) comfortably exceeds the ~29 GB
+  the training spike measured at peak. If that `triton` import becomes
+  optional upstream, MPS training works with no change to anything in
+  DetectKit; the probe would simply start reporting the env usable.
 
-SAM3 LoRA training runs on CUDA exclusively — there is no CPU or MPS path.
-Preflight checks free VRAM before touching a weight and refuses the run
-below **32 GB free**, with a further warning below 40 GB. That floor sits
-above the ~29 GB the training spike actually measured at batch size 1: the
-margin exists so the same GPU load that OOMs a real run also fails
-preflight, in milliseconds, rather than after an hour of GPU time. Point
-this role at the CUDA box, not a laptop.
+Preflight also checks free VRAM/memory before touching a weight and
+refuses the run below **32 GB free**, with a further warning below 40 GB.
+That floor sits above the ~29 GB the training spike actually measured at
+batch size 1: the margin exists so the same GPU load that OOMs a real run
+also fails preflight, in milliseconds, rather than after an hour of
+compute time.
 
 ### The label-quality acknowledgement
 

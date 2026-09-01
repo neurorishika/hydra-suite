@@ -18,9 +18,11 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QPlainTextEdit,
+    QPushButton,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -31,9 +33,16 @@ from hydra_suite.training.sam3_lora.availability import (
     Sam3TrainingAvailability,
     probe_sam3_training_availability,
 )
+from hydra_suite.training.sam3_lora.env import DEFAULT_SAM3_ENV
 
 _GEOMETRY_MODES = ("auto_object", "auto_model", "custom")
 _PRECISIONS = ("bf16", "fp16", "fp32")
+
+# Kept short: the probe spawns a `conda run` subprocess, and the panel must
+# never block the GUI thread for the probe's full default timeout on every
+# construction/show. Users pointed at a genuinely slow/hanging env can still
+# hit "Check" and wait -- the button has no shortened timeout.
+_AUTO_PROBE_TIMEOUT_S = 5.0
 
 
 class Sam3TrainingPanel(QWidget):
@@ -42,17 +51,71 @@ class Sam3TrainingPanel(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._unavailable_reason = ""
+        self._probed_once = False
         self._build_ui()
 
-        availability: Sam3TrainingAvailability = probe_sam3_training_availability()
-        if not availability.usable:
+    # -- Qt lifecycle ------------------------------------------------------
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().showEvent(event)
+        if not self._probed_once:
+            self.check_availability()
+
+    # -- Availability probing -----------------------------------------------
+
+    def check_availability(self) -> Sam3TrainingAvailability:
+        """Probe the sidecar env named in `self.env_edit` and reflect the result.
+
+        Spawns a `conda run` subprocess -- never called on every keystroke or
+        during widget construction; only on first show or an explicit "Check"
+        click, with a short timeout so a broken env cannot hang the GUI for
+        long.
+        """
+        self._probed_once = True
+        env_name = self.env_edit.text().strip() or DEFAULT_SAM3_ENV
+        self.env_status_label.setText(f"Checking {env_name!r}...")
+        availability: Sam3TrainingAvailability = probe_sam3_training_availability(
+            env=env_name, timeout=_AUTO_PROBE_TIMEOUT_S
+        )
+        if availability.usable:
+            self._unavailable_reason = ""
+            self.env_status_label.setText(f"{env_name!r} is usable.")
+            self._body.setEnabled(True)
+        else:
             self._unavailable_reason = availability.reason
-            self.setEnabled(False)
+            self.env_status_label.setText(
+                f"{env_name!r} is unusable: {availability.reason}"
+            )
+            self._body.setEnabled(False)
+        return availability
 
     # -- UI construction -------------------------------------------------
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
+
+        self.env_group = QGroupBox("Sidecar environment")
+        env_layout = QHBoxLayout(self.env_group)
+        env_layout.addWidget(QLabel("Conda env"))
+        self.env_edit = QLineEdit(DEFAULT_SAM3_ENV)
+        env_layout.addWidget(self.env_edit)
+        self.btn_check_env = QPushButton("Check")
+        self.btn_check_env.clicked.connect(self.check_availability)
+        env_layout.addWidget(self.btn_check_env)
+        layout.addWidget(self.env_group)
+
+        self.env_status_label = QLabel("Not checked yet.")
+        self.env_status_label.setWordWrap(True)
+        layout.addWidget(self.env_status_label)
+
+        # Everything below is disabled with a reason when the sidecar env is
+        # unusable; the env row above stays interactive so the user can fix
+        # the env name and re-check without recreating the panel.
+        self._body = QWidget()
+        layout.addWidget(self._body)
+        body_layout = QVBoxLayout(self._body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        layout = body_layout
 
         host_notice = QLabel(
             "SAM3 LoRA finetuning requires a CUDA host with a large GPU "
@@ -206,6 +269,7 @@ class Sam3TrainingPanel(QWidget):
             tile_overlap=self.tile_overlap_spin.value(),
             keep_empty_tiles=self.chk_keep_empty_tiles.isChecked(),
             label_quality_acknowledged=self.chk_ack.isChecked(),
+            env_name=self.env_edit.text().strip(),
         )
 
     def set_params(self, p: Sam3LoraParams) -> None:
@@ -237,6 +301,7 @@ class Sam3TrainingPanel(QWidget):
         self.tile_overlap_spin.setValue(p.tile_overlap)
         self.chk_keep_empty_tiles.setChecked(p.keep_empty_tiles)
         self.chk_ack.setChecked(p.label_quality_acknowledged)
+        self.env_edit.setText(p.env_name or DEFAULT_SAM3_ENV)
 
     def acknowledged(self) -> bool:
         return self.chk_ack.isChecked()

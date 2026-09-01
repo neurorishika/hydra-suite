@@ -172,6 +172,10 @@ class Sam3LoraParams:
     # learns them -- including its own accepted output. Preflight refuses
     # without it; the panel writes it; the dialog gates the run on it.
     label_quality_acknowledged: bool = False
+    # Which sidecar conda env to launch training in. Empty resolves to
+    # `resolve_sam3_env`'s default (`DEFAULT_SAM3_ENV`, or `HYDRA_SAM3_ENV`);
+    # travels with the spec so a run's env choice is recorded.
+    env_name: str = ""
 
 
 @dataclass(slots=True)
