@@ -98,6 +98,19 @@ sam3 = [
     "ultralytics>=8.4.34",
     "ftfy",
 ]
+# SAM3 LoRA finetuning (training, not inference -- see the sam3 extra above
+# for that). Also needs `torch` (already a core dependency), the `sam3`
+# package itself (a git dependency, so it cannot be listed here -- same PEP
+# 508 constraint the sam3 extra above documents for `clip`), and CUDA at
+# runtime; this extra provides no path around either requirement. Must stay
+# in sync with `TRAINING_PACKAGES` in
+# hydra_suite/training/sam3_lora/availability.py.
+sam3-train = [
+    "torchmetrics",
+    "scipy",
+    "einops",
+    "decord",
+]
 dev = [
     "pytest>=7.0",
     "pytest-cov",

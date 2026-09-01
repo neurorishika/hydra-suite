@@ -1,5 +1,10 @@
 # DetectKit: Semantic Escalation (SAM3)
 
+> This page also documents SAM3 LoRA **finetuning** (below), which produces
+> the checkpoints this page's escalation dialog can select from. Escalation
+> itself needs none of the packages the finetuning section names — only the
+> `sam3` extra.
+
 DetectKit's **Escalation** group in the Tools panel offers two distinct
 operations. Both live under `detectkit`, in the same "Escalation" section.
 
@@ -191,3 +196,113 @@ automatically. This is precisely why acceptance produces a reviewable
 sibling source rather than a silent merge: review is where you decide,
 for your dataset, which convention should stand — or whether the two need
 to be visually reconciled before you train on the combined set.
+
+## Finetuning your own SAM3 checkpoint
+
+The stock `sam3` checkpoint is a general-purpose model. If your animals or
+imaging conditions are far from what it saw in pretraining, DetectKit can
+finetune a SAM3 LoRA adapter on your own polygon labels and publish a
+merged checkpoint that then shows up as another option in this page's
+escalation dialog.
+
+This is a **DetectKit training role** ("Semantic" mode, in the training
+dialog's mode selector), not part of the escalation workflow above. It
+lives in its own "SAM3" tab, which only appears once Semantic mode is
+selected — the mode also force-selects the `segment` task, since a SAM3
+checkpoint is only ever consumed as a segmentation model.
+
+### Installing the training dependencies
+
+Finetuning needs a larger, CUDA-only dependency stack. **Escalation
+(inference) needs none of it** — that is the entire point of publishing a
+merged checkpoint rather than shipping the training code path to every
+machine that just wants to run segmentation.
+
+```bash
+pip install 'hydra-suite[sam3,sam3-train]'
+pip install git+https://github.com/ultralytics/CLIP.git
+pip install git+https://github.com/facebookresearch/sam3.git
+```
+
+The `sam3` package itself, like `clip` above, is a git dependency and
+cannot be listed in a published PyPI extra (the same PEP 508 metadata
+constraint documented for `clip` earlier on this page), so it is always a
+manual install. The `sam3-train` extra covers everything else training
+needs beyond the `sam3` extra: `torchmetrics`, `scipy`, `einops`, and
+`decord`.
+
+### CUDA only, and not a small GPU
+
+SAM3 LoRA training runs on CUDA exclusively — there is no CPU or MPS path.
+Preflight checks free VRAM before touching a weight and refuses the run
+below **32 GB free**, with a further warning below 40 GB. That floor sits
+above the ~29 GB the training spike actually measured at batch size 1: the
+margin exists so the same GPU load that OOMs a real run also fails
+preflight, in milliseconds, rather than after an hour of GPU time. Point
+this role at the CUDA box, not a laptop.
+
+### The label-quality acknowledgement
+
+Training uses **every label** on the source you point it at — there is no
+provenance filter that separates labels you drew by hand from labels a
+prior semantic-escalation run produced and you accepted. That is a
+deliberate simplification, not an oversight: provenance does not survive
+review in a form training could reliably filter on. Because of that, the
+SAM3 tab has a checkbox — unchecked by default — asking you to confirm the
+source's labels are good enough to train on, including any SAM3 output
+already folded in. Preflight refuses to start the run without it.
+
+### Dataset and tiling
+
+Training builds a COCO instance-segmentation dataset from the source's
+polygon labels, tiled with the same shared tile-geometry helpers
+(`utils/slice_geometry`) that sliced training and sliced inference already
+use elsewhere in DetectKit — so a training tile and an inference tile are
+built the same way. Polygon labels are the only geometry level training can
+use; AABB/OBB-only sources need geometry escalation first.
+
+### Defaults
+
+The panel's defaults come from a training spike, not from taste — see the
+comments in `Sam3LoraParams` if you want the exact rationale per value:
+
+| Setting | Default |
+|---|---|
+| LoRA rank / alpha | 16 / 32 |
+| Learning rate | 5e-5 |
+| Epochs | 10 |
+| Batch size / grad-accum | 1 / 8 (effective batch 8) |
+| Mixed precision | bf16 |
+| Input size | 1008 (SAM3's architecture size; not configurable) |
+
+On a small internal check — 3 leave-one-frame-out folds over 3 labelled
+frames on one dataset — AP75 rose from roughly 0.000 (stock checkpoint) to
+roughly 0.624 (finetuned). That is a small-sample result on a single
+dataset, not a general performance claim; treat it as evidence the
+approach works at all, not as a number to expect on your own data.
+
+### Checkpoint selection is always "last", never "best"
+
+On that same spike, validation loss was **anti-correlated** with held-out
+AP: the fold with the worst validation loss had the best held-out AP75.
+Training therefore always keeps the **last** epoch's checkpoint. It still
+computes and reports validation-loss statistics during the run, because
+they are informative to watch, but nothing in the pipeline uses them to
+pick which weights to keep. Do not "fix" this by wiring in best-checkpoint
+selection later without re-running the measurement that ruled it out.
+
+### Publishing
+
+A finished run publishes a **merged, full checkpoint** — the LoRA adapter
+folded into the base weights, not the adapter alone — to
+`get_models_dir() / "sam3_finetuned"`, alongside a JSON sidecar recording
+the run's parameters and dataset fingerprint, and registers it in the
+model registry. From then on, the escalation dialog's model selector
+offers it next to the stock `sam3` checkpoint.
+
+A load guard (`assert_checkpoint_loaded`) checks that a selected checkpoint
+actually loaded before it is used for inference. This exists because
+ultralytics loads state dicts with `load_state_dict(strict=False)` and
+discards the result it returns — without an explicit check, a checkpoint
+that fails to match the model's shape would silently fall back to serving
+stock weights instead of raising.
