@@ -36,6 +36,8 @@ from hydra_suite.training.geometry_levels import GeometryLevel
 from hydra_suite.widgets.dialogs import BaseDialog
 from hydra_suite.widgets.workers import BaseWorker
 
+from ..panels.sam3_training_panel import Sam3TrainingPanel
+
 if TYPE_CHECKING:
     from ..models import DetectKitProject
 
@@ -59,6 +61,7 @@ _SELECTION_ROLE_MAP: dict[tuple[str, str], tuple[str, ...]] = {
     ("sequential", "obb"): ("seq_detect", "seq_crop_obb"),
     ("sequential", "detect"): ("seq_detect",),
     ("sequential", "segment"): ("seq_detect", "seq_crop_segment"),
+    ("semantic", "segment"): ("semantic_sam3",),
 }
 
 _SELECTION_DESCRIPTIONS: dict[tuple[str, str], str] = {
@@ -77,6 +80,9 @@ _SELECTION_DESCRIPTIONS: dict[tuple[str, str], str] = {
         "sequential",
         "segment",
     ): "Train a full-image detector followed by a crop-focused segmentation model.",
+    ("semantic", "segment"): (
+        "Finetune SAM3 on this source's polygons (CUDA host, ~32 GB)."
+    ),
 }
 
 
@@ -219,6 +225,11 @@ class TrainingDialog(BaseDialog):
         self.training_tabs = QTabWidget()
         self.training_tabs.addTab(self._build_overview_tab(), "Overview")
         self.training_tabs.addTab(self._build_training_tab(), "Advanced")
+        self.sam3_panel = Sam3TrainingPanel()
+        self._sam3_tab_index = self.training_tabs.addTab(self.sam3_panel, "SAM3")
+        self.training_tabs.setTabVisible(
+            self._sam3_tab_index, self._selected_mode() == "semantic"
+        )
         layout.addWidget(self.training_tabs, 1)
 
         layout.addWidget(self._build_run_group(), 0)
@@ -499,6 +510,7 @@ QTabBar::tab:selected {
         self.mode_combo = QComboBox()
         self.mode_combo.addItem("Direct", "direct")
         self.mode_combo.addItem("Sequential", "sequential")
+        self.mode_combo.addItem("Semantic", "semantic")
         self.mode_combo.setMinimumWidth(150)
         layout.addWidget(QLabel("Style"), 1, 0)
         layout.addWidget(self.mode_combo, 1, 1)
@@ -587,6 +599,8 @@ QTabBar::tab:selected {
             selected.append("seq_crop_obb")
         if self.chk_role_seq_crop_segment.isChecked():
             selected.append("seq_crop_segment")
+        if self.chk_semantic_sam3.isChecked():
+            selected.append("semantic_sam3")
         return selected
 
     @staticmethod
@@ -672,6 +686,7 @@ QTabBar::tab:selected {
         self.chk_role_seq_detect = QCheckBox("seq_detect")
         self.chk_role_seq_crop_obb = QCheckBox("seq_crop_obb")
         self.chk_role_seq_crop_segment = QCheckBox("seq_crop_segment")
+        self.chk_semantic_sam3 = QCheckBox("semantic_sam3")
 
     # --- 2. Config ---
 
@@ -1351,6 +1366,7 @@ QTabBar::tab:selected {
             "seq_detect": self.chk_role_seq_detect,
             "seq_crop_obb": self.chk_role_seq_crop_obb,
             "seq_crop_segment": self.chk_role_seq_crop_segment,
+            "semantic_sam3": self.chk_semantic_sam3,
         }
 
     def _update_advanced_role_controls(self) -> None:
@@ -1445,11 +1461,23 @@ QTabBar::tab:selected {
             model.item(index).setEnabled(highest >= task_requirements[task])
 
     def _on_training_selection_changed(self, *_args) -> None:
+        # "semantic" mode only ever pairs with the "segment" task -- force it
+        # so the plan key is always a valid _SELECTION_ROLE_MAP entry and the
+        # unguarded subscript below can never KeyError.
+        if self._selected_mode() == "semantic" and self._selected_task() != "segment":
+            self.task_combo.blockSignals(True)
+            self._set_combo_data(self.task_combo, "segment")
+            self.task_combo.blockSignals(False)
+
         self._apply_selection_roles()
         self.selection_description.setText(
             _SELECTION_DESCRIPTIONS[self._selected_plan_key()]
         )
         self._update_advanced_role_controls()
+        if hasattr(self, "sam3_panel"):
+            self.training_tabs.setTabVisible(
+                self._sam3_tab_index, self._selected_mode() == "semantic"
+            )
         self._refresh_summary()
         self._mark_dataset_fit_dirty()
 
@@ -1943,7 +1971,34 @@ QTabBar::tab:selected {
             roles.append(TrainingRole.SEQ_CROP_OBB)
         if self.chk_role_seq_crop_segment.isChecked():
             roles.append(TrainingRole.SEQ_CROP_SEGMENT)
+        if self.chk_semantic_sam3.isChecked():
+            roles.append(TrainingRole.SEMANTIC_SAM3)
         return roles
+
+    @staticmethod
+    def _sam3_spec_for(source_path, params, derived_dir, seed):
+        """One raw source, no merge. Concept training is per-source."""
+        from hydra_suite.training import (
+            SourceDataset,
+            TrainingHyperParams,
+            TrainingRole,
+            TrainingRunSpec,
+        )
+
+        if not params.label_quality_acknowledged:
+            raise ValueError(
+                "You must acknowledge the label-quality warning before "
+                "training: SAM3 learns any systematic error in these labels."
+            )
+        return TrainingRunSpec(
+            role=TrainingRole.SEMANTIC_SAM3,
+            source_datasets=[SourceDataset(path=str(source_path), level="polygon")],
+            derived_dataset_dir=str(derived_dir),
+            base_model="sam3",
+            hyperparams=TrainingHyperParams(epochs=params.epochs),
+            seed=seed,
+            sam3_params=params,
+        )
 
     def _collect_sources(self) -> list:
         try:
@@ -2059,6 +2114,38 @@ QTabBar::tab:selected {
             merged_by_level = {}
 
             for role in roles:
+                if role is TrainingRole.SEMANTIC_SAM3:
+                    # Concept training is per-source: skip the merge entirely
+                    # and derive one dataset per raw source (design breakage
+                    # row 5).
+                    sam3_params = self.sam3_panel.params()
+                    if not sam3_params.label_quality_acknowledged:
+                        QMessageBox.warning(
+                            self,
+                            "Label Quality",
+                            "Acknowledge the label-quality warning in the "
+                            "SAM3 tab before building this role's dataset.",
+                        )
+                        return False
+                    built_dirs = []
+                    for src in sources:
+                        build = orchestrator.build_role_dataset(
+                            role,
+                            src.path,
+                            sam3_params=sam3_params,
+                            seed=self.spin_seed.value(),
+                            split=split,
+                        )
+                        built_dirs.append(build.dataset_dir)
+                        self._append_log(
+                            f"Prepared [{role.value}] dataset from {src.path}: "
+                            f"{build.dataset_dir}"
+                        )
+                    self.role_dataset_dirs[role.value] = (
+                        built_dirs[-1] if built_dirs else ""
+                    )
+                    continue
+
                 required_level = role_min_level(role)
                 merged = merged_by_level.get(required_level)
                 if merged is None:

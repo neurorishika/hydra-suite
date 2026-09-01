@@ -100,7 +100,8 @@ def test_training_dialog_has_overview_tabs(qapp, tmp_path):
 
     dlg = TrainingDialog(_make_proj(tmp_path))
     assert hasattr(dlg, "training_tabs")
-    assert dlg.training_tabs.count() == 2
+    # Overview, Advanced, and the SAM3 finetuning tab.
+    assert dlg.training_tabs.count() == 3
 
 
 def test_training_dialog_uses_advanced_tab_label(qapp, tmp_path):
@@ -143,7 +144,8 @@ def test_training_dialog_has_two_simple_plan_selectors(qapp, tmp_path):
     dlg = TrainingDialog(_make_proj(tmp_path))
     assert hasattr(dlg, "mode_combo")
     assert hasattr(dlg, "task_combo")
-    assert dlg.mode_combo.count() == 2
+    # "Direct", "Sequential", and "Semantic" (SAM3 finetuning).
+    assert dlg.mode_combo.count() == 3
     assert dlg.task_combo.count() == 3
 
 
