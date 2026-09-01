@@ -77,3 +77,83 @@ def test_selecting_model_without_sidecar_is_noop(tmp_path, monkeypatch):
     assert panel.chk_slice_enabled.isChecked() == enabled_before
     assert mw.advanced_config == adv_before
     mw.close()
+
+
+def test_selecting_profile_applies_complete_calibrated_settings(tmp_path, monkeypatch):
+    panel, mw, model_path = _make_panel_with_sidecar(tmp_path, monkeypatch)
+    (model_path.parent / (model_path.name + ".slice_meta.json")).write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "training_geometry": {"geometry_mode": "auto_model"},
+                "primary_profile_id": "balanced",
+                "profiles": [
+                    {
+                        "id": "balanced",
+                        "name": "Balanced",
+                        "settings": {
+                            "geometry_mode": "auto_object",
+                            "object_tile_fraction": 0.4,
+                            "overlap": 0.25,
+                            "trained_body_px": 75,
+                            "confidence_threshold": 0.3,
+                        },
+                    },
+                    {
+                        "id": "fast",
+                        "name": "Fast scan",
+                        "settings": {
+                            "geometry_mode": "custom",
+                            "slice_width": 1024,
+                            "slice_height": 800,
+                            "overlap": 0.1,
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    panel.apply_slice_meta_for_model(str(model_path))
+
+    assert panel.combo_slice_profile.currentText() == "Balanced"
+    assert mw.advanced_config["slice_profile_id"] == "balanced"
+    assert panel.spin_yolo_confidence.value() == 0.3
+    fast = panel.combo_slice_profile.findData("fast")
+    panel.combo_slice_profile.setCurrentIndex(fast)
+    assert panel.combo_slice_geometry.currentText() == "custom"
+    assert panel.spin_slice_tile_w.value() == 1024
+    assert panel.spin_slice_tile_h.value() == 800
+    assert mw.advanced_config["slice_profile_id"] == "fast"
+    mw.close()
+
+
+def test_editing_profile_settings_marks_custom_without_writing_model(
+    tmp_path, monkeypatch
+):
+    panel, mw, model_path = _make_panel_with_sidecar(tmp_path, monkeypatch)
+    sidecar = model_path.parent / (model_path.name + ".slice_meta.json")
+    sidecar.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "profiles": [
+                    {
+                        "id": "profile",
+                        "name": "Profile",
+                        "settings": {"overlap": 0.2},
+                    }
+                ],
+                "primary_profile_id": "profile",
+            }
+        ),
+        encoding="utf-8",
+    )
+    before = sidecar.read_text(encoding="utf-8")
+    panel.apply_slice_meta_for_model(str(model_path))
+    panel.spin_slice_overlap.setValue(0.3)
+    assert panel.combo_slice_profile.currentText() == "Custom"
+    assert mw.advanced_config["slice_profile_id"] == "__custom__"
+    assert sidecar.read_text(encoding="utf-8") == before
+    mw.close()

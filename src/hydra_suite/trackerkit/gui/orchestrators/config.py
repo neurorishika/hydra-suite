@@ -432,6 +432,9 @@ class ConfigOrchestrator:
         if slice_geo not in {"auto_model", "auto_object", "custom"}:
             slice_geo = "auto_model"
         self._panels.detection.combo_slice_geometry.setCurrentText(slice_geo)
+        self._mw.advanced_config["slice_profile_id"] = str(
+            get_cfg("slice_profile_id", default="") or ""
+        )
 
         yolo_direct_model = get_cfg(
             "yolo_obb_direct_model_path",
@@ -1648,6 +1651,9 @@ class ConfigOrchestrator:
                 "yolo_fixed_angle_deg": self._panels.detection.spin_yolo_fixed_angle.value(),
                 "slice_enabled": self._panels.detection.chk_slice_enabled.isChecked(),
                 "slice_geometry_mode": self._panels.detection.combo_slice_geometry.currentText(),
+                "slice_profile_id": str(
+                    self._mw.advanced_config.get("slice_profile_id", "") or ""
+                ),
                 "yolo_obb_direct_model_path": make_model_path_relative(
                     yolo_direct_path
                 ),

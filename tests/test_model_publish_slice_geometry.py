@@ -4,7 +4,13 @@ from pathlib import Path
 import pytest
 
 import hydra_suite.training.model_publish as mp
-from hydra_suite.core.inference.slice_meta import read_slice_meta
+from hydra_suite.core.inference.slice_meta import (
+    available_slice_profiles,
+    primary_slice_profile,
+    read_slice_meta,
+    slice_meta_to_panel_values,
+    write_slice_meta,
+)
 from hydra_suite.training.contracts import TrainingRole
 
 
@@ -128,3 +134,69 @@ def test_no_slice_geometry_writes_no_sidecar(tmp_path, monkeypatch):
     reg = mp.load_model_registry()
     assert "slice_geometry" not in reg["entries"][key]
     assert "slice_meta_sidecar" not in reg["entries"][key]
+
+
+def test_calibrated_profiles_apply_primary_without_losing_training_geometry(tmp_path):
+    model = tmp_path / "weights.pt"
+    model.write_bytes(b"weights")
+    meta = {
+        "schema_version": 2,
+        "training_geometry": {"geometry_mode": "auto_model", "imgsz": 640},
+        "primary_profile_id": "recall",
+        "profiles": [
+            {
+                "id": "recall",
+                "name": "High recall",
+                "settings": {
+                    "geometry_mode": "auto_object",
+                    "object_tile_fraction": 0.4,
+                    "overlap": 0.3,
+                    "trained_body_px": 80,
+                    "slice_width": 0,
+                    "slice_height": 0,
+                    "confidence_threshold": 0.2,
+                },
+            },
+            {
+                "id": "fast",
+                "name": "Fast scan",
+                "settings": {"geometry_mode": "auto_model", "overlap": 0.1},
+            },
+        ],
+    }
+    write_slice_meta(model, meta)
+
+    loaded = read_slice_meta(model)
+    assert loaded == meta
+    assert [profile["id"] for profile in available_slice_profiles(loaded)] == [
+        "recall",
+        "fast",
+    ]
+    assert primary_slice_profile(loaded)["name"] == "High recall"
+    primary = slice_meta_to_panel_values(loaded)
+    fast = slice_meta_to_panel_values(loaded, "fast")
+    assert primary["profile_id"] == "recall"
+    assert primary["confidence_threshold"] == 0.2
+    assert fast["profile_name"] == "Fast scan"
+    assert fast["geometry_mode"] == "auto_model"
+
+
+def test_missing_profile_falls_back_to_primary_and_legacy_sidecar_still_loads():
+    meta = {
+        "schema_version": 2,
+        "training_geometry": {"geometry_mode": "custom", "slice_width": 700},
+        "primary_profile_id": "saved",
+        "profiles": [
+            {"id": "saved", "name": "Saved", "settings": {"overlap": 0.25}},
+        ],
+    }
+    assert slice_meta_to_panel_values(meta, "removed")["profile_id"] == "saved"
+    legacy = {
+        "geometry_mode": "auto_object",
+        "target_sizes": [300.0],
+        "imgsz": 640,
+        "reference_body_px": 42.0,
+    }
+    values = slice_meta_to_panel_values(legacy)
+    assert values["profile_id"] is None
+    assert values["object_tile_fraction"] == 300.0 / 640.0
