@@ -9,6 +9,7 @@ a GPU or a real dataset.
 
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 from typing import Any
@@ -34,15 +35,42 @@ def _cuda_free_gb() -> float | None:  # seam for tests
 
 
 def _free_disk_gb(path: str) -> float:  # seam for tests
-    usage = shutil.disk_usage(Path(path).expanduser().resolve().anchor or "/")
+    # Walk up to the nearest EXISTING ancestor before asking for free space --
+    # `derived_dataset_dir` may not exist yet, and `disk_usage` requires a
+    # real path. Using `.anchor` (the filesystem root) would silently report
+    # the wrong mount whenever the target lives on a different volume than
+    # `/` (e.g. a mounted data drive), which is exactly the case this check
+    # exists to protect against an hour of GPU time.
+    target = Path(path).expanduser().resolve()
+    while not target.exists() and target != target.parent:
+        target = target.parent
+    usage = shutil.disk_usage(target)
     return usage.free / (1024**3)
 
 
-def _instance_count(source_datasets: Any) -> int:  # seam for tests
-    # Real implementation would count annotated instances across the spec's
-    # source datasets; tests always monkeypatch this seam, so a conservative
-    # zero here never masks a missing patch.
-    return 0
+def _instance_count(dataset_dir: str) -> int:  # seam for tests
+    """Count non-crowd instances in the built COCO train split.
+
+    Preflight runs after dataset build (see `runner.py`'s `SEMANTIC_SAM3`
+    role, which calls `build_sam3_coco_dataset` before dispatching to
+    `train_sam3_lora`), so `<dataset_dir>/train/_annotations.coco.json`
+    should already exist. `iscrowd=1` annotations are seam-clipped partial
+    instances (see `dataset_build.py`'s `MIN_RETAINED_AREA_FRAC`), not full
+    training examples, so they are excluded from the count -- counting them
+    would let a dataset of mostly-clipped fragments pass this floor. A
+    missing or unreadable file is treated as zero instances (refuse), never
+    silently skipped.
+    """
+    ann_path = (
+        Path(dataset_dir).expanduser().resolve() / "train" / "_annotations.coco.json"
+    )
+    if not ann_path.exists():
+        return 0
+    try:
+        coco = json.loads(ann_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return 0
+    return sum(1 for ann in coco.get("annotations", []) if not ann.get("iscrowd"))
 
 
 def _bf16_capability_warning() -> str | None:
@@ -83,7 +111,7 @@ def preflight(spec: Any) -> list[str]:
     if not prompt.strip():
         reasons.append("Prompt is empty; SAM3 requires a text prompt to train against.")
 
-    n_instances = _instance_count(spec.source_datasets)
+    n_instances = _instance_count(spec.derived_dataset_dir)
     if n_instances < MIN_TRAIN_INSTANCES:
         reasons.append(
             f"Only {n_instances} labeled instances found; at least "

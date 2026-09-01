@@ -28,7 +28,12 @@ from typing import Any, Callable
 
 import numpy as np
 
-from .dataloader import build_batches, try_build_batches
+from .dataloader import (
+    build_datapoints,
+    collate_batches,
+    collate_epoch_batches,
+    try_build_datapoints,
+)
 from .lora import adapter_state_dict, inject_adapters, lora_config_from_params
 from .preflight import preflight
 
@@ -97,11 +102,11 @@ def train_sam3_lora(
     _seed_everything(spec.seed)
 
     # Build (and validate) the training set BEFORE touching `sam3` or the GPU.
-    train_batches = _build_dataloader(spec, params, split="train")
-    if not train_batches:
+    train_datapoints = _build_dataloader(spec, params, split="train")
+    if not train_datapoints:
         return _refuse(
-            "Training set produced zero batches; refusing to report success "
-            "for a run that trained nothing."
+            "Training set produced zero datapoints; refusing to report "
+            "success for a run that trained nothing."
         )
 
     # --- Lazy, training-only imports -----------------------------------
@@ -126,7 +131,8 @@ def train_sam3_lora(
     loss_fn = Sam3LossWrapper()
 
     grad_accum = max(1, int(params.grad_accum))
-    n_batches = len(train_batches)
+    batch_size = max(1, int(params.batch))
+    n_batches = -(-len(train_datapoints) // batch_size)  # ceil division
     steps_per_epoch = -(-n_batches // grad_accum)  # ceil division
     total_steps = max(1, steps_per_epoch * params.epochs)
     warmup_steps = min(50, total_steps // 4)
@@ -155,7 +161,14 @@ def train_sam3_lora(
             canceled = True
             break
         model.train()
-        for micro_idx, batch in enumerate(train_batches):
+        # Reshuffled every epoch (seeded from spec.seed + epoch, so runs stay
+        # reproducible) -- a fixed order would put each tile's negatives in
+        # the same accumulation window as its positive on every epoch.
+        epoch_batches = collate_epoch_batches(
+            train_datapoints, batch_size, seed=spec.seed + epoch
+        )
+        n_epoch_batches = len(epoch_batches)
+        for micro_idx, batch in enumerate(epoch_batches):
             if should_cancel():
                 canceled = True
                 break
@@ -175,15 +188,15 @@ def train_sam3_lora(
             (loss / grad_accum).backward()
 
             is_boundary = (micro_idx + 1) % grad_accum == 0
-            is_final_micro_batch = (micro_idx + 1) == n_batches
+            is_final_micro_batch = (micro_idx + 1) == n_epoch_batches
             if is_boundary or is_final_micro_batch:
                 torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
                 optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad()
+                global_step += 1
                 if global_step % logging_steps == 0:
                     log_cb(f"epoch {epoch} step {global_step} loss {float(loss):.4f}")
-                global_step += 1
 
         if canceled:
             break
@@ -214,12 +227,14 @@ def train_sam3_lora(
 
 
 def _build_dataloader(spec: Any, params: Any, *, split: str) -> list:
-    """Read the built COCO split into batched Datapoints. Kept as a thin,
-    separately-mockable seam so tests can force a zero-batch run without a
-    real dataset or `sam3` install; the real implementation lives in
-    `dataloader.py` and never returns `[]` itself -- it raises instead.
+    """Read the built COCO split into its (unshuffled) Datapoints. Kept as a
+    thin, separately-mockable seam so tests can force a zero-datapoint run
+    without a real dataset or `sam3` install; the real implementation lives
+    in `dataloader.py` and never returns `[]` itself -- it raises instead.
+    Per-epoch shuffling into batches happens later, inside the training
+    loop, via `collate_epoch_batches`.
     """
-    return build_batches(spec.derived_dataset_dir, params, split, seed=spec.seed)
+    return build_datapoints(spec.derived_dataset_dir, params, split, seed=spec.seed)
 
 
 def _evaluate_and_write(
@@ -242,11 +257,12 @@ def _evaluate_and_write(
     """
     import torch
 
-    val_batches = try_build_batches(
+    val_datapoints = try_build_datapoints(
         spec.derived_dataset_dir, params, "valid", seed=spec.seed
     )
-    if not val_batches:
+    if not val_datapoints:
         return None
+    val_batches = collate_batches(val_datapoints, params.batch)
 
     model.eval()
     total_loss = 0.0
