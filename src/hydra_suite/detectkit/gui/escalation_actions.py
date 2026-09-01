@@ -64,7 +64,7 @@ def on_escalate_geometry(window, preselect: str | None = None) -> None:
         n
         for n in source_names
         if existing_by_name.get(n) is not None
-        and existing_by_name[n].pending_escalation is not None
+        and existing_by_name[n].staged_review is not None
     ]
     overwrite = False
     if would_conflict:
@@ -108,6 +108,12 @@ def on_escalate_geometry(window, preselect: str | None = None) -> None:
     progress.setValue(0)
 
     worker = Sam2EscalationWorker(request)
+    # A BOUND METHOD of the window, not a lambda: a functor with no
+    # receiver QObject is delivered DIRECTLY on the emitting (worker)
+    # thread, and this slot touches the dataset panel. Binding it to the
+    # window -- a QObject living in the main thread -- is what makes Qt's
+    # AutoConnection resolve to a queued, main-thread call.
+    worker.project_mutated.connect(window._persist_staged_pointer)
     worker.progress.connect(progress.setValue)
     worker.status.connect(progress.setLabelText)
     worker.status.connect(lambda msg: window.statusBar().showMessage(msg, 3000))
@@ -122,7 +128,7 @@ def on_escalate_geometry(window, preselect: str | None = None) -> None:
     worker.error.connect(_stash_error)
 
     def _handle_result(result: object) -> None:
-        # The worker set pending_escalation on existing sources on a
+        # The worker set staged_review on existing sources on a
         # background thread; persist + refresh immediately. Everything
         # UI-facing (message boxes, the review dialog) is deferred to
         # _finish, because the application-modal progress dialog is still
@@ -171,10 +177,12 @@ def on_escalate_geometry(window, preselect: str | None = None) -> None:
                     f"Staged {len(staged)} source(s) for review: "
                     f"{', '.join(staged)}.\n\n"
                     f"{primed} instance(s) primed, {fell_back} fell back "
-                    f"to the original box.{skipped_note}"
+                    f"to the original box.{skipped_note}\n\n"
+                    "Use the review bar on the annotation preview to accept "
+                    "or reject each frame."
                 ),
             )
-            on_review_escalations(window)
+            window._on_go_to_staged_review()
         else:
             QMessageBox.information(
                 window,
@@ -290,6 +298,13 @@ def on_semantic_escalation(window) -> None:
 
     worker.error.connect(_stash_error)
 
+    # A BOUND METHOD of the window, not a lambda: a functor with no
+    # receiver QObject is delivered DIRECTLY on the emitting (worker)
+    # thread, and this slot touches the dataset panel. Binding it to the
+    # window -- a QObject living in the main thread -- is what makes Qt's
+    # AutoConnection resolve to a queued, main-thread call.
+    worker.project_mutated.connect(window._persist_staged_pointer)
+
     def _handle_result(result) -> None:
         # Everything UI-facing (the prompt-failure warning, the success info
         # box) is deferred to _finish, because the progress dialog is still
@@ -369,6 +384,11 @@ def on_semantic_escalation(window) -> None:
             )
             + skipped_note,
         )
+        # Mirror the SAM2 path: staging is worthless until the user is
+        # standing in front of the review bar. A CANCELLED run still staged
+        # real frames, so it jumps too.
+        if result.staged:
+            window._on_go_to_staged_review()
 
     worker.result_ready.connect(_handle_result)
     worker.finished.connect(_finish)
@@ -408,43 +428,3 @@ def resolve_reference_body_px(project) -> tuple[float, str]:
         note += ", a capped sample)" if truncated else ")"
         return measured, note
     return 0.0, "nothing found — enter one, or tiling stays off"
-
-
-def on_review_escalations(window) -> None:
-    """Open the review dialog for every source with a pending escalation,
-    regardless of when it was staged. Reachable independent of an
-    escalation run having just finished, so closing the dialog without
-    acting never strands a pending escalation."""
-    if window._project is None:
-        QMessageBox.information(window, "Review Escalations", "Open a project first.")
-        return
-
-    pending_sources = [
-        s for s in window._project.sources if s.pending_escalation is not None
-    ]
-    if not pending_sources:
-        QMessageBox.information(
-            window,
-            "Review Escalations",
-            "There are no pending escalations to review.",
-        )
-        return
-
-    from .dialogs.review_escalations_dialog import ReviewEscalationsDialog
-
-    review_dlg = ReviewEscalationsDialog(
-        pending_sources,
-        parent=window,
-        project=window._project,
-        project_dir=window._project.project_dir,
-    )
-    review_dlg.exec()
-    window._save_current_project()
-    window._dataset_panel.refresh_sources(window._project)
-    window._tools_panel.refresh_overview()
-    # Directly, not incidentally. The staged-mask overlay happened to clear
-    # today only because refresh_sources resets the panel's selection to row
-    # 0, which re-enters show_image; a selection-preserving refresh would
-    # leave accepted or rejected masks on screen with nothing asking for a
-    # redraw. A re-threshold also rewrites the staged labels underneath us.
-    window._refresh_escalation_overlay()

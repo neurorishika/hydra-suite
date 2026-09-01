@@ -61,7 +61,7 @@ class OverlayProvider(Protocol):
 def resolve_pending_level(pending):
     """Geometry level a staged escalation's labels are in.
 
-    ``PendingEscalation.target_level`` is load-bearing: SAM2 converts
+    ``StagedReview.target_level`` is load-bearing: SAM2 converts
     existing boxes IN PLACE and can stage OBB, while SAM3 stages polygons.
     Drawing an OBB quad as polygon-native gave it the polygon style AND a
     derived OBB of the same quad -- a duplicate outline in the wrong style.
@@ -164,19 +164,35 @@ class PredictionProvider:
         )
 
 
-class StagedEscalationProvider:
-    key = "escalation"
+class StagedReviewProvider:
+    key = "staged"
 
     def build(self, ctx: FrameContext) -> Optional[OverlayLayer]:
         source = ctx.source()
-        pending = getattr(source, "pending_escalation", None) if source else None
-        if pending is None or not str(getattr(pending, "staged_path", "")).strip():
+        review = getattr(source, "staged_review", None) if source else None
+        if review is None or not str(getattr(review, "staged_path", "")).strip():
             return None
         label_path = find_staged_label_for_image(
-            Path(ctx.image_path), ctx.source_path, pending.staged_path
+            Path(ctx.image_path), ctx.source_path, review.staged_path
         )
         if label_path is None:
             return None
+
+        # A decided frame's proposal is resolved: an accepted one now lives on
+        # the ground-truth layer, a rejected one is not wanted. Keeping it in
+        # magenta would make a reviewed frame look identical to an unreviewed
+        # one, which is the single thing frame-granular review has to show.
+        from ...jobs.staged_review import read_decisions, review_key_for_image
+
+        # The key comes from the IMAGE, not from `label_path`.
+        # find_staged_label_for_image has stem and recursive fallbacks, so
+        # label_path.relative_to(staged_labels) is not guaranteed to be the
+        # same string staged_frames/accept_frame use as their key. Deriving
+        # it from the image is the only way the three agree.
+        rel = review_key_for_image(ctx.source_path, ctx.image_path)
+        if rel is not None and rel in read_decisions(review.staged_path):
+            return None
+
         h, w = ctx.size
         # No class_id_map: staged ids index the STAGING dir's classes.txt,
         # not the project's class list, so remapping them would mislabel.
@@ -186,8 +202,8 @@ class StagedEscalationProvider:
         return OverlayLayer(
             key=self.key,
             detections=dets,
-            native_level=resolve_pending_level(pending),
-            class_names=staged_class_names(pending.staged_path),
+            native_level=resolve_pending_level(review),
+            class_names=staged_class_names(review.staged_path),
             colour_policy=ColourPolicy.FIXED,
             fixed_colour=ESCALATION_COLOUR,
             class_filtered=False,
@@ -200,6 +216,6 @@ class StagedEscalationProvider:
 # the z values above encode the same stacking.
 PROVIDERS: tuple = (
     GroundTruthProvider(),
-    StagedEscalationProvider(),
+    StagedReviewProvider(),
     PredictionProvider(),
 )

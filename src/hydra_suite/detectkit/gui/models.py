@@ -15,67 +15,74 @@ INFERENCE_CONFIDENCE_FLOOR = 0.01
 
 
 @dataclass
-class PendingEscalation:
-    """A staged (not-yet-reviewed) escalation result awaiting accept/reject.
+class StagedReview:
+    """A staged, not-yet-reviewed set of proposed labels for a source.
 
-    ``primer_kind`` distinguishes the two producers: ``"sam2"`` converts
-    existing boxes to masks and promotes IN PLACE; ``"sam3"`` finds
-    instances from a prompt and promotes to a NEW SIBLING SOURCE. They
-    accept differently, so the kind is load-bearing, not decorative.
+    Generalises the old `PendingEscalation`. ``producer`` is one of
+    ``"sam2"``, ``"sam3"``, ``"inference"`` and is **provenance only**: all
+    three stage into the same contract and accept through the same code
+    path. It used to dispatch the accept (SAM2 overwrote in place, SAM3
+    built a sibling source), and making it load-bearing for nothing is the
+    entire point of the refactor. A test in
+    tests/test_detectkit_staged_review.py fails if it ever becomes
+    load-bearing again.
 
-    ``sam2_variant`` is retained so pre-existing projects and any legacy
-    reader keep working; it mirrors ``primer_variant`` for SAM2 records.
+    The staging directory it points at holds::
+
+        labels/          one .txt per frame, mirroring the source's images/
+        classes.txt
+        run.json         producer, params, fingerprint
+        decisions.json   per-frame outcome (written during review)
+        labels_before/   the source's prior labels, snapshotted on first accept
     """
 
     staged_path: str = ""
     target_level: str = "polygon"
-    sam2_variant: str = ""
+    producer: str = "sam2"
+    producer_variant: str = ""
+    prompt: str = ""
+    params: dict = field(default_factory=dict)
     created_at: str = ""
-    primer_kind: str = "sam2"
-    primer_variant: str = ""
-    primer_prompt: str = ""
-    primer_params: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
-        """Serialize to a plain dictionary."""
+        """Serialize to a plain dictionary, using only the new key names."""
         return {
             "staged_path": self.staged_path,
             "target_level": self.target_level,
-            "sam2_variant": self.sam2_variant,
+            "producer": self.producer,
+            "producer_variant": self.producer_variant,
+            "prompt": self.prompt,
+            "params": dict(self.params),
             "created_at": self.created_at,
-            "primer_kind": self.primer_kind,
-            "primer_variant": self.primer_variant,
-            "primer_prompt": self.primer_prompt,
-            "primer_params": dict(self.primer_params),
         }
 
     @staticmethod
-    def from_dict(d: dict) -> "PendingEscalation":
-        """Restore a PendingEscalation, back-filling pre-primer records.
+    def from_dict(d: dict) -> "StagedReview":
+        """Restore, accepting both the new names and every legacy spelling.
 
-        The back-fill triggers only when ``primer_kind`` is absent entirely
-        (a truly pre-Task-8 on-disk record) -- not merely falsy. Falling
-        back on emptiness alone would re-derive ``primer_variant`` from
-        ``sam2_variant`` on every round trip of an already-migrated record
-        that happens to carry an empty ``primer_variant`` by construction,
-        silently mutating a value the caller never asked to change.
+        A project staged before this change must review with no migration
+        step: the directory layout never changed, only these key names.
+        Legacy records carry ``primer_kind``/``primer_variant``/
+        ``primer_prompt``/``primer_params``; the oldest (pre-primer, SAM2
+        only) carry just ``sam2_variant``.
+
+        Note that `to_dict` writes only the new names, so a project saved by
+        this version is NOT readable by an older one -- the same one-way
+        step the runtime_tier migration took.
         """
-        legacy_variant = str(d.get("sam2_variant", ""))
-        is_legacy_record = "primer_kind" not in d
-        kind = str(d.get("primer_kind", "") or "sam2")
-        if is_legacy_record:
-            variant = legacy_variant
-        else:
-            variant = str(d.get("primer_variant", ""))
-        return PendingEscalation(
+        legacy_sam2_variant = str(d.get("sam2_variant", "") or "")
+        producer = str(d.get("producer") or d.get("primer_kind") or "sam2")
+        variant = str(
+            d.get("producer_variant") or d.get("primer_variant") or legacy_sam2_variant
+        )
+        return StagedReview(
             staged_path=str(d.get("staged_path", "")),
             target_level=str(d.get("target_level", "polygon") or "polygon"),
-            sam2_variant=legacy_variant or (variant if kind == "sam2" else ""),
+            producer=producer,
+            producer_variant=variant,
+            prompt=str(d.get("prompt") or d.get("primer_prompt") or ""),
+            params=dict(d.get("params") or d.get("primer_params") or {}),
             created_at=str(d.get("created_at", "")),
-            primer_kind=kind,
-            primer_variant=variant,
-            primer_prompt=str(d.get("primer_prompt", "")),
-            primer_params=dict(d.get("primer_params") or {}),
         )
 
 
@@ -106,7 +113,7 @@ class OBBSource:
     reviewed: bool = True  # False only for un-reviewed SAM2-primed derived sources
     derived_from: str | None = None  # origin source name for derived sources
     sam2_variant: str | None = None  # SAM2 version that primed a derived source
-    pending_escalation: PendingEscalation | None = None  # staged, unreviewed escalation
+    staged_review: StagedReview | None = None  # staged, unreviewed proposals
 
     def to_dict(self) -> dict:
         """Serialize to a plain dictionary."""
@@ -121,10 +128,8 @@ class OBBSource:
             "reviewed": self.reviewed,
             "derived_from": self.derived_from,
             "sam2_variant": self.sam2_variant,
-            "pending_escalation": (
-                self.pending_escalation.to_dict()
-                if self.pending_escalation is not None
-                else None
+            "staged_review": (
+                self.staged_review.to_dict() if self.staged_review is not None else None
             ),
         }
 
@@ -142,9 +147,13 @@ class OBBSource:
             reviewed=bool(d.get("reviewed", True)),
             derived_from=(d.get("derived_from") or None),
             sam2_variant=(d.get("sam2_variant") or None),
-            pending_escalation=(
-                PendingEscalation.from_dict(d["pending_escalation"])
-                if d.get("pending_escalation")
+            # The legacy key is read but never written: a project staged
+            # before the rename must review without a migration step.
+            staged_review=(
+                StagedReview.from_dict(
+                    d.get("staged_review") or d["pending_escalation"]
+                )
+                if (d.get("staged_review") or d.get("pending_escalation"))
                 else None
             ),
         )

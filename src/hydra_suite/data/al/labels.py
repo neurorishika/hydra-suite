@@ -15,7 +15,7 @@ from typing import Sequence
 
 import numpy as np
 
-from hydra_suite.utils.geometry_levels import GeometryLevel
+from hydra_suite.utils.geometry_levels import GeometryLevel, classify_label_line
 
 from .escalation import LabelRecord
 
@@ -81,3 +81,79 @@ def write_label_file(
     with Path(path).open("w") as fp:
         for rec in records:
             fp.write(_format_line(rec, height, width, level))
+
+
+_LEVEL_BY_KIND = {
+    "aabb": GeometryLevel.AABB,
+    "four_point": GeometryLevel.OBB,
+    "polygon": GeometryLevel.POLYGON,
+}
+
+
+def read_label_file(
+    path: str | Path,
+    frame_size: tuple[int, int],
+) -> list[LabelRecord]:
+    """Read one YOLO label file back into pixel-space LabelRecords.
+
+    The inverse of `write_label_file`. `frame_size` is (height, width), the
+    same convention, because the file stores normalised coordinates.
+
+    Each line's level comes from its own field count via
+    `classify_label_line`, not from a caller-supplied level. The `four_point`
+    case (9 fields) is ambiguous in principle -- an OBB or a 4-point quad
+    polygon -- but not here: `_polygon_points` repeats the final vertex
+    precisely so a polygon-level file never contains a 4-point line. A
+    9-field line is therefore always an OBB, including inside a source whose
+    own `level` says polygon (an unpromoted leftover), which is exactly what
+    a caller merging into that source needs to know.
+
+    Confidence is not stored on disk. Records read back carry
+    ``confidence=1.0`` ("asserted"); nothing downstream reads it, and
+    `write_label_file` ignores it.
+
+    Unparseable lines are skipped, matching `parse_obb_label`'s tolerance for
+    files a user may have hand-edited. A missing file reads as empty -- a
+    frame with no label file has no labels, which is not an error.
+    """
+    height, width = int(frame_size[0]), int(frame_size[1])
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError:
+        return []
+
+    records: list[LabelRecord] = []
+    for line in text.splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        kind = classify_label_line(len(parts))
+        level = _LEVEL_BY_KIND.get(kind)
+        if level is None:
+            continue
+        try:
+            class_id = int(parts[0])
+            coords = [float(v) for v in parts[1:]]
+        except ValueError:
+            continue
+
+        if level is GeometryLevel.AABB:
+            cx, cy, w, h = coords
+            x1, y1 = cx - w / 2.0, cy - h / 2.0
+            x2, y2 = cx + w / 2.0, cy + h / 2.0
+            flat = [x1, y1, x2, y1, x2, y2, x1, y2]
+        else:
+            flat = coords
+
+        pts = np.asarray(flat, dtype=np.float32).reshape(-1, 2)
+        pts[:, 0] *= float(width)
+        pts[:, 1] *= float(height)
+        records.append(
+            LabelRecord(
+                class_id=class_id,
+                confidence=1.0,
+                points=pts,
+                level=level,
+            )
+        )
+    return records

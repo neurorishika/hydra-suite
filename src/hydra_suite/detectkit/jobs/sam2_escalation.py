@@ -19,7 +19,7 @@ from hydra_suite.data.al.escalation import LabelRecord
 from hydra_suite.data.al.labels import write_label_file
 from hydra_suite.data.project_bundle import ensure_bundle_subdirectory
 from hydra_suite.detectkit.gui.constants import IMG_EXTS
-from hydra_suite.detectkit.gui.models import OBBSource, PendingEscalation
+from hydra_suite.detectkit.gui.models import OBBSource, StagedReview
 from hydra_suite.utils.geometry_levels import GeometryLevel
 from hydra_suite.widgets.workers import BaseWorker
 
@@ -38,7 +38,7 @@ def _is_safe_to_delete(
 ) -> bool:
     """True if *path* is a staging directory this module may recursively delete.
 
-    ``PendingEscalation.staged_path`` round-trips through the saved project
+    ``StagedReview.staged_path`` round-trips through the saved project
     file, so it is untrusted input from disk: a hand-edited or corrupted
     project could point it at ``/`` or at the source's own directory, and
     every deletion here is a recursive ``rmtree``. When *project_dir* is
@@ -104,7 +104,7 @@ class EscalationRequest:
 
 @dataclass
 class EscalationResult:
-    # Names of sources that received a fresh `pending_escalation` this run.
+    # Names of sources that received a fresh `staged_review` this run.
     staged: list[str] = field(default_factory=list)
     primed: int = 0
     fell_back: int = 0
@@ -117,6 +117,11 @@ class Sam2EscalationWorker(BaseWorker):
     """QThread wrapper around run_escalation (BaseWorker signals + result_ready)."""
 
     result_ready = Signal(object)  # EscalationResult
+    # Emitted from the WORKER thread whenever a source's staged_review
+    # changes, so the caller can persist the pointer right then instead of
+    # only after the whole run returns. See run_escalation's `on_mutated`.
+    # Default AutoConnection makes the slot run queued on the main thread.
+    project_mutated = Signal()
 
     def __init__(self, request: EscalationRequest, executor=None, parent=None) -> None:
         super().__init__(parent)
@@ -138,6 +143,7 @@ class Sam2EscalationWorker(BaseWorker):
                 self.progress.emit(pct),
                 self.status.emit(msg),
             ),
+            on_mutated=self.project_mutated.emit,
         )
         self.status.emit(
             f"Done: {len(result.staged)} staged, {result.primed} primed, "
@@ -156,15 +162,16 @@ def run_escalation(
     *,
     overwrite: bool = False,
     progress: Callable[[int, str], None] | None = None,
+    on_mutated: Callable[[], None] | None = None,
 ) -> EscalationResult:
     """Stage each named source's SAM2-primed polygon labels for review.
 
     Writes the primed result to a per-source staging directory under
     ``artifacts/pending_escalations/`` and records it on the source's
-    ``pending_escalation`` field. It does NOT touch the source's own
+    ``staged_review`` field. It does NOT touch the source's own
     canonical labels and does NOT register any new source -- a caller (the
-    escalation review dialog) must call ``accept_pending_escalation`` or
-    ``reject_pending_escalation`` to promote or discard the staged result.
+    frame-granular review flow in ``jobs/staged_review.py``) accepts or
+    rejects individual staged frames to promote or discard the staged result.
 
     Re-running escalation over a source that already has a pending
     escalation is guarded: by default it's skipped (recorded in
@@ -172,6 +179,17 @@ def run_escalation(
     user hasn't reviewed yet. Pass ``overwrite=True`` to re-stage (replaces
     the staging directory in place).
     """
+
+    def _mutated() -> None:
+        # Called after EVERY write to a source's staged_review so the
+        # caller can persist it immediately. Deferring the save to the end
+        # of the run meant an exception on source 2, or the app closing
+        # before the run returned, left a fully-written staging directory
+        # on disk with nothing pointing at it -- and the review bar keys
+        # off the pointer, so those frames became unreviewable.
+        if on_mutated is not None:
+            on_mutated()
+
     result = EscalationResult()
     by_name = _sources_by_name(req.project)
     todo = [
@@ -181,7 +199,7 @@ def run_escalation(
     ]
     project_root = Path(req.project.project_dir)
     for si, src in enumerate(todo):
-        if src.pending_escalation is not None and not overwrite:
+        if src.staged_review is not None and not overwrite:
             result.skipped.append(
                 (
                     src.name,
@@ -207,10 +225,18 @@ def run_escalation(
         # staging path (e.g. this is a re-escalation with a different SAM2
         # variant, which hashes to a different directory) must have its old
         # staging dir cleaned up -- otherwise it's orphaned forever, since
-        # nothing else ever revisits a replaced pending_escalation.
-        old_pending = src.pending_escalation
+        # nothing else ever revisits a replaced staged_review.
+        old_pending = src.staged_review
         if old_pending is not None and old_pending.staged_path != str(staged_root):
             remove_staged_escalation_dir(old_pending.staged_path, project_root)
+            # The pointer dies with the directory, and that death is
+            # persisted immediately: staged_review is only REPLACED at the
+            # end of this source, so a failure in between used to leave the
+            # source pointing at a directory that no longer exists -- a
+            # review the dialog offers but cannot open or dismiss. Same
+            # reasoning as run_semantic_escalation's F7.
+            src.staged_review = None
+            _mutated()
 
         remove_staged_escalation_dir(staged_root, project_root)
         (staged_root / "labels").mkdir(parents=True, exist_ok=True)
@@ -267,14 +293,20 @@ def run_escalation(
                             level=GeometryLevel.POLYGON,
                         )
                     )
-            staged_label_path = staged_root / "labels" / relative_label
-            staged_label_path.parent.mkdir(parents=True, exist_ok=True)
-            write_label_file(
-                staged_label_path,
-                records,
-                frame_size=(h, w),
-                level=GeometryLevel.POLYGON,
-            )
+            if records:
+                staged_label_path = staged_root / "labels" / relative_label
+                staged_label_path.parent.mkdir(parents=True, exist_ok=True)
+                write_label_file(
+                    staged_label_path,
+                    records,
+                    frame_size=(h, w),
+                    level=GeometryLevel.POLYGON,
+                )
+            # else: no staged label file for this frame. Frames with no
+            # detections are not staged at all -- an empty staged label
+            # would mean "accept this to delete the frame's labels", which
+            # is not what running SAM2 escalation asks for. Same contract
+            # inference_stager.py already documents/enforces.
             if progress:
                 progress(
                     int(100 * (si + (ii + 1) / max(len(images), 1)) / len(todo)),
@@ -286,105 +318,13 @@ def run_escalation(
             if (src_root / "classes.txt").exists()
             else "object\n"
         )
-        src.pending_escalation = PendingEscalation(
+        src.staged_review = StagedReview(
             staged_path=str(staged_root),
             target_level=GeometryLevel.POLYGON.label,
-            sam2_variant=req.variant,
+            producer="sam2",
+            producer_variant=req.variant,
             created_at=datetime.now().isoformat(),
         )
+        _mutated()
         result.staged.append(src.name)
     return result
-
-
-def accept_pending_escalation(
-    source: OBBSource,
-    project_dir: str | Path | None = None,
-) -> None:
-    """Promote *source*'s staged escalation result to its canonical labels.
-
-    Overwrites the source's ``labels/`` + ``classes.txt`` from the staged
-    copy, sets ``level``/``sam2_variant`` from the pending record, resets
-    ``reviewed`` to ``False`` (same meaning as any other machine-derived,
-    not-yet-human-confirmed result -- just attached to the existing source
-    instead of a new sibling), removes the staging directory, and clears
-    ``pending_escalation``.
-
-    Validates BEFORE deleting anything: refuses (raising ``RuntimeError``,
-    source left untouched) if the staging directory is missing on disk, or
-    if it is missing a label file for an image the source currently has a
-    label for (e.g. an image that failed to decode during escalation and was
-    silently skipped by ``run_escalation``) -- accepting such a staged result
-    would otherwise delete real labels with nothing staged to replace them.
-
-    *project_dir*, when given, bounds the staging-directory delete to that
-    project's ``artifacts/pending_escalations/`` (see ``_is_safe_to_delete``).
-
-    Raises ValueError if the source has no pending escalation.
-    """
-    pending = source.pending_escalation
-    if pending is None:
-        raise ValueError(f"Source '{source.name}' has no pending escalation.")
-
-    staged_root = Path(pending.staged_path)
-    staged_labels = staged_root / "labels"
-    if not staged_labels.is_dir():
-        raise RuntimeError(
-            f"Staged escalation for '{source.name}' is missing on disk "
-            f"({staged_labels}); nothing was changed. Reject this escalation "
-            "and re-run it."
-        )
-
-    source_root = Path(source.path)
-    source_labels = source_root / "labels"
-    existing_rel = (
-        {p.relative_to(source_labels) for p in source_labels.rglob("*.txt")}
-        if source_labels.is_dir()
-        else set()
-    )
-    staged_rel = {p.relative_to(staged_labels) for p in staged_labels.rglob("*.txt")}
-    missing = sorted(str(p) for p in existing_rel - staged_rel)
-    if missing:
-        raise RuntimeError(
-            f"Staged escalation for '{source.name}' is missing "
-            f"{len(missing)} label file(s) that exist in the source (likely "
-            "an unreadable image during escalation) -- refusing to accept, "
-            f"as this would delete those labels: {missing[:5]}"
-        )
-
-    # ignore_errors=False (the default): a partially-failed delete must raise
-    # HERE, before any copy has started. Swallowing it left the destination
-    # only half gone, and the copytree below then failed with FileExistsError
-    # -- wedging labels/ in a half-deleted state.
-    if source_labels.exists():
-        shutil.rmtree(source_labels)
-    shutil.copytree(staged_labels, source_labels)
-    classes_src = staged_root / "classes.txt"
-    if classes_src.exists():
-        shutil.copyfile(classes_src, source_root / "classes.txt")
-
-    source.level = pending.target_level
-    source.reviewed = False
-    source.sam2_variant = pending.sam2_variant
-
-    remove_staged_escalation_dir(staged_root, project_dir)
-    source.pending_escalation = None
-
-
-def reject_pending_escalation(
-    source: OBBSource,
-    project_dir: str | Path | None = None,
-) -> None:
-    """Discard *source*'s staged escalation result, leaving it untouched.
-
-    *project_dir*, when given, bounds the staging-directory delete to that
-    project's ``artifacts/pending_escalations/`` (see ``_is_safe_to_delete``).
-    An out-of-bounds ``staged_path`` is left on disk and the pending state is
-    cleared anyway -- rejecting must always succeed.
-
-    Raises ValueError if the source has no pending escalation.
-    """
-    pending = source.pending_escalation
-    if pending is None:
-        raise ValueError(f"Source '{source.name}' has no pending escalation.")
-    remove_staged_escalation_dir(pending.staged_path, project_dir)
-    source.pending_escalation = None

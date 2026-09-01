@@ -263,7 +263,7 @@ def test_remove_selected_deletes_pending_escalation_staging_dir(qapp, tmp_path):
     """Removing a source with an unreviewed pending escalation must not leak
     its staging directory under artifacts/pending_escalations/."""
     from hydra_suite.detectkit.gui.dialogs.source_manager import SourceManagerDialog
-    from hydra_suite.detectkit.gui.models import OBBSource, PendingEscalation
+    from hydra_suite.detectkit.gui.models import OBBSource, StagedReview
 
     staged_dir = tmp_path / "artifacts" / "pending_escalations" / "orig-variant-abc123"
     staged_dir.mkdir(parents=True)
@@ -274,10 +274,11 @@ def test_remove_selected_deletes_pending_escalation_staging_dir(qapp, tmp_path):
         OBBSource(
             path=str(tmp_path / "orig"),
             name="orig",
-            pending_escalation=PendingEscalation(
+            staged_review=StagedReview(
                 staged_path=str(staged_dir),
                 target_level="polygon",
-                sam2_variant="sam2.1-hiera-base_plus",
+                producer="sam2",
+                producer_variant="sam2.1-hiera-base_plus",
                 created_at="2026-08-27T00:00:00",
             ),
         )

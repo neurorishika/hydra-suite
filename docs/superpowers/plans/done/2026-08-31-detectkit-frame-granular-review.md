@@ -41,10 +41,23 @@ producer that stages into the same contract.
   ordering `AABB < OBB < POLYGON`. Upward derivation is refused everywhere except the
   one documented promotion path (Task 7), which lifts an OBB quad to a 4-point polygon
   by re-encoding, not by inventing points.
+- **No `qtbot` / pytest-qt.** It is NOT installed and no test in this repo uses it —
+  every existing `qtbot` argument in `tests/` is a plain no-op default
+  (`def test_x(qtbot=None)`), e.g. `tests/test_semantic_calibration.py:467`. Qt tests
+  use the repo's own pattern: `os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")`
+  before importing PySide6, then `app = QApplication.instance() or QApplication([])`
+  (`tests/test_detectkit_canvas.py:93-96`), widgets driven with `.click()`, signals
+  captured by connecting a list-append closure, and `deleteLater()` for cleanup. Do not
+  add pytest-qt as a dependency.
 - **No equivalence gate applies** — nothing here touches the tracking pipeline. The
   gate is `python -m pytest` on the named test files.
+- **Environment:** activate `hydra-mps` before running anything
+  (`conda activate hydra-mps`). The base environment's `black` is broken against
+  pathspec 0.12.1, so `make format` fails there for reasons unrelated to any task.
 - **Every task ends with `make format` clean and a commit.** Run
-  `make format && make lint-moderate` before each commit; commit messages use the
+  `make format && make lint` before each commit (`make lint` is the moderate-severity
+  flake8 gate — note there is NO `lint-moderate` target, despite CLAUDE.md's pre-PR
+  checklist naming one); commit messages use the
   repo's `feat(detectkit):` / `refactor(detectkit):` / `test(detectkit):` prefixes.
 - **Commit as the configured git user.** Do not add a `Co-Authored-By: Claude` trailer.
 
@@ -193,7 +206,7 @@ def test_polygon_iou_lives_in_utils_so_data_can_import_it():
 
 ```bash
 python -m pytest tests/test_semantic_masks.py -q
-make format && make lint-moderate
+make format && make lint
 git add src/hydra_suite/utils/polygon_iou.py src/hydra_suite/core/inference/masks.py tests/test_semantic_masks.py
 git commit -m "refactor(utils): move polygon_iou down from core/inference to utils"
 ```
@@ -427,7 +440,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-make format && make lint-moderate
+make format && make lint
 git add src/hydra_suite/data/al/labels.py tests/test_al_label_reader.py
 git commit -m "feat(data): add read_label_file, the inverse of write_label_file"
 ```
@@ -755,7 +768,7 @@ Expected: PASS (all 12).
 - [ ] **Step 5: Commit**
 
 ```bash
-make format && make lint-moderate
+make format && make lint
 git add src/hydra_suite/data/al/merge.py tests/test_al_merge.py
 git commit -m "feat(data): add merge_records, the ADD_NEW/OVERWRITE merge primitive"
 ```
@@ -1084,7 +1097,7 @@ failure is an unrenamed call site — fix it, do not skip the test.
 - [ ] **Step 8: Commit**
 
 ```bash
-make format && make lint-moderate
+make format && make lint
 git add -A src/hydra_suite/detectkit tests
 git commit -m "refactor(detectkit): PendingEscalation -> StagedReview, producer is provenance only"
 ```
@@ -1446,7 +1459,7 @@ Expected: PASS (8).
 - [ ] **Step 5: Commit**
 
 ```bash
-make format && make lint-moderate
+make format && make lint
 git add src/hydra_suite/detectkit/jobs/staged_review.py tests/test_detectkit_staged_review.py
 git commit -m "feat(detectkit): add decisions.json and the pre-review snapshot"
 ```
@@ -1592,7 +1605,7 @@ Expected: PASS (12).
 - [ ] **Step 5: Commit**
 
 ```bash
-make format && make lint-moderate
+make format && make lint
 git add src/hydra_suite/detectkit/jobs/staged_review.py tests/test_detectkit_staged_review.py
 git commit -m "feat(detectkit): map staged class ids onto the source by name"
 ```
@@ -2354,7 +2367,7 @@ in-place acceptance — that behaviour change is the point of the design.
 - [ ] **Step 7: Commit**
 
 ```bash
-make format && make lint-moderate
+make format && make lint
 git add -A src/hydra_suite/detectkit tests/test_detectkit_staged_review.py tests/test_detectkit_review_escalations_dialog.py tests/test_detectkit_sam2_escalation_wiring.py
 git commit -m "feat(detectkit): producer-agnostic frame-granular accept with promotion"
 ```
@@ -2493,7 +2506,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-make format && make lint-moderate
+make format && make lint
 git add src/hydra_suite/detectkit/gui/overlays/providers.py tests/test_detectkit_overlay_providers.py
 git commit -m "feat(detectkit): hide the staged overlay on frames already decided"
 ```
@@ -2541,23 +2554,39 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 pytest.importorskip("PySide6")
 
-from types import SimpleNamespace  # noqa: E402
+from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from hydra_suite.detectkit.gui.panels.review_bar import ReviewBar  # noqa: E402
 
 
-def test_the_bar_is_hidden_until_a_review_is_set(qtbot):
-    bar = ReviewBar()
-    qtbot.addWidget(bar)
+@pytest.fixture
+def bar():
+    """A ReviewBar on a live QApplication, cleaned up after the test.
 
-    assert not bar.isVisibleTo(bar.parentWidget()) or bar.isHidden()
+    NO pytest-qt: it is not installed, and no test in this repo uses it --
+    every existing `qtbot` argument is a plain no-op default (see
+    tests/test_semantic_calibration.py:467). This is the repo's own Qt
+    pattern (tests/test_detectkit_canvas.py:93-96).
+    """
+    QApplication.instance() or QApplication([])
+    widget = ReviewBar()
+    yield widget
+    widget.deleteLater()
 
 
-def test_setting_a_review_shows_the_bar_and_the_counter(qtbot):
-    bar = ReviewBar()
-    qtbot.addWidget(bar)
+def _fired(signal):
+    """Record emissions of a Qt signal in a list."""
+    seen = []
+    signal.connect(lambda *args: seen.append(args))
+    return seen
 
-    bar.set_review_state("sam3", "prompt 'ant'", decided=23, total=140, can_rethreshold=True)
+
+def test_the_bar_is_hidden_until_a_review_is_set(bar):
+    assert bar.isHidden()
+
+
+def test_setting_a_review_shows_the_bar_and_the_counter(bar):
+    bar.set_review_state("sam3", "prompt \'ant\'", decided=23, total=140, can_rethreshold=True)
 
     assert not bar.isHidden()
     assert "23/140" in bar.progress_text()
@@ -2565,9 +2594,7 @@ def test_setting_a_review_shows_the_bar_and_the_counter(qtbot):
     assert "ant" in bar.summary_text()
 
 
-def test_clearing_hides_the_bar(qtbot):
-    bar = ReviewBar()
-    qtbot.addWidget(bar)
+def test_clearing_hides_the_bar(bar):
     bar.set_review_state("sam2", "sam2.1_hiera_large", 0, 10, can_rethreshold=False)
 
     bar.clear_review_state()
@@ -2575,14 +2602,11 @@ def test_clearing_hides_the_bar(qtbot):
     assert bar.isHidden()
 
 
-def test_rethreshold_is_offered_only_when_the_producer_supports_it(qtbot):
-    bar = ReviewBar()
-    qtbot.addWidget(bar)
-
+def test_rethreshold_is_offered_only_when_the_producer_supports_it(bar):
     bar.set_review_state("sam2", "v", 0, 10, can_rethreshold=False)
-    assert not bar.rethreshold_button().isVisible() or not bar.rethreshold_button().isEnabled()
+    assert not bar.rethreshold_button().isEnabled()
 
-    bar.set_review_state("sam3", "prompt 'ant'", 0, 10, can_rethreshold=True)
+    bar.set_review_state("sam3", "prompt \'ant\'", 0, 10, can_rethreshold=True)
     assert bar.rethreshold_button().isEnabled()
 
 
@@ -2598,19 +2622,16 @@ def test_rethreshold_is_offered_only_when_the_producer_supports_it(qtbot):
         ("revert_button", "revert_requested"),
     ],
 )
-def test_each_button_emits_its_signal(qtbot, button_name, signal_name):
-    bar = ReviewBar()
-    qtbot.addWidget(bar)
+def test_each_button_emits_its_signal(bar, button_name, signal_name):
     bar.set_review_state("sam2", "v", 0, 10, can_rethreshold=False)
+    seen = _fired(getattr(bar, signal_name))
 
-    with qtbot.waitSignal(getattr(bar, signal_name), timeout=500):
-        getattr(bar, button_name)().click()
+    getattr(bar, button_name)().click()
+
+    assert len(seen) == 1
 
 
-def test_a_complete_review_says_so(qtbot):
-    bar = ReviewBar()
-    qtbot.addWidget(bar)
-
+def test_a_complete_review_says_so(bar):
     bar.set_review_state("sam2", "v", 10, 10, can_rethreshold=False)
 
     assert "complete" in bar.progress_text().lower()
@@ -2789,7 +2810,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-make format && make lint-moderate
+make format && make lint
 git add src/hydra_suite/detectkit/gui/panels/review_bar.py tests/test_detectkit_review_bar.py
 git commit -m "feat(detectkit): add the frame-granular review bar widget"
 ```
@@ -2817,10 +2838,31 @@ git commit -m "feat(detectkit): add the frame-granular review bar widget"
 
 - [ ] **Step 1: Write the failing integration tests**
 
-Append to `tests/test_detectkit_review_bar.py`:
+Append to `tests/test_detectkit_review_bar.py`. Add `from types import SimpleNamespace`
+to that file's header imports (below the `QApplication` import Task 9 added) — these
+tests use it.
 
 ```python
-def test_accepting_a_frame_refreshes_both_layers(qtbot, monkeypatch, tmp_path):
+@pytest.fixture
+def window():
+    """A DetectKitMainWindow on a live QApplication, cleaned up after.
+
+    NO pytest-qt (not installed; no test in this repo uses it -- see the
+    fixture note above). These are the FIRST tests in the suite to construct
+    a DetectKitMainWindow, so run this file on its own the first time and
+    confirm it exits cleanly rather than aborting. If construction crashes
+    the interpreter, fall back to testing the handlers as unbound functions
+    against a SimpleNamespace stub and say so in the commit message.
+    """
+    from hydra_suite.detectkit.gui import main_window as mw
+
+    QApplication.instance() or QApplication([])
+    win = mw.DetectKitMainWindow()
+    yield win
+    win.deleteLater()
+
+
+def test_accepting_a_frame_refreshes_both_layers(window, monkeypatch, tmp_path):
     """Accept must redraw GT (the change landed) and staged (it is decided).
 
     Directly, not incidentally: a selection-preserving refresh would
@@ -2831,8 +2873,6 @@ def test_accepting_a_frame_refreshes_both_layers(qtbot, monkeypatch, tmp_path):
     from hydra_suite.detectkit.gui import main_window as mw
 
     refreshed: list = []
-    window = mw.DetectKitMainWindow()
-    qtbot.addWidget(window)
     monkeypatch.setattr(window, "_refresh_overlays", lambda keys=None: refreshed.append(keys))
     monkeypatch.setattr(window, "_current_staged_rel", lambda: "a.txt")
     # SimpleNamespace, not object(): _on_review_accept ends by calling
@@ -2849,15 +2889,17 @@ def test_accepting_a_frame_refreshes_both_layers(qtbot, monkeypatch, tmp_path):
     assert refreshed and set(refreshed[-1]) == {"gt", "escalation"}
 
 
-def test_next_undecided_selects_the_first_frame_without_a_decision(qtbot, monkeypatch):
+def test_next_undecided_selects_the_first_frame_without_a_decision(window, monkeypatch):
     from hydra_suite.detectkit.gui import main_window as mw
 
-    window = mw.DetectKitMainWindow()
-    qtbot.addWidget(window)
     monkeypatch.setattr(mw, "staged_frames", lambda root: ["a.txt", "b.txt", "c.txt"])
     monkeypatch.setattr(mw, "read_decisions", lambda root: {"a.txt": "rejected"})
     selected: list = []
-    monkeypatch.setattr(window._dataset_panel, "select_image_by_relative_label", lambda rel: selected.append(rel))
+    monkeypatch.setattr(
+        window._dataset_panel,
+        "select_image_by_relative_label",
+        lambda rel: selected.append(rel),
+    )
     monkeypatch.setattr(window, "_current_staged_root", lambda: "/tmp/staging")
 
     window._on_review_next_undecided()
@@ -3218,7 +3260,7 @@ Expected: PASS.
 - [ ] **Step 8: Commit**
 
 ```bash
-make format && make lint-moderate
+make format && make lint
 git add -A src/hydra_suite/detectkit tests
 git commit -m "feat(detectkit): review bar replaces the per-source escalation dialog"
 ```
@@ -3625,7 +3667,7 @@ Expected: PASS (8).
 - [ ] **Step 5: Commit**
 
 ```bash
-make format && make lint-moderate
+make format && make lint
 git add src/hydra_suite/detectkit/jobs/inference_stager.py tests/test_detectkit_inference_stager.py
 git commit -m "feat(detectkit): stage dataset-inference predictions for review"
 ```
@@ -3652,7 +3694,7 @@ git commit -m "feat(detectkit): stage dataset-inference predictions for review"
 Append to `tests/test_detectkit_inference_stager.py`:
 
 ```python
-def _wired_window(qtbot, monkeypatch, tmp_path, predictions):
+def _wired_window(monkeypatch, tmp_path, predictions):
     """A DetectKitMainWindow with just enough stubbed to run the handler.
 
     Every modal is patched out: an unpatched QMessageBox in a GUI test hangs
@@ -3661,11 +3703,15 @@ def _wired_window(qtbot, monkeypatch, tmp_path, predictions):
     """
     from types import SimpleNamespace
 
+    from PySide6.QtWidgets import QApplication
+
     from hydra_suite.detectkit.gui import main_window as mw
     from hydra_suite.detectkit.gui.models import OBBSource
 
+    # Repo Qt pattern, no pytest-qt (not installed). The caller is
+    # responsible for window.deleteLater() -- see the tests below.
+    QApplication.instance() or QApplication([])
     window = mw.DetectKitMainWindow()
-    qtbot.addWidget(window)
     source = OBBSource(path=str(tmp_path / "src"), name="src")
     window._project = SimpleNamespace(
         project_dir=str(tmp_path), active_model_path="m.pt", sources=[source]
@@ -3699,18 +3745,19 @@ def _det(conf):
     return {"class_id": 0, "polygon_px": [(0, 0), (10, 0), (10, 10), (0, 10)], "confidence": conf}
 
 
-def test_staging_action_refuses_when_no_predictions_are_held(qtbot, monkeypatch, tmp_path):
-    mw, window = _wired_window(qtbot, monkeypatch, tmp_path, {})
+def test_staging_action_refuses_when_no_predictions_are_held(monkeypatch, tmp_path):
+    mw, window = _wired_window(monkeypatch, tmp_path, {})
     called: list = []
     monkeypatch.setattr(mw, "stage_predictions", lambda *a, **k: called.append(a))
 
     window._on_stage_predictions()
+    window.deleteLater()
 
     assert called == []
 
 
 def test_staging_action_stages_only_what_is_visible_at_the_slider(
-    qtbot, monkeypatch, tmp_path
+    monkeypatch, tmp_path
 ):
     """The floor-retained candidates the user never saw must not be staged.
 
@@ -3720,7 +3767,7 @@ def test_staging_action_stages_only_what_is_visible_at_the_slider(
     the slider value.
     """
     mw, window = _wired_window(
-        qtbot, monkeypatch, tmp_path, {"/img/a.png": [_det(0.9), _det(0.02)]}
+        monkeypatch, tmp_path, {"/img/a.png": [_det(0.9), _det(0.02)]}
     )
     seen: dict = {}
     monkeypatch.setattr(
@@ -3729,16 +3776,17 @@ def test_staging_action_stages_only_what_is_visible_at_the_slider(
     )
 
     window._on_stage_predictions()
+    window.deleteLater()
 
     assert [d["confidence"] for d in seen["per_image"]["/img/a.png"]] == [0.9]
     assert seen["kw"]["confidence"] == 0.40
 
 
-def test_staging_action_records_the_real_kind_and_device(qtbot, monkeypatch, tmp_path):
+def test_staging_action_records_the_real_kind_and_device(monkeypatch, tmp_path):
     """OverlaySettings carries neither field; they come from the run's own
     resolution. A sequential_segment run staged as obb_direct would declare
     polygon labels at OBB level."""
-    mw, window = _wired_window(qtbot, monkeypatch, tmp_path, {"/img/a.png": [_det(0.9)]})
+    mw, window = _wired_window(monkeypatch, tmp_path, {"/img/a.png": [_det(0.9)]})
     seen: dict = {}
     monkeypatch.setattr(
         mw, "stage_predictions",
@@ -3746,6 +3794,7 @@ def test_staging_action_records_the_real_kind_and_device(qtbot, monkeypatch, tmp
     )
 
     window._on_stage_predictions()
+    window.deleteLater()
 
     assert seen["inference_kind"] == "sequential_segment"
     assert seen["device"] == "mps"
@@ -3850,7 +3899,9 @@ at module scope so tests can monkeypatch it):
             return
         self._save_current_project()
         self._sync_review_bar()
-        self._refresh_overlays(keys=("staged",))
+        # "escalation" is the key in force until Task 14 renames it; that
+        # task's grep sweep picks this call up with the rest.
+        self._refresh_overlays(keys=("escalation",))
 ```
 
 Connect it where the other tools-panel signals are wired:
@@ -3871,7 +3922,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-make format && make lint-moderate
+make format && make lint
 git add -A src/hydra_suite/detectkit tests/test_detectkit_inference_stager.py
 git commit -m "feat(detectkit): add Stage Predictions for Review"
 ```
@@ -3990,7 +4041,7 @@ skipped.
 - [ ] **Step 6: Commit**
 
 ```bash
-make format && make lint-moderate
+make format && make lint
 git add -A src/hydra_suite/detectkit tests
 git commit -m "refactor(detectkit): delete the SAM3 sibling-source accept path"
 ```
@@ -4058,7 +4109,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-make format && make lint-moderate
+make format && make lint
 git add -A src/hydra_suite/detectkit tests
 git commit -m "refactor(detectkit): drop the PendingEscalation alias, key the layer 'staged'"
 ```

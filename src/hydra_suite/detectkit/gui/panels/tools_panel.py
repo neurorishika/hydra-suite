@@ -108,6 +108,7 @@ class ToolsPanel(QWidget):
     semantic_escalation_requested = Signal()
     mark_reviewed_requested = Signal()
     review_escalations_requested = Signal()
+    stage_predictions_requested = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -370,6 +371,15 @@ class ToolsPanel(QWidget):
         self._btn_run_inference = QPushButton("Run Inference")
         self._btn_run_inference.clicked.connect(self.run_inference_requested)
         v.addWidget(self._btn_run_inference)
+
+        self.btn_stage_predictions = QPushButton("Stage Predictions for Review")
+        self.btn_stage_predictions.setToolTip(
+            "Write the current predictions into a staged review, so they can be "
+            "accepted or rejected frame by frame like an escalation result. "
+            "Looking at predictions never creates reviewable state; this does."
+        )
+        self.btn_stage_predictions.clicked.connect(self.stage_predictions_requested)
+        v.addWidget(self.btn_stage_predictions)
 
         return box
 

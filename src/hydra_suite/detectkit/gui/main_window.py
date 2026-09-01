@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hydra_suite.data.al.merge import MergeMode
 from hydra_suite.data.project_bundle import (
     export_project_bundle_archive,
     import_project_bundle_archive,
@@ -40,6 +41,20 @@ from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noq
 from hydra_suite.widgets.busy import BusyTaskError, run_blocking_with_busy_dialog
 from hydra_suite.widgets.workers import BaseWorker
 
+from ..jobs.inference_stager import stage_predictions
+from ..jobs.staged_review import (
+    accept_all,
+    accept_frame,
+    finish_review,
+    is_complete,
+    read_decisions,
+    reject_all,
+    reject_frame,
+    revert_review,
+    review_key_for_image,
+    review_progress,
+    staged_frames,
+)
 from . import escalation_actions
 from .canvas import OBBCanvas
 from .models import (
@@ -50,6 +65,7 @@ from .models import (
 )
 from .overlays import PROVIDERS, FrameContext
 from .panels.dataset_panel import DatasetPanel
+from .panels.review_bar import ReviewBar
 from .panels.tools_panel import ToolsPanel
 from .prediction_preview import (
     dicts_from_obb_result,
@@ -724,6 +740,7 @@ class DetectKitMainWindow(QMainWindow):
         # Build workspace panels first (toolbar actions need them)
         self._dataset_panel = DatasetPanel()
         self._canvas = OBBCanvas()
+        self._review_bar = ReviewBar()
         self._tools_panel = ToolsPanel()
 
         # Toolbar (hidden until project loaded)
@@ -762,8 +779,31 @@ class DetectKitMainWindow(QMainWindow):
         )
         self._tools_panel.mark_reviewed_requested.connect(self._on_mark_reviewed)
         self._tools_panel.review_escalations_requested.connect(
-            lambda: escalation_actions.on_review_escalations(self)
+            self._on_go_to_staged_review
         )
+        self._tools_panel.stage_predictions_requested.connect(
+            self._on_stage_predictions
+        )
+
+        self._review_bar.accept_overwrite_requested.connect(
+            lambda: self._on_review_accept(MergeMode.OVERWRITE)
+        )
+        self._review_bar.accept_add_new_requested.connect(
+            lambda: self._on_review_accept(MergeMode.ADD_NEW)
+        )
+        self._review_bar.reject_requested.connect(self._on_review_reject)
+        self._review_bar.accept_all_requested.connect(
+            lambda: self._on_review_bulk(accept=True)
+        )
+        self._review_bar.reject_all_requested.connect(
+            lambda: self._on_review_bulk(accept=False)
+        )
+        self._review_bar.next_undecided_requested.connect(
+            self._on_review_next_undecided
+        )
+        self._review_bar.revert_requested.connect(self._on_review_revert)
+        self._review_bar.rethreshold_requested.connect(self._on_review_rethreshold)
+        self._review_bar.discard_requested.connect(self._on_review_discard)
 
     # ------------------------------------------------------------------
     # Toolbar
@@ -940,6 +980,7 @@ class DetectKitMainWindow(QMainWindow):
         canvas_layout.addWidget(canvas_hint)
 
         self._canvas.setMinimumWidth(_CANVAS_MIN_WIDTH)
+        canvas_layout.addWidget(self._review_bar)
         canvas_layout.addWidget(self._canvas, 1)
         canvas_shell.setMinimumWidth(_CANVAS_MIN_WIDTH)
         splitter.addWidget(canvas_shell)  # index 1
@@ -1264,6 +1305,24 @@ class DetectKitMainWindow(QMainWindow):
         if proj.sources:
             return
         QTimer.singleShot(100, self._open_source_manager)
+
+    def _persist_staged_pointer(self) -> None:
+        """Save the project the moment a staged_review pointer changes.
+
+        Connected to an escalation worker's ``project_mutated`` signal. It is
+        a bound method of this window -- a QObject in the main thread -- so
+        Qt's AutoConnection delivers it QUEUED here rather than directly on
+        the worker thread, which is the only reason touching the dataset
+        panel below is legal.
+
+        Deliberately not `_save_current_project`: this fires once per source,
+        and that method flashes "Project saved." in the status bar each time,
+        stampeding over the escalation's own progress messages.
+        """
+        if self._project is None:
+            return
+        self._dataset_panel.collect_state(self._project)
+        save_project(self._project)
 
     def _save_current_project(self) -> None:
         if self._project is None:
@@ -1630,7 +1689,7 @@ class DetectKitMainWindow(QMainWindow):
             self._sync_al_action_enabled()
         self._canvas.set_layer_visible("gt", settings.show_gt)
         self._canvas.set_layer_visible("pred", settings.show_pred)
-        self._canvas.set_layer_visible("escalation", settings.show_escalation)
+        self._canvas.set_layer_visible("staged", settings.show_escalation)
         self._canvas.set_class_filter(settings.visible_class_ids)
         self._canvas.set_derived_levels_visible(settings.show_derived_levels)
 
@@ -1720,6 +1779,79 @@ class DetectKitMainWindow(QMainWindow):
             self._current_source_path,
             model_path,
         ) + self._effective_inference_settings(settings).cache_key()
+
+    def _on_stage_predictions(self) -> None:
+        """Turn the predictions currently on screen into a staged review.
+
+        ON SCREEN, not in memory. `_dataset_predictions` is deliberately
+        retained at INFERENCE_CONFIDENCE_FLOOR (0.01, models.py:12-14) so
+        that moving the slider is useful without re-running the model; the
+        slider is applied at DISPLAY time by
+        `_filter_detections_by_confidence`. Staging the raw dict would stage
+        hundreds of 0.01 candidates the user never saw, while run.json
+        recorded the slider value -- staging something other than what was
+        reviewed. Filter first, at exactly the displayed threshold.
+
+        The kind and device likewise come from the same resolution the
+        inference RUN used (`detectkit_resolve_inference_models` +
+        `_effective_inference_settings`), not from OverlaySettings, which
+        carries neither field.
+        """
+        source = self._current_source_obj()
+        if source is None or self._project is None:
+            QMessageBox.information(
+                self, "Stage Predictions", "Open a project and select a source first."
+            )
+            return
+
+        settings = self._tools_panel.get_overlay_settings()
+        signature = self._dataset_signature(settings)
+        if (
+            not self._dataset_predictions
+            or signature is None
+            or signature != self._dataset_prediction_signature
+        ):
+            QMessageBox.information(
+                self,
+                "Stage Predictions",
+                "There are no predictions for this source and model. Run "
+                "inference across the source first.",
+            )
+            return
+
+        threshold = float(settings.confidence_threshold)
+        visible = {
+            image_path: _filter_detections_by_confidence(dets, threshold)
+            for image_path, dets in self._dataset_predictions.items()
+        }
+
+        model_path = signature[1]
+        try:
+            kind, _primary, _secondary = detectkit_resolve_inference_models(
+                self._project, model_path
+            )
+            device = self._effective_inference_settings(settings).device
+        except RuntimeError as exc:
+            QMessageBox.information(self, "Stage Predictions", str(exc))
+            return
+
+        try:
+            stage_predictions(
+                source,
+                self._project.project_dir,
+                visible,
+                model_path=str(model_path),
+                inference_kind=str(kind),
+                confidence=threshold,
+                device=str(device),
+                class_names=self._project.class_names,
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Stage Predictions", str(exc))
+            return
+        self._save_current_project()
+        self._sync_review_bar()
+        self._refresh_overlays(keys=("staged",))
 
     def _visible_inference_stats(self, confidence_threshold: float) -> dict:
         """Summarize cached candidates after applying the live display filter."""
@@ -1970,9 +2102,6 @@ class DetectKitMainWindow(QMainWindow):
             self._last_prediction_request = None
             self._canvas.clear_all()
 
-    def _refresh_escalation_overlay(self) -> None:
-        self._refresh_overlays(keys=("escalation",))
-
     def _frame_context(self) -> "FrameContext | None":
         """Everything the providers need about the frame on screen.
 
@@ -2048,9 +2177,15 @@ class DetectKitMainWindow(QMainWindow):
         for provider in PROVIDERS:
             self._canvas.remove_layer(provider.key)
         if not self._canvas.load_image(image_path):
+            # Sync the review bar to the NEW source even on load failure,
+            # so it does not keep showing the previous source's review
+            # while handlers already act on the updated current-source
+            # state above.
+            self._sync_review_bar()
             return
 
         self._refresh_overlays()
+        self._sync_review_bar()
 
         if (
             self._last_prediction_request is None
@@ -2062,6 +2197,275 @@ class DetectKitMainWindow(QMainWindow):
                 3000,
             )
         self._canvas.fit_in_view()
+
+    # ------------------------------------------------------------------
+    # Frame-granular review
+    # ------------------------------------------------------------------
+
+    def _current_source_obj(self):
+        if self._project is None or not self._current_source_path:
+            return None
+        return next(
+            (
+                s
+                for s in self._project.sources
+                if str(s.path) == self._current_source_path
+            ),
+            None,
+        )
+
+    def _current_staged_root(self) -> "str | None":
+        source = self._current_source_obj()
+        review = getattr(source, "staged_review", None) if source else None
+        if review is None or not str(review.staged_path).strip():
+            return None
+        return str(review.staged_path)
+
+    def _current_staged_rel(self) -> "str | None":
+        """The current frame's key into the review. One definition, reused."""
+        source = self._current_source_obj()
+        if source is None or not self._current_image_path:
+            return None
+        return review_key_for_image(source.path, self._current_image_path)
+
+    def _sync_review_bar(self) -> None:
+        """Show or hide the bar for the source on screen, and refresh its counter."""
+        source = self._current_source_obj()
+        review = getattr(source, "staged_review", None) if source else None
+        if review is None:
+            self._review_bar.clear_review_state()
+            return
+        detail = (
+            f"prompt '{review.prompt}'" if review.prompt else review.producer_variant
+        )
+        decided, total = review_progress(review.staged_path)
+        if total == 0:
+            # No staged frame this review can ever decide: is_complete
+            # needs total > 0, revert_review has no snapshot, and
+            # stage_predictions refuses to stage over an existing review --
+            # so without an escape hatch the source is stuck. Reachable if
+            # the staging dir was deleted outside the app, a run was
+            # cancelled before its first frame, or the project (and its
+            # ABSOLUTE staged_path) was moved to another machine.
+            self._review_bar.set_empty_review_state(review.producer, detail)
+            return
+        self._review_bar.set_review_state(
+            review.producer,
+            detail,
+            decided,
+            total,
+            can_rethreshold=review.producer == "sam3",
+        )
+
+    def _after_review_change(self) -> None:
+        """Everything a decision must trigger, in one place.
+
+        Both layers, directly: the ground truth changed (that is the point of
+        reviewing on the frame) and the staged proposal is now decided, so it
+        must stop drawing. Neither refresh happens incidentally.
+        """
+        self._refresh_overlays(keys=("gt", "staged"))
+        self._sync_review_bar()
+        self._save_current_project()
+
+    def _on_review_accept(self, mode) -> None:
+        source = self._current_source_obj()
+        rel = self._current_staged_rel()
+        if source is None or rel is None:
+            return
+        try:
+            accept_frame(source, rel, mode=mode)
+        except Exception as exc:
+            QMessageBox.warning(self, "Review", str(exc))
+            return
+        self._after_review_change()
+        self._offer_finish_if_complete(source)
+
+    def _on_review_reject(self) -> None:
+        source = self._current_source_obj()
+        rel = self._current_staged_rel()
+        if source is None or rel is None:
+            return
+        try:
+            reject_frame(source, rel)
+        except Exception as exc:
+            QMessageBox.warning(self, "Review", str(exc))
+            return
+        self._after_review_change()
+        self._offer_finish_if_complete(source)
+
+    def _on_review_bulk(self, *, accept: bool) -> None:
+        source = self._current_source_obj()
+        if source is None:
+            return
+        verb = "Accept" if accept else "Reject"
+        mode = MergeMode.ADD_NEW  # unused on the reject path; bound so it always exists
+        if accept:
+            choice = QMessageBox.question(
+                self,
+                "Accept All",
+                "Replace each undecided frame's labels with the staged ones, "
+                "or add only the non-overlapping staged instances?\n\n"
+                "Yes = Replace, No = Add New.",
+                QMessageBox.StandardButton.Yes
+                | QMessageBox.StandardButton.No
+                | QMessageBox.StandardButton.Cancel,
+            )
+            if choice == QMessageBox.StandardButton.Cancel:
+                return
+            mode = (
+                MergeMode.OVERWRITE
+                if choice == QMessageBox.StandardButton.Yes
+                else MergeMode.ADD_NEW
+            )
+        try:
+            count = accept_all(source, mode=mode) if accept else reject_all(source)
+        except Exception as exc:
+            QMessageBox.warning(self, verb + " All", str(exc))
+            return
+        self._after_review_change()
+        self.statusBar().showMessage(f"{verb}ed {count} frame(s).", 4000)
+        self._offer_finish_if_complete(source)
+
+    def _on_review_next_undecided(self) -> None:
+        staged_root = self._current_staged_root()
+        if staged_root is None:
+            return
+        decided = read_decisions(staged_root)
+        for rel in staged_frames(staged_root):
+            if rel not in decided:
+                self._dataset_panel.select_image_by_relative_label(rel)
+                return
+        self.statusBar().showMessage("Every staged frame has been decided.", 4000)
+
+    def _on_review_revert(self) -> None:
+        source = self._current_source_obj()
+        staged_root = self._current_staged_root()
+        if source is None or staged_root is None:
+            return
+        if (
+            QMessageBox.question(
+                self,
+                "Revert Review",
+                "Restore this source's labels, geometry level and class list to "
+                "their state before this review started? Every decision made so "
+                "far is cleared.",
+            )
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+        try:
+            revert_review(source, staged_root)
+        except Exception as exc:
+            QMessageBox.warning(self, "Revert Review", str(exc))
+            return
+        self._after_review_change()
+
+    def _on_review_rethreshold(self) -> None:
+        """The one irreplaceable feature of the retired dialog, per-review."""
+        from PySide6.QtWidgets import QInputDialog
+
+        from ..jobs.semantic_escalation import rethreshold_floor_for, rethreshold_staged
+
+        source = self._current_source_obj()
+        review = getattr(source, "staged_review", None) if source else None
+        if review is None or review.producer != "sam3":
+            return
+        # Re-thresholding rewrites the staged labels underneath any decision
+        # already recorded against them, so those decisions would describe
+        # geometry that no longer exists. Refuse rather than silently
+        # invalidate them; reverting first is the documented way through.
+        if read_decisions(review.staged_path):
+            QMessageBox.information(
+                self,
+                "Re-threshold",
+                "Frames in this review have already been decided, and "
+                "re-thresholding would rewrite the staged labels those "
+                "decisions refer to. Revert the review first if you want to "
+                "re-threshold it.",
+            )
+            return
+        current = float(review.params.get("confidence", 0.35))
+        minimum = rethreshold_floor_for([source])
+        value, ok = QInputDialog.getDouble(
+            self,
+            "Re-threshold",
+            f"New confidence (cache floor {minimum:.2f}):",
+            max(current, minimum),
+            minimum,
+            0.99,
+            2,
+        )
+        if not ok:
+            return
+        try:
+            kept = rethreshold_staged(
+                source,
+                confidence=value,
+                merge_iou=float(review.params.get("merge_iou", 0.5)),
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Re-threshold", str(exc))
+            return
+        self._after_review_change()
+        self.statusBar().showMessage(
+            f"{source.name}: {kept} instance(s) at confidence {value:.2f}.", 5000
+        )
+
+    def _on_review_discard(self) -> None:
+        """Close an unfinishable (zero-frame) review without touching labels.
+
+        `finish_review` already degrades safely for this case: it deletes
+        whatever is at `staged_path` (a no-op if it is already missing,
+        via `remove_staged_escalation_dir`'s ignore_errors rmtree) and
+        clears the source's field regardless. No confirmation dialog --
+        there is nothing decided here to lose.
+        """
+        source = self._current_source_obj()
+        if source is None or getattr(source, "staged_review", None) is None:
+            return
+        finish_review(source, self._project.project_dir if self._project else None)
+        self._save_current_project()
+        self._sync_review_bar()
+        self._dataset_panel.refresh_sources(self._project)
+
+    def _offer_finish_if_complete(self, source) -> None:
+        if not is_complete(source):
+            return
+        if (
+            QMessageBox.question(
+                self,
+                "Review Complete",
+                "Every staged frame has been decided. Close this review?\n\n"
+                "Closing deletes the staged proposals AND the snapshot, so "
+                '"Revert Review" is no longer available afterwards.',
+            )
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+        finish_review(source, self._project.project_dir if self._project else None)
+        self._save_current_project()
+        self._dataset_panel.refresh_sources(self._project)
+        self._tools_panel.refresh_overview()
+        self._refresh_overlays(keys=("gt", "staged"))
+        self._sync_review_bar()
+
+    def _on_go_to_staged_review(self) -> None:
+        """Jump to a source with a staged review; the review bar drives it.
+
+        Kept as a menu entry because a staged review is otherwise only
+        discoverable by browsing to the right source.
+        """
+        if self._project is None:
+            QMessageBox.information(self, "Staged Reviews", "Open a project first.")
+            return
+        pending = [s for s in self._project.sources if s.staged_review is not None]
+        if not pending:
+            QMessageBox.information(
+                self, "Staged Reviews", "There are no staged reviews."
+            )
+            return
+        self._dataset_panel.select_source_by_path(str(pending[0].path))
 
     # ------------------------------------------------------------------
     # Public accessors

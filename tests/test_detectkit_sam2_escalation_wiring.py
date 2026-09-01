@@ -51,12 +51,17 @@ def test_escalation_actions_module_has_handlers():
 
     assert callable(escalation_actions.on_escalate_geometry)
     assert callable(escalation_actions.on_semantic_escalation)
-    assert callable(escalation_actions.on_review_escalations)
+    # on_review_escalations was retired by the frame-granular review task:
+    # its one irreplaceable feature (SAM3 re-thresholding) moved to the
+    # review bar, and "jump to a staged review" is now
+    # MainWindow._on_go_to_staged_review.
+    assert getattr(escalation_actions, "on_review_escalations", None) is None
     # _on_mark_reviewed was not moved -- it stays a MainWindow method.
     assert callable(getattr(MainWindow, "_on_mark_reviewed", None))
     # The moved methods must no longer exist on MainWindow.
     assert getattr(MainWindow, "_on_escalate_to_segment_sam2", None) is None
     assert getattr(MainWindow, "_on_review_escalations", None) is None
+    assert callable(getattr(MainWindow, "_on_go_to_staged_review", None))
 
 
 def test_escalate_dialog_preselect_source(qapp):
@@ -93,7 +98,7 @@ def test_escalation_finish_defers_dialog_past_progress_close():
     from hydra_suite.detectkit.gui import escalation_actions
 
     source = inspect.getsource(escalation_actions.on_escalate_geometry)
-    assert "on_review_escalations" in source
+    assert "_on_go_to_staged_review" in source
     assert 'getattr(result, "staged"' in source
 
     handle_result_start = source.index("def _handle_result")
@@ -109,7 +114,7 @@ def test_escalation_finish_defers_dialog_past_progress_close():
     assert "QMessageBox" not in handle_result_body
     assert (
         "ReviewEscalationsDialog" in finish_body
-        or "on_review_escalations" in finish_body
+        or "_on_go_to_staged_review" in finish_body
     )
 
 
@@ -575,3 +580,69 @@ def test_the_dialog_asks_for_labels_without_decoding_images():
     )
     assert "has_labelled_frames" in source
     assert "labelled_frames_for" not in source
+
+
+def test_accepting_a_sam3_review_does_not_create_a_sibling_source(tmp_path):
+    """The originally reported symptom: accept used to spawn a new source."""
+    import hydra_suite.detectkit.jobs.semantic_escalation as se
+
+    assert not hasattr(se, "accept_pending_semantic_escalation")
+    assert not hasattr(se, "_unique_source_name")
+
+
+def test_semantic_handler_jumps_to_the_review_like_the_sam2_path():
+    """Staging is worthless until the user is in front of the review bar.
+
+    The SAM2 path has called ``_on_go_to_staged_review()`` on success since
+    it shipped; the SAM3 path did not, so a successful run ended at an
+    info box with the review bar nowhere in sight.
+    """
+    import inspect
+
+    from hydra_suite.detectkit.gui import escalation_actions
+
+    source = inspect.getsource(escalation_actions.on_semantic_escalation)
+    assert "window._on_go_to_staged_review()" in source
+
+
+def test_both_escalation_handlers_persist_the_pointer_as_it_is_written():
+    """A staged_review written in memory but never saved orphans the whole
+    staging directory: the review bar keys off the pointer, so the staged
+    frames become unreviewable even though every label is on disk."""
+    import inspect
+
+    from hydra_suite.detectkit.gui import escalation_actions
+
+    for handler in (
+        escalation_actions.on_semantic_escalation,
+        escalation_actions.on_escalate_geometry,
+    ):
+        source = inspect.getsource(handler)
+        assert (
+            "worker.project_mutated.connect(window._persist_staged_pointer)" in source
+        ), handler.__name__
+
+
+def test_the_pointer_persist_slot_is_a_bound_method_of_the_window():
+    """A functor with no receiver QObject is delivered DIRECTLY on the
+    emitting thread. This slot touches the dataset panel, so it must be a
+    bound method of the window for AutoConnection to queue it onto the main
+    thread -- hence a MainWindow method, not a lambda in the handler.
+
+    It also must not be _save_current_project: it fires once per source, and
+    that method flashes "Project saved." over the run's progress messages.
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    from hydra_suite.detectkit.gui.main_window import MainWindow
+
+    fn = ast.parse(
+        textwrap.dedent(inspect.getsource(MainWindow._persist_staged_pointer))
+    ).body[0]
+    # The docstring names _save_current_project to explain the choice, so
+    # compare against the BODY, not the raw source text.
+    body = ast.unparse(ast.Module(body=fn.body[1:], type_ignores=[]))
+    assert "save_project(self._project)" in body
+    assert "_save_current_project" not in body

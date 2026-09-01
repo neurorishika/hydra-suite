@@ -339,3 +339,8 @@ Two consequences:
 
 Implementation plan:
 `docs/superpowers/plans/done/2026-08-31-detectkit-overlay-layer-registry.md`.
+
+**Post-implementation note (frame-granular review, Task 15):**
+`StagedEscalationProvider` was renamed `StagedReviewProvider`, key
+`"staged"`, since it now serves all three producers (SAM2, SAM3,
+inference), not just escalations.

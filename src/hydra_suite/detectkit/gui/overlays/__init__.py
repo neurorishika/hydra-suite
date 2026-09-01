@@ -7,7 +7,7 @@ from .providers import (
     GroundTruthProvider,
     OverlayProvider,
     PredictionProvider,
-    StagedEscalationProvider,
+    StagedReviewProvider,
     resolve_pending_level,
     resolve_source_render_state,
 )
@@ -23,7 +23,7 @@ __all__ = [
     "GroundTruthProvider",
     "OverlayProvider",
     "PredictionProvider",
-    "StagedEscalationProvider",
+    "StagedReviewProvider",
     "resolve_pending_level",
     "resolve_source_render_state",
 ]

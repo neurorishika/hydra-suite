@@ -25,33 +25,35 @@ def test_from_dict_missing_new_fields_defaults_reviewed_true():
     assert back.reviewed is True and back.derived_from is None
 
 
-def test_pending_escalation_roundtrip():
-    from hydra_suite.detectkit.gui.models import PendingEscalation
+def test_staged_review_roundtrip():
+    from hydra_suite.detectkit.gui.models import StagedReview
 
-    pending = PendingEscalation(
+    pending = StagedReview(
         staged_path="/tmp/proj/artifacts/pending_escalations/orig-sam2.1-abc123",
         target_level="polygon",
-        sam2_variant="sam2.1-hiera-base_plus",
+        producer="sam2",
+        producer_variant="sam2.1-hiera-base_plus",
         created_at="2026-08-27T12:00:00",
     )
-    back = PendingEscalation.from_dict(pending.to_dict())
+    back = StagedReview.from_dict(pending.to_dict())
     assert back == pending
 
 
-def test_obbsource_pending_escalation_roundtrip():
-    from hydra_suite.detectkit.gui.models import PendingEscalation
+def test_obbsource_staged_review_roundtrip():
+    from hydra_suite.detectkit.gui.models import StagedReview
 
-    pending = PendingEscalation(
+    pending = StagedReview(
         staged_path="/tmp/staged",
         target_level="polygon",
-        sam2_variant="sam2.1-hiera-base_plus",
+        producer="sam2",
+        producer_variant="sam2.1-hiera-base_plus",
         created_at="2026-08-27T12:00:00",
     )
-    s = OBBSource(name="orig", pending_escalation=pending)
+    s = OBBSource(name="orig", staged_review=pending)
     back = OBBSource.from_dict(s.to_dict())
-    assert back.pending_escalation == pending
+    assert back.staged_review == pending
 
 
-def test_obbsource_pending_escalation_defaults_none():
+def test_obbsource_staged_review_defaults_none():
     back = OBBSource.from_dict({"name": "legacy", "level": "obb"})
-    assert back.pending_escalation is None
+    assert back.staged_review is None

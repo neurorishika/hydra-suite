@@ -169,7 +169,7 @@ def _pred_layer(**kw):
 
 def _escalation_layer(**kw):
     base = dict(
-        key="escalation",
+        key="staged",
         detections=_ESC,
         native_level=GeometryLevel.OBB,
         class_names=["prompt_a", "prompt_b"],
@@ -326,7 +326,7 @@ def _visible_counts(canvas) -> dict:
             for o in b.obb_items
             if o.isVisible()
         )
-        for key in ("gt", "pred", "escalation")
+        for key in ("gt", "pred", "staged")
     }
 
 
@@ -338,7 +338,7 @@ def test_hiding_gt_leaves_the_other_two_layers_fully_visible(qapp):
     after = _visible_counts(canvas)
     assert after["gt"] == 0
     assert after["pred"] == before["pred"]
-    assert after["escalation"] == before["escalation"]
+    assert after["staged"] == before["staged"]
 
 
 def test_hiding_derived_levels_keeps_exactly_the_native_shapes(qapp):
@@ -350,7 +350,7 @@ def test_hiding_derived_levels_keeps_exactly_the_native_shapes(qapp):
     canvas.set_derived_levels_visible(False)
     assert _visible_counts(canvas) == {
         "gt": len(_GT),
-        "escalation": len(_ESC),
+        "staged": len(_ESC),
         "pred": len(_PRED),
     }
 
@@ -363,7 +363,7 @@ def test_the_class_filter_never_hides_the_escalation_layer(qapp):
     canvas.set_class_filter({999})
     counts = _visible_counts(canvas)
     assert counts["gt"] == 0
-    assert counts["escalation"] == len(_ESC) * 2  # OBB native + derived AABB
+    assert counts["staged"] == len(_ESC) * 2  # OBB native + derived AABB
 
 
 def test_an_empty_class_filter_means_show_all(qapp):
@@ -396,7 +396,7 @@ def test_visibility_matrix_is_self_consistent(
     _build_main_window_scene(canvas)
     canvas.set_layer_visible("gt", show_gt)
     canvas.set_layer_visible("pred", show_pred)
-    canvas.set_layer_visible("escalation", show_esc)
+    canvas.set_layer_visible("staged", show_esc)
     canvas.set_derived_levels_visible(show_derived)
     canvas.set_class_filter(class_filter)
 
@@ -406,11 +406,11 @@ def test_visibility_matrix_is_self_consistent(
     if not show_pred:
         assert counts["pred"] == 0
     if not show_esc:
-        assert counts["escalation"] == 0
+        assert counts["staged"] == 0
     if show_esc:
         # class_filtered=False, so the filter can never reduce it
         expected = len(_ESC) * (2 if show_derived else 1)
-        assert counts["escalation"] == expected
+        assert counts["staged"] == expected
 
 
 def test_dialog_scene_is_buildable_from_layers_alone(qapp):
