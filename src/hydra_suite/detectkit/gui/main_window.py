@@ -1306,6 +1306,24 @@ class DetectKitMainWindow(QMainWindow):
             return
         QTimer.singleShot(100, self._open_source_manager)
 
+    def _persist_staged_pointer(self) -> None:
+        """Save the project the moment a staged_review pointer changes.
+
+        Connected to an escalation worker's ``project_mutated`` signal. It is
+        a bound method of this window -- a QObject in the main thread -- so
+        Qt's AutoConnection delivers it QUEUED here rather than directly on
+        the worker thread, which is the only reason touching the dataset
+        panel below is legal.
+
+        Deliberately not `_save_current_project`: this fires once per source,
+        and that method flashes "Project saved." in the status bar each time,
+        stampeding over the escalation's own progress messages.
+        """
+        if self._project is None:
+            return
+        self._dataset_panel.collect_state(self._project)
+        save_project(self._project)
+
     def _save_current_project(self) -> None:
         if self._project is None:
             return

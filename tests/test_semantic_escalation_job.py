@@ -1068,3 +1068,90 @@ def test_no_band_stages_everything_as_before(tmp_path):
     )
     result = run_semantic_escalation(_request(tmp_path, src, confidence=0.1), labeler)
     assert result.labelled == 2
+
+
+# --- on_mutated: the staged_review pointer is persistable as it is written ---
+#
+# The pointer used to live only in memory until the run RETURNED and the GUI
+# saved on result_ready. A raise on source 2, or the app closing before the
+# run returned, therefore left a fully-written staging directory on disk with
+# nothing pointing at it -- and the review bar keys off the pointer, so those
+# staged frames were unreviewable and invisible.
+
+
+def test_on_mutated_fires_once_per_staged_source(tmp_path):
+    src_a = _make_source(tmp_path, name="a", n_images=1)
+    src_b = _make_source(tmp_path, name="b", n_images=1)
+    req = _request(tmp_path, src_a)
+    req.project = _Project(tmp_path, [src_a, src_b])
+    req.source_names = [src_a.name, src_b.name]
+    labeler = ScriptedLabeler([SemanticInstance(_blob(200, 200), 0.9)])
+
+    seen = []
+    result = run_semantic_escalation(
+        req,
+        labeler,
+        on_mutated=lambda: seen.append(
+            [(s.name, s.staged_review is not None) for s in req.project.sources]
+        ),
+    )
+
+    assert result.staged == [src_a.name, src_b.name]
+    # Fired AFTER each assignment, not batched at the end: the first
+    # callback must already see a's pointer and must NOT see b's.
+    assert seen[0] == [("a", True), ("b", False)]
+    assert seen[1] == [("a", True), ("b", True)]
+
+
+def test_on_mutated_fires_for_the_clear_of_a_replaced_pointer(tmp_path):
+    """The clear matters as much as the set: by then the old staging dir is
+    already deleted, so an unpersisted clear leaves a dangling pointer."""
+    src = _make_source(tmp_path, n_images=1)
+    labeler = ScriptedLabeler([SemanticInstance(_blob(200, 200), 0.9)])
+    run_semantic_escalation(_request(tmp_path, src, prompt="ant"), labeler)
+    assert src.staged_review is not None
+
+    seen = []
+    run_semantic_escalation(
+        _request(tmp_path, src, prompt="beetle", overwrite=True),
+        labeler,
+        overwrite=True,
+        on_mutated=lambda: seen.append(src.staged_review),
+    )
+    assert seen[0] is None  # the clear
+    assert seen[-1] is not None and "beetle" in seen[-1].staged_path
+
+
+def test_the_pointer_survives_a_run_that_raises_on_a_later_source(tmp_path):
+    """The regression, end to end: source a stages, source b explodes."""
+    src_a = _make_source(tmp_path, name="a", n_images=1)
+    src_b = _make_source(tmp_path, name="b", n_images=1)
+    req = _request(tmp_path, src_a)
+    req.project = _Project(tmp_path, [src_a, src_b])
+    req.source_names = [src_a.name, src_b.name]
+
+    class Exploding(ScriptedLabeler):
+        def label_image(self, *a, **k):
+            if src_a.staged_review is not None:
+                raise RuntimeError("boom on the second source")
+            return super().label_image(*a, **k)
+
+    saved = {}
+
+    def _persist():
+        saved["sources"] = json.loads(
+            json.dumps([s.to_dict() for s in req.project.sources])
+        )
+
+    with pytest.raises(RuntimeError):
+        run_semantic_escalation(
+            req,
+            Exploding([SemanticInstance(_blob(200, 200), 0.9)]),
+            on_mutated=_persist,
+        )
+
+    # a's staged frames are on disk AND a save carrying a's pointer happened
+    # before the explosion -- so the review is recoverable, not orphaned.
+    pointer = saved["sources"][0]["staged_review"]
+    assert pointer is not None
+    assert Path(pointer["staged_path"], "labels").is_dir()

@@ -117,6 +117,11 @@ class Sam2EscalationWorker(BaseWorker):
     """QThread wrapper around run_escalation (BaseWorker signals + result_ready)."""
 
     result_ready = Signal(object)  # EscalationResult
+    # Emitted from the WORKER thread whenever a source's staged_review
+    # changes, so the caller can persist the pointer right then instead of
+    # only after the whole run returns. See run_escalation's `on_mutated`.
+    # Default AutoConnection makes the slot run queued on the main thread.
+    project_mutated = Signal()
 
     def __init__(self, request: EscalationRequest, executor=None, parent=None) -> None:
         super().__init__(parent)
@@ -138,6 +143,7 @@ class Sam2EscalationWorker(BaseWorker):
                 self.progress.emit(pct),
                 self.status.emit(msg),
             ),
+            on_mutated=self.project_mutated.emit,
         )
         self.status.emit(
             f"Done: {len(result.staged)} staged, {result.primed} primed, "
@@ -156,6 +162,7 @@ def run_escalation(
     *,
     overwrite: bool = False,
     progress: Callable[[int, str], None] | None = None,
+    on_mutated: Callable[[], None] | None = None,
 ) -> EscalationResult:
     """Stage each named source's SAM2-primed polygon labels for review.
 
@@ -172,6 +179,17 @@ def run_escalation(
     user hasn't reviewed yet. Pass ``overwrite=True`` to re-stage (replaces
     the staging directory in place).
     """
+
+    def _mutated() -> None:
+        # Called after EVERY write to a source's staged_review so the
+        # caller can persist it immediately. Deferring the save to the end
+        # of the run meant an exception on source 2, or the app closing
+        # before the run returned, left a fully-written staging directory
+        # on disk with nothing pointing at it -- and the review bar keys
+        # off the pointer, so those frames became unreviewable.
+        if on_mutated is not None:
+            on_mutated()
+
     result = EscalationResult()
     by_name = _sources_by_name(req.project)
     todo = [
@@ -211,6 +229,14 @@ def run_escalation(
         old_pending = src.staged_review
         if old_pending is not None and old_pending.staged_path != str(staged_root):
             remove_staged_escalation_dir(old_pending.staged_path, project_root)
+            # The pointer dies with the directory, and that death is
+            # persisted immediately: staged_review is only REPLACED at the
+            # end of this source, so a failure in between used to leave the
+            # source pointing at a directory that no longer exists -- a
+            # review the dialog offers but cannot open or dismiss. Same
+            # reasoning as run_semantic_escalation's F7.
+            src.staged_review = None
+            _mutated()
 
         remove_staged_escalation_dir(staged_root, project_root)
         (staged_root / "labels").mkdir(parents=True, exist_ok=True)
@@ -299,5 +325,6 @@ def run_escalation(
             producer_variant=req.variant,
             created_at=datetime.now().isoformat(),
         )
+        _mutated()
         result.staged.append(src.name)
     return result

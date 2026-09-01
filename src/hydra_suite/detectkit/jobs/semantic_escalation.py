@@ -398,6 +398,7 @@ def run_semantic_escalation(
     overwrite: bool = False,
     progress: Callable[[int, str], None] | None = None,
     should_stop: Callable[[], bool] | None = None,
+    on_mutated: Callable[[], None] | None = None,
 ) -> SemanticEscalationResult:
     """Stage prompt-driven polygon labels for each named source.
 
@@ -405,7 +406,24 @@ def run_semantic_escalation(
     (``jobs/staged_review.py``): the user accepts or rejects individual
     staged frames into the source the run was made against, rather than
     promoting the whole staged run into a new sibling source.
+
+    ``on_mutated`` is called immediately after EVERY write to a source's
+    ``staged_review``, so the caller can persist the project right then.
+    Without it the pointer lived only in memory until the run returned and
+    the caller saved on success -- so an exception on source 2, or the app
+    being closed before the run returned, left the fully-written staging
+    directory on disk with NOTHING pointing at it. The review bar keys off
+    the pointer, so those staged frames became unreviewable and invisible
+    (recovery was a full re-run). The clear at the top of the loop matters
+    just as much as the set at the bottom: by then the old staging
+    directory is already deleted, so an unpersisted clear leaves the source
+    pointing at a directory that no longer exists.
     """
+
+    def _mutated() -> None:
+        if on_mutated is not None:
+            on_mutated()
+
     result = SemanticEscalationResult()
     by_name = {s.name: s for s in req.project.sources}
     # DEPARTURE 1: no `level != "polygon"` filter. Finding animals the
@@ -462,6 +480,7 @@ def run_semantic_escalation(
             # at a directory that no longer exists -- the review dialog then
             # offers a pending escalation that cannot be opened or dismissed.
             src.staged_review = None
+            _mutated()
 
         # DEPARTURE 3: the wipe is CONDITIONAL on the fingerprint, so a
         # cancelled multi-hour run resumes instead of restarting.
@@ -582,6 +601,7 @@ def run_semantic_escalation(
                 "area_max_px2": float(req.area_max_px2),
             },
         )
+        _mutated()
         result.staged.append(src.name)
 
     result.degenerate += counting_labeler.count
@@ -1083,6 +1103,12 @@ class SemanticEscalationWorker(BaseWorker):
     """QThread wrapper around run_semantic_escalation, with cancellation."""
 
     result_ready = Signal(object)  # SemanticEscalationResult
+    # Emitted from the WORKER thread every time a source's staged_review
+    # changes. Connected with Qt's default AutoConnection, so the slot runs
+    # queued on the receiver's (main) thread -- which is the only place
+    # MainWindow._save_current_project may run, since it touches the dataset
+    # panel and the status bar.
+    project_mutated = Signal()
 
     def __init__(
         self, request: SemanticEscalationRequest, labeler=None, parent=None
@@ -1121,6 +1147,7 @@ class SemanticEscalationWorker(BaseWorker):
                 self.status.emit(msg),
             ),
             should_stop=lambda: self._cancel,
+            on_mutated=self.project_mutated.emit,
         )
         self.result_ready.emit(result)
 

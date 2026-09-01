@@ -108,6 +108,12 @@ def on_escalate_geometry(window, preselect: str | None = None) -> None:
     progress.setValue(0)
 
     worker = Sam2EscalationWorker(request)
+    # A BOUND METHOD of the window, not a lambda: a functor with no
+    # receiver QObject is delivered DIRECTLY on the emitting (worker)
+    # thread, and this slot touches the dataset panel. Binding it to the
+    # window -- a QObject living in the main thread -- is what makes Qt's
+    # AutoConnection resolve to a queued, main-thread call.
+    worker.project_mutated.connect(window._persist_staged_pointer)
     worker.progress.connect(progress.setValue)
     worker.status.connect(progress.setLabelText)
     worker.status.connect(lambda msg: window.statusBar().showMessage(msg, 3000))
@@ -292,6 +298,13 @@ def on_semantic_escalation(window) -> None:
 
     worker.error.connect(_stash_error)
 
+    # A BOUND METHOD of the window, not a lambda: a functor with no
+    # receiver QObject is delivered DIRECTLY on the emitting (worker)
+    # thread, and this slot touches the dataset panel. Binding it to the
+    # window -- a QObject living in the main thread -- is what makes Qt's
+    # AutoConnection resolve to a queued, main-thread call.
+    worker.project_mutated.connect(window._persist_staged_pointer)
+
     def _handle_result(result) -> None:
         # Everything UI-facing (the prompt-failure warning, the success info
         # box) is deferred to _finish, because the progress dialog is still
@@ -371,6 +384,11 @@ def on_semantic_escalation(window) -> None:
             )
             + skipped_note,
         )
+        # Mirror the SAM2 path: staging is worthless until the user is
+        # standing in front of the review bar. A CANCELLED run still staged
+        # real frames, so it jumps too.
+        if result.staged:
+            window._on_go_to_staged_review()
 
     worker.result_ready.connect(_handle_result)
     worker.finished.connect(_finish)

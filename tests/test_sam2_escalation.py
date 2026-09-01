@@ -523,3 +523,51 @@ def test_worker_runs_with_injected_executor(tmp_path):
     worker.result_ready.connect(lambda r: captured.update(staged=r.staged))
     worker.execute()  # call directly (no thread) — BaseWorker pattern
     assert captured["staged"] == ["orig"]
+
+
+def test_on_mutated_fires_when_the_staged_pointer_is_written(tmp_path):
+    """Without it the pointer lives only in memory until the run returns,
+    so a failure or an app close orphans the whole staging directory --
+    the review bar keys off the pointer, not off the files on disk."""
+    src = _make_source(tmp_path)
+    project = types.SimpleNamespace(project_dir=str(tmp_path), sources=[src])
+    req = EscalationRequest(
+        project=project, source_names=["orig"], variant="sam2.1-hiera-base_plus"
+    )
+
+    seen = []
+    run_escalation(req, _FakeExec(), on_mutated=lambda: seen.append(src.staged_review))
+
+    assert len(seen) == 1
+    assert seen[0] is not None and seen[0] is src.staged_review
+
+
+def test_replacing_a_pointer_clears_it_before_the_new_one_is_written(tmp_path):
+    """The old staging dir is deleted at that moment, so leaving the
+    pointer set makes a failure in between offer a review that cannot be
+    opened or dismissed."""
+    from hydra_suite.detectkit.gui.models import StagedReview
+
+    src = _make_source(tmp_path)
+    stale = tmp_path / "artifacts" / "pending_escalations" / "stale"
+    (stale / "labels").mkdir(parents=True)
+    src.staged_review = StagedReview(staged_path=str(stale), producer="sam2")
+    project = types.SimpleNamespace(project_dir=str(tmp_path), sources=[src])
+    req = EscalationRequest(
+        project=project,
+        source_names=["orig"],
+        variant="sam2.1-hiera-base_plus",
+        overwrite=True,
+    )
+
+    seen = []
+    run_escalation(
+        req,
+        _FakeExec(),
+        overwrite=True,
+        on_mutated=lambda: seen.append(src.staged_review),
+    )
+
+    assert seen[0] is None  # the clear, persisted on its own
+    assert not stale.exists()
+    assert seen[-1] is not None and seen[-1].staged_path != str(stale)
