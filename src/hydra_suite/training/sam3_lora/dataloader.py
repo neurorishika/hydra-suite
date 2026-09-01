@@ -4,10 +4,10 @@ batches of Meta Datapoints for `train.py`.
 Qt-free; no `sam3` import at module scope -- `datapoints.py`'s helpers own
 that lazy import, this module only calls them.
 
-UNVERIFIED (flag alongside the loss/matcher import paths in train.py): the
-per-tile transform (`_default_transform`, plain `to_tensor`) is inferred from
-the COCO tile builder's own output format in `dataset_build.py`, not
-confirmed against a live SAM3 install. Verify on the CUDA box.
+`_default_transform` here only converts the PIL tile to a float tensor;
+`datapoints.build_datapoint` applies SAM3's own `NormalizeAPI` (mean/std,
+box XYXY -> normalized CxCyWH) at the `Datapoint` level afterwards -- see
+that module for the confirmed values and citation.
 """
 
 from __future__ import annotations
@@ -24,9 +24,10 @@ from .datapoints import build_datapoint, build_negative_datapoint, collate_datap
 
 
 def _default_transform():
-    """Plain float tensor conversion; SAM3's own normalization is unknown
-    without the package installed -- verify against `sam3`'s reference
-    transform on the CUDA box before relying on this for real training."""
+    """Plain float tensor conversion. Mean/std normalization and box
+    XYXY -> normalized CxCyWH conversion happen afterwards, at the
+    `Datapoint` level, via `datapoints.build_datapoint`'s `NormalizeAPI`
+    call -- do not add per-tile normalization here."""
     import torchvision.transforms.functional as tvf
 
     return tvf.to_tensor
@@ -83,11 +84,17 @@ def _segmentation_to_polygons(annotations: list[dict]) -> list[tuple[np.ndarray,
     entirely and forced the tile's query to `is_exhaustive=False` to
     compensate (COCO's own meaning of `iscrowd` is "present but
     unannotated", not "absent", so silently omitting it would have taught
-    the model those pixels were background). That reasoning predated having
-    the real `sam3.train.data.sam3_image_dataset.Object` API to check: it
-    turns out `Object` has a first-class `is_crowd` field, so the instance
-    can stay present in the object list with `is_crowd=True` and the loss
-    handles it correctly -- no need to fall back to a non-exhaustive query.
+    the model those pixels were background). `Object` does have a
+    first-class `is_crowd` field, so these instances can stay present with
+    `is_crowd=True` instead of being dropped -- but grepping the installed
+    `sam3.train.{loss,matcher,data}` shows nothing in the loss, the matcher,
+    or the collator actually *reads* `is_crowd`; only the COCO loaders and
+    the dataclass definition reference it. It is metadata sam3's own
+    training path does not consume, so these instances behave as ordinary
+    positives, not specially-weighted ones. That is still the right
+    behaviour here (the builder's `MIN_RETAINED_AREA_FRAC` logic only marks
+    tile-clipped instances as crowd, not something that needs loss-level
+    special-casing), it just is not "the loss handles it" -- nothing does.
     """
     polygons: list[tuple[np.ndarray, bool]] = []
     for ann in annotations:

@@ -85,10 +85,39 @@ class Sam3TrainingPanel(QWidget):
 
     # -- Qt lifecycle ------------------------------------------------------
 
+    # Bounded: this only needs to outlast the `conda run` probe's own
+    # `_AUTO_PROBE_TIMEOUT_S`, not hang forever if the subprocess wedges.
+    _CLOSE_WAIT_MS = 6000
+
     def showEvent(self, event) -> None:  # noqa: N802 - Qt override
         super().showEvent(event)
         if not self._probed_once:
             self._start_async_probe()
+
+    def hideEvent(self, event) -> None:  # noqa: N802 - Qt override
+        self._stop_probe_worker()
+        super().hideEvent(event)
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
+        self._stop_probe_worker()
+        super().closeEvent(event)
+
+    def _stop_probe_worker(self) -> None:
+        """Block a running probe `QThread` to completion (bounded) before the
+        panel can be hidden/closed/destroyed.
+
+        `QThread`s parented to a widget are NOT auto-joined on destruction --
+        a still-running thread destroyed under it raises "QThread: Destroyed
+        while thread is still running" and SIGABRTs the whole app. This repo
+        has hit exactly that failure mode before; `_is_destroyed` alone only
+        guards the result *slot*, not the thread's lifetime.
+        """
+        worker = self._probe_worker
+        if worker is None:
+            return
+        if worker.isRunning():
+            worker.quit()
+            worker.wait(self._CLOSE_WAIT_MS)
 
     def _mark_destroyed(self, *_args) -> None:
         self._is_destroyed = True
@@ -108,9 +137,19 @@ class Sam3TrainingPanel(QWidget):
         self.env_status_label.setText(f"Checking {env_name!r}...")
         worker = _AvailabilityProbeWorker(env_name, _AUTO_PROBE_TIMEOUT_S, self)
         worker.result.connect(self._on_async_probe_result)
+        worker.error.connect(self._on_async_probe_error)
         worker.finished.connect(worker.deleteLater)
         self._probe_worker = worker
         worker.start()
+
+    def _on_async_probe_error(self, message: str) -> None:
+        # Previously unconnected: an exception inside the probe (e.g. the
+        # `conda run` subprocess call itself raising) left the label stuck
+        # on "Checking '<env>'..." forever, with no way to tell the probe
+        # had failed rather than still being in flight.
+        if self._is_destroyed:
+            return
+        self.env_status_label.setText(f"Probe failed: {message}")
 
     def _on_async_probe_result(self, payload: tuple) -> None:
         # The worker thread may finish after the panel (or its owning

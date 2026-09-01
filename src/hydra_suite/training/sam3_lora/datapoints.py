@@ -21,6 +21,12 @@ from hydra_suite.core.inference.semantic.sam3 import PREDICTOR_IMGSZ
 # ONE definition of SAM3's input size, shared with the predictor overrides.
 RES = PREDICTOR_IMGSZ
 
+# Confirmed against every reference config under sam3/train/configs/ (e.g.
+# eval_base.yaml's train_norm_mean/train_norm_std/val_norm_mean/val_norm_std):
+# SAM3's image path normalizes with (0.5, 0.5, 0.5) mean/std, not ImageNet's.
+SAM3_NORM_MEAN = (0.5, 0.5, 0.5)
+SAM3_NORM_STD = (0.5, 0.5, 0.5)
+
 
 def _scale_polygons_to_res(
     polygons: list[np.ndarray], w: int, h: int
@@ -101,6 +107,7 @@ def build_datapoint(
         Image,
         InferenceMetadata,
     )
+    from sam3.train.transforms.basic_for_api import NormalizeAPI
 
     h, w = tile_bgr.shape[:2]
     pil = PILImage.fromarray(cv2.cvtColor(tile_bgr, cv2.COLOR_BGR2RGB))
@@ -116,7 +123,13 @@ def build_datapoint(
     query = FindQueryLoaded(
         query_text=prompt,
         image_id=0,
-        object_ids_output=[],
+        # `collate_fn_api` (sam3/train/data/collator.py) builds every find
+        # target EXCLUSIVELY from `object_ids_output`, using each entry as a
+        # positional index into `Image.objects` -- `Image.objects` itself is
+        # never consulted any other way. Leaving this `[]` for a positive
+        # query silently collates to num_boxes=0 (indistinguishable from a
+        # negative), so it must enumerate every object's position here.
+        object_ids_output=list(range(len(objects))),
         is_exhaustive=True,
         query_processing_order=0,
         inference_metadata=InferenceMetadata(
@@ -128,11 +141,21 @@ def build_datapoint(
             frame_index=-1,
         ),
     )
-    return Datapoint(
+    datapoint = Datapoint(
         find_queries=[query],
         images=[Image(data=transform(pil), objects=objects, size=(RES, RES))],
         raw_images=[pil],
     )
+    # `Object.bbox` is documented (sam3/train/data/sam3_image_dataset.py) as
+    # denormalized XYXY on construction, converted to normalized CxCyWH by
+    # `NormalizeAPI` -- which also applies the image mean/std the pretrained
+    # checkpoint expects. Both jobs happen together, at the Datapoint level;
+    # use Meta's own transform rather than reimplementing its maths so the
+    # two paths cannot drift. mean/std=(0.5, 0.5, 0.5) is what every SAM3
+    # reference train/eval config under `sam3/train/configs/` sets for
+    # `train_norm_mean`/`train_norm_std`/`val_norm_mean`/`val_norm_std`.
+    normalize = NormalizeAPI(mean=SAM3_NORM_MEAN, std=SAM3_NORM_STD)
+    return normalize(datapoint)
 
 
 def build_negative_datapoint(
