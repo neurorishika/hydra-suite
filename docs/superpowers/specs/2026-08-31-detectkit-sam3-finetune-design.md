@@ -452,6 +452,41 @@ So:
   precedent applies: the measured value is sacrosanct, the derived one is a
   starting point.
 
+### A prerequisite bug: escalation runs SAM3 at 644, not 1008
+
+Found while rendering the finetuned model's output through the shipping path, and
+it must be fixed **before** the stack-parity gate can mean anything.
+
+`build_sam3.py:38` and `:308` build the SAM3 architecture at `img_size=1008`. But
+`SAM3SemanticPredictor` takes `imgsz` from ultralytics' default config — `640`,
+rounded up to `644` for the stride-14 backbone — and calls `self.model.set_imgsz`
+with it (`predict.py:571`). `predictor_overrides` in `semantic/sam3.py:36-54`
+pins `model`, `device`, `conf` and `iou` but **not** `imgsz`. So every semantic
+escalation this project has ever run has fed SAM3 644 px tiles against a
+1008-native architecture.
+
+Consequences, in order of importance:
+
+1. **It degrades stock escalation today**, independent of anything here. Worth
+   measuring on its own.
+2. It makes the two stacks disagree on more than post-processing: the spike
+   measured at 1008 (Meta's default), the product serves at 644. A model
+   finetuned at 1008 and served at 644 sees a **1.56x scale mismatch** — exactly
+   the failure §2's scale-coupling rule exists to prevent, arriving through a
+   parameter neither the sidecar nor the prefill ever mentioned.
+
+So:
+
+- `predictor_overrides` pins `imgsz = 1008` (the architecture's own value, named
+  as a constant beside `PREDICTOR_NMS_IOU` with the same "pinned, not inherited"
+  reasoning the existing comments use).
+- The sidecar records `imgsz`, and the labeler refuses a checkpoint whose
+  recorded `imgsz` differs from the one it is about to run at, rather than
+  silently rescaling.
+- Because this changes stock behaviour, it is its own commit with its own
+  before/after measurement — not folded into the finetune work where a quality
+  change would be misattributed.
+
 ### The silent-load guard
 
 `_load_checkpoint` **discards** the return value of
