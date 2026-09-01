@@ -254,12 +254,15 @@ conda run -n hydra-sam3 pip install git+https://github.com/facebookresearch/sam3
 conda run -n hydra-sam3 pip install -e /path/to/hydra-suite
 ```
 
-Two of these pins are not obvious, and were found the hard way:
+Three of these pins are not obvious, and were found the hard way:
 
 - **`setuptools<81`** — setuptools 81 removed `pkg_resources`, which
   `sam3/model_builder.py:8` imports at module scope. Without this pin,
   `import sam3` fails immediately with `ModuleNotFoundError:
   No module named 'pkg_resources'`, regardless of what else is installed.
+- **`einops`** — imported by `sam3/sam/rope.py` at module scope but absent
+  from sam3's declared dependencies, so a bare `pip install sam3` leaves it
+  missing until the first LoRA-adapted forward pass fails.
 - **`pandas`/`numba`** — training's in-env CLI runs as
   `python -m hydra_suite.training.sam3_lora.cli`, and importing
   `hydra_suite` this way eagerly imports `hydra_suite.training.service`,
@@ -293,12 +296,17 @@ Training is gated on whether the `hydra-sam3` env can actually import
   optional upstream, MPS training works with no change to anything in
   DetectKit; the probe would simply start reporting the env usable.
 
-Preflight also checks free VRAM/memory before touching a weight and
-refuses the run below **32 GB free**, with a further warning below 40 GB.
-That floor sits above the ~29 GB the training spike actually measured at
-batch size 1: the margin exists so the same GPU load that OOMs a real run
-also fails preflight, in milliseconds, rather than after an hour of
-compute time.
+Preflight also checks free VRAM before touching a weight and refuses the
+run below **32 GB free**, with a further warning below 40 GB -- but only
+when the check can see a GPU at all. Preflight runs in the **launching**
+process (the GUI's conda env, e.g. `hydra-mps`/`hydra-cuda`), not in the
+`hydra-sam3` sidecar where training actually executes; on a Mac launcher
+there is no CUDA device to query, so this check silently reports "no CUDA
+device" and does not apply. The sidecar child does not re-check VRAM either.
+Where it does apply (a CUDA launcher, e.g. mehek), that floor sits above the
+~29 GB the training spike actually measured at batch size 1: the margin
+exists so the same GPU load that OOMs a real run also fails preflight, in
+milliseconds, rather than after an hour of compute time.
 
 ### The label-quality acknowledgement
 

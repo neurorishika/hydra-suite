@@ -33,8 +33,15 @@ def resolve_sam3_env(configured: Optional[str] = None) -> str:
 
 
 def sam3_env_command(env: str, module_args: List[str]) -> List[str]:
-    """Build the ``conda run`` command line to invoke a module in ``env``."""
-    return ["conda", "run", "-n", env, "python", "-m", *module_args]
+    """Build the ``conda run`` command line to invoke a module in ``env``.
+
+    ``-u`` (unbuffered stdout/stderr) matters here: the launcher parses the
+    child's stdout line by line for progress, and ordinary ``sam3``/``torch``
+    prints are not flushed like this package's own sentinel records are --
+    without it, plain log output can arrive in bursts or be lost entirely if
+    the child is killed before its buffer flushes.
+    """
+    return ["conda", "run", "-n", env, "python", "-u", "-m", *module_args]
 
 
 def sam3_env_environ() -> Dict[str, str]:

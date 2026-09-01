@@ -42,6 +42,7 @@ def test_sam3_env_command_builds_conda_run_python_module():
         "-n",
         "hydra-sam3",
         "python",
+        "-u",
         "-m",
         "pkg.module",
         "--flag",

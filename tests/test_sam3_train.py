@@ -47,7 +47,16 @@ def _pass_preflight(monkeypatch):
 
 
 class _FakeProcess:
-    """Stands in for `subprocess.Popen` as returned by `popen_conda`."""
+    """Stands in for `subprocess.Popen` as returned by `popen_conda`.
+
+    `pid` is deliberately bogus (not a real process): `_send_signal`'s
+    `os.killpg(os.getpgid(pid), ...)` must raise on it and fall back to the
+    plain `.terminate()`/`.kill()` below, which is what these tests assert
+    on -- this is also what happens for real against a process this test
+    process does not own.
+    """
+
+    pid = -1
 
     def __init__(self, lines, returncode=0, terminate_hangs=False):
         self._lines = list(lines)
@@ -144,12 +153,15 @@ def test_progress_and_log_records_forwarded(tmp_path, monkeypatch):
 def test_malformed_json_record_treated_as_plain_text(tmp_path, monkeypatch):
     _pass_preflight(monkeypatch)
     run_dir = tmp_path / "run"
-    run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "adapters.pt").write_bytes(b"fake")
 
     bad_line = "@@HYDRA_SAM3_PROGRESS@@{not valid json\n"
-    process = _FakeProcess([bad_line], returncode=0)
-    monkeypatch.setattr(tr, "popen_conda", lambda *a, **k: process)
+
+    def _fake_popen(*a, **k):
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "adapters.pt").write_bytes(b"fake")
+        return _FakeProcess([bad_line], returncode=0)
+
+    monkeypatch.setattr(tr, "popen_conda", _fake_popen)
 
     logs = []
     result = tr.train_sam3_lora(
@@ -246,3 +258,84 @@ def test_spec_serialised_to_run_dir(tmp_path, monkeypatch):
 
     payload = json.loads(spec_path.read_text(encoding="utf-8"))
     assert payload["sam3_params"]["prompt"] == "ant"
+
+
+def test_log_cb_raising_mid_stream_still_terminates_child(tmp_path, monkeypatch):
+    """C1: a raising callback (or a decode error) must not orphan the child."""
+    _pass_preflight(monkeypatch)
+    run_dir = tmp_path / "run"
+    process = _FakeProcess(["line one\n", "line two\n"], returncode=0)
+    monkeypatch.setattr(tr, "popen_conda", lambda *a, **k: process)
+
+    def _raising_log_cb(_line):
+        raise ValueError("boom from log_cb")
+
+    try:
+        tr.train_sam3_lora(
+            _healthy_spec(tmp_path), str(run_dir), log_cb=_raising_log_cb
+        )
+        raised = False
+    except ValueError:
+        raised = True
+
+    assert raised is True
+    assert process.terminated is True
+    assert not (run_dir / "adapters.pt").exists()
+
+
+def test_stale_artifact_is_cleared_before_launch(tmp_path, monkeypatch):
+    """I2: a pre-existing adapters.pt plus a child that writes nothing must
+    still fail, never silently publish the PREVIOUS run's artifact."""
+    _pass_preflight(monkeypatch)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "adapters.pt").write_bytes(b"stale-from-a-previous-run")
+
+    process = _FakeProcess(["trained nothing, exited clean\n"], returncode=0)
+    monkeypatch.setattr(tr, "popen_conda", lambda *a, **k: process)
+
+    result = tr.train_sam3_lora(_healthy_spec(tmp_path), str(run_dir))
+
+    assert result["success"] is False
+    assert not (run_dir / "adapters.pt").exists()
+    assert "did not write" in result["error_message"]
+
+
+def test_empty_artifact_is_treated_as_missing(tmp_path, monkeypatch):
+    """I2: a zero-byte adapters.pt (e.g. a truncated write) must not pass."""
+    _pass_preflight(monkeypatch)
+    run_dir = tmp_path / "run"
+
+    def _fake_popen(*args, **kwargs):
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "adapters.pt").write_bytes(b"")  # zero bytes
+        return _FakeProcess([], returncode=0)
+
+    monkeypatch.setattr(tr, "popen_conda", _fake_popen)
+
+    result = tr.train_sam3_lora(_healthy_spec(tmp_path), str(run_dir))
+
+    assert result["success"] is False
+    assert "did not write" in result["error_message"]
+
+
+def test_command_and_environ_wired_from_env_module(tmp_path, monkeypatch):
+    """Sanity check that the launcher still uses env.py's helpers (unbuffered
+    `-u`, KMP_DUPLICATE_LIB_OK) rather than re-deriving them."""
+    _pass_preflight(monkeypatch)
+    run_dir = tmp_path / "run"
+    captured = {}
+
+    def _fake_popen(command, **kwargs):
+        captured["command"] = command
+        captured["env"] = kwargs.get("env")
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "adapters.pt").write_bytes(b"fake")
+        return _FakeProcess([], returncode=0)
+
+    monkeypatch.setattr(tr, "popen_conda", _fake_popen)
+
+    tr.train_sam3_lora(_healthy_spec(tmp_path), str(run_dir))
+
+    assert "-u" in captured["command"]
+    assert captured["env"]["KMP_DUPLICATE_LIB_OK"] == "TRUE"

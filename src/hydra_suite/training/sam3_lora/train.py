@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import json
 import os
+import platform
+import signal
 import subprocess
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -40,6 +42,16 @@ TERMINATE_GRACE_S = 5.0
 # How many trailing plain-text lines to keep for the error message on a
 # non-zero exit (the child's own stderr is merged into this stream).
 STDERR_TAIL_LINES = 20
+
+# `conda run` execs a shell wrapper around the real python grandchild that
+# does the training; signalling only the wrapper (`process.terminate()`)
+# can leave that grandchild alive holding tens of GB of VRAM. On POSIX we
+# launch the child in its own session (`start_new_session=True`) and signal
+# the whole process group instead. `conda_utils` exists precisely because
+# Windows differs here -- there `start_new_session`/process groups work
+# differently, so Windows keeps the plain `process.terminate()`/`.kill()`
+# path, same as before this fix.
+_IS_POSIX = platform.system() != "Windows"
 
 
 def train_sam3_lora(
@@ -94,6 +106,16 @@ def train_sam3_lora(
     )
     child_environ = {**os.environ, **sam3_env_environ()}
 
+    # A stale adapters.pt from a reused run_dir must never be mistaken for
+    # this run's output: if the child exits 0 without writing a new one, the
+    # existence check below has to see it genuinely absent, not a leftover.
+    artifact_path = run_dir_path / "adapters.pt"
+    artifact_path.unlink(missing_ok=True)
+
+    popen_kwargs: dict[str, Any] = {}
+    if _IS_POSIX:
+        popen_kwargs["start_new_session"] = True
+
     try:
         process = popen_conda(
             command,
@@ -101,7 +123,9 @@ def train_sam3_lora(
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            errors="replace",
             bufsize=1,
+            **popen_kwargs,
         )
     except FileNotFoundError as exc:
         return _refuse(
@@ -111,6 +135,7 @@ def train_sam3_lora(
 
     canceled = False
     tail_lines: list[str] = []
+    stream_error: Optional[Exception] = None
 
     try:
         assert process.stdout is not None
@@ -129,18 +154,25 @@ def train_sam3_lora(
             tail_lines.append(line)
             if len(tail_lines) > STDERR_TAIL_LINES:
                 tail_lines.pop(0)
+    except Exception as exc:  # noqa: BLE001 -- anything here (a decode
+        # error from stray non-UTF8 child output, or log_cb/progress_cb
+        # raising) must still reap the child below, never propagate past a
+        # live orphaned process. Re-raised after the child is reaped.
+        stream_error = exc
     finally:
-        # Terminate in `finally` so a raising parent (or an exception from a
-        # callback above) can never orphan the child.
-        if canceled:
-            process.terminate()
+        # Reap the child on EVERY exit path -- cancellation, a clean finish,
+        # or an exception above -- so a raising caller can never orphan a
+        # live, multi-hour training process.
+        if canceled or stream_error is not None:
+            _terminate_then_kill(process)
+        else:
             try:
                 process.wait(timeout=TERMINATE_GRACE_S)
             except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
-        else:
-            process.wait()
+                _terminate_then_kill(process)
+
+    if stream_error is not None:
+        raise stream_error
 
     if canceled:
         return {
@@ -157,12 +189,11 @@ def train_sam3_lora(
             f"{process.returncode}. Child output tail:\n{tail}"
         )
 
-    artifact_path = run_dir_path / "adapters.pt"
-    if not artifact_path.exists():
+    if not artifact_path.exists() or artifact_path.stat().st_size == 0:
         return _refuse(
             "SAM3 training subprocess exited successfully but did not write "
-            f"{artifact_path.name}; refusing to report success for a run "
-            "that trained nothing."
+            f"a non-empty {artifact_path.name}; refusing to report success "
+            "for a run that trained nothing."
         )
 
     metrics_candidate = run_dir_path / "val_stats.json"
@@ -174,3 +205,30 @@ def train_sam3_lora(
         "metrics_path": str(metrics_path) if metrics_path else None,
         "canceled": False,
     }
+
+
+def _terminate_then_kill(process: "subprocess.Popen[str]") -> None:
+    """Escalate terminate -> grace period -> kill, signalling the whole
+    process group on POSIX so `conda run`'s python grandchild is reached
+    too (see `_IS_POSIX` above)."""
+    _send_signal(process, terminate=True)
+    try:
+        process.wait(timeout=TERMINATE_GRACE_S)
+    except subprocess.TimeoutExpired:
+        _send_signal(process, terminate=False)
+        process.wait()
+
+
+def _send_signal(process: "subprocess.Popen[str]", *, terminate: bool) -> None:
+    if _IS_POSIX:
+        sig = signal.SIGTERM if terminate else signal.SIGKILL
+        try:
+            os.killpg(os.getpgid(process.pid), sig)
+            return
+        except (ProcessLookupError, PermissionError, OSError):
+            pass  # process group already gone, or this process is not a
+            # session leader (e.g. a test double) -- fall back below.
+    if terminate:
+        process.terminate()
+    else:
+        process.kill()
