@@ -7,46 +7,54 @@
 DetectKit's semantic escalation runs SAM3 zero-shot from a text prompt. On the
 `improved_ant_detection` project that is not good enough, and a YOLO-seg model
 trained on the same three frames is worse. A leave-one-frame-out spike (`spike/sam3-lora`,
-`scratch/sam3_lora_spike/FINDINGS.md`, result JSONs committed under
-`scratch/sam3_lora_spike/results/`) measured, **on one held-out frame after one
-epoch of one fold**:
+`scratch/sam3_lora_spike/FINDINGS.md`, result JSONs under
+`scratch/sam3_lora_spike/results/`) trained three folds — each on two frames
+(~48 ant polygons), each scored on the third, genuinely held-out frame:
 
-| arm (held-out frame f008078)  | AP50  | AP75  | mean matched IoU |
-|-------------------------------|-------|-------|------------------|
-| YOLO-seg, best tile size      | 0.483 | 0.220 | 0.761            |
-| SAM3 zero-shot                | 0.447 | 0.000 | 0.584            |
-| SAM3 + LoRA, **one epoch**    | 0.737 | 0.563 | 0.769            |
+| arm (mean over 3 held-out frames) | AP50  | AP75  | mean matched IoU | R@50  |
+|-----------------------------------|-------|-------|------------------|-------|
+| YOLO-seg, best tile size          | 0.479 | 0.255 | 0.764            | 0.931 |
+| SAM3 zero-shot                    | 0.465 | 0.000 | 0.571            | 0.667 |
+| **SAM3 + LoRA (last @ epoch 40)** | **0.838** | **0.624** | 0.757        | 0.903 |
 
-**How much weight this evidence carries.** One fold, one epoch, 24 GT instances
-on a single frame from a single video. Both known biases favour YOLO (its
-training set included this frame; its tile size was swept on the test frames),
-so the direction is conservative -- but the magnitude is noisy and should not be
-quoted as a expected gain. Two further caveats the numbers do not carry on their
-face: `mean matched IoU` is averaged only over the GT each arm actually found,
-so zero-shot's 0.584 is computed over the 62% it hit and is a selection effect;
-and the scorer's greedy argmax matching is not COCO matching (a prediction whose
-best GT is already taken becomes an FP even if a second GT would clear
-threshold), which deflates all arms but makes these numbers non-comparable to
-published COCO AP. **All three folds have since trained, and they are not identical.** Fold 3
-(`f008975` held out) ran a validation loss of ~2.5 at epoch 10 against ~0.85 on
-folds 1-2, converging to ~1.4-1.7 by epoch 40. Because the validation split *is*
-the held-out frame, that is a per-frame generalisation signal, not a training
-artifact — the divergence shrank with training rather than persisting, which
-reads as slower convergence on that split rather than a failure, but it is
-unresolved until the held-out AP for all three folds exists.
+Per fold, so the spread is visible rather than hidden in a mean:
 
-**The 3-fold held-out AP is therefore a blocking input to the go decision**, not
-a footnote to it. If folds 2-3 do not show the same AP75 recovery as fold 1, the
-mechanism claim — not merely the magnitude — is in question, and this design
-should not proceed on fold 1 alone. `epochs` (below) is blocked on the same
-evaluation.
+| held-out frame | AP50  | AP75  | mean matched IoU |
+|----------------|-------|-------|------------------|
+| f008078        | 0.924 | 0.669 | 0.757            |
+| f008161        | 0.678 | 0.417 | 0.739            |
+| f008975        | 0.911 | 0.786 | 0.775            |
 
-The diagnosis is specific and it is what makes finetuning the right lever:
-**zero-shot SAM3 already localises the animals as well as a trained YOLO, but
-its mask geometry is wrong** — it overshoots, tracing legs, the same ~1.7x area
-bias the shape-aware calibration work documented. AP75 of 0.001 is that bias.
-One epoch on ~48 example polygons fixed it. Localisation is expensive to teach;
-shape is cheap, and the user already has the labels.
+**Every fold beats the tuned YOLO baseline on AP75**, the worst of them
+(0.417) by 1.6x and the mean by 2.4x. The diagnosis this design rests on is
+what the numbers say: **zero-shot SAM3 already localises the animals about as
+well as a trained YOLO (AP50 0.465 vs 0.479) but its mask geometry is wrong**
+— AP75 0.000, mean IoU 0.571 against YOLO's 0.764. That is the ~1.7x area
+overshoot (tracing legs) the shape-aware calibration work documented.
+Finetuning fixes exactly that term: IoU 0.571 -> 0.757, AP75 0.000 -> 0.624.
+Localisation is expensive to teach; shape is cheap, and the labels already
+exist.
+
+**What this evidence does and does not support.** Three frames from one video,
+one arena, one lighting condition, 24 instances each. Leave-one-frame-out
+controls overfitting to a *frame*, not to a *setup*, so these numbers justify
+building the feature and do not promise a value on a new rig. Both known biases
+favour YOLO (its training set included these frames; its tile size was swept on
+them), so the margin is conservative. Between-fold spread is real — AP50 ranges
+0.678 to 0.924 — and `f008161` is materially weaker than the other two.
+Two properties of the scorer travel with the numbers: `mean matched IoU` is
+averaged only over the GT each arm found, so zero-shot's 0.571 is a selection
+effect over the 67% it hit; and the greedy argmax matching is not COCO matching,
+so these are not comparable to published COCO AP.
+
+Validation loss proved a **useless** signal here and should not be used as a
+stopping criterion: fold `f008975` had the worst val loss of the three (~2.5 at
+epoch 10, ~1.7 at 40, against ~0.85 elsewhere) and the *best* held-out AP75
+(0.786).
+
+Operating point: AP is ranking-based and flat across conf 0.1/0.2/0.4, but
+precision at fixed recall moves 0.17 -> 0.32 -> 0.72. A deployed model wants
+conf ~0.4; the escalation default of 0.2 leaves easy precision on the table.
 
 Confidence threshold is not the lever: zero-shot AP50 is 0.465/0.465/0.462 at
 conf 0.1/0.2/0.4.
@@ -163,7 +171,7 @@ class Sam3LoraParams:
     alpha: int = 32
     dropout: float = 0.1
     lr: float = 5e-5
-    epochs: int = 20
+    epochs: int = 10
     batch: int = 1                # 1008 px + ViT backprop; see VRAM preflight
     grad_accum: int = 8
     mixed_precision: str = "bf16"
@@ -198,13 +206,30 @@ up. It deliberately diverges from the `0.15` used by the SAHI consumers
 escalation seed (`semantic/tiling.py:32`) because SAM3's fixed 1008 input makes
 the trade-off a different one.
 
-`epochs = 20` is a **placeholder, and weaker than it looks**. The spike hit
-AP75 0.563 after one epoch, but with `warmup_steps: 50` and ~9 optimiser steps
-per epoch that checkpoint trained entirely inside LR warmup — it may not reflect
-the configured learning rate at all. Fold-1 val loss then rose from 0.884 to
-0.997 and never cleanly improved. The AP-vs-epoch curve (fold 1 snapshots, eval
-pending) is a **blocking input** to this default: do not implement against 20
-without it.
+`epochs = 10` is **measured, not guessed.** The AP-vs-epoch curve on fold 1's
+held-out frame (`scratch/sam3_lora_spike/results/curve/`, 10 checkpoints across
+40 epochs):
+
+| epoch | 1 | 5 | 9 | 13 | 17 | 21 | 25 | 29 | 33 | 37 |
+|-------|---|---|---|----|----|----|----|----|----|----|
+| AP50  | .821 | .828 | .877 | .853 | .884 | .880 | .855 | .924 | .855 | .911 |
+| AP75  | .594 | .624 | .649 | .673 | .578 | .707 | .621 | .610 | .637 | .660 |
+
+From epoch 9 on, AP75 has mean 0.642 and **sd 0.040**, and swings ±0.13 between
+adjacent points (0.578 at 17, 0.707 at 21) — that is sampling noise on 24
+instances in one frame, not learning. Epoch 1 already scores 0.594 and epoch 5
+0.624, both within about one sd of the plateau. So the useful adaptation is
+essentially complete within the first handful of epochs; 10 buys the plateau
+with margin, and 40 buys nothing.
+
+This is a **practical** finding as much as a numeric one: the finetune costs
+minutes of GPU, not hours, which is what makes it reasonable to offer as a
+routine step rather than an expedition.
+
+One caveat that keeps this honest: the curve is one fold's held-out frame. The
+right reading is "the plateau arrives early", not "epoch 21 is optimal" — picking
+the curve's argmax would be selection on the evaluation frame, the same leak the
+checkpoint-selection rule above exists to prevent.
 
 ### 2. Dataset builder (`training/dataset_builders.py`)
 
@@ -544,10 +569,12 @@ checkpoint and a 32 GB CUDA card. The manual gate is below.
 Automated tests cannot cover the integration that actually matters, so these are
 the conditions for calling the role done. Both run on mehek.
 
-0. **Three-fold held-out AP (blocking, and first).** Every fold's `last`
-   checkpoint scored on its own held-out frame. Go requires **all three folds**
-   to beat zero-shot SAM3 on AP75 by a wide margin (zero-shot is ~0.00; any fold
-   below 0.20 is a stop-and-investigate). One fold succeeding is not a result.
+0. **Three-fold held-out AP — SATISFIED by the spike.** Every fold's `last`
+   checkpoint was scored on its own held-out frame: AP75 0.669 / 0.417 / 0.786,
+   against a 0.20 stop-and-investigate floor and a zero-shot baseline of 0.000.
+   All three clear it, and all three beat tuned YOLO's 0.255. This gate is
+   recorded as met; it remains in the list because a future retrain must clear it
+   again.
 
 1. **Stack-parity gate (blocking).** The merged checkpoint, loaded through the
    **ultralytics** path, must reproduce the native-`sam3`-path result on the same
