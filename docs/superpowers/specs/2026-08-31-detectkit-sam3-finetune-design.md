@@ -193,10 +193,39 @@ class Sam3LoraParams:
     slice_height: int = 0                # custom mode only
     tile_overlap: float = 0.25
     keep_empty_tiles: bool = True
+    # Provenance does not survive a review (see the ordering dependency above),
+    # so the user must affirm the labels are good before SAM3 learns them --
+    # including its own accepted output. Preflight refuses without it.
+    label_quality_acknowledged: bool = False
 ```
 
 `TrainingRunSpec` gains `sam3_params: Sam3LoraParams | None = None`, exactly as
 it already carries `tiny_params` and `custom_params`.
+
+**The six `adapt_*` flags select submodules by PREFIX, not suffix**, so the LoRA
+seam needs both: a target-suffix list (which `nn.Linear` leaves to wrap) and an
+include-prefix list (which subtree they must live under). A suffix-only filter
+cannot express these flags at all and would adapt the text encoder we
+deliberately freeze.
+
+The prefixes are **measured**, not guessed — against a live
+`build_sam3_image_model` carrying 293 `nn.Linear` modules:
+
+| flag | prefix | Linears |
+|---|---|---|
+| `adapt_vision_encoder` | `backbone.vision_backbone` | 128 |
+| `adapt_text_encoder` | `backbone.language_backbone` | 73 |
+| `adapt_detr_decoder` | `transformer.decoder` | 42 |
+| `adapt_detr_encoder` | `transformer.encoder` | 24 |
+| `adapt_geometry_encoder` | `geometry_encoder` | 18 |
+| `adapt_mask_decoder` | `segmentation_head` | 4 |
+
+Two natural guesses are wrong and would match **nothing**, silently making
+their flag a no-op: the geometry encoder is top-level, not
+`backbone.geometry_encoder`, and the mask decoder is `segmentation_head`, not
+`mask_decoder`. `dot_prod_scoring` (4 Linears, the text/vision similarity head)
+is named by no flag and is therefore never adapted; add a flag rather than
+folding it into another.
 
 `object_tile_fraction` defaults to 0.055 because that is what the spike
 measured, not because it is principled: 55 px animals in a 1008 px tile. It is
@@ -295,6 +324,8 @@ because the motivating project has only three labelled frames:
 - **1 frame:** train-only. Val is skipped, the run record records
   `validation: "none"`, and the GUI says so. Refusing would block the exact
   bootstrap case this feature exists to serve.
+- Use `n_val = max(1, round(n * split.val))` whenever `n >= 2`: with three
+  frames and `val=0.2` a plain floor yields an empty valid split.
 - The spike's own leak (its `valid/` split *was* the held-out evaluation frame)
   is a lesson, not a pattern: in production, val is drawn from the training
   frames and evaluation is a separate concern.
@@ -397,6 +428,20 @@ On success the trainer writes `adapters.pt` (~46 MB) into the run dir, and
 `train_tile_px` is named to prevent the conflation §2 warns about: it is a
 **frame-space** tile size, not SAM3's fixed 1008 px input. In the spike they
 coincided (55.4 / 0.055 ≈ 1007); they generally do not.
+
+`publish_sam3_model` returns **`(registry_key, artifact_path)`** — the same
+shape `publish_trained_model` returns, because `run_role_training` unpacks it as
+`(published_key, published_path)` (`service.py:463-472`). Returning
+`(artifact, sidecar)` would silently record the JSON sidecar as the published
+model. The sidecar is reachable from the registry entry.
+
+**Where the sidecar's geometry comes from.** `train_tile_px` and
+`reference_body_px` are written by the *builder*, into
+`<derived>/build_manifest.json`; `publish_metadata` carries size/species-style
+fields only. The publish fork must read that manifest, or the sidecar ships
+without geometry, the escalation prefill has nothing to prefill, and the
+scale-round-trip acceptance gate cannot pass. `source_fingerprint` likewise
+comes from the caller's `dataset_fingerprint_value`, not from the manifest.
 
 The adapters are retained in the run dir. They are the cheap artifact to keep for
 re-merging against a future base checkpoint; the 3.4 GB file is the disposable
