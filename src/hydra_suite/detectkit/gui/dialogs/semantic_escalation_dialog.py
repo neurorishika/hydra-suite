@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 from hydra_suite.core.inference.semantic.checkpoints import (
     CHECKPOINT_SIZE_GB,
     available_models,
+    available_variants,
     probe_availability,
     sidecar_for,
 )
@@ -140,6 +141,20 @@ class SemanticEscalationDialog(BaseDialog):
         if self._variant.findText(saved_variant) >= 0:
             self._variant.setCurrentText(saved_variant)
         add_field(0, 0, "Model", self._variant)
+
+        # The dropdown is populated from available_models() = stock variants
+        # + registry-published finetuned models. Until a finetuned model is
+        # published that is exactly ["sam3"] -- one item, no explanation --
+        # which reads as "model selection was never built" rather than
+        # "nothing to select yet". Say so explicitly.
+        self._no_finetuned_hint = QLabel(
+            "No finetuned SAM3 models published yet — train one from the "
+            "DetectKit training dialog (Semantic mode)."
+        )
+        self._no_finetuned_hint.setWordWrap(True)
+        finetuned_present = len(available_models()) > len(available_variants())
+        self._no_finetuned_hint.setVisible(not finetuned_present)
+        form.addWidget(self._no_finetuned_hint, 6, 0, 1, 4)
 
         self._prompt = QLineEdit(str(saved.get("prompt", "ant") or "ant"))
         self._prompt.setToolTip(

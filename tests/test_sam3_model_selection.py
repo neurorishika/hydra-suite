@@ -82,3 +82,21 @@ def test_job_resolves_the_selected_key_to_a_checkpoint(monkeypatch, tmp_path):
     )
     ck = job.labeler_checkpoint_for("run123")
     assert str(ck).endswith("run123.pt")
+
+
+def test_no_finetuned_hint_visible_when_only_stock_models_exist(qapp, monkeypatch):
+    from hydra_suite.detectkit.gui.dialogs import semantic_escalation_dialog as d
+
+    monkeypatch.setattr(d, "available_variants", lambda: ["sam3"])
+    monkeypatch.setattr(d, "available_models", lambda: ["sam3"])
+    dlg = d.SemanticEscalationDialog(sources=[], reference_body_px=55.0)
+    assert not dlg._no_finetuned_hint.isHidden()
+
+
+def test_no_finetuned_hint_hidden_when_a_finetuned_model_exists(qapp, monkeypatch):
+    from hydra_suite.detectkit.gui.dialogs import semantic_escalation_dialog as d
+
+    monkeypatch.setattr(d, "available_variants", lambda: ["sam3"])
+    monkeypatch.setattr(d, "available_models", lambda: ["sam3", "run123"])
+    dlg = d.SemanticEscalationDialog(sources=[], reference_body_px=55.0)
+    assert dlg._no_finetuned_hint.isHidden()
