@@ -179,3 +179,16 @@ def merge_adapters(
         delta = (b @ a) * cfg.scaling
         merged[key] = merged[key] + delta.to(merged[key].dtype)
     return merged
+
+
+def adapter_touched_keys(
+    adapters: dict[str, torch.Tensor], *, prefix: str = "detector."
+) -> set[str]:
+    """Return the base-checkpoint keys `merge_adapters` would modify.
+
+    Single source of truth for the `{prefix}{path}.weight` formula, so a
+    caller reporting "N keys carried across untouched" (publish.py) cannot
+    silently disagree with the key set `merge_adapters` itself touches.
+    """
+    paths = sorted({k.rsplit(".", 1)[0] for k in adapters})
+    return {f"{prefix}{path}.weight" for path in paths}

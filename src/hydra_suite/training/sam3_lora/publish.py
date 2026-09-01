@@ -19,7 +19,7 @@ import torch
 
 from hydra_suite.core.inference.semantic.sam3 import PREDICTOR_IMGSZ
 
-from .lora import lora_config_from_params, merge_adapters
+from .lora import adapter_touched_keys, lora_config_from_params, merge_adapters
 
 logger = logging.getLogger(__name__)
 
@@ -36,9 +36,30 @@ def stripped_keys(state_dict: dict[str, Any]) -> list[str]:
 
 
 def _tensor_sha256(tensor: torch.Tensor) -> str:
+    # dtype-agnostic: `.numpy()` raises TypeError on bf16 (numpy has no bf16),
+    # which is the repo's own default mixed_precision -- so this must not
+    # depend on the tensor's dtype surviving a numpy round-trip. Viewing as
+    # raw bytes sidesteps that entirely.
     return hashlib.sha256(
-        tensor.detach().cpu().contiguous().numpy().tobytes()
+        tensor.detach().cpu().contiguous().view(torch.uint8).numpy().tobytes()
     ).hexdigest()
+
+
+def _load_base_checkpoint(base_checkpoint: Path) -> dict[str, torch.Tensor]:
+    try:
+        base = torch.load(base_checkpoint, map_location="cpu", weights_only=True)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to load SAM3 base checkpoint {base_checkpoint} with "
+            "weights_only=True. If the stock checkpoint is a wrapper carrying "
+            "non-tensor metadata (as its `base['model']` unwrap below "
+            "suggests it may be), retry with torch.load(..., "
+            "weights_only=False) -- only safe for a trusted, first-party "
+            "checkpoint."
+        ) from exc
+    if isinstance(base, dict) and "model" in base and isinstance(base["model"], dict):
+        base = base["model"]
+    return base
 
 
 def publish_sam3_model(
@@ -60,15 +81,22 @@ def publish_sam3_model(
         unpacks it as ``(published_key, published_path)``.
     """
     if models_root is None:
-        from hydra_suite.paths import get_models_dir
+        # Same helper `model_publish._registry_path()` uses (get_models_root,
+        # not paths.get_models_dir) so a SAM3 entry can never land in a
+        # second registry file under a monkeypatched project root.
+        from .model_publish import get_models_root
 
-        models_root = get_models_dir()
+        models_root = get_models_root()
     models_root = Path(models_root)
 
-    base = torch.load(Path(base_checkpoint), map_location="cpu", weights_only=True)
-    if isinstance(base, dict) and "model" in base and isinstance(base["model"], dict):
-        base = base["model"]
+    base = _load_base_checkpoint(Path(base_checkpoint))
     adapters = torch.load(Path(adapters_path), map_location="cpu", weights_only=True)
+    if not adapters:
+        raise RuntimeError(
+            "adapters.pt is empty -- there is nothing to merge. Publishing it "
+            "would silently produce a checkpoint byte-for-byte identical to "
+            "stock SAM3 while reporting success."
+        )
 
     cfg = lora_config_from_params(params)
     merged = merge_adapters(base, adapters, cfg)
@@ -77,20 +105,40 @@ def publish_sam3_model(
     # because it starts from a clone of `base` -- so stock-only keys (e.g.
     # the spike's 22 vision_backbone.sam2_convs.* tensors that Meta's builder
     # never instantiates) are carried across untouched automatically. Just
-    # count and log them so a future regression is visible.
-    adapter_paths = sorted({k.rsplit(".", 1)[0] for k in adapters})
-    touched_keys = {f"detector.{path}.weight" for path in adapter_paths}
+    # count and log them so a future regression is visible. Shared formula
+    # with merge_adapters via adapter_touched_keys -- no re-derived prefix.
+    touched_keys = adapter_touched_keys(adapters)
     untouched_count = len(set(merged) - touched_keys)
+    discarded_on_load = len(merged) - len(stripped_keys(merged))
     logger.info(
         "sam3 publish: merged %d adapter tensors into %d base keys "
-        "(%d keys carried across untouched)",
-        len(adapter_paths),
+        "(%d keys carried across untouched, %d keys ultralytics' substring "
+        "filter will discard on load)",
+        len(touched_keys),
         len(merged),
         untouched_count,
+        discarded_on_load,
     )
 
     fingerprint_keys = sorted(touched_keys)[:3]
     tuned_fingerprints = {k: _tensor_sha256(merged[k]) for k in fingerprint_keys}
+    base_fingerprints = {
+        k: _tensor_sha256(base[k]) for k in fingerprint_keys if k in base
+    }
+    unchanged = [
+        k
+        for k in fingerprint_keys
+        if k in base_fingerprints and base_fingerprints[k] == tuned_fingerprints[k]
+    ]
+    if unchanged and set(unchanged) == set(fingerprint_keys):
+        raise RuntimeError(
+            "Merge produced a checkpoint indistinguishable from stock SAM3: "
+            f"every sampled tuned key ({sorted(unchanged)}) hashes identically "
+            "to base. This usually means lora_B is still at zero init (an "
+            "aborted or zero-step training run) or the adapters are otherwise "
+            "all-zero. Refusing to publish a model that would silently be a "
+            "no-op."
+        )
 
     out_dir = models_root / "sam3_finetuned"
     out_dir.mkdir(parents=True, exist_ok=True)
