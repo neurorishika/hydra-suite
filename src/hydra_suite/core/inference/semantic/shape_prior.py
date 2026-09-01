@@ -37,11 +37,12 @@ from hydra_suite.core.inference.masks import polygon_iou
 
 # The multipliers are applied to the label population's EXTREMES, not only
 # to its median (see fit_area_band). HIGH is generous on purpose: it must
-# clear the ~1.7x appendage overshoot with room to spare, while still
-# rejecting the multi-animal merges and arena chunks that are an order of
-# magnitude out.
+# clear the ~1.7x appendage overshoot with room to spare.  It must also reject
+# a two-animal merge: at 3.5x, two correctly traced ~1.7x masks could be
+# combined and still pass the gate, after which containment resolution would
+# prefer that blob over both individuals.
 LOW_MULTIPLIER = 0.3
-HIGH_MULTIPLIER = 3.5
+HIGH_MULTIPLIER = 2.5
 # Floor on the aspect-agreement term. A silhouette that traces legs and
 # antennae has a minAreaRect elongation near 1 while the body-core quad
 # labelling the same animal can be 8:1 -- the SAME conventional difference

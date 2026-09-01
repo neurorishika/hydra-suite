@@ -19,7 +19,7 @@ from hydra_suite.core.inference.masks import polygon_iou
 from hydra_suite.utils.slice_geometry import SlicePlan, plan_tiles
 
 from .base import SemanticInstance, SemanticLabeler
-from .shape_prior import AreaBand, in_band
+from .shape_prior import AreaBand, in_band, polygon_area
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +37,14 @@ TILE_FRACTION_GRID: tuple[float | None, ...] = (0.03, 0.05, 0.10, None)
 DEFAULT_OVERLAP = 0.5
 DEFAULT_SEAM_MARGIN_PX = 4
 DEFAULT_MERGE_IOU = 0.5
+# Ordinary IoU cannot recognize a sub-mask as redundant: a fragment entirely
+# inside a whole-object mask has IoU equal to the fragment/whole area ratio,
+# which can be very small.  Intersection-over-smaller (IoS) detects that
+# containment directly.  Keep this deliberately stricter than merge IoU so
+# two genuinely overlapping animals are not collapsed merely because their
+# silhouettes touch.
+DEFAULT_CONTAINMENT_OVERLAP = 0.80
+MIN_CONTAINMENT_AREA_RATIO = 1.25
 
 
 class TileCollectionCancelled(RuntimeError):
@@ -243,21 +251,19 @@ def merge_candidates(
     iou_threshold: float,
     area_band: AreaBand | None = None,
 ) -> list[SemanticInstance]:
-    """Threshold, area-gate, then greedy-NMS the candidates into instances.
+    """Threshold, area-gate, resolve containment, then NMS into instances.
 
     The invariant this upholds is: the survivors at threshold T are exactly
     the survivors of merging the >=T subset -- i.e. merging is applied to a
     thresholded input, never to an already-merged output.
 
-    An earlier version of this docstring claimed that re-merging can
-    RESURRECT a candidate that post-filtering could not, because "a
-    suppressor removed by the higher threshold should resurrect whatever it
-    suppressed". That is false, and it is worth recording why: greedy NMS
-    walks candidates in DESCENDING confidence, so a suppressor always
-    outscores its victim. Raising the floor therefore can never drop a
-    suppressor while keeping what it suppressed, and re-merging and
-    post-filtering provably agree (verified empirically over 1500
-    randomised candidate-set/threshold pairs: zero divergences).
+    For ordinary confidence-ordered NMS, raising the floor cannot drop a
+    suppressor while keeping its victim.  Containment resolution is
+    intentionally different: the larger, whole-object candidate wins even
+    when its confidence is lower than a subpart's.  Raising the threshold
+    above that whole candidate can therefore resurrect the subpart.  This is
+    why every threshold must be applied to the cached raw candidates and the
+    merge rerun, rather than post-filtering an earlier merged result.
 
     ``area_band`` -- the label-derived size gate from ``shape_prior`` --
     is applied BEFORE suppression, and deliberately so: an arena-sized blob
@@ -267,17 +273,54 @@ def merge_candidates(
     drop, which is what lets a re-threshold replay cached candidates and
     still agree with the run that produced them. ``None`` disables it.
 
+    Before ordinary IoU NMS, strongly contained candidates are resolved in
+    favour of the materially larger polygon.  This catches SAM3's common
+    whole-object + subpart output: IoU alone cannot suppress a half-object
+    fragment inside a full mask.  The area gate still runs first, so a
+    calibrated multi-animal blob cannot win this rule over the individual
+    masks it contains.
+
     Re-merging is kept anyway because it is the obviously-correct
     formulation -- it states the invariant directly instead of relying on
     that argument staying true if the suppression rule is ever changed to
     something not confidence-ordered -- and it is cheap.
     """
+    eligible = [
+        c
+        for c in candidates
+        if c.confidence >= confidence_threshold and in_band(c.polygon_px, area_band)
+    ]
+
+    # Resolve nested alternatives before confidence-ordered NMS.  Confidence
+    # is not a reliable discriminator here: SAM3 can score a salient body
+    # part above the full animal.  Only materially different areas enter this
+    # pass; near-equal duplicates remain confidence-resolved by IoU NMS.
+    areas = [polygon_area(c.polygon_px) for c in eligible]
+    subparts: set[int] = set()
+    for small_i, small_area in enumerate(areas):
+        if small_area <= 0.0:
+            continue
+        for large_i, large_area in enumerate(areas):
+            if (
+                small_i == large_i
+                or large_area < small_area * MIN_CONTAINMENT_AREA_RATIO
+            ):
+                continue
+            iou = polygon_iou(
+                eligible[small_i].polygon_px, eligible[large_i].polygon_px
+            )
+            if iou <= 0.0:
+                continue
+            # IoU = I / (A + B - I), hence I = IoU*(A+B)/(1+IoU).
+            # Deriving IoS this way reuses the arbitrary-non-convex polygon
+            # rasterizer instead of incorrectly applying a convex clipper.
+            intersection = iou * (small_area + large_area) / (1.0 + iou)
+            if intersection / small_area >= DEFAULT_CONTAINMENT_OVERLAP:
+                subparts.add(small_i)
+                break
+
     kept = sorted(
-        (
-            c
-            for c in candidates
-            if c.confidence >= confidence_threshold and in_band(c.polygon_px, area_band)
-        ),
+        (c for i, c in enumerate(eligible) if i not in subparts),
         key=lambda c: -c.confidence,
     )
     survivors: list[TileCandidate] = []

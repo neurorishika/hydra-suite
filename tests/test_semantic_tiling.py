@@ -180,16 +180,47 @@ def test_merge_collapses_one_object_seen_in_two_overlapping_tiles():
     assert merged[0].confidence == 0.8  # the higher-scoring survivor wins
 
 
+def test_merge_drops_nested_subparts_even_when_the_fragment_scores_higher():
+    """IoU NMS alone misses a fragment contained by a whole-object mask."""
+    whole = TileCandidate(_sq(100, 100, 80), 0.70, 0)
+    left_half = TileCandidate(
+        np.array([[100, 100], [140, 100], [140, 180], [100, 180]], np.float32),
+        0.95,
+        0,
+    )
+    # IoU is only 0.5, and use a stricter ordinary-NMS threshold to prove the
+    # containment rule -- not IoU NMS -- removes the fragment.
+    merged = merge_candidates(
+        [left_half, whole], confidence_threshold=0.0, iou_threshold=0.75
+    )
+    assert len(merged) == 1
+    assert merged[0].confidence == 0.70
+
+    # Re-thresholding merges the newly eligible raw set. Once the lower-score
+    # whole mask is excluded, its higher-score subpart is allowed to survive.
+    high = merge_candidates(
+        [left_half, whole], confidence_threshold=0.90, iou_threshold=0.75
+    )
+    assert len(high) == 1
+    assert high[0].confidence == 0.95
+
+
+def test_merge_keeps_overlapping_instances_when_neither_contains_the_other():
+    adjacent = [
+        TileCandidate(_sq(100, 100, 80), 0.9, 0),
+        TileCandidate(_sq(150, 100, 80), 0.8, 0),
+    ]
+    merged = merge_candidates(adjacent, confidence_threshold=0.0, iou_threshold=0.5)
+    assert len(merged) == 2
+
+
 def test_merging_at_a_threshold_equals_merging_only_the_kept_subset():
     """The REAL per-threshold invariant.
 
-    The old test here was named
-    ``test_merge_is_redone_per_threshold_not_post_filtered`` and claimed a
-    high threshold "resurrects" a candidate its suppressor had removed. That
-    property does not exist -- greedy NMS runs in descending confidence, so a
-    suppressor always outscores its victim -- and the test's second half
-    hand-filtered the suppressor out of the INPUT, which no threshold could
-    do. It therefore could not fail for the reason its name claimed.
+    For confidence-ordered IoU NMS, a suppressor always outscores its victim,
+    so raising the threshold cannot remove only the suppressor.  (The nested
+    subpart test above separately covers containment resolution, where the
+    lower-confidence whole object can suppress a higher-confidence fragment.)
 
     What merge_candidates does guarantee, and what this pins, is that
     thresholding is applied to the merge INPUT: survivors at T are exactly
@@ -293,6 +324,29 @@ def test_merge_drops_out_of_band_candidates_before_nms():
     )
     assert len(merged) == 1
     assert merged[0].confidence == 0.5  # the body survived, not the blob
+
+
+def test_calibrated_band_drops_a_two_object_merge_before_containment():
+    """A combined mask must not suppress the two valid masks inside it."""
+    from hydra_suite.core.inference.semantic.shape_prior import fit_area_band
+
+    labels = [_sq(0, 0, 20) for _ in range(10)]  # 400 px^2 each
+    band = fit_area_band(labels)
+    assert band is not None
+    left = TileCandidate(_sq(100, 100, 20), 0.7, 0)
+    right = TileCandidate(_sq(125, 100, 20), 0.7, 0)
+    combined = TileCandidate(
+        np.array([[88, 88], [137, 88], [137, 112], [88, 112]], np.float32),
+        0.95,
+        0,
+    )  # 1176 px^2 > calibrated 1000 px^2 ceiling
+    merged = merge_candidates(
+        [combined, left, right],
+        confidence_threshold=0.0,
+        iou_threshold=0.5,
+        area_band=band,
+    )
+    assert len(merged) == 2
 
 
 def test_merge_without_a_band_is_unchanged():
