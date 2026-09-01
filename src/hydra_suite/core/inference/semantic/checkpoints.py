@@ -196,7 +196,7 @@ def probe_checkpoint(
                 False, f"Registered SAM3 model {key!r} has no artifact at {path}."
             )
         return Sam3Availability(
-            True,
+            False,
             f"The SAM3 checkpoint ({key}, ~{CHECKPOINT_SIZE_GB:.2f} GB) has "
             "not been downloaded yet. It will be downloaded once, with your "
             "confirmation, before the first run starts. The weights are "

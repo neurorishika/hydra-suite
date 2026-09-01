@@ -36,12 +36,16 @@ def stripped_keys(state_dict: dict[str, Any]) -> list[str]:
 
 
 def _tensor_sha256(tensor: torch.Tensor) -> str:
-    # dtype-agnostic: `.numpy()` raises TypeError on bf16 (numpy has no bf16),
-    # which is the repo's own default mixed_precision -- so this must not
-    # depend on the tensor's dtype surviving a numpy round-trip. Viewing as
-    # raw bytes sidesteps that entirely.
+    # Normalised to float32 BEFORE hashing, on both this side (publish) and
+    # the consumer side (core.inference.semantic.sam3._tensor_sha256): the
+    # merged checkpoint may be saved in bf16 (this repo's mixed_precision
+    # default), but ultralytics reconstructs the live model and may cast
+    # dtype during that build. Hashing raw bytes at two different dtypes
+    # would make the guard raise on every CORRECTLY loaded checkpoint --
+    # turning a safety net into an outage. `.float()` also sidesteps
+    # `.numpy()` raising TypeError on bf16 (numpy has no bf16 dtype).
     return hashlib.sha256(
-        tensor.detach().cpu().contiguous().view(torch.uint8).numpy().tobytes()
+        tensor.detach().cpu().contiguous().float().view(torch.uint8).numpy().tobytes()
     ).hexdigest()
 
 
@@ -153,7 +157,16 @@ def publish_sam3_model(
         "object_tile_fraction": build_manifest.get("object_tile_fraction"),
         "imgsz": PREDICTOR_IMGSZ,
         "stripped_keys": stripped_keys(merged),
-        "tuned_fingerprints": tuned_fingerprints,
+        # Stored under the STRIPPED namespace, matching `stripped_keys`
+        # above and the live (post-load) model's state dict --
+        # `tuned_fingerprints` here is built pre-strip (it indexes `merged`,
+        # which still carries the `detector.` prefix ultralytics' load
+        # transform later removes). A consumer guarding a live, already-
+        # stripped state dict must never see the pre-strip namespace, or
+        # every lookup KeyErrors instead of raising the intended refusal.
+        "tuned_fingerprints": {
+            k.replace("detector.", ""): v for k, v in tuned_fingerprints.items()
+        },
         "source_fingerprint": source_fingerprint,
         "label_quality_acknowledged": getattr(
             params, "label_quality_acknowledged", False

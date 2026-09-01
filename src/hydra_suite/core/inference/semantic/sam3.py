@@ -65,11 +65,14 @@ def predictor_overrides(
 
 
 def _tensor_sha256(tensor: torch.Tensor) -> str:
-    # Same recipe as training.sam3_lora.publish._tensor_sha256: dtype-agnostic
-    # via a raw-byte view, so bf16 tensors (this repo's mixed_precision
-    # default) don't hit numpy's missing-bf16 TypeError.
+    # MUST match training.sam3_lora.publish._tensor_sha256 exactly: both
+    # normalise to float32 before hashing, because the live model's dtype
+    # after ultralytics reconstructs it may differ from what was saved to
+    # disk. Hashing at two different dtypes would make the guard raise on
+    # every correctly-loaded checkpoint. `.float()` also sidesteps
+    # `.numpy()` raising TypeError on bf16.
     return hashlib.sha256(
-        tensor.detach().cpu().contiguous().view(torch.uint8).numpy().tobytes()
+        tensor.detach().cpu().contiguous().float().view(torch.uint8).numpy().tobytes()
     ).hexdigest()
 
 
@@ -102,6 +105,17 @@ def assert_checkpoint_loaded(
                 "the checkpoint loaded nothing and the model is stock SAM3."
             )
     for key, expected_fp in meta.get("tuned_fingerprints", {}).items():
+        # `tuned_fingerprints` keys are recorded in the STRIPPED namespace
+        # (training.sam3_lora.publish.publish_sam3_model normalises them to
+        # match `stripped_keys` / the live, post-load state dict) -- a bare
+        # subscript here would KeyError instead of raising the intended
+        # refusal if that namespace convention is ever violated again.
+        if key not in live_state_dict:
+            raise RuntimeError(
+                f"SAM3 finetuned checkpoint failed to load: tuned key "
+                f"{key!r} recorded at publish time is absent from the live "
+                "model's state dict."
+            )
         actual_fp = _tensor_sha256(live_state_dict[key])
         if actual_fp != expected_fp:
             raise RuntimeError(
@@ -113,6 +127,12 @@ def assert_checkpoint_loaded(
             )
     meta_imgsz = meta.get("imgsz")
     if meta_imgsz is not None and meta_imgsz != imgsz:
+        # This can only fire if PREDICTOR_IMGSZ changes between publish time
+        # and serve time: publish.py stamps the sidecar with the SAME
+        # PREDICTOR_IMGSZ constant this module defines, so today the two
+        # always agree. It is not dead code -- it is the guard against this
+        # constant ever drifting (or a future multi-imgsz world) without
+        # anyone noticing the train/serve scale disagreement.
         raise RuntimeError(
             f"SAM3 finetuned checkpoint was trained at imgsz={meta_imgsz} "
             f"but is being served at imgsz={imgsz}. This loads perfectly "
@@ -122,23 +142,51 @@ def assert_checkpoint_loaded(
         )
 
 
-def _sidecar_for_checkpoint(checkpoint: Path) -> dict | None:
+def _sidecar_for_checkpoint(checkpoint: Path) -> dict:
     """Read the ``<artifact>.sam3_meta.json`` sidecar next to *checkpoint*.
 
     Mirrors the naming convention ``training.sam3_lora.publish`` writes
     (``artifact_path.with_name(artifact_path.name + ".sam3_meta.json")``)
     without importing that module -- this package must stay training-free.
+
+    Only called when the caller has explicitly named a *checkpoint* (a
+    published artifact), never for a stock variant -- so unlike
+    ``checkpoints.sidecar_for`` (which legitimately returns ``None`` for a
+    stock key that ships no sidecar), a missing or corrupt sidecar HERE
+    means the sidecar this module itself wrote is gone or broken, which is
+    exactly the state to refuse rather than silently skip the guard for.
     """
     import json
 
     sidecar_path = checkpoint.with_name(checkpoint.name + ".sam3_meta.json")
     if not sidecar_path.exists():
-        return None
+        raise RuntimeError(
+            f"SAM3 finetuned checkpoint {checkpoint} has no sidecar at "
+            f"{sidecar_path}. A published artifact without its sidecar "
+            "cannot be guarded -- refusing rather than serving it unchecked."
+        )
     try:
         loaded = json.loads(sidecar_path.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-    return loaded if isinstance(loaded, dict) else None
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"SAM3 finetuned checkpoint sidecar {sidecar_path} is not valid "
+            f"JSON ({exc}). Refusing to serve an unguardable checkpoint."
+        ) from exc
+    if not isinstance(loaded, dict):
+        raise RuntimeError(
+            f"SAM3 finetuned checkpoint sidecar {sidecar_path} did not "
+            f"parse to a JSON object (got {type(loaded).__name__}). "
+            "Refusing to serve an unguardable checkpoint."
+        )
+    if "imgsz" not in loaded:
+        # publish.py always writes `imgsz`; its absence means the sidecar
+        # predates that field or was hand-edited -- either way, exactly the
+        # kind of drift the guard exists to catch, not skip silently.
+        raise RuntimeError(
+            f"SAM3 finetuned checkpoint sidecar {sidecar_path} has no "
+            "'imgsz' field. Refusing to serve an unguardable checkpoint."
+        )
+    return loaded
 
 
 class Sam3SemanticLabeler:

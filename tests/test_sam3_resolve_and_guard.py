@@ -1,5 +1,7 @@
 """A published key must resolve, and a mis-loading checkpoint must raise."""
 
+import json
+
 import pytest
 import torch
 
@@ -76,3 +78,58 @@ def test_stock_variant_without_a_sidecar_is_unguarded():
         assert_checkpoint_loaded({"a.weight": torch.zeros(2, 2)}, None, imgsz=1008)
         is None
     )
+
+
+def test_guard_against_a_real_published_sidecar(tmp_path):
+    """End-to-end regression for the namespace bug (fix round 1, C1).
+
+    All 7 tests above hand-write an idealised `meta` dict. This one derives
+    the sidecar from the actual `publish_sam3_model` path, whose
+    `tuned_fingerprints` keys came out of `adapter_touched_keys` in the
+    PRE-STRIP `detector.<path>.weight` namespace -- a namespace the live,
+    already-stripped model state dict never uses. A bare-subscript guard
+    KeyErrors on every real published checkpoint; the fixed guard must
+    either pass (tuned weights resident, stripped-key lookup) or raise a
+    RuntimeError naming the offending key (tuned weights NOT resident) --
+    never KeyError either way.
+    """
+    from pathlib import Path
+
+    from hydra_suite.training.contracts import Sam3LoraParams
+    from hydra_suite.training.sam3_lora.publish import publish_sam3_model
+
+    base = {"detector.qkv.weight": torch.randn(4, 4)}
+    torch.save(base, tmp_path / "base.pt")
+    torch.save(
+        {"qkv.lora_A": torch.randn(2, 4), "qkv.lora_B": torch.randn(4, 2)},
+        tmp_path / "adapters.pt",
+    )
+    _, art = publish_sam3_model(
+        run_id="r1",
+        adapters_path=tmp_path / "adapters.pt",
+        base_checkpoint=tmp_path / "base.pt",
+        build_manifest={"tile_px": 1007, "reference_body_px": 55.4},
+        params=Sam3LoraParams(prompt="ant"),
+        source_fingerprint="fp1",
+        models_root=tmp_path / "models",
+    )
+    meta = json.loads(Path(str(art) + ".sam3_meta.json").read_text())
+
+    merged = torch.load(art, map_location="cpu", weights_only=True)
+    # The live model's state dict is what ultralytics hands back AFTER its
+    # substring-strip load transform -- i.e. stripped, not `merged` as-is.
+    stripped_live = {
+        k.replace("detector.", ""): v for k, v in merged.items() if "detector" in k
+    }
+
+    # Good path: tuned weights are resident under the stripped namespace.
+    assert assert_checkpoint_loaded(stripped_live, meta, imgsz=meta["imgsz"]) is None
+
+    # Bad path: tuned weights are NOT resident (reverted to a base tensor
+    # for every tuned key) -- must raise RuntimeError naming a real key,
+    # never KeyError.
+    tampered = dict(stripped_live)
+    for key in meta["tuned_fingerprints"]:
+        tampered[key] = torch.zeros_like(tampered[key])
+    with pytest.raises(RuntimeError):
+        assert_checkpoint_loaded(tampered, meta, imgsz=meta["imgsz"])
