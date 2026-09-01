@@ -9,6 +9,7 @@ from typing import Callable
 
 from .contracts import (
     DatasetBuildResult,
+    Sam3LoraParams,
     SourceDataset,
     SplitConfig,
     TrainingRole,
@@ -382,6 +383,9 @@ class TrainingOrchestrator:
         min_crop_size_px: int = 64,
         enforce_square: bool = True,
         merged_level: GeometryLevel = GeometryLevel.POLYGON,
+        sam3_params: "Sam3LoraParams | None" = None,
+        seed: int = 42,
+        split: SplitConfig | None = None,
     ) -> DatasetBuildResult:
         """Derive a role-specific dataset (detect, crop-OBB, classify) from a merged OBB dataset."""
         out_root = self.workspace_root / "derived" / role.value
@@ -396,6 +400,9 @@ class TrainingOrchestrator:
             min_crop_size_px=min_crop_size_px,
             enforce_square=enforce_square,
             merged_level=merged_level,
+            sam3_params=sam3_params,
+            seed=seed,
+            split=split,
         )
         report = validate_role_dataset(result.dataset_dir, role)
         result.stats = dict(result.stats)

@@ -16,7 +16,13 @@ import cv2
 import numpy as np
 
 from .class_mapping import build_class_id_map, resolve_dataset_class_names
-from .contracts import DatasetBuildResult, SourceDataset, SplitConfig, TrainingRole
+from .contracts import (
+    DatasetBuildResult,
+    Sam3LoraParams,
+    SourceDataset,
+    SplitConfig,
+    TrainingRole,
+)
 from .dataset_inspector import (
     DatasetInspection,
     inspect_obb_or_detect_dataset,
@@ -1040,6 +1046,9 @@ def prepare_role_dataset(
     min_crop_size_px: int = 64,
     enforce_square: bool = True,
     merged_level: GeometryLevel = GeometryLevel.POLYGON,
+    sam3_params: "Sam3LoraParams | None" = None,
+    seed: int = 42,
+    split: SplitConfig | None = None,
 ) -> DatasetBuildResult:
     """Prepare role-specific dataset from the merged source."""
     required = role_min_level(role)
