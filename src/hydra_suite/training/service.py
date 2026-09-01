@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+from hydra_suite.core.inference.semantic.checkpoints import ensure_checkpoint
+
 from .contracts import (
     DatasetBuildResult,
     Sam3LoraParams,
@@ -31,6 +33,7 @@ from .registry import (
     new_run_id,
 )
 from .runner import run_training
+from .sam3_lora.publish import publish_sam3_model
 from .sliced_dataset import SliceBuildParams, build_sliced_obb_dataset
 from .validation import (
     format_validation_report,
@@ -90,6 +93,29 @@ def _publish_training_artifacts(
 ) -> tuple[str, str]:
     if not artifact_paths:
         return "", ""
+
+    if spec.role is TrainingRole.SEMANTIC_SAM3:
+        # Forked, not extended: publish_trained_model's naming scheme does not
+        # fit a promptable-concept checkpoint, and _repo_dir_for_role raises
+        # for this role. See the design's "Publish -- a fork, not an extension".
+        #
+        # The geometry the sidecar needs (tile_px, reference_body_px) is
+        # written by the BUILDER, not by publish_metadata -- which carries
+        # size/species-style fields only. Read it from the derived dataset dir,
+        # or the sidecar ships without geometry and Task 10b's prefill has
+        # nothing to prefill (which would make Gate 3 unpassable).
+        manifest_path = Path(spec.derived_dataset_dir) / "build_manifest.json"
+        manifest = dict(publish_metadata or {})
+        if manifest_path.exists():
+            manifest.update(json.loads(manifest_path.read_text()))
+        return publish_sam3_model(
+            run_id=run_id,
+            adapters_path=Path(artifact_paths[0]),
+            base_checkpoint=ensure_checkpoint("sam3", allow_download=False),
+            build_manifest=manifest,
+            params=spec.sam3_params,
+            source_fingerprint=dataset_fingerprint_value,
+        )
 
     raw_recommended_threshold = publish_metadata.get(
         "recommended_confidence_threshold",
