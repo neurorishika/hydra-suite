@@ -122,17 +122,25 @@ conda create -n hydra-sam3 python=3.12 'numpy<2'
 conda run -n hydra-sam3 pip install torch torchvision
 conda run -n hydra-sam3 pip install 'setuptools<81'
 conda run -n hydra-sam3 pip install einops torchmetrics scipy decord iopath \
-    opencv-python-headless pillow platformdirs
+    opencv-python-headless pillow platformdirs pandas numba
 conda run -n hydra-sam3 pip install git+https://github.com/facebookresearch/sam3.git
 conda run -n hydra-sam3 pip install -e /path/to/hydra-suite
 ```
 
-Two pins are non-obvious and were found the hard way:
+Three pins are non-obvious and were found the hard way:
 
 - **`setuptools<81`** — setuptools 81 removed `pkg_resources`, which
   `sam3/model_builder.py:8` imports at module scope.
 - **`einops`** — imported by `sam3/sam/rope.py` but absent from sam3's
   declared dependencies.
+- **`pandas`/`numba`** — `cli.py` runs as `python -m
+  hydra_suite.training.sam3_lora.cli`, which imports the `hydra_suite`,
+  `hydra_suite.training` and `hydra_suite.training.sam3_lora` packages in
+  that order first. `hydra_suite/training/__init__.py` eagerly imports
+  `.service`, which pulls in numba, pandas, cv2 and torch even though
+  `cli.py` itself needs none of the first two. Making that package init
+  lazy was ruled out of scope for this slice (it is a shared entry point
+  every kit imports); the sidecar env just needs to actually have them.
 
 ## Testing
 
