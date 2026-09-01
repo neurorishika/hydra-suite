@@ -31,6 +31,13 @@ DEFAULT_CONFIDENCE_FLOOR = 0.05
 # 0.7; pinned here so an upstream default change cannot silently alter what
 # reaches our cross-tile merge (which applies its own, separate merge_iou).
 PREDICTOR_NMS_IOU = 0.7
+# Pinned for the same reason as PREDICTOR_NMS_IOU. ultralytics' default cfg
+# imgsz is 640 -- rounded up to 644 for the stride-14 backbone -- but
+# build_sam3.py builds the SAM3 architecture at img_size=1008 and
+# BasePredictor calls model.set_imgsz(self.imgsz). Inheriting the default
+# therefore runs a 1008-native model at 644 with no warning. It also makes
+# train/serve scale disagree for any finetuned checkpoint.
+PREDICTOR_IMGSZ = 1008
 
 
 def predictor_overrides(
@@ -51,6 +58,7 @@ def predictor_overrides(
         # See DEFAULT_CONFIDENCE_FLOOR / PREDICTOR_NMS_IOU above.
         "conf": float(max(0.0, min(1.0, confidence_floor))),
         "iou": PREDICTOR_NMS_IOU,
+        "imgsz": PREDICTOR_IMGSZ,
     }
 
 
