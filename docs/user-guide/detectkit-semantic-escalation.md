@@ -236,6 +236,21 @@ checkout* of `sam3` placed on `PYTHONPATH` -- rather than a `pip install`
 of it -- never resolves that dependency, and the failure surfaces only
 once training reaches `sam3.train.loss`, as a bare `ModuleNotFoundError`.
 
+!!! warning "Install the training extra into a dedicated environment"
+
+    `numpy<2` is a hard constraint of `sam3`, and most current
+    environments carry numpy 2.x -- the `hydra-mps` dev environment on a
+    workstation, for example, ships 2.3.5. Running
+    `pip install 'hydra-suite[sam3-train]'` there will **downgrade numpy
+    across the whole environment**, which can break unrelated packages
+    compiled against the 2.x ABI.
+
+    Training is CUDA-only and never runs on a workstation, so the extra
+    has no reason to be installed there. Put it in a dedicated environment
+    on the training machine (e.g. a `hydra-sam3` conda env) rather than in
+    a shared or general-purpose one. Inference needs none of these
+    packages -- that is the point of publishing a merged checkpoint.
+
 ### CUDA only, and not a small GPU
 
 SAM3 LoRA training runs on CUDA exclusively — there is no CPU or MPS path.
