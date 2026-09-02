@@ -43,7 +43,16 @@ stack and are shown as unavailable in this YOLO evaluator.
 
 ### Dataset panel
 
-The dataset panel's "Clear labels" actions (frame, source, and whole-project
-scope) are destructive and irreversible: they truncate the matching label
-file(s) to empty rather than deleting them, so the files remain on disk but
-lose their annotations. Images themselves are never touched.
+Dataset curation changes are recoverable. Removing selected images with
+**Delete** or **Backspace** moves the images and matching labels into the
+project's `artifacts/recovery/` folder. The frame-, source-, and whole-project
+**Clear labels** actions save exact copies there before truncating the working
+label files. This also protects linked sources that live outside the project:
+their recovery payload is owned by the project that initiated the change.
+
+Use **Undo last dataset change** or the platform Undo shortcut (Command-Z on
+macOS, Ctrl-Z elsewhere) to restore the newest operation. Undo will not
+overwrite an image recreated at the same path or labels edited after they were
+cleared; resolve that conflict manually and try again. Nested images are shown
+by their paths relative to the source's `images/` directory, with the absolute
+path available in the row tooltip.

@@ -57,6 +57,96 @@ def test_dataset_panel_refresh_sources(qapp, tmp_path):
     assert panel.source_combo.count() == 1
 
 
+def test_dataset_panel_shows_nested_image_paths_relative_to_images_root(qapp, tmp_path):
+    from hydra_suite.detectkit.gui.models import DetectKitProject, OBBSource
+    from hydra_suite.detectkit.gui.panels.dataset_panel import DatasetPanel
+
+    source_root = tmp_path / "src"
+    first = source_root / "images" / "train" / "camera-a" / "frame.jpg"
+    second = source_root / "images" / "val" / "camera-b" / "frame.jpg"
+    first.parent.mkdir(parents=True)
+    second.parent.mkdir(parents=True)
+    (source_root / "labels").mkdir()
+    first.write_bytes(b"a")
+    second.write_bytes(b"b")
+    (source_root / "classes.txt").write_text("ant\n")
+    project = DetectKitProject(project_dir=tmp_path, class_names=["ant"])
+    project.sources = [OBBSource(path=str(source_root), name="src")]
+
+    panel = DatasetPanel()
+    panel.set_project(project, main_window=None)
+
+    assert [panel.image_list.item(i).text() for i in range(2)] == [
+        "train/camera-a/frame.jpg",
+        "val/camera-b/frame.jpg",
+    ]
+    assert panel.image_list.item(0).toolTip() == str(first.resolve())
+
+
+def test_dataset_panel_exposes_undo_button_and_native_shortcut(qapp):
+    from PySide6.QtGui import QKeySequence
+
+    from hydra_suite.detectkit.gui.panels.dataset_panel import DatasetPanel
+
+    panel = DatasetPanel()
+
+    assert panel.btn_undo_dataset_change.text().startswith("Undo")
+    assert panel._undo_shortcut.key() == QKeySequence(QKeySequence.StandardKey.Undo)
+    assert panel._undo_shortcut.context() == Qt.WindowShortcut
+    assert "Delete" in panel._curation_shortcuts.text()
+    assert "Backspace" in panel._curation_shortcuts.text()
+
+
+def test_delete_selected_image_is_recoverable_from_panel(qapp, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    panel, source_root = _make_panel_with_source(qapp, tmp_path)
+    panel.image_list.setCurrentRow(0)
+    panel.image_list.item(0).setSelected(True)
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.panels.dataset_panel.QMessageBox.warning",
+        lambda *a, **k: QMessageBox.StandardButton.Yes,
+    )
+
+    panel._delete_selected_images()
+
+    assert not (source_root / "images" / "a.jpg").exists()
+    assert not (source_root / "labels" / "a.txt").exists()
+    assert panel.btn_undo_dataset_change.isEnabled()
+
+    panel._undo_last_dataset_change()
+
+    assert (source_root / "images" / "a.jpg").read_bytes() == b"fake"
+    assert (source_root / "labels" / "a.txt").read_text() != ""
+
+
+def test_delete_prompt_explains_linked_source_recovery(qapp, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    panel, source_root = _make_panel_with_source(qapp, tmp_path)
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    panel._project.project_dir = project_dir
+    panel.image_list.setCurrentRow(0)
+    panel.image_list.item(0).setSelected(True)
+    captured = {}
+
+    def _capture_warning(self, title, text, *args, **kwargs):
+        captured["text"] = text
+        return QMessageBox.StandardButton.Cancel
+
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.panels.dataset_panel.QMessageBox.warning",
+        _capture_warning,
+    )
+
+    panel._delete_selected_images()
+
+    assert "linked source" in captured["text"].lower()
+    assert "inside the project" in captured["text"].lower()
+    assert (source_root / "images" / "a.jpg").exists()
+
+
 def test_dataset_panel_no_source_list(qapp):
     """Old QListWidget-based source_list must be gone."""
     from hydra_suite.detectkit.gui.panels.dataset_panel import DatasetPanel

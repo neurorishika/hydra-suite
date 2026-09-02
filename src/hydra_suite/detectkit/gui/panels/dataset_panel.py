@@ -37,10 +37,15 @@ from hydra_suite.training.geometry_levels import GeometryLevel, scan_source_leve
 from hydra_suite.utils.conda_utils import run_conda
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
 
+from ..dataset_recovery import (
+    DatasetRecoveryError,
+    clear_labels_with_recovery,
+    latest_dataset_recovery,
+    remove_images_with_recovery,
+    undo_latest_dataset_recovery,
+)
 from ..utils import (
-    clear_labels_for_source,
     ensure_detectkit_source_structure,
-    find_label_for_image,
     labels_to_clear,
     list_images_in_source,
     source_class_id_map,
@@ -168,6 +173,28 @@ class DatasetPanel(QWidget):
         self.btn_clear_all_labels.clicked.connect(self._clear_labels_from_all_sources)
         images_layout.addWidget(self.btn_clear_all_labels)
 
+        self.btn_undo_dataset_change = QPushButton("Undo last dataset change")
+        self.btn_undo_dataset_change.setProperty("detectkitVariant", "secondary")
+        self.btn_undo_dataset_change.setEnabled(False)
+        self.btn_undo_dataset_change.clicked.connect(self._undo_last_dataset_change)
+        images_layout.addWidget(self.btn_undo_dataset_change)
+
+        native_undo = QKeySequence(QKeySequence.StandardKey.Undo).toString(
+            QKeySequence.SequenceFormat.NativeText
+        )
+        self._curation_shortcuts = QLabel(
+            f"Shortcuts: Delete / Backspace moves selected frames to Recovery; "
+            f"{native_undo} restores the latest dataset change."
+        )
+        self._curation_shortcuts.setWordWrap(True)
+        self._curation_shortcuts.setProperty("detectkitRole", "sectionHint")
+        images_layout.addWidget(self._curation_shortcuts)
+
+        self._recovery_summary = QLabel("No dataset change is available to undo.")
+        self._recovery_summary.setWordWrap(True)
+        self._recovery_summary.setProperty("detectkitRole", "sectionHint")
+        images_layout.addWidget(self._recovery_summary)
+
         self._delete_shortcut = QShortcut(QKeySequence(Qt.Key_Delete), self.image_list)
         self._delete_shortcut.setContext(Qt.WidgetShortcut)
         self._delete_shortcut.activated.connect(self._delete_selected_images)
@@ -176,6 +203,11 @@ class DatasetPanel(QWidget):
         )
         self._backspace_shortcut.setContext(Qt.WidgetShortcut)
         self._backspace_shortcut.activated.connect(self._delete_selected_images)
+        self._undo_shortcut = QShortcut(
+            QKeySequence(QKeySequence.StandardKey.Undo), self
+        )
+        self._undo_shortcut.setContext(Qt.WindowShortcut)
+        self._undo_shortcut.activated.connect(self._undo_last_dataset_change)
 
         layout.addWidget(images_group, 1)
 
@@ -262,6 +294,7 @@ class DatasetPanel(QWidget):
         self._project = proj
         self._main_window = main_window
         self.refresh_sources(proj)
+        self._update_recovery_controls()
 
         # Restore last selection
         if 0 <= proj.last_source_index < self.source_combo.count():
@@ -274,8 +307,13 @@ class DatasetPanel(QWidget):
         self.source_combo.blockSignals(True)
         self.source_combo.clear()
         for src in proj.sources:
-            display = src.name if src.name else src.path
+            display = self._source_display_text(proj, src)
             self.source_combo.addItem(display, userData=src.path)
+            self.source_combo.setItemData(
+                self.source_combo.count() - 1,
+                str(Path(src.path).expanduser().absolute()),
+                Qt.ToolTipRole,
+            )
         self.source_combo.blockSignals(False)
         source_count = len(proj.sources)
         if source_count == 0:
@@ -362,7 +400,7 @@ class DatasetPanel(QWidget):
         return False
 
     # ------------------------------------------------------------------
-    # Image deletion
+    # Recoverable dataset operations
     # ------------------------------------------------------------------
 
     def _on_image_list_context_menu(self, pos) -> None:
@@ -376,16 +414,16 @@ class DatasetPanel(QWidget):
             return
         menu = QMenu(self.image_list)
         label_text = (
-            f"Delete {len(items)} images..." if len(items) > 1 else "Delete image..."
+            f"Remove {len(items)} images…" if len(items) > 1 else "Remove image…"
         )
         delete_action = QAction(label_text, menu)
         delete_action.triggered.connect(self._delete_selected_images)
         menu.addAction(delete_action)
 
         clear_label_text = (
-            f"Clear labels from {len(items)} frames..."
+            f"Clear labels from {len(items)} frames…"
             if len(items) > 1
-            else "Clear labels from frame..."
+            else "Clear labels from frame…"
         )
         clear_action = QAction(clear_label_text, menu)
         clear_action.triggered.connect(self._clear_labels_from_frame)
@@ -394,7 +432,7 @@ class DatasetPanel(QWidget):
         menu.exec(self.image_list.viewport().mapToGlobal(pos))
 
     def _delete_selected_images(self) -> None:
-        """Permanently delete selected images and their label files from disk."""
+        """Move selected images and matching labels into project Recovery."""
         items = self.image_list.selectedItems()
         if not items:
             return
@@ -416,13 +454,15 @@ class DatasetPanel(QWidget):
         sample_names = ", ".join(p.name for p in image_paths[:3])
         if len(image_paths) > 3:
             sample_names += f", ... (+{len(image_paths) - 3} more)"
+        linked_note = self._linked_source_recovery_note(source_root)
         confirm = QMessageBox.warning(
             self,
-            "Delete Images",
+            "Remove Images",
             (
-                f"Permanently delete {len(image_paths)} image(s) and any matching "
-                f"label files?\n\n{sample_names}\n\n"
-                "This cannot be undone."
+                f"Remove {len(image_paths)} image(s) and any matching label files "
+                f"from this source?\n\n{sample_names}\n\n"
+                "The files will be moved into this project's Recovery folder and "
+                f"can be restored with Undo.{linked_note}"
             ),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Cancel,
@@ -430,19 +470,16 @@ class DatasetPanel(QWidget):
         if confirm != QMessageBox.StandardButton.Yes:
             return
 
-        failures: list[str] = []
-        deleted_image_paths: list[str] = []
-        for image_path in image_paths:
-            try:
-                if image_path.exists():
-                    image_path.unlink()
-                label_path = self._label_path_for_image(image_path, source_root)
-                if label_path is not None and label_path.exists():
-                    label_path.unlink()
-                deleted_image_paths.append(str(image_path))
-            except Exception as exc:
-                logger.warning("Failed to delete %s: %s", image_path, exc)
-                failures.append(f"{image_path.name}: {exc}")
+        try:
+            operation = remove_images_with_recovery(
+                self._require_project_dir(), source_root, image_paths
+            )
+        except DatasetRecoveryError as exc:
+            QMessageBox.warning(self, "Remove Images", str(exc))
+            self._update_recovery_controls()
+            return
+
+        deleted_image_paths = [str(image_path) for image_path in image_paths]
 
         if self._main_window is not None and hasattr(
             self._main_window, "on_images_deleted"
@@ -450,13 +487,7 @@ class DatasetPanel(QWidget):
             self._main_window.on_images_deleted(deleted_image_paths)
 
         self._on_source_combo_changed(self.source_combo.currentIndex())
-
-        if failures:
-            QMessageBox.warning(
-                self,
-                "Delete Images",
-                "Some images could not be deleted:\n\n" + "\n".join(failures),
-            )
+        self._update_recovery_controls(operation)
 
     def _clear_labels_from_frame(self) -> None:
         """Empty the label file(s) for the currently selected image(s),
@@ -482,13 +513,16 @@ class DatasetPanel(QWidget):
         sample_names = ", ".join(p.name for p in image_paths[:3])
         if len(image_paths) > 3:
             sample_names += f", ... (+{len(image_paths) - 3} more)"
+        linked_note = self._linked_source_recovery_note(Path(source_path))
         confirm = QMessageBox.warning(
             self,
             "Clear Labels",
             (
                 f"Clear all labels for {len(image_paths)} frame(s)? The "
                 f"image(s) stay, only their annotations are removed.\n\n"
-                f"{sample_names}\n\nThis cannot be undone."
+                f"{sample_names}\n\nThe original label files will be saved in "
+                "this project's Recovery folder and can be restored with Undo."
+                f"{linked_note}"
             ),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Cancel,
@@ -496,15 +530,18 @@ class DatasetPanel(QWidget):
         if confirm != QMessageBox.StandardButton.Yes:
             return
 
-        expected = len(labels_to_clear(source_path, image_paths))
-        cleared = clear_labels_for_source(source_path, image_paths)
-        if cleared < expected:
-            QMessageBox.warning(
-                self,
-                "Clear Labels",
-                f"Cleared {cleared} of {expected} label file(s); "
-                "some could not be written.",
+        label_paths = labels_to_clear(source_path, image_paths)
+        if not label_paths:
+            return
+        try:
+            operation = clear_labels_with_recovery(
+                self._require_project_dir(), label_paths
             )
+        except DatasetRecoveryError as exc:
+            QMessageBox.warning(self, "Clear Labels", str(exc))
+            self._update_recovery_controls()
+            return
+        self._update_recovery_controls(operation)
         self._on_image_changed(self.image_list.currentRow())
 
     def _clear_labels_from_source(self) -> None:
@@ -522,13 +559,15 @@ class DatasetPanel(QWidget):
             )
             return
 
+        linked_note = self._linked_source_recovery_note(Path(source_path))
         confirm = QMessageBox.warning(
             self,
             "Remove Labels",
             (
                 f"Clear ALL labels for source '{name}' ({count} label "
-                "file(s))? Images are not affected.\n\nThis cannot be "
-                "undone."
+                "file(s))? Images are not affected.\n\nThe original labels "
+                "will be saved in this project's Recovery folder and can be "
+                f"restored with Undo.{linked_note}"
             ),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Cancel,
@@ -536,14 +575,15 @@ class DatasetPanel(QWidget):
         if confirm != QMessageBox.StandardButton.Yes:
             return
 
-        cleared = clear_labels_for_source(source_path)
-        if cleared < count:
-            QMessageBox.warning(
-                self,
-                "Remove Labels",
-                f"Cleared {cleared} of {count} label file(s); some could "
-                "not be written.",
+        try:
+            operation = clear_labels_with_recovery(
+                self._require_project_dir(), labels_to_clear(source_path)
             )
+        except DatasetRecoveryError as exc:
+            QMessageBox.warning(self, "Remove Labels", str(exc))
+            self._update_recovery_controls()
+            return
+        self._update_recovery_controls(operation)
         row = self.image_list.currentRow()
         self._on_source_combo_changed(self.source_combo.currentIndex())
         if 0 <= row < self.image_list.count():
@@ -576,7 +616,8 @@ class DatasetPanel(QWidget):
         )
         linked_note = (
             f"\n\n{linked_count} source(s) live outside this project folder and "
-            "will also be cleared."
+            "will also be cleared. Their originals will still be copied into "
+            "this project's Recovery folder."
             if linked_count
             else ""
         )
@@ -587,7 +628,8 @@ class DatasetPanel(QWidget):
             (
                 f"This clears ALL labels across {len(self._project.sources)} "
                 f"source(s) ({total} label file(s) total). Images are not "
-                f"affected. This cannot be undone.{linked_note}\n\nType the "
+                f"affected. One Undo restores the complete operation.{linked_note}"
+                f"\n\nType the "
                 f"project name to confirm: {project_name}"
             ),
         )
@@ -595,25 +637,81 @@ class DatasetPanel(QWidget):
         if not typed or typed != project_name:
             return
 
-        cleared_total = 0
-        for src in self._project.sources:
-            cleared_total += clear_labels_for_source(src.path)
-        if cleared_total < total:
-            QMessageBox.warning(
-                self,
-                "Remove Labels",
-                f"Cleared {cleared_total} of {total} label file(s) across "
-                "the project; some could not be written.",
+        label_paths = [
+            label
+            for src in self._project.sources
+            for label in labels_to_clear(src.path)
+        ]
+        try:
+            operation = clear_labels_with_recovery(
+                self._require_project_dir(), label_paths
             )
+        except DatasetRecoveryError as exc:
+            QMessageBox.warning(self, "Remove Labels", str(exc))
+            self._update_recovery_controls()
+            return
+        self._update_recovery_controls(operation)
         row = self.image_list.currentRow()
         self._on_source_combo_changed(self.source_combo.currentIndex())
         if 0 <= row < self.image_list.count():
             self.image_list.setCurrentRow(row)
 
-    @staticmethod
-    def _label_path_for_image(image_path: Path, source_root: Path) -> Path | None:
-        """Resolve the label without crossing same-stem dataset splits."""
-        return find_label_for_image(image_path, str(source_root))
+    def _undo_last_dataset_change(self) -> None:
+        """Restore the newest recovery operation when doing so is conflict-free."""
+        if self._project is None:
+            return
+        try:
+            operation = undo_latest_dataset_recovery(self._project.project_dir)
+        except DatasetRecoveryError as exc:
+            QMessageBox.warning(self, "Undo Dataset Change", str(exc))
+            self._update_recovery_controls()
+            return
+
+        row = self.image_list.currentRow()
+        self._on_source_combo_changed(self.source_combo.currentIndex())
+        if 0 <= row < self.image_list.count():
+            self.image_list.setCurrentRow(row)
+        self._update_recovery_controls()
+        if not self.btn_undo_dataset_change.isEnabled():
+            self._recovery_summary.setText(f"Restored: {operation.summary}.")
+        if self._main_window is not None and hasattr(self._main_window, "statusBar"):
+            self._main_window.statusBar().showMessage(
+                f"Restored dataset change: {operation.summary}.", 4000
+            )
+
+    def _update_recovery_controls(self, operation=None) -> None:
+        """Synchronize Undo availability and its concise operation summary."""
+        if self._project is None:
+            self.btn_undo_dataset_change.setEnabled(False)
+            self._recovery_summary.setText("No dataset change is available to undo.")
+            return
+        latest = operation or latest_dataset_recovery(self._project.project_dir)
+        self.btn_undo_dataset_change.setEnabled(latest is not None)
+        if latest is None:
+            self._recovery_summary.setText("No dataset change is available to undo.")
+        else:
+            self._recovery_summary.setText(
+                f"Undo available: {latest.summary}. Recovery is stored inside "
+                "this project."
+            )
+
+    def _require_project_dir(self) -> Path:
+        if self._project is None:
+            raise DatasetRecoveryError("Open a project before changing its dataset.")
+        return Path(self._project.project_dir)
+
+    def _linked_source_recovery_note(self, source_root: Path) -> str:
+        if self._project is None:
+            return ""
+        try:
+            source_root.resolve().relative_to(Path(self._project.project_dir).resolve())
+        except ValueError:
+            return (
+                "\n\nThis is a linked source outside the project. Recovery "
+                "payloads will still be protected inside the project before "
+                "the linked source is changed."
+            )
+        return ""
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -644,6 +742,24 @@ class DatasetPanel(QWidget):
         """
         src_obj = self._selected_source_obj()
         return GeometryLevel.from_str(getattr(src_obj, "level", "obb"))
+
+    @staticmethod
+    def _source_display_text(proj: "DetectKitProject", src) -> str:
+        """Show a source name plus a concise project-relative location."""
+        source_path = Path(src.path).expanduser().absolute()
+        project_dir = getattr(proj, "project_dir", None)
+        try:
+            if project_dir is None:
+                raise ValueError
+            location = source_path.relative_to(
+                Path(project_dir).expanduser().absolute()
+            ).as_posix()
+        except ValueError:
+            location = f"{source_path.name} (linked)"
+        name = str(src.name or "").strip()
+        if name and name != location:
+            return f"{name} — {location}"
+        return name or location
 
     @staticmethod
     def _xal_stage_dir_for_source(source_dir: Path) -> Path:
@@ -850,10 +966,19 @@ class DatasetPanel(QWidget):
             self._image_summary.setText("Select a source to browse its images.")
             return
         images = list_images_in_source(source_path)
+        images_root = Path(source_path) / "images"
         self.image_list.blockSignals(True)
         for img in images:
-            img_item = QListWidgetItem(img.name)
+            try:
+                display_path = img.relative_to(images_root).as_posix()
+            except ValueError:
+                try:
+                    display_path = img.relative_to(Path(source_path)).as_posix()
+                except ValueError:
+                    display_path = img.name
+            img_item = QListWidgetItem(display_path)
             img_item.setData(Qt.UserRole, str(img))
+            img_item.setToolTip(str(img.expanduser().absolute()))
             self.image_list.addItem(img_item)
         self.image_list.blockSignals(False)
         source_name = self.source_combo.currentText().strip() or "Selected source"
