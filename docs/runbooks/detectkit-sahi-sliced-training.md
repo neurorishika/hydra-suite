@@ -26,7 +26,7 @@ You have a DetectKit project with:
      - A larger fraction means a smaller tile and more aggressive crowd-splitting.
      - DetectKit resolves each fraction for the active model input size, so changing model input size does not require translating pixel targets yourself.
    - Set **Overlap** to `0.2` (default, creates a 20% border overlap between adjacent tiles to reduce edge artifacts).
-   - Use the live tile-layout preview beside the controls to see the resulting grid over a representative source image. Before the first build it is explicitly illustrative; afterward it uses the label-derived body measurement.
+   - Use the live tile-layout preview beside the controls to see the resulting grid over a representative labelled project frame at its native width and height. Before the first build it is explicitly illustrative; afterward it uses the label-derived body measurement.
 
 5. **Configure negative sampling and merging:**
    - Set **Min area ratio** to `0.1` (default, tiles with < 10% of the object's area are suppressed during slicing).

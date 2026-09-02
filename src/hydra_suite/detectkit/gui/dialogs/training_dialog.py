@@ -2089,6 +2089,7 @@ QTabBar::tab:selected {
 
         records = self._source_preview_records()
         if not self._project.sources:
+            self.slice_group.set_preview_frame_size(None)
             self.source_preview_status.setText(
                 "No sources configured yet. Add one or more DetectKit datasets to preview sample frames here."
             )
@@ -2101,6 +2102,7 @@ QTabBar::tab:selected {
             return
 
         if not records:
+            self.slice_group.set_preview_frame_size(None)
             self.source_preview_status.setText(
                 "Source datasets are configured, but DetectKit could not discover previewable image-label pairs yet."
             )
@@ -2111,6 +2113,13 @@ QTabBar::tab:selected {
             empty_label.setStyleSheet("color:#cfcfcf; font-size:11px;")
             self.source_preview_cards_layout.addWidget(empty_label)
             return
+
+        representative = self._source_preview_pixmap(Path(str(records[0]["path"])))
+        self.slice_group.set_preview_frame_size(
+            (representative.width(), representative.height())
+            if not representative.isNull()
+            else None
+        )
 
         self.source_preview_status.setText(
             f"Showing {len(records)} representative labeled sample(s) from {len(self._project.sources)} source dataset(s)."

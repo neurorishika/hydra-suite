@@ -79,3 +79,13 @@ def test_slice_settings_preview_renders_tile_layout(_app):
     # background after the live preview is constructed.
     assert image.width() > 0
     assert image.pixelColor(12, 17).isValid()
+
+
+def test_slice_settings_preview_uses_project_frame_dimensions(_app):
+    from hydra_suite.detectkit.gui.panels.slice_settings_widget import (
+        SliceSettingsGroup,
+    )
+
+    w = SliceSettingsGroup()
+    w.set_preview_frame_size((3072, 2048))
+    assert w.preview.frame_size == (3072, 2048)

@@ -12,6 +12,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
+from PySide6.QtGui import QImage  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
     QDialogButtonBox,
@@ -58,12 +59,9 @@ def _write_detectkit_source_dataset(root: Path) -> Path:
     labels_dir.mkdir(parents=True, exist_ok=True)
 
     image_path = images_dir / "sample.png"
-    image_path.write_bytes(
-        bytes.fromhex(
-            "89504E470D0A1A0A0000000D4948445200000001000000010802000000907753DE"
-            "0000000C49444154789C63F8FFFF3F0005FE02FE0EA257A90000000049454E44AE426082"
-        )
-    )
+    image = QImage(320, 240, QImage.Format.Format_RGB32)
+    image.fill(0)
+    assert image.save(str(image_path))
     (labels_dir / "sample.txt").write_text(
         "0 0.10 0.10 0.40 0.10 0.40 0.40 0.10 0.40\n",
         encoding="utf-8",
@@ -594,6 +592,7 @@ def test_training_dialog_source_preview_loads_real_source_samples(qapp, tmp_path
     records = dlg._source_preview_records()
     assert records
     assert dlg.source_preview_status.text().startswith("Showing ")
+    assert dlg.slice_group.preview.frame_size == (320, 240)
 
 
 # ---------------------------------------------------------------------------
