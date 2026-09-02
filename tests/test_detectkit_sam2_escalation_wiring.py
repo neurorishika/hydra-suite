@@ -530,7 +530,7 @@ def test_reference_body_px_resolution_chain(tmp_path):
     class _Project:
         project_dir = str(tmp_path)
         sources = [src]
-        slice_training = _Slice()
+        slice_settings = _Slice()
 
     project = _Project()
 
@@ -550,6 +550,21 @@ def test_reference_body_px_resolution_chain(tmp_path):
     # Link 1: the project setting wins outright.
     _Slice.reference_body_px = 55.0
     value, origin = resolve_reference_body_px(project)
+    assert value == 55.0
+    assert "sliced-training" in origin
+
+
+def test_reference_body_px_reads_the_real_project_slice_settings(tmp_path):
+    from hydra_suite.detectkit.gui.escalation_actions import resolve_reference_body_px
+    from hydra_suite.detectkit.gui.models import DetectKitProject, SliceTrainingSettings
+
+    project = DetectKitProject(
+        project_dir=tmp_path,
+        slice_settings=SliceTrainingSettings(reference_body_px=55.0),
+    )
+
+    value, origin = resolve_reference_body_px(project)
+
     assert value == 55.0
     assert "sliced-training" in origin
 

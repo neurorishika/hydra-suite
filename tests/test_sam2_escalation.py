@@ -74,6 +74,31 @@ def test_escalation_stages_without_touching_canonical_labels(tmp_path):
     assert (Path(pending.staged_path) / "classes.txt").read_text() == "ant\n"
 
 
+def test_escalation_routes_duplicate_display_names_by_source_path(tmp_path):
+    first = _make_source(tmp_path / "first")
+    second = _make_source(tmp_path / "second")
+    project = types.SimpleNamespace(project_dir=str(tmp_path), sources=[first, second])
+    req = EscalationRequest(
+        project=project,
+        source_names=[first.name],
+        source_paths=[first.path],
+        variant="sam2.1-hiera-base_plus",
+    )
+
+    result = run_escalation(req, _FakeExec())
+
+    assert result.staged == [first.name]
+    assert first.staged_review is not None
+    assert second.staged_review is None
+
+
+def test_escalation_request_preserves_positional_overwrite_argument():
+    req = EscalationRequest(object(), ["source"], "variant", True)
+
+    assert req.overwrite is True
+    assert req.source_paths == []
+
+
 def test_no_label_file_is_staged_for_an_image_with_no_source_boxes(tmp_path):
     """`write_label_file([])` creates a zero-byte file, and `staged_frames()`
     would count it as a reviewable frame; `accept_frame(..., OVERWRITE)`

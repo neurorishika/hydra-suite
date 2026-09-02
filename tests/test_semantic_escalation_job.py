@@ -88,6 +88,28 @@ def test_polygon_level_sources_are_not_filtered_out(tmp_path):
     assert result.labelled > 0
 
 
+def test_semantic_escalation_routes_duplicate_display_names_by_source_path(tmp_path):
+    first = _make_source(tmp_path / "first", name="duplicate", n_images=1)
+    second = _make_source(tmp_path / "second", name="duplicate", n_images=1)
+    req = _request(tmp_path, first)
+    req.project.sources = [first, second]
+    req.source_paths = [first.path]
+    labeler = ScriptedLabeler([SemanticInstance(_blob(200, 200), 0.9)])
+
+    result = run_semantic_escalation(req, labeler)
+
+    assert result.staged == [first.name]
+    assert first.staged_review is not None
+    assert second.staged_review is None
+
+
+def test_semantic_request_preserves_positional_class_name_argument():
+    req = SemanticEscalationRequest(object(), ["source"], "variant", "prompt", "ant")
+
+    assert req.class_name == "ant"
+    assert req.source_paths == []
+
+
 def test_original_labels_are_never_touched(tmp_path):
     src = _make_source(tmp_path)
     (Path(src.path) / "labels" / "f0.txt").write_text("0 0.1 0.1 0.2 0.2\n")

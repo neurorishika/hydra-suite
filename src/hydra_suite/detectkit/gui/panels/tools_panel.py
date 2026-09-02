@@ -390,6 +390,10 @@ class ToolsPanel(QWidget):
     def set_project(self, proj: "DetectKitProject") -> None:
         """Bind panel to a project and refresh all groups."""
         self._proj = proj
+        # Project switches must replace, not inherit, session model state.
+        # Suppress the overlay signal while MainWindow is still binding the
+        # rest of the new project.
+        self.set_active_model_path(proj.active_model_path, emit=False)
         self._rebuild_class_checkboxes(proj.class_names)
         self.refresh_overview()
 
@@ -531,7 +535,14 @@ class ToolsPanel(QWidget):
             )
         )
 
-    def set_active_model_path(self, primary: str, secondary: str | None = None) -> None:
+    def set_active_model_path(
+        self,
+        primary: str,
+        secondary: str | None = None,
+        *,
+        status: str | None = None,
+        emit: bool = True,
+    ) -> None:
         """Set the active model path and update the read-only display label."""
         self._active_model_path = str(primary or "").strip()
         if not self._active_model_path:
@@ -547,7 +558,15 @@ class ToolsPanel(QWidget):
         else:
             self._model_display.setText(Path(primary).name)
             self._model_display.setToolTip(self._active_model_path)
-        self._emit_overlay_changed()
+        if status and self._active_model_path:
+            self._model_display.setText(
+                f"{self._model_display.text()}\n({str(status).strip()})"
+            )
+            self._model_display.setToolTip(
+                f"{self._model_display.toolTip()}\n{str(status).strip()}"
+            )
+        if emit:
+            self._emit_overlay_changed()
 
     # ------------------------------------------------------------------
     # Internal

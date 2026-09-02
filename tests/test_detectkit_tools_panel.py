@@ -110,6 +110,44 @@ def test_tools_panel_set_project(qapp, tmp_path):
     panel.set_project(proj)  # Must not raise
 
 
+def test_tools_panel_project_switch_replaces_the_previous_active_model(qapp, tmp_path):
+    from hydra_suite.detectkit.gui.panels.tools_panel import ToolsPanel
+
+    first = _make_proj(tmp_path / "first")
+    first.active_model_path = "/models/first.pt"
+    second = _make_proj(tmp_path / "second")
+
+    panel = ToolsPanel()
+    panel.set_project(first)
+    panel.set_active_model_path(first.active_model_path)
+    panel.set_project(second)
+
+    assert panel.get_overlay_settings().active_model_path == ""
+
+
+def test_model_status_text_never_becomes_part_of_the_model_path(qapp):
+    from hydra_suite.detectkit.gui.panels.tools_panel import ToolsPanel
+
+    panel = ToolsPanel()
+    panel.set_active_model_path("/models/detect.pt", status="missing OBB head")
+
+    assert panel.get_overlay_settings().active_model_path == "/models/detect.pt"
+    assert "missing OBB head" in panel._model_display.text()
+
+
+def test_main_window_passes_incomplete_model_status_separately_from_path():
+    import inspect
+
+    from hydra_suite.detectkit.gui.main_window import MainWindow
+
+    load_source = inspect.getsource(MainWindow._load_project)
+    history_source = inspect.getsource(MainWindow._open_history_dialog)
+    assert 'status="missing OBB head"' in load_source
+    assert 'status="missing OBB head"' in history_source
+    assert "active_model_path} (missing OBB head)" not in load_source
+    assert "active_model_path} (missing OBB head)" not in history_source
+
+
 def test_tools_panel_refresh_overview(qapp, tmp_path):
     from hydra_suite.detectkit.gui.panels.tools_panel import ToolsPanel
 

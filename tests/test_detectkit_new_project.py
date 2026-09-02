@@ -140,6 +140,57 @@ def test_detectkit_main_window_new_project_creates_project_from_dialog(
     window.close()
 
 
+def test_close_stops_owned_background_workers_before_destroying_window(qapp):
+    window = MainWindow()
+
+    class _Worker:
+        def __init__(self):
+            self.running = True
+            self.cancelled = False
+            self.waited = False
+
+        def isRunning(self):
+            return self.running
+
+        def cancel(self):
+            self.cancelled = True
+
+        def wait(self, _milliseconds):
+            self.waited = True
+            self.running = False
+            return True
+
+    worker = _Worker()
+    window._inference_worker = worker
+
+    assert window._stop_background_workers_for_close() is True
+    assert worker.cancelled is True
+    assert worker.waited is True
+    window._inference_worker = None
+    window.close()
+
+
+def test_close_is_rejected_when_project_save_fails(qapp, tmp_path, monkeypatch):
+    from PySide6.QtGui import QCloseEvent
+
+    from hydra_suite.detectkit.gui.models import DetectKitProject
+
+    window = MainWindow()
+    window._project = DetectKitProject(project_dir=tmp_path)
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.main_window.save_project",
+        lambda _project: (_ for _ in ()).throw(OSError("disk full")),
+    )
+    event = QCloseEvent()
+
+    window.closeEvent(event)
+
+    assert event.isAccepted() is False
+    assert "disk full" in window.statusBar().currentMessage()
+    window._project = None
+    window.close()
+
+
 def test_detectkit_main_window_new_project_opens_existing_project(
     qapp, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
-from typing import Literal
+from typing import Callable, Literal
 
 import cv2
 import numpy as np
@@ -81,6 +81,8 @@ class CandidatePoolConfig:
 def build_candidate_pool(
     source: FrameSource,
     cfg: CandidatePoolConfig,
+    *,
+    should_stop: Callable[[], bool] | None = None,
 ) -> list[FrameRef]:
     """Return a deduplicated, optionally capped list of candidate FrameRefs.
 
@@ -115,6 +117,8 @@ def build_candidate_pool(
     frames_since_allowed = 0
 
     for ref in source:
+        if should_stop is not None and should_stop():
+            break
         if cfg.max_candidates is not None and len(kept) >= cfg.max_candidates:
             break
 

@@ -419,6 +419,7 @@ _CANVAS_MIN_WIDTH = 480
 _TOOLS_PANEL_PREFERRED_WIDTH = 380
 _WORKSPACE_MIN_HEIGHT = 760
 _WORKSPACE_MIN_WIDTH = 1320
+_CLOSE_WORKER_WAIT_MS = 3000
 
 _DARK_STYLESHEET = """
 QMainWindow {
@@ -736,6 +737,7 @@ class DetectKitMainWindow(QMainWindow):
         self._escalation_progress_dialog: Optional[QProgressDialog] = None
         self._last_escalation_result: object | None = None
         self._last_escalation_error: str | None = None
+        self._al_worker = None
 
         # Build workspace panels first (toolbar actions need them)
         self._dataset_panel = DatasetPanel()
@@ -1282,7 +1284,8 @@ class DetectKitMainWindow(QMainWindow):
             except RuntimeError as exc:
                 # Sequential pair incomplete — show with suffix, no secondary.
                 self._tools_panel.set_active_model_path(
-                    f"{proj.active_model_path} (missing OBB head)"
+                    proj.active_model_path,
+                    status="missing OBB head",
                 )
                 logger.warning("Sequential pair resolution failed: %s", exc)
 
@@ -1324,12 +1327,24 @@ class DetectKitMainWindow(QMainWindow):
         self._dataset_panel.collect_state(self._project)
         save_project(self._project)
 
-    def _save_current_project(self) -> None:
+    def _save_current_project(self, *, interactive: bool = True) -> bool:
         if self._project is None:
-            return
-        self._dataset_panel.collect_state(self._project)
-        save_project(self._project)
+            return True
+        try:
+            self._dataset_panel.collect_state(self._project)
+            save_project(self._project)
+        except Exception as exc:
+            logger.exception("Could not save DetectKit project")
+            if interactive:
+                QMessageBox.warning(
+                    self,
+                    "Save Project",
+                    f"The project could not be saved:\n\n{exc}",
+                )
+            self.statusBar().showMessage(f"Project save failed: {exc}", 5000)
+            return False
         self.statusBar().showMessage("Project saved.", 3000)
+        return True
 
     def make_project_portable(self, *, interactive: bool = True) -> bool:
         if self._project is None:
@@ -1353,7 +1368,8 @@ class DetectKitMainWindow(QMainWindow):
             return True
 
         if interactive:
-            self._save_current_project()
+            if not self._save_current_project():
+                return False
             progress = QProgressDialog(
                 "Copying linked sources and project artifacts into the bundle...",
                 None,
@@ -1405,10 +1421,7 @@ class DetectKitMainWindow(QMainWindow):
             worker.start()
             return True
 
-        try:
-            self._save_current_project()
-        except Exception as exc:
-            QMessageBox.warning(self, "Make Project Portable", str(exc))
+        if not self._save_current_project():
             return False
 
         project = self._project
@@ -1474,7 +1487,8 @@ class DetectKitMainWindow(QMainWindow):
         try:
             if not self.make_project_portable(interactive=False):
                 return
-            self._save_current_project()
+            if not self._save_current_project():
+                return
         except Exception as exc:
             QMessageBox.warning(self, "Export Project Zip", str(exc))
             return
@@ -1510,6 +1524,12 @@ class DetectKitMainWindow(QMainWindow):
         dlg = SourceManagerDialog(self._project, parent=self)
         dlg.exec()
         self._dataset_panel.refresh_sources(self._project)
+        linked_counts = detectkit_project_linked_reference_counts(self._project)
+        portability_status = (
+            "Portable" if detectkit_project_is_portable(self._project) else "Linked"
+        )
+        self._dataset_panel.set_portability_status(portability_status, linked_counts)
+        self._tools_panel.set_portability_status(portability_status, linked_counts)
         self._tools_panel.refresh_overview()
 
     def _open_training_dialog(self) -> None:
@@ -1545,7 +1565,8 @@ class DetectKitMainWindow(QMainWindow):
                 )
             except RuntimeError as exc:
                 self._tools_panel.set_active_model_path(
-                    f"{self._project.active_model_path} (missing OBB head)"
+                    self._project.active_model_path,
+                    status="missing OBB head",
                 )
                 logger.warning("Sequential pair resolution failed: %s", exc)
         self._sync_al_action_enabled()
@@ -1595,7 +1616,13 @@ class DetectKitMainWindow(QMainWindow):
             )
         )
         worker.error.connect(lambda msg: dlg.status_label.setText(f"Error: {msg}"))
-        worker.finished.connect(lambda: dlg.set_running(False))
+
+        def _finish() -> None:
+            dlg.set_running(False)
+            if self._al_worker is worker:
+                self._al_worker = None
+
+        worker.finished.connect(_finish)
         worker.start()
         self._al_worker = worker
 
@@ -2481,8 +2508,46 @@ class DetectKitMainWindow(QMainWindow):
     # Events
     # ------------------------------------------------------------------
 
+    def _stop_background_workers_for_close(self) -> bool:
+        """Cancel owned workers and join them before Qt destroys the window."""
+        workers = []
+        for name in (
+            "_inference_worker",
+            "_portable_worker",
+            "_escalation_worker",
+            "_al_worker",
+        ):
+            worker = getattr(self, name, None)
+            if worker is not None and worker not in workers and worker.isRunning():
+                workers.append(worker)
+
+        for worker in workers:
+            cancel = getattr(worker, "cancel", None)
+            if callable(cancel):
+                cancel()
+            else:
+                request_interruption = getattr(worker, "requestInterruption", None)
+                if callable(request_interruption):
+                    request_interruption()
+
+        for worker in workers:
+            worker.wait(_CLOSE_WORKER_WAIT_MS)
+        return not any(worker.isRunning() for worker in workers)
+
     def closeEvent(self, event) -> None:  # noqa: N802
-        self._save_current_project()
+        if not self._stop_background_workers_for_close():
+            event.ignore()
+            QMessageBox.information(
+                self,
+                "Background Work Still Stopping",
+                "DetectKit is still stopping a background task. Try closing again "
+                "after it finishes; the window will remain open to avoid corrupting "
+                "project state.",
+            )
+            return
+        if not self._save_current_project(interactive=False):
+            event.ignore()
+            return
         super().closeEvent(event)
 
 

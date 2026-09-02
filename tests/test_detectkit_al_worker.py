@@ -135,6 +135,97 @@ def _patch_detection(monkeypatch, dets_for) -> _FakeRunner:
     return runner
 
 
+def test_active_learning_cancellation_stops_before_detection(tmp_path, monkeypatch):
+    from hydra_suite.detectkit.jobs import al_worker as al_worker_mod
+    from hydra_suite.detectkit.jobs.al_worker import (
+        ActiveLearningCancelled,
+        ALRequest,
+        run_active_learning,
+    )
+
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+    project = DetectKitProject(project_dir=project_dir, sources=[])
+    folder = _seed_image_folder(tmp_path, n=6)
+    detection_started = False
+
+    def _unexpected_detection(_req):
+        nonlocal detection_started
+        detection_started = True
+        raise AssertionError("detection should not start after cancellation")
+
+    monkeypatch.setattr(
+        al_worker_mod, "_build_detection_context", _unexpected_detection
+    )
+    checks = 0
+
+    def should_stop() -> bool:
+        nonlocal checks
+        checks += 1
+        return checks > 2
+
+    request = ALRequest(
+        input_kind="folder",
+        input_path=str(folder),
+        project=project,
+        budget=1,
+        detector=_SPEC,
+        candidate_pool=al_worker_mod.CandidatePoolConfig(
+            dedup_method="none", max_candidates=None
+        ),
+    )
+
+    with pytest.raises(ActiveLearningCancelled):
+        run_active_learning(request, should_stop=should_stop)
+
+    assert detection_started is False
+    assert project.sources == []
+
+
+def test_active_learning_cancellation_removes_partial_export(tmp_path, monkeypatch):
+    from hydra_suite.detectkit.jobs import al_worker as al_worker_mod
+    from hydra_suite.detectkit.jobs.al_worker import (
+        ActiveLearningCancelled,
+        ALRequest,
+        run_active_learning,
+    )
+
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+    project = DetectKitProject(project_dir=project_dir, sources=[])
+    folder = _seed_image_folder(tmp_path, n=3)
+    _patch_detection(monkeypatch, lambda _pos, _idx: [(10, 10, 8, 4, 0.0, 0.95)])
+    cancelled = False
+
+    def cancel_during_export(*, round_dir, frames, images, **_kwargs):
+        nonlocal cancelled
+        Path(round_dir).mkdir(parents=True)
+        (Path(round_dir) / "partial.txt").write_text("partial")
+        cancelled = True
+        images[frames[0].frame_id]
+        raise AssertionError("the lazy image read must observe cancellation")
+
+    monkeypatch.setattr(al_worker_mod, "export_al_dataset", cancel_during_export)
+    request = ALRequest(
+        input_kind="folder",
+        input_path=str(folder),
+        project=project,
+        budget=1,
+        detector=_SPEC,
+        diversity_window=0,
+        probabilistic=False,
+        candidate_pool=al_worker_mod.CandidatePoolConfig(
+            dedup_method="none", max_candidates=None
+        ),
+    )
+
+    with pytest.raises(ActiveLearningCancelled):
+        run_active_learning(request, should_stop=lambda: cancelled)
+
+    assert project.sources == []
+    assert not list((project_dir / "sources").glob("al_round_*"))
+
+
 def test_al_worker_writes_seeded_labels_and_registers_source(tmp_path, monkeypatch):
     from hydra_suite.detectkit.jobs.al_worker import ALRequest, run_active_learning
 

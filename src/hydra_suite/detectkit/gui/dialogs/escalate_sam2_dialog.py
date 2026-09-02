@@ -42,6 +42,10 @@ class EscalateSam2Dialog(BaseDialog):
             label = s.name if eligible else f"{s.name}  (already segment)"
             item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, s.name)
+            item.setData(
+                Qt.ItemDataRole.UserRole + 1,
+                str(getattr(s, "path", "") or s.name),
+            )
             item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
             if s.level == "polygon":
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
@@ -78,6 +82,14 @@ class EscalateSam2Dialog(BaseDialog):
     def selected_sources(self) -> list[str]:
         return [
             self._list.item(i).data(Qt.ItemDataRole.UserRole)
+            for i in range(self._list.count())
+            if self._list.item(i).isSelected()
+        ]
+
+    def selected_source_paths(self) -> list[str]:
+        """Stable source identities corresponding to the selected display rows."""
+        return [
+            self._list.item(i).data(Qt.ItemDataRole.UserRole + 1)
             for i in range(self._list.count())
             if self._list.item(i).isSelected()
         ]

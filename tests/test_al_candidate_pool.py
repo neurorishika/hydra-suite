@@ -58,6 +58,22 @@ def test_candidate_pool_respects_max_candidates(tmp_path):
     assert len(refs) == 3
 
 
+def test_candidate_pool_stops_when_cancellation_is_requested(tmp_path):
+    src = _make_dataset(tmp_path, n_unique=10, n_dupes=0)
+    cfg = CandidatePoolConfig(dedup_method="none", max_candidates=None)
+    checks = 0
+
+    def should_stop() -> bool:
+        nonlocal checks
+        checks += 1
+        return checks > 3
+
+    refs = build_candidate_pool(src, cfg, should_stop=should_stop)
+
+    assert len(refs) == 3
+    assert checks == 4
+
+
 def test_candidate_pool_no_dedup_passthrough(tmp_path):
     src = _make_dataset(tmp_path, n_unique=5, n_dupes=0)
     cfg = CandidatePoolConfig(dedup_method="none")

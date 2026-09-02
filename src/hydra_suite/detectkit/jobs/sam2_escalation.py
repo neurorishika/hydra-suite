@@ -100,6 +100,7 @@ class EscalationRequest:
     source_names: list[str]
     variant: str
     overwrite: bool = False
+    source_paths: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -156,6 +157,22 @@ def _sources_by_name(project) -> dict[str, OBBSource]:
     return {s.name: s for s in project.sources}
 
 
+def _requested_sources(req: EscalationRequest) -> list[OBBSource]:
+    """Resolve stable source paths first; names remain a legacy fallback."""
+    if req.source_paths:
+        by_path = {
+            str(Path(source.path).expanduser().resolve()): source
+            for source in req.project.sources
+        }
+        return [
+            by_path[resolved]
+            for path in req.source_paths
+            if (resolved := str(Path(path).expanduser().resolve())) in by_path
+        ]
+    by_name = _sources_by_name(req.project)
+    return [by_name[name] for name in req.source_names if name in by_name]
+
+
 def run_escalation(
     req: EscalationRequest,
     executor,
@@ -191,12 +208,7 @@ def run_escalation(
             on_mutated()
 
     result = EscalationResult()
-    by_name = _sources_by_name(req.project)
-    todo = [
-        by_name[n]
-        for n in req.source_names
-        if n in by_name and by_name[n].level != "polygon"
-    ]
+    todo = [source for source in _requested_sources(req) if source.level != "polygon"]
     project_root = Path(req.project.project_dir)
     for si, src in enumerate(todo):
         if src.staged_review is not None and not overwrite:

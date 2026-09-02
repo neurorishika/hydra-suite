@@ -51,6 +51,7 @@ def on_escalate_geometry(window, preselect: str | None = None) -> None:
         return
 
     source_names = dlg.selected_sources()
+    source_paths = dlg.selected_source_paths()
     if not source_names:
         QMessageBox.information(
             window,
@@ -59,13 +60,14 @@ def on_escalate_geometry(window, preselect: str | None = None) -> None:
         )
         return
 
-    existing_by_name = {s.name: s for s in window._project.sources}
-    would_conflict = [
-        n
-        for n in source_names
-        if existing_by_name.get(n) is not None
-        and existing_by_name[n].staged_review is not None
+    existing_by_path = {str(s.path): s for s in window._project.sources}
+    conflicting_paths = [
+        path
+        for path in source_paths
+        if existing_by_path.get(path) is not None
+        and existing_by_path[path].staged_review is not None
     ]
+    would_conflict = [existing_by_path[path].name for path in conflicting_paths]
     overwrite = False
     if would_conflict:
         reply = QMessageBox.question(
@@ -81,7 +83,13 @@ def on_escalate_geometry(window, preselect: str | None = None) -> None:
             QMessageBox.No,
         )
         if reply != QMessageBox.Yes:
-            source_names = [n for n in source_names if n not in would_conflict]
+            selected = [
+                (name, path)
+                for name, path in zip(source_names, source_paths)
+                if path not in conflicting_paths
+            ]
+            source_names = [name for name, _path in selected]
+            source_paths = [path for _name, path in selected]
             if not source_names:
                 return
         else:
@@ -90,6 +98,7 @@ def on_escalate_geometry(window, preselect: str | None = None) -> None:
     request = EscalationRequest(
         project=window._project,
         source_names=source_names,
+        source_paths=source_paths,
         variant=dlg.selected_variant(),
         overwrite=overwrite,
     )
@@ -219,6 +228,7 @@ def on_semantic_escalation(window) -> None:
         SemanticEscalationRequest,
         SemanticEscalationWorker,
         is_prompt_failure,
+        source_paths_pending_replacement,
         sources_pending_replacement,
     )
 
@@ -241,6 +251,7 @@ def on_semantic_escalation(window) -> None:
     request = SemanticEscalationRequest(
         project=window._project,
         source_names=[s.name for s in sources],
+        source_paths=[s.path for s in sources],
         variant=dlg.selected_variant(),
         prompt=dlg.prompt(),
         **params,
@@ -251,6 +262,7 @@ def on_semantic_escalation(window) -> None:
     # ever meant "silently wipe whatever else is staged" -- including an
     # unreviewed SAM2 escalation. Mirror on_escalate_geometry and ask.
     would_replace = sources_pending_replacement(request)
+    replacement_paths = source_paths_pending_replacement(request)
     if would_replace:
         reply = QMessageBox.question(
             window,
@@ -267,9 +279,13 @@ def on_semantic_escalation(window) -> None:
         if reply == QMessageBox.Yes:
             request.overwrite = True
         else:
-            request.source_names = [
-                n for n in request.source_names if n not in would_replace
+            selected = [
+                (name, path)
+                for name, path in zip(request.source_names, request.source_paths)
+                if path not in replacement_paths
             ]
+            request.source_names = [name for name, _path in selected]
+            request.source_paths = [path for _name, path in selected]
             if not request.source_names:
                 return
 
@@ -408,7 +424,7 @@ def resolve_reference_body_px(project) -> tuple[float, str]:
     """
     from hydra_suite.detectkit.jobs.semantic_escalation import measure_median_body_px
 
-    slice_settings = getattr(project, "slice_training", None)
+    slice_settings = getattr(project, "slice_settings", None)
     from_project = float(getattr(slice_settings, "reference_body_px", 0.0) or 0.0)
     if from_project > 0:
         return from_project, "the project's sliced-training reference body size"

@@ -327,6 +327,12 @@ class HistoryDialog(BaseDialog):
             delete_training_history_entry(self._project, run_id)
         except Exception as exc:
             logger.warning("Could not delete run %s: %s", run_id, exc)
+            QMessageBox.warning(
+                self,
+                "Delete Run Failed",
+                f"Run '{run_id}' could not be deleted:\n\n{exc}",
+            )
+            return
         self._refresh()
         if self._runs:
             self.table.selectRow(max(0, min(row - 1, len(self._runs) - 1)))

@@ -55,3 +55,15 @@ def test_dialog_uses_clickable_multi_selection_instead_of_checkboxes():
 
     assert dlg.selected_sources() == ["a"]
     dlg.close()
+
+
+def test_dialog_keeps_duplicate_display_names_distinct_by_path():
+    sources = [
+        OBBSource(path="/one/duplicate", name="duplicate", level="obb"),
+        OBBSource(path="/two/duplicate", name="duplicate", level="obb"),
+    ]
+    dlg = EscalateSam2Dialog(sources)
+    dlg._list.item(1).setSelected(False)
+
+    assert dlg.selected_sources() == ["duplicate"]
+    assert dlg.selected_source_paths() == ["/one/duplicate"]

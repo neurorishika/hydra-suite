@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import logging
+import shutil
 import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -50,6 +51,11 @@ from hydra_suite.utils.video_artifacts import build_inference_cache_dir
 from hydra_suite.widgets.workers import BaseWorker
 
 logger = logging.getLogger(__name__)
+
+
+class ActiveLearningCancelled(RuntimeError):
+    """Raised when an active-learning run is cooperatively cancelled."""
+
 
 # `Detection`/`DetectorFn` (the per-frame detector-closure aliases) are gone
 # with the closure itself: nothing outside this module ever referenced either,
@@ -138,12 +144,16 @@ class _LazyALImages(Mapping):
         source: FrameSource,
         frame_refs_by_id: dict[int, "FrameRef"],
         frame_ids: Sequence[int],
+        should_stop: Callable[[], bool] | None = None,
     ) -> None:
         self._source = source
         self._frame_refs_by_id = frame_refs_by_id
         self._frame_ids = list(frame_ids)
+        self._should_stop = should_stop
 
     def __getitem__(self, frame_id: int):
+        if self._should_stop is not None and self._should_stop():
+            raise ActiveLearningCancelled("Active learning cancelled.")
         img = self._source.read(self._frame_refs_by_id[frame_id])
         if img is None:
             raise KeyError(frame_id)
@@ -376,6 +386,7 @@ def _records_from_detections(detections: list) -> list[LabelRecord]:
 def run_active_learning(
     req: ALRequest,
     progress: Callable[[int, str], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> ALResult:
     """Execute one AL round end-to-end. Pure function for testability.
 
@@ -407,7 +418,9 @@ def run_active_learning(
 
     source = _build_frame_source(req)
     try:
-        return _run_active_learning_with_source(req, source, weights, progress)
+        return _run_active_learning_with_source(
+            req, source, weights, progress, should_stop
+        )
     finally:
         # Ruling: the round owns the source's OS handles. `VideoFrameSource`
         # holds one `cv2.VideoCapture` open across all its reads, and this
@@ -426,11 +439,20 @@ def _run_active_learning_with_source(
     source: FrameSource,
     weights: AcquisitionWeights,
     progress: Callable[[int, str], None] | None,
+    should_stop: Callable[[], bool] | None,
 ) -> ALResult:
+    def stop_if_requested() -> None:
+        if should_stop is not None and should_stop():
+            raise ActiveLearningCancelled("Active learning cancelled.")
+
     # --- Phase 1: candidate selection (one sequential decode, no model) -----
+    stop_if_requested()
     if progress:
         progress(5, "Building candidate pool...")
-    candidates = build_candidate_pool(source, req.candidate_pool)
+    candidates = build_candidate_pool(
+        source, req.candidate_pool, should_stop=should_stop
+    )
+    stop_if_requested()
     if not candidates:
         raise RuntimeError(
             "0 candidates after FilterKit dedup; relax threshold or stride."
@@ -452,12 +474,14 @@ def _run_active_learning_with_source(
     # --- Phase 2: one batched, cached detection pass over all candidates ----
     if progress:
         progress(25, f"Detecting on {len(candidates)} candidates...")
+    stop_if_requested()
     runner, obb_config = _build_detection_context(req)
 
     readable: list[FrameRef] = []
     frames: list[np.ndarray] = []
     frame_shapes: dict[int, tuple[int, int]] = {}
     for ref in candidates:
+        stop_if_requested()
         img = source.read(ref)
         if img is None:
             # Same log-and-skip contract the old per-frame scoring loop had
@@ -472,6 +496,7 @@ def _run_active_learning_with_source(
     frame_indices = [ref.frame_id for ref in readable]
     with _al_detection_cache_dir(req) as cache_dir:
         raw_by_idx = get_or_compute_raw(runner, cache_dir, frames, frame_indices)
+    stop_if_requested()
     # The pixels are not needed past detection -- only each frame's extent,
     # already captured in `frame_shapes` for the edge-proximity signal.
     del frames
@@ -483,6 +508,7 @@ def _run_active_learning_with_source(
     detections_by_id: dict[int, list] = {}
     frame_refs_by_id: dict[int, object] = {}
     for i, ref in enumerate(readable):
+        stop_if_requested()
         sig, dets = _frame_signals(
             ref.frame_id,
             raw_by_idx[ref.frame_id],
@@ -501,6 +527,7 @@ def _run_active_learning_with_source(
 
     if progress:
         progress(85, "Selecting top-K frames...")
+    stop_if_requested()
     rng = np.random.default_rng()
     picked_ids = select(
         signals,
@@ -513,6 +540,7 @@ def _run_active_learning_with_source(
 
     if progress:
         progress(95, "Writing dataset...")
+    stop_if_requested()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     proj_dir = Path(req.project.project_dir)
     source_root = proj_dir / "sources" / f"al_round_{timestamp}"
@@ -525,6 +553,7 @@ def _run_active_learning_with_source(
     # holding every picked frame resident at once (see `_LazyALImages`).
     written_ids: list[int] = []
     for fid in picked_ids:
+        stop_if_requested()
         ref = frame_refs_by_id[fid]
         if source.read(ref) is None:
             logger.warning("Could not re-read picked frame %s; skipping.", fid)
@@ -563,15 +592,23 @@ def _run_active_learning_with_source(
         "base_iou": req.base_iou,
     }
 
-    manifest = export_al_dataset(
-        round_dir=source_root,
-        frames=exported,
-        images=_LazyALImages(source, frame_refs_by_id, written_ids),
-        native_level=native_level,
-        levels=requested_levels,
-        class_names=[req.project.class_name],
-        provenance=provenance,
-    )
+    try:
+        manifest = export_al_dataset(
+            round_dir=source_root,
+            frames=exported,
+            images=_LazyALImages(
+                source, frame_refs_by_id, written_ids, should_stop=should_stop
+            ),
+            native_level=native_level,
+            levels=requested_levels,
+            class_names=[req.project.class_name],
+            provenance=provenance,
+        )
+        stop_if_requested()
+    except ActiveLearningCancelled:
+        # A partially written round must never look like a usable dataset.
+        shutil.rmtree(source_root, ignore_errors=True)
+        raise
 
     # ONE OBBSource for the round's authoritative root only -- the root
     # export_al_dataset marks derived_from=None (the highest level actually
@@ -660,7 +697,15 @@ class ALWorker(BaseWorker):
             self.progress.emit(int(pct))
             self.status.emit(str(msg))
 
-        result = run_active_learning(self._request, progress=cb)
+        try:
+            result = run_active_learning(
+                self._request,
+                progress=cb,
+                should_stop=self._should_stop,
+            )
+        except ActiveLearningCancelled:
+            self.status.emit("Active learning cancelled.")
+            return
         if not self._should_stop():
             self.result_ready.emit(
                 result.source_path,

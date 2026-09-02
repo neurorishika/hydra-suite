@@ -107,6 +107,9 @@ class SemanticEscalationRequest:
     area_min_px2: float = 0.0
     area_max_px2: float = 0.0
     overwrite: bool = False
+    # Stable source identities for GUI requests. Kept after the pre-existing
+    # fields so positional construction remains backward compatible.
+    source_paths: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -225,7 +228,23 @@ def labeler_checkpoint_for(model_key: str):
     return resolve_checkpoint(model_key)
 
 
-def sources_pending_replacement(req: "SemanticEscalationRequest") -> list[str]:
+def _requested_sources(req: "SemanticEscalationRequest") -> list[OBBSource]:
+    """Resolve stable source paths first; names remain a legacy fallback."""
+    if req.source_paths:
+        by_path = {
+            str(Path(source.path).expanduser().resolve()): source
+            for source in req.project.sources
+        }
+        return [
+            by_path[resolved]
+            for path in req.source_paths
+            if (resolved := str(Path(path).expanduser().resolve())) in by_path
+        ]
+    by_name = {source.name: source for source in req.project.sources}
+    return [by_name[name] for name in req.source_names if name in by_name]
+
+
+def source_paths_pending_replacement(req: "SemanticEscalationRequest") -> list[str]:
     """Selected sources whose staged escalation this run would DESTROY.
 
     A source whose pending escalation is the very run being re-issued is a
@@ -233,12 +252,10 @@ def sources_pending_replacement(req: "SemanticEscalationRequest") -> list[str]:
     or an unreviewed SAM2 result would be wiped, and the GUI must confirm
     those before they are.
     """
-    by_name = {s.name: s for s in req.project.sources}
     project_root = _resolved(req.project.project_dir)
     out: list[str] = []
-    for name in req.source_names:
-        src = by_name.get(name)
-        if src is None or src.staged_review is None:
+    for src in _requested_sources(req):
+        if src.staged_review is None:
             continue
         target = (
             project_root
@@ -247,8 +264,18 @@ def sources_pending_replacement(req: "SemanticEscalationRequest") -> list[str]:
             / staged_dirname_for(src, req.variant, req.prompt)
         )
         if _resolved(src.staged_review.staged_path) != target:
-            out.append(name)
+            out.append(src.path)
     return out
+
+
+def sources_pending_replacement(req: "SemanticEscalationRequest") -> list[str]:
+    """Display names for selected sources whose staged work would be replaced."""
+    pending_paths = set(source_paths_pending_replacement(req))
+    return [
+        source.name
+        for source in _requested_sources(req)
+        if source.path in pending_paths
+    ]
 
 
 def band_from_bounds(min_px2: float, max_px2: float) -> AreaBand | None:
@@ -532,10 +559,9 @@ def run_semantic_escalation(
             on_mutated()
 
     result = SemanticEscalationResult()
-    by_name = {s.name: s for s in req.project.sources}
     # DEPARTURE 1: no `level != "polygon"` filter. Finding animals the
     # existing polygons missed is a primary use case for this feature.
-    todo = [by_name[n] for n in req.source_names if n in by_name]
+    todo = _requested_sources(req)
     # Canonical, so every staged-path comparison below matches the paths
     # ensure_bundle_subdirectory hands back (see _resolved).
     project_root = _resolved(req.project.project_dir)

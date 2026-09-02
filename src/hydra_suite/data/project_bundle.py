@@ -178,8 +178,8 @@ def write_json_atomic(path: Path, payload: dict[str, Any] | list[Any]) -> None:
             suffix=".tmp",
             delete=False,
         ) as handle:
-            handle.write(encoded)
             temp_path = Path(handle.name)
+            handle.write(encoded)
         temp_path.replace(path)
     finally:
         if temp_path is not None:
