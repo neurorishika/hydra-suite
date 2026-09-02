@@ -222,7 +222,7 @@ def _prepare_role_datasets(
                 overlap=slice_settings.overlap,
                 min_area_ratio=slice_settings.min_area_ratio,
                 negative_tile_fraction=slice_settings.negative_tile_fraction,
-                target_sizes=list(slice_settings.target_sizes),
+                target_sizes=slice_settings.target_sizes_for(request.imgsz_for(role)),
                 full_frame_mix=slice_settings.full_frame_mix,
             )
             sliced = orchestrator.build_sliced_obb_dataset(
@@ -781,6 +781,12 @@ QTabBar::tab:selected {
         self.spin_imgsz_seq_crop_segment.valueChanged.connect(
             self._mark_dataset_fit_dirty
         )
+        for spinner in (
+            self.spin_imgsz_obb_direct,
+            self.spin_imgsz_detect_direct,
+            self.spin_imgsz_segment_direct,
+        ):
+            spinner.valueChanged.connect(self._sync_slice_model_input_size)
 
         for spinner in (
             self.spin_train,
@@ -1680,12 +1686,28 @@ QTabBar::tab:selected {
             _SELECTION_DESCRIPTIONS[self._selected_plan_key()]
         )
         self._update_advanced_role_controls()
+        self._sync_slice_model_input_size()
         if hasattr(self, "sam3_panel"):
             self.training_tabs.setTabVisible(
                 self._sam3_tab_index, self._selected_mode() == "semantic"
             )
         self._refresh_summary()
         self._mark_dataset_fit_dirty()
+
+    def _sync_slice_model_input_size(self, *_args) -> None:
+        """Show SAHI's relative object scales against the active direct model."""
+        if not hasattr(self, "slice_group"):
+            return
+        direct_roles = {
+            "obb_direct": self.spin_imgsz_obb_direct,
+            "detect_direct": self.spin_imgsz_detect_direct,
+            "segment_direct": self.spin_imgsz_segment_direct,
+        }
+        for role in self._selected_role_keys():
+            if role in direct_roles:
+                self.slice_group.set_model_input_size(direct_roles[role].value())
+                return
+        self.slice_group.set_model_input_size(640)
 
     def _source_fit_summary(self) -> str:
         sources = list(self._project.sources)
@@ -2395,9 +2417,13 @@ QTabBar::tab:selected {
                     )
                 else:
                     self._append_log(
-                        f"Auto-set reference body size: {measured_ref:.1f}px "
-                        "(measured)"
+                        f"Updated automatic reference body size: {measured_ref:.1f}px "
+                        "(measured from labels)"
                     )
+                # Refresh the informational label and live tile schematic in
+                # this still-open dialog with the fresh label measurement.
+                self.slice_group.load_from(self._project.slice_settings)
+                self._sync_slice_model_input_size()
 
         self._set_run_status(
             f"Prepared datasets for {len(self.role_dataset_dirs)} selected role(s)."

@@ -6,6 +6,22 @@ def test_slice_settings_defaults_off():
     assert s.enabled is False
     assert s.geometry_mode == "auto_object"
     assert s.target_sizes == [200.0, 300.0, 400.0]
+    assert s.target_fractions() == [200.0 / 640.0, 300.0 / 640.0, 400.0 / 640.0]
+
+
+def test_relative_target_sizes_resolve_per_model_input():
+    s = SliceTrainingSettings(target_size_fractions=[0.25, 0.5])
+    assert s.target_sizes_for(640) == [160.0, 320.0]
+    assert s.target_sizes_for(1024) == [256.0, 512.0]
+
+
+def test_label_measurement_replaces_stale_slice_reference():
+    from hydra_suite.detectkit.gui.models import populate_measured_reference
+
+    settings = SliceTrainingSettings(reference_body_px=55.0)
+    assert populate_measured_reference(settings, 42.0)
+    assert settings.reference_body_px == 42.0
+    assert not populate_measured_reference(settings, 42.0)
 
 
 def test_project_slice_settings_round_trip(tmp_path):

@@ -338,7 +338,7 @@ class _DetectKitDatasetInferenceWorker(BaseWorker):
                             # 0.0 => tile_size_for_mode degrades auto_object to imgsz tiling (honest; no fabricated scale)
                             reference_body_px=slice_settings.reference_body_px,
                             object_tile_fraction=preview_object_tile_fraction(
-                                slice_settings.target_sizes,
+                                slice_settings.target_sizes_for(self._imgsz_obb_direct),
                                 slice_settings.object_tile_fraction,
                                 self._imgsz_obb_direct,
                             ),

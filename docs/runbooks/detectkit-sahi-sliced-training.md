@@ -19,14 +19,14 @@ You have a DetectKit project with:
 
 3. **Enable sliced training:**
    - Check the "Enable sliced training + preview" checkbox.
-   - Leave geometry mode at the default `auto_object` (this mode automatically tiles around ant bounding boxes).
+   - Leave **Tile strategy** at **Fit labelled objects** (the default). DetectKit measures the reference body size from all labels during the build; it is not a manual setting.
 
 4. **Configure tile sizing** (these control how crowded frames are split):
-   - Set **Target sizes (px, comma)** to `200, 300, 400` (default).
-     - Explanation: larger target apparent size → smaller tiles → more aggressive crowd-splitting.
-     - The model will be trained to detect ants at these apparent sizes; SAHI inference will request tiles scaled to match these training sizes, so the learned detector sees familiar scales at inference time.
-   - Set **Object tile fraction** to `0.15` (default, controls the fraction of the tile occupied by a typical object).
+   - Set **Object scale in model input** to `0.3125, 0.46875, 0.625` (the default). These are fractions of the active model input; at 640px they correspond to 200, 300, and 400px.
+     - A larger fraction means a smaller tile and more aggressive crowd-splitting.
+     - DetectKit resolves each fraction for the active model input size, so changing model input size does not require translating pixel targets yourself.
    - Set **Overlap** to `0.2` (default, creates a 20% border overlap between adjacent tiles to reduce edge artifacts).
+   - Use the live tile-layout preview beside the controls to see the resulting grid over a representative source image. Before the first build it is explicitly illustrative; afterward it uses the label-derived body measurement.
 
 5. **Configure negative sampling and merging:**
    - Set **Min area ratio** to `0.1` (default, tiles with < 10% of the object's area are suppressed during slicing).
@@ -34,10 +34,9 @@ You have a DetectKit project with:
    - Leave **Mix full frames** checked (default, ensures the model also learns full-frame context).
    - Set **Merge threshold** to `0.5` (default, overlapping predictions from adjacent tiles are merged when IoU exceeds this).
 
-6. **Optional: Set Reference body px** if `auto_object` mode gives poor results in preview:
-   - Leave at `0.0` (auto/imgsz) if you want automatic sizing, but note that preview fidelity depends on accurate object size estimation.
-   - If preview looks wrong (e.g., tiles are too large or too small), manually set this to your typical ant's pixel width in a native-resolution frame (e.g., 20–30 px for small ants).
-   - Alternatively, use the `custom` geometry mode and set explicit "Custom tile W" and "Custom tile H" values.
+6. **Choose a different tile strategy only when needed:**
+   - **Use model input** makes each tile the model input size and hides object-scale controls because labels are not used to set tile size.
+   - **Custom tile size** exposes width and height. Choose it only when a known camera or acquisition geometry requires a fixed tile size.
 
 ## Build + Train
 
@@ -49,7 +48,7 @@ You have a DetectKit project with:
 2. **Train the OBB-direct role:**
    - Set the training role to **OBB-direct** (the role that learns to detect ants at their native scale).
    - Click **Train**.
-   - The training will proceed over the sliced dataset; the model will learn detection patterns at the target tile scales (200, 300, 400 px).
+   - The training will proceed over the sliced dataset; the model will learn detection patterns at the selected relative object scales.
    - Training time may increase due to the larger number of tiles per frame, but the model convergence often improves in crowded-frame scenarios.
 
 ## Validate
@@ -63,7 +62,7 @@ You have a DetectKit project with:
    - Compare the sliced preview output to the non-sliced baseline (turn off the checkbox to disable slicing temporarily).
    - On crowded frames, you should see individual bounding boxes that were previously merged; the model should now separate clusters.
    - If clusters are still merged, check that:
-     - Target sizes match your typical object scale (increase target sizes if tiles are too small).
+     - Object scales match your typical object scale (increase the fractions if tiles are too small).
      - Overlap is not too small (0.2 is typical; lower overlap can miss objects at tile edges).
      - Min area ratio is not too aggressive (0.1 allows small partial objects).
 
@@ -71,7 +70,7 @@ You have a DetectKit project with:
    - Re-run the collaborator's detection-vs-scale curve experiment on validation frames.
    - The sliced model should show a **flattened detection curve** — detection accuracy no longer degrades at high densities.
    - If the curve still shows density-dependent degradation, consider:
-     - Retraining with smaller target sizes (e.g., 150, 250, 350) to generate more aggressive tiling.
+     - Retraining with larger object-scale fractions to generate more aggressive tiling.
      - Increasing negative tile fraction to improve false-negative detection in sparse regions.
 
 4. **Check model metadata:**
@@ -88,10 +87,10 @@ You have a DetectKit project with:
 2. **Document the slicing configuration:**
    - Include a note in your delivery that specifies:
      - Geometry mode used (`auto_object` in this runbook).
-     - Target sizes in pixels (e.g., 200, 300, 400).
-     - Reference body pixel size if manually set (or "auto" if left at 0.0).
+     - Object scales as model-input fractions (e.g., 0.3125, 0.46875, 0.625).
+     - The label-derived reference body pixel size recorded in the sidecar.
      - Overlap and min-area-ratio values.
-   - Example note: *"Model trained with SAHI auto_object tiling; target sizes 200, 300, 400 px; overlap 0.2; reference_body_px=auto. Sidecar slice_meta.json included."*
+   - Example note: *"Model trained with SAHI labelled-object tiling; object scales 0.3125, 0.46875, 0.625 of model input; overlap 0.2; reference_body_px measured from labels. Sidecar slice_meta.json included."*
 
 3. **Prepare for TrackerKit inference:**
    - The `slice_meta.json` sidecar will later be read by TrackerKit's SAHI inference pipeline to auto-configure slicing for validation and production inference.
@@ -105,18 +104,18 @@ You have a DetectKit project with:
 ### Preview shows no improvement or wrong tiling
 
 - **Issue:** Clusters still appear merged, or tiles seem misaligned.
-- **Check:** Confirm "Enable sliced training + preview" is checked. If using `auto_object`, set "Reference body px" to your typical object's pixel size (e.g., 20–30 px). Alternatively, switch to `custom` mode and explicitly set tile dimensions.
+- **Check:** Confirm "Enable sliced training + preview" is checked. For labelled-object tiling, rebuild the sliced dataset so DetectKit can measure the reference body from labels; alternatively, switch to custom tile size and explicitly set dimensions.
 
 ### Training is much slower
 
 - **Expected behavior:** Sliced training processes more tiles, so training time increases. This is normal.
-- **Optimization:** If training time is prohibitive, you can reduce "Target sizes" (e.g., 250, 350 instead of 200, 300, 400) to generate fewer tiles, but this may reduce cluster separation.
+- **Optimization:** If training time is prohibitive, lower the object-scale fractions to generate fewer, larger tiles, but this may reduce cluster separation.
 
 ### Scale-sweep curve still shows degradation at high density
 
 - **Diagnosis:** The model may not have learned sufficient crowd-splitting.
 - **Solutions:**
-  - Retrain with smaller target sizes (e.g., 150, 250, 350) to force more aggressive tiling.
+  - Retrain with larger object-scale fractions to force more aggressive tiling.
   - Increase "Negative tile fraction" (e.g., 0.25) to improve sparse-frame accuracy.
   - Verify that the training dataset contains representative crowded frames; if training data is mostly sparse, the model won't learn crowd-splitting.
   - Check that overlap (0.2) and min-area-ratio (0.1) are not too conservative.

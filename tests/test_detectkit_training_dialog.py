@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (  # noqa: E402
     QDialogButtonBox,
     QGridLayout,
     QGroupBox,
+    QHBoxLayout,
 )
 
 
@@ -119,7 +120,7 @@ def test_training_dialog_uses_compact_grid_layouts(qapp, tmp_path):
     groups = {group.title(): group for group in dlg.findChildren(QGroupBox)}
     assert isinstance(groups["Training Selection"].layout(), QGridLayout)
     assert isinstance(groups["Dataset And Runtime"].layout(), QGridLayout)
-    assert isinstance(dlg.slice_group.layout(), QGridLayout)
+    assert isinstance(dlg.slice_group.layout(), QHBoxLayout)
 
 
 def test_training_dialog_summary_reflects_current_plan(qapp, tmp_path):
@@ -319,6 +320,7 @@ def test_dataset_preparation_preserves_merge_reuse_and_slice_routing(qapp):
     assert len(calls["slice"]) == 1
     assert calls["slice"][0][0] == "/tmp/merged"
     assert calls["slice"][0][1]["params"].imgsz == 768
+    assert calls["slice"][0][1]["params"].target_sizes == [240.0, 360.0, 480.0]
     assert [source_dir for _, source_dir, _ in calls["role"]] == [
         "/tmp/sliced",
         "/tmp/merged",
