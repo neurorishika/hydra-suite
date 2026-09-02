@@ -767,6 +767,7 @@ class DetectKitMainWindow(QMainWindow):
         # Connect panel signals
         self._dataset_panel.manage_sources_requested.connect(self._open_source_manager)
         self._dataset_panel.train_requested.connect(self._open_training_dialog)
+        self._dataset_panel.evaluate_requested.connect(self._open_evaluation_dialog)
         self._dataset_panel.history_requested.connect(self._open_history_dialog)
         self._tools_panel.overlay_settings_changed.connect(self._on_overlay_changed)
         self._tools_panel.run_inference_requested.connect(self._run_inference_overlay)
@@ -862,6 +863,10 @@ class DetectKitMainWindow(QMainWindow):
         act_train = QAction("Train", self)
         act_train.triggered.connect(self._open_training_dialog)
         tb.addAction(act_train)
+
+        act_evaluate = QAction("Evaluate", self)
+        act_evaluate.triggered.connect(self._open_evaluation_dialog)
+        tb.addAction(act_evaluate)
 
         act_run_inference = QAction("Run Inference", self)
         act_run_inference.triggered.connect(self._run_inference_overlay)
@@ -1539,6 +1544,14 @@ class DetectKitMainWindow(QMainWindow):
 
         dlg = TrainingDialog(self._project, parent=self)
         dlg.training_completed.connect(self._on_training_completed)
+        dlg.exec()
+
+    def _open_evaluation_dialog(self) -> None:
+        if self._project is None:
+            return
+        from .dialogs.evaluation_dialog import EvaluationDialog
+
+        dlg = EvaluationDialog(self._project, parent=self)
         dlg.exec()
 
     def _open_history_dialog(self) -> None:

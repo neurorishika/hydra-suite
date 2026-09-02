@@ -81,6 +81,7 @@ class DatasetPanel(QWidget):
 
     manage_sources_requested = Signal()
     train_requested = Signal()
+    evaluate_requested = Signal()
     history_requested = Signal()
 
     def __init__(self, parent=None) -> None:
@@ -233,11 +234,15 @@ class DatasetPanel(QWidget):
         nav_layout.addWidget(self._counter_label)
 
         self.btn_train = QPushButton("Train…")
+        self.btn_evaluate = QPushButton("Evaluate…")
         self.btn_history = QPushButton("History…")
+        self.btn_evaluate.setProperty("detectkitVariant", "secondary")
         self.btn_history.setProperty("detectkitVariant", "secondary")
         self.btn_train.clicked.connect(self.train_requested)
+        self.btn_evaluate.clicked.connect(self.evaluate_requested)
         self.btn_history.clicked.connect(self.history_requested)
         nav_layout.addWidget(self.btn_train)
+        nav_layout.addWidget(self.btn_evaluate)
         nav_layout.addWidget(self.btn_history)
 
         layout.addWidget(nav_group)
