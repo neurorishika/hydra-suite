@@ -61,7 +61,7 @@ def _guard_single_source_role_dataset(out_root: Path, source_dir: str) -> None:
     previous call's output for a different source.
 
     Mirrors the DetectKit training dialog's "Multiple Sources Not
-    Supported" guard (see `_build_role_datasets`), but at the service layer,
+    Supported" guard (see `_start_training`), but at the service layer,
     so a programmatic caller gets the same protection the GUI already has.
     """
     stamp_path = out_root / _ROLE_SOURCE_STAMP_FILENAME
@@ -460,7 +460,7 @@ class TrainingOrchestrator:
         if role is TrainingRole.SEMANTIC_SAM3:
             # SEMANTIC_SAM3 is derived directly per-source (it skips the
             # cross-source merge step other roles use, see
-            # `_build_role_datasets` in the DetectKit training dialog), but
+            # `_prepare_role_datasets` in the DetectKit training dialog), but
             # `out_root` is keyed by role only, not by source. A second call
             # for this role with a different source would silently overwrite
             # `train/_annotations.coco.json` while both sources' images stay

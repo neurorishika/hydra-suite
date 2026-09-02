@@ -201,6 +201,240 @@ def test_training_worker_is_base_worker(qapp):
     assert issubclass(_TrainingWorker, BaseWorker)
 
 
+def test_dataset_preparation_worker_is_base_worker(qapp):
+    from hydra_suite.detectkit.gui.dialogs.training_dialog import (
+        _DatasetPreparationWorker,
+    )
+    from hydra_suite.widgets.workers import BaseWorker
+
+    assert issubclass(_DatasetPreparationWorker, BaseWorker)
+
+
+def test_dataset_preparation_runs_builders_off_gui_thread(qapp):
+    from types import SimpleNamespace
+
+    from PySide6.QtCore import QThread
+
+    from hydra_suite.detectkit.gui.dialogs.training_dialog import (
+        _DatasetPreparationRequest,
+        _DatasetPreparationWorker,
+    )
+    from hydra_suite.detectkit.gui.models import SliceTrainingSettings
+    from hydra_suite.training.contracts import SourceDataset, SplitConfig, TrainingRole
+
+    called_from = []
+
+    class _Orchestrator:
+        def build_merged_obb_dataset(self, *_args, **_kwargs):
+            called_from.append(QThread.currentThread())
+            return SimpleNamespace(
+                dataset_dir="/tmp/merged",
+                stats={"source_items": {"source": 1}},
+            )
+
+        def build_role_dataset(self, *_args, **_kwargs):
+            called_from.append(QThread.currentThread())
+            return SimpleNamespace(dataset_dir="/tmp/role")
+
+    request = _DatasetPreparationRequest(
+        sources=(SourceDataset(path="/tmp/source"),),
+        roles=(TrainingRole.OBB_DIRECT,),
+        class_names=("ant",),
+        split=SplitConfig(),
+        seed=7,
+        dedup=True,
+        crop_pad_ratio=0.15,
+        min_crop_size_px=128,
+        enforce_square=True,
+        imgsz_by_role=((TrainingRole.OBB_DIRECT.value, 640),),
+        slice_settings=SliceTrainingSettings(enabled=False),
+    )
+    errors = []
+    worker = _DatasetPreparationWorker(_Orchestrator(), request)
+    worker.error.connect(errors.append)
+
+    worker.start()
+    assert worker.wait(5000), "dataset preparation worker did not finish"
+    qapp.processEvents()
+
+    assert errors == []
+    assert len(called_from) == 2
+    assert all(thread is not qapp.thread() for thread in called_from)
+
+
+def test_dataset_preparation_preserves_merge_reuse_and_slice_routing(qapp):
+    from types import SimpleNamespace
+
+    from hydra_suite.detectkit.gui.dialogs.training_dialog import (
+        _DatasetPreparationRequest,
+        _prepare_role_datasets,
+    )
+    from hydra_suite.detectkit.gui.models import SliceTrainingSettings
+    from hydra_suite.training.contracts import SourceDataset, SplitConfig, TrainingRole
+
+    calls = {"merge": [], "slice": [], "role": []}
+
+    class _Orchestrator:
+        def build_merged_obb_dataset(self, *_args, **kwargs):
+            calls["merge"].append(kwargs)
+            return SimpleNamespace(
+                dataset_dir="/tmp/merged",
+                stats={"source_items": {"source": 1}},
+            )
+
+        def build_sliced_obb_dataset(self, source_dir, **kwargs):
+            calls["slice"].append((source_dir, kwargs))
+            return SimpleNamespace(
+                dataset_dir="/tmp/sliced",
+                stats={"measured_reference_body_px": 42.5},
+            )
+
+        def build_role_dataset(self, role, source_dir, **kwargs):
+            calls["role"].append((role, source_dir, kwargs))
+            return SimpleNamespace(dataset_dir=f"/tmp/{role.value}")
+
+    request = _DatasetPreparationRequest(
+        sources=(SourceDataset(path="/tmp/source", level="aabb"),),
+        roles=(TrainingRole.DETECT_DIRECT, TrainingRole.SEQ_DETECT),
+        class_names=("ant",),
+        split=SplitConfig(),
+        seed=7,
+        dedup=True,
+        crop_pad_ratio=0.15,
+        min_crop_size_px=128,
+        enforce_square=True,
+        imgsz_by_role=((TrainingRole.DETECT_DIRECT.value, 768),),
+        slice_settings=SliceTrainingSettings(enabled=True),
+    )
+
+    result = _prepare_role_datasets(
+        _Orchestrator(),
+        request,
+        log=lambda _message: None,
+        status=lambda _message: None,
+        should_cancel=lambda: False,
+    )
+
+    assert len(calls["merge"]) == 1
+    assert len(calls["slice"]) == 1
+    assert calls["slice"][0][0] == "/tmp/merged"
+    assert calls["slice"][0][1]["params"].imgsz == 768
+    assert [source_dir for _, source_dir, _ in calls["role"]] == [
+        "/tmp/sliced",
+        "/tmp/merged",
+    ]
+    assert result.role_dataset_dirs == {
+        TrainingRole.DETECT_DIRECT.value: "/tmp/detect_direct",
+        TrainingRole.SEQ_DETECT.value: "/tmp/seq_detect",
+    }
+    assert result.measured_reference_body_px == 42.5
+
+
+def test_start_training_launches_dataset_preparation_without_building_inline(
+    qapp, tmp_path, monkeypatch
+):
+    from hydra_suite.detectkit.gui.dialogs import training_dialog as td
+
+    class _Signal:
+        def connect(self, *_args, **_kwargs):
+            pass
+
+    class _FakePreparationWorker:
+        def __init__(self, orchestrator, request):
+            self.orchestrator = orchestrator
+            self.request = request
+            self.log_signal = _Signal()
+            self.status = _Signal()
+            self.result_ready = _Signal()
+            self.error = _Signal()
+            self.finished = _Signal()
+            self.started = False
+
+        def isRunning(self):
+            return self.started
+
+        def start(self):
+            self.started = True
+
+        def cancel(self):
+            pass
+
+    class _Orchestrator:
+        def build_merged_obb_dataset(self, *_args, **_kwargs):
+            raise AssertionError("dataset builder ran synchronously")
+
+        def build_role_dataset(self, *_args, **_kwargs):
+            raise AssertionError("role builder ran synchronously")
+
+    dlg = td.TrainingDialog(_make_proj(tmp_path))
+    orchestrator = _Orchestrator()
+    monkeypatch.setattr(dlg, "_get_orchestrator", lambda: orchestrator)
+    monkeypatch.setattr(td, "_DatasetPreparationWorker", _FakePreparationWorker)
+
+    dlg._start_training()
+
+    worker = dlg._dataset_worker
+    assert isinstance(worker, _FakePreparationWorker)
+    assert worker.started is True
+    assert worker.orchestrator is orchestrator
+    assert dlg._worker is None
+    assert dlg._training_running is True
+    assert (dlg.progress.minimum(), dlg.progress.maximum()) == (0, 0)
+
+    dlg._dataset_worker = None
+    dlg._set_training_running(False)
+    dlg.close()
+
+
+def test_cancel_routes_to_active_dataset_preparation(qapp, tmp_path):
+    from hydra_suite.detectkit.gui.dialogs.training_dialog import TrainingDialog
+
+    class _PreparationWorker:
+        cancelled = False
+
+        def cancel(self):
+            self.cancelled = True
+
+    dlg = TrainingDialog(_make_proj(tmp_path))
+    worker = _PreparationWorker()
+    dlg._dataset_worker = worker
+
+    dlg._cancel_training()
+
+    assert worker.cancelled is True
+    assert "safe dataset boundary" in dlg.run_status_label.text()
+
+    dlg._dataset_worker = None
+    dlg.close()
+
+
+def test_cancelled_preparation_never_transitions_to_training(
+    qapp, tmp_path, monkeypatch
+):
+    from hydra_suite.detectkit.gui.dialogs import training_dialog as td
+    from hydra_suite.training.contracts import TrainingRole
+
+    class _CancelledWorker:
+        def is_cancelled(self):
+            return True
+
+    dlg = td.TrainingDialog(_make_proj(tmp_path))
+    dlg._dataset_worker = _CancelledWorker()
+    dlg._pending_dataset_result = td._DatasetPreparationResult(
+        role_dataset_dirs={TrainingRole.OBB_DIRECT.value: "/tmp/role"},
+        roles=(TrainingRole.OBB_DIRECT,),
+    )
+    started = []
+    monkeypatch.setattr(dlg, "_start_training_worker", started.append)
+
+    dlg._on_dataset_worker_finished()
+
+    assert started == []
+    assert dlg._training_running is False
+    assert dlg.progress.format() == "Cancelled"
+    dlg.close()
+
+
 # ---------------------------------------------------------------------------
 # Roles group
 # ---------------------------------------------------------------------------

@@ -87,14 +87,19 @@ def test_run_path_carries_sam3_params_and_is_reachable(tmp_path, monkeypatch):
     dlg.sam3_panel.prompt_edit.setText("ant")
     dlg.sam3_panel.chk_ack.setChecked(True)
 
-    # Skip the real dataset build (no orchestrator/filesystem dataset here):
-    # only the spec-construction path in _start_training is under test.
-    monkeypatch.setattr(dlg, "_build_role_datasets", lambda silent=True: True)
-    dlg.role_dataset_dirs = {
-        TrainingRole.SEMANTIC_SAM3.value: str(tmp_path / "derived")
-    }
     monkeypatch.setattr(dlg, "_get_orchestrator", lambda: object())
     monkeypatch.setattr(dlg, "_write_to_project", lambda: None)
+
+    # Complete the background-preparation phase synchronously so this test can
+    # continue to inspect the spec handed to the training worker.
+    def _finish_preparation(_orchestrator, request):
+        dlg.role_dataset_dirs = {
+            TrainingRole.SEMANTIC_SAM3.value: str(tmp_path / "derived")
+        }
+        dlg._set_training_running(True)
+        dlg._start_training_worker(list(request.roles))
+
+    monkeypatch.setattr(dlg, "_launch_dataset_preparation", _finish_preparation)
 
     captured = {}
 

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPixmap
@@ -31,11 +32,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from hydra_suite.training.contracts import TrainingRole
+from hydra_suite.training.contracts import (
+    Sam3LoraParams,
+    SourceDataset,
+    SplitConfig,
+    TrainingRole,
+)
 from hydra_suite.training.geometry_levels import GeometryLevel
 from hydra_suite.widgets.dialogs import BaseDialog
 from hydra_suite.widgets.workers import BaseWorker
 
+from ..models import SliceTrainingSettings
 from ..panels.sam3_training_panel import Sam3TrainingPanel
 
 if TYPE_CHECKING:
@@ -89,6 +96,202 @@ _SELECTION_DESCRIPTIONS: dict[tuple[str, str], str] = {
 # ---------------------------------------------------------------------------
 # Worker
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class _DatasetPreparationRequest:
+    """Immutable snapshot of every control used while deriving role datasets."""
+
+    sources: tuple[SourceDataset, ...]
+    roles: tuple[TrainingRole, ...]
+    class_names: tuple[str, ...]
+    split: SplitConfig
+    seed: int
+    dedup: bool
+    crop_pad_ratio: float
+    min_crop_size_px: int
+    enforce_square: bool
+    imgsz_by_role: tuple[tuple[str, int], ...]
+    slice_settings: SliceTrainingSettings
+    sam3_params: Sam3LoraParams | None = None
+
+    def imgsz_for(self, role: TrainingRole) -> int:
+        return dict(self.imgsz_by_role).get(role.value, 640)
+
+
+@dataclass(frozen=True, slots=True)
+class _DatasetPreparationResult:
+    role_dataset_dirs: dict[str, str]
+    roles: tuple[TrainingRole, ...]
+    measured_reference_body_px: float = 0.0
+
+
+class _DatasetPreparationCancelled(RuntimeError):
+    """Internal control flow used at safe dataset-build boundaries."""
+
+
+def _prepare_role_datasets(
+    orchestrator,
+    request: _DatasetPreparationRequest,
+    *,
+    log: Callable[[str], None],
+    status: Callable[[str], None],
+    should_cancel: Callable[[], bool],
+) -> _DatasetPreparationResult:
+    """Build every selected role dataset without touching Qt widgets."""
+
+    def check_cancelled() -> None:
+        if should_cancel():
+            raise _DatasetPreparationCancelled("Dataset preparation cancelled.")
+
+    from hydra_suite.training.dataset_builders import role_min_level
+
+    role_dataset_dirs: dict[str, str] = {}
+    merged_by_level = {}
+    measured_reference_body_px = 0.0
+
+    for role_index, role in enumerate(request.roles, start=1):
+        check_cancelled()
+        status(f"Preparing dataset {role_index}/{len(request.roles)}: {role.value}…")
+
+        if role is TrainingRole.SEMANTIC_SAM3:
+            if len(request.sources) != 1:
+                raise ValueError(
+                    "SAM3 concept training supports exactly one labeled source "
+                    "dataset at a time."
+                )
+            if request.sam3_params is None:
+                raise ValueError("SAM3 dataset preparation requires SAM3 parameters.")
+            src = request.sources[0]
+            build = orchestrator.build_role_dataset(
+                role,
+                src.path,
+                sam3_params=request.sam3_params,
+                seed=request.seed,
+                split=request.split,
+            )
+            check_cancelled()
+            role_dataset_dirs[role.value] = build.dataset_dir
+            log(
+                f"Prepared [{role.value}] dataset from {src.path}: "
+                f"{build.dataset_dir}"
+            )
+            continue
+
+        required_level = role_min_level(role)
+        merged = merged_by_level.get(required_level)
+        if merged is None:
+            status(f"Merging and deduplicating {required_level.label} sources…")
+            merged = orchestrator.build_merged_obb_dataset(
+                list(request.sources),
+                class_names=list(request.class_names),
+                split_cfg=request.split,
+                seed=request.seed,
+                dedup=request.dedup,
+                target_level=required_level,
+            )
+            check_cancelled()
+            merged_by_level[required_level] = merged
+            used_count = len(merged.stats.get("source_items", {}))
+            log(
+                f"Merged {required_level.label} dataset from "
+                f"{used_count}/{len(request.sources)} compatible source(s): "
+                f"{merged.dataset_dir}"
+            )
+
+        role_source_dir = merged.dataset_dir
+        slice_settings = request.slice_settings
+        if (
+            role
+            in {
+                TrainingRole.OBB_DIRECT,
+                TrainingRole.DETECT_DIRECT,
+                TrainingRole.SEGMENT_DIRECT,
+            }
+            and slice_settings.enabled
+        ):
+            from hydra_suite.training.sliced_dataset import SliceBuildParams
+
+            status(f"Slicing the {role.value} dataset…")
+            params = SliceBuildParams(
+                geometry_mode=slice_settings.geometry_mode,
+                imgsz=request.imgsz_for(role),
+                object_tile_fraction=slice_settings.object_tile_fraction,
+                slice_width=slice_settings.slice_width,
+                slice_height=slice_settings.slice_height,
+                overlap=slice_settings.overlap,
+                min_area_ratio=slice_settings.min_area_ratio,
+                negative_tile_fraction=slice_settings.negative_tile_fraction,
+                target_sizes=list(slice_settings.target_sizes),
+                full_frame_mix=slice_settings.full_frame_mix,
+            )
+            sliced = orchestrator.build_sliced_obb_dataset(
+                merged.dataset_dir,
+                level=required_level,
+                params=params,
+                seed=request.seed,
+            )
+            check_cancelled()
+            role_source_dir = sliced.dataset_dir
+            log(f"Sliced dataset: {sliced.dataset_dir}")
+            if measured_reference_body_px <= 0.0:
+                measured_reference_body_px = float(
+                    sliced.stats.get("measured_reference_body_px", 0.0)
+                )
+
+        status(f"Generating the {role.value} role dataset…")
+        build = orchestrator.build_role_dataset(
+            role,
+            role_source_dir,
+            class_names=list(request.class_names),
+            crop_pad_ratio=request.crop_pad_ratio,
+            min_crop_size_px=request.min_crop_size_px,
+            enforce_square=request.enforce_square,
+            merged_level=required_level,
+        )
+        check_cancelled()
+        role_dataset_dirs[role.value] = build.dataset_dir
+        log(f"Prepared [{role.value}] dataset: {build.dataset_dir}")
+
+    return _DatasetPreparationResult(
+        role_dataset_dirs=role_dataset_dirs,
+        roles=request.roles,
+        measured_reference_body_px=measured_reference_body_px,
+    )
+
+
+class _DatasetPreparationWorker(BaseWorker):
+    """Build role datasets in a background thread before training starts."""
+
+    log_signal = Signal(str)
+    result_ready = Signal(object)
+
+    def __init__(self, orchestrator, request: _DatasetPreparationRequest) -> None:
+        super().__init__()
+        self._orchestrator = orchestrator
+        self._request = request
+        self._cancel = False
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+    def is_cancelled(self) -> bool:
+        return bool(self._cancel)
+
+    def execute(self) -> None:
+        try:
+            result = _prepare_role_datasets(
+                self._orchestrator,
+                self._request,
+                log=self.log_signal.emit,
+                status=self.status.emit,
+                should_cancel=self.is_cancelled,
+            )
+        except _DatasetPreparationCancelled:
+            self.status.emit("Dataset preparation cancelled.")
+            return
+        if not self.is_cancelled():
+            self.result_ready.emit(result)
 
 
 class _TrainingWorker(BaseWorker):
@@ -182,6 +385,9 @@ class TrainingDialog(BaseDialog):
             buttons=QDialogButtonBox.StandardButton.Close,
         )
         self._project = project
+        self._dataset_worker = None
+        self._pending_dataset_result: _DatasetPreparationResult | None = None
+        self._dataset_preparation_error = ""
         self._worker = None
         self._last_training_results: list[dict] = []
         self._role_logs: dict[str, list[str]] = {}
@@ -2078,196 +2284,142 @@ QTabBar::tab:selected {
     # Dataset building
     # ------------------------------------------------------------------
 
-    def _build_role_datasets(self, *, silent: bool = False) -> bool:
-        orchestrator = self._get_orchestrator()
-        if orchestrator is None:
-            QMessageBox.critical(
-                self, "Not Available", "Training dependencies not available."
-            )
-            return False
-
-        sources = self._collect_sources()
-        if not sources:
-            QMessageBox.warning(
-                self, "No Sources", "Add at least one labeled DetectKit source dataset."
-            )
-            return False
-
-        roles = self._selected_roles()
-        if not roles:
-            QMessageBox.warning(self, "No Roles", "Select at least one training role.")
-            return False
-
-        self._set_run_status("Preparing role datasets…")
-
-        try:
-            from hydra_suite.training import SplitConfig
-
-            split = SplitConfig(
+    def _dataset_preparation_request(
+        self,
+        sources: list[SourceDataset],
+        roles: list[TrainingRole],
+    ) -> _DatasetPreparationRequest:
+        slice_settings = SliceTrainingSettings.from_dict(
+            self.slice_group.to_settings().to_dict()
+        )
+        sam3_params = (
+            self.sam3_panel.params() if TrainingRole.SEMANTIC_SAM3 in roles else None
+        )
+        return _DatasetPreparationRequest(
+            sources=tuple(sources),
+            roles=tuple(roles),
+            class_names=tuple(self._class_names()),
+            split=SplitConfig(
                 train=self.spin_train.value(),
                 val=self.spin_val.value(),
                 test=0.0,
-            )
-            self.role_dataset_dirs = {}
-            from hydra_suite.training.dataset_builders import role_min_level
+            ),
+            seed=self.spin_seed.value(),
+            dedup=self.chk_dedup.isChecked(),
+            crop_pad_ratio=self.spin_crop_pad.value(),
+            min_crop_size_px=self.spin_crop_min_px.value(),
+            enforce_square=self.chk_crop_square.isChecked(),
+            imgsz_by_role=tuple(
+                (role.value, self._imgsz_for_role(role)) for role in roles
+            ),
+            slice_settings=slice_settings,
+            sam3_params=sam3_params,
+        )
 
-            merged_by_level = {}
+    def _launch_dataset_preparation(
+        self,
+        orchestrator,
+        request: _DatasetPreparationRequest,
+    ) -> None:
+        self.role_dataset_dirs = {}
+        self._pending_dataset_result = None
+        self._dataset_preparation_error = ""
+        worker = _DatasetPreparationWorker(orchestrator, request)
+        worker.log_signal.connect(self._append_log)
+        worker.status.connect(self._set_run_status)
+        worker.result_ready.connect(self._on_dataset_prepared)
+        worker.error.connect(self._on_dataset_preparation_error)
+        worker.finished.connect(self._on_dataset_worker_finished)
+        self._dataset_worker = worker
 
-            for role in roles:
-                if role is TrainingRole.SEMANTIC_SAM3:
-                    # Concept training is per-source: skip the merge entirely
-                    # and derive one dataset per raw source (design breakage
-                    # row 5). The service writes each role's derived dataset
-                    # to a single out_root keyed by role only (not by
-                    # source), so a second source would silently overwrite
-                    # the first source's annotations on disk while both
-                    # sources' images remain. Refuse rather than silently
-                    # lose data (see final whole-branch review, finding I1).
-                    if len(sources) > 1:
-                        QMessageBox.warning(
-                            self,
-                            "Multiple Sources Not Supported",
-                            "SAM3 concept training supports exactly one "
-                            "labeled source dataset at a time. Remove the "
-                            "extra sources (or run this role separately per "
-                            "source) before building/training this role.",
-                        )
-                        return False
-                    sam3_params = self.sam3_panel.params()
-                    # Label-quality acknowledgement is validated once, inside
-                    # _sam3_spec_for; do not duplicate the gate here.
-                    built_dirs = []
-                    for src in sources:
-                        build = orchestrator.build_role_dataset(
-                            role,
-                            src.path,
-                            sam3_params=sam3_params,
-                            seed=self.spin_seed.value(),
-                            split=split,
-                        )
-                        built_dirs.append(build.dataset_dir)
-                        self._append_log(
-                            f"Prepared [{role.value}] dataset from {src.path}: "
-                            f"{build.dataset_dir}"
-                        )
-                    self.role_dataset_dirs[role.value] = (
-                        built_dirs[-1] if built_dirs else ""
-                    )
-                    continue
+        self._set_training_running(True)
+        self.progress.setRange(0, 0)
+        self.progress.setFormat("Preparing datasets…")
+        self._set_run_status(
+            "Preparing role datasets in the background. You can stop at the next "
+            "safe dataset boundary."
+        )
+        worker.start()
 
-                required_level = role_min_level(role)
-                merged = merged_by_level.get(required_level)
-                if merged is None:
-                    merged = orchestrator.build_merged_obb_dataset(
-                        sources,
-                        class_names=self._class_names(),
-                        split_cfg=split,
-                        seed=self.spin_seed.value(),
-                        dedup=self.chk_dedup.isChecked(),
-                        target_level=required_level,
-                    )
-                    merged_by_level[required_level] = merged
-                    used_count = len(merged.stats.get("source_items", {}))
-                    self._append_log(
-                        f"Merged {required_level.label} dataset from "
-                        f"{used_count}/{len(sources)} compatible source(s): {merged.dataset_dir}"
-                    )
+    def _on_dataset_prepared(self, result: _DatasetPreparationResult) -> None:
+        self._pending_dataset_result = result
 
-                role_source_dir = merged.dataset_dir
-                slice_settings = getattr(self._project, "slice_settings", None)
-                if (
-                    role
-                    in {
-                        TrainingRole.OBB_DIRECT,
-                        TrainingRole.DETECT_DIRECT,
-                        TrainingRole.SEGMENT_DIRECT,
-                    }
-                    and slice_settings is not None
-                    and slice_settings.enabled
-                ):
-                    from hydra_suite.training.sliced_dataset import SliceBuildParams
+    def _on_dataset_preparation_error(self, message: str) -> None:
+        self._dataset_preparation_error = str(message)
+        self._append_log(f"Dataset preparation failed:\n{message}")
+        self._set_run_status(
+            "Dataset preparation failed. See the session log for details."
+        )
 
-                    params = SliceBuildParams(
-                        geometry_mode=slice_settings.geometry_mode,
-                        imgsz=self._imgsz_for_role(role),
-                        object_tile_fraction=slice_settings.object_tile_fraction,
-                        slice_width=slice_settings.slice_width,
-                        slice_height=slice_settings.slice_height,
-                        overlap=slice_settings.overlap,
-                        min_area_ratio=slice_settings.min_area_ratio,
-                        negative_tile_fraction=slice_settings.negative_tile_fraction,
-                        target_sizes=list(slice_settings.target_sizes),
-                        full_frame_mix=slice_settings.full_frame_mix,
-                    )
-                    sliced = orchestrator.build_sliced_obb_dataset(
-                        merged.dataset_dir,
-                        level=required_level,
-                        params=params,
-                        seed=self.spin_seed.value(),
-                    )
-                    role_source_dir = sliced.dataset_dir
-                    self._append_log(f"Sliced dataset: {sliced.dataset_dir}")
+    def _on_dataset_worker_finished(self) -> None:
+        worker = self._dataset_worker
+        result = self._pending_dataset_result
+        error = self._dataset_preparation_error
+        cancelled = bool(worker is not None and worker.is_cancelled())
+        self._dataset_worker = None
+        self._pending_dataset_result = None
+        self.progress.setRange(0, 100)
 
-                    from hydra_suite.detectkit.gui.models import (
-                        populate_measured_reference,
-                    )
+        if cancelled:
+            result = None
 
-                    measured_ref = float(
-                        sliced.stats.get("measured_reference_body_px", 0.0)
-                    )
-                    if populate_measured_reference(
-                        self._project.slice_settings, measured_ref
-                    ):
-                        from hydra_suite.detectkit.gui.project import save_project
-
-                        save_project(self._project)
-                        self._append_log(
-                            f"Auto-set reference body size: {measured_ref:.1f}px (measured)"
-                        )
-
-                build = orchestrator.build_role_dataset(
-                    role,
-                    role_source_dir,
-                    class_names=self._class_names(),
-                    crop_pad_ratio=self.spin_crop_pad.value(),
-                    min_crop_size_px=self.spin_crop_min_px.value(),
-                    enforce_square=self.chk_crop_square.isChecked(),
-                    merged_level=required_level,
-                )
-                self.role_dataset_dirs[role.value] = build.dataset_dir
-                self._append_log(
-                    f"Prepared [{role.value}] dataset: {build.dataset_dir}"
-                )
-        except Exception as exc:
-            self._append_log(f"Dataset preparation failed:\n{exc}")
-            self._set_run_status(
-                "Dataset preparation failed. See the session log for details."
-            )
-            if not silent:
+        if result is None:
+            self._set_training_running(False)
+            self.progress.setValue(0)
+            self.progress.setFormat("Cancelled" if cancelled else "Failed")
+            if cancelled:
+                self._append_log("Dataset preparation cancelled.")
+                self._set_run_status("Dataset preparation cancelled.")
+            elif error:
                 QMessageBox.critical(
                     self,
-                    "Build Failed",
+                    "Dataset Preparation Failed",
                     "Dataset preparation failed. See the session log for details.",
                 )
-            return False
+            return
+
+        self.role_dataset_dirs = dict(result.role_dataset_dirs)
+        measured_ref = float(result.measured_reference_body_px)
+        if measured_ref > 0.0:
+            from hydra_suite.detectkit.gui.models import populate_measured_reference
+
+            if populate_measured_reference(self._project.slice_settings, measured_ref):
+                try:
+                    from hydra_suite.detectkit.gui.project import save_project
+
+                    save_project(self._project)
+                except Exception as exc:
+                    self._append_log(
+                        "WARNING: Could not persist the measured reference body "
+                        f"size: {exc}"
+                    )
+                else:
+                    self._append_log(
+                        f"Auto-set reference body size: {measured_ref:.1f}px "
+                        "(measured)"
+                    )
 
         self._set_run_status(
             f"Prepared datasets for {len(self.role_dataset_dirs)} selected role(s)."
         )
         self._refresh_summary()
-        if not silent:
-            QMessageBox.information(
-                self, "Datasets Ready", "Role datasets built successfully."
-            )
-        return True
+        self._start_training_worker(list(result.roles))
 
     # ------------------------------------------------------------------
     # Training execution
     # ------------------------------------------------------------------
 
     def _start_training(self) -> None:
-        if self._worker is not None and self._worker.isRunning():
-            QMessageBox.warning(self, "Busy", "Training is already running.")
+        dataset_busy = self._dataset_worker is not None and (
+            self._dataset_worker.isRunning()
+        )
+        training_busy = self._worker is not None and self._worker.isRunning()
+        if dataset_busy or training_busy:
+            QMessageBox.warning(
+                self,
+                "Busy",
+                "Dataset preparation or training is already running.",
+            )
             return
 
         roles = self._selected_roles()
@@ -2275,7 +2427,13 @@ QTabBar::tab:selected {
             QMessageBox.warning(self, "No Roles", "Select at least one training role.")
             return
 
-        if not self._build_role_datasets(silent=True):
+        sources = self._collect_sources()
+        if not sources:
+            QMessageBox.warning(
+                self,
+                "No Sources",
+                "Add at least one labeled DetectKit source dataset.",
+            )
             return
 
         orchestrator = self._get_orchestrator()
@@ -2283,7 +2441,35 @@ QTabBar::tab:selected {
             self._append_log("Training dependencies not available.")
             return
 
+        if TrainingRole.SEMANTIC_SAM3 in roles and len(sources) != 1:
+            QMessageBox.warning(
+                self,
+                "Multiple Sources Not Supported",
+                "SAM3 concept training supports exactly one labeled source "
+                "dataset at a time. Remove the extra sources (or run this role "
+                "separately per source) before building/training this role.",
+            )
+            return
+
         self._write_to_project()
+        self._last_training_results = []
+        request = self._dataset_preparation_request(sources, roles)
+        self._launch_dataset_preparation(orchestrator, request)
+
+    def _start_training_worker(self, roles: list[TrainingRole]) -> None:
+        """Build run specs on the GUI thread, then launch the training worker."""
+
+        def abort_start() -> None:
+            self._set_training_running(False)
+            self.progress.setRange(0, 100)
+            self.progress.setValue(0)
+            self.progress.setFormat("Not started")
+
+        orchestrator = self._get_orchestrator()
+        if orchestrator is None:
+            self._append_log("Training dependencies not available.")
+            abort_start()
+            return
 
         try:
             from hydra_suite.training import (
@@ -2294,6 +2480,7 @@ QTabBar::tab:selected {
             )
         except ImportError as exc:
             self._append_log(f"Training dependencies not available: {exc}")
+            abort_start()
             return
 
         # Default publish policy: import successful artifacts back into the project
@@ -2310,6 +2497,7 @@ QTabBar::tab:selected {
                     "Missing Dataset",
                     f"No dataset prepared for role: {role.value}",
                 )
+                abort_start()
                 return
 
             if role is TrainingRole.SEMANTIC_SAM3:
@@ -2324,6 +2512,7 @@ QTabBar::tab:selected {
                         "No Sources",
                         "Add at least one labeled DetectKit source dataset.",
                     )
+                    abort_start()
                     return
                 try:
                     spec = self._sam3_spec_for(
@@ -2334,6 +2523,7 @@ QTabBar::tab:selected {
                     )
                 except ValueError as exc:
                     QMessageBox.warning(self, "Label Quality", str(exc))
+                    abort_start()
                     return
                 role_entries.append(
                     {
@@ -2351,6 +2541,7 @@ QTabBar::tab:selected {
                     "Base Model",
                     f"Set base model for role: {role.value}",
                 )
+                abort_start()
                 return
 
             aug_args: dict[str, float] = {}
@@ -2408,6 +2599,7 @@ QTabBar::tab:selected {
         self._worker.finished.connect(self._on_worker_finished)
 
         self._set_training_running(True)
+        self.progress.setRange(0, 100)
         self.progress.setValue(0)
         self.progress.setFormat("Starting…")
         self._role_logs = {}
@@ -2421,6 +2613,17 @@ QTabBar::tab:selected {
         self._worker.start()
 
     def _cancel_training(self) -> None:
+        if self._dataset_worker is not None:
+            self._dataset_worker.cancel()
+            self._append_log(
+                "Dataset preparation cancellation requested; waiting for the "
+                "current file operation to finish…"
+            )
+            self._set_run_status(
+                "Dataset preparation cancellation requested. It will stop at "
+                "the next safe dataset boundary."
+            )
+            return
         if self._worker:
             self._worker.cancel()
         self._append_log("Cancellation requested…")
