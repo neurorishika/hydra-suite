@@ -174,6 +174,10 @@ class SliceTrainingSettings:
     overlap: float = 0.2
     min_area_ratio: float = 0.1
     negative_tile_fraction: float = 0.15
+    # ``target_sizes`` is retained for projects written before target scale was
+    # expressed relative to the model input. New UI writes fractions; the
+    # builder resolves them separately for each selected model input size.
+    target_size_fractions: list[float] = field(default_factory=list)
     target_sizes: list[float] = field(default_factory=lambda: [200.0, 300.0, 400.0])
     full_frame_mix: bool = True
     merge_threshold: float = 0.5
@@ -189,6 +193,7 @@ class SliceTrainingSettings:
             "overlap": self.overlap,
             "min_area_ratio": self.min_area_ratio,
             "negative_tile_fraction": self.negative_tile_fraction,
+            "target_size_fractions": list(self.target_size_fractions),
             "target_sizes": list(self.target_sizes),
             "full_frame_mix": self.full_frame_mix,
             "merge_threshold": self.merge_threshold,
@@ -215,12 +220,37 @@ class SliceTrainingSettings:
             negative_tile_fraction=float(
                 d.get("negative_tile_fraction", base.negative_tile_fraction)
             ),
+            target_size_fractions=[
+                float(x) for x in (d.get("target_size_fractions") or [])
+            ],
             target_sizes=[
                 float(x) for x in (d.get("target_sizes") or base.target_sizes)
             ],
             full_frame_mix=bool(d.get("full_frame_mix", base.full_frame_mix)),
             merge_threshold=float(d.get("merge_threshold", base.merge_threshold)),
         )
+
+    def target_fractions(self) -> list[float]:
+        """Return target apparent sizes as fractions of model input size.
+
+        Older projects stored pixel targets with an implicit 640px model input;
+        preserve that interpretation when no explicit fractions are present.
+        """
+        fractions = [
+            float(value)
+            for value in self.target_size_fractions
+            if 0.0 < float(value) <= 1.0
+        ]
+        if fractions:
+            return fractions
+        return [
+            float(value) / 640.0 for value in self.target_sizes if float(value) > 0.0
+        ]
+
+    def target_sizes_for(self, imgsz: int) -> list[float]:
+        """Resolve the configured relative target scales for one model input."""
+        input_size = max(1, int(imgsz))
+        return [fraction * input_size for fraction in self.target_fractions()]
 
 
 @dataclass
@@ -265,7 +295,7 @@ class InferenceRunSettings:
             int(settings.slice_width),
             int(settings.slice_height),
             round(float(settings.overlap), 4),
-            tuple(round(float(value), 2) for value in settings.target_sizes),
+            tuple(round(value, 5) for value in settings.target_fractions()),
             round(float(settings.merge_threshold), 4),
         )
 
@@ -273,12 +303,16 @@ class InferenceRunSettings:
 def populate_measured_reference(
     settings: SliceTrainingSettings, measured: float
 ) -> bool:
-    """Set settings.reference_body_px from a measured value only when currently unset.
+    """Refresh the stored label-derived reference body measurement.
 
-    Returns True iff it changed the value (settings.reference_body_px was 0.0 and
-    measured > 0). A user-set value is never overwritten.
+    Returns true only when a valid new measurement changes the stored metadata.
+    The value is never a user override: it is recreated from labels for every
+    sliced dataset build.
     """
-    if settings.reference_body_px == 0.0 and float(measured) > 0.0:
+    if (
+        float(measured) > 0.0
+        and abs(settings.reference_body_px - float(measured)) > 1e-6
+    ):
         settings.reference_body_px = float(measured)
         return True
     return False
