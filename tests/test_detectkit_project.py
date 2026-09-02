@@ -234,6 +234,7 @@ def test_create_project_uses_bundle_layout(tmp_path: Path) -> None:
     assert artifact_paths["training_runs"].is_dir()
     assert artifact_paths["evaluation"].is_dir()
     assert artifact_paths["exports"].is_dir()
+    assert artifact_paths["recovery"].is_dir()
     assert project_file_path(tmp_path).exists()
     assert not legacy_project_file_path(tmp_path).exists()
     assert project_exists(tmp_path) is True

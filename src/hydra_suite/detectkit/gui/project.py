@@ -54,6 +54,7 @@ _DETECTKIT_ARTIFACT_DIRS = {
     "training_runs": "artifacts/training_runs",
     "evaluation": "artifacts/evaluation",
     "exports": "artifacts/exports",
+    "recovery": "artifacts/recovery",
 }
 
 
