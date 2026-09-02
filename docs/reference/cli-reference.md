@@ -65,6 +65,13 @@ Entry: `hydra_suite.detectkit.app:main`
 ### Command
 
 - `detectkit`
+- `detectkit train --config /path/to/training.json`
+
+The bare command launches the GUI. The `train` subcommand runs dataset
+validation, derivation, training, run registration, and optional publishing
+without importing Qt or requiring a display. See the
+[headless training runbook](../runbooks/detectkit-headless-training.md) for the
+configuration format and server examples.
 
 ---
 

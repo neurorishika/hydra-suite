@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QImageReader, QPixmap
@@ -35,16 +34,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from hydra_suite.training.contracts import (
-    Sam3LoraParams,
-    SourceDataset,
-    SplitConfig,
-    TrainingRole,
-)
+from hydra_suite.training.contracts import SourceDataset, SplitConfig, TrainingRole
 from hydra_suite.training.geometry_levels import GeometryLevel
 from hydra_suite.widgets.dialogs import BaseDialog
 from hydra_suite.widgets.workers import BaseWorker
 
+from ...jobs.training import DatasetPreparationCancelled as _DatasetPreparationCancelled
+from ...jobs.training import DatasetPreparationRequest as _DatasetPreparationRequest
+from ...jobs.training import DatasetPreparationResult as _DatasetPreparationResult
+from ...jobs.training import prepare_role_datasets as _prepare_role_datasets
+from ...jobs.training import run_role_entries
 from ..models import SliceTrainingSettings
 from ..panels.sam3_training_panel import Sam3TrainingPanel
 
@@ -99,168 +98,6 @@ _SELECTION_DESCRIPTIONS: dict[tuple[str, str], str] = {
 # ---------------------------------------------------------------------------
 # Worker
 # ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class _DatasetPreparationRequest:
-    """Immutable snapshot of every control used while deriving role datasets."""
-
-    sources: tuple[SourceDataset, ...]
-    roles: tuple[TrainingRole, ...]
-    class_names: tuple[str, ...]
-    split: SplitConfig
-    seed: int
-    dedup: bool
-    crop_pad_ratio: float
-    min_crop_size_px: int
-    enforce_square: bool
-    imgsz_by_role: tuple[tuple[str, int], ...]
-    slice_settings: SliceTrainingSettings
-    sam3_params: Sam3LoraParams | None = None
-
-    def imgsz_for(self, role: TrainingRole) -> int:
-        return dict(self.imgsz_by_role).get(role.value, 640)
-
-
-@dataclass(frozen=True, slots=True)
-class _DatasetPreparationResult:
-    role_dataset_dirs: dict[str, str]
-    roles: tuple[TrainingRole, ...]
-    measured_reference_body_px: float = 0.0
-
-
-class _DatasetPreparationCancelled(RuntimeError):
-    """Internal control flow used at safe dataset-build boundaries."""
-
-
-def _prepare_role_datasets(
-    orchestrator,
-    request: _DatasetPreparationRequest,
-    *,
-    log: Callable[[str], None],
-    status: Callable[[str], None],
-    should_cancel: Callable[[], bool],
-) -> _DatasetPreparationResult:
-    """Build every selected role dataset without touching Qt widgets."""
-
-    def check_cancelled() -> None:
-        if should_cancel():
-            raise _DatasetPreparationCancelled("Dataset preparation cancelled.")
-
-    from hydra_suite.training.dataset_builders import role_min_level
-
-    role_dataset_dirs: dict[str, str] = {}
-    merged_by_level = {}
-    measured_reference_body_px = 0.0
-
-    for role_index, role in enumerate(request.roles, start=1):
-        check_cancelled()
-        status(f"Preparing dataset {role_index}/{len(request.roles)}: {role.value}…")
-
-        if role is TrainingRole.SEMANTIC_SAM3:
-            if len(request.sources) != 1:
-                raise ValueError(
-                    "SAM3 concept training supports exactly one labeled source "
-                    "dataset at a time."
-                )
-            if request.sam3_params is None:
-                raise ValueError("SAM3 dataset preparation requires SAM3 parameters.")
-            src = request.sources[0]
-            build = orchestrator.build_role_dataset(
-                role,
-                src.path,
-                sam3_params=request.sam3_params,
-                seed=request.seed,
-                split=request.split,
-            )
-            check_cancelled()
-            role_dataset_dirs[role.value] = build.dataset_dir
-            log(
-                f"Prepared [{role.value}] dataset from {src.path}: "
-                f"{build.dataset_dir}"
-            )
-            continue
-
-        required_level = role_min_level(role)
-        merged = merged_by_level.get(required_level)
-        if merged is None:
-            status(f"Merging and deduplicating {required_level.label} sources…")
-            merged = orchestrator.build_merged_obb_dataset(
-                list(request.sources),
-                class_names=list(request.class_names),
-                split_cfg=request.split,
-                seed=request.seed,
-                dedup=request.dedup,
-                target_level=required_level,
-            )
-            check_cancelled()
-            merged_by_level[required_level] = merged
-            used_count = len(merged.stats.get("source_items", {}))
-            log(
-                f"Merged {required_level.label} dataset from "
-                f"{used_count}/{len(request.sources)} compatible source(s): "
-                f"{merged.dataset_dir}"
-            )
-
-        role_source_dir = merged.dataset_dir
-        slice_settings = request.slice_settings
-        if (
-            role
-            in {
-                TrainingRole.OBB_DIRECT,
-                TrainingRole.DETECT_DIRECT,
-                TrainingRole.SEGMENT_DIRECT,
-            }
-            and slice_settings.enabled
-        ):
-            from hydra_suite.training.sliced_dataset import SliceBuildParams
-
-            status(f"Slicing the {role.value} dataset…")
-            params = SliceBuildParams(
-                geometry_mode=slice_settings.geometry_mode,
-                imgsz=request.imgsz_for(role),
-                object_tile_fraction=slice_settings.object_tile_fraction,
-                slice_width=slice_settings.slice_width,
-                slice_height=slice_settings.slice_height,
-                overlap=slice_settings.overlap,
-                min_area_ratio=slice_settings.min_area_ratio,
-                negative_tile_fraction=slice_settings.negative_tile_fraction,
-                target_sizes=slice_settings.target_sizes_for(request.imgsz_for(role)),
-                full_frame_mix=slice_settings.full_frame_mix,
-            )
-            sliced = orchestrator.build_sliced_obb_dataset(
-                merged.dataset_dir,
-                level=required_level,
-                params=params,
-                seed=request.seed,
-            )
-            check_cancelled()
-            role_source_dir = sliced.dataset_dir
-            log(f"Sliced dataset: {sliced.dataset_dir}")
-            if measured_reference_body_px <= 0.0:
-                measured_reference_body_px = float(
-                    sliced.stats.get("measured_reference_body_px", 0.0)
-                )
-
-        status(f"Generating the {role.value} role dataset…")
-        build = orchestrator.build_role_dataset(
-            role,
-            role_source_dir,
-            class_names=list(request.class_names),
-            crop_pad_ratio=request.crop_pad_ratio,
-            min_crop_size_px=request.min_crop_size_px,
-            enforce_square=request.enforce_square,
-            merged_level=required_level,
-        )
-        check_cancelled()
-        role_dataset_dirs[role.value] = build.dataset_dir
-        log(f"Prepared [{role.value}] dataset: {build.dataset_dir}")
-
-    return _DatasetPreparationResult(
-        role_dataset_dirs=role_dataset_dirs,
-        roles=request.roles,
-        measured_reference_body_px=measured_reference_body_px,
-    )
 
 
 class _DatasetPreparationWorker(BaseWorker):
@@ -320,54 +157,15 @@ class _TrainingWorker(BaseWorker):
         return bool(self._cancel)
 
     def execute(self) -> None:
-        results = []
-        parent_run = ""
-        for entry in self.role_entries:
-            if self._cancel:
-                break
-            role = entry["role"]
-            spec = entry["spec"]
-            publish_meta = entry["publish_meta"]
-            self.role_started.emit(role.value)
-
-            def _log(msg: str, _role=role):
-                self.log_signal.emit(f"[{_role.value}] {msg}")
-
-            def _prog(cur: int, total: int, _role=role):
-                self.progress_signal.emit(_role.value, int(cur), int(total))
-
-            try:
-                result = self.orchestrator.run_role_training(
-                    spec,
-                    parent_run_id=parent_run,
-                    publish_metadata=publish_meta,
-                    log_cb=_log,
-                    progress_cb=_prog,
-                    should_cancel=self._should_cancel,
-                )
-            except Exception as exc:
-                result = {
-                    "run_id": "",
-                    "success": False,
-                    "error": str(exc),
-                    "published_registry_key": "",
-                    "published_model_path": "",
-                }
-
-            result["role"] = role.value
-            results.append(result)
-            ok = bool(result.get("success", False))
-            msg = (
-                f"run_id={result.get('run_id', '')}"
-                if ok
-                else (
-                    result.get("error") or f"exit={result.get('exit_code', 'unknown')}"
-                )
-            )
-            self.role_finished.emit(role.value, ok, msg)
-            if result.get("run_id"):
-                parent_run = str(result["run_id"])
-
+        results = run_role_entries(
+            self.orchestrator,
+            self.role_entries,
+            log=self.log_signal.emit,
+            progress=self.progress_signal.emit,
+            should_cancel=self._should_cancel,
+            role_started=self.role_started.emit,
+            role_finished=self.role_finished.emit,
+        )
         self.done_signal.emit(results)
 
 
@@ -2601,24 +2399,8 @@ QTabBar::tab:selected {
             abort_start()
             return
 
-        try:
-            from hydra_suite.training import (
-                AugmentationProfile,
-                PublishPolicy,
-                TrainingHyperParams,
-                TrainingRunSpec,
-            )
-        except ImportError as exc:
-            self._append_log(f"Training dependencies not available: {exc}")
-            abort_start()
-            return
-
-        # Default publish policy: import successful artifacts back into the project
-        # so the History dialog can drive any later export.
-        publish_policy = PublishPolicy(auto_import=True, auto_select=False)
-
         source_obb = self._collect_sources()
-        role_entries = []
+        role_configs = []
         for role in roles:
             ds = self.role_dataset_dirs.get(role.value, "")
             if not ds:
@@ -2629,42 +2411,11 @@ QTabBar::tab:selected {
                 )
                 abort_start()
                 return
-
-            if role is TrainingRole.SEMANTIC_SAM3:
-                # SAM3 LoRA finetuning needs no ultralytics base model, so it
-                # is exempt from the base-model requirement below, and its
-                # spec is built by the single source of truth for SAM3 specs
-                # (_sam3_spec_for) so the panel's prompt/acknowledgement
-                # actually reach the run (final whole-branch review, C1).
-                if not source_obb:
-                    QMessageBox.warning(
-                        self,
-                        "No Sources",
-                        "Add at least one labeled DetectKit source dataset.",
-                    )
-                    abort_start()
-                    return
-                try:
-                    spec = self._sam3_spec_for(
-                        source_obb[0].path,
-                        self.sam3_panel.params(),
-                        ds,
-                        self.spin_seed.value(),
-                    )
-                except ValueError as exc:
-                    QMessageBox.warning(self, "Label Quality", str(exc))
-                    abort_start()
-                    return
-                role_entries.append(
-                    {
-                        "role": role,
-                        "spec": spec,
-                        "publish_meta": self._publish_meta_for_role(role, "sam3"),
-                    }
-                )
-                continue
-
-            base_model = self._base_model_for_role(role)
+            base_model = (
+                "sam3"
+                if role is TrainingRole.SEMANTIC_SAM3
+                else self._base_model_for_role(role)
+            )
             if not base_model:
                 QMessageBox.warning(
                     self,
@@ -2673,6 +2424,26 @@ QTabBar::tab:selected {
                 )
                 abort_start()
                 return
+            from hydra_suite.detectkit.config.training import RoleTrainingConfig
+
+            role_configs.append(
+                RoleTrainingConfig(
+                    role=role,
+                    base_model=base_model,
+                    imgsz=self._imgsz_for_role(role),
+                )
+            )
+
+        try:
+            from hydra_suite.detectkit.config.training import (
+                DetectTrainingPlan,
+                SliceTrainingConfig,
+            )
+            from hydra_suite.training import (
+                AugmentationProfile,
+                PublishPolicy,
+                TrainingHyperParams,
+            )
 
             aug_args: dict[str, float] = {}
             if self.aug_group.isChecked():
@@ -2686,18 +2457,34 @@ QTabBar::tab:selected {
                     "hsv_s": self.aug_hsv_s.value(),
                     "hsv_v": self.aug_hsv_v.value(),
                 }
-
             batch_val = (
                 -1 if self.chk_auto_batch.isChecked() else self.spin_batch.value()
             )
-            spec = TrainingRunSpec(
-                role=role,
-                source_datasets=source_obb,
-                derived_dataset_dir=ds,
-                base_model=base_model,
+            sam3_params = (
+                self.sam3_panel.params()
+                if TrainingRole.SEMANTIC_SAM3 in roles
+                else None
+            )
+            plan = DetectTrainingPlan(
+                workspace_root=Path(self._workspace_default),
+                sources=tuple(source_obb),
+                class_names=tuple(self._class_names()),
+                roles=tuple(role_configs),
+                split=SplitConfig(
+                    train=self.spin_train.value(),
+                    val=self.spin_val.value(),
+                    test=0.0,
+                ),
+                seed=self.spin_seed.value(),
+                dedup=self.chk_dedup.isChecked(),
+                crop_pad_ratio=self.spin_crop_pad.value(),
+                min_crop_size_px=self.spin_crop_min_px.value(),
+                enforce_square=self.chk_crop_square.isChecked(),
+                slice_settings=SliceTrainingConfig.from_dict(
+                    self.slice_group.to_settings().to_dict()
+                ),
                 hyperparams=TrainingHyperParams(
                     epochs=self.spin_epochs.value(),
-                    imgsz=self._imgsz_for_role(role),
                     batch=batch_val,
                     lr0=self.spin_lr0.value(),
                     patience=self.spin_patience.value(),
@@ -2705,20 +2492,23 @@ QTabBar::tab:selected {
                     cache=self.chk_cache.isChecked(),
                 ),
                 device=self.combo_device.currentText().strip() or "cpu",
-                seed=self.spin_seed.value(),
                 augmentation_profile=AugmentationProfile(
                     enabled=self.aug_group.isChecked(),
                     args=aug_args,
                 ),
-                publish_policy=publish_policy,
+                # Preserve the GUI's existing behavior: successful artifacts
+                # are imported so History can export or select them later.
+                publish_policy=PublishPolicy(auto_import=True, auto_select=False),
+                species=(self._project.species or "").strip() or "species",
+                model_tag=(self._project.model_tag or "").strip() or "train",
+                sam3_params=sam3_params,
             )
-            role_entries.append(
-                {
-                    "role": role,
-                    "spec": spec,
-                    "publish_meta": self._publish_meta_for_role(role, base_model),
-                }
-            )
+            plan.validate()
+            role_entries = plan.role_entries(self.role_dataset_dirs)
+        except (ImportError, ValueError) as exc:
+            QMessageBox.warning(self, "Training Configuration", str(exc))
+            abort_start()
+            return
 
         self._worker = _TrainingWorker(orchestrator, role_entries)
         self._worker.log_signal.connect(self._append_log)

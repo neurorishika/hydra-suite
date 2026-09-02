@@ -343,6 +343,7 @@ def test_dataset_preparation_preserves_merge_reuse_and_slice_routing(qapp):
     assert calls["slice"][0][0] == "/tmp/merged"
     assert calls["slice"][0][1]["params"].imgsz == 768
     assert calls["slice"][0][1]["params"].target_sizes == [240.0, 360.0, 480.0]
+    assert calls["slice"][0][1]["params"].reference_body_px == 0.0
     assert [source_dir for _, source_dir, _ in calls["role"]] == [
         "/tmp/sliced",
         "/tmp/merged",
