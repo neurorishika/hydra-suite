@@ -182,6 +182,8 @@ def profile_by_id(
     meta: dict[str, Any], profile_id: str | None
 ) -> dict[str, Any] | None:
     """Resolve a profile, falling back only to the explicit primary profile."""
+    if profile_id == "__training__":
+        return None
     if profile_id:
         profile = next(
             (

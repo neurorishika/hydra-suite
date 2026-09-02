@@ -126,6 +126,10 @@ def test_selecting_profile_applies_complete_calibrated_settings(tmp_path, monkey
     assert panel.spin_slice_tile_w.value() == 1024
     assert panel.spin_slice_tile_h.value() == 800
     assert mw.advanced_config["slice_profile_id"] == "fast"
+    training = panel.combo_slice_profile.findData("__training__")
+    panel.combo_slice_profile.setCurrentIndex(training)
+    assert panel.combo_slice_geometry.currentText() == "auto_model"
+    assert mw.advanced_config["slice_profile_id"] == "__training__"
     mw.close()
 
 

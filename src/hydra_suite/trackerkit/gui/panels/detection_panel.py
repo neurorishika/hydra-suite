@@ -2596,7 +2596,10 @@ class DetectionPanel(QWidget):
         if self._applying_slice_profile or self._slice_meta is None:
             return
         profile_id = self.combo_slice_profile.currentData(Qt.UserRole)
-        if profile_id in (None, "__training__", "__custom__"):
+        if profile_id == "__training__":
+            self._apply_slice_meta_values("__training__")
+            return
+        if profile_id in (None, "__custom__"):
             self._main_window.advanced_config["slice_profile_id"] = str(
                 profile_id or ""
             )
