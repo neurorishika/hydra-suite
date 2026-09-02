@@ -27,15 +27,15 @@ from ..models import SliceTrainingSettings
 class _TileLayoutPreview(QWidget):
     """Draw a compact, schematic view of the tile grid on a sample frame."""
 
-    _FRAME_WH = (1920, 1080)
+    _FALLBACK_FRAME_WH = (1920, 1080)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setMinimumSize(290, 180)
         self.setToolTip(
-            "A live schematic of the tile grid over a representative 1920 × 1080 "
-            "source image. The automatic body-size estimate is used after the first "
-            "sliced dataset build."
+            "A live schematic of the tile grid over a representative labelled source "
+            "frame. The automatic body-size estimate is used after the first sliced "
+            "dataset build."
         )
         self._mode = "auto_object"
         self._target_fractions = [0.3125, 0.46875, 0.625]
@@ -43,6 +43,23 @@ class _TileLayoutPreview(QWidget):
         self._overlap = 0.2
         self._model_input_size = 640
         self._reference_body_px = 0.0
+        self._frame_wh = self._FALLBACK_FRAME_WH
+        self._uses_fallback_frame = True
+
+    @property
+    def frame_size(self) -> tuple[int, int]:
+        """Representative source-frame dimensions currently shown by the preview."""
+        return self._frame_wh
+
+    def set_frame_size(self, frame_wh: tuple[int, int] | None) -> None:
+        """Use a project source frame, or the labelled fallback when unavailable."""
+        if frame_wh is None or min(frame_wh) <= 0:
+            self._frame_wh = self._FALLBACK_FRAME_WH
+            self._uses_fallback_frame = True
+        else:
+            self._frame_wh = (int(frame_wh[0]), int(frame_wh[1]))
+            self._uses_fallback_frame = False
+        self.update()
 
     def set_settings(
         self,
@@ -69,7 +86,7 @@ class _TileLayoutPreview(QWidget):
             # Labels have not been measured before the first build. This keeps
             # the preview useful without presenting an illustrative value as a
             # real measurement.
-            reference = self._FRAME_WH[1] / 18.0
+            reference = self._frame_wh[1] / 18.0
         fraction = (
             float(median(self._target_fractions)) if self._target_fractions else 0.15
         )
@@ -90,8 +107,8 @@ class _TileLayoutPreview(QWidget):
         margin, top = 12, 26
         available_w = max(1, self.width() - 2 * margin)
         available_h = max(1, self.height() - top - 38)
-        scale = min(available_w / self._FRAME_WH[0], available_h / self._FRAME_WH[1])
-        draw_w, draw_h = int(self._FRAME_WH[0] * scale), int(self._FRAME_WH[1] * scale)
+        scale = min(available_w / self._frame_wh[0], available_h / self._frame_wh[1])
+        draw_w, draw_h = int(self._frame_wh[0] * scale), int(self._frame_wh[1] * scale)
         x = (self.width() - draw_w) // 2
         y = top + (available_h - draw_h) // 2
 
@@ -102,7 +119,7 @@ class _TileLayoutPreview(QWidget):
         tile_w, tile_h = self._tile_size()
         try:
             plan = plan_tiles(
-                (self._FRAME_WH[1], self._FRAME_WH[0]),
+                (self._frame_wh[1], self._frame_wh[0]),
                 tile_w,
                 tile_h,
                 self._overlap,
@@ -126,7 +143,7 @@ class _TileLayoutPreview(QWidget):
         painter.drawText(
             margin,
             17,
-            f"Tile layout on a {self._FRAME_WH[0]} × {self._FRAME_WH[1]} image",
+            f"Tile layout on a {self._frame_wh[0]} × {self._frame_wh[1]} image",
         )
         note = (
             "uses last label measurement"
@@ -137,7 +154,8 @@ class _TileLayoutPreview(QWidget):
                 else ""
             )
         )
-        tile_note = f"{len(tiles)} tiles · {tile_w} × {tile_h} px"
+        frame_note = "fallback frame" if self._uses_fallback_frame else "project sample"
+        tile_note = f"{len(tiles)} tiles · {tile_w} × {tile_h} px · {frame_note}"
         painter.setPen(QColor("#c0c0c0"))
         painter.drawText(margin, self.height() - 17, f"{tile_note} {note}".strip())
 
@@ -246,6 +264,10 @@ class SliceSettingsGroup(QGroupBox):
         """Set the active model input size used to resolve relative scales."""
         self._model_input_size = max(1, int(imgsz))
         self._refresh_preview()
+
+    def set_preview_frame_size(self, frame_wh: tuple[int, int] | None) -> None:
+        """Use a representative project frame for the tile-layout schematic."""
+        self.preview.set_frame_size(frame_wh)
 
     @staticmethod
     def _format_fractions(fractions: list[float]) -> str:
