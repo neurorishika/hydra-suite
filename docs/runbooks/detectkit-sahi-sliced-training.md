@@ -29,8 +29,8 @@ You have a DetectKit project with:
    - Use the live tile-layout preview beside the controls to see the resulting grid over the project’s labelled frame sizes at their native dimensions. Click it to cycle through the image-size distribution; all configured object-scale targets are shown together. Before the first build it is explicitly illustrative; afterward it uses the label-derived body measurement.
 
 5. **Configure negative sampling and merging:**
-   - Set **Min area ratio** to `0.1` (default, tiles with < 10% of the object's area are suppressed during slicing).
-   - Set **Negative tile fraction** to `0.15` (default, 15% of tiles generated will be background-only, strengthening non-object detection).
+   - Set **Minimum retained object area** to `0.1` (default, tiles with < 10% of the object's area are suppressed during slicing).
+   - Set **Empty-tile sampling fraction** to `0.15` (default, 15% of background-only tiles are kept, strengthening non-object detection).
    - Leave **Mix full frames** checked (default, ensures the model also learns full-frame context).
    - Set **Merge threshold** to `0.5` (default, overlapping predictions from adjacent tiles are merged when IoU exceeds this).
 
@@ -64,7 +64,7 @@ You have a DetectKit project with:
    - If clusters are still merged, check that:
      - Object scales match your typical object scale (increase the fractions if tiles are too small).
      - Overlap is not too small (0.2 is typical; lower overlap can miss objects at tile edges).
-     - Min area ratio is not too aggressive (0.1 allows small partial objects).
+     - Minimum retained object area is not too aggressive (0.1 allows small partial objects).
 
 3. **Run the scale-sweep validation:**
    - Re-run the collaborator's detection-vs-scale curve experiment on validation frames.
@@ -116,9 +116,9 @@ You have a DetectKit project with:
 - **Diagnosis:** The model may not have learned sufficient crowd-splitting.
 - **Solutions:**
   - Retrain with larger object-scale fractions to force more aggressive tiling.
-  - Increase "Negative tile fraction" (e.g., 0.25) to improve sparse-frame accuracy.
+  - Increase "Empty-tile sampling fraction" (e.g., 0.25) to improve sparse-frame accuracy.
   - Verify that the training dataset contains representative crowded frames; if training data is mostly sparse, the model won't learn crowd-splitting.
-  - Check that overlap (0.2) and min-area-ratio (0.1) are not too conservative.
+  - Check that overlap (0.2) and minimum retained object area (0.1) are not too conservative.
 
 ### Model runs but inference is not sliced
 

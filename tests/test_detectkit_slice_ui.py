@@ -67,6 +67,19 @@ def test_slice_settings_show_only_controls_for_selected_geometry(_app):
     assert w.spin_h.isVisible()
 
 
+def test_slice_fraction_controls_explain_their_numeric_meaning(_app):
+    from hydra_suite.detectkit.gui.panels.slice_settings_widget import (
+        SliceSettingsGroup,
+    )
+
+    w = SliceSettingsGroup()
+    labels = {label.text() for label, _control in w._rows.values()}
+    assert "Minimum retained object area" in labels
+    assert "Empty-tile sampling fraction" in labels
+    assert "10%" in w.spin_min_area.toolTip()
+    assert "15%" in w.spin_neg.toolTip()
+
+
 def test_slice_settings_preview_renders_tile_layout(_app):
     from hydra_suite.detectkit.gui.panels.slice_settings_widget import (
         SliceSettingsGroup,
