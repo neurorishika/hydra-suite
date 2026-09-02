@@ -292,10 +292,18 @@ class SliceSettingsGroup(QGroupBox):
         grid.setVerticalSpacing(8)
 
         self.chk_enabled = QCheckBox("Enable sliced training + preview")
+        self.chk_enabled.setToolTip(
+            "Generate sliced training examples and use the same tile geometry for "
+            "DetectKit preview inference."
+        )
         self.cmb_mode = QComboBox()
         self.cmb_mode.addItem("Fit labelled objects", "auto_object")
         self.cmb_mode.addItem("Use model input", "auto_model")
         self.cmb_mode.addItem("Custom tile size", "custom")
+        self.cmb_mode.setToolTip(
+            "Choose whether tiles follow labelled object scale, the model input size, "
+            "or explicit tile dimensions."
+        )
         self.txt_targets = QLineEdit()
         self.txt_targets.setPlaceholderText("e.g. 0.31, 0.47, 0.62")
         self.txt_targets.setToolTip(
@@ -309,22 +317,50 @@ class SliceSettingsGroup(QGroupBox):
         self.spin_w = QSpinBox()
         self.spin_w.setRange(0, 8192)
         self.spin_w.setSpecialValueText("Model input size")
+        self.spin_w.setToolTip(
+            "Custom tile width in source-image pixels. Zero uses the active model "
+            "input size."
+        )
         self.spin_h = QSpinBox()
         self.spin_h.setRange(0, 8192)
         self.spin_h.setSpecialValueText("Model input size")
+        self.spin_h.setToolTip(
+            "Custom tile height in source-image pixels. Zero uses the active model "
+            "input size."
+        )
         self.spin_overlap = QDoubleSpinBox()
         self.spin_overlap.setRange(0.0, 0.9)
         self.spin_overlap.setSingleStep(0.05)
+        self.spin_overlap.setToolTip(
+            "Fraction shared by neighbouring tiles. More overlap protects objects at "
+            "tile edges but creates more inference work."
+        )
         self.spin_min_area = QDoubleSpinBox()
         self.spin_min_area.setRange(0.0, 1.0)
         self.spin_min_area.setSingleStep(0.05)
+        self.spin_min_area.setToolTip(
+            "Minimum fraction of a labelled object's original area that must lie in a "
+            "tile to keep that label. For example, 0.10 keeps labels with at least 10%."
+        )
         self.spin_neg = QDoubleSpinBox()
         self.spin_neg.setRange(0.0, 1.0)
         self.spin_neg.setSingleStep(0.05)
+        self.spin_neg.setToolTip(
+            "Sampling probability for background-only tiles. For example, 0.15 keeps "
+            "15% of empty tiles."
+        )
         self.chk_full = QCheckBox("Mix full frames")
+        self.chk_full.setToolTip(
+            "Include unsliced full-frame examples alongside tiles so the model retains "
+            "global context."
+        )
         self.spin_merge = QDoubleSpinBox()
         self.spin_merge.setRange(0.0, 1.0)
         self.spin_merge.setSingleStep(0.05)
+        self.spin_merge.setToolTip(
+            "Overlap threshold used to merge duplicate predictions from neighbouring "
+            "tiles during preview inference."
+        )
 
         for control in (
             self.cmb_mode,
@@ -342,6 +378,7 @@ class SliceSettingsGroup(QGroupBox):
 
         def add_row(row: int, key: str, label: str, control: QWidget) -> None:
             label_widget = QLabel(label)
+            label_widget.setToolTip(control.toolTip())
             self._rows[key] = (label_widget, control)
             grid.addWidget(label_widget, row, 0)
             grid.addWidget(control, row, 1)
@@ -353,8 +390,8 @@ class SliceSettingsGroup(QGroupBox):
         add_row(4, "width", "Tile width", self.spin_w)
         add_row(5, "height", "Tile height", self.spin_h)
         add_row(6, "overlap", "Tile overlap", self.spin_overlap)
-        add_row(7, "min_area", "Keep labelled area", self.spin_min_area)
-        add_row(8, "negative", "Keep empty tiles", self.spin_neg)
+        add_row(7, "min_area", "Minimum retained object area", self.spin_min_area)
+        add_row(8, "negative", "Empty-tile sampling fraction", self.spin_neg)
         grid.addWidget(self.chk_full, 9, 0, 1, 2)
         add_row(10, "merge", "Merge threshold", self.spin_merge)
 

@@ -14,11 +14,15 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtGui import QImage  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
+    QAbstractButton,
+    QAbstractSpinBox,
     QApplication,
+    QComboBox,
     QDialogButtonBox,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
+    QLineEdit,
 )
 
 
@@ -119,6 +123,26 @@ def test_training_dialog_uses_compact_grid_layouts(qapp, tmp_path):
     assert isinstance(groups["Training Selection"].layout(), QGridLayout)
     assert isinstance(groups["Dataset And Runtime"].layout(), QGridLayout)
     assert isinstance(dlg.slice_group.layout(), QHBoxLayout)
+
+
+def test_training_dialog_interactive_controls_have_tooltips(qapp, tmp_path):
+    from hydra_suite.detectkit.gui.dialogs.training_dialog import TrainingDialog
+
+    dialog = TrainingDialog(_make_proj(tmp_path))
+    interactive = (
+        QAbstractButton,
+        QAbstractSpinBox,
+        QComboBox,
+        QLineEdit,
+    )
+    controls = [
+        control
+        for control_type in interactive
+        for control in dialog.findChildren(control_type)
+        if control.isEnabled()
+    ]
+    assert controls
+    assert all(control.toolTip() for control in controls)
 
 
 def test_training_dialog_summary_reflects_current_plan(qapp, tmp_path):

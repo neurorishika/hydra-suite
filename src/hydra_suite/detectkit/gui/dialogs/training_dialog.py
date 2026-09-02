@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING, Callable
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QImageReader, QPixmap
 from PySide6.QtWidgets import (
+    QAbstractButton,
+    QAbstractSpinBox,
     QCheckBox,
     QComboBox,
     QDialogButtonBox,
@@ -20,6 +22,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QProgressBar,
     QPushButton,
@@ -442,6 +445,85 @@ class TrainingDialog(BaseDialog):
 
         self.add_content(container)
         self._connect_summary_signals()
+        self._apply_training_tooltips()
+
+    def _apply_training_tooltips(self) -> None:
+        """Describe every interactive control in the training dialog.
+
+        Specific tooltips explain the common decisions. A type-specific fallback
+        keeps specialised controls (including the SAM3 panel) discoverable as
+        that tab evolves without silently introducing unlabelled interaction.
+        """
+        tips = {
+            self.mode_combo: "Choose a direct, sequential, or semantic training recipe.",
+            self.task_combo: "Choose the output geometry the selected recipe should learn.",
+            self.chk_role_obb_direct: "Train a direct oriented-bounding-box detector.",
+            self.chk_role_detect_direct: "Train a direct axis-aligned object detector.",
+            self.chk_role_segment_direct: "Train a direct instance-segmentation model.",
+            self.chk_role_seq_detect: "Train the full-frame first stage of a sequential recipe.",
+            self.chk_role_seq_crop_obb: "Train the crop-focused OBB second stage.",
+            self.chk_role_seq_crop_segment: "Train the crop-focused segmentation second stage.",
+            self.chk_semantic_sam3: "Fine-tune the semantic SAM3 training role.",
+            self.spin_train: "Fraction of the source data assigned to training.",
+            self.spin_val: "Fraction of the source data assigned to validation.",
+            self.spin_seed: "Random seed used for deterministic splitting and sampling.",
+            self.chk_dedup: "Remove source images with identical content before training.",
+            self.spin_crop_pad: "Extra context added around sequential second-stage crops, as a fraction of object size.",
+            self.spin_crop_min_px: "Smallest allowed sequential second-stage crop side in pixels.",
+            self.chk_crop_square: "Make sequential second-stage crops square before model resizing.",
+            self.combo_device: "Choose the hardware used for dataset preparation and model training.",
+            self.spin_epochs: "Maximum number of complete passes through the training dataset.",
+            self.spin_batch: "Number of images processed together in each optimization step.",
+            self.chk_auto_batch: "Let Ultralytics choose the largest safe batch size for the selected hardware.",
+            self.spin_lr0: "Initial optimizer learning rate. Lower values make training updates more conservative.",
+            self.spin_patience: "Stop training after this many epochs without validation improvement.",
+            self.spin_workers: "Number of background data-loading worker processes. Zero loads in the main process.",
+            self.chk_cache: "Cache decoded training images to speed later epochs at the cost of memory or disk space.",
+            self.spin_imgsz_obb_direct: "Square model input size for direct OBB training.",
+            self.spin_imgsz_detect_direct: "Square model input size for direct detection training.",
+            self.spin_imgsz_segment_direct: "Square model input size for direct segmentation training.",
+            self.spin_imgsz_seq_detect: "Square model input size for the sequential first-stage detector.",
+            self.spin_imgsz_seq_crop_obb: "Square model input size for sequential crop-focused OBB training.",
+            self.spin_imgsz_seq_crop_segment: "Square model input size for sequential crop-focused segmentation training.",
+            self.combo_model_obb_direct: "Base checkpoint used to initialize direct OBB training.",
+            self.combo_model_detect_direct: "Base checkpoint used to initialize direct detection training.",
+            self.combo_model_segment_direct: "Base checkpoint used to initialize direct segmentation training.",
+            self.combo_model_seq_detect: "Base checkpoint used to initialize sequential first-stage detection training.",
+            self.combo_model_seq_crop_obb: "Base checkpoint used to initialize sequential crop-focused OBB training.",
+            self.combo_model_seq_crop_segment: "Base checkpoint used to initialize sequential crop-focused segmentation training.",
+            self.aug_group: "Enable or disable the image augmentations below for this training run.",
+            self.aug_fliplr: "Probability of a left-right image flip during augmentation.",
+            self.aug_flipud: "Probability of an up-down image flip during augmentation.",
+            self.aug_degrees: "Maximum random rotation angle used during augmentation.",
+            self.aug_mosaic: "Probability of mosaic augmentation, which combines multiple images into one training example.",
+            self.aug_mixup: "Probability of mixup augmentation, which blends two training images.",
+            self.aug_hsv_h: "Maximum hue adjustment used during colour augmentation.",
+            self.aug_hsv_s: "Maximum saturation adjustment used during colour augmentation.",
+            self.aug_hsv_v: "Maximum brightness adjustment used during colour augmentation.",
+            self.btn_refresh_dataset_fit: "Reinspect the configured sources and update the overview cards.",
+            self.btn_start: "Build the selected datasets and begin training.",
+            self.btn_cancel: "Request a safe stop after the current training or dataset boundary.",
+            self.btn_resume: "Resume the most recent compatible interrupted training run.",
+            self.btn_save_config: "Save the current training controls as a reusable preset.",
+            self.btn_load_config: "Load a previously saved training preset into this dialog.",
+        }
+        for control, tip in tips.items():
+            control.setToolTip(tip)
+
+        for control in self.findChildren(QWidget):
+            if control.toolTip():
+                continue
+            if isinstance(control, QAbstractSpinBox):
+                tip = "Enter a numeric value for this training setting."
+            elif isinstance(control, QComboBox):
+                tip = "Choose an option for this training setting."
+            elif isinstance(control, QLineEdit):
+                tip = "Enter a value for this training setting."
+            elif isinstance(control, QAbstractButton):
+                tip = "Activate or toggle this training option."
+            else:
+                continue
+            control.setToolTip(tip)
 
     def _apply_training_dialog_styles(self) -> None:
         self.setStyleSheet(self.styleSheet() + """
