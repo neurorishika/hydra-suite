@@ -584,6 +584,14 @@ def test_training_dialog_source_preview_loads_real_source_samples(qapp, tmp_path
     from hydra_suite.detectkit.gui.models import DetectKitProject, OBBSource
 
     source_root = _write_detectkit_source_dataset(tmp_path / "preview_source")
+    additional_image = source_root / "images" / "train" / "wide.png"
+    image = QImage(640, 320, QImage.Format.Format_RGB32)
+    image.fill(0)
+    assert image.save(str(additional_image))
+    (source_root / "labels" / "train" / "wide.txt").write_text(
+        "0 0.10 0.10 0.40 0.10 0.40 0.40 0.10 0.40\n",
+        encoding="utf-8",
+    )
     proj = DetectKitProject(project_dir=tmp_path, class_names=["ant"])
     proj.sources = [OBBSource(path=str(source_root), name="preview_source")]
 
@@ -593,6 +601,7 @@ def test_training_dialog_source_preview_loads_real_source_samples(qapp, tmp_path
     assert records
     assert dlg.source_preview_status.text().startswith("Showing ")
     assert dlg.slice_group.preview.frame_size == (320, 240)
+    assert dlg.slice_group.preview.frame_options == [(320, 240, 1), (640, 320, 1)]
 
 
 # ---------------------------------------------------------------------------

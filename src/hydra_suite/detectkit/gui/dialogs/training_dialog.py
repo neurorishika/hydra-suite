@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QImageReader, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -1972,6 +1972,8 @@ QTabBar::tab:selected {
             return []
 
         buckets: dict[str, list[dict[str, str | Path]]] = {}
+        frame_size_counts: dict[tuple[int, int], int] = {}
+        seen_frame_paths: set[Path] = set()
         required_level = self._selected_required_level()
         for src in self._project.sources:
             if GeometryLevel.from_str(getattr(src, "level", "obb")) < required_level:
@@ -2005,6 +2007,15 @@ QTabBar::tab:selected {
                     image_path = Path(item.image_path)
                     if not image_path.exists():
                         continue
+                    resolved_path = image_path.resolve()
+                    if resolved_path not in seen_frame_paths:
+                        seen_frame_paths.add(resolved_path)
+                        image_size = QImageReader(str(image_path)).size()
+                        if image_size.isValid():
+                            frame_wh = (image_size.width(), image_size.height())
+                            frame_size_counts[frame_wh] = (
+                                frame_size_counts.get(frame_wh, 0) + 1
+                            )
                     records.append(
                         {
                             "path": image_path,
@@ -2014,6 +2025,11 @@ QTabBar::tab:selected {
                     )
             if records:
                 buckets[source_name] = records
+
+        self._source_preview_frame_options = [
+            (width, height, count)
+            for (width, height), count in frame_size_counts.items()
+        ]
 
         selected: list[dict[str, str | Path]] = []
         while len(selected) < max_items:
@@ -2089,7 +2105,7 @@ QTabBar::tab:selected {
 
         records = self._source_preview_records()
         if not self._project.sources:
-            self.slice_group.set_preview_frame_size(None)
+            self.slice_group.set_preview_frame_options([])
             self.source_preview_status.setText(
                 "No sources configured yet. Add one or more DetectKit datasets to preview sample frames here."
             )
@@ -2102,7 +2118,7 @@ QTabBar::tab:selected {
             return
 
         if not records:
-            self.slice_group.set_preview_frame_size(None)
+            self.slice_group.set_preview_frame_options([])
             self.source_preview_status.setText(
                 "Source datasets are configured, but DetectKit could not discover previewable image-label pairs yet."
             )
@@ -2114,11 +2130,8 @@ QTabBar::tab:selected {
             self.source_preview_cards_layout.addWidget(empty_label)
             return
 
-        representative = self._source_preview_pixmap(Path(str(records[0]["path"])))
-        self.slice_group.set_preview_frame_size(
-            (representative.width(), representative.height())
-            if not representative.isNull()
-            else None
+        self.slice_group.set_preview_frame_options(
+            getattr(self, "_source_preview_frame_options", [])
         )
 
         self.source_preview_status.setText(
