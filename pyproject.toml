@@ -37,7 +37,9 @@ dependencies = [
     "PySide6>=6.5",
     "timm",
     "huggingface_hub",
-    "ultralytics>=8.0",
+    # 8.4.138 avoids the MPS TaskAlignedAssigner advanced-indexing failure
+    # that can crash one-class segmentation training on dense frames.
+    "ultralytics>=8.4.138",
     "hnswlib",
     "usearch",
     "annoy",
@@ -95,7 +97,7 @@ av = [
 # break `twine upload` for the WHOLE package, not just this extra. Install it
 # manually -- see docs/user-guide/detectkit-semantic-escalation.md.
 sam3 = [
-    "ultralytics>=8.4.34",
+    "ultralytics>=8.4.138",
     "ftfy",
 ]
 # SAM3 LoRA finetuning (training, not inference -- see the sam3 extra above
