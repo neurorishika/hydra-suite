@@ -395,24 +395,24 @@ def undo_latest_dataset_recovery(
     for entry in operation.entries:
         if not entry.recovery_path.is_file():
             raise DatasetRecoveryError(
-                f"Recovery payload is missing for {entry.original_path.name}."
+                f"Recovery payload is missing for {entry.original_path}."
             )
         if entry.strategy == "move" and entry.original_path.exists():
             raise DatasetRecoveryError(
-                f"Cannot restore {entry.original_path.name}: its original path already exists."
+                f"Cannot restore {entry.original_path}: its original path already exists."
             )
         if entry.strategy == "copy":
             label_existed[entry.original_path] = entry.original_path.exists()
             if entry.original_path.exists() and not entry.original_path.is_file():
                 raise DatasetRecoveryError(
-                    f"Cannot restore {entry.original_path.name}: its original path already exists."
+                    f"Cannot restore {entry.original_path}: its original path already exists."
                 )
             if (
                 entry.original_path.is_file()
                 and entry.original_path.stat().st_size != 0
             ):
                 raise DatasetRecoveryError(
-                    f"Cannot restore {entry.original_path.name}: it changed since labels were cleared."
+                    f"Cannot restore {entry.original_path}: it changed since labels were cleared."
                 )
 
     restored: list[DatasetRecoveryEntry] = []

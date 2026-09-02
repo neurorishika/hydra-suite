@@ -206,7 +206,7 @@ class DatasetPanel(QWidget):
         self._undo_shortcut = QShortcut(
             QKeySequence(QKeySequence.StandardKey.Undo), self
         )
-        self._undo_shortcut.setContext(Qt.WindowShortcut)
+        self._undo_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
         self._undo_shortcut.activated.connect(self._undo_last_dataset_change)
 
         layout.addWidget(images_group, 1)
@@ -405,11 +405,7 @@ class DatasetPanel(QWidget):
 
     def _on_image_list_context_menu(self, pos) -> None:
         """Show right-click menu on the image list."""
-        items = self.image_list.selectedItems()
-        if not items:
-            item = self.image_list.itemAt(pos)
-            if item is not None:
-                items = [item]
+        items = self._items_for_context_menu(pos)
         if not items:
             return
         menu = QMenu(self.image_list)
@@ -431,6 +427,17 @@ class DatasetPanel(QWidget):
 
         menu.exec(self.image_list.viewport().mapToGlobal(pos))
 
+    def _items_for_context_menu(self, pos) -> list[QListWidgetItem]:
+        """Return the selection, selecting a lone right-clicked row if needed."""
+        items = self.image_list.selectedItems()
+        if not items:
+            item = self.image_list.itemAt(pos)
+            if item is not None:
+                self.image_list.setCurrentItem(item)
+                item.setSelected(True)
+                items = [item]
+        return items
+
     def _delete_selected_images(self) -> None:
         """Move selected images and matching labels into project Recovery."""
         items = self.image_list.selectedItems()
@@ -451,7 +458,9 @@ class DatasetPanel(QWidget):
         if not image_paths:
             return
 
-        sample_names = ", ".join(p.name for p in image_paths[:3])
+        sample_names = ", ".join(
+            self._image_display_path(path, source_root) for path in image_paths[:3]
+        )
         if len(image_paths) > 3:
             sample_names += f", ... (+{len(image_paths) - 3} more)"
         linked_note = self._linked_source_recovery_note(source_root)
@@ -510,10 +519,13 @@ class DatasetPanel(QWidget):
         if not image_paths:
             return
 
-        sample_names = ", ".join(p.name for p in image_paths[:3])
+        source_root = Path(source_path)
+        sample_names = ", ".join(
+            self._image_display_path(path, source_root) for path in image_paths[:3]
+        )
         if len(image_paths) > 3:
             sample_names += f", ... (+{len(image_paths) - 3} more)"
-        linked_note = self._linked_source_recovery_note(Path(source_path))
+        linked_note = self._linked_source_recovery_note(source_root)
         confirm = QMessageBox.warning(
             self,
             "Clear Labels",
@@ -762,6 +774,17 @@ class DatasetPanel(QWidget):
         return name or location
 
     @staticmethod
+    def _image_display_path(image_path: Path, source_root: Path) -> str:
+        """Return an unambiguous path relative to a source's image root."""
+        try:
+            return image_path.relative_to(source_root / "images").as_posix()
+        except ValueError:
+            try:
+                return image_path.relative_to(source_root).as_posix()
+            except ValueError:
+                return image_path.name
+
+    @staticmethod
     def _xal_stage_dir_for_source(source_dir: Path) -> Path:
         """Return a stable X-AnyLabeling staging workspace for a DetectKit source."""
         source_resolved = source_dir.expanduser().resolve()
@@ -966,16 +989,10 @@ class DatasetPanel(QWidget):
             self._image_summary.setText("Select a source to browse its images.")
             return
         images = list_images_in_source(source_path)
-        images_root = Path(source_path) / "images"
+        source_root = Path(source_path)
         self.image_list.blockSignals(True)
         for img in images:
-            try:
-                display_path = img.relative_to(images_root).as_posix()
-            except ValueError:
-                try:
-                    display_path = img.relative_to(Path(source_path)).as_posix()
-                except ValueError:
-                    display_path = img.name
+            display_path = self._image_display_path(img, source_root)
             img_item = QListWidgetItem(display_path)
             img_item.setData(Qt.UserRole, str(img))
             img_item.setToolTip(str(img.expanduser().absolute()))

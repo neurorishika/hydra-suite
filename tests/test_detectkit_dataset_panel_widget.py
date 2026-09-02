@@ -92,7 +92,7 @@ def test_dataset_panel_exposes_undo_button_and_native_shortcut(qapp):
 
     assert panel.btn_undo_dataset_change.text().startswith("Undo")
     assert panel._undo_shortcut.key() == QKeySequence(QKeySequence.StandardKey.Undo)
-    assert panel._undo_shortcut.context() == Qt.WindowShortcut
+    assert panel._undo_shortcut.context() == Qt.WidgetWithChildrenShortcut
     assert "Delete" in panel._curation_shortcuts.text()
     assert "Backspace" in panel._curation_shortcuts.text()
 
@@ -145,6 +145,48 @@ def test_delete_prompt_explains_linked_source_recovery(qapp, tmp_path, monkeypat
     assert "linked source" in captured["text"].lower()
     assert "inside the project" in captured["text"].lower()
     assert (source_root / "images" / "a.jpg").exists()
+
+
+def test_delete_prompt_uses_nested_source_relative_path(qapp, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    panel, source_root = _make_panel_with_source(qapp, tmp_path)
+    nested_image = source_root / "images" / "train" / "a.jpg"
+    nested_label = source_root / "labels" / "train" / "a.txt"
+    nested_image.parent.mkdir()
+    nested_label.parent.mkdir()
+    (source_root / "images" / "a.jpg").replace(nested_image)
+    (source_root / "labels" / "a.txt").replace(nested_label)
+    panel.refresh_sources(panel._project)
+    panel.image_list.setCurrentRow(0)
+    panel.image_list.item(0).setSelected(True)
+    captured = {}
+
+    def _capture_warning(self, title, text, *args, **kwargs):
+        captured["text"] = text
+        return QMessageBox.StandardButton.Cancel
+
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.panels.dataset_panel.QMessageBox.warning",
+        _capture_warning,
+    )
+
+    panel._delete_selected_images()
+
+    assert "train/a.jpg" in captured["text"]
+
+
+def test_context_menu_selects_right_clicked_row_when_selection_is_empty(qapp, tmp_path):
+    panel, _source_root = _make_panel_with_source(qapp, tmp_path)
+    item = panel.image_list.item(0)
+    panel.image_list.clearSelection()
+
+    items = panel._items_for_context_menu(
+        panel.image_list.visualItemRect(item).center()
+    )
+
+    assert item.isSelected()
+    assert items == [item]
 
 
 def test_dataset_panel_no_source_list(qapp):
