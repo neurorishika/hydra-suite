@@ -7,6 +7,8 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
+from hydra_suite.data.project_bundle import write_json_atomic
+
 DEFAULT_CLASS_NAME = "object"
 # Dataset inference retains candidates at this floor, then applies the UI
 # threshold live. Keeping this intentionally low makes a later slider change
@@ -399,8 +401,7 @@ class DetectKitProject:
 
     def save(self, path: Path) -> None:
         """Write project state as JSON to *path*."""
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(self.to_dict(), indent=2), encoding="utf-8")
+        write_json_atomic(path, self.to_dict())
 
     @staticmethod
     def load(path: Path) -> DetectKitProject:

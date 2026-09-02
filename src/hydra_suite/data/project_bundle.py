@@ -168,17 +168,22 @@ def write_json_atomic(path: Path, payload: dict[str, Any] | list[Any]) -> None:
     """Atomically write JSON to *path* using a same-directory temporary file."""
     path.parent.mkdir(parents=True, exist_ok=True)
     encoded = json.dumps(payload, indent=2)
-    with NamedTemporaryFile(
-        "w",
-        encoding="utf-8",
-        dir=path.parent,
-        prefix=f".{path.stem}.",
-        suffix=".tmp",
-        delete=False,
-    ) as handle:
-        handle.write(encoded)
-        temp_path = Path(handle.name)
-    temp_path.replace(path)
+    temp_path: Path | None = None
+    try:
+        with NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.stem}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            handle.write(encoded)
+            temp_path = Path(handle.name)
+        temp_path.replace(path)
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
 
 
 def load_project_bundle_manifest(

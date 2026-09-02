@@ -62,6 +62,28 @@ def test_project_roundtrip(tmp_path: Path):
     assert loaded.sources[0].name == "ds1"
 
 
+def test_project_save_is_atomic_when_replacement_fails(tmp_path: Path, monkeypatch):
+    project_file = tmp_path / "detectkit_project.json"
+    project = DetectKitProject(project_dir=tmp_path, class_names=["before"])
+    project.save(project_file)
+    original = project_file.read_bytes()
+    project.class_names = ["after"]
+
+    original_replace = Path.replace
+
+    def fail_temp_replace(path: Path, target: Path):
+        if path.suffix == ".tmp" and Path(target) == project_file:
+            raise OSError("simulated replace failure")
+        return original_replace(path, target)
+
+    monkeypatch.setattr(Path, "replace", fail_temp_replace)
+
+    with pytest.raises(OSError, match="simulated replace failure"):
+        project.save(project_file)
+
+    assert project_file.read_bytes() == original
+
+
 def test_project_roundtrip_preserves_semantic_settings_and_calibration(tmp_path: Path):
     proj = DetectKitProject(project_dir=tmp_path)
     proj.semantic_escalation_settings = {
