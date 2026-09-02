@@ -4,7 +4,16 @@ from pathlib import Path
 import pytest
 
 import hydra_suite.training.model_publish as mp
-from hydra_suite.core.inference.slice_meta import read_slice_meta
+from hydra_suite.core.inference.slice_meta import (
+    available_slice_profiles,
+    normalized_slice_meta,
+    primary_slice_profile,
+    read_slice_meta,
+    remove_slice_profile,
+    slice_meta_to_panel_values,
+    upsert_slice_profile,
+    write_slice_meta,
+)
 from hydra_suite.training.contracts import TrainingRole
 
 
@@ -37,7 +46,7 @@ def test_all_direct_detector_roles_publish_slice_geometry(
     )
 
     sidecar = Path(stored).with_suffix(Path(stored).suffix + ".slice_meta.json")
-    assert json.loads(sidecar.read_text()) == geometry
+    assert json.loads(sidecar.read_text())["training_geometry"] == geometry
     assert mp.load_model_registry()["entries"][key]["slice_geometry"] == geometry
 
 
@@ -70,7 +79,10 @@ def test_slice_geometry_written_as_sidecar_and_registry(tmp_path, monkeypatch):
     stored_path = Path(stored)
     sidecar = stored_path.with_suffix(stored_path.suffix + ".slice_meta.json")
     assert sidecar.exists()
-    assert json.loads(sidecar.read_text())["reference_body_px"] == 42.0
+    assert (
+        json.loads(sidecar.read_text())["training_geometry"]["reference_body_px"]
+        == 42.0
+    )
     reg = mp.load_model_registry()
     assert reg["entries"][key]["slice_geometry"]["geometry_mode"] == "auto_object"
     assert reg["entries"][key]["slice_meta_sidecar"] == sidecar.name
@@ -105,8 +117,8 @@ def test_published_sidecar_is_read_back_by_read_slice_meta(tmp_path, monkeypatch
     )
     meta = read_slice_meta(stored)
     assert meta is not None
-    assert meta["reference_body_px"] == 42.0
-    assert meta["geometry_mode"] == "auto_object"
+    assert meta["training_geometry"]["reference_body_px"] == 42.0
+    assert meta["training_geometry"]["geometry_mode"] == "auto_object"
 
 
 def test_no_slice_geometry_writes_no_sidecar(tmp_path, monkeypatch):
@@ -128,3 +140,99 @@ def test_no_slice_geometry_writes_no_sidecar(tmp_path, monkeypatch):
     reg = mp.load_model_registry()
     assert "slice_geometry" not in reg["entries"][key]
     assert "slice_meta_sidecar" not in reg["entries"][key]
+
+
+def test_calibrated_profiles_apply_primary_without_losing_training_geometry(tmp_path):
+    model = tmp_path / "weights.pt"
+    model.write_bytes(b"weights")
+    meta = {
+        "schema_version": 2,
+        "training_geometry": {"geometry_mode": "auto_model", "imgsz": 640},
+        "primary_profile_id": "recall",
+        "profiles": [
+            {
+                "id": "recall",
+                "name": "High recall",
+                "settings": {
+                    "geometry_mode": "auto_object",
+                    "object_tile_fraction": 0.4,
+                    "overlap": 0.3,
+                    "trained_body_px": 80,
+                    "slice_width": 0,
+                    "slice_height": 0,
+                    "confidence_threshold": 0.2,
+                },
+            },
+            {
+                "id": "fast",
+                "name": "Fast scan",
+                "settings": {"geometry_mode": "auto_model", "overlap": 0.1},
+            },
+        ],
+    }
+    write_slice_meta(model, meta)
+
+    loaded = read_slice_meta(model)
+    assert loaded == meta
+    assert [profile["id"] for profile in available_slice_profiles(loaded)] == [
+        "recall",
+        "fast",
+    ]
+    assert primary_slice_profile(loaded)["name"] == "High recall"
+    primary = slice_meta_to_panel_values(loaded)
+    fast = slice_meta_to_panel_values(loaded, "fast")
+    assert primary["profile_id"] == "recall"
+    assert primary["confidence_threshold"] == 0.2
+    assert fast["profile_name"] == "Fast scan"
+    assert fast["geometry_mode"] == "auto_model"
+
+
+def test_missing_profile_falls_back_to_primary_and_legacy_sidecar_still_loads():
+    meta = {
+        "schema_version": 2,
+        "training_geometry": {"geometry_mode": "custom", "slice_width": 700},
+        "primary_profile_id": "saved",
+        "profiles": [
+            {"id": "saved", "name": "Saved", "settings": {"overlap": 0.25}},
+        ],
+    }
+    assert slice_meta_to_panel_values(meta, "removed")["profile_id"] == "saved"
+    legacy = {
+        "geometry_mode": "auto_object",
+        "target_sizes": [300.0],
+        "imgsz": 640,
+        "reference_body_px": 42.0,
+    }
+    values = slice_meta_to_panel_values(legacy)
+    assert values["profile_id"] is None
+    assert values["object_tile_fraction"] == 300.0 / 640.0
+
+
+def test_profile_management_preserves_training_geometry_and_other_profiles():
+    legacy = {"geometry_mode": "auto_object", "reference_body_px": 50.0}
+    meta = upsert_slice_profile(
+        legacy,
+        name="Balanced",
+        settings={"overlap": 0.2},
+        profile_id="balanced",
+        primary=True,
+    )
+    meta = upsert_slice_profile(
+        meta,
+        name="Fast scan",
+        settings={"overlap": 0.1},
+        profile_id="fast",
+    )
+    assert meta["training_geometry"] == legacy
+    assert meta["primary_profile_id"] == "balanced"
+    assert [p["id"] for p in meta["profiles"]] == ["balanced", "fast"]
+    trimmed = remove_slice_profile(meta, "balanced")
+    assert trimmed["primary_profile_id"] == "fast"
+    assert [p["id"] for p in trimmed["profiles"]] == ["fast"]
+    assert normalized_slice_meta(trimmed)["training_geometry"] == legacy
+
+
+def test_profile_management_refuses_duplicate_names():
+    meta = upsert_slice_profile({}, name="Balanced", settings={}, profile_id="first")
+    with pytest.raises(ValueError, match="already exists"):
+        upsert_slice_profile(meta, name="balanced", settings={}, profile_id="second")

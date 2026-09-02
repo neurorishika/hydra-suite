@@ -764,6 +764,21 @@ class DetectionPanel(QWidget):
         self.row_slice_toggle = _labeled_row("Sliced inference", self.chk_slice_enabled)
         f_yolo.addWidget(self.row_slice_toggle, 8, 0)
 
+        self._slice_meta = None
+        self._applying_slice_profile = False
+        self.combo_slice_profile = QComboBox()
+        self.combo_slice_profile.setFixedHeight(30)
+        self.combo_slice_profile.setToolTip(
+            "Measured SAHI operating profiles stored with the selected model. "
+            "Editing a setting switches this to Custom without changing the model."
+        )
+        self.combo_slice_profile.currentIndexChanged.connect(
+            self._on_slice_profile_changed
+        )
+        self.row_slice_profile = _labeled_row("SAHI profile", self.combo_slice_profile)
+        f_yolo.addWidget(self.row_slice_profile, 7, 1)
+        self._set_widget_visible(self.row_slice_profile, False)
+
         self.combo_slice_geometry = QComboBox()
         self.combo_slice_geometry.addItems(["auto_model", "auto_object", "custom"])
         self.combo_slice_geometry.setFixedHeight(30)
@@ -847,6 +862,7 @@ class DetectionPanel(QWidget):
                 self._main_window.advanced_config[_key] = (
                     int(value) if isinstance(_spin, QSpinBox) else float(value)
                 )
+                self._mark_slice_profile_custom()
 
             spin.valueChanged.connect(_sync_advanced)
 
@@ -2268,6 +2284,7 @@ class DetectionPanel(QWidget):
 
     def _on_slice_toggled(self, checked: bool) -> None:
         """Show the slice-geometry picker only while sliced inference is on."""
+        self._mark_slice_profile_custom()
         if not hasattr(self, "row_slice_geometry"):
             return
         visible = self.combo_yolo_obb_mode.currentIndex() == 0 and bool(checked)
@@ -2285,6 +2302,7 @@ class DetectionPanel(QWidget):
         """
         if not hasattr(self, "combo_slice_geometry"):
             return
+        self._mark_slice_profile_custom()
         mode = self.combo_slice_geometry.currentText()
         is_custom = mode == "custom"
         is_auto_object = mode == "auto_object"
@@ -2559,47 +2577,112 @@ class DetectionPanel(QWidget):
             return
         self._on_yolo_mode_changed(index)
 
-    def apply_slice_meta_for_model(self, model_path: str) -> None:
-        """Pre-fill SAHI settings from a model's .slice_meta.json sidecar, if present.
+    def _mark_slice_profile_custom(self) -> None:
+        """Mark user changes as custom without mutating artifact metadata."""
+        if self._applying_slice_profile or not hasattr(self, "combo_slice_profile"):
+            return
+        if self.combo_slice_profile.count() <= 1:
+            return
+        custom_index = self.combo_slice_profile.findData("__custom__", Qt.UserRole)
+        if custom_index < 0:
+            self.combo_slice_profile.addItem("Custom", "__custom__")
+            custom_index = self.combo_slice_profile.count() - 1
+        self.combo_slice_profile.blockSignals(True)
+        self.combo_slice_profile.setCurrentIndex(custom_index)
+        self.combo_slice_profile.blockSignals(False)
+        self._main_window.advanced_config["slice_profile_id"] = "__custom__"
 
-        Scale-independent trained knobs + the model-internal slice_trained_body_px;
-        REFERENCE_BODY_SIZE (spin_reference_body_size) is deliberately left untouched
-        (it is the full-frame tracking body size, a different quantity from the
-        training-image body scale). No-op when no sidecar exists.
-        """
+    def _on_slice_profile_changed(self, _index: int) -> None:
+        if self._applying_slice_profile or self._slice_meta is None:
+            return
+        profile_id = self.combo_slice_profile.currentData(Qt.UserRole)
+        if profile_id == "__training__":
+            self._apply_slice_meta_values("__training__")
+            return
+        if profile_id in (None, "__custom__"):
+            self._main_window.advanced_config["slice_profile_id"] = str(
+                profile_id or ""
+            )
+            return
+        self._apply_slice_meta_values(profile_id)
+
+    def _apply_slice_meta_values(self, profile_id: str | None = None) -> None:
+        """Apply selected sidecar profile without touching tracking body size."""
+        from hydra_suite.core.inference.slice_meta import slice_meta_to_panel_values
+
+        if self._slice_meta is None:
+            return
+        values = slice_meta_to_panel_values(self._slice_meta, profile_id)
+        self._applying_slice_profile = True
+        try:
+            self.chk_slice_enabled.setChecked(bool(values["enabled"]))
+            idx = self.combo_slice_geometry.findText(values["geometry_mode"])
+            if idx >= 0:
+                self.combo_slice_geometry.setCurrentIndex(idx)
+            advanced = self._main_window.advanced_config
+            advanced["slice_overlap"] = float(values["overlap"])
+            advanced["slice_object_tile_fraction"] = float(
+                values["object_tile_fraction"]
+            )
+            advanced["slice_trained_body_px"] = float(values["trained_body_px"])
+            advanced["slice_width"] = int(values["slice_width"])
+            advanced["slice_height"] = int(values["slice_height"])
+            advanced["slice_profile_id"] = str(values["profile_id"] or "__training__")
+            for key in (
+                "merge_policy",
+                "merge_metric",
+                "merge_threshold",
+                "merge_backend",
+            ):
+                if values[key] is not None:
+                    advanced[f"slice_{key}"] = values[key]
+            if values["confidence_threshold"] is not None:
+                self.spin_yolo_confidence.setValue(
+                    float(values["confidence_threshold"])
+                )
+            for spin, value in (
+                (self.spin_slice_overlap, values["overlap"]),
+                (self.spin_slice_object_fraction, values["object_tile_fraction"]),
+                (self.spin_slice_tile_w, values["slice_width"]),
+                (self.spin_slice_tile_h, values["slice_height"]),
+            ):
+                spin.blockSignals(True)
+                spin.setValue(value)
+                spin.blockSignals(False)
+            target_id = values["profile_id"] or "__training__"
+            target_index = self.combo_slice_profile.findData(target_id, Qt.UserRole)
+            if target_index >= 0:
+                self.combo_slice_profile.blockSignals(True)
+                self.combo_slice_profile.setCurrentIndex(target_index)
+                self.combo_slice_profile.blockSignals(False)
+        finally:
+            self._applying_slice_profile = False
+        self._notify_matched_geometry()
+
+    def apply_slice_meta_for_model(self, model_path: str) -> None:
+        """Populate TrackerKit from training geometry and calibrated profiles."""
         from hydra_suite.core.inference.slice_meta import (
+            available_slice_profiles,
             read_slice_meta,
-            slice_meta_to_panel_values,
         )
 
         meta = read_slice_meta(model_path)
         if meta is None:
+            self._slice_meta = None
+            self.combo_slice_profile.clear()
+            self._set_widget_visible(self.row_slice_profile, False)
             return
-        values = slice_meta_to_panel_values(meta)
-        self.chk_slice_enabled.setChecked(bool(values["enabled"]))
-        idx = self.combo_slice_geometry.findText(values["geometry_mode"])
-        if idx >= 0:
-            self.combo_slice_geometry.setCurrentIndex(idx)
-        adv = self._main_window.advanced_config
-        adv["slice_overlap"] = float(values["overlap"])
-        adv["slice_object_tile_fraction"] = float(values["object_tile_fraction"])
-        adv["slice_trained_body_px"] = float(values["trained_body_px"])
-        # Display-sync the spins without letting their rounded values clobber
-        # the exact metadata (e.g. 300/640 -> spin shows 0.47, config keeps
-        # 0.46875).
-        for spin, value in (
-            (getattr(self, "spin_slice_overlap", None), values["overlap"]),
-            (
-                getattr(self, "spin_slice_object_fraction", None),
-                values["object_tile_fraction"],
-            ),
-        ):
-            if spin is None:
-                continue
-            spin.blockSignals(True)
-            spin.setValue(float(value))
-            spin.blockSignals(False)
-        self._notify_matched_geometry()
+        self._slice_meta = meta
+        profiles = available_slice_profiles(meta)
+        self.combo_slice_profile.blockSignals(True)
+        self.combo_slice_profile.clear()
+        self.combo_slice_profile.addItem("Training geometry", "__training__")
+        for profile in profiles:
+            self.combo_slice_profile.addItem(profile["name"], profile["id"])
+        self.combo_slice_profile.blockSignals(False)
+        self._set_widget_visible(self.row_slice_profile, bool(profiles))
+        requested = self._main_window.advanced_config.get("slice_profile_id")
+        self._apply_slice_meta_values(str(requested) if requested else None)
 
     def _notify_matched_geometry(self) -> None:
         """Show a dismissible "Matched trained SAHI geometry" banner.
