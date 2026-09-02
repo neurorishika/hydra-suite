@@ -37,6 +37,21 @@ def test_find_label_for_image(tmp_path: Path):
     assert result.name == "frame001.txt"
 
 
+def test_find_label_for_image_does_not_cross_split_stem_collision(tmp_path: Path):
+    """An unlabeled train image must not inherit a same-stem val label."""
+    (tmp_path / "images" / "train").mkdir(parents=True)
+    (tmp_path / "images" / "val").mkdir(parents=True)
+    (tmp_path / "labels" / "val").mkdir(parents=True)
+    train_image = tmp_path / "images" / "train" / "frame001.jpg"
+    train_image.write_bytes(b"fake")
+    (tmp_path / "images" / "val" / "frame001.jpg").write_bytes(b"fake")
+    (tmp_path / "labels" / "val" / "frame001.txt").write_text(
+        "0 0.1 0.2 0.9 0.2 0.9 0.8 0.1 0.8\n"
+    )
+
+    assert find_label_for_image(train_image, str(tmp_path)) is None
+
+
 def test_detectkit_source_structure_requires_images_labels_and_classes(tmp_path: Path):
     (tmp_path / "images").mkdir()
     (tmp_path / "labels").mkdir()

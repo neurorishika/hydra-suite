@@ -68,6 +68,20 @@ def test_no_staged_label_returns_none(tmp_path):
     )
 
 
+def test_staged_label_does_not_cross_split_stem_collision(tmp_path):
+    from hydra_suite.detectkit.gui.utils import find_staged_label_for_image
+
+    source = tmp_path / "src"
+    (source / "images" / "train").mkdir(parents=True)
+    image = source / "images" / "train" / "f0.png"
+    image.write_bytes(b"")
+    staged = tmp_path / "staged"
+    wrong = _write_staged(staged, "val/f0.txt", ["0 0.5 0.5 0.2 0.2"])
+
+    assert wrong.exists()
+    assert find_staged_label_for_image(image, str(source), str(staged)) is None
+
+
 def test_staged_class_names_come_from_the_staging_dirs_classes_txt(tmp_path):
     """The staged classes.txt holds the PROMPT, which is what the overlay
     label should read -- not the project's class list."""

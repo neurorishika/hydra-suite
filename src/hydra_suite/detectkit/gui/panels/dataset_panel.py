@@ -40,6 +40,7 @@ from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noq
 from ..utils import (
     clear_labels_for_source,
     ensure_detectkit_source_structure,
+    find_label_for_image,
     labels_to_clear,
     list_images_in_source,
     source_class_id_map,
@@ -606,25 +607,8 @@ class DatasetPanel(QWidget):
 
     @staticmethod
     def _label_path_for_image(image_path: Path, source_root: Path) -> Path | None:
-        """Mirror images/<rel> -> labels/<rel>.txt, with a stem-match fallback."""
-        labels_dir = source_root / "labels"
-        if not labels_dir.is_dir():
-            return None
-        images_dir = source_root / "images"
-        if images_dir.is_dir():
-            try:
-                rel = image_path.relative_to(images_dir)
-                candidate = labels_dir / rel.with_suffix(".txt")
-                if candidate.exists():
-                    return candidate
-            except ValueError:
-                pass
-        candidate = labels_dir / f"{image_path.stem}.txt"
-        if candidate.exists():
-            return candidate
-        for found in labels_dir.rglob(f"{image_path.stem}.txt"):
-            return found
-        return None
+        """Resolve the label without crossing same-stem dataset splits."""
+        return find_label_for_image(image_path, str(source_root))
 
     # ------------------------------------------------------------------
     # Internal helpers

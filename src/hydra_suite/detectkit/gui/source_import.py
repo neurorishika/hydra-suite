@@ -11,6 +11,8 @@ from hashlib import sha1
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from hydra_suite.data.project_bundle import ensure_bundle_subdirectory
 from hydra_suite.training.class_mapping import (
     normalize_declared_class_names,
@@ -451,18 +453,142 @@ def _coerce_coco_image_size(
     return int(image.shape[1]), int(image.shape[0])
 
 
-def _coco_segmentation_points(segmentation: Any) -> list[tuple[float, float]]:
-    points: list[tuple[float, float]] = []
+def _coco_polygon_components(
+    segmentation: Any,
+) -> list[list[tuple[float, float]]]:
+    """Return valid disconnected polygon components without joining them."""
     if not isinstance(segmentation, list):
-        return points
-    for segment in segmentation:
-        if not isinstance(segment, list) or len(segment) < 6:
+        return []
+    raw_components = (
+        [segmentation]
+        if segmentation
+        and all(isinstance(value, (int, float)) for value in segmentation)
+        else segmentation
+    )
+    components: list[list[tuple[float, float]]] = []
+    for segment in raw_components:
+        if not isinstance(segment, list) or len(segment) < 6 or len(segment) % 2:
             continue
-        if len(segment) % 2 != 0:
+        try:
+            points = [
+                (float(segment[index]), float(segment[index + 1]))
+                for index in range(0, len(segment), 2)
+            ]
+        except (TypeError, ValueError):
             continue
-        for index in range(0, len(segment), 2):
-            points.append((float(segment[index]), float(segment[index + 1])))
-    return points
+        components.append(points)
+    return components
+
+
+def _polygon_area(points: list[tuple[float, float]]) -> float:
+    return abs(
+        sum(
+            (x_pos * points[(index + 1) % len(points)][1])
+            - (points[(index + 1) % len(points)][0] * y_pos)
+            for index, (x_pos, y_pos) in enumerate(points)
+        )
+        * 0.5
+    )
+
+
+def _decode_compressed_coco_rle(counts: str | bytes) -> list[int] | None:
+    """Decode COCO's compact signed, delta-coded run-length string."""
+    if isinstance(counts, bytes):
+        try:
+            counts = counts.decode("ascii")
+        except UnicodeDecodeError:
+            return None
+    decoded: list[int] = []
+    position = 0
+    try:
+        while position < len(counts):
+            value = 0
+            shift = 0
+            while True:
+                char = ord(counts[position]) - 48
+                position += 1
+                value |= (char & 0x1F) << (5 * shift)
+                shift += 1
+                if not (char & 0x20):
+                    if char & 0x10:
+                        value |= -1 << (5 * shift)
+                    break
+            if len(decoded) > 2:
+                value += decoded[-2]
+            if value < 0:
+                return None
+            decoded.append(value)
+    except (IndexError, TypeError, ValueError):
+        return None
+    return decoded
+
+
+def _decode_coco_rle(segmentation: Any) -> np.ndarray | None:
+    if not isinstance(segmentation, dict):
+        return None
+    size = segmentation.get("size")
+    if not isinstance(size, list) or len(size) < 2:
+        return None
+    try:
+        height, width = int(size[0]), int(size[1])
+    except (TypeError, ValueError):
+        return None
+    if height <= 0 or width <= 0:
+        return None
+
+    raw_counts = segmentation.get("counts")
+    if isinstance(raw_counts, list):
+        try:
+            counts = [int(value) for value in raw_counts]
+        except (TypeError, ValueError):
+            return None
+    elif isinstance(raw_counts, (str, bytes)):
+        counts = _decode_compressed_coco_rle(raw_counts)
+        if counts is None:
+            return None
+    else:
+        return None
+    if any(run < 0 for run in counts):
+        return None
+
+    flat = np.zeros(height * width, dtype=np.uint8)
+    cursor = 0
+    foreground = False
+    for run in counts:
+        end = cursor + run
+        if end > flat.size:
+            return None
+        if foreground:
+            flat[cursor:end] = 1
+        cursor = end
+        foreground = not foreground
+    if cursor != flat.size:
+        return None
+    return flat.reshape((height, width), order="F")
+
+
+def _coco_segmentation_points(segmentation: Any) -> list[tuple[float, float]]:
+    components = _coco_polygon_components(segmentation)
+    if components:
+        # YOLO has no representation for a disconnected single instance.
+        # Retain the largest real component rather than drawing artificial
+        # bridge edges between components.
+        return max(components, key=_polygon_area)
+
+    mask = _decode_coco_rle(segmentation)
+    if mask is None or not np.any(mask):
+        return []
+    import cv2
+
+    contours, _hierarchy = cv2.findContours(
+        mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+    if not contours:
+        return []
+    contour = max(contours, key=cv2.contourArea).reshape(-1, 2)
+    if len(contour) < 3:
+        return []
+    return [(float(point[0]), float(point[1])) for point in contour]
 
 
 def _coco_bbox_to_polygon(bbox: Any, width: int, height: int) -> list[float] | None:
@@ -666,25 +792,12 @@ def materialize_detectkit_source(
     if import_mode not in {IMPORT_MODE_PORTABLE, IMPORT_MODE_LINKED}:
         raise ValueError(f"Unsupported DetectKit import mode: {import_mode}")
 
-    if import_mode == IMPORT_MODE_LINKED and not force_import:
+    if import_mode == IMPORT_MODE_LINKED:
         if inspection.requires_import:
             if inspection.source_kind == "coco":
                 _materialize_coco_source(root, root)
             else:
                 _materialize_yolo_source(root, root)
-        return MaterializedDetectKitSource(
-            source_root=root,
-            canonical_path=root,
-            source_kind=inspection.source_kind,
-            display_name=root.name,
-            images_count=inspection.images_count,
-            annotation_count=inspection.annotation_count,
-            discovered_labels=list(inspection.discovered_labels),
-            imported=False,
-            level=level,
-        )
-
-    if not inspection.requires_import and not force_import:
         return MaterializedDetectKitSource(
             source_root=root,
             canonical_path=root,

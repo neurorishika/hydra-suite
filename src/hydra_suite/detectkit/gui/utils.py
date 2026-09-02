@@ -108,7 +108,10 @@ def find_label_for_image(
     Strategies tried in order:
     1. Mirror the ``images/`` sub-path into ``labels/`` (YOLO convention).
     2. Stem match directly inside ``<source>/labels/``.
-    3. Recursive search under ``<source>/labels/`` for stem match.
+
+    A recursive stem-only fallback is deliberately unsafe: two dataset splits
+    may contain different images with the same stem. In that case returning a
+    label from an unrelated split is worse than returning ``None``.
     """
     root = Path(source_path)
     labels_dir = root / "labels"
@@ -131,11 +134,6 @@ def find_label_for_image(
         if candidate.exists():
             return candidate
 
-    # Strategy 3: recursive search
-    if labels_dir.is_dir():
-        for p in labels_dir.rglob(f"{stem}.txt"):
-            return p
-
     return None
 
 
@@ -149,7 +147,8 @@ def find_staged_label_for_image(
     A staging directory has ``labels/`` but no ``images/``, so
     ``find_label_for_image`` cannot mirror inside it -- the relative path has
     to be taken from the SOURCE's images tree and applied to the staging
-    dir. Falls back to a stem match, then a recursive one, for flat sources.
+    dir. Falls back only to a direct stem match for flat sources; recursively
+    matching by stem can cross dataset splits.
     """
     staged_root = Path(staged_path)
     labels_dir = staged_root / "labels"
@@ -170,8 +169,6 @@ def find_staged_label_for_image(
     candidate = labels_dir / f"{image_path.stem}.txt"
     if candidate.exists():
         return candidate
-    for found in labels_dir.rglob(f"{image_path.stem}.txt"):
-        return found
     return None
 
 

@@ -10,6 +10,7 @@ import pytest
 
 from hydra_suite.detectkit.gui.source_import import (
     IMPORT_MODE_LINKED,
+    IMPORT_MODE_PORTABLE,
     inspect_detectkit_source,
     materialize_detectkit_source,
     resolve_al_round_authoritative_level,
@@ -31,6 +32,49 @@ def test_inspect_detectkit_source_accepts_existing_canonical_root(tmp_path: Path
     assert inspection.source_kind == "detectkit"
     assert inspection.requires_import is False
     assert inspection.discovered_labels == ["ant"]
+
+
+def test_portable_mode_copies_an_existing_canonical_source(tmp_path: Path):
+    source_root = tmp_path / "canonical"
+    (source_root / "images").mkdir(parents=True)
+    (source_root / "labels").mkdir(parents=True)
+    _write_fake_image(source_root / "images" / "frame001.jpg")
+    (source_root / "labels" / "frame001.txt").write_text(
+        "0 0.1 0.2 0.9 0.2 0.9 0.8 0.1 0.8\n", encoding="utf-8"
+    )
+    (source_root / "classes.txt").write_text("ant\n", encoding="utf-8")
+
+    materialized = materialize_detectkit_source(
+        source_root,
+        tmp_path / "project",
+        import_mode=IMPORT_MODE_PORTABLE,
+    )
+
+    assert materialized.imported is True
+    assert materialized.canonical_path != source_root.resolve()
+    assert materialized.canonical_path.is_relative_to((tmp_path / "project").resolve())
+    assert (materialized.canonical_path / "images" / "frame001.jpg").exists()
+
+
+def test_linked_mode_remains_linked_when_remapping_forced(tmp_path: Path):
+    source_root = tmp_path / "canonical"
+    (source_root / "images").mkdir(parents=True)
+    (source_root / "labels").mkdir(parents=True)
+    _write_fake_image(source_root / "images" / "frame001.jpg")
+    (source_root / "labels" / "frame001.txt").write_text(
+        "0 0.1 0.2 0.9 0.2 0.9 0.8 0.1 0.8\n", encoding="utf-8"
+    )
+    (source_root / "classes.txt").write_text("ant\n", encoding="utf-8")
+
+    materialized = materialize_detectkit_source(
+        source_root,
+        tmp_path / "project",
+        import_mode=IMPORT_MODE_LINKED,
+        force_import=True,
+    )
+
+    assert materialized.imported is False
+    assert materialized.canonical_path == source_root.resolve()
 
 
 def test_materialize_detectkit_source_converts_yolo_detect_boxes(tmp_path: Path):
@@ -113,6 +157,132 @@ def test_materialize_detectkit_source_converts_coco_bbox_annotations(tmp_path: P
     )
     assert len(fields) == 9
     assert fields[0] == "0"
+
+
+def test_coco_multipolygon_uses_one_valid_component_instead_of_bridging(
+    tmp_path: Path,
+):
+    source_root = tmp_path / "coco"
+    _write_fake_image(source_root / "images" / "sample.jpg")
+    (source_root / "annotations.json").write_text(
+        json.dumps(
+            {
+                "images": [
+                    {"id": 1, "file_name": "sample.jpg", "width": 100, "height": 100}
+                ],
+                "annotations": [
+                    {
+                        "id": 1,
+                        "image_id": 1,
+                        "category_id": 1,
+                        "segmentation": [
+                            [1, 1, 4, 1, 4, 4, 1, 4],
+                            [50, 50, 90, 50, 90, 90, 50, 90],
+                        ],
+                    }
+                ],
+                "categories": [{"id": 1, "name": "ant"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    materialized = materialize_detectkit_source(source_root, tmp_path / "project")
+    fields = (
+        (materialized.canonical_path / "labels" / "sample.txt")
+        .read_text(encoding="utf-8")
+        .strip()
+        .split()
+    )
+
+    assert len(fields) == 9
+    coords = [float(value) for value in fields[1:]]
+    assert min(coords) == pytest.approx(0.5)
+    assert max(coords) == pytest.approx(0.9)
+
+
+def _rle_counts(mask) -> list[int]:
+    flat = mask.flatten(order="F")
+    counts: list[int] = []
+    value = 0
+    run = 0
+    for pixel in flat:
+        pixel_value = int(pixel)
+        if pixel_value == value:
+            run += 1
+        else:
+            counts.append(run)
+            run = 1
+            value = pixel_value
+    counts.append(run)
+    return counts
+
+
+def _compress_rle_counts(counts: list[int]) -> str:
+    encoded: list[str] = []
+    for index, original in enumerate(counts):
+        value = int(original)
+        if index > 2:
+            value -= counts[index - 2]
+        while True:
+            char = value & 0x1F
+            value >>= 5
+            more = value != (-1 if char & 0x10 else 0)
+            if more:
+                char |= 0x20
+            encoded.append(chr(char + 48))
+            if not more:
+                break
+    return "".join(encoded)
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+def test_coco_rle_segmentation_is_converted_to_polygon(
+    tmp_path: Path, compressed: bool
+):
+    import numpy as np
+
+    source_root = tmp_path / "coco"
+    _write_fake_image(source_root / "images" / "sample.jpg")
+    mask = np.zeros((10, 12), dtype=np.uint8)
+    mask[2:8, 3:10] = 1
+    counts = _rle_counts(mask)
+    segmentation = {
+        "size": [10, 12],
+        "counts": _compress_rle_counts(counts) if compressed else counts,
+    }
+    (source_root / "annotations.json").write_text(
+        json.dumps(
+            {
+                "images": [
+                    {"id": 1, "file_name": "sample.jpg", "width": 12, "height": 10}
+                ],
+                "annotations": [
+                    {
+                        "id": 1,
+                        "image_id": 1,
+                        "category_id": 1,
+                        "segmentation": segmentation,
+                        "bbox": [3, 2, 7, 6],
+                    }
+                ],
+                "categories": [{"id": 1, "name": "ant"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    materialized = materialize_detectkit_source(source_root, tmp_path / "project")
+    fields = (
+        (materialized.canonical_path / "labels" / "sample.txt")
+        .read_text(encoding="utf-8")
+        .strip()
+        .split()
+    )
+
+    assert materialized.level == "polygon"
+    assert len(fields) >= 7
+    assert len(fields) % 2 == 1
 
 
 def _write_al_round(
