@@ -55,6 +55,27 @@ def test_project_training_history_persists(tmp_path):
     ]
 
 
+def test_project_evaluation_history_persists(tmp_path):
+    from hydra_suite.detectkit.gui.models import DetectKitProject
+
+    record = {
+        "evaluation_id": "eval_001",
+        "run_id": "run_001",
+        "precision": 0.8,
+        "recall": 0.7,
+        "map50": 0.75,
+        "map50_95": 0.5,
+    }
+    proj = DetectKitProject(project_dir=tmp_path)
+    proj.evaluation_history = [record]
+    save_path = tmp_path / "project.json"
+    proj.save(save_path)
+
+    loaded = DetectKitProject.load(save_path)
+
+    assert loaded.evaluation_history == [record]
+
+
 from hydra_suite.detectkit.gui.models import OBBSource, StagedReview
 
 

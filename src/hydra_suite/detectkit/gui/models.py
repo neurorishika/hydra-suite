@@ -367,6 +367,7 @@ class DetectKitProject:
     last_image_index: int = 0
     active_model_path: str = ""
     training_history: list[dict[str, Any]] = field(default_factory=list)
+    evaluation_history: list[dict[str, Any]] = field(default_factory=list)
     slice_settings: SliceTrainingSettings = field(default_factory=SliceTrainingSettings)
     # Last-used SAM3 controls and the most recent measured calibration frontier.
     # Plain dictionaries keep the project file forward-compatible with new SAM3
