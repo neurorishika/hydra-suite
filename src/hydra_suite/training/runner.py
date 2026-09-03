@@ -5,11 +5,15 @@ from __future__ import annotations
 import csv
 import dataclasses
 import logging
+import os
+import queue
 import random
 import re
 import shutil
+import signal
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import Any, Callable
 
@@ -2201,13 +2205,27 @@ _CUSTOM_CLASSIFY_ROLES = {
 
 def _cancel_subprocess(proc, command):
     """Terminate or kill a subprocess and return a cancellation result dict."""
+
+    owns_group = bool(getattr(proc, "_hydra_owns_process_group", False))
     try:
-        proc.terminate()
+        if os.name == "posix" and owns_group:
+            os.killpg(proc.pid, signal.SIGTERM)
+        else:
+            proc.terminate()
     except Exception:
         pass
-    if proc.poll() is None:
+    try:
+        proc.wait(timeout=5.0)
+    except (subprocess.TimeoutExpired, AttributeError):
         try:
-            proc.kill()
+            if os.name == "posix" and owns_group:
+                os.killpg(proc.pid, signal.SIGKILL)
+            else:
+                proc.kill()
+        except Exception:
+            pass
+        try:
+            proc.wait(timeout=5.0)
         except Exception:
             pass
     return {
@@ -2242,11 +2260,35 @@ def _stream_ultralytics_output(proc, log_cb, progress_cb, should_cancel, command
                 return int(match.group(1)), int(match.group(2))
         return None
 
-    for line in proc.stdout:
+    output_queue: queue.Queue[object] = queue.Queue()
+    end_of_output = object()
+
+    def read_output() -> None:
+        try:
+            for line in proc.stdout:
+                output_queue.put(line)
+        finally:
+            output_queue.put(end_of_output)
+
+    reader = threading.Thread(
+        target=read_output,
+        name="hydra-ultralytics-output",
+        daemon=True,
+    )
+    reader.start()
+
+    while True:
         if should_cancel and should_cancel():
             return _cancel_subprocess(proc, command)
 
-        msg = ansi_re.sub("", line).rstrip()
+        try:
+            queued = output_queue.get(timeout=0.1)
+        except queue.Empty:
+            continue
+        if queued is end_of_output:
+            break
+
+        msg = ansi_re.sub("", str(queued)).rstrip()
         if msg:
             _safe_log(log_cb, msg)
         parsed_progress = _extract_progress(msg)
@@ -2340,7 +2382,9 @@ def run_training(
         encoding="utf-8",
         errors="replace",
         bufsize=1,
+        start_new_session=os.name == "posix",
     )
+    proc._hydra_owns_process_group = os.name == "posix"
 
     cancel_result = _stream_ultralytics_output(
         proc, log_cb, progress_cb, should_cancel, command
