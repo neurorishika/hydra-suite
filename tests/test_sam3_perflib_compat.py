@@ -20,6 +20,21 @@ class _Linear(torch.nn.Module):
         self.weight = self.inner.weight
         self.bias = self.inner.bias
 
+    def forward(self, x):
+        return self.inner(x)
+
+
+class _NoWeightWrapper(torch.nn.Module):
+    """Stands in for LoraLinear: callable, but exposes no `.weight`."""
+
+    def __init__(self):
+        super().__init__()
+        self.base = torch.nn.Linear(4, 3)
+        self.extra = torch.nn.Parameter(torch.ones(3))
+
+    def forward(self, x):
+        return self.base(x) + self.extra
+
 
 @pytest.mark.parametrize(
     "act, fn",
@@ -88,3 +103,14 @@ def test_install_is_a_no_op_without_sam3(monkeypatch):
     for mod in [m for m in sys.modules if m.startswith("sam3")]:
         monkeypatch.delitem(sys.modules, mod, raising=False)
     assert install_grad_safe_addmm_act() is False
+
+
+def test_eager_addmm_act_calls_a_wrapper_without_a_weight_attribute():
+    """LoraLinear has no `.weight`; unpacking it also skipped the adapter."""
+    wrapper = _NoWeightWrapper()
+    x = torch.randn(2, 4)
+    expected = torch.nn.functional.gelu(wrapper(x))
+    torch.testing.assert_close(eager_addmm_act(torch.nn.GELU, wrapper, x), expected)
+
+    eager_addmm_act(torch.nn.GELU, wrapper, x).sum().backward()
+    assert wrapper.extra.grad is not None, "adapter branch got no gradient"

@@ -32,11 +32,18 @@ def eager_addmm_act(activation: Any, linear: Any, mat1: Any) -> Any:
     Mirrors ``perflib.fused.addmm_act``'s contract -- *activation* is the
     activation CLASS (``type(self.act)``), not an instance -- but keeps the
     weight and bias attached to the graph.
+
+    *linear* is CALLED, not unpacked into ``.weight``/``.bias``. By the time
+    this runs, ``inject_adapters`` may already have replaced the module with
+    a ``LoraLinear`` wrapper, which exposes no ``.weight`` (its base lives at
+    ``.base``). Reading the weights directly raised ``AttributeError`` and
+    would also have bypassed the adapter's low-rank branch entirely -- i.e.
+    trained nothing in the vision trunk while appearing to work.
     """
     import torch
     import torch.nn.functional as F
 
-    y = F.linear(mat1, linear.weight, linear.bias)
+    y = linear(mat1)
     if activation in (F.relu, torch.nn.ReLU):
         return F.relu(y)
     if activation in (F.gelu, torch.nn.GELU):
