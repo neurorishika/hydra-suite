@@ -6,6 +6,10 @@ target on any non-1008 tile. `_scale_polygons_to_res` is the pure helper that
 fix extracted so this can be tested without a `sam3` install.
 """
 
+import sys
+import types
+from dataclasses import dataclass
+
 import numpy as np
 import pytest
 
@@ -91,3 +95,230 @@ def test_positive_datapoint_collates_nonempty_normalized_boxes():
     boxes = target0.boxes_padded[0][: target0.num_boxes[0]]
     assert boxes.min().item() >= 0.0
     assert boxes.max().item() <= 1.0
+
+
+def test_tile_datapoint_shares_one_image_across_positive_and_negative_queries():
+    """Meta's collator supports several query rows pointing at one image row."""
+    pytest.importorskip("sam3", exc_type=ImportError)
+
+    from hydra_suite.training.sam3_lora.dataloader import _default_transform
+    from hydra_suite.training.sam3_lora.datapoints import (
+        build_tile_datapoint,
+        collate_datapoints,
+    )
+
+    tile = np.zeros((RES, RES, 3), dtype=np.uint8)
+    polygon = np.array(
+        [[100.0, 100.0], [300.0, 100.0], [300.0, 300.0], [100.0, 300.0]],
+        dtype=np.float32,
+    )
+    transforms = 0
+    base_transform = _default_transform()
+
+    def counting_transform(image):
+        nonlocal transforms
+        transforms += 1
+        return base_transform(image)
+
+    datapoint = build_tile_datapoint(
+        tile,
+        "ant",
+        [(polygon, True)],
+        ["floor", "food", "wall"],
+        counting_transform,
+    )
+    assert transforms == 1
+    assert len(datapoint.images) == 1
+    assert datapoint.raw_images is None
+    assert [query.image_id for query in datapoint.find_queries] == [0, 0, 0, 0]
+    assert [query.object_ids_output for query in datapoint.find_queries] == [
+        [0],
+        [],
+        [],
+        [],
+    ]
+
+    batched = collate_datapoints([datapoint])["input"]
+    stage = batched.find_inputs[0]
+    targets = batched.find_targets[0]
+    assert stage.img_ids.tolist() == [0, 0, 0, 0]
+    assert targets.num_boxes.tolist() == [1, 0, 0, 0]
+    assert targets.is_exhaustive.tolist() == [True, True, True, True]
+    assert targets.is_valid_segment.tolist() == [1]
+
+
+def test_shared_query_datapoints_preserve_independent_query_targets():
+    """CUDA integration guard: shared owners collate like the former copies."""
+    pytest.importorskip("sam3", exc_type=ImportError)
+
+    from hydra_suite.training.sam3_lora.dataloader import _default_transform
+    from hydra_suite.training.sam3_lora.datapoints import (
+        build_datapoint,
+        build_negative_datapoint,
+        build_shared_query_datapoints,
+        collate_datapoints,
+    )
+
+    tile = np.zeros((RES, RES, 3), dtype=np.uint8)
+    polygon = np.array(
+        [[100.0, 100.0], [300.0, 100.0], [300.0, 300.0], [100.0, 300.0]],
+        dtype=np.float32,
+    )
+    transform = _default_transform()
+    copied = [build_datapoint(tile, "ant", [(polygon, True)], transform)]
+    copied.extend(
+        build_negative_datapoint(tile, prompt, transform)
+        for prompt in ("floor", "wall")
+    )
+    shared = build_shared_query_datapoints(
+        tile, "ant", [(polygon, True)], ["floor", "wall"], transform
+    )
+
+    copied_batch = collate_datapoints(copied)["input"]
+    shared_batch = collate_datapoints(shared)["input"]
+    assert copied_batch.find_text_batch == shared_batch.find_text_batch
+    assert copied_batch.find_inputs[0].img_ids.tolist() == [0, 1, 2]
+    assert shared_batch.find_inputs[0].img_ids.tolist() == [0, 1, 2]
+    assert copied_batch.find_targets[0].num_boxes.tolist() == [1, 0, 0]
+    assert (
+        shared_batch.find_targets[0].num_boxes.tolist()
+        == copied_batch.find_targets[0].num_boxes.tolist()
+    )
+    assert copied_batch.find_targets[0].is_exhaustive.tolist() == [True] * 3
+    assert (
+        shared_batch.find_targets[0].is_exhaustive.tolist()
+        == copied_batch.find_targets[0].is_exhaustive.tolist()
+    )
+    assert shared[0].images is shared[1].images is shared[2].images
+
+
+def test_tile_datapoint_native_shape_without_importing_full_sam3(monkeypatch):
+    """Exercise our adapter against the Meta dataclass contract with fakes.
+
+    The macOS training environment cannot import Meta's package root because
+    its CUDA-only Triton module is unconditional. These fakes mirror the
+    inspected dataclass signatures while the CUDA-only real-package test above
+    remains the authoritative integration check.
+    """
+
+    @dataclass
+    class InferenceMetadata:
+        coco_image_id: int
+        original_image_id: int
+        original_category_id: int
+        original_size: tuple[int, int]
+        object_id: int
+        frame_index: int
+
+    @dataclass
+    class FindQueryLoaded:
+        query_text: str
+        image_id: int
+        object_ids_output: list[int]
+        is_exhaustive: bool
+        query_processing_order: int
+        inference_metadata: InferenceMetadata
+
+    @dataclass
+    class Object:
+        bbox: object
+        area: float
+        segment: object
+        is_crowd: bool
+
+    @dataclass
+    class Image:
+        data: object
+        objects: list[Object]
+        size: tuple[int, int]
+
+    @dataclass
+    class Datapoint:
+        find_queries: list[FindQueryLoaded]
+        images: list[Image]
+        raw_images: object = None
+
+    class NormalizeAPI:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __call__(self, datapoint):
+            return datapoint
+
+    module_names = [
+        "sam3",
+        "sam3.train",
+        "sam3.train.data",
+        "sam3.train.transforms",
+    ]
+    for name in module_names:
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+    data_module = types.ModuleType("sam3.train.data.sam3_image_dataset")
+    for value in (
+        Datapoint,
+        FindQueryLoaded,
+        Image,
+        InferenceMetadata,
+        Object,
+    ):
+        setattr(data_module, value.__name__, value)
+    monkeypatch.setitem(sys.modules, "sam3.train.data.sam3_image_dataset", data_module)
+    normalize_module = types.ModuleType("sam3.train.transforms.basic_for_api")
+    normalize_module.NormalizeAPI = NormalizeAPI
+    monkeypatch.setitem(
+        sys.modules, "sam3.train.transforms.basic_for_api", normalize_module
+    )
+
+    from hydra_suite.training.sam3_lora.datapoints import (
+        build_shared_query_datapoints,
+        build_tile_datapoint,
+    )
+
+    transform_calls = []
+    tile = np.zeros((20, 10, 3), dtype=np.uint8)
+    polygon = np.array([[1, 2], [8, 2], [8, 18]], dtype=np.float32)
+
+    datapoint = build_tile_datapoint(
+        tile,
+        "ant",
+        [(polygon, True)],
+        ["floor", "wall"],
+        lambda image: transform_calls.append(image) or "tensor",
+    )
+
+    assert len(transform_calls) == 1
+    assert len(datapoint.images) == 1
+    assert datapoint.images[0].data == "tensor"
+    assert datapoint.images[0].objects[0].is_crowd is True
+    assert datapoint.raw_images is None
+    assert [query.query_text for query in datapoint.find_queries] == [
+        "ant",
+        "floor",
+        "wall",
+    ]
+    assert [query.image_id for query in datapoint.find_queries] == [0, 0, 0]
+    assert [query.object_ids_output for query in datapoint.find_queries] == [
+        [0],
+        [],
+        [],
+    ]
+
+    shared_transform_calls = []
+    shared = build_shared_query_datapoints(
+        tile,
+        "ant",
+        [(polygon, True)],
+        ["floor", "wall"],
+        lambda image: shared_transform_calls.append(image) or "shared-tensor",
+    )
+    assert len(shared_transform_calls) == 1
+    assert len(shared) == 3
+    assert all(len(item.find_queries) == 1 for item in shared)
+    assert all(item.images is shared[0].images for item in shared)
+    assert all(item.images[0].data == "shared-tensor" for item in shared)
+    assert all(item.images[0].objects is shared[0].images[0].objects for item in shared)
+    assert [item.find_queries[0].object_ids_output for item in shared] == [
+        [0],
+        [],
+        [],
+    ]

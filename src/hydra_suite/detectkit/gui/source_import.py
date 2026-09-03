@@ -19,7 +19,11 @@ from hydra_suite.training.class_mapping import (
     resolve_dataset_class_names,
 )
 from hydra_suite.training.dataset_inspector import inspect_obb_or_detect_dataset
-from hydra_suite.training.geometry_levels import GeometryLevel, scan_source_levels
+from hydra_suite.training.geometry_levels import (
+    GeometryLevel,
+    classify_label_line,
+    scan_source_levels,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -274,13 +278,16 @@ def _select_al_round_authoritative_root(
 def resolve_al_round_authoritative_level(source_root: str | Path) -> str | None:
     """Return an AL round's manifest-declared authoritative-root level.
 
-    An AL-export root's labels are always stored as 9-field quads regardless
-    of level (see `_detect_source_level`'s `intended_level=OBB` re-scan,
-    which cannot distinguish a genuine OBB from an axis-aligned-quad-encoded
-    AABB by re-scanning). Only the manifest recorded which is which at
-    export time -- callers that need an AL round's true level (rather than a
-    re-scanned guess) must go through this function instead of
-    `_detect_source_level`.
+    An AL-export root's non-polygon labels are stored as 9-field quads
+    regardless of level (see `_detect_source_level`'s `intended_level=OBB`
+    re-scan, which cannot distinguish a genuine OBB from an
+    axis-aligned-quad-encoded AABB by re-scanning). Only the manifest
+    recorded which is which at export time -- callers that need an AL round's
+    true level (rather than a re-scanned guess) must go through this function
+    instead of `_detect_source_level`. Note the converse hazard: a round whose
+    labels were escalated to polygons in place keeps its exported
+    ``level`` stamp, so this manifest-declared level can UNDERSTATE what the
+    labels now contain.
 
     When no entry carries ``authoritative: true`` this falls back to the
     FIRST entry's declared level, mirroring
@@ -385,19 +392,26 @@ def _convert_yolo_label_text(label_path: Path) -> str:
                 f"Invalid YOLO annotation line in {label_path}: {raw_line}"
             ) from exc
 
-        if len(parts) == 5:
+        kind = classify_label_line(len(parts))
+        if kind == "aabb":
             cx, cy, width, height = (float(value) for value in parts[1:5])
             x1 = cx - (width * 0.5)
             y1 = cy - (height * 0.5)
             x2 = cx + (width * 0.5)
             y2 = cy + (height * 0.5)
             coords = [x1, y1, x2, y1, x2, y2, x1, y2]
-        elif len(parts) == 9:
-            coords = [float(value) for value in parts[1:9]]
+        elif kind in ("four_point", "polygon"):
+            # Pass the point list through unchanged: a polygon-level source
+            # must survive materialization as a polygon, not be collapsed
+            # into a quad. `_detect_source_level` reads the ORIGINAL root, so
+            # the recorded level and the materialized labels agree only if the
+            # point count is preserved here.
+            coords = [float(value) for value in parts[1:]]
         else:
             raise RuntimeError(
                 "Unsupported YOLO annotation format in "
-                f"{label_path}: expected 5 or 9 fields, got {len(parts)}"
+                f"{label_path}: expected 5 fields (aabb), 9 fields (obb), or "
+                f"an odd count >= 7 (polygon), got {len(parts)}"
             )
         lines.append(_format_obb_line(class_id, coords))
     return "\n".join(lines) + ("\n" if lines else "")

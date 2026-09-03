@@ -125,12 +125,33 @@ def inject_adapters(model: nn.Module, cfg: LoraConfig) -> int:
             return False
         return not cfg.include_prefixes or name.startswith(cfg.include_prefixes)
 
+    by_name = dict(model.named_modules())
+
+    def _parent_uses_weights_directly(name: str) -> bool:
+        """True when wrapping this Linear would break its parent.
+
+        SAM3's MultiheadAttention (``model_misc.py``) does not CALL
+        ``self.out_proj``; it passes ``self.out_proj.weight`` and
+        ``.bias`` into a functional attention kernel. A ``LoraLinear``
+        wrapper exposes neither (its base lives at ``.base``), so wrapping
+        raised ``AttributeError: 'LoraLinear' object has no attribute
+        'weight'`` on the first forward. ``in_proj_weight`` is the reliable
+        marker for that fused-attention shape -- both torch's own
+        ``nn.MultiheadAttention`` and SAM3's clone carry it -- and the
+        adapter would be dead weight there regardless, since the parent
+        never routes activations through the module.
+        """
+        parent_path = name.rsplit(".", 1)[0] if "." in name else ""
+        parent = by_name.get(parent_path)
+        return parent is not None and hasattr(parent, "in_proj_weight")
+
     targets = [
         (name, mod)
         for name, mod in model.named_modules()
         if isinstance(mod, nn.Linear)
         and name.split(".")[-1] in cfg.target_suffixes
         and _scoped(name)
+        and not _parent_uses_weights_directly(name)
     ]
     for name, mod in targets:
         *parent_path, attr = name.split(".")
