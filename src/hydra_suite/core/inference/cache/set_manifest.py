@@ -142,7 +142,14 @@ def publish_compatibility_links(cache_dir: Path, manifest: CacheSetManifest) -> 
         destination = cache_dir / name
         temporary = cache_dir / f".{name}.{uuid.uuid4().hex}.link"
         try:
-            os.symlink(relative, temporary)
+            try:
+                os.symlink(relative, temporary)
+            except OSError:
+                # Windows may deny symlink creation to an unprivileged process.
+                # A same-volume hard link still preserves path discovery; all
+                # cache-aware readers resolve through cache_set.json first.
+                temporary.unlink(missing_ok=True)
+                os.link(cache_dir / relative, temporary)
             os.replace(temporary, destination)
         finally:
             try:
