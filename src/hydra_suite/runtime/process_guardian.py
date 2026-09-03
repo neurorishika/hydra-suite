@@ -13,11 +13,11 @@ from typing import Mapping, Optional, Sequence
 
 import psutil
 
+from .resource_limits import cgroup_path_contains_unit, signal_systemd_scope
 from .resource_limits import (
-    cgroup_path_contains_unit,
-    signal_systemd_scope,
-    systemd_scope_is_quiescent,
+    systemd_scope_invocation_id as probe_systemd_scope_invocation_id,
 )
+from .resource_limits import systemd_scope_is_quiescent, systemd_scope_member_pids
 
 _TOKEN_ENV = "HYDRA_CONTAINMENT_TOKEN"
 
@@ -122,8 +122,7 @@ def spawn_parent_guardian(
             guardian.kill()
             guardian.wait(timeout=2.0)
         raise RuntimeError(
-            "cannot prove process ownership: launch-scoped identity scan "
-            "is unavailable"
+            "cannot prove process ownership: launch boundary is unavailable"
         )
     return guardian
 
@@ -142,17 +141,21 @@ def run_guardian(
     """Run the guardian protocol in its dedicated out-of-scope process."""
 
     try:  # pragma: no cover - exercised through subprocess integration tests
-        identities: dict[int, GuardedIdentity] = {}
-        scan_ok, _ = _scan_token_identities(
-            containment_token,
-            identities,
-            max_identities=max_identities,
-        )
-        if not scan_ok:
+        try:
+            identities, external_identities, launch_started_at, scope_invocation_id = (
+                _prepare_guardian_tracking(
+                    workload_pid=workload_pid,
+                    token=containment_token,
+                    max_identities=max_identities,
+                    systemd_unit=systemd_unit,
+                )
+            )
+        except RuntimeError:
             os.write(ready_write_fd, b"E")
             return 125
         os.write(ready_write_fd, b"R")
         os.close(ready_write_fd)
+        guardian_ownership_uncertain = False
         while True:
             readable, _, _ = select.select([liveness_read_fd], [], [], 0.05)
             if readable:
@@ -161,18 +164,27 @@ def run_guardian(
                 except OSError:
                     request = b""
                 break
-            _scan_token_identities(
-                containment_token,
-                identities,
-                max_identities=max_identities,
-            )
+            if systemd_unit is None:
+                scan_complete, overflowed = _scan_token_identities(
+                    containment_token,
+                    identities,
+                    external_identities=external_identities,
+                    launch_started_at=launch_started_at,
+                    max_identities=max_identities,
+                )
+                if not scan_complete or overflowed:
+                    guardian_ownership_uncertain = True
 
         _terminate_until_quiescent(
             containment_token=containment_token,
             identities=identities,
+            external_identities=external_identities,
+            launch_started_at=launch_started_at,
             max_identities=max_identities,
             process_group_id=process_group_id,
             systemd_unit=systemd_unit,
+            expected_scope_invocation_id=scope_invocation_id,
+            initial_ownership_uncertain=guardian_ownership_uncertain,
         )
         if request == b"T":
             try:
@@ -192,37 +204,180 @@ def run_guardian(
     return 0
 
 
-def _scan_token_identities(
+def _prepare_guardian_tracking(
+    *,
+    workload_pid: int,
+    token: str,
+    max_identities: int,
+    systemd_unit: Optional[str],
+) -> tuple[
+    dict[int, GuardedIdentity], dict[int, GuardedIdentity], float, Optional[str]
+]:
+    """Establish the ownership proof before releasing the child start gate."""
+
+    if systemd_unit is not None:
+        try:
+            workload_identity = GuardedIdentity(
+                workload_pid, float(psutil.Process(workload_pid).create_time())
+            )
+        except (psutil.Error, OSError) as exc:
+            raise RuntimeError(
+                "systemd launcher disappeared before guardian setup"
+            ) from exc
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            invocation_id = probe_systemd_scope_invocation_id(systemd_unit)
+            if (
+                invocation_id
+                and _systemd_scope_contains_workload(systemd_unit, workload_identity)
+                is True
+            ):
+                return {}, {}, workload_identity.create_time, invocation_id
+            time.sleep(0.05)
+        raise RuntimeError("systemd scope did not become observable")
+
+    identities: dict[int, GuardedIdentity] = {}
+    external_identities: dict[int, GuardedIdentity] = {}
+    try:
+        launch_started_at = float(psutil.Process(workload_pid).create_time())
+    except (psutil.Error, OSError) as exc:
+        raise RuntimeError(
+            "workload identity disappeared before guardian setup"
+        ) from exc
+    if not _baseline_guardian_identities(
+        workload_pid=workload_pid,
+        token=token,
+        identities=identities,
+        external_identities=external_identities,
+        launch_started_at=launch_started_at,
+        max_identities=max_identities,
+    ):
+        raise RuntimeError("fallback guardian could not establish ownership baseline")
+    return identities, external_identities, launch_started_at, None
+
+
+def _baseline_guardian_identities(
+    *,
+    workload_pid: int,
     token: str,
     identities: dict[int, GuardedIdentity],
-    *,
+    external_identities: dict[int, GuardedIdentity],
+    launch_started_at: Optional[float] = None,
     max_identities: int,
-) -> tuple[bool, bool]:
-    """Capture token-bearing same-user processes without trusting ancestry."""
+) -> bool:
+    """Classify inaccessible pre-existing processes while the child is gated."""
 
-    _prune_gone_identities(identities)
-    overflowed = False
+    if launch_started_at is None:
+        try:
+            launch_started_at = float(psutil.Process(workload_pid).create_time())
+        except (psutil.Error, OSError):
+            return False
     try:
-        processes = psutil.process_iter(["pid", "uids"])
-        for process in processes:
+        for process in psutil.process_iter(["pid", "uids"]):
             if process.pid == os.getpid():
                 continue
             try:
                 uids = process.info.get("uids")
                 if uids is not None and uids.real != os.getuid():
                     continue
-                if process.environ().get(_TOKEN_ENV) != token:
-                    continue
                 identity = GuardedIdentity(process.pid, float(process.create_time()))
+                if (
+                    process.pid != workload_pid
+                    and identity.create_time < launch_started_at - 0.01
+                ):
+                    continue
+                process_environment = process.environ()
+                if abs(float(process.create_time()) - identity.create_time) >= 0.01:
+                    continue
             except (psutil.NoSuchProcess, psutil.ZombieProcess):
                 continue
             except (psutil.AccessDenied, OSError):
-                # A same-user environment that cannot be inspected means the
-                # token absence cannot be proved.
-                return False, overflowed
-            if identities.get(identity.pid) == identity:
+                # The child is still blocked at its start gate and therefore
+                # has no descendants. Every inaccessible non-root identity at
+                # this instant is proven external to this launch.
+                if process.pid == workload_pid:
+                    return False
+                try:
+                    identity = GuardedIdentity(
+                        process.pid, float(process.create_time())
+                    )
+                except (psutil.NoSuchProcess, psutil.ZombieProcess):
+                    continue
+                except (psutil.AccessDenied, OSError):
+                    return False
+                if identity.create_time < launch_started_at - 0.01:
+                    # It predates the launch, so it cannot be an escaped child.
+                    continue
+                if len(external_identities) >= max_identities:
+                    return False
+                external_identities[identity.pid] = identity
+                continue
+            if process_environment.get(_TOKEN_ENV) != token:
                 continue
             if len(identities) >= max_identities:
+                return False
+            identities[identity.pid] = identity
+        return workload_pid in identities
+    except (psutil.Error, OSError, RuntimeError):
+        return False
+
+
+def _scan_token_identities(
+    token: str,
+    identities: dict[int, GuardedIdentity],
+    *,
+    external_identities: dict[int, GuardedIdentity],
+    launch_started_at: float = 0.0,
+    max_identities: int,
+) -> tuple[bool, bool]:
+    """Capture token-bearing same-user processes without trusting ancestry."""
+
+    _prune_gone_identities(identities)
+    _prune_gone_identities(external_identities)
+    overflowed = False
+    try:
+        processes = psutil.process_iter(["pid", "uids"])
+        for process in processes:
+            if process.pid == os.getpid():
+                continue
+            identity: Optional[GuardedIdentity] = None
+            try:
+                uids = process.info.get("uids")
+                if uids is not None and uids.real != os.getuid():
+                    continue
+                identity = GuardedIdentity(process.pid, float(process.create_time()))
+                if identity.create_time < launch_started_at - 0.01:
+                    continue
+                process_environment = process.environ()
+                if abs(float(process.create_time()) - identity.create_time) >= 0.01:
+                    continue
+            except (psutil.NoSuchProcess, psutil.ZombieProcess):
+                continue
+            except (psutil.AccessDenied, OSError):
+                if identity is None:
+                    try:
+                        identity = GuardedIdentity(
+                            process.pid, float(process.create_time())
+                        )
+                    except (psutil.Error, OSError):
+                        return False, overflowed
+                if identities.get(identity.pid) == identity:
+                    return False, overflowed
+                if external_identities.get(identity.pid) == identity:
+                    continue
+                if identity.create_time < launch_started_at - 0.01:
+                    continue
+                # A new inaccessible identity was not proven external while
+                # the child was gated. It may be an escaped descendant.
+                return False, overflowed
+            if process_environment.get(_TOKEN_ENV) != token:
+                continue
+            assert identity is not None
+            if identities.get(identity.pid) == identity:
+                continue
+            if len(identities) > max_identities:
+                return False, True
+            if len(identities) == max_identities:
                 overflowed = True
                 # Keep the first over-cap identity in a dedicated bounded
                 # overflow slot (max + one) until it is proven gone. Returning
@@ -261,25 +416,46 @@ def _terminate_until_quiescent(
     *,
     containment_token: str,
     identities: dict[int, GuardedIdentity],
+    external_identities: Optional[dict[int, GuardedIdentity]] = None,
+    launch_started_at: float = 0.0,
     max_identities: int,
     process_group_id: int,
     systemd_unit: Optional[str],
+    expected_scope_invocation_id: Optional[str] = None,
+    initial_ownership_uncertain: bool = False,
 ) -> None:
     """Retain inherited leases until the complete owned boundary is empty."""
 
     stable_empty_scans = 0
-    permanent_ownership_uncertain = False
+    permanent_ownership_uncertain = initial_ownership_uncertain
+    if external_identities is None:
+        external_identities = {}
     while stable_empty_scans < 2:
-        scan_ok, _ = _scan_token_identities(
-            containment_token,
-            identities,
-            max_identities=max_identities,
-        )
+        if systemd_unit is None:
+            scan_ok, _ = _scan_token_identities(
+                containment_token,
+                identities,
+                external_identities=external_identities,
+                launch_started_at=launch_started_at,
+                max_identities=max_identities,
+            )
+        else:
+            scan_ok = True
         authoritative_ok = True
         if systemd_unit is not None:
-            authoritative_ok = signal_systemd_scope(
-                systemd_unit, int(signal.SIGKILL)
-            ) and (systemd_scope_is_quiescent(systemd_unit) is True)
+            quiescent_before_signal = systemd_scope_is_quiescent(systemd_unit)
+            if quiescent_before_signal is True:
+                authoritative_ok = True
+            elif (
+                not expected_scope_invocation_id
+                or probe_systemd_scope_invocation_id(systemd_unit)
+                != expected_scope_invocation_id
+            ):
+                authoritative_ok = False
+                permanent_ownership_uncertain = True
+            else:
+                signal_systemd_scope(systemd_unit, int(signal.SIGKILL))
+                authoritative_ok = systemd_scope_is_quiescent(systemd_unit) is True
         else:
             try:
                 os.killpg(process_group_id, signal.SIGKILL)
@@ -324,9 +500,46 @@ def _identity_in_systemd_scope(identity: GuardedIdentity, unit: str) -> Optional
     try:
         with open(f"/proc/{process.pid}/cgroup", encoding="utf-8") as cgroup_file:
             cgroup_text = cgroup_file.read()
+    except FileNotFoundError:
+        _, gone_after_read = identity.resolve()
+        return True if gone_after_read else None
     except OSError:
         return None
     return cgroup_path_contains_unit(cgroup_text, unit)
+
+
+def _systemd_scope_contains_workload(
+    unit: str, workload_identity: GuardedIdentity
+) -> Optional[bool]:
+    """Verify an exact cgroup member descends from the known launcher."""
+
+    member_pids = systemd_scope_member_pids(unit)
+    if member_pids is None:
+        return None
+    if not member_pids:
+        return False
+    for pid in member_pids:
+        remaining = 64
+        current_pid = pid
+        try:
+            while current_pid > 1 and remaining:
+                process = psutil.Process(current_pid)
+                if current_pid == workload_identity.pid:
+                    if (
+                        abs(
+                            float(process.create_time()) - workload_identity.create_time
+                        )
+                        < 0.01
+                    ):
+                        return True
+                    break
+                current_pid = int(process.ppid())
+                remaining -= 1
+        except (psutil.NoSuchProcess, psutil.ZombieProcess):
+            continue
+        except (psutil.AccessDenied, OSError):
+            return None
+    return False
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

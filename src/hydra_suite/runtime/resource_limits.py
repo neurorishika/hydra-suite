@@ -142,6 +142,8 @@ def build_limited_launch(
     """Wrap ``command`` so limits are applied before accelerator imports."""
     if not command:
         raise ValueError("child command must not be empty")
+    if systemd_unit is not None:
+        raise ValueError("systemd scope names are generated internally per launch")
     accelerator_kind = AcceleratorKind(accelerator_kind)
     accelerator_device_uuid = (accelerator_device_uuid or "").strip() or None
     accelerator_pci_bus_id = (accelerator_pci_bus_id or "").strip() or None
@@ -179,7 +181,7 @@ def build_limited_launch(
     limitations: list[str] = []
     unit = None
     if selected is LimitBackend.SYSTEMD_CGROUP:
-        unit = systemd_unit or f"hydra-job-{uuid.uuid4().hex}.scope"
+        unit = f"hydra-job-{uuid.uuid4().hex}.scope"
         wrapped = [
             "systemd-run",
             "--user",
@@ -334,6 +336,20 @@ def systemd_scope_is_quiescent(
 ) -> Optional[bool]:
     """Return whether an exact systemd scope is inactive and has no members."""
 
+    member_pids = systemd_scope_member_pids(
+        unit, timeout_seconds=timeout_seconds, cgroup_root=cgroup_root
+    )
+    return None if member_pids is None else not member_pids
+
+
+def systemd_scope_member_pids(
+    unit: str,
+    *,
+    timeout_seconds: float = 3.0,
+    cgroup_root: Path = _DEFAULT_CGROUP_ROOT,
+) -> Optional[tuple[int, ...]]:
+    """Return exact scope members, empty for an unloaded unit, or unknown."""
+
     if timeout_seconds <= 0:
         raise ValueError("systemd state timeout must be positive")
     try:
@@ -354,28 +370,81 @@ def systemd_scope_is_quiescent(
     except (OSError, subprocess.TimeoutExpired):
         return None
     if completed.returncode != 0:
+        detail = completed.stderr.lower()
+        if any(
+            marker in detail
+            for marker in (
+                "could not be found",
+                "not found",
+                "not loaded",
+                "does not exist",
+            )
+        ):
+            return ()
         return None
     properties: dict[str, str] = {}
     for line in completed.stdout.splitlines():
         key, separator, value = line.partition("=")
         if separator:
             properties[key] = value
-    active_state = properties.get("ActiveState", "")
-    if active_state not in {"inactive", "failed"}:
-        return False
-    if "ControlGroup" not in properties:
+    active_state = properties.get("ActiveState")
+    if active_state is None or "ControlGroup" not in properties:
         return None
     control_group = properties["ControlGroup"]
     if not control_group:
-        return True
+        return () if active_state in {"inactive", "failed"} else None
     procs_path = cgroup_root / control_group.lstrip("/") / "cgroup.procs"
     try:
-        return not procs_path.read_text(encoding="utf-8").strip()
+        raw_pids = procs_path.read_text(encoding="utf-8").split()
+        return tuple(int(pid) for pid in raw_pids)
     except FileNotFoundError:
         # A cgroup can only be removed after its final task leaves.
-        return True
-    except OSError:
+        return () if active_state in {"inactive", "failed"} else None
+    except (OSError, ValueError):
         return None
+
+
+def systemd_scope_invocation_id(
+    unit: str, *, timeout_seconds: float = 3.0
+) -> Optional[str]:
+    """Return the exact transient-unit invocation ID, empty when unloaded."""
+
+    if timeout_seconds <= 0:
+        raise ValueError("systemd state timeout must be positive")
+    try:
+        completed = subprocess.run(
+            [
+                "systemctl",
+                "--user",
+                "show",
+                unit,
+                "--property=InvocationID",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode != 0:
+        detail = completed.stderr.lower()
+        if any(
+            marker in detail
+            for marker in (
+                "could not be found",
+                "not found",
+                "not loaded",
+                "does not exist",
+            )
+        ):
+            return ""
+        return None
+    for line in completed.stdout.splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key == "InvocationID":
+            return value.strip() or None
+    return None
 
 
 def cgroup_path_contains_unit(cgroup_text: str, unit: str) -> bool:

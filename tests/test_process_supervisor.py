@@ -61,12 +61,11 @@ def _cpu_lease_set(tmp_path: Path) -> HeavyJobLeaseSet:
     )
 
 
-def _require_guardian_identity_scan() -> None:
-    scan_ok, _ = guardian_module._scan_token_identities(
-        "capability-probe", {}, max_identities=1
-    )
-    if not scan_ok:
-        pytest.skip("sandbox denies the guardian's launch-scoped identity scan")
+def _require_process_table_scan() -> None:
+    try:
+        next(iter(psutil.process_iter(["pid"])), None)
+    except (psutil.Error, OSError):
+        pytest.skip("sandbox denies process-table enumeration")
 
 
 def _initialize_fake_tree(tree: OwnedProcessTree) -> None:
@@ -315,6 +314,29 @@ def test_systemd_membership_treats_identity_that_exited_during_signal_as_gone(
     assert tree._identity_in_systemd_scope(GoneIdentity()) is True
 
 
+def test_systemd_membership_rechecks_identity_when_proc_cgroup_disappears(
+    monkeypatch,
+):
+    process = type("Process", (), {"pid": 42})()
+    probes = iter(((process, False), (None, True)))
+
+    class ExitingIdentity:
+        def probe(self):
+            return next(probes)
+
+    tree = object.__new__(OwnedProcessTree)
+    _initialize_fake_tree(tree)
+    tree.systemd_unit = "hydra-owned.scope"
+    monkeypatch.setattr(supervisor_module.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(
+        supervisor_module.Path,
+        "read_text",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(FileNotFoundError()),
+    )
+
+    assert tree._identity_in_systemd_scope(ExitingIdentity()) is True
+
+
 def test_identity_registry_prunes_dead_entries_retains_escapees_and_fails_closed(
     monkeypatch,
 ):
@@ -399,19 +421,18 @@ def test_failed_direct_signal_permanently_retains_uncertain_ownership(monkeypatc
     assert tree.ownership_uncertain
 
 
-def test_bounded_discovery_never_requests_recursive_materialization():
+def test_bounded_discovery_stops_streaming_process_table_at_cap(monkeypatch):
     calls = []
 
     class FakeProcess:
-        def __init__(self, pid):
+        def __init__(self, pid, ppid=0):
             self.pid = pid
+            self.info = {"pid": pid, "ppid": ppid, "create_time": float(pid)}
 
-        def create_time(self):
-            return float(self.pid)
-
-        def children(self, recursive):
-            calls.append((self.pid, recursive))
-            return [FakeProcess(pid) for pid in range(2, 100)] if self.pid == 1 else []
+    def stream_processes(_attrs):
+        for pid in range(2, 100):
+            calls.append(pid)
+            yield FakeProcess(pid, ppid=1)
 
     tree = object.__new__(OwnedProcessTree)
     _initialize_fake_tree(tree)
@@ -421,13 +442,14 @@ def test_bounded_discovery_never_requests_recursive_materialization():
     )()
     tree._known_identities = {1: supervisor_module._ProcessIdentity(1, 1.0)}
     tree.max_tracked_identities = 2
+    monkeypatch.setattr(supervisor_module.psutil, "process_iter", stream_processes)
 
     discovered, overflow, uncertain = tree._discover_identities()
 
     assert [identity.pid for identity in discovered] == [2]
     assert overflow is not None and overflow.pid == 3
     assert not uncertain
-    assert calls == [(1, False)]
+    assert calls == [2, 3]
 
 
 def test_owned_tree_registry_operations_are_serialized_across_threads(monkeypatch):
@@ -546,7 +568,7 @@ def test_guardian_registry_retains_first_overflow_identity_until_proven_gone(
     }
 
     complete, overflowed = guardian_module._scan_token_identities(
-        token, identities, max_identities=3
+        token, identities, external_identities={}, max_identities=3
     )
 
     assert not complete
@@ -557,6 +579,19 @@ def test_guardian_registry_retains_first_overflow_identity_until_proven_gone(
         4: guardian_module.GuardedIdentity(4, 4.0),
         5: guardian_module.GuardedIdentity(5, 5.0),
     }
+    monkeypatch.setattr(
+        guardian_module.psutil,
+        "process_iter",
+        lambda _attrs: [FakeProcess(6, 6.0)],
+    )
+
+    complete, overflowed = guardian_module._scan_token_identities(
+        token, identities, external_identities={}, max_identities=3
+    )
+
+    assert not complete
+    assert overflowed
+    assert set(identities) == {2, 3, 4, 5}
 
 
 def test_guardian_does_not_prune_or_acknowledge_unverifiable_identity(monkeypatch):
@@ -572,6 +607,243 @@ def test_guardian_does_not_prune_or_acknowledge_unverifiable_identity(monkeypatc
 
     assert identities == {42: identity}
     assert not guardian_module._signal_identity(identity, signal.SIGKILL)
+
+
+def test_guardian_persists_prior_observation_uncertainty_through_teardown(
+    monkeypatch,
+):
+    class StopRetry(RuntimeError):
+        pass
+
+    monkeypatch.setattr(
+        guardian_module,
+        "_scan_token_identities",
+        lambda *_args, **_kwargs: (True, False),
+    )
+    monkeypatch.setattr(
+        guardian_module.os,
+        "killpg",
+        lambda *_args: (_ for _ in ()).throw(ProcessLookupError()),
+    )
+    monkeypatch.setattr(
+        guardian_module.time,
+        "sleep",
+        lambda _seconds: (_ for _ in ()).throw(StopRetry()),
+    )
+
+    with pytest.raises(StopRetry):
+        guardian_module._terminate_until_quiescent(
+            containment_token="token",
+            identities={},
+            max_identities=8,
+            process_group_id=123,
+            systemd_unit=None,
+            initial_ownership_uncertain=True,
+        )
+
+
+def test_guardian_baselines_inaccessible_unrelated_process_before_gate(monkeypatch):
+    token = "owned-token"
+
+    class FakeProcess:
+        def __init__(self, pid, *, owned=False, deny_environment=False):
+            self.pid = pid
+            self._owned = owned
+            self._deny_environment = deny_environment
+            self.info = {"uids": type("Uids", (), {"real": 501})()}
+
+        def create_time(self):
+            return float(self.pid)
+
+        def environ(self):
+            if self._deny_environment:
+                raise psutil.AccessDenied(self.pid)
+            return {"HYDRA_CONTAINMENT_TOKEN": token} if self._owned else {}
+
+    root = FakeProcess(10, owned=True)
+    unrelated = FakeProcess(20, deny_environment=True)
+
+    class OldInaccessibleProcess(FakeProcess):
+        def environ(self):
+            pytest.fail("pre-launch process environment was inspected")
+
+    old_unrelated = OldInaccessibleProcess(5)
+    monkeypatch.setattr(
+        guardian_module.psutil,
+        "process_iter",
+        lambda _attrs: iter((root, old_unrelated, unrelated)),
+    )
+    monkeypatch.setattr(guardian_module.os, "getpid", lambda: 999)
+    monkeypatch.setattr(guardian_module.os, "getuid", lambda: 501)
+    monkeypatch.setattr(
+        guardian_module.GuardedIdentity,
+        "resolve",
+        lambda _identity: (object(), False),
+    )
+    owned = {}
+    external = {}
+
+    assert guardian_module._baseline_guardian_identities(
+        workload_pid=10,
+        token=token,
+        identities=owned,
+        external_identities=external,
+        launch_started_at=10.0,
+        max_identities=8,
+    )
+    assert set(owned) == {10}
+    assert set(external) == {20}
+
+    complete, overflowed = guardian_module._scan_token_identities(
+        token,
+        owned,
+        external_identities=external,
+        launch_started_at=10.0,
+        max_identities=8,
+    )
+    assert complete
+    assert not overflowed
+
+
+def test_guardian_fails_closed_for_new_or_owned_inaccessible_identity(monkeypatch):
+    class InaccessibleProcess:
+        pid = 30
+        info = {"uids": type("Uids", (), {"real": 501})()}
+
+        def create_time(self):
+            return 30.0
+
+        def environ(self):
+            raise psutil.AccessDenied(self.pid)
+
+    monkeypatch.setattr(
+        guardian_module.psutil,
+        "process_iter",
+        lambda _attrs: iter((InaccessibleProcess(),)),
+    )
+    monkeypatch.setattr(guardian_module.os, "getpid", lambda: 999)
+    monkeypatch.setattr(guardian_module.os, "getuid", lambda: 501)
+
+    complete, _ = guardian_module._scan_token_identities(
+        "owned-token", {}, external_identities={}, max_identities=8
+    )
+    assert not complete
+
+    owned = {30: guardian_module.GuardedIdentity(30, 30.0)}
+    complete, _ = guardian_module._scan_token_identities(
+        "owned-token", owned, external_identities={}, max_identities=8
+    )
+    assert not complete
+
+
+def test_guardian_does_not_pair_old_token_with_reused_pid_identity(monkeypatch):
+    class ReusedProcess:
+        pid = 30
+        info = {"uids": type("Uids", (), {"real": 501})()}
+
+        def __init__(self):
+            self.create_times = iter((30.0, 31.0))
+
+        def create_time(self):
+            return next(self.create_times)
+
+        def environ(self):
+            return {"HYDRA_CONTAINMENT_TOKEN": "owned-token"}
+
+    monkeypatch.setattr(
+        guardian_module.psutil,
+        "process_iter",
+        lambda _attrs: iter((ReusedProcess(),)),
+    )
+    monkeypatch.setattr(guardian_module.os, "getpid", lambda: 999)
+    monkeypatch.setattr(guardian_module.os, "getuid", lambda: 501)
+    identities = {}
+
+    complete, overflowed = guardian_module._scan_token_identities(
+        "owned-token", identities, external_identities={}, max_identities=8
+    )
+
+    assert complete
+    assert not overflowed
+    assert identities == {}
+
+
+def test_systemd_guardian_never_requires_global_environment_scan(monkeypatch):
+    monkeypatch.setattr(
+        guardian_module,
+        "_baseline_guardian_identities",
+        lambda **_kwargs: pytest.fail("systemd used global token scanning"),
+    )
+    monkeypatch.setattr(
+        guardian_module,
+        "probe_systemd_scope_invocation_id",
+        lambda _unit: "invocation-1",
+    )
+    monkeypatch.setattr(
+        guardian_module,
+        "_systemd_scope_contains_workload",
+        lambda _unit, _identity: True,
+    )
+    monkeypatch.setattr(
+        guardian_module.psutil,
+        "Process",
+        lambda pid: type("Process", (), {"create_time": lambda _self: float(pid)})(),
+    )
+
+    owned, external, launch_started_at, invocation_id = (
+        guardian_module._prepare_guardian_tracking(
+            workload_pid=10,
+            token="owned-token",
+            max_identities=8,
+            systemd_unit="hydra-owned.scope",
+        )
+    )
+
+    assert owned == {}
+    assert external == {}
+    assert launch_started_at == 10.0
+    assert invocation_id == "invocation-1"
+
+
+def test_systemd_scope_identity_requires_member_descended_from_launcher(monkeypatch):
+    parents = {20: 10, 10: 1, 30: 1}
+    create_times = {10: 10.0, 20: 20.0, 30: 30.0}
+
+    class FakeProcess:
+        def __init__(self, pid):
+            self.pid = pid
+
+        def create_time(self):
+            return create_times[self.pid]
+
+        def ppid(self):
+            return parents[self.pid]
+
+        def environ(self):
+            pytest.fail("systemd ownership inspected process environment")
+
+    monkeypatch.setattr(guardian_module.psutil, "Process", FakeProcess)
+    monkeypatch.setattr(
+        guardian_module,
+        "systemd_scope_member_pids",
+        lambda _unit: (20,),
+    )
+    workload = guardian_module.GuardedIdentity(10, 10.0)
+
+    assert (
+        guardian_module._systemd_scope_contains_workload("owned.scope", workload)
+        is True
+    )
+
+    monkeypatch.setattr(
+        guardian_module,
+        "systemd_scope_member_pids",
+        lambda _unit: (30,),
+    )
+    assert (
+        guardian_module._systemd_scope_contains_workload("colliding.scope", workload)
+        is False
+    )
 
 
 def test_guardian_is_spawned_as_a_separate_session_outside_systemd(monkeypatch):
@@ -634,12 +906,49 @@ def test_supervisor_releases_only_after_guardian_quiescence_acknowledgement():
     sidecar = object.__new__(SupervisedSidecar)
     sidecar._guardian_started = True
     sidecar._guardian_teardown_requested = False
+    sidecar._guardian_ack_received = False
     sidecar._parent_liveness_write_fd = liveness_write
     sidecar._guardian_ack_read_fd = acknowledgement_read
     sidecar._guardian_process = CompletedGuardian()
 
     assert sidecar._complete_guardian_teardown(timeout=0.1)
     assert os.read(liveness_read, 1) == b"T"
+    os.close(liveness_read)
+
+
+def test_guardian_acknowledgement_survives_a_reap_timeout_for_retry():
+    liveness_read, liveness_write = os.pipe()
+    acknowledgement_read, acknowledgement_write = os.pipe()
+    os.write(acknowledgement_write, b"Q")
+    os.close(acknowledgement_write)
+
+    class EventuallyReapedGuardian:
+        returncode = None
+
+        def __init__(self):
+            self.waits = 0
+
+        def wait(self, timeout):
+            self.waits += 1
+            if self.waits == 1:
+                raise subprocess.TimeoutExpired(["guardian"], timeout)
+            self.returncode = 0
+            return 0
+
+    guardian = EventuallyReapedGuardian()
+    sidecar = object.__new__(SupervisedSidecar)
+    sidecar._guardian_started = True
+    sidecar._guardian_teardown_requested = False
+    sidecar._guardian_ack_received = False
+    sidecar._parent_liveness_write_fd = liveness_write
+    sidecar._guardian_ack_read_fd = acknowledgement_read
+    sidecar._guardian_process = guardian
+
+    assert not sidecar._complete_guardian_teardown(timeout=0.1)
+    assert sidecar._guardian_ack_received
+    assert sidecar._guardian_ack_read_fd is None
+    assert sidecar._complete_guardian_teardown(timeout=0.1)
+    assert guardian.waits == 2
     os.close(liveness_read)
 
 
@@ -717,7 +1026,7 @@ def test_drained_lines_are_retained_as_tail_without_being_reported_as_dropped():
 
 
 def test_noisy_child_is_drained_without_an_unbounded_parent_queue(tmp_path):
-    _require_guardian_identity_scan()
+    _require_process_table_scan()
     launch = build_limited_launch(
         [
             sys.executable,
@@ -755,7 +1064,7 @@ def test_noisy_child_is_drained_without_an_unbounded_parent_queue(tmp_path):
 def test_parent_liveness_guardian_is_enabled_for_each_posix_fallback(
     backend, monkeypatch, tmp_path
 ):
-    _require_guardian_identity_scan()
+    _require_process_table_scan()
     launch = build_limited_launch(
         [sys.executable, "-c", "print('done')"],
         ProcessMemoryLimits(soft_host_bytes=1024**3, hard_host_bytes=2 * 1024**3),
@@ -785,7 +1094,7 @@ def test_parent_liveness_guardian_is_enabled_for_each_posix_fallback(
 
 
 def test_wait_timeout_terminates_reaps_and_releases_owned_lease(tmp_path):
-    _require_guardian_identity_scan()
+    _require_process_table_scan()
     launch = build_limited_launch(
         [sys.executable, "-c", "import time; time.sleep(60)"],
         ProcessMemoryLimits(soft_host_bytes=1024**3, hard_host_bytes=2 * 1024**3),
@@ -817,7 +1126,7 @@ def test_wait_timeout_terminates_reaps_and_releases_owned_lease(tmp_path):
 def test_wait_timeout_returns_explicit_owner_when_exit_cannot_be_proved(
     tmp_path, monkeypatch
 ):
-    _require_guardian_identity_scan()
+    _require_process_table_scan()
     launch = build_limited_launch(
         [sys.executable, "-c", "import time; time.sleep(60)"],
         ProcessMemoryLimits(soft_host_bytes=1024**3, hard_host_bytes=2 * 1024**3),
@@ -934,7 +1243,7 @@ def test_containment_plan_derives_canonical_keys_and_internal_lease_contends(
 def test_constructor_failure_after_popen_kills_reaps_and_releases_lease(
     tmp_path, monkeypatch
 ):
-    _require_guardian_identity_scan()
+    _require_process_table_scan()
     launch = build_limited_launch(
         [sys.executable, "-c", "import time; time.sleep(60)"],
         ProcessMemoryLimits(soft_host_bytes=1024**3, hard_host_bytes=2 * 1024**3),
@@ -978,9 +1287,10 @@ def test_constructor_failure_after_popen_kills_reaps_and_releases_lease(
 
 
 def test_supervisor_process_death_does_not_orphan_watchdog_only_child(tmp_path):
-    _require_guardian_identity_scan()
+    _require_process_table_scan()
     helper_script = """
 import os, sys
+os.environ['HYDRA_DATA_DIR'] = sys.argv[1]
 from hydra_suite.runtime.process_supervisor import ContainmentPlan, SupervisedSidecar
 from hydra_suite.runtime.resource_limits import (
     LimitBackend, ProcessMemoryLimits, build_limited_launch,
@@ -1017,9 +1327,10 @@ os._exit(0)
 def test_parent_death_guardian_captures_setsid_escapee_when_os_allows_enumeration(
     tmp_path,
 ):
-    _require_guardian_identity_scan()
+    _require_process_table_scan()
     helper_script = r"""
 import os, psutil, sys, time
+os.environ['HYDRA_DATA_DIR'] = sys.argv[1]
 from hydra_suite.runtime.process_supervisor import ContainmentPlan, SupervisedSidecar
 from hydra_suite.runtime.resource_limits import (
     LimitBackend, ProcessMemoryLimits, build_limited_launch,
@@ -1089,7 +1400,7 @@ os._exit(0)
 
 
 def test_immediate_success_cannot_release_an_uncaptured_setsid_escapee(tmp_path):
-    _require_guardian_identity_scan()
+    _require_process_table_scan()
     workload = """
 import subprocess, sys
 escaped = subprocess.Popen(
@@ -1126,9 +1437,10 @@ print(escaped.pid, flush=True)
 def test_abrupt_parent_death_captures_immediate_exit_setsid_escapee_repeatedly(
     tmp_path,
 ):
-    _require_guardian_identity_scan()
+    _require_process_table_scan()
     helper_script = r"""
 import os, sys, time
+os.environ['HYDRA_DATA_DIR'] = sys.argv[1]
 from hydra_suite.runtime.process_supervisor import ContainmentPlan, SupervisedSidecar
 from hydra_suite.runtime.resource_limits import (
     LimitBackend, ProcessMemoryLimits, build_limited_launch,
@@ -1195,6 +1507,11 @@ def test_systemd_parent_guardian_requires_scope_quiescence_after_signal(monkeypa
     monkeypatch.setattr(guardian_module, "signal_systemd_scope", signal_scope)
     monkeypatch.setattr(
         guardian_module,
+        "probe_systemd_scope_invocation_id",
+        lambda _unit: "invocation-1",
+    )
+    monkeypatch.setattr(
+        guardian_module,
         "systemd_scope_is_quiescent",
         lambda _unit: next(quiescence),
     )
@@ -1211,13 +1528,64 @@ def test_systemd_parent_guardian_requires_scope_quiescence_after_signal(monkeypa
         max_identities=8,
         process_group_id=123,
         systemd_unit="owned.scope",
+        expected_scope_invocation_id="invocation-1",
     )
 
-    assert signals == [
-        ("owned.scope", int(signal.SIGKILL)),
-        ("owned.scope", int(signal.SIGKILL)),
-        ("owned.scope", int(signal.SIGKILL)),
-    ]
+    assert signals == [("owned.scope", int(signal.SIGKILL))]
+
+
+def test_systemd_guardian_accepts_already_unloaded_scope_without_signal(monkeypatch):
+    monkeypatch.setattr(
+        guardian_module, "systemd_scope_is_quiescent", lambda _unit: True
+    )
+    monkeypatch.setattr(
+        guardian_module,
+        "signal_systemd_scope",
+        lambda *_args: pytest.fail("an absent scope was signalled"),
+    )
+    monkeypatch.setattr(guardian_module.time, "sleep", lambda _seconds: None)
+
+    guardian_module._terminate_until_quiescent(
+        containment_token="token",
+        identities={},
+        max_identities=8,
+        process_group_id=123,
+        systemd_unit="gone.scope",
+    )
+
+
+def test_systemd_guardian_never_signals_reused_unit_invocation(monkeypatch):
+    class StopRetry(RuntimeError):
+        pass
+
+    monkeypatch.setattr(
+        guardian_module, "systemd_scope_is_quiescent", lambda _unit: False
+    )
+    monkeypatch.setattr(
+        guardian_module,
+        "probe_systemd_scope_invocation_id",
+        lambda _unit: "replacement-invocation",
+    )
+    monkeypatch.setattr(
+        guardian_module,
+        "signal_systemd_scope",
+        lambda *_args: pytest.fail("replacement unit was signalled"),
+    )
+    monkeypatch.setattr(
+        guardian_module.time,
+        "sleep",
+        lambda _seconds: (_ for _ in ()).throw(StopRetry()),
+    )
+
+    with pytest.raises(StopRetry):
+        guardian_module._terminate_until_quiescent(
+            containment_token="token",
+            identities={},
+            max_identities=8,
+            process_group_id=123,
+            systemd_unit="reused.scope",
+            expected_scope_invocation_id="owned-invocation",
+        )
 
 
 def test_success_is_not_reclassified_from_historical_oom_text():

@@ -210,46 +210,42 @@ class OwnedProcessTree:
         if root_gone or root is None:
             return (), None, not root_gone
         discovered: list[_ProcessIdentity] = []
-        queued: deque[psutil.Process] = deque([root])
-        seen: set[int] = set()
+        frontier = {root.pid}
+        expanded: set[int] = set()
         discovered_pids: set[int] = set()
-        while queued:
-            parent = queued.popleft()
-            if parent.pid in seen:
-                continue
-            seen.add(parent.pid)
+        while frontier:
+            next_frontier: set[int] = set()
             try:
-                parent.create_time()
-            except (psutil.NoSuchProcess, psutil.ZombieProcess):
-                continue
-            except (psutil.AccessDenied, OSError):
-                return tuple(discovered), None, True
-            try:
-                # Breadth-first, non-recursive traversal avoids first
-                # materializing an unbounded recursive descendant list.
-                children = parent.children(recursive=False)
-            except (psutil.NoSuchProcess, psutil.ZombieProcess):
-                continue
-            except (psutil.AccessDenied, OSError):
-                return tuple(discovered), None, True
-            for child in children:
-                try:
-                    child_identity = _ProcessIdentity(child.pid, child.create_time())
-                except (psutil.NoSuchProcess, psutil.ZombieProcess):
-                    continue
-                except (psutil.AccessDenied, OSError):
-                    return tuple(discovered), None, True
-                if (
-                    child_identity.pid not in self._known_identities
-                    and child_identity.pid not in discovered_pids
-                ):
-                    if len(self._known_identities) + len(discovered) >= (
-                        self.max_tracked_identities
+                processes = psutil.process_iter(["pid", "ppid", "create_time"])
+                for child in processes:
+                    try:
+                        parent_pid = int(child.info["ppid"])
+                    except (KeyError, TypeError, ValueError):
+                        return tuple(discovered), None, True
+                    if parent_pid not in frontier:
+                        continue
+                    try:
+                        child_identity = _ProcessIdentity(
+                            child.pid, float(child.info["create_time"])
+                        )
+                    except (KeyError, TypeError, ValueError):
+                        return tuple(discovered), None, True
+                    if (
+                        child_identity.pid not in self._known_identities
+                        and child_identity.pid not in discovered_pids
                     ):
-                        return tuple(discovered), child_identity, False
-                    discovered.append(child_identity)
-                    discovered_pids.add(child_identity.pid)
-                queued.append(child)
+                        if len(self._known_identities) + len(discovered) >= (
+                            self.max_tracked_identities
+                        ):
+                            return tuple(discovered), child_identity, False
+                        discovered.append(child_identity)
+                        discovered_pids.add(child_identity.pid)
+                    if child_identity.pid not in expanded:
+                        next_frontier.add(child_identity.pid)
+            except (psutil.Error, OSError, RuntimeError):
+                return tuple(discovered), None, True
+            expanded.update(frontier)
+            frontier = next_frontier - expanded
         return tuple(discovered), None, False
 
     def _prune_dead_identities(self) -> None:
@@ -419,6 +415,9 @@ class OwnedProcessTree:
             cgroup_text = Path(f"/proc/{process.pid}/cgroup").read_text(
                 encoding="utf-8"
             )
+        except FileNotFoundError:
+            _, gone_after_read = identity.probe()
+            return True if gone_after_read else None
         except (OSError, UnicodeError):
             return None
         return cgroup_path_contains_unit(cgroup_text, self.systemd_unit)
@@ -773,6 +772,7 @@ class SupervisedSidecar:
         self._guardian_ack_read_fd: Optional[int] = None
         self._guardian_started = False
         self._guardian_teardown_requested = False
+        self._guardian_ack_received = False
         self._guardian_process: Optional[subprocess.Popen[bytes]] = None
         self.process: subprocess.Popen[Any]
         self.tree: OwnedProcessTree
@@ -1002,26 +1002,30 @@ class SupervisedSidecar:
                 pass
             self._parent_liveness_write_fd = None
         acknowledgement = self._guardian_ack_read_fd
-        if acknowledgement is None:
-            return False
-        readable, _, _ = select.select([acknowledgement], [], [], timeout)
-        if not readable:
-            return False
-        try:
-            confirmed = os.read(acknowledgement, 1) == b"Q"
-        except OSError:
-            confirmed = False
-        if confirmed:
+        if not self._guardian_ack_received:
+            if acknowledgement is None:
+                return False
+            try:
+                readable, _, _ = select.select([acknowledgement], [], [], timeout)
+            except OSError:
+                return False
+            if not readable:
+                return False
+            try:
+                self._guardian_ack_received = os.read(acknowledgement, 1) == b"Q"
+            except OSError:
+                return False
+            if not self._guardian_ack_received:
+                return False
             os.close(acknowledgement)
             self._guardian_ack_read_fd = None
-            if self._guardian_process is not None:
-                try:
-                    self._guardian_process.wait(timeout=2.0)
-                except subprocess.TimeoutExpired:
-                    return False
-                if self._guardian_process.returncode != 0:
-                    return False
-        return confirmed
+        if self._guardian_process is None:
+            return False
+        try:
+            self._guardian_process.wait(timeout=2.0)
+        except subprocess.TimeoutExpired:
+            return False
+        return self._guardian_process.returncode == 0
 
     def _close_unstarted_guardian_fds(self) -> None:
         for attribute in ("_parent_liveness_write_fd", "_guardian_ack_read_fd"):

@@ -79,7 +79,12 @@ be inactive with an empty (or removed) cgroup. Unit membership compares exact
 cgroup path components, never substrings. Only token-captured processes proven
 outside the scope may be signalled directly. The guardian is launched by the
 supervisor outside the limited cgroup, so `MemoryMax` and `TasksMax` cannot kill
-the process responsible for cleanup and lock retention.
+the process responsible for cleanup and lock retention. Scope names are random
+and internal, and guardian readiness binds the known launcher identity to an
+exact cgroup plus systemd `InvocationID`. The same invocation is revalidated
+before signalling, so a colliding or reused unit is never treated as owned. An
+already-unloaded unit is quiescent; transport and malformed-evidence failures
+remain unknown and retain ownership.
 
 If a user scope is unavailable, Linux falls back to `RLIMIT_AS`. This limits
 virtual address space rather than resident memory. CUDA commonly reserves large
@@ -94,8 +99,13 @@ inherited by descendants, allowing the guardian to find a short-lived parent's
 daemonized `setsid` child after ancestry has disappeared. On normal completion
 the supervisor requests teardown and waits for an acknowledgement after two
 stable empty token scans. On abrupt parent death, EOF triggers the same cleanup.
-Identity registries are locked, use bounded non-recursive traversal, retain a
-first overflow identity, and never treat access denial as process death. Failed
+Fallback token scanning records the launch start identity and does not inspect
+process environments that provably predate it. Any inaccessible concurrent
+process is classified while the workload is still gated; a later new or owned
+inaccessible identity fails closed. Systemd uses its exact cgroup boundary and
+never scans process environments.
+Identity registries are locked, use a bounded streaming parent-PID scan, retain
+a first overflow identity, and never treat access denial as process death. Failed
 direct signals permanently retain ownership. If authoritative cleanup cannot be
 proved, the guardian retains inherited locks instead of declaring resources
 free.
@@ -108,9 +118,10 @@ ratio deliberately before importing torch—an MPS launch without an explicit
 ratio is rejected—and enforce both the child-tree RSS limit and the system
 available-memory reserve from the parent. The token-scanning guardian protects
 watchdog-only launches and session escapees if the supervisor disappears. A
-host that forbids same-user process identity/environment inspection is refused
-because it cannot provide that guarantee. MPS allocations consume the same
-physical pool as ordinary host allocations.
+host that forbids process-table enumeration is refused because it cannot
+provide that fallback guarantee; unrelated processes with protected
+environments do not block launch merely because their environments are private.
+MPS allocations consume the same physical pool as ordinary host allocations.
 
 ### Windows
 

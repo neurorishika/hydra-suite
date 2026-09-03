@@ -32,13 +32,19 @@ def _test_env() -> dict[str, str]:
 
 def test_systemd_command_places_kernel_limits_outside_bootstrap():
     limits = ProcessMemoryLimits(soft_host_bytes=100, hard_host_bytes=200)
+    with pytest.raises(ValueError, match="generated internally"):
+        build_limited_launch(
+            ["python", "work.py"],
+            limits,
+            backend=LimitBackend.SYSTEMD_CGROUP,
+            systemd_unit="colliding.scope",
+        )
     launch = build_limited_launch(
         ["python", "work.py"],
         limits,
         backend=LimitBackend.SYSTEMD_CGROUP,
         environment={},
         python_executable="/usr/bin/python3",
-        systemd_unit="hydra-test.scope",
     )
 
     assert launch.command[:4] == (
@@ -53,7 +59,10 @@ def test_systemd_command_places_kernel_limits_outside_bootstrap():
     assert "--property=MemorySwapMax=0" in launch.command
     assert "--property=TasksMax=512" in launch.command
     assert "--address-space-bytes" not in launch.command
-    assert launch.systemd_unit == "hydra-test.scope"
+    assert launch.systemd_unit is not None
+    assert launch.systemd_unit.startswith("hydra-job-")
+    assert launch.systemd_unit.endswith(".scope")
+    assert launch.command[launch.command.index("--unit") + 1] == launch.systemd_unit
     assert launch.limits is limits
     assert dict(launch.environment) == {}
 
@@ -212,6 +221,20 @@ def test_systemd_scope_signal_success_does_not_prove_live_cgroup_empty(
         limits_module.subprocess, "run", lambda *_a, **_k: missing_membership
     )
     assert systemd_scope_is_quiescent("hydra-owned.scope", cgroup_root=tmp_path) is None
+
+
+def test_unloaded_systemd_scope_is_quiescent_but_bus_error_is_unknown(monkeypatch):
+    absent = subprocess.CompletedProcess(
+        [], 1, stdout="", stderr="Unit hydra-gone.scope could not be found."
+    )
+    monkeypatch.setattr(limits_module.subprocess, "run", lambda *_a, **_k: absent)
+    assert systemd_scope_is_quiescent("hydra-gone.scope") is True
+
+    bus_error = subprocess.CompletedProcess(
+        [], 1, stdout="", stderr="Failed to connect to bus: connection refused"
+    )
+    monkeypatch.setattr(limits_module.subprocess, "run", lambda *_a, **_k: bus_error)
+    assert systemd_scope_is_quiescent("hydra-gone.scope") is None
 
 
 def test_cgroup_unit_matching_uses_an_exact_path_component():
