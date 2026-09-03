@@ -433,13 +433,17 @@ class OwnedProcessTree:
 
     @staticmethod
     def _identity_process_group(identity: _ProcessIdentity) -> Optional[int]:
-        process = identity.resolve()
-        if process is None or os.name != "posix":
+        process, gone = identity.probe()
+        if gone or process is None or os.name != "posix":
             return None
         try:
-            return os.getpgid(process.pid)
+            process_group = os.getpgid(process.pid)
         except (ProcessLookupError, PermissionError, OSError):
             return None
+        validated_again, gone_after_probe = identity.probe()
+        if gone_after_probe or validated_again is None:
+            return None
+        return process_group
 
     def _identity_in_systemd_scope(self, identity: _ProcessIdentity) -> Optional[bool]:
         if self.systemd_unit is None or platform.system() != "Linux":

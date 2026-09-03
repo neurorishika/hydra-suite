@@ -218,6 +218,29 @@ def test_process_group_is_not_signalled_after_all_owned_identities_are_gone(
     assert calls == []
 
 
+def test_process_group_is_not_signalled_when_identity_changes_during_probe(monkeypatch):
+    process = type("Process", (), {"pid": 42})()
+    probes = iter(((process, False), (None, True)))
+
+    class ReusedIdentity:
+        def probe(self):
+            return next(probes)
+
+    identity = ReusedIdentity()
+    tree = object.__new__(OwnedProcessTree)
+    _initialize_fake_tree(tree)
+    tree.process_group_id = 42
+    tree.systemd_unit = None
+    tree.scope_signal_failed = False
+    monkeypatch.setattr(os, "getpgid", lambda _pid: 42)
+    monkeypatch.setattr(
+        os, "killpg", lambda *_args: pytest.fail("reused process group was signalled")
+    )
+    monkeypatch.setattr(tree, "_signal_identity", lambda *_args: True)
+
+    tree._signal_snapshot(signal.SIGKILL, (identity,))
+
+
 def test_systemd_scope_is_authoritative_for_tree_signals(monkeypatch):
     class FailOnDirectSignal:
         pid = 123
