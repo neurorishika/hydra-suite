@@ -38,7 +38,7 @@ from hydra_suite.training.sam3_lora.env import DEFAULT_SAM3_ENV
 from hydra_suite.widgets.workers import BaseWorker
 
 _GEOMETRY_MODES = ("auto_object", "auto_model", "custom")
-_PRECISIONS = ("bf16", "fp16", "fp32")
+_PRECISIONS = ("bf16",)
 
 # Kept short: the probe spawns a `conda run` subprocess, and the panel must
 # never block the GUI thread for the probe's full default timeout on every
@@ -277,6 +277,33 @@ class Sam3TrainingPanel(QWidget):
         opt_form.addRow("Mixed precision", self.precision_combo)
         layout.addWidget(opt_group)
 
+        safety_group = QGroupBox("Resource safety")
+        safety_form = QFormLayout(safety_group)
+        self.host_reserve_gb_spin = QDoubleSpinBox()
+        self.host_reserve_gb_spin.setRange(0.0, 1024.0)
+        self.host_reserve_gb_spin.setDecimals(1)
+        safety_form.addRow("Host reserve (GiB)", self.host_reserve_gb_spin)
+        self.host_reserve_fraction_spin = QDoubleSpinBox()
+        self.host_reserve_fraction_spin.setRange(0.0, 1.0)
+        self.host_reserve_fraction_spin.setDecimals(2)
+        self.host_reserve_fraction_spin.setSingleStep(0.05)
+        safety_form.addRow("Host reserve fraction", self.host_reserve_fraction_spin)
+        self.cuda_safety_fraction_spin = QDoubleSpinBox()
+        self.cuda_safety_fraction_spin.setRange(0.01, 1.0)
+        self.cuda_safety_fraction_spin.setDecimals(2)
+        self.cuda_safety_fraction_spin.setSingleStep(0.05)
+        safety_form.addRow("CUDA usable fraction", self.cuda_safety_fraction_spin)
+        self.host_limit_headroom_spin = QDoubleSpinBox()
+        self.host_limit_headroom_spin.setRange(1.0, 4.0)
+        self.host_limit_headroom_spin.setDecimals(2)
+        self.host_limit_headroom_spin.setSingleStep(0.05)
+        safety_form.addRow("Hard-limit headroom", self.host_limit_headroom_spin)
+        self.watchdog_poll_spin = QDoubleSpinBox()
+        self.watchdog_poll_spin.setRange(0.1, 60.0)
+        self.watchdog_poll_spin.setDecimals(1)
+        safety_form.addRow("Watchdog interval (s)", self.watchdog_poll_spin)
+        layout.addWidget(safety_group)
+
         adapt_group = QGroupBox("Adapted submodules")
         adapt_form = QFormLayout(adapt_group)
         self.chk_adapt_vision_encoder = QCheckBox("Vision encoder")
@@ -360,6 +387,11 @@ class Sam3TrainingPanel(QWidget):
             batch=self.batch_spin.value(),
             grad_accum=self.grad_accum_spin.value(),
             mixed_precision=self.precision_combo.currentText(),
+            host_reserve_gb=self.host_reserve_gb_spin.value(),
+            host_reserve_fraction=self.host_reserve_fraction_spin.value(),
+            cuda_safety_fraction=self.cuda_safety_fraction_spin.value(),
+            host_limit_headroom_fraction=self.host_limit_headroom_spin.value(),
+            watchdog_poll_seconds=self.watchdog_poll_spin.value(),
             adapt_vision_encoder=self.chk_adapt_vision_encoder.isChecked(),
             adapt_text_encoder=self.chk_adapt_text_encoder.isChecked(),
             adapt_geometry_encoder=self.chk_adapt_geometry_encoder.isChecked(),
@@ -390,6 +422,13 @@ class Sam3TrainingPanel(QWidget):
         idx = self.precision_combo.findText(p.mixed_precision)
         if idx >= 0:
             self.precision_combo.setCurrentIndex(idx)
+        else:
+            self.precision_combo.setCurrentIndex(0)
+        self.host_reserve_gb_spin.setValue(p.host_reserve_gb)
+        self.host_reserve_fraction_spin.setValue(p.host_reserve_fraction)
+        self.cuda_safety_fraction_spin.setValue(p.cuda_safety_fraction)
+        self.host_limit_headroom_spin.setValue(p.host_limit_headroom_fraction)
+        self.watchdog_poll_spin.setValue(p.watchdog_poll_seconds)
         self.chk_adapt_vision_encoder.setChecked(p.adapt_vision_encoder)
         self.chk_adapt_text_encoder.setChecked(p.adapt_text_encoder)
         self.chk_adapt_geometry_encoder.setChecked(p.adapt_geometry_encoder)

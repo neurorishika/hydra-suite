@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+from hydra_suite.training.contracts import Sam3LoraParams
 from hydra_suite.training.sam3_lora import cli
 
 
@@ -70,6 +71,35 @@ def test_main_zero_datapoints_exits_nonzero(tmp_path, monkeypatch, capsys):
 
     assert rc != 0
     assert not (run_dir / "adapters.pt").exists()
+
+
+class _FakeCuda:
+    def __init__(self, available=True, capability=(8, 0)):
+        self._available = available
+        self._capability = capability
+
+    def is_available(self):
+        return self._available
+
+    def get_device_capability(self):
+        return self._capability
+
+
+def test_runtime_precision_matrix_fails_closed():
+    torch = SimpleNamespace(cuda=_FakeCuda())
+    assert cli._runtime_admission_refusal(torch, Sam3LoraParams()) is None
+    assert "only CUDA BF16" in cli._runtime_admission_refusal(
+        torch, Sam3LoraParams(mixed_precision="fp16")
+    )
+    assert "only CUDA BF16" in cli._runtime_admission_refusal(
+        torch, Sam3LoraParams(mixed_precision="fp32")
+    )
+    assert "CUDA device" in cli._runtime_admission_refusal(
+        SimpleNamespace(cuda=_FakeCuda(available=False)), Sam3LoraParams()
+    )
+    assert "8.0" in cli._runtime_admission_refusal(
+        SimpleNamespace(cuda=_FakeCuda(capability=(7, 5))), Sam3LoraParams()
+    )
 
 
 def test_collated_batch_moves_to_device_before_target_conversion_and_forward():

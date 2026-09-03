@@ -67,11 +67,20 @@ class _FakeCompleted:
         self.stderr = stderr
 
 
+def _healthy_payload():
+    return {
+        "ok": True,
+        "missing": [],
+        "cuda_available": True,
+        "cuda_compute_capability": [8, 9],
+    }
+
+
 def test_usable_when_child_reports_ok(monkeypatch):
     monkeypatch.setattr(
         av,
         "_run_probe",
-        lambda env, timeout: _FakeCompleted(0, json.dumps({"ok": True, "missing": []})),
+        lambda env, timeout: _FakeCompleted(0, json.dumps(_healthy_payload())),
     )
     monkeypatch.setattr(av, "_checkpoint_present", lambda cache_dir=None: True)
     got = av.probe_sam3_training_availability(env="hydra-sam3")
@@ -106,7 +115,7 @@ def test_missing_checkpoint_is_reported_not_downloaded(monkeypatch):
     monkeypatch.setattr(
         av,
         "_run_probe",
-        lambda env, timeout: _FakeCompleted(0, json.dumps({"ok": True, "missing": []})),
+        lambda env, timeout: _FakeCompleted(0, json.dumps(_healthy_payload())),
     )
     monkeypatch.setattr(av, "_checkpoint_present", lambda cache_dir=None: False)
     got = av.probe_sam3_training_availability()
@@ -173,9 +182,35 @@ def test_probe_does_not_import_sam3(monkeypatch):
     monkeypatch.setattr(
         av,
         "_run_probe",
-        lambda env, timeout: _FakeCompleted(0, json.dumps({"ok": True, "missing": []})),
+        lambda env, timeout: _FakeCompleted(0, json.dumps(_healthy_payload())),
     )
     monkeypatch.setattr(av, "_checkpoint_present", lambda cache_dir=None: True)
     sys.modules.pop("sam3", None)
     av.probe_sam3_training_availability()
     assert "sam3" not in sys.modules
+
+
+def test_no_cuda_and_pre_ampere_are_unavailable(monkeypatch):
+    monkeypatch.setattr(av, "_checkpoint_present", lambda cache_dir=None: True)
+    for payload, expected in (
+        ({"ok": True, "missing": [], "cuda_available": False}, "CUDA"),
+        (
+            {
+                "ok": True,
+                "missing": [],
+                "cuda_available": True,
+                "cuda_compute_capability": [7, 5],
+            },
+            "8.0",
+        ),
+    ):
+        monkeypatch.setattr(
+            av,
+            "_run_probe",
+            lambda env, timeout, payload=payload: _FakeCompleted(
+                0, json.dumps(payload)
+            ),
+        )
+        got = av.probe_sam3_training_availability()
+        assert not got.usable
+        assert expected in got.reason

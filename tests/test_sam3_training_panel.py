@@ -28,9 +28,31 @@ def test_params_round_trip(qapp):
     got = panel.params()
     assert got.epochs == 10 and got.rank == 16
 
-    panel.set_params(Sam3LoraParams(prompt="beetle", epochs=3, rank=8))
+    panel.set_params(
+        Sam3LoraParams(
+            prompt="beetle",
+            epochs=3,
+            rank=8,
+            host_reserve_gb=12.0,
+            host_reserve_fraction=0.2,
+            cuda_safety_fraction=0.8,
+        )
+    )
     back = panel.params()
     assert back.prompt == "beetle" and back.epochs == 3 and back.rank == 8
+    assert back.host_reserve_gb == 12.0
+    assert back.host_reserve_fraction == pytest.approx(0.2)
+    assert back.cuda_safety_fraction == pytest.approx(0.8)
+
+
+def test_gui_exposes_only_verified_bf16_mode(qapp):
+    from hydra_suite.detectkit.gui.panels.sam3_training_panel import Sam3TrainingPanel
+
+    panel = Sam3TrainingPanel()
+
+    assert [
+        panel.precision_combo.itemText(i) for i in range(panel.precision_combo.count())
+    ] == ["bf16"]
 
 
 def test_training_is_blocked_until_labels_are_acknowledged(qapp):

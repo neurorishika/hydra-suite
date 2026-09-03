@@ -76,12 +76,19 @@ def test_run_path_carries_sam3_params_and_is_reachable(tmp_path, monkeypatch):
     from hydra_suite.detectkit.gui.models import DetectKitProject, OBBSource
     from hydra_suite.training.contracts import TrainingRole
 
+    monkeypatch.setattr(
+        td.QMessageBox,
+        "warning",
+        lambda _parent, title, message: pytest.fail(f"{title}: {message}"),
+    )
+
     proj = DetectKitProject(project_dir=tmp_path, class_names=["ant"])
     src_dir = tmp_path / "ds1"
     src_dir.mkdir()
     proj.sources = [OBBSource(path=str(src_dir), name="ds1")]
 
     dlg = td.TrainingDialog(proj)
+    dlg.chk_role_obb_direct.setChecked(False)  # current default plan; not under test
     dlg.chk_role_segment_direct.setChecked(False)  # default plan; not under test
     dlg.chk_semantic_sam3.setChecked(True)
     dlg.sam3_panel.prompt_edit.setText("ant")

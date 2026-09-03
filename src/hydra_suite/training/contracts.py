@@ -151,6 +151,14 @@ class Sam3LoraParams:
     grad_accum: int = 8
     mixed_precision: str = "bf16"
     num_negatives: int = 3
+    # Admission/containment policy.  These conservative defaults leave space
+    # for the desktop and other services while the separately supervised
+    # sidecar owns the remainder of the training budget.
+    host_reserve_gb: float = 8.0
+    host_reserve_fraction: float = 0.15
+    cuda_safety_fraction: float = 0.85
+    host_limit_headroom_fraction: float = 1.25
+    watchdog_poll_seconds: float = 1.0
     # Which submodules receive adapters. The text encoder is False as a
     # precaution against eroding prompt discrimination -- untested; the spike
     # froze it in every configuration.

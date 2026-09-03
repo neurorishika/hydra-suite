@@ -477,7 +477,17 @@ class DetectTrainingPlan:
             ):
                 if name in sam3_values:
                     sam3_values[name] = _require_int(sam3_values[name], f"sam3.{name}")
-            for name in ("dropout", "lr", "object_tile_fraction", "tile_overlap"):
+            for name in (
+                "dropout",
+                "lr",
+                "object_tile_fraction",
+                "tile_overlap",
+                "host_reserve_gb",
+                "host_reserve_fraction",
+                "cuda_safety_fraction",
+                "host_limit_headroom_fraction",
+                "watchdog_poll_seconds",
+            ):
                 if name in sam3_values:
                     sam3_values[name] = _require_number(
                         sam3_values[name], f"sam3.{name}"
@@ -600,6 +610,23 @@ class DetectTrainingPlan:
                 raise TrainingPlanError("sam3.batch must be positive")
             if self.sam3_params.grad_accum <= 0:
                 raise TrainingPlanError("sam3.grad_accum must be positive")
+            if self.sam3_params.mixed_precision != "bf16":
+                raise TrainingPlanError(
+                    "SAM3 training currently supports only CUDA BF16; "
+                    "fp16/fp32 modes are unsafe and disabled"
+                )
+            if self.sam3_params.host_reserve_gb < 0.0:
+                raise TrainingPlanError("sam3.host_reserve_gb must not be negative")
+            if not 0.0 <= self.sam3_params.host_reserve_fraction <= 1.0:
+                raise TrainingPlanError("sam3.host_reserve_fraction must be in [0, 1]")
+            if not 0.0 < self.sam3_params.cuda_safety_fraction <= 1.0:
+                raise TrainingPlanError("sam3.cuda_safety_fraction must be in (0, 1]")
+            if self.sam3_params.host_limit_headroom_fraction < 1.0:
+                raise TrainingPlanError(
+                    "sam3.host_limit_headroom_fraction must be at least 1"
+                )
+            if self.sam3_params.watchdog_poll_seconds <= 0.0:
+                raise TrainingPlanError("sam3.watchdog_poll_seconds must be positive")
             if not 0.0 <= self.sam3_params.tile_overlap < 1.0:
                 raise TrainingPlanError("sam3.tile_overlap must be in [0, 1)")
             if self.sam3_params.object_tile_fraction <= 0.0:

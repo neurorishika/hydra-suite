@@ -173,6 +173,24 @@ def _build_dataloader(spec: Any, params: Any, *, split: str) -> list:
     return build_descriptors(spec.derived_dataset_dir, params, split, seed=spec.seed)
 
 
+def _runtime_admission_refusal(torch_module: Any, params: Any) -> str | None:
+    """Repeat the parent precision/hardware gate before importing SAM3."""
+    if getattr(params, "mixed_precision", None) != "bf16":
+        return (
+            "SAM3 training supports only CUDA BF16; fp16/fp32 modes fail "
+            "against SAM3's BF16 activation path and are disabled."
+        )
+    if not torch_module.cuda.is_available():
+        return "SAM3 training requires a CUDA device; CPU and MPS are disabled."
+    major, minor = torch_module.cuda.get_device_capability()
+    if major < 8:
+        return (
+            "SAM3 training requires CUDA BF16 on compute capability >= 8.0; "
+            f"the selected GPU reports {major}.{minor}. FP32 fallback is disabled."
+        )
+    return None
+
+
 def run_training(spec: Any, run_dir_path: Path) -> bool:
     """Run the SAM3 LoRA training loop and write `adapters.pt`.
 
@@ -182,7 +200,6 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
     uncaught exception is `main()`'s cue to exit nonzero).
     """
     params = spec.sam3_params
-    _seed_everything(spec.seed)
 
     train_descriptors = _build_dataloader(spec, params, split="train")
     if not train_descriptors:
@@ -194,6 +211,12 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
 
     # --- Lazy, training-only imports -----------------------------------
     import torch
+
+    refusal = _runtime_admission_refusal(torch, params)
+    if refusal:
+        emit_log(refusal)
+        return False
+    _seed_everything(spec.seed)
 
     # NOTE: verified against the real Meta sam3 source on the CUDA box
     # (2026-08-31): sam3/build_sam.py does not exist. The builder lives in
@@ -287,14 +310,7 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
         optimizer, lr_lambda=_cosine_with_warmup(warmup_steps, total_steps)
     )
 
-    major, _minor = torch.cuda.get_device_capability()
-    use_bf16 = major >= 8 and params.mixed_precision == "bf16"
-    if params.mixed_precision == "bf16" and not use_bf16:
-        emit_log(
-            "GPU compute capability < 8.0; falling back to fp32 "
-            "(bf16 autocast is not supported)."
-        )
-    autocast_dtype = torch.bfloat16 if use_bf16 else torch.float32
+    autocast_dtype = torch.bfloat16
 
     global_step = 0
     logging_steps = 10
@@ -310,9 +326,7 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
         )
         n_epoch_batches = n_batches
         for micro_idx, batch in enumerate(epoch_batches):
-            with torch.autocast(
-                device_type="cuda", dtype=autocast_dtype, enabled=use_bf16
-            ):
+            with torch.autocast(device_type="cuda", dtype=autocast_dtype, enabled=True):
                 model_input, targets, outputs = _forward_batch(batch, model, device)
                 loss_dict = loss_fn(outputs, targets)
                 loss = _core_loss(loss_dict)
@@ -345,7 +359,7 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
         loss_fn,
         device,
         autocast_dtype,
-        use_bf16,
+        True,
         run_dir_path,
     )
     return True
