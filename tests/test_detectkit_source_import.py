@@ -452,3 +452,57 @@ def test_materialize_detectkit_source_can_link_and_normalize_in_place(tmp_path: 
     )
     assert len(fields) == 9
     assert fields[0] == "0"
+
+
+def test_materialize_detectkit_source_preserves_polygon_labels(tmp_path: Path):
+    """A polygon-level source must materialize as polygons, not collapse to quads.
+
+    Regression: `_convert_yolo_label_text` accepted only 5- or 9-field lines,
+    so making a project portable from a polygon-level source (e.g. an AL round
+    whose labels were escalated to masks) raised
+    "Unsupported YOLO annotation format ... expected 5 or 9 fields".
+    """
+    source_root = tmp_path / "polygon_source"
+    (source_root / "images").mkdir(parents=True)
+    (source_root / "labels").mkdir(parents=True)
+    _write_fake_image(source_root / "images" / "frame001.jpg")
+    polygon_line = "0 0.1 0.1 0.5 0.05 0.9 0.1 0.9 0.9 0.1 0.9"
+    (source_root / "labels" / "frame001.txt").write_text(
+        polygon_line + "\n", encoding="utf-8"
+    )
+    (source_root / "classes.txt").write_text("ant\n", encoding="utf-8")
+
+    materialized = materialize_detectkit_source(
+        source_root,
+        tmp_path / "project",
+        import_mode=IMPORT_MODE_PORTABLE,
+    )
+
+    assert materialized.level == "polygon"
+    label_text = (materialized.canonical_path / "labels" / "frame001.txt").read_text(
+        encoding="utf-8"
+    )
+    fields = label_text.strip().split()
+    assert len(fields) == 11
+    assert fields[0] == "0"
+    assert [float(value) for value in fields[1:]] == [
+        float(value) for value in polygon_line.split()[1:]
+    ]
+
+
+def test_materialize_detectkit_source_rejects_malformed_label_lines(tmp_path: Path):
+    source_root = tmp_path / "bad_source"
+    (source_root / "images").mkdir(parents=True)
+    (source_root / "labels").mkdir(parents=True)
+    _write_fake_image(source_root / "images" / "frame001.jpg")
+    (source_root / "labels" / "frame001.txt").write_text(
+        "0 0.1 0.2 0.3\n", encoding="utf-8"
+    )
+    (source_root / "classes.txt").write_text("ant\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="Unsupported YOLO annotation format"):
+        materialize_detectkit_source(
+            source_root,
+            tmp_path / "project",
+            import_mode=IMPORT_MODE_PORTABLE,
+        )
