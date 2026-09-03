@@ -130,6 +130,16 @@ def arm_parent_liveness_proxy(
             break
         if normal_shutdown:
             os._exit(0)
+        # Close the sample-to-EOF race: descendants may fork or call setsid
+        # while the guardian is blocked in select(). Capture once more after
+        # observing supervisor death and immediately before teardown.
+        captured_now, _ = _capture_descendant_identities(
+            workload_pid,
+            root_create_time,
+            captured,
+            max_identities=max_identities,
+        )
+        enumeration_succeeded = captured_now or enumeration_succeeded
         if systemd_unit is not None:
             _guard_systemd_scope(systemd_unit, captured)
         else:

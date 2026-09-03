@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import codecs
 import os
 import platform
 import signal
@@ -559,24 +560,48 @@ def pump_stdout(
     if read_chunk_chars < 1:
         raise ValueError("stdout read chunks must be positive")
     pending = ""
+
+    def retain(chunk: str) -> None:
+        nonlocal pending
+        pending += chunk
+        while pending:
+            newline = pending.find("\n")
+            if newline >= 0:
+                output.append(pending[: newline + 1])
+                pending = pending[newline + 1 :]
+            elif len(pending) >= read_chunk_chars:
+                # A newline-free log record must never grow with producer
+                # output. Preserve it as independently bounded fragments.
+                output.append(pending[:read_chunk_chars])
+                pending = pending[read_chunk_chars:]
+            else:
+                break
+
+    binary_buffer = getattr(stdout, "buffer", None)
+    read_available = getattr(binary_buffer, "read1", None)
+    decoder = None
+    if callable(read_available):
+        # Buffered ``read1`` returns currently available pipe bytes instead of
+        # waiting for the requested count like TextIOWrapper.read(size).
+        decoder = codecs.getincrementaldecoder(
+            getattr(stdout, "encoding", None) or "utf-8"
+        )(errors="replace")
+    else:
+        read_available = stdout.read
     try:
         while True:
-            chunk = stdout.read(read_chunk_chars)
-            if not chunk:
+            raw_chunk = read_available(read_chunk_chars)
+            if not raw_chunk:
                 break
-            pending += str(chunk)
-            while pending:
-                newline = pending.find("\n")
-                if newline >= 0:
-                    output.append(pending[: newline + 1])
-                    pending = pending[newline + 1 :]
-                elif len(pending) >= read_chunk_chars:
-                    # A newline-free log record must never grow with producer
-                    # output. Preserve it as independently bounded fragments.
-                    output.append(pending[:read_chunk_chars])
-                    pending = pending[read_chunk_chars:]
-                else:
-                    break
+            if isinstance(raw_chunk, bytes):
+                if decoder is None:
+                    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+                chunk = decoder.decode(raw_chunk, final=False)
+            else:
+                chunk = str(raw_chunk)
+            retain(chunk)
+        if decoder is not None:
+            retain(decoder.decode(b"", final=True))
         if pending:
             output.append(pending)
     except Exception as exc:  # noqa: BLE001 - transferred to owner thread

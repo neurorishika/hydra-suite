@@ -388,6 +388,37 @@ def test_newline_free_multi_megabyte_output_is_read_in_bounded_chunks(tmp_path):
     assert output.dropped_lines > 0
 
 
+def test_short_progress_line_is_available_before_live_pipe_reaches_eof():
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import time; print('ready', flush=True); time.sleep(60)",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    assert process.stdout is not None
+    output = BoundedLineBuffer(max_lines=4, max_chars=1024)
+    reader = supervisor_module.threading.Thread(
+        target=supervisor_module.pump_stdout,
+        args=(process.stdout, output),
+        daemon=True,
+    )
+    reader.start()
+    try:
+        lines, eof, error = output.drain(timeout=1.0)
+    finally:
+        process.kill()
+        process.wait(timeout=5)
+        reader.join(timeout=2)
+
+    assert lines == ["ready\n"]
+    assert not eof
+    assert error is None
+
+
 def test_drained_lines_are_retained_as_tail_without_being_reported_as_dropped():
     output = BoundedLineBuffer(max_lines=2, max_chars=100)
     output.append("first\n")
@@ -746,6 +777,10 @@ while escaped_pid is None and time.monotonic() < deadline:
     for line in lines:
         if line.strip().isdigit():
             escaped_pid = int(line.strip())
+if escaped_pid is None:
+    print('missing-escaped-pid', flush=True)
+    sidecar.cancel(0.05)
+    raise SystemExit(2)
 try:
     psutil.Process(sidecar.process.pid).children(recursive=True)
 except (psutil.Error, OSError):
@@ -767,6 +802,11 @@ os._exit(0)
     helper.wait(timeout=10)
     if report == "unsupported":
         pytest.skip("sandbox denies descendant enumeration needed by this OS test")
+    assert helper.returncode == 0, (
+        f"helper failed before reporting the escaped PID: {report!r}; "
+        f"stderr={helper.stderr.read() if helper.stderr is not None else ''}"
+    )
+    assert report != "missing-escaped-pid", "child progress line was not delivered"
     root_pid, escaped_pid = map(int, report.split(","))
 
     _wait_until_gone(root_pid)
