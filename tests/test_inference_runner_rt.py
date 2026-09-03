@@ -156,6 +156,35 @@ def test_run_realtime_persists_detection_cache_for_backward(tmp_path):
         assert fr.obb.num_detections == 2  # 0.9 & 0.8 pass the 0.5 conf gate
 
 
+def test_run_realtime_records_downstream_empty_coverage(tmp_path):
+    from hydra_suite.core.inference.runner import InferenceRunner, _AllModels, _CacheSet
+
+    cfg = _cfg()
+    handles = {
+        name: MagicMock() for name in ("detection", "headtail", "pose", "apriltag")
+    }
+    cnn_cache = MagicMock()
+    caches = _CacheSet(**handles, cnn=[cnn_cache])
+    models = _AllModels(
+        obb=MagicMock(), headtail=None, cnn=[], pose=None, apriltag=None
+    )
+    empty = _make_obb(n=0, frame_idx=4)
+
+    with (
+        patch(
+            "hydra_suite.core.inference.runner._load_all_models", return_value=models
+        ),
+        patch("hydra_suite.core.inference.runner._open_caches", return_value=caches),
+        patch("hydra_suite.core.inference.runner.run_obb", return_value=[empty]),
+    ):
+        runner = InferenceRunner(cfg, cache_dir=tmp_path)
+        runner.run_realtime(np.zeros((8, 8, 3), dtype=np.uint8), 4)
+
+    for name in ("headtail", "pose", "apriltag"):
+        handles[name].write_frame.assert_called_once()
+    cnn_cache.write_frame.assert_called_once_with(4, predictions=[])
+
+
 def test_inference_runner_close_calls_model_close():
     from hydra_suite.core.inference.runner import InferenceRunner, _AllModels
 

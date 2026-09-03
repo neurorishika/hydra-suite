@@ -63,6 +63,15 @@ def test_caches_invalidated_when_video_file_changes(tmp_path):
     assert runner2.caches_all_valid() is False
 
 
+def test_open_caches_propagates_coordinated_access_mode(tmp_path):
+    from hydra_suite.core.inference.runner import _open_caches
+
+    caches = _open_caches(_cfg(), tmp_path, read_only=True, write_mode="resume")
+    assert caches.all_handles()
+    assert all(handle.read_only for handle in caches.all_handles())
+    assert all(handle.write_mode == "resume" for handle in caches.all_handles())
+
+
 def test_run_batch_pass_raises_without_cache_dir():
     from hydra_suite.core.inference.runner import InferenceRunner
 
@@ -350,6 +359,38 @@ def test_process_obb_results_applies_roi_mask_filter(tmp_path):
         f"{results[0].obb.num_detections} surviving"
     )
     np.testing.assert_allclose(results[0].obb.centroids[0], [5.0, 5.0])
+
+
+def test_process_window_records_downstream_empty_coverage(tmp_path):
+    from hydra_suite.core.inference.pipeline import BatchWindow
+    from hydra_suite.core.inference.runner import InferenceRunner, _CacheSet
+
+    cfg = _cfg()
+    handles = {
+        name: MagicMock() for name in ("detection", "headtail", "pose", "apriltag")
+    }
+    caches = _CacheSet(**handles)
+
+    with (
+        patch("hydra_suite.core.inference.runner._load_all_models") as load,
+        patch(
+            "hydra_suite.core.inference.pipeline.run_obb",
+            return_value=[_make_obb(n=0, frame_idx=5)],
+        ),
+    ):
+        load.return_value = MagicMock(
+            obb=MagicMock(), headtail=None, cnn=[], pose=None, apriltag=None
+        )
+        runner = InferenceRunner(cfg, cache_dir=tmp_path)
+        pipeline = runner._build_pipeline(caches)
+        pipeline._process_window(
+            BatchWindow(frames=[np.zeros((8, 8, 3), dtype=np.uint8)], frame_indices=[5])
+        )
+        pipeline.cache_writer.flush()
+        pipeline.cache_writer.close()
+
+    for name in ("headtail", "pose", "apriltag"):
+        handles[name].write_frame.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -203,8 +204,9 @@ def test_failed_new_generation_keeps_previous_manifest_honest(tmp_path, monkeypa
         raise RuntimeError("simulated crash after replacement chunk rename")
 
     monkeypatch.setattr(replacement._store, "_publish_manifest", fail_manifest)
+    replacement.write_frame(0, result=_obb(0, 2))
     with pytest.raises(RuntimeError, match="replacement chunk rename"):
-        replacement.write_frame(0, result=_obb(0, 2))
+        replacement.close()
 
     assert path.read_bytes() == published
     recovered = DetectionCacheHandle(path, _key())
@@ -396,3 +398,205 @@ def test_cache_key_mismatch_does_not_return_empty_result(tmp_path):
     reader = DetectionCacheHandle(path, wrong)
     assert not reader.is_valid()
     assert reader.read_frame(0) is None
+
+
+def _write_manifest(path: Path, *, session_id: str, entries: list[dict], **overrides):
+    arrays = {
+        "chunked_format_version": np.asarray([1], np.int32),
+        "cache_kind": np.asarray(["detection"]),
+        "cache_key": np.asarray([_key().as_string()]),
+        "session_id": np.asarray([session_id]),
+        "chunks_json": np.asarray([json.dumps(entries)]),
+    }
+    arrays.update(overrides)
+    chunked._atomic_npz_save(path, **arrays)
+
+
+def test_manifest_rejects_empty_scalar_arrays_instead_of_raising(tmp_path):
+    path = tmp_path / "detection.npz"
+    _write_manifest(
+        path,
+        session_id="safe-session",
+        entries=[],
+        chunked_format_version=np.asarray([], np.int32),
+    )
+
+    reader = DetectionCacheHandle(path, _key())
+    assert reader.is_valid() is False
+
+
+@pytest.mark.parametrize("session_id", [".", "..", "a/b", "a\\b", ""])
+def test_manifest_rejects_unsafe_session_ids(tmp_path, session_id):
+    path = tmp_path / "detection.npz"
+    _write_manifest(path, session_id=session_id, entries=[])
+    assert DetectionCacheHandle(path, _key()).is_valid() is False
+
+
+@pytest.mark.parametrize(
+    "ranges",
+    [
+        [[-1, 0]],
+        [[4, 3]],
+        [[0, 2], [2, 4]],
+        [[0, 10**12]],
+        [],
+    ],
+)
+def test_manifest_rejects_invalid_or_attacker_sized_ranges(tmp_path, ranges):
+    path = tmp_path / "detection.npz"
+    session = "safe-session"
+    chunk_dir = tmp_path / "detection.npz.chunks" / session
+    payload_path = chunk_dir / "chunk-00000000.npz"
+    chunked._atomic_npz_save(
+        payload_path,
+        written_frames=np.asarray([0], np.int64),
+        frame_indices=np.asarray([0], np.int64),
+        marker=np.asarray([1], np.int64),
+    )
+    _write_manifest(
+        path,
+        session_id=session,
+        entries=[
+            {
+                "name": payload_path.name,
+                "ranges": ranges,
+                "byte_size": payload_path.stat().st_size,
+                "sha256": chunked._sha256_file(payload_path),
+            }
+        ],
+    )
+
+    reader = DetectionCacheHandle(path, _key())
+    assert reader.is_valid() is False
+    assert reader.contains_frame(0) is False
+
+
+def test_contains_frame_uses_index_without_expanding_coverage(tmp_path):
+    path = tmp_path / "detection.npz"
+    writer = DetectionCacheHandle(path, _key(), chunk_size=2)
+    writer.write_frame(10, result=_obb(10, 0))
+    writer.write_frame(11, result=_obb(11, 1))
+    writer.close()
+
+    reader = DetectionCacheHandle(path, _key(), read_only=True)
+    assert reader.contains_frame(10)
+    assert reader.contains_frame(11)
+    assert not reader.contains_frame(12)
+
+
+def test_iter_arrays_emits_only_winning_rows_from_overlapping_chunks(tmp_path):
+    store = chunked.ChunkedArrayStore(tmp_path / "detection.npz", _key(), "detection")
+    store.append_chunk(
+        [0], {"frame_indices": np.asarray([0]), "marker": np.asarray([0])}
+    )
+    store.append_chunk(
+        [2], {"frame_indices": np.asarray([2]), "marker": np.asarray([2])}
+    )
+    store.append_chunk(
+        [1, 2],
+        {"frame_indices": np.asarray([1, 2]), "marker": np.asarray([11, 12])},
+    )
+
+    rows = [int(v) for arrays in store.iter_chunk_arrays() for v in arrays["marker"]]
+    assert rows == [0, 11, 12]
+
+
+def test_same_size_chunk_corruption_fails_deep_reuse_validation(tmp_path):
+    path = tmp_path / "detection.npz"
+    writer = DetectionCacheHandle(path, _key(), chunk_size=1)
+    writer.write_frame(0, result=_obb(0, 1))
+    writer.close()
+    payload = next((tmp_path / "detection.npz.chunks").rglob("chunk-*.npz"))
+    damaged = bytearray(payload.read_bytes())
+    damaged[len(damaged) // 2] ^= 0x01
+    payload.write_bytes(damaged)
+
+    reader = DetectionCacheHandle(path, _key(), read_only=True)
+    assert reader.is_valid() is True
+    assert reader.is_reusable() is False
+
+
+def test_legacy_manifest_remains_visible_until_full_replacement_close(tmp_path):
+    path = tmp_path / "detection.npz"
+    legacy = _obb(9, 1)
+    _npz_save(
+        path,
+        _key(),
+        written_frames=np.asarray([9], np.int64),
+        frame_indices=np.asarray([9], np.int64),
+        centroids=legacy.centroids,
+        angles=legacy.angles,
+        sizes=legacy.sizes,
+        shapes=legacy.shapes,
+        confidences=legacy.confidences,
+        corners=legacy.corners,
+        detection_ids=legacy.detection_ids,
+        class_ids=legacy.class_ids,
+    )
+    replacement = DetectionCacheHandle(path, _key(), chunk_size=1, write_mode="fresh")
+    replacement.write_frame(0, result=_obb(0, 1))
+
+    during = DetectionCacheHandle(path, _key(), read_only=True)
+    assert during.is_legacy
+    assert during.read_frame(9).num_detections == 1
+
+    replacement.write_frame(1, result=_obb(1, 1))
+    replacement.close()
+    after = DetectionCacheHandle(path, _key(), read_only=True)
+    assert not after.is_legacy
+    assert after.covers_frame_range(0, 1)
+
+
+def test_resume_mode_keeps_generation_when_first_frame_is_already_covered(tmp_path):
+    path = tmp_path / "detection.npz"
+    first = DetectionCacheHandle(path, _key(), chunk_size=1)
+    first.write_frame(0, result=_obb(0, 1))
+    first.close()
+    session = DetectionCacheHandle(path, _key())._store._session_id
+
+    resumed = DetectionCacheHandle(path, _key(), chunk_size=1, write_mode="resume")
+    resumed.write_frame(0, result=_obb(0, 2))
+    resumed.write_frame(1, result=_obb(1, 1))
+    resumed.close()
+
+    reader = DetectionCacheHandle(path, _key())
+    assert reader._store._session_id == session
+    assert reader.read_frame(0).num_detections == 2
+    assert reader.read_frame(1).num_detections == 1
+
+
+def test_handle_flushes_on_bytes_before_frame_count(tmp_path):
+    writer = DetectionCacheHandle(
+        tmp_path / "detection.npz",
+        _key(),
+        chunk_size=100,
+        max_buffer_bytes=700,
+    )
+    writer.write_frame(0, result=_obb(0, 2))
+    writer.write_frame(1, result=_obb(1, 2))
+    writer.close()
+    assert len(writer._store._entries) >= 2
+
+
+def test_handle_rejects_one_payload_larger_than_buffer_budget(tmp_path):
+    writer = DetectionCacheHandle(
+        tmp_path / "detection.npz",
+        _key(),
+        max_buffer_bytes=64,
+    )
+    with pytest.raises(ValueError, match="cache frame payload exceeds"):
+        writer.write_frame(0, result=_obb(0, 10))
+
+
+def test_detection_write_rejects_misaligned_result(tmp_path):
+    writer = DetectionCacheHandle(tmp_path / "detection.npz", _key())
+    with pytest.raises(ValueError, match="frame_idx"):
+        writer.write_frame(3, result=_obb(4, 1))
+
+
+def test_detection_write_rejects_misaligned_array_lengths(tmp_path):
+    writer = DetectionCacheHandle(tmp_path / "detection.npz", _key())
+    result = _obb(3, 2)
+    result.angles = result.angles[:1]
+    with pytest.raises(ValueError, match="aligned lengths"):
+        writer.write_frame(3, result=result)

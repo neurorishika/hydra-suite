@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import tempfile
 from bisect import bisect_right
 from dataclasses import dataclass
@@ -24,6 +25,9 @@ from .base import CacheKey
 CHUNK_FORMAT_VERSION = 1
 DEFAULT_CHUNK_FRAMES = 64
 _FORMAT_FIELD = "chunked_format_version"
+MAX_CHUNK_FRAMES = 1_000_000
+MAX_FRAME_INDEX = np.iinfo(np.int32).max
+_SAFE_COMPONENT = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 @dataclass(frozen=True)
@@ -35,15 +39,50 @@ class ChunkEntry:
 
     @classmethod
     def from_dict(cls, raw: dict) -> "ChunkEntry":
+        if not isinstance(raw, dict):
+            raise TypeError("chunk entry must be an object")
+        name = raw["name"]
+        if (
+            not isinstance(name, str)
+            or re.fullmatch(r"chunk-[0-9]{8}\.npz", name) is None
+        ):
+            raise ValueError("unsafe chunk name")
+        byte_size = raw["byte_size"]
+        sha256 = raw["sha256"]
+        if (
+            not isinstance(byte_size, int)
+            or isinstance(byte_size, bool)
+            or byte_size < 1
+        ):
+            raise ValueError("invalid chunk byte size")
+        if not isinstance(sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", sha256):
+            raise ValueError("invalid chunk checksum")
+        ranges_raw = raw.get("ranges")
+        if not isinstance(ranges_raw, list) or not ranges_raw:
+            raise ValueError("chunk ranges must be a nonempty list")
+        ranges: list[tuple[int, int]] = []
+        cardinality = 0
+        previous_end = -1
+        for bounds in ranges_raw:
+            if not isinstance(bounds, list) or len(bounds) != 2:
+                raise ValueError("invalid chunk range")
+            start, end = bounds
+            if any(not isinstance(v, int) or isinstance(v, bool) for v in bounds):
+                raise ValueError("chunk range bounds must be integers")
+            if start < 0 or start > end or end > MAX_FRAME_INDEX:
+                raise ValueError("chunk range is out of bounds")
+            if start <= previous_end:
+                raise ValueError("chunk ranges must be ordered and disjoint")
+            cardinality += end - start + 1
+            if cardinality > MAX_CHUNK_FRAMES:
+                raise ValueError("chunk frame cardinality exceeds safety limit")
+            ranges.append((start, end))
+            previous_end = end
         return cls(
-            name=str(raw["name"]),
-            ranges=(
-                tuple((int(start), int(end)) for start, end in raw["ranges"])
-                if "ranges" in raw
-                else _compress_frames(tuple(int(v) for v in raw["frames"]))
-            ),
-            byte_size=int(raw["byte_size"]),
-            sha256=str(raw["sha256"]),
+            name=name,
+            ranges=tuple(ranges),
+            byte_size=byte_size,
+            sha256=sha256,
         )
 
     def to_dict(self) -> dict:
@@ -84,6 +123,40 @@ def _compress_frames(frames: tuple[int, ...]) -> tuple[tuple[int, int], ...]:
         start = previous = frame
     ranges.append((start, previous))
     return tuple(ranges)
+
+
+def _safe_component(value: str) -> bool:
+    return value not in {".", ".."} and _SAFE_COMPONENT.fullmatch(value) is not None
+
+
+def _scalar(raw: np.lib.npyio.NpzFile, name: str):
+    value = raw[name]
+    if value.ndim != 1 or value.size != 1:
+        raise ValueError(f"manifest field {name!r} must contain exactly one value")
+    return value[0]
+
+
+def _frames_match_ranges(
+    frames: np.ndarray, ranges: tuple[tuple[int, int], ...]
+) -> bool:
+    values = np.asarray(frames)
+    if values.ndim != 1 or values.size > MAX_CHUNK_FRAMES:
+        return False
+    expected_count = sum(end - start + 1 for start, end in ranges)
+    if values.size != expected_count:
+        return False
+    offset = 0
+    for start, end in ranges:
+        length = end - start + 1
+        part = values[offset : offset + length]
+        if length and (
+            int(part[0]) != start
+            or int(part[-1]) != end
+            or (length > 1 and not np.all(np.diff(part) == 1))
+        ):
+            return False
+        offset += length
+    return True
 
 
 def _atomic_npz_save(path: Path, **arrays: np.ndarray) -> None:
@@ -154,6 +227,8 @@ class ChunkedArrayStore:
         self._cached_entry: ChunkEntry | None = None
         self._cached_arrays: dict[str, np.ndarray] | None = None
         self._fresh_staged = False
+        self._defer_manifest = False
+        self._deep_validated = False
 
     @property
     def is_legacy(self) -> bool:
@@ -168,6 +243,25 @@ class ChunkedArrayStore:
         self._load_manifest()
         return self._valid
 
+    def is_reusable(self) -> bool:
+        """Validate every referenced payload checksum before replay."""
+        self._load_manifest()
+        if not self._valid:
+            return False
+        if self._deep_validated:
+            return True
+        if self._legacy:
+            self._deep_validated = self.load_legacy() is not None
+            return self._deep_validated
+        for entry in self._entries:
+            arrays = self._load_entry_arrays(entry)
+            if arrays is None:
+                return False
+            self._cached_entry = entry
+            self._cached_arrays = arrays
+        self._deep_validated = True
+        return True
+
     def _load_manifest(self) -> None:
         if self._loaded:
             return
@@ -180,33 +274,46 @@ class ChunkedArrayStore:
                 if _FORMAT_FIELD not in files:
                     self._legacy = True
                     if self.require_key:
-                        stored_key = str(raw["cache_key"][0])
+                        stored_key = str(_scalar(raw, "cache_key"))
                         self._valid = stored_key == self.key.as_string()
                     else:
                         self._valid = True
                     return
-                version = int(raw[_FORMAT_FIELD][0])
-                stored_kind = str(raw["cache_kind"][0])
-                stored_key = str(raw["cache_key"][0])
-                session_id = str(raw["session_id"][0])
-                entries_raw = json.loads(str(raw["chunks_json"][0]))
+                if files != {
+                    _FORMAT_FIELD,
+                    "cache_kind",
+                    "cache_key",
+                    "session_id",
+                    "chunks_json",
+                }:
+                    return
+                if raw[_FORMAT_FIELD].dtype.kind not in "iu":
+                    return
+                if any(
+                    raw[name].dtype.kind not in "US"
+                    for name in ("cache_kind", "cache_key", "session_id", "chunks_json")
+                ):
+                    return
+                version = int(_scalar(raw, _FORMAT_FIELD))
+                stored_kind = str(_scalar(raw, "cache_kind"))
+                stored_key = str(_scalar(raw, "cache_key"))
+                session_id = str(_scalar(raw, "session_id"))
+                entries_raw = json.loads(str(_scalar(raw, "chunks_json")))
             if version != CHUNK_FORMAT_VERSION or stored_kind != self.kind:
                 return
             if self.require_key and stored_key != self.key.as_string():
                 return
+            if not isinstance(entries_raw, list) or len(entries_raw) > MAX_CHUNK_FRAMES:
+                return
             entries = [ChunkEntry.from_dict(item) for item in entries_raw]
-            if not session_id or Path(session_id).name != session_id:
+            if not _safe_component(session_id):
                 return
             self._session_id = session_id
             self._entries = entries
             # Missing or truncated referenced chunks invalidate the cache. A
             # renamed-but-unpublished orphan is absent from entries and ignored.
             for entry in entries:
-                if (
-                    not entry.ranges
-                    or Path(entry.name).name != entry.name
-                    or not entry.name.startswith("chunk-")
-                ):
+                if not entry.ranges or not entry.name.startswith("chunk-"):
                     return
                 chunk_path = self._chunk_path(entry)
                 if (
@@ -216,7 +323,14 @@ class ChunkedArrayStore:
                     return
             self._rebuild_frame_index()
             self._valid = True
-        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+        except (
+            OSError,
+            ValueError,
+            KeyError,
+            TypeError,
+            IndexError,
+            json.JSONDecodeError,
+        ):
             self._valid = False
 
     def _rebuild_frame_index(self) -> None:
@@ -251,6 +365,14 @@ class ChunkedArrayStore:
             for frame in range(start, end + 1)
         }
 
+    def contains_frame(self, frame_idx: int) -> bool:
+        self._load_manifest()
+        return (
+            self._valid
+            and not self._legacy
+            and self._entry_for_frame(int(frame_idx)) is not None
+        )
+
     def covered_ranges(self) -> tuple[tuple[int, int], ...]:
         """Return normalized processed-frame coverage without expanding IDs."""
         self._load_manifest()
@@ -272,6 +394,14 @@ class ChunkedArrayStore:
         frames = tuple(int(frame) for frame in written_frames)
         if not frames:
             return
+        if (
+            len(frames) > MAX_CHUNK_FRAMES
+            or any(frame < 0 or frame > MAX_FRAME_INDEX for frame in frames)
+            or any(right <= left for left, right in zip(frames, frames[1:]))
+        ):
+            raise ValueError(
+                "written frames must be unique, nonnegative, and increasing"
+            )
         self._prepare_for_write()
         sequence = len(self._entries)
         name = f"chunk-{sequence:08d}.npz"
@@ -287,13 +417,15 @@ class ChunkedArrayStore:
             sha256=_sha256_file(chunk_path),
         )
         new_entries = [*self._entries, entry]
-        self._publish_manifest(new_entries)
+        if not self._defer_manifest:
+            self._publish_manifest(new_entries)
         self._entries = new_entries
         self._rebuild_frame_index()
         self._valid = True
         self._legacy = False
         self._cached_entry = None
         self._cached_arrays = None
+        self._deep_validated = False
 
     @staticmethod
     def _validate_staged_chunk(
@@ -317,6 +449,14 @@ class ChunkedArrayStore:
         self._rebuild_frame_index()
         self._valid = True
 
+    def commit_generation(self) -> None:
+        """Atomically publish a complete staged replacement generation."""
+        if self._defer_manifest:
+            self._publish_manifest(self._entries)
+            self._defer_manifest = False
+            self._valid = True
+            self._legacy = False
+
     def _prepare_for_write(self) -> None:
         self._load_manifest()
         if self._fresh_staged:
@@ -325,6 +465,7 @@ class ChunkedArrayStore:
             return
         # Invalid, missing, and legacy files start a fresh chunk session on the
         # first actual write. Merely opening a write handle never migrates data.
+        preserve_published_cache = self.path.is_file()
         self._legacy = False
         self._valid = False
         self._session_id = self._session_prefix() + "-00000000"
@@ -333,6 +474,7 @@ class ChunkedArrayStore:
         self._range_starts = []
         self._range_prefix_max_end = []
         self._fresh_staged = True
+        self._defer_manifest = preserve_published_cache
 
     def start_fresh(self) -> None:
         """Stage a new generation while leaving the published cache untouched."""
@@ -353,7 +495,9 @@ class ChunkedArrayStore:
         self._legacy = False
         self._cached_entry = None
         self._cached_arrays = None
+        self._deep_validated = False
         self._fresh_staged = True
+        self._defer_manifest = True
 
     def _session_prefix(self) -> str:
         identity = f"{self.kind}\0{self.key.as_string()}".encode("utf-8")
@@ -383,23 +527,28 @@ class ChunkedArrayStore:
         if entry is None:
             return None
         if entry != self._cached_entry:
-            chunk_path = self._chunk_path(entry)
-            try:
-                if _sha256_file(chunk_path) != entry.sha256:
-                    self._valid = False
-                    return None
-                with np.load(chunk_path, allow_pickle=False) as raw:
-                    arrays = {name: raw[name] for name in raw.files}
-                stored_frames = tuple(int(v) for v in arrays["written_frames"])
-                if stored_frames != entry.frames:
-                    self._valid = False
-                    return None
-            except (OSError, ValueError, KeyError):
-                self._valid = False
+            arrays = self._load_entry_arrays(entry)
+            if arrays is None:
                 return None
             self._cached_entry = entry
             self._cached_arrays = arrays
         return self._cached_arrays
+
+    def _load_entry_arrays(self, entry: ChunkEntry) -> dict[str, np.ndarray] | None:
+        chunk_path = self._chunk_path(entry)
+        try:
+            if _sha256_file(chunk_path) != entry.sha256:
+                self._valid = False
+                return None
+            with np.load(chunk_path, allow_pickle=False) as raw:
+                arrays = {name: raw[name] for name in raw.files}
+            if not _frames_match_ranges(arrays["written_frames"], entry.ranges):
+                self._valid = False
+                return None
+            return arrays
+        except (OSError, ValueError, KeyError):
+            self._valid = False
+            return None
 
     def _entry_for_frame(self, frame_idx: int) -> ChunkEntry | None:
         position = bisect_right(self._range_starts, frame_idx) - 1
@@ -427,11 +576,39 @@ class ChunkedArrayStore:
         if not self._valid or self._legacy:
             return
         for entry in self._entries:
-            first = entry.first_frame
-            arrays = self.read_frame_arrays(first)
+            arrays = self._load_entry_arrays(entry)
             if arrays is None:
                 return
-            yield arrays
+            winning = np.asarray(
+                [
+                    self._entry_for_frame(int(frame)) == entry
+                    for frame in arrays["written_frames"]
+                ],
+                dtype=bool,
+            )
+            if not np.any(winning):
+                continue
+            winning_frames = arrays["written_frames"][winning]
+            row_frames = np.asarray(arrays.get("frame_indices", []))
+            row_mask = np.isin(row_frames, winning_frames)
+            filtered = {}
+            metadata_fields = {
+                "factor_names_json",
+                "class_names_json",
+                "class_counts",
+            }
+            for name, value in arrays.items():
+                if name == "written_frames":
+                    filtered[name] = winning_frames
+                elif (
+                    name not in metadata_fields
+                    and value.ndim > 0
+                    and len(value) == len(row_frames)
+                ):
+                    filtered[name] = value[row_mask]
+                else:
+                    filtered[name] = value
+            yield filtered
 
     def load_legacy(self) -> dict[str, np.ndarray] | None:
         """Materialize a legacy NPZ only; new chunked caches never use this."""

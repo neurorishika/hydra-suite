@@ -342,7 +342,17 @@ class Pipeline:
                     cfg, obb_result, self.stages.roi_mask
                 )
                 if filtered_obb.num_detections == 0:
-                    # _run_batch ``continue``s: no downstream stage / cache writes.
+                    # Coverage is per enabled cache, not per detection. Persist
+                    # an explicit empty so an interrupted pass cannot look
+                    # complete in detection while downstream remains partial.
+                    self.cache_writer.write_downstream(
+                        frame_idx,
+                        det_indices=det_indices,
+                        headtail=None,
+                        cnn_results=[],
+                        pose=None,
+                        apriltag=None,
+                    )
                     continue
                 filtered_by_frame[frame_idx] = filtered_obb
                 det_indices_by_frame[frame_idx] = det_indices

@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from hydra_suite.core.inference.cache.reuse import (
     _cache_key_for,
@@ -164,3 +165,43 @@ def test_reused_reader_loads_only_each_requested_payload_chunk(tmp_path, monkeyp
 
     # Both requested frames share the default 64-frame payload chunk.
     assert payload_calls == 1
+
+
+@pytest.mark.parametrize(
+    ("frames", "indices", "message"),
+    [
+        ([np.zeros((2, 2, 3), np.uint8)], [0, 1], "same length"),
+        ([np.zeros((2, 2, 3), np.uint8)] * 2, [1, 1], "unique"),
+        ([np.zeros((2, 2, 3), np.uint8)] * 2, [2, 1], "increasing"),
+        ([np.zeros((2, 2, 3), np.uint8)], [-1], "nonnegative"),
+    ],
+)
+def test_get_or_compute_raw_rejects_misaligned_or_invalid_requests(
+    tmp_path, frames, indices, message
+):
+    with pytest.raises(ValueError, match=message):
+        get_or_compute_raw(_FakeRunner(), tmp_path, frames, indices)
+
+
+class _ShortRunner(_FakeRunner):
+    def detect_batch_raw(self, frames, frame_indices=None, roi_mask=None):
+        return []
+
+
+class _WrongFrameRunner(_FakeRunner):
+    def detect_batch_raw(self, frames, frame_indices=None, roi_mask=None):
+        return [_make_raw_result(frame_indices[0] + 1)]
+
+
+def test_get_or_compute_raw_rejects_wrong_result_count(tmp_path):
+    with pytest.raises(ValueError, match="one result per frame"):
+        get_or_compute_raw(
+            _ShortRunner(), tmp_path, [np.zeros((2, 2, 3), np.uint8)], [0]
+        )
+
+
+def test_get_or_compute_raw_rejects_result_frame_mismatch(tmp_path):
+    with pytest.raises(ValueError, match="frame_idx"):
+        get_or_compute_raw(
+            _WrongFrameRunner(), tmp_path, [np.zeros((2, 2, 3), np.uint8)], [0]
+        )

@@ -103,12 +103,25 @@ def get_or_compute_raw(
     """
     frame_indices = list(frame_indices)
     frames = list(frames)
+    if len(frames) != len(frame_indices):
+        raise ValueError("frames and frame_indices must have the same length")
+    if any(not isinstance(idx, (int, np.integer)) for idx in frame_indices):
+        raise ValueError("frame indices must be integers")
+    if any(int(idx) < 0 for idx in frame_indices):
+        raise ValueError("frame indices must be nonnegative")
+    if len({int(idx) for idx in frame_indices}) != len(frame_indices):
+        raise ValueError("frame indices must be unique")
+    if any(right <= left for left, right in zip(frame_indices, frame_indices[1:])):
+        raise ValueError("frame indices must be strictly increasing")
     cache_path = Path(cache_dir) / "detection.npz"
     read_handle = cache_reader or open_raw_detection_cache_reader(runner, cache_dir)
     cached: dict[int, OBBResult | None] = {}
     missing_indices = list(frame_indices)
     missing_frames = list(frames)
-    if read_handle.is_valid():
+    structurally_valid = read_handle.is_valid()
+    reusable = read_handle.is_reusable() if structurally_valid else False
+    replacement_required = structurally_valid and not reusable
+    if reusable:
         cached = {idx: read_handle.read_frame(idx) for idx in frame_indices}
         missing_indices = [idx for idx in frame_indices if cached[idx] is None]
         if not missing_indices:
@@ -121,8 +134,18 @@ def get_or_compute_raw(
             cached = {}
             missing_indices = list(frame_indices)
             missing_frames = list(frames)
+            replacement_required = True
 
     raw_results = runner.detect_batch_raw(missing_frames, frame_indices=missing_indices)
+    if len(raw_results) != len(missing_indices):
+        raise ValueError("detect_batch_raw must return one result per frame")
+    if any(
+        int(result.frame_idx) != int(idx)
+        for idx, result in zip(missing_indices, raw_results)
+    ):
+        raise ValueError(
+            "detect_batch_raw result.frame_idx must match its requested frame"
+        )
 
     if not write:
         computed = dict(zip(missing_indices, raw_results))
@@ -137,6 +160,7 @@ def get_or_compute_raw(
         key=key,
         require_key=require_key,
         read_only=False,
+        write_mode="fresh" if replacement_required else "resume",
     )
     for idx, result in zip(missing_indices, raw_results):
         write_handle.write_frame(idx, result=result)

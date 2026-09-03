@@ -285,7 +285,11 @@ def build_density_cache_dict(
         from hydra_suite.core.inference.runner import _open_caches as _oc
 
         runner._caches = _oc(
-            runner.config, runner.cache_dir, runner._video_sig, runner._roi_mask
+            runner.config,
+            runner.cache_dir,
+            runner._video_sig,
+            runner._roi_mask,
+            read_only=True,
         )
 
     det_cache = runner._caches.detection
@@ -298,11 +302,7 @@ def build_density_cache_dict(
     if not det_cache.is_valid():
         return result
 
-    unique_fi = sorted(
-        frame
-        for frame in det_cache.written_frames()
-        if start_frame <= frame <= end_frame
-    )
+    unique_fi = det_cache.iter_covered_frames(start_frame, end_frame)
 
     for fi in unique_fi:
         obb = det_cache.read_frame(fi)

@@ -19,7 +19,10 @@ rather than relying on every caller remembering the rule.
 import numpy as np
 import pytest
 
-from hydra_suite.core.inference.cache import open_detection_cache_reader
+from hydra_suite.core.inference.cache import (
+    open_cnn_cache_reader,
+    open_detection_cache_reader,
+)
 from hydra_suite.core.inference.cache.base import CACHE_SCHEMA_VERSION, CacheKey
 from hydra_suite.core.inference.cache.store import DetectionCacheHandle, _npz_save
 
@@ -97,6 +100,13 @@ def test_real_writer_still_flushes_an_empty_cache(tmp_path):
     reader = DetectionCacheHandle(path=path, key=_real_key())
     assert reader.is_valid()
     assert reader.written_frames() == set()
+
+
+def test_cnn_reader_is_read_only(tmp_path):
+    reader = open_cnn_cache_reader(tmp_path / "cnn_identity.npz", "identity")
+    with pytest.raises(RuntimeError, match="read-only"):
+        reader.write_frame(0, predictions=[])
+    reader.close()
 
 
 @pytest.mark.parametrize("frames", [(0, 2), (0, 5)])

@@ -336,3 +336,60 @@ def test_async_writer_rejects_single_payload_larger_than_budget():
     with pytest.raises(ValueError, match="exceeds max_queue_bytes"):
         writer.write_detection(0, _obb(0))
     writer.close()
+
+
+def test_sync_writer_rejects_single_payload_larger_than_total_budget():
+    writer = CacheWriter(
+        {"detection": _RecordingHandle()},
+        [],
+        async_mode=False,
+        max_queue_bytes=1,
+    )
+    with pytest.raises(ValueError, match="exceeds max_queue_bytes"):
+        writer.write_detection(0, _obb(0))
+    writer.close()
+
+
+def test_async_flush_and_close_have_bounded_waits():
+    handle = _GatedHandle()
+    writer = CacheWriter(
+        {"detection": handle},
+        [],
+        async_mode=True,
+        max_queue_bytes=_detection_item_size() + 32,
+    )
+    writer.write_detection(0, _obb(0))
+    assert handle.started.wait(timeout=1)
+
+    with pytest.raises(TimeoutError, match="flush"):
+        writer.flush(timeout=0.01)
+    with pytest.raises(TimeoutError, match="stop"):
+        writer.close(timeout=0.01)
+    assert writer.worker_alive
+    assert handle.close_count == 0
+
+    handle.release.set()
+    writer._worker.join(timeout=2)
+    assert not writer.worker_alive
+
+
+class _BufferBudgetHandle(_RecordingHandle):
+    def __init__(self):
+        super().__init__()
+        self.max_buffer_bytes = None
+
+    def set_buffer_limit(self, value: int) -> None:
+        self.max_buffer_bytes = value
+
+    @property
+    def buffered_bytes(self) -> int:
+        return 0
+
+
+def test_writer_partitions_total_budget_across_queue_and_handle_buffers():
+    handles = {name: _BufferBudgetHandle() for name in ("a", "b", "c")}
+    writer = CacheWriter(handles, [], async_mode=True, max_queue_bytes=1200)
+    limits = [handle.max_buffer_bytes for handle in handles.values()]
+    assert all(limit is not None and limit > 0 for limit in limits)
+    assert writer._max_queue_bytes + sum(limits) <= writer.max_retained_bytes
+    writer.close()

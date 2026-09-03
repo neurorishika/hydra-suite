@@ -303,6 +303,9 @@ def _open_caches(
     cache_dir: Path,
     video_sig: str = "",
     roi_mask: "np.ndarray | None" = None,
+    *,
+    read_only: bool = False,
+    write_mode: str = "auto",
 ) -> _CacheSet:
     # Bind every per-video cache to the exact source file so a changed video
     # (e.g. a clip regenerated under the same name with a different frame count)
@@ -322,11 +325,15 @@ def _open_caches(
         detection=DetectionCacheHandle(
             path=cache_dir / "detection.npz",
             key=_k(detection_key),
+            read_only=read_only,
+            write_mode=write_mode,
         ),
         headtail=(
             HeadTailCacheHandle(
                 path=cache_dir / "headtail.npz",
                 key=_k(headtail_cache_key(config.headtail, config.canonical)),
+                read_only=read_only,
+                write_mode=write_mode,
             )
             if config.headtail is not None
             else None
@@ -336,6 +343,8 @@ def _open_caches(
                 path=cache_dir / f"cnn_{c.label}.npz",
                 key=_k(cnn_cache_key(c, config.canonical)),
                 label=c.label,
+                read_only=read_only,
+                write_mode=write_mode,
             )
             for c in config.cnn_phases
         ],
@@ -343,6 +352,8 @@ def _open_caches(
             PoseCacheHandle(
                 path=cache_dir / "pose.npz",
                 key=_k(pose_cache_key(config.pose, config.canonical)),
+                read_only=read_only,
+                write_mode=write_mode,
             )
             if config.pose is not None
             else None
@@ -351,6 +362,8 @@ def _open_caches(
             AprilTagCacheHandle(
                 path=cache_dir / "apriltag.npz",
                 key=_k(apriltag_cache_key(config.apriltag)),
+                read_only=read_only,
+                write_mode=write_mode,
             )
             if config.apriltag.enabled
             else None
@@ -723,10 +736,14 @@ class InferenceRunner:
         if self.cache_dir is None:
             return False
         caches = _open_caches(
-            self.config, self.cache_dir, self._video_sig, self._roi_mask
+            self.config,
+            self.cache_dir,
+            self._video_sig,
+            self._roi_mask,
+            read_only=True,
         )
         handles = caches.all_handles()
-        if not handles or not all(h.is_valid() for h in handles):
+        if not handles or not all(h.is_reusable() for h in handles):
             return False
         # A child crash can publish detection chunks before a downstream stage
         # finishes. Matching keys alone must not turn that honest partial cache
@@ -745,7 +762,11 @@ class InferenceRunner:
         if self.cache_dir is None:
             return False
         caches = _open_caches(
-            self.config, self.cache_dir, self._video_sig, self._roi_mask
+            self.config,
+            self.cache_dir,
+            self._video_sig,
+            self._roi_mask,
+            read_only=True,
         )
         if caches.detection is None:
             return False
@@ -758,7 +779,11 @@ class InferenceRunner:
         if self.cache_dir is None:
             return []
         caches = _open_caches(
-            self.config, self.cache_dir, self._video_sig, self._roi_mask
+            self.config,
+            self.cache_dir,
+            self._video_sig,
+            self._roi_mask,
+            read_only=True,
         )
         if caches.detection is None:
             return []
@@ -777,7 +802,11 @@ class InferenceRunner:
             # load_frame; without this, realtime + backward gets an empty backward pass.
             if self._caches is None and self.cache_dir is not None:
                 self._caches = _open_caches(
-                    self.config, self.cache_dir, self._video_sig, self._roi_mask
+                    self.config,
+                    self.cache_dir,
+                    self._video_sig,
+                    self._roi_mask,
+                    write_mode="resume",
                 )
                 self._caches_writable = True
             caches = self._caches if self._caches_writable else None
@@ -846,6 +875,35 @@ class InferenceRunner:
                 )
 
             if filtered_obb.num_detections == 0:
+                if caches is not None:
+                    empty_det_indices = np.zeros(0, np.int32)
+                    if caches.headtail is not None:
+                        caches.headtail.write_frame(
+                            frame_idx,
+                            det_indices=empty_det_indices,
+                            heading_hints=np.zeros(0, np.float32),
+                            heading_confidences=np.zeros(0, np.float32),
+                            directed_mask=np.zeros(0, np.uint8),
+                        )
+                    for cache in caches.cnn:
+                        cache.write_frame(frame_idx, predictions=[])
+                    if caches.pose is not None:
+                        caches.pose.write_frame(
+                            frame_idx,
+                            det_indices=empty_det_indices,
+                            keypoints=np.zeros((0, 0, 3), np.float32),
+                            valid_mask=np.zeros(0, bool),
+                        )
+                    if caches.apriltag is not None:
+                        caches.apriltag.write_frame(
+                            frame_idx,
+                            result=AprilTagResult(
+                                tag_ids=[],
+                                det_indices=[],
+                                centers=np.zeros((0, 2), np.float32),
+                                corners=np.zeros((0, 4, 2), np.float32),
+                            ),
+                        )
                 empty_result = _build_frame_result(
                     frame_idx, filtered_obb, np.zeros(0, np.int32), None, [], None, None
                 )
@@ -1149,7 +1207,11 @@ class InferenceRunner:
         if self._identity_evidence is None or self.cache_dir is None:
             return
         read_caches = _open_caches(
-            self.config, self.cache_dir, self._video_sig, self._roi_mask
+            self.config,
+            self.cache_dir,
+            self._video_sig,
+            self._roi_mask,
+            read_only=True,
         )
         out_path = self._identity_evidence_sidecar_path("batch")
         write_identity_evidence_sidecar(
@@ -1347,7 +1409,11 @@ class InferenceRunner:
 
             with span(N.OPEN_CACHES):
                 caches = _open_caches(
-                    self.config, self.cache_dir, self._video_sig, self._roi_mask
+                    self.config,
+                    self.cache_dir,
+                    self._video_sig,
+                    self._roi_mask,
+                    write_mode="fresh" if start_frame == 0 else "resume",
                 )
             self._caches = caches
 
@@ -1381,10 +1447,10 @@ class InferenceRunner:
                 # depth>=2 uses an async CacheWriter; flush/close it before closing the
                 # handles so all queued writes land (Pipeline.run already does this on
                 # its own teardown path, but a pre-run failure may skip it).
-                try:
-                    pipeline.cache_writer.close()
-                except Exception:
-                    pass
+                pipeline.cache_writer.close()
+                # Never close a handle while a timed-out writer can still be
+                # inside it. CacheWriter.close raises before this point when
+                # its worker fails to stop by the deadline.
                 for h in caches.all_handles():
                     h.close()
 
@@ -1428,7 +1494,11 @@ class InferenceRunner:
             raise RuntimeError("cache_dir not set — cannot load cached frames")
         if self._caches is None:
             self._caches = _open_caches(
-                self.config, self.cache_dir, self._video_sig, self._roi_mask
+                self.config,
+                self.cache_dir,
+                self._video_sig,
+                self._roi_mask,
+                read_only=True,
             )
 
         raw_obb = (

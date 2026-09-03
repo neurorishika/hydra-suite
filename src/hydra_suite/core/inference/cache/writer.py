@@ -22,6 +22,7 @@ from __future__ import annotations
 import collections
 import sys
 import threading
+import time
 from typing import Any
 
 from hydra_suite.utils import profiling_names as N
@@ -68,7 +69,27 @@ class CacheWriter:
 
         if int(max_queue_bytes) < 1:
             raise ValueError("max_queue_bytes must be >= 1")
-        self._max_queue_bytes = int(max_queue_bytes)
+        self.max_retained_bytes = int(max_queue_bytes)
+        bounded_handles = [
+            handle
+            for handle in handles.values()
+            if callable(getattr(handle, "set_buffer_limit", None))
+        ]
+        handle_budget = (
+            self.max_retained_bytes // 2 if async_mode else self.max_retained_bytes
+        )
+        if bounded_handles:
+            per_handle = handle_budget // len(bounded_handles)
+            if per_handle < 1:
+                raise ValueError(
+                    "max_queue_bytes is too small for cache handle buffers"
+                )
+            for handle in bounded_handles:
+                handle.set_buffer_limit(per_handle)
+            assigned_handle_bytes = per_handle * len(bounded_handles)
+        else:
+            assigned_handle_bytes = 0
+        self._max_queue_bytes = self.max_retained_bytes - assigned_handle_bytes
 
         if async_mode:
             self._condition = threading.Condition()
@@ -125,31 +146,41 @@ class CacheWriter:
             }
         )
 
-    def flush(self) -> None:
+    def flush(self, timeout: float = 30.0) -> None:
         """Block until all enqueued writes have landed (async); no-op (sync)."""
         if self._async_mode:
             with self._condition:
-                self._condition.wait_for(
+                completed = self._condition.wait_for(
                     lambda: self._worker_error is not None
-                    or (not self._items and not self._worker_active)
+                    or (not self._items and not self._worker_active),
+                    timeout=max(0.0, float(timeout)),
                 )
+                if not completed:
+                    raise TimeoutError("cache writer flush timed out")
                 self._raise_worker_error_once_locked()
 
-    def close(self) -> None:
+    def close(self, timeout: float = 30.0) -> None:
         """Drain + stop the worker thread (async).  Does NOT close handles."""
         if self._closed:
+            if self.worker_alive:
+                raise TimeoutError("cache writer worker is still running")
             return
         self._closed = True
         if self._async_mode:
+            deadline = time.monotonic() + max(0.0, float(timeout))
             pending_error: BaseException | None = None
             try:
-                self.flush()
+                self.flush(timeout=max(0.0, deadline - time.monotonic()))
             except BaseException as exc:  # noqa: BLE001,B036 - re-raised after join
                 pending_error = exc
             with self._condition:
                 self._stop_requested = True
                 self._condition.notify_all()
-            self._worker.join()
+            self._worker.join(timeout=max(0.0, deadline - time.monotonic()))
+            if self._worker.is_alive():
+                raise TimeoutError(
+                    "cache writer worker did not stop before the close deadline"
+                ) from pending_error
             if pending_error is not None:
                 raise pending_error
             with self._condition:
@@ -181,6 +212,12 @@ class CacheWriter:
                     self._inflight_bytes += item_bytes
                     self._condition.notify_all()
             else:
+                item_bytes = _payload_bytes(item)
+                if item_bytes > self.max_retained_bytes:
+                    raise ValueError(
+                        "cache write payload exceeds max_queue_bytes: "
+                        f"{item_bytes} > {self.max_retained_bytes}"
+                    )
                 self._apply(item)
 
     def _apply(self, item: dict) -> None:
@@ -324,6 +361,17 @@ class CacheWriter:
             return 0
         with self._condition:
             return self._inflight_bytes
+
+    @property
+    def retained_bytes(self) -> int:
+        return self.queued_bytes + sum(
+            int(getattr(handle, "buffered_bytes", 0))
+            for handle in self._handles.values()
+        )
+
+    @property
+    def worker_alive(self) -> bool:
+        return bool(self._async_mode and self._worker.is_alive())
 
     def _raise_worker_error_once_locked(
         self, *, reject_after_failure: bool = False

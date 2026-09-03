@@ -81,6 +81,26 @@ def _concat(parts: list[np.ndarray], shape: tuple[int, ...], dtype) -> np.ndarra
     return np.concatenate(nonempty) if nonempty else np.zeros(shape, dtype=dtype)
 
 
+def _buffer_value_bytes(value: Any, seen: set[int] | None = None) -> int:
+    """Estimate bytes retained by a handle without double-counting arrays."""
+    if seen is None:
+        seen = set()
+    identity = id(value)
+    if identity in seen:
+        return 0
+    seen.add(identity)
+    if isinstance(value, np.ndarray):
+        return int(value.nbytes)
+    if isinstance(value, dict):
+        return 64 + sum(_buffer_value_bytes(item, seen) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return 64 + sum(_buffer_value_bytes(item, seen) for item in value)
+    fields = getattr(value, "__dict__", None)
+    if fields is not None:
+        return 256 + _buffer_value_bytes(fields, seen)
+    return 64
+
+
 class _ChunkedHandleMixin:
     path: Path
     key: CacheKey
@@ -88,6 +108,9 @@ class _ChunkedHandleMixin:
     chunk_size: int
     _store: ChunkedArrayStore
     _legacy_data: dict[str, np.ndarray] | None
+    read_only: bool
+    write_mode: str
+    max_buffer_bytes: int
 
     _kind = ""
 
@@ -102,12 +125,68 @@ class _ChunkedHandleMixin:
             require_key=self.require_key,
         )
         self._write_started = False
+        self._buffer_bytes = 0
+        self._last_buffered_frame: int | None = None
+        if self.write_mode not in {"auto", "fresh", "resume"}:
+            raise ValueError("write_mode must be 'auto', 'fresh', or 'resume'")
+        if int(self.max_buffer_bytes) < 1:
+            raise ValueError("max_buffer_bytes must be >= 1")
+
+    @property
+    def buffered_bytes(self) -> int:
+        return self._buffer_bytes
+
+    def set_buffer_limit(self, value: int) -> None:
+        if int(value) < 1:
+            raise ValueError("cache handle buffer limit must be >= 1")
+        self.max_buffer_bytes = int(value)
+        if self._buffer_bytes > self.max_buffer_bytes:
+            self._flush()
+
+    def _append_buffered(self, frame_idx: int, value: Any) -> None:
+        frame = int(frame_idx)
+        if frame < 0:
+            raise ValueError("frame_idx must be nonnegative")
+        if self._last_buffered_frame is not None and frame <= self._last_buffered_frame:
+            raise ValueError("cache frame indices must be unique and increasing")
+        value_bytes = _buffer_value_bytes(value)
+        if value_bytes > self.max_buffer_bytes:
+            raise ValueError(
+                "cache frame payload exceeds max_buffer_bytes: "
+                f"{value_bytes} > {self.max_buffer_bytes}"
+            )
+        if self._buffer and self._buffer_bytes + value_bytes > self.max_buffer_bytes:
+            self._flush()
+        self._buffer.append(value)
+        self._buffer_bytes += value_bytes
+        self._last_buffered_frame = frame
+        if (
+            len(self._buffer) >= self.chunk_size
+            or self._buffer_bytes >= self.max_buffer_bytes
+        ):
+            self._flush()
+
+    def _clear_buffer(self) -> None:
+        self._buffer.clear()
+        self._buffer_bytes = 0
+
+    def _finish_close(self) -> None:
+        if self.read_only:
+            return
+        self._flush()
+        if not self.path.exists():
+            self._store.ensure_manifest()
+        self._store.commit_generation()
 
     def _prepare_frame_write(self, frame_idx: int) -> None:
+        if self.read_only:
+            raise RuntimeError("cannot write through a read-only cache handle")
         if self._write_started:
             return
-        if self._store.is_valid() and (
-            self._store.is_legacy or int(frame_idx) in self._store.written_frames()
+        if self.write_mode == "fresh" or (
+            self.write_mode == "auto"
+            and self._store.is_valid()
+            and (self._store.is_legacy or self._store.contains_frame(int(frame_idx)))
         ):
             # A pass beginning on an already-covered frame is a deliberate
             # recomputation, not a resume. Build a new generation so a crash
@@ -117,6 +196,27 @@ class _ChunkedHandleMixin:
 
     def is_valid(self) -> bool:
         return self._store.is_valid()
+
+    def is_reusable(self) -> bool:
+        return self._store.is_reusable()
+
+    def contains_frame(self, frame_idx: int) -> bool:
+        if not self.is_valid():
+            return False
+        if self._store.is_legacy:
+            if self._legacy_data is None:
+                self._legacy_data = self._store.load_legacy()
+            return int(frame_idx) in self._legacy_written_frames(
+                self._legacy_data or {}
+            )
+        return self._store.contains_frame(int(frame_idx))
+
+    def iter_covered_frames(self, start_frame: int, end_frame: int) -> Iterator[int]:
+        start_bound, end_bound = int(start_frame), int(end_frame)
+        for start, end in self.coverage_ranges():
+            lo, hi = max(start, start_bound), min(end, end_bound)
+            if lo <= hi:
+                yield from range(lo, hi + 1)
 
     @property
     def is_legacy(self) -> bool:
@@ -206,7 +306,9 @@ class DetectionCacheHandle(_ChunkedHandleMixin, CacheHandle):
     key: CacheKey
     require_key: bool = True
     read_only: bool = False
+    write_mode: str = "auto"
     chunk_size: int = DEFAULT_CHUNK_FRAMES
+    max_buffer_bytes: int = 16 * 1024 * 1024
     _buffer: list[OBBResult] = field(default_factory=list, repr=False)
     _legacy_data: dict[str, np.ndarray] | None = field(default=None, repr=False)
     _store: ChunkedArrayStore = field(init=False, repr=False)
@@ -226,14 +328,22 @@ class DetectionCacheHandle(_ChunkedHandleMixin, CacheHandle):
         self._legacy_data = value
 
     def write_frame(self, frame_idx: int, *, result: OBBResult, **_) -> None:
-        if self.read_only:
-            raise RuntimeError("cannot write through a read-only cache handle")
         if int(frame_idx) != int(result.frame_idx):
-            result.frame_idx = int(frame_idx)
+            raise ValueError("result.frame_idx must match frame_idx")
+        row_lengths = [
+            len(result.centroids),
+            len(result.angles),
+            len(result.sizes),
+            len(result.shapes),
+            len(result.confidences),
+            len(result.corners),
+            len(result.detection_ids),
+            len(result.class_ids_or_zeros),
+        ]
+        if len(set(row_lengths)) != 1:
+            raise ValueError("detection result arrays must have aligned lengths")
         self._prepare_frame_write(frame_idx)
-        self._buffer.append(result)
-        if len(self._buffer) >= self.chunk_size:
-            self._flush()
+        self._append_buffered(frame_idx, result)
 
     def _flush(self) -> None:
         if not self._buffer:
@@ -295,7 +405,7 @@ class DetectionCacheHandle(_ChunkedHandleMixin, CacheHandle):
         }
         payload["frame_indices"] = np.asarray(frame_indices, dtype=np.int64)
         self._store.append_chunk([result.frame_idx for result in rows], payload)
-        self._buffer.clear()
+        self._clear_buffer()
 
     def read_frame(self, frame_idx: int) -> OBBResult | None:
         arrays = self._arrays_for_frame(frame_idx)
@@ -316,11 +426,7 @@ class DetectionCacheHandle(_ChunkedHandleMixin, CacheHandle):
         )
 
     def close(self) -> None:
-        if self.read_only:
-            return
-        self._flush()
-        if not self.path.exists():
-            self._store.ensure_manifest()
+        self._finish_close()
 
 
 @dataclass
@@ -328,7 +434,10 @@ class HeadTailCacheHandle(_ChunkedHandleMixin, CacheHandle):
     path: Path
     key: CacheKey
     require_key: bool = True
+    read_only: bool = False
+    write_mode: str = "auto"
     chunk_size: int = DEFAULT_CHUNK_FRAMES
+    max_buffer_bytes: int = 16 * 1024 * 1024
     _buffer: list[tuple[int, np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = field(
         default_factory=list, repr=False
     )
@@ -350,18 +459,18 @@ class HeadTailCacheHandle(_ChunkedHandleMixin, CacheHandle):
         directed_mask: np.ndarray,
         **_,
     ) -> None:
-        self._prepare_frame_write(frame_idx)
-        self._buffer.append(
-            (
-                int(frame_idx),
-                np.asarray(det_indices, dtype=np.int32),
-                np.asarray(heading_hints, dtype=np.float32),
-                np.asarray(heading_confidences, dtype=np.float32),
-                np.asarray(directed_mask, dtype=np.uint8),
-            )
+        arrays = (
+            int(frame_idx),
+            np.asarray(det_indices, dtype=np.int32),
+            np.asarray(heading_hints, dtype=np.float32),
+            np.asarray(heading_confidences, dtype=np.float32),
+            np.asarray(directed_mask, dtype=np.uint8),
         )
-        if len(self._buffer) >= self.chunk_size:
-            self._flush()
+        lengths = [len(value) for value in arrays[1:]]
+        if len(set(lengths)) != 1:
+            raise ValueError("headtail arrays must have aligned lengths")
+        self._prepare_frame_write(frame_idx)
+        self._append_buffered(frame_idx, arrays)
 
     def _flush(self) -> None:
         if not self._buffer:
@@ -380,7 +489,7 @@ class HeadTailCacheHandle(_ChunkedHandleMixin, CacheHandle):
             "directed_mask": _concat([row[4] for row in self._buffer], (0,), np.uint8),
         }
         self._store.append_chunk(frames, payload)
-        self._buffer.clear()
+        self._clear_buffer()
 
     def read_frame(self, frame_idx: int):
         arrays = self._arrays_for_frame(frame_idx)
@@ -395,9 +504,7 @@ class HeadTailCacheHandle(_ChunkedHandleMixin, CacheHandle):
         )
 
     def close(self) -> None:
-        self._flush()
-        if not self.path.exists():
-            self._store.ensure_manifest()
+        self._finish_close()
 
 
 @dataclass
@@ -406,7 +513,10 @@ class CNNCacheHandle(_ChunkedHandleMixin, CacheHandle):
     key: CacheKey
     label: str
     require_key: bool = True
+    read_only: bool = False
+    write_mode: str = "auto"
     chunk_size: int = DEFAULT_CHUNK_FRAMES
+    max_buffer_bytes: int = 16 * 1024 * 1024
     _buffer: list[tuple[int, list[CNNDetectionPrediction]]] = field(
         default_factory=list, repr=False
     )
@@ -422,9 +532,7 @@ class CNNCacheHandle(_ChunkedHandleMixin, CacheHandle):
         self, frame_idx: int, *, predictions: list[CNNDetectionPrediction], **_
     ) -> None:
         self._prepare_frame_write(frame_idx)
-        self._buffer.append((int(frame_idx), predictions))
-        if len(self._buffer) >= self.chunk_size:
-            self._flush()
+        self._append_buffered(frame_idx, (int(frame_idx), predictions))
 
     def _flush(self) -> None:
         if not self._buffer:
@@ -469,7 +577,7 @@ class CNNCacheHandle(_ChunkedHandleMixin, CacheHandle):
             "probabilities": probabilities,
         }
         self._store.append_chunk(frames, payload)
-        self._buffer.clear()
+        self._clear_buffer()
 
     def read_frame(self, frame_idx: int) -> list[CNNDetectionPrediction] | None:
         arrays = self._arrays_for_frame(frame_idx)
@@ -501,9 +609,7 @@ class CNNCacheHandle(_ChunkedHandleMixin, CacheHandle):
         ]
 
     def close(self) -> None:
-        self._flush()
-        if not self.path.exists():
-            self._store.ensure_manifest()
+        self._finish_close()
 
 
 @dataclass
@@ -511,7 +617,10 @@ class PoseCacheHandle(_ChunkedHandleMixin, CacheHandle):
     path: Path
     key: CacheKey
     require_key: bool = True
+    read_only: bool = False
+    write_mode: str = "auto"
     chunk_size: int = DEFAULT_CHUNK_FRAMES
+    max_buffer_bytes: int = 16 * 1024 * 1024
     _buffer: list[tuple[int, np.ndarray, np.ndarray, np.ndarray]] = field(
         default_factory=list, repr=False
     )
@@ -532,17 +641,16 @@ class PoseCacheHandle(_ChunkedHandleMixin, CacheHandle):
         valid_mask: np.ndarray,
         **_,
     ) -> None:
-        self._prepare_frame_write(frame_idx)
-        self._buffer.append(
-            (
-                int(frame_idx),
-                np.asarray(det_indices, dtype=np.int32),
-                np.asarray(keypoints, dtype=np.float32),
-                np.asarray(valid_mask, dtype=np.uint8),
-            )
+        arrays = (
+            int(frame_idx),
+            np.asarray(det_indices, dtype=np.int32),
+            np.asarray(keypoints, dtype=np.float32),
+            np.asarray(valid_mask, dtype=np.uint8),
         )
-        if len(self._buffer) >= self.chunk_size:
-            self._flush()
+        if len(arrays[1]) != len(arrays[2]) or len(arrays[1]) != len(arrays[3]):
+            raise ValueError("pose arrays must have aligned lengths")
+        self._prepare_frame_write(frame_idx)
+        self._append_buffered(frame_idx, arrays)
 
     def _flush(self) -> None:
         if not self._buffer:
@@ -561,7 +669,7 @@ class PoseCacheHandle(_ChunkedHandleMixin, CacheHandle):
             "valid_mask": _concat([row[3] for row in self._buffer], (0,), np.uint8),
         }
         self._store.append_chunk(frames, payload)
-        self._buffer.clear()
+        self._clear_buffer()
 
     def read_frame(self, frame_idx: int):
         arrays = self._arrays_for_frame(frame_idx)
@@ -575,9 +683,7 @@ class PoseCacheHandle(_ChunkedHandleMixin, CacheHandle):
         )
 
     def close(self) -> None:
-        self._flush()
-        if not self.path.exists():
-            self._store.ensure_manifest()
+        self._finish_close()
 
 
 @dataclass
@@ -585,7 +691,10 @@ class AprilTagCacheHandle(_ChunkedHandleMixin, CacheHandle):
     path: Path
     key: CacheKey
     require_key: bool = True
+    read_only: bool = False
+    write_mode: str = "auto"
     chunk_size: int = DEFAULT_CHUNK_FRAMES
+    max_buffer_bytes: int = 16 * 1024 * 1024
     _buffer: list[tuple[int, AprilTagResult]] = field(default_factory=list, repr=False)
     _legacy_data: dict[str, np.ndarray] | None = field(default=None, repr=False)
     _store: ChunkedArrayStore = field(init=False, repr=False)
@@ -596,10 +705,16 @@ class AprilTagCacheHandle(_ChunkedHandleMixin, CacheHandle):
         self._init_store()
 
     def write_frame(self, frame_idx: int, *, result: AprilTagResult, **_) -> None:
+        lengths = [
+            len(result.tag_ids),
+            len(result.det_indices),
+            len(result.centers),
+            len(result.corners),
+        ]
+        if len(set(lengths)) != 1:
+            raise ValueError("apriltag arrays must have aligned lengths")
         self._prepare_frame_write(frame_idx)
-        self._buffer.append((int(frame_idx), result))
-        if len(self._buffer) >= self.chunk_size:
-            self._flush()
+        self._append_buffered(frame_idx, (int(frame_idx), result))
 
     def _flush(self) -> None:
         if not self._buffer:
@@ -630,7 +745,7 @@ class AprilTagCacheHandle(_ChunkedHandleMixin, CacheHandle):
             ),
         }
         self._store.append_chunk(frames, payload)
-        self._buffer.clear()
+        self._clear_buffer()
 
     def read_frame(self, frame_idx: int) -> AprilTagResult | None:
         arrays = self._arrays_for_frame(frame_idx)
@@ -645,6 +760,4 @@ class AprilTagCacheHandle(_ChunkedHandleMixin, CacheHandle):
         )
 
     def close(self) -> None:
-        self._flush()
-        if not self.path.exists():
-            self._store.ensure_manifest()
+        self._finish_close()
