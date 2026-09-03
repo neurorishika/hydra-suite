@@ -108,6 +108,7 @@ nav:
   - PoseKit: user-guide/posekit.md
   - ClassKit: user-guide/classkit.md
   - DetectKit: user-guide/detectkit.md
+  - DetectKit Headless Training: runbooks/detectkit-headless-training.md
   - "DetectKit: Semantic Escalation (SAM3)": user-guide/detectkit-semantic-escalation.md
   - FilterKit: user-guide/filterkit.md
   - RefineKit: user-guide/refinekit.md
