@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import re
+import struct
 import tempfile
 import uuid
 import zipfile
@@ -153,6 +154,39 @@ def _inspect_npz(
     """Validate ZIP and NPY metadata before NumPy may allocate payload arrays."""
     metadata: dict[str, tuple[tuple[int, ...], np.dtype]] = {}
     try:
+        archive_size = path.stat().st_size
+        if archive_size < 22 or archive_size > max_uncompressed_bytes + 2 * 1024 * 1024:
+            raise ValueError("NPZ archive size exceeds safety limit")
+        # ZipFile parses the complete central directory in its constructor.
+        # Bound that directory from the fixed-size EOCD record first so a ZIP
+        # with millions of entries cannot allocate before the member-count cap.
+        with path.open("rb") as raw_archive:
+            raw_archive.seek(max(0, archive_size - (65_535 + 22)))
+            tail = raw_archive.read(65_535 + 22)
+        eocd_offset = tail.rfind(b"PK\x05\x06")
+        if eocd_offset < 0 or len(tail) - eocd_offset < 22:
+            raise ValueError("NPZ end-of-central-directory record is missing")
+        (
+            _signature,
+            disk_number,
+            central_disk,
+            entries_on_disk,
+            total_entries,
+            central_size,
+            central_offset,
+            comment_size,
+        ) = struct.unpack("<4s4H2LH", tail[eocd_offset : eocd_offset + 22])
+        if (
+            disk_number != 0
+            or central_disk != 0
+            or entries_on_disk != total_entries
+            or total_entries < 1
+            or total_entries > max_members
+            or central_size > max_members * 1024
+            or central_offset + central_size > archive_size
+            or eocd_offset + 22 + comment_size != len(tail)
+        ):
+            raise ValueError("unsafe NPZ central directory")
         with zipfile.ZipFile(path) as archive:
             infos = archive.infolist()
             if not infos or len(infos) > max_members:

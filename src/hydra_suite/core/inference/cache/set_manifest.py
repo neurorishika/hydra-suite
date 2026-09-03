@@ -51,6 +51,11 @@ def load_cache_set(cache_dir: Path) -> CacheSetManifest | None:
         if not path.is_file() or path.stat().st_size > MAX_CACHE_SET_BYTES:
             return None
 
+        with path.open("rb") as stream:
+            payload = stream.read(MAX_CACHE_SET_BYTES + 1)
+        if len(payload) > MAX_CACHE_SET_BYTES:
+            return None
+
         def reject_duplicates(pairs):
             result = {}
             for key, value in pairs:
@@ -59,9 +64,7 @@ def load_cache_set(cache_dir: Path) -> CacheSetManifest | None:
                 result[key] = value
             return result
 
-        raw = json.loads(
-            path.read_text(encoding="utf-8"), object_pairs_hook=reject_duplicates
-        )
+        raw = json.loads(payload.decode("utf-8"), object_pairs_hook=reject_duplicates)
         if not isinstance(raw, dict) or set(raw) != {
             "version",
             "generation_id",
