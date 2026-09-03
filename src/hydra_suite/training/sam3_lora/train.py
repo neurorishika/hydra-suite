@@ -116,6 +116,10 @@ def _containment_diagnostic(
         payload.update(
             {
                 "peak_observed_device_used_bytes": result.peak_accelerator_bytes,
+                "peak_observed_tree_rss_bytes": result.peak_tree_rss_bytes,
+                "minimum_observed_system_available_bytes": (
+                    result.minimum_system_available_bytes
+                ),
                 "accelerator_observation_error": result.accelerator_observation_error,
                 "dropped_output_lines": result.dropped_output_lines,
                 "output_error": result.output_error,

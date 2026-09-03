@@ -80,6 +80,8 @@ def _supervised(kind=ExitKind.SUCCESS, *, returncode=0, tail=()):
         output_error=None,
         peak_accelerator_bytes=2 << 30,
         accelerator_observation_error=None,
+        peak_tree_rss_bytes=3 << 30,
+        minimum_system_available_bytes=40 << 30,
     )
 
 
@@ -192,6 +194,7 @@ def test_progress_plain_logs_and_bounded_diagnostics_are_propagated(
     assert logs == ["plain startup", "loss 1.0"]
     assert progress == [(1, 2)]
     assert result["containment"]["peak_observed_device_used_bytes"] == 2 << 30
+    assert result["containment"]["peak_observed_tree_rss_bytes"] == 3 << 30
     assert "not kernel-capped" in result["containment"]["cuda_vram_enforcement"]
 
 

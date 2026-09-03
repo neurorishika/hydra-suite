@@ -480,6 +480,8 @@ class ProcessTreeWatchdog:
         self.tree = tree
         self.policy = policy
         self.outcome: Optional[WatchdogOutcome] = None
+        self.peak_tree_rss_bytes = 0
+        self.minimum_system_available_bytes: Optional[int] = None
         self.peak_accelerator_bytes: Optional[int] = None
         self.accelerator_observation_error: Optional[str] = None
         self._accelerator_probe = accelerator_probe
@@ -550,6 +552,15 @@ class ProcessTreeWatchdog:
                 return
             rss = self.tree.rss_bytes()
             available = int(psutil.virtual_memory().available)
+            self.peak_tree_rss_bytes = max(self.peak_tree_rss_bytes, rss)
+            self.minimum_system_available_bytes = min(
+                (
+                    self.minimum_system_available_bytes
+                    if self.minimum_system_available_bytes is not None
+                    else available
+                ),
+                available,
+            )
             if available < self.policy.minimum_system_available_bytes:
                 self.tree.kill()
                 self.outcome = WatchdogOutcome(
@@ -794,6 +805,8 @@ class SupervisedResult:
     output_error: Optional[str]
     peak_accelerator_bytes: Optional[int] = None
     accelerator_observation_error: Optional[str] = None
+    peak_tree_rss_bytes: int = 0
+    minimum_system_available_bytes: Optional[int] = None
 
 
 class WorkloadStillOwnedError(RuntimeError):
@@ -1046,6 +1059,10 @@ class SupervisedSidecar:
                 peak_accelerator_bytes=self.watchdog.peak_accelerator_bytes,
                 accelerator_observation_error=(
                     self.watchdog.accelerator_observation_error
+                ),
+                peak_tree_rss_bytes=self.watchdog.peak_tree_rss_bytes,
+                minimum_system_available_bytes=(
+                    self.watchdog.minimum_system_available_bytes
                 ),
             )
             if post_exit_check is not None:

@@ -1327,6 +1327,8 @@ def test_watchdog_records_bounded_accelerator_pressure_telemetry():
 
     assert watchdog.peak_accelerator_bytes == 9
     assert watchdog.accelerator_observation_error is None
+    assert watchdog.peak_tree_rss_bytes > 0
+    assert watchdog.minimum_system_available_bytes is not None
 
 
 def test_containment_plan_derives_canonical_keys_and_internal_lease_contends(
