@@ -44,10 +44,12 @@ import numpy as np
 from hydra_suite.training.contracts import Sam3LoraParams
 
 from .dataloader import (
-    build_datapoints,
+    batch_count,
+    build_descriptors,
     collate_batches,
     collate_epoch_batches,
-    try_build_datapoints,
+    query_count,
+    try_build_descriptors,
 )
 from .lora import adapter_state_dict, inject_adapters, lora_config_from_params
 from .protocol import emit_log, emit_progress
@@ -96,18 +98,78 @@ def _cosine_with_warmup(warmup_steps: int, total_steps: int):
     return _fn
 
 
-def _targets_from_batch(batch: Any) -> Any:
-    return batch.get("targets") if isinstance(batch, dict) else batch
+def _forward_batch(
+    batch: Any,
+    model: Any,
+    device: Any,
+    *,
+    copy_to_device: Any | None = None,
+) -> tuple[Any, list[Any], Any]:
+    """Move one collated batch to ``device``, convert targets, then forward.
+
+    Meta's collator constructs a CPU ``BatchedDatapoint``. Its trainer uses
+    ``copy_data_to_device`` on that unwrapped object before both
+    ``back_convert`` and model forward; keep this sidecar on the same seam so
+    every nested tensor (images, boxes, masks, and validity arrays) moves
+    together.
+    """
+    if copy_to_device is None:
+        from sam3.model.utils.misc import copy_data_to_device
+
+        copy_to_device = copy_data_to_device
+
+    model_input = batch["input"] if isinstance(batch, dict) else batch
+    model_input = copy_to_device(model_input, device, non_blocking=True)
+    targets = [model.back_convert(target) for target in model_input.find_targets]
+    outputs = model(model_input)
+    return model_input, targets, outputs
+
+
+def _build_loss_wrapper(
+    loss_wrapper_type: Any,
+    *,
+    loss_fns_find: list[Any],
+    matcher: Any,
+    o2m_matcher: Any,
+) -> Any:
+    """Build Meta's loss without distributed collectives in this sidecar."""
+    return loss_wrapper_type(
+        loss_fns_find=loss_fns_find,
+        normalization="local",
+        matcher=matcher,
+        o2m_weight=2.0,
+        o2m_matcher=o2m_matcher,
+        use_o2m_matcher_on_o2m_aux=False,
+        loss_fn_semantic_seg=None,
+    )
+
+
+def _attach_matcher_indices(outputs: Any, targets: list[Any], matcher: Any) -> None:
+    """Attach matcher results when the model is in validation/eval mode.
+
+    ``Sam3Image`` does this itself while ``model.training`` is true. Evaluation
+    deliberately disables training behavior, so its SAM3Output dictionaries
+    need the same indices before ``Sam3LossWrapper`` can score them.
+    """
+    for stage_outputs, target in zip(outputs.output, targets):
+        for output in stage_outputs:
+            output["indices"] = matcher(output, target)
+            for auxiliary in output.get("aux_outputs", []):
+                auxiliary["indices"] = matcher(auxiliary, target)
+
+
+def _core_loss(loss_result: Any) -> Any:
+    """Extract Meta's ``CORE_LOSS_KEY`` without importing SAM3 at module load."""
+    return loss_result["core_loss"] if isinstance(loss_result, dict) else loss_result
 
 
 def _build_dataloader(spec: Any, params: Any, *, split: str) -> list:
-    """Read the built COCO split into its (unshuffled) Datapoints.
+    """Read the built COCO split into lightweight tile descriptors.
 
-    Never returns `[]` itself -- it raises instead; the real emptiness
-    refusal lives in `run_training` below. Per-epoch shuffling into batches
-    happens later, inside the training loop, via `collate_epoch_batches`.
+    No image is decoded, transformed, or rasterized until its epoch iterator
+    reaches the corresponding batch.
     """
-    return build_datapoints(spec.derived_dataset_dir, params, split, seed=spec.seed)
+    return build_descriptors(spec.derived_dataset_dir, params, split, seed=spec.seed)
 
 
 def run_training(spec: Any, run_dir_path: Path) -> bool:
@@ -121,8 +183,8 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
     params = spec.sam3_params
     _seed_everything(spec.seed)
 
-    train_datapoints = _build_dataloader(spec, params, split="train")
-    if not train_datapoints:
+    train_descriptors = _build_dataloader(spec, params, split="train")
+    if not train_descriptors:
         emit_log(
             "Training set produced zero datapoints; refusing to report "
             "success for a run that trained nothing."
@@ -171,7 +233,11 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
         gamma=2,
         stable=False,
     )
-    loss_fn = Sam3LossWrapper(
+    # The image model computes matching internally in training mode. Use the
+    # exact same matcher instance as the explicit validation path and loss.
+    model.matcher = matcher
+    loss_fn = _build_loss_wrapper(
+        Sam3LossWrapper,
         loss_fns_find=[
             Boxes(weight_dict={"loss_bbox": 5.0, "loss_giou": 2.0}),
             IABCEMdetr(
@@ -193,15 +259,12 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
             ),
         ],
         matcher=matcher,
-        o2m_weight=2.0,
         o2m_matcher=BinaryOneToManyMatcher(alpha=0.3, threshold=0.4, topk=4),
-        use_o2m_matcher_on_o2m_aux=False,
-        loss_fn_semantic_seg=None,
     )
 
     grad_accum = max(1, int(params.grad_accum))
     batch_size = max(1, int(params.batch))
-    n_batches = -(-len(train_datapoints) // batch_size)  # ceil division
+    n_batches = batch_count(query_count(train_descriptors), batch_size)
     steps_per_epoch = -(-n_batches // grad_accum)  # ceil division
     total_steps = max(1, steps_per_epoch * params.epochs)
     warmup_steps = min(50, total_steps // 4)
@@ -226,25 +289,20 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
 
     for epoch in range(params.epochs):
         model.train()
-        # Reshuffled every epoch (seeded from spec.seed + epoch, so runs stay
-        # reproducible) -- a fixed order would put each tile's negatives in
-        # the same accumulation window as its positive on every epoch.
+        # Tile descriptors reshuffle every epoch (seeded from spec.seed +
+        # epoch, so runs stay reproducible). Queries remain tile-grouped to
+        # share one transformed image without a dataset-sized tensor cache.
         epoch_batches = collate_epoch_batches(
-            train_datapoints, batch_size, seed=spec.seed + epoch
+            train_descriptors, batch_size, seed=spec.seed + epoch
         )
-        n_epoch_batches = len(epoch_batches)
+        n_epoch_batches = n_batches
         for micro_idx, batch in enumerate(epoch_batches):
-            targets = _targets_from_batch(batch)
             with torch.autocast(
                 device_type="cuda", dtype=autocast_dtype, enabled=use_bf16
             ):
-                outputs = model(batch)
-                outputs["indices"] = matcher(outputs, targets)
-                if "aux_outputs" in outputs:
-                    for aux in outputs["aux_outputs"]:
-                        aux["indices"] = matcher(aux, targets)
+                model_input, targets, outputs = _forward_batch(batch, model, device)
                 loss_dict = loss_fn(outputs, targets)
-                loss = loss_dict["loss"] if isinstance(loss_dict, dict) else loss_dict
+                loss = _core_loss(loss_dict)
 
             (loss / grad_accum).backward()
 
@@ -258,6 +316,7 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
                 global_step += 1
                 if global_step % logging_steps == 0:
                     emit_log(f"epoch {epoch} step {global_step} loss {float(loss):.4f}")
+            del batch, model_input, targets, outputs, loss_dict, loss
 
         emit_progress(epoch + 1, params.epochs)
 
@@ -266,7 +325,15 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
     torch.save(adapter_state_dict(model), artifact_path)
 
     _evaluate_and_write(
-        model, spec, params, matcher, loss_fn, autocast_dtype, use_bf16, run_dir_path
+        model,
+        spec,
+        params,
+        matcher,
+        loss_fn,
+        device,
+        autocast_dtype,
+        use_bf16,
+        run_dir_path,
     )
     return True
 
@@ -277,6 +344,7 @@ def _evaluate_and_write(
     params: Any,
     matcher: Any,
     loss_fn: Any,
+    device: Any,
     autocast_dtype: Any,
     use_bf16: bool,
     run_dir_path: Path,
@@ -291,33 +359,31 @@ def _evaluate_and_write(
     """
     import torch
 
-    val_datapoints = try_build_datapoints(
+    val_descriptors = try_build_descriptors(
         spec.derived_dataset_dir, params, "valid", seed=spec.seed
     )
-    if not val_datapoints:
+    if not val_descriptors:
         return None
-    val_batches = collate_batches(val_datapoints, params.batch)
+    n_val_batches = batch_count(query_count(val_descriptors), params.batch)
+    val_batches = collate_batches(val_descriptors, params.batch)
 
     model.eval()
     total_loss = 0.0
     with torch.no_grad():
         for batch in val_batches:
-            targets = _targets_from_batch(batch)
             with torch.autocast(
                 device_type="cuda", dtype=autocast_dtype, enabled=use_bf16
             ):
-                outputs = model(batch)
-                outputs["indices"] = matcher(outputs, targets)
-                if "aux_outputs" in outputs:
-                    for aux in outputs["aux_outputs"]:
-                        aux["indices"] = matcher(aux, targets)
+                model_input, targets, outputs = _forward_batch(batch, model, device)
+                _attach_matcher_indices(outputs, targets, matcher)
                 loss_dict = loss_fn(outputs, targets)
-                loss = loss_dict["loss"] if isinstance(loss_dict, dict) else loss_dict
+                loss = _core_loss(loss_dict)
             total_loss += float(loss)
+            del batch, model_input, targets, outputs, loss_dict, loss
 
     val_stats = {
-        "val_loss_mean": total_loss / len(val_batches),
-        "val_batches": len(val_batches),
+        "val_loss_mean": total_loss / n_val_batches,
+        "val_batches": n_val_batches,
         "note": "informational only; checkpoint selection is always 'last'",
     }
     metrics_path = run_dir_path / "val_stats.json"
