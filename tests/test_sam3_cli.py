@@ -12,6 +12,7 @@ fix round 1, finding 2).
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 from hydra_suite.training.sam3_lora import cli
 
@@ -69,3 +70,29 @@ def test_main_zero_datapoints_exits_nonzero(tmp_path, monkeypatch, capsys):
 
     assert rc != 0
     assert not (run_dir / "adapters.pt").exists()
+
+
+def test_collated_batch_is_unwrapped_and_targets_are_back_converted():
+    model_input = SimpleNamespace(find_targets=["target-a", "target-b"])
+    model = SimpleNamespace(back_convert=lambda target: f"converted-{target}")
+
+    got_input, got_targets = cli._model_input_and_targets({"input": model_input}, model)
+
+    assert got_input is model_input
+    assert got_targets == ["converted-target-a", "converted-target-b"]
+
+
+def test_validation_matching_is_attached_to_every_main_and_aux_output():
+    main = {"name": "main", "aux_outputs": [{"name": "aux"}]}
+    outputs = SimpleNamespace(output=[[main]])
+    calls = []
+
+    def matcher(output, target):
+        calls.append((output["name"], target))
+        return f"indices-{output['name']}"
+
+    cli._attach_matcher_indices(outputs, ["target"], matcher)
+
+    assert calls == [("main", "target"), ("aux", "target")]
+    assert main["indices"] == "indices-main"
+    assert main["aux_outputs"][0]["indices"] == "indices-aux"
