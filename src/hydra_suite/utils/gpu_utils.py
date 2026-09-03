@@ -58,8 +58,29 @@ try:
     NUMBA_AVAILABLE = True
 except ImportError:
     NUMBA_AVAILABLE = False
-    njit = None
-    prange = None
+
+    # Pass-through fallbacks, NOT None. `kalman.py` decorates its kernels with
+    # `@njit(cache=True)` at module scope while branching on NUMBA_AVAILABLE at
+    # every CALL site, so a None here raised TypeError at import time and made
+    # the whole `hydra_suite` package unimportable in any env without numba --
+    # including the deliberately minimal SAM3 training sidecar env, which only
+    # needs `training.sam3_lora.cli`. Mirrors the fallbacks `assigners/
+    # hungarian.py` and `background/model.py` already define locally.
+    def njit(*args, **kwargs):
+        """No-op stand-in for numba.njit; returns the function unchanged."""
+
+        def decorator(func):
+            return func
+
+        # Support both `@njit` and `@njit(cache=True)`.
+        if len(args) == 1 and not kwargs and callable(args[0]):
+            return args[0]
+        return decorator
+
+    def prange(*args, **kwargs):
+        """No-op stand-in for numba.prange; delegates to the built-in range."""
+        return range(*args, **kwargs)
+
 
 # TensorRT for NVIDIA GPU inference optimization
 try:
