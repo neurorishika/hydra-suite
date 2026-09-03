@@ -66,6 +66,13 @@ class ResourceObservation:
             raise ValueError(
                 "MPS uses unified host memory; do not provide a separate device pool"
             )
+        if self.accelerator_kind is AcceleratorKind.CPU and (
+            self.total_accelerator_bytes is not None
+            or self.available_accelerator_bytes is not None
+        ):
+            raise ValueError(
+                "CPU observations cannot claim a separate accelerator memory pool"
+            )
 
 
 @dataclass(frozen=True)
@@ -178,7 +185,11 @@ class ResourceBudget:
     available_accelerator_bytes: Optional[int]
     usable_accelerator_bytes: Optional[int]
     dominant_phase: str
+    dominant_host_phase: str
+    dominant_accelerator_phase: Optional[str]
     dominant_allocations: tuple[tuple[str, int], ...]
+    dominant_host_allocations: tuple[tuple[str, int], ...]
+    dominant_accelerator_allocations: tuple[tuple[str, int], ...]
     limits: WorkLimits
     refusals: tuple[str, ...]
     warnings: tuple[str, ...]
@@ -246,7 +257,16 @@ def evaluate_resource_request(
         )
         for phase in request.phases
     }
-    dominant_phase = max(phase_host_peaks, key=phase_host_peaks.__getitem__)
+    dominant_host_phase = max(phase_host_peaks, key=phase_host_peaks.__getitem__)
+    phase_accelerator_peaks = {
+        phase.name: phase.accelerator_peak_bytes for phase in request.phases
+    }
+    accelerator_peak = max(phase_accelerator_peaks.values(), default=0)
+    dominant_accelerator_phase = (
+        max(phase_accelerator_peaks, key=phase_accelerator_peaks.__getitem__)
+        if accelerator_peak
+        else None
+    )
     host_steady = max(
         phase.host_steady_bytes
         + (
@@ -256,15 +276,29 @@ def evaluate_resource_request(
         )
         for phase in request.phases
     )
-    host_peak = phase_host_peaks[dominant_phase]
+    host_peak = phase_host_peaks[dominant_host_phase]
     accelerator_steady = max(
         (phase.accelerator_steady_bytes for phase in request.phases), default=0
     )
-    accelerator_peak = max(
-        (phase.accelerator_peak_bytes for phase in request.phases), default=0
-    )
     disk_peak = max((phase.disk_transient_bytes for phase in request.phases), default=0)
-    dominant = next(phase for phase in request.phases if phase.name == dominant_phase)
+    dominant = next(
+        phase for phase in request.phases if phase.name == dominant_host_phase
+    )
+    accelerator_dominant = (
+        next(
+            phase
+            for phase in request.phases
+            if phase.name == dominant_accelerator_phase
+        )
+        if dominant_accelerator_phase is not None
+        else None
+    )
+    dominant_host_allocations = _sorted_allocations(dominant.dominant_allocations)
+    dominant_accelerator_allocations = _sorted_allocations(
+        accelerator_dominant.dominant_allocations
+        if accelerator_dominant is not None
+        else ()
+    )
 
     reserve = max(
         policy.reserve_host_bytes,
@@ -276,7 +310,7 @@ def evaluate_resource_request(
     if host_peak > usable_host:
         refusals.append(
             f"{request.job_name} needs an estimated peak of "
-            f"{_format_bytes(host_peak)} host memory during {dominant_phase}, "
+            f"{_format_bytes(host_peak)} host memory during {dominant_host_phase}, "
             f"but only {_format_bytes(usable_host)} is usable after reserving "
             f"{_format_bytes(reserve)}"
         )
@@ -287,6 +321,11 @@ def evaluate_resource_request(
         )
 
     usable_accelerator: Optional[int] = None
+    if observation.accelerator_kind is AcceleratorKind.CPU and accelerator_peak:
+        refusals.append(
+            f"{request.job_name} estimates {_format_bytes(accelerator_peak)} of "
+            "accelerator memory, but the CPU observation has no accelerator pool"
+        )
     if observation.accelerator_kind is AcceleratorKind.CUDA:
         if observation.available_accelerator_bytes is None:
             refusals.append("CUDA memory availability could not be measured")
@@ -321,8 +360,12 @@ def evaluate_resource_request(
         reserved_host_bytes=reserve,
         available_accelerator_bytes=observation.available_accelerator_bytes,
         usable_accelerator_bytes=usable_accelerator,
-        dominant_phase=dominant_phase,
-        dominant_allocations=_sorted_allocations(dominant.dominant_allocations),
+        dominant_phase=dominant_host_phase,
+        dominant_host_phase=dominant_host_phase,
+        dominant_accelerator_phase=dominant_accelerator_phase,
+        dominant_allocations=dominant_host_allocations,
+        dominant_host_allocations=dominant_host_allocations,
+        dominant_accelerator_allocations=dominant_accelerator_allocations,
         limits=request.limits,
         refusals=tuple(refusals),
         warnings=tuple(warnings),

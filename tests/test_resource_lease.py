@@ -8,9 +8,12 @@ from pathlib import Path
 
 import pytest
 
+import hydra_suite.runtime.resource_lease as lease_module
 from hydra_suite.runtime.resource_lease import (
     HeavyJobLease,
     ResourceBusyError,
+    canonical_heavy_job_lease,
+    canonical_resource_key,
     owner_is_live,
 )
 
@@ -78,3 +81,48 @@ def test_stale_metadata_is_replaced_only_after_lock_acquisition(tmp_path):
 
     persisted = json.loads(lease.path.read_text(encoding="utf-8"))
     assert persisted["job_name"] == "new job"
+
+
+def test_canonical_keys_use_physical_cuda_uuid_and_one_mps_pool():
+    assert canonical_resource_key("cuda", index=0, device_uuid="GPU-ABC") == (
+        canonical_resource_key("cuda", index=7, device_uuid="gpu-abc")
+    )
+    assert canonical_resource_key("mps", index=0) == canonical_resource_key(
+        "mps", index=99, device_uuid="ignored"
+    )
+    assert canonical_resource_key("mps", index=0).endswith(":mps:unified")
+    assert canonical_resource_key(
+        "cuda",
+        index=1,
+        environ={"CUDA_VISIBLE_DEVICES": "GPU-ONE,GPU-TWO"},
+    ).endswith(":cuda:uuid:gpu-two")
+
+
+def test_canonical_lease_factory_uses_shared_hydra_data_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("HYDRA_DATA_DIR", str(tmp_path))
+    lease = canonical_heavy_job_lease("training", "mps", index=3)
+
+    assert lease.path.parent == tmp_path / "runtime" / "heavy-job-leases"
+    assert lease.resource_key.endswith(":mps:unified")
+
+
+def test_failed_owner_metadata_setup_unlocks_and_closes_handle(tmp_path, monkeypatch):
+    unlocked_while_open = []
+    monkeypatch.setattr(lease_module, "_try_lock", lambda _handle: None)
+    monkeypatch.setattr(
+        lease_module,
+        "_unlock",
+        lambda handle: unlocked_while_open.append(not handle.closed),
+    )
+    monkeypatch.setattr(
+        lease_module.psutil,
+        "Process",
+        lambda _pid: (_ for _ in ()).throw(RuntimeError("metadata probe failed")),
+    )
+    lease = HeavyJobLease("host:cpu:memory", "broken", tmp_path)
+
+    with pytest.raises(RuntimeError, match="metadata probe failed"):
+        lease.acquire()
+
+    assert unlocked_while_open == [True]
+    assert lease.owner is None

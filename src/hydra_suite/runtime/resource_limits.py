@@ -19,10 +19,15 @@ import uuid
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+from types import MappingProxyType
 from typing import Mapping, Optional, Sequence
+
+from .resource_budget import AcceleratorKind
 
 
 class LimitBackend(str, Enum):
+    """Host-memory enforcement mechanism applied to a protected launch."""
+
     SYSTEMD_CGROUP = "systemd-cgroup-v2"
     RLIMIT_AS = "rlimit-as"
     WATCHDOG_ONLY = "watchdog-only"
@@ -49,20 +54,28 @@ class ProcessMemoryLimits:
 
 @dataclass(frozen=True)
 class LimitedLaunch:
+    """Immutable child command, environment, and authoritative memory limits."""
+
     command: tuple[str, ...]
     environment: Mapping[str, str]
     backend: LimitBackend
+    limits: ProcessMemoryLimits
+    accelerator_kind: AcceleratorKind
     systemd_unit: Optional[str] = None
     limitations: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
 class CgroupEvidence:
+    """Bounded post-exit observations from a transient systemd scope."""
+
     unit: str
+    available: bool = True
     result: Optional[str] = None
     oom_killed: bool = False
     memory_peak_bytes: Optional[int] = None
     raw_properties: Mapping[str, str] | None = None
+    error: Optional[str] = None
 
 
 def systemd_user_scope_available(
@@ -77,7 +90,7 @@ def systemd_user_scope_available(
     rather than silently running the workload without its requested cap.
     """
     system = system or platform.system()
-    environ = environ or os.environ
+    environ = os.environ if environ is None else environ
     return bool(
         system == "Linux"
         and Path("/sys/fs/cgroup/cgroup.controllers").exists()
@@ -91,6 +104,8 @@ def select_limit_backend(
     system: Optional[str] = None,
     systemd_available: Optional[bool] = None,
 ) -> LimitBackend:
+    """Choose the strongest supported host-memory boundary for this platform."""
+
     system = system or platform.system()
     if system == "Linux" and (
         systemd_user_scope_available(system=system)
@@ -113,12 +128,19 @@ def build_limited_launch(
     environment: Optional[Mapping[str, str]] = None,
     python_executable: Optional[str] = None,
     systemd_unit: Optional[str] = None,
+    accelerator_kind: AcceleratorKind | str = AcceleratorKind.CPU,
 ) -> LimitedLaunch:
     """Wrap ``command`` so limits are applied before accelerator imports."""
     if not command:
         raise ValueError("child command must not be empty")
+    accelerator_kind = AcceleratorKind(accelerator_kind)
+    if (
+        accelerator_kind is AcceleratorKind.MPS
+        and limits.mps_high_watermark_ratio is None
+    ):
+        raise ValueError("MPS jobs require an explicit allocator high-watermark ratio")
     selected = backend or select_limit_backend()
-    child_env = dict(environment or os.environ)
+    child_env = dict(os.environ if environment is None else environment)
     bootstrap = [
         python_executable or sys.executable,
         "-m",
@@ -148,6 +170,7 @@ def build_limited_launch(
             unit,
             f"--property=MemoryHigh={limits.soft_host_bytes}",
             f"--property=MemoryMax={limits.hard_host_bytes}",
+            "--property=MemorySwapMax=0",
             "--",
             *bootstrap,
         ]
@@ -165,8 +188,10 @@ def build_limited_launch(
             )
     return LimitedLaunch(
         command=tuple(wrapped),
-        environment=child_env,
+        environment=MappingProxyType(child_env),
         backend=selected,
+        limits=limits,
+        accelerator_kind=accelerator_kind,
         systemd_unit=unit,
         limitations=tuple(limitations),
     )
@@ -201,29 +226,45 @@ def apply_child_limits(
         os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = str(mps_high_watermark_ratio)
 
 
-def probe_systemd_cgroup_evidence(unit: str) -> CgroupEvidence:
+def probe_systemd_cgroup_evidence(
+    unit: str, *, timeout_seconds: float = 3.0
+) -> CgroupEvidence:
     """Read transient-unit evidence used to distinguish cgroup OOM kills."""
-    completed = subprocess.run(
-        [
-            "systemctl",
-            "--user",
-            "show",
-            unit,
-            "--property=Result",
-            "--property=ExecMainStatus",
-            "--property=MemoryPeak",
-            "--property=OOMKilled",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    if timeout_seconds <= 0:
+        raise ValueError("systemd evidence timeout must be positive")
+    try:
+        completed = subprocess.run(
+            [
+                "systemctl",
+                "--user",
+                "show",
+                unit,
+                "--property=Result",
+                "--property=ExecMainStatus",
+                "--property=MemoryPeak",
+                "--property=OOMKilled",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired:
+        return CgroupEvidence(
+            unit=unit,
+            available=False,
+            error=f"systemd evidence query timed out after {timeout_seconds:g}s",
+        )
+    except OSError as exc:
+        return CgroupEvidence(unit=unit, available=False, error=str(exc))
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or f"systemctl exited {completed.returncode}"
+        return CgroupEvidence(unit=unit, available=False, error=detail)
     properties: dict[str, str] = {}
-    if completed.returncode == 0:
-        for line in completed.stdout.splitlines():
-            key, separator, value = line.partition("=")
-            if separator:
-                properties[key] = value
+    for line in completed.stdout.splitlines():
+        key, separator, value = line.partition("=")
+        if separator:
+            properties[key] = value
     result = properties.get("Result")
     oom_killed = properties.get("OOMKilled", "").lower() in {"yes", "true", "1"}
     oom_killed = oom_killed or result in {"oom-kill", "oom-killed"}
@@ -237,6 +278,32 @@ def probe_systemd_cgroup_evidence(unit: str) -> CgroupEvidence:
     )
 
 
+def signal_systemd_scope(
+    unit: str, signum: int, *, timeout_seconds: float = 3.0
+) -> bool:
+    """Ask systemd to signal every process still owned by one transient scope."""
+    if timeout_seconds <= 0:
+        raise ValueError("systemd signal timeout must be positive")
+    try:
+        completed = subprocess.run(
+            [
+                "systemctl",
+                "--user",
+                "kill",
+                f"--signal={int(signum)}",
+                "--kill-whom=all",
+                unit,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return completed.returncode == 0
+
+
 def serialize_limit_diagnostic(launch: LimitedLaunch) -> str:
     """Return stable JSON suitable for a run manifest or support report."""
     return json.dumps(
@@ -244,6 +311,10 @@ def serialize_limit_diagnostic(launch: LimitedLaunch) -> str:
             "backend": launch.backend.value,
             "systemd_unit": launch.systemd_unit,
             "limitations": list(launch.limitations),
+            "soft_host_bytes": launch.limits.soft_host_bytes,
+            "hard_host_bytes": launch.limits.hard_host_bytes,
+            "mps_high_watermark_ratio": launch.limits.mps_high_watermark_ratio,
+            "accelerator_kind": launch.accelerator_kind.value,
         },
         sort_keys=True,
     )

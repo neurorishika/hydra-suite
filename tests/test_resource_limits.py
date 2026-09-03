@@ -7,12 +7,16 @@ from pathlib import Path
 
 import pytest
 
+from hydra_suite.runtime.child_bootstrap import install_linux_parent_death_signal
 from hydra_suite.runtime.process_supervisor import ExitEvidence, ExitKind, classify_exit
 from hydra_suite.runtime.resource_limits import (
+    CgroupEvidence,
     LimitBackend,
     ProcessMemoryLimits,
     build_limited_launch,
+    probe_systemd_cgroup_evidence,
     select_limit_backend,
+    systemd_user_scope_available,
 )
 
 
@@ -24,9 +28,10 @@ def _test_env() -> dict[str, str]:
 
 
 def test_systemd_command_places_kernel_limits_outside_bootstrap():
+    limits = ProcessMemoryLimits(soft_host_bytes=100, hard_host_bytes=200)
     launch = build_limited_launch(
         ["python", "work.py"],
-        ProcessMemoryLimits(soft_host_bytes=100, hard_host_bytes=200),
+        limits,
         backend=LimitBackend.SYSTEMD_CGROUP,
         environment={},
         python_executable="/usr/bin/python3",
@@ -42,8 +47,11 @@ def test_systemd_command_places_kernel_limits_outside_bootstrap():
     assert "--wait" not in launch.command
     assert "--property=MemoryHigh=100" in launch.command
     assert "--property=MemoryMax=200" in launch.command
+    assert "--property=MemorySwapMax=0" in launch.command
     assert "--address-space-bytes" not in launch.command
     assert launch.systemd_unit == "hydra-test.scope"
+    assert launch.limits is limits
+    assert dict(launch.environment) == {}
 
 
 def test_rlimit_launch_documents_virtual_memory_and_sets_mps_before_exec():
@@ -79,6 +87,7 @@ def test_bootstrap_sets_mps_guard_before_replacing_itself_with_workload():
             mps_high_watermark_ratio=0.65,
         ),
         backend=LimitBackend.WATCHDOG_ONLY,
+        accelerator_kind="mps",
         environment=_test_env(),
     )
 
@@ -92,6 +101,87 @@ def test_bootstrap_sets_mps_guard_before_replacing_itself_with_workload():
     )
 
     assert result.stdout.strip() == "0.65"
+
+
+def test_mps_launch_requires_an_explicit_allocator_high_watermark():
+    with pytest.raises(ValueError, match="MPS.*high-watermark"):
+        build_limited_launch(
+            ["python", "work.py"],
+            ProcessMemoryLimits(soft_host_bytes=100, hard_host_bytes=200),
+            backend=LimitBackend.WATCHDOG_ONLY,
+            accelerator_kind="mps",
+        )
+
+
+def test_none_environment_inherits_but_empty_environment_stays_empty(monkeypatch):
+    monkeypatch.setenv("HYDRA_ENV_SENTINEL", "present")
+    limits = ProcessMemoryLimits(soft_host_bytes=100, hard_host_bytes=200)
+
+    inherited = build_limited_launch(
+        ["python", "work.py"], limits, backend=LimitBackend.WATCHDOG_ONLY
+    )
+    empty = build_limited_launch(
+        ["python", "work.py"],
+        limits,
+        backend=LimitBackend.WATCHDOG_ONLY,
+        environment={},
+    )
+
+    assert inherited.environment["HYDRA_ENV_SENTINEL"] == "present"
+    assert dict(empty.environment) == {}
+    with pytest.raises(TypeError):
+        empty.environment["late-mutation"] = "forbidden"  # type: ignore[index]
+
+    monkeypatch.setattr(Path, "exists", lambda _path: True)
+    monkeypatch.setattr("shutil.which", lambda _name: "/usr/bin/systemd-run")
+    assert not systemd_user_scope_available(system="Linux", environ={})
+
+
+def test_systemd_evidence_timeout_and_disappearing_unit_are_explicit(monkeypatch):
+    calls = []
+
+    def disappeared(*args, **kwargs):
+        calls.append(kwargs)
+        return subprocess.CompletedProcess(args[0], 1, "", "Unit vanished")
+
+    monkeypatch.setattr(subprocess, "run", disappeared)
+    evidence = probe_systemd_cgroup_evidence("gone.scope", timeout_seconds=0.25)
+    assert isinstance(evidence, CgroupEvidence)
+    assert not evidence.available
+    assert "vanished" in (evidence.error or "").lower()
+    assert calls[0]["timeout"] == 0.25
+
+    def timed_out(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired(["systemctl"], 0.25)
+
+    monkeypatch.setattr(subprocess, "run", timed_out)
+    evidence = probe_systemd_cgroup_evidence("slow.scope", timeout_seconds=0.25)
+    assert not evidence.available
+    assert "timed out" in (evidence.error or "").lower()
+
+
+def test_linux_parent_death_signal_is_installed_before_race_check():
+    calls = []
+
+    def fake_prctl(option, signal_number):
+        calls.append((option, signal_number))
+        return 0
+
+    assert install_linux_parent_death_signal(
+        123,
+        system="Linux",
+        prctl_call=fake_prctl,
+        get_parent_pid=lambda: 123,
+    )
+    assert calls
+
+    with pytest.raises(RuntimeError, match="parent exited"):
+        install_linux_parent_death_signal(
+            123,
+            system="Linux",
+            prctl_call=fake_prctl,
+            get_parent_pid=lambda: 999,
+        )
 
 
 def test_runtime_package_import_does_not_load_accelerator_modules():

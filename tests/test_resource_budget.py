@@ -131,6 +131,54 @@ def test_mps_rejects_a_second_fake_device_pool():
         )
 
 
+def test_cpu_rejects_fake_accelerator_observations_and_accelerator_work():
+    with pytest.raises(ValueError, match="CPU observations"):
+        ResourceObservation(
+            total_host_bytes=64 * GiB,
+            available_host_bytes=32 * GiB,
+            accelerator_kind=AcceleratorKind.CPU,
+            total_accelerator_bytes=8 * GiB,
+            available_accelerator_bytes=4 * GiB,
+        )
+
+    request = ResourceRequest(
+        "misresolved accelerator job",
+        (PhaseEstimate("train", accelerator_peak_bytes=2 * GiB),),
+    )
+    budget = evaluate_resource_request(request, _observation(AcceleratorKind.CPU))
+    assert not budget.admitted
+    assert any("CPU observation" in refusal for refusal in budget.refusals)
+
+
+def test_host_and_accelerator_dominant_phases_are_reported_separately():
+    request = ResourceRequest(
+        "split peaks",
+        (
+            PhaseEstimate(
+                "decode",
+                host_peak_bytes=12 * GiB,
+                dominant_allocations=(("decoded frames", 10 * GiB),),
+            ),
+            PhaseEstimate(
+                "train",
+                host_peak_bytes=4 * GiB,
+                accelerator_peak_bytes=8 * GiB,
+                dominant_allocations=(("model state", 7 * GiB),),
+            ),
+        ),
+    )
+
+    budget = evaluate_resource_request(request, _observation(AcceleratorKind.CUDA))
+
+    assert budget.dominant_host_phase == "decode"
+    assert budget.dominant_accelerator_phase == "train"
+    assert budget.dominant_host_allocations == (("decoded frames", 10 * GiB),)
+    assert budget.dominant_accelerator_allocations == (("model state", 7 * GiB),)
+    # Compatibility spelling remains explicitly host-oriented.
+    assert budget.dominant_phase == budget.dominant_host_phase
+    assert budget.dominant_allocations == budget.dominant_host_allocations
+
+
 def test_observations_and_phase_names_reject_ambiguous_inputs():
     with pytest.raises(ValueError, match="paired"):
         ResourceObservation(
