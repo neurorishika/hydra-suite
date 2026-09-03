@@ -74,13 +74,21 @@ and commit only those results. Cache-key mismatch, missing/truncated referenced
 chunks, and malformed metadata invalidate the cache rather than becoming empty
 results.
 
+A deliberate replacement uses a new session directory and keeps the prior
+canonical manifest visible until the complete pass closes successfully. Stops,
+exceptions, and stuck cache-writer teardown leave replacement chunks orphaned
+rather than promoting partial coverage over the last reusable generation.
+
 Legacy NPZ files remain read-only compatible. New writes use the chunked format;
 there is no automatic migration or deletion of a legacy cache.
 
 ## Memory and concurrency contract
 
-Each handle buffers at most one configured chunk and releases it immediately
-after publication. Indexed readers retain at most one decoded chunk. The async
-`CacheWriter` additionally accounts for payload bytes and blocks producers once
-its configured queue-byte budget is occupied. A worker failure wakes blocked
-producers and is surfaced once without waiting for an undrainable queue.
+Each handle has a byte-triggered buffer limit in addition to its frame-count
+limit and rejects a single frame larger than that budget. Indexed readers retain
+at most one decoded chunk. `CacheWriter` treats its configured limit as an
+aggregate retained-memory budget: it partitions bytes across handle buffers and,
+in asynchronous mode, the queued/current payload. Both synchronous and
+asynchronous writers reject an oversized payload. A worker failure wakes blocked
+producers, while flush and close use bounded deadlines so callers never close a
+handle that a stuck worker may still be using.
