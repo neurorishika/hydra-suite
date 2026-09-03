@@ -49,16 +49,14 @@ def test_get_or_compute_raw_reads_fully_covered_cache_without_recompute(tmp_path
     assert set(result.keys()) == {0, 1}
 
 
-def test_get_or_compute_raw_recomputes_whole_set_on_partial_miss(tmp_path):
+def test_get_or_compute_raw_resumes_only_missing_frames(tmp_path):
     runner = _FakeRunner()
     frames2 = [np.zeros((4, 4, 3), dtype=np.uint8) for _ in range(2)]
     get_or_compute_raw(runner, tmp_path, frames2, [0, 1])  # populates cache for [0, 1]
     runner.calls.clear()
     frames3 = [np.zeros((4, 4, 3), dtype=np.uint8) for _ in range(3)]
     get_or_compute_raw(runner, tmp_path, frames3, [0, 1, 2])  # 2 is missing
-    # Per the no-merge convention: the whole *requested* set is recomputed fresh,
-    # not just the miss.
-    assert runner.calls == [[0, 1, 2]]
+    assert runner.calls == [[2]]
 
 
 def test_get_or_compute_raw_write_false_never_touches_the_cache_file(tmp_path):
@@ -78,11 +76,12 @@ def test_get_or_compute_raw_write_false_never_touches_the_cache_file(tmp_path):
     before = cache_path.read_bytes()
     runner.calls.clear()
 
-    # A miss under write=False: recomputed, returned, nothing written.
+    # A miss under write=False: only the missing frame is recomputed and
+    # returned, but the borrowed cache remains untouched.
     frames3 = [np.zeros((4, 4, 3), dtype=np.uint8) for _ in range(3)]
     result = get_or_compute_raw(runner, tmp_path, frames3, [0, 1, 2], write=False)
     assert set(result.keys()) == {0, 1, 2}
-    assert runner.calls == [[0, 1, 2]]
+    assert runner.calls == [[2]]
     assert cache_path.read_bytes() == before
 
 
@@ -140,29 +139,28 @@ def test_bgsub_cache_recomputes_when_detection_config_changes(tmp_path):
     assert second.calls == [[0]]
 
 
-def test_reused_reader_loads_cache_arrays_only_once(tmp_path, monkeypatch):
-    """Chunked export must reuse an already-loaded detection.npz reader."""
+def test_reused_reader_loads_only_each_requested_payload_chunk(tmp_path, monkeypatch):
+    """Chunked export retains one chunk and never loads unrelated chunks."""
 
-    import hydra_suite.core.inference.cache.store as store
+    import hydra_suite.core.inference.cache.chunked as chunked
 
     runner = _FakeRunner()
     frames = [np.zeros((4, 4, 3), dtype=np.uint8) for _ in range(2)]
     get_or_compute_raw(runner, tmp_path, frames, [0, 1])
 
-    real_load = store.np.load
-    calls = 0
+    real_load = chunked.np.load
+    payload_calls = 0
 
     def counted_load(*args, **kwargs):
-        nonlocal calls
-        calls += 1
+        nonlocal payload_calls
+        if "chunks" in str(args[0]):
+            payload_calls += 1
         return real_load(*args, **kwargs)
 
-    monkeypatch.setattr(store.np, "load", counted_load)
+    monkeypatch.setattr(chunked.np, "load", counted_load)
     reader = open_raw_detection_cache_reader(runner, tmp_path)
     get_or_compute_raw(runner, tmp_path, [frames[0]], [0], cache_reader=reader)
     get_or_compute_raw(runner, tmp_path, [frames[1]], [1], cache_reader=reader)
 
-    # The unkeyed fake runner checks only file existence, so the first chunk
-    # performs one eager array load. The second uses the reader's cached
-    # validity and arrays rather than reloading NPZ.
-    assert calls == 1
+    # Both requested frames share the default 64-frame payload chunk.
+    assert payload_calls == 1

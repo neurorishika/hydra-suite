@@ -732,60 +732,64 @@ def build_detected_cnn_lookup_dataframe_from_cache(
     uses the global detection-id encoding (``frame * DETECTION_ID_STRIDE +
     local detection index``) that ``DetectionID`` carries in the trajectory CSV.
     """
+    from hydra_suite.core.inference.cache.reader import open_cnn_cache_reader
     from hydra_suite.core.inference.result import DETECTION_ID_STRIDE
 
-    try:
-        data = np.load(cache_path, allow_pickle=False)
-    except Exception:
+    reader = open_cnn_cache_reader(cache_path, label)
+    if not reader.is_valid():
         logger.debug("Detected CNN cache unreadable: %s", cache_path, exc_info=True)
         return pd.DataFrame()
 
-    frame_indices = np.asarray(data.get("frame_indices", np.zeros(0, np.int32)))
-    det_indices = np.asarray(data.get("det_indices", np.zeros(0, np.int32)))
-    if frame_indices.size == 0 or det_indices.size == 0:
-        return pd.DataFrame()
-
-    try:
-        factor_names = json.loads(str(data["factor_names_json"][0]))
-        class_names = json.loads(str(data["class_names_json"][0]))
-    except Exception:
-        logger.debug("Detected CNN cache metadata unreadable: %s", cache_path)
-        return pd.DataFrame()
-    if not factor_names or not class_names:
-        return pd.DataFrame()
-
-    class_counts = np.asarray(data["class_counts"]).astype(int)
-    probs = np.asarray(data["probabilities"])
-    specs = build_cnn_output_columns(label, factor_names)
-
-    out: Dict[str, Any] = {
-        "_cnn_frame_id": frame_indices.astype(np.int64),
-        "_cnn_detection_id": frame_indices.astype(np.int64) * DETECTION_ID_STRIDE
-        + det_indices.astype(np.int64),
-    }
-    for f_idx, (_factor, class_col, conf_col) in enumerate(specs):
-        if f_idx >= probs.shape[1] or f_idx >= len(class_names):
+    chunk_frames: list[pd.DataFrame] = []
+    for data in reader.iter_arrays():
+        frame_indices = np.asarray(data.get("frame_indices", np.zeros(0, np.int32)))
+        det_indices = np.asarray(data.get("det_indices", np.zeros(0, np.int32)))
+        if frame_indices.size == 0 or det_indices.size == 0:
             continue
-        n_cls = int(class_counts[f_idx]) if f_idx < len(class_counts) else 0
-        block = probs[:, f_idx, :n_cls] if n_cls else probs[:, f_idx, :0]
-        if block.size == 0:
+        try:
+            factor_names = json.loads(str(data["factor_names_json"][0]))
+            class_names = json.loads(str(data["class_names_json"][0]))
+        except Exception:
+            logger.debug("Detected CNN cache metadata unreadable: %s", cache_path)
+            return pd.DataFrame()
+        if not factor_names or not class_names:
             continue
-        # A detection with no prediction for this factor is stored as all-NaN
-        # padding; it must stay unlabelled rather than argmax to class 0.
-        valid = np.isfinite(block).any(axis=1)
-        best = np.zeros(block.shape[0], dtype=np.int64)
-        best[valid] = np.nanargmax(block[valid], axis=1)
-        vocab = [str(c) for c in class_names[f_idx]]
-        out[class_col] = np.where(
-            valid,
-            np.array([vocab[i] if i < len(vocab) else "" for i in best], dtype=object),
-            np.nan,
-        )
-        conf = np.full(block.shape[0], np.nan, dtype=np.float64)
-        conf[valid] = np.nanmax(block[valid], axis=1)
-        out[conf_col] = conf
 
-    return pd.DataFrame(out)
+        class_counts = np.asarray(data["class_counts"]).astype(int)
+        probs = np.asarray(data["probabilities"])
+        specs = build_cnn_output_columns(label, factor_names)
+        out: Dict[str, Any] = {
+            "_cnn_frame_id": frame_indices.astype(np.int64),
+            "_cnn_detection_id": frame_indices.astype(np.int64) * DETECTION_ID_STRIDE
+            + det_indices.astype(np.int64),
+        }
+        for f_idx, (_factor, class_col, conf_col) in enumerate(specs):
+            if f_idx >= probs.shape[1] or f_idx >= len(class_names):
+                continue
+            n_cls = int(class_counts[f_idx]) if f_idx < len(class_counts) else 0
+            block = probs[:, f_idx, :n_cls] if n_cls else probs[:, f_idx, :0]
+            if block.size == 0:
+                continue
+            valid = np.isfinite(block).any(axis=1)
+            best = np.zeros(block.shape[0], dtype=np.int64)
+            best[valid] = np.nanargmax(block[valid], axis=1)
+            vocab = [str(c) for c in class_names[f_idx]]
+            out[class_col] = np.where(
+                valid,
+                np.array(
+                    [vocab[i] if i < len(vocab) else "" for i in best],
+                    dtype=object,
+                ),
+                np.nan,
+            )
+            conf = np.full(block.shape[0], np.nan, dtype=np.float64)
+            conf[valid] = np.nanmax(block[valid], axis=1)
+            out[conf_col] = conf
+        chunk_frames.append(pd.DataFrame(out))
+
+    return (
+        pd.concat(chunk_frames, ignore_index=True) if chunk_frames else pd.DataFrame()
+    )
 
 
 def augment_trajectories_with_detected_cnn_cache(

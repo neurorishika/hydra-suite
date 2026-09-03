@@ -76,6 +76,17 @@ def detection_cache_has_detections(detection_cache_path) -> bool:
     it can never false-positive on a legitimately empty clip.
     """
     try:
+        # Modern inference caches may be an atomic chunk manifest. Use the
+        # path-only reader so each payload is inspected independently without
+        # materializing a whole video.
+        from hydra_suite.core.inference.cache.reader import open_detection_cache_reader
+
+        reader = open_detection_cache_reader(detection_cache_path)
+        if reader.is_valid() and not reader.is_legacy:
+            return any(
+                np.asarray(arrays.get("frame_indices", [])).size > 0
+                for arrays in reader.iter_arrays()
+            )
         with np.load(str(detection_cache_path), allow_pickle=True) as data:
             for key in data.files:
                 if key.startswith("frame_") and key.endswith("_meas"):

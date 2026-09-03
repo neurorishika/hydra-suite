@@ -292,19 +292,16 @@ def build_density_cache_dict(
     if det_cache is None:
         return result
 
-    # Load the raw NPZ data to get all frame indices at once.
+    # Query the handle's explicit processed-frame index. For new caches this is
+    # manifest metadata; no payload chunk is loaded until read_frame below.
+    # Legacy monolithic NPZ remains supported by the handle.
     if not det_cache.is_valid():
         return result
 
-    if det_cache._data is None:
-        import numpy as _np
-
-        det_cache._data = dict(_np.load(det_cache.path))
-
-    d = det_cache._data
-    all_fi = d.get("frame_indices", np.zeros(0, np.int32))
     unique_fi = sorted(
-        {int(fi) for fi in all_fi if start_frame <= int(fi) <= end_frame}
+        frame
+        for frame in det_cache.written_frames()
+        if start_frame <= frame <= end_frame
     )
 
     for fi in unique_fi:

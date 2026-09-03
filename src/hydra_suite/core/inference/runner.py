@@ -725,7 +725,14 @@ class InferenceRunner:
         caches = _open_caches(
             self.config, self.cache_dir, self._video_sig, self._roi_mask
         )
-        return all(h.is_valid() for h in caches.all_handles())
+        handles = caches.all_handles()
+        if not handles or not all(h.is_valid() for h in handles):
+            return False
+        # A child crash can publish detection chunks before a downstream stage
+        # finishes. Matching keys alone must not turn that honest partial cache
+        # into a reusable complete pass.
+        reference = caches.detection.coverage_ranges() if caches.detection else ()
+        return all(h.coverage_ranges() == reference for h in handles)
 
     def detection_cache_covers_range(self, start_frame: int, end_frame: int) -> bool:
         """Return True iff the detection cache spans every frame in the range.
