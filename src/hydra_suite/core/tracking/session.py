@@ -87,6 +87,16 @@ def detection_cache_has_detections(detection_cache_path) -> bool:
                 np.asarray(arrays.get("frame_indices", [])).size > 0
                 for arrays in reader.iter_arrays()
             )
+        from hydra_suite.core.inference.cache.chunked import (
+            MAX_LEGACY_BYTES,
+            _inspect_npz,
+        )
+
+        _inspect_npz(
+            Path(detection_cache_path),
+            max_uncompressed_bytes=MAX_LEGACY_BYTES,
+            allow_object=True,
+        )
         with np.load(str(detection_cache_path), allow_pickle=True) as data:
             for key in data.files:
                 if key.startswith("frame_") and key.endswith("_meas"):

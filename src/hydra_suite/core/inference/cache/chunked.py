@@ -150,6 +150,7 @@ def _inspect_npz(
     *,
     max_uncompressed_bytes: int,
     max_members: int = MAX_NPZ_MEMBERS,
+    allow_object: bool = False,
 ) -> dict[str, tuple[tuple[int, ...], np.dtype]]:
     """Validate ZIP and NPY metadata before NumPy may allocate payload arrays."""
     metadata: dict[str, tuple[tuple[int, ...], np.dtype]] = {}
@@ -230,7 +231,7 @@ def _inspect_npz(
                         raise ValueError("unsupported NPY format version")
                     dtype = np.dtype(dtype)
                     if (
-                        dtype.hasobject
+                        (dtype.hasobject and not allow_object)
                         or len(shape) > 4
                         or any(
                             not isinstance(dim, int) or dim < 0 or dim > MAX_FRAME_INDEX
@@ -247,7 +248,10 @@ def _inspect_npz(
                             raise ValueError("NPY declared array exceeds safety limit")
                     # A truncated member cannot honestly contain its declared
                     # header plus payload. ZIP metadata is checked before load.
-                    if member.tell() + count * dtype.itemsize != info.file_size:
+                    if (
+                        not dtype.hasobject
+                        and member.tell() + count * dtype.itemsize != info.file_size
+                    ):
                         raise ValueError("NPY member size does not match its header")
                     metadata[info.filename[:-4]] = (tuple(shape), dtype)
     except (
