@@ -8,14 +8,13 @@ close()-joins-worker contract, handle-lifecycle, and worker-exception surfacing.
 
 from __future__ import annotations
 
-import numpy as np
+import threading
 
-from hydra_suite.core.inference.cache.writer import CacheWriter
-from hydra_suite.core.inference.result import (
-    AprilTagResult,
-    HeadTailResult,
-    OBBResult,
-)
+import numpy as np
+import pytest
+
+from hydra_suite.core.inference.cache.writer import CacheWriter, _payload_bytes
+from hydra_suite.core.inference.result import AprilTagResult, HeadTailResult, OBBResult
 
 # ---------------------------------------------------------------------------
 # Fake handle helpers
@@ -194,6 +193,27 @@ def test_write_downstream_routes_to_apriltag_handle():
     assert "result" in h_at.calls[0][1]
 
 
+def test_write_downstream_records_processed_empty_frames_for_all_handles():
+    handles = {
+        "headtail": _RecordingHandle(),
+        "cnn_id": _RecordingHandle(),
+        "pose": _RecordingHandle(),
+        "apriltag": _RecordingHandle(),
+    }
+    writer = CacheWriter(handles, [_SimpleCNNConfig("id")], async_mode=False)
+    writer.write_downstream(
+        12,
+        det_indices=np.zeros(0, np.int32),
+        headtail=None,
+        cnn_results=[],
+        pose=None,
+        apriltag=None,
+    )
+    assert all(handle.frames == [12] for handle in handles.values())
+    assert handles["cnn_id"].calls[0][1]["predictions"] == []
+    assert handles["pose"].calls[0][1]["keypoints"].shape == (0, 0, 3)
+
+
 # ---------------------------------------------------------------------------
 # Tests: async worker exception surfacing (Task-10 behavior preserved)
 # ---------------------------------------------------------------------------
@@ -223,3 +243,96 @@ def test_async_worker_exception_surfaces_on_close():
     w.write_detection(0, _obb(0))
     with pytest.raises(RuntimeError, match="write_frame failed"):
         w.close()
+
+
+class _GatedHandle(_RecordingHandle):
+    def __init__(self, *, fail: bool = False):
+        super().__init__()
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.fail = fail
+
+    def write_frame(self, frame_idx: int, **kw):
+        self.started.set()
+        assert self.release.wait(timeout=3)
+        if self.fail:
+            raise RuntimeError("gated writer failed")
+        super().write_frame(frame_idx, **kw)
+
+
+def _detection_item_size(frame_idx: int = 0) -> int:
+    return _payload_bytes(
+        {"kind": "detection", "frame_idx": frame_idx, "obb": _obb(frame_idx)}
+    )
+
+
+def test_async_writer_applies_byte_backpressure_to_producer():
+    handle = _GatedHandle()
+    writer = CacheWriter(
+        {"detection": handle},
+        [],
+        async_mode=True,
+        max_queue_bytes=_detection_item_size() + 32,
+    )
+    writer.write_detection(0, _obb(0))
+    assert handle.started.wait(timeout=1)
+
+    completed = threading.Event()
+
+    def enqueue_second():
+        writer.write_detection(1, _obb(1))
+        completed.set()
+
+    producer = threading.Thread(target=enqueue_second)
+    producer.start()
+    assert not completed.wait(timeout=0.1), "producer must block at the byte budget"
+    assert writer.queued_bytes <= writer._max_queue_bytes
+    handle.release.set()
+    producer.join(timeout=2)
+    assert completed.is_set()
+    writer.close()
+    assert handle.frames == [0, 1]
+
+
+def test_async_worker_failure_wakes_blocked_producer_without_deadlock():
+    handle = _GatedHandle(fail=True)
+    writer = CacheWriter(
+        {"detection": handle},
+        [],
+        async_mode=True,
+        max_queue_bytes=_detection_item_size() + 32,
+    )
+    writer.write_detection(0, _obb(0))
+    assert handle.started.wait(timeout=1)
+    caught: list[BaseException] = []
+
+    def enqueue_second():
+        try:
+            writer.write_detection(1, _obb(1))
+        except BaseException as exc:  # noqa: BLE001,B036 - assertion capture
+            caught.append(exc)
+
+    producer = threading.Thread(target=enqueue_second)
+    producer.start()
+    handle.release.set()
+    producer.join(timeout=2)
+    assert not producer.is_alive()
+    assert len(caught) == 1
+    assert "gated writer failed" in str(caught[0])
+    with pytest.raises(RuntimeError, match="unavailable after worker failure"):
+        writer.write_detection(2, _obb(2))
+    # The worker failure is surfaced exactly once; teardown remains idempotent.
+    writer.close()
+    writer.close()
+
+
+def test_async_writer_rejects_single_payload_larger_than_budget():
+    writer = CacheWriter(
+        {"detection": _RecordingHandle()},
+        [],
+        async_mode=True,
+        max_queue_bytes=1,
+    )
+    with pytest.raises(ValueError, match="exceeds max_queue_bytes"):
+        writer.write_detection(0, _obb(0))
+    writer.close()
