@@ -430,15 +430,17 @@ class ChunkedArrayStore:
             files = set(raw)
             if _FORMAT_FIELD not in files:
                 self._legacy = True
-                if (
-                    raw.get("cache_key") is None
-                    or raw["cache_key"].dtype.kind not in "US"
-                ):
+                cache_key = raw.get("cache_key")
+                if cache_key is not None:
+                    if cache_key.dtype.kind not in "US":
+                        return
+                    stored_key = str(_scalar(raw, "cache_key"))
+                    self._stored_key = stored_key
+                    self._valid = (
+                        not self.require_key or stored_key == self.key.as_string()
+                    )
+                elif self.require_key:
                     return
-                stored_key = str(_scalar(raw, "cache_key"))
-                self._stored_key = stored_key
-                if self.require_key:
-                    self._valid = stored_key == self.key.as_string()
                 else:
                     self._valid = True
                 return
@@ -602,7 +604,7 @@ class ChunkedArrayStore:
         payload.update(
             {
                 "_cache_kind": np.asarray([self.kind]),
-                "_cache_key": np.asarray([self.key.as_string()]),
+                "_cache_key": np.asarray([self._stored_key]),
                 "_session_id": np.asarray([self._session_id]),
                 "_generation_id": np.asarray([self._generation_id]),
                 "_chunk_position": np.asarray([sequence], dtype=np.int64),
@@ -836,11 +838,15 @@ class ChunkedArrayStore:
 
     def _validate_legacy_arrays(self, arrays: dict[str, np.ndarray]) -> None:
         """Apply the same structural contract to monolithic legacy caches."""
-        if "cache_key" not in arrays:
+        if self.require_key and "cache_key" not in arrays:
             raise ValueError("legacy cache is missing cache_key")
         # Legacy layouts have no chunk identity. Validate through a synthetic
         # chunk while preserving detection's historically optional class_ids.
-        payload = {name: value for name, value in arrays.items() if name != "cache_key"}
+        payload = {
+            name: value
+            for name, value in arrays.items()
+            if name not in {"cache_key", "frame_count"}
+        }
         if "written_frames" not in payload:
             payload["written_frames"] = np.unique(payload.get("frame_indices", []))
         if self.kind == "detection" and "class_ids" not in payload:
@@ -850,7 +856,7 @@ class ChunkedArrayStore:
         payload.update(
             {
                 "_cache_kind": np.asarray([self.kind]),
-                "_cache_key": np.asarray([self.key.as_string()]),
+                "_cache_key": np.asarray([self._stored_key]),
                 "_session_id": np.asarray([self._session_id]),
                 "_generation_id": np.asarray([self._generation_id]),
                 "_chunk_position": np.asarray([0], np.int64),

@@ -96,7 +96,7 @@ def test_real_writer_still_flushes_an_empty_cache(tmp_path):
     assert path.exists()
     data = np.load(path)
     assert str(data["cache_key"][0]) == _real_key().as_string()
-    assert int(data["chunked_format_version"][0]) == 1
+    assert int(data["chunked_format_version"][0]) == 2
     reader = DetectionCacheHandle(path=path, key=_real_key())
     assert reader.is_valid()
     assert reader.written_frames() == set()
