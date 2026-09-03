@@ -34,6 +34,46 @@ from .resource_limits import (
     signal_systemd_scope,
 )
 
+_FORK_EXCLUDED_FDS: set[int] = set()
+_FORK_EXCLUDED_LOCK = threading.Lock()
+
+
+def _close_excluded_fds_in_fork_child() -> None:
+    """Prevent unrelated fork children from extending containment ownership."""
+
+    try:
+        for descriptor in tuple(_FORK_EXCLUDED_FDS):
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        _FORK_EXCLUDED_FDS.clear()
+    finally:
+        _FORK_EXCLUDED_LOCK.release()
+
+
+def _register_fork_excluded_fds(descriptors: tuple[int, ...]) -> None:
+    with _FORK_EXCLUDED_LOCK:
+        _FORK_EXCLUDED_FDS.update(descriptors)
+
+
+def _close_fork_excluded_fd(descriptor: int) -> None:
+    """Close and unregister one descriptor atomically against ``fork``."""
+
+    with _FORK_EXCLUDED_LOCK:
+        try:
+            os.close(descriptor)
+        finally:
+            _FORK_EXCLUDED_FDS.discard(descriptor)
+
+
+if os.name == "posix" and hasattr(os, "register_at_fork"):
+    os.register_at_fork(
+        before=_FORK_EXCLUDED_LOCK.acquire,
+        after_in_parent=_FORK_EXCLUDED_LOCK.release,
+        after_in_child=_close_excluded_fds_in_fork_child,
+    )
+
 
 class WatchdogTrigger(str, Enum):
     """Reason the parent watchdog intervened in a workload."""
@@ -774,6 +814,7 @@ class SupervisedSidecar:
         self._guardian_teardown_requested = False
         self._guardian_ack_received = False
         self._guardian_process: Optional[subprocess.Popen[bytes]] = None
+        self._fork_excluded_fds: tuple[int, ...] = ()
         self.process: subprocess.Popen[Any]
         self.tree: OwnedProcessTree
         self._reader: threading.Thread
@@ -839,6 +880,10 @@ class SupervisedSidecar:
             if guardian_read_fd is not None and guardian_ack_write_fd is not None:
                 assert start_gate_write_fd is not None
                 self._guardian_process = spawn_parent_guardian(
+                    supervisor_pid=os.getpid(),
+                    supervisor_create_time=float(
+                        psutil.Process(os.getpid()).create_time()
+                    ),
                     workload_pid=self.process.pid,
                     process_group_id=self.tree.process_group_id or self.process.pid,
                     liveness_read_fd=guardian_read_fd,
@@ -852,6 +897,16 @@ class SupervisedSidecar:
                 guardian_read_fd = None
                 guardian_ack_write_fd = None
                 self._guardian_started = True
+                self._fork_excluded_fds = tuple(
+                    descriptor
+                    for descriptor in (
+                        self._parent_liveness_write_fd,
+                        self._guardian_ack_read_fd,
+                        *self._leases.filenos(),
+                    )
+                    if descriptor is not None
+                )
+                _register_fork_excluded_fds(self._fork_excluded_fds)
                 os.write(start_gate_write_fd, b"G")
                 os.close(start_gate_write_fd)
                 start_gate_write_fd = None
@@ -997,7 +1052,7 @@ class SupervisedSidecar:
             except OSError:
                 pass
             try:
-                os.close(descriptor)
+                _close_fork_excluded_fd(descriptor)
             except OSError:
                 pass
             self._parent_liveness_write_fd = None
@@ -1017,7 +1072,7 @@ class SupervisedSidecar:
                 return False
             if not self._guardian_ack_received:
                 return False
-            os.close(acknowledgement)
+            _close_fork_excluded_fd(acknowledgement)
             self._guardian_ack_read_fd = None
         if self._guardian_process is None:
             return False
@@ -1039,7 +1094,9 @@ class SupervisedSidecar:
 
     def _release_leases(self) -> None:
         if not self._leases_released:
-            self._leases.release()
+            with _FORK_EXCLUDED_LOCK:
+                self._leases.release()
+                _FORK_EXCLUDED_FDS.difference_update(self._fork_excluded_fds)
             self._leases_released = True
 
     def _kill_and_reap_after_setup_failure(

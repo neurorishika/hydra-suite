@@ -642,6 +642,34 @@ def test_guardian_persists_prior_observation_uncertainty_through_teardown(
         )
 
 
+def test_guardian_never_signals_reused_group_without_live_owned_member(monkeypatch):
+    escaped = guardian_module.GuardedIdentity(42, 1.0)
+    direct = []
+    monkeypatch.setattr(
+        guardian_module,
+        "_identity_process_group",
+        lambda _identity: 999,
+    )
+
+    def record_signal(identity, signum):
+        direct.append((identity.pid, signum))
+        return True
+
+    monkeypatch.setattr(
+        guardian_module,
+        "_signal_identity",
+        record_signal,
+    )
+    monkeypatch.setattr(
+        guardian_module.os,
+        "killpg",
+        lambda *_args: pytest.fail("reused original process group was signalled"),
+    )
+
+    assert guardian_module._signal_fallback_boundary((escaped,), 123, signal.SIGKILL)
+    assert direct == [(42, signal.SIGKILL)]
+
+
 def test_guardian_baselines_inaccessible_unrelated_process_before_gate(monkeypatch):
     token = "owned-token"
 
@@ -869,6 +897,8 @@ def test_guardian_is_spawned_as_a_separate_session_outside_systemd(monkeypatch):
     monkeypatch.setattr(guardian_module.os, "read", lambda _fd, _size: b"R")
     try:
         guardian_module.spawn_parent_guardian(
+            supervisor_pid=os.getpid(),
+            supervisor_create_time=psutil.Process(os.getpid()).create_time(),
             workload_pid=100,
             process_group_id=100,
             liveness_read_fd=liveness_read,
@@ -887,6 +917,8 @@ def test_guardian_is_spawned_as_a_separate_session_outside_systemd(monkeypatch):
         "hydra_suite.runtime.process_guardian",
     ]
     assert "systemd-run" not in captured["command"]
+    assert "--supervisor-pid" in captured["command"]
+    assert "--supervisor-create-time" in captured["command"]
     assert captured["kwargs"]["start_new_session"] is True
 
 
@@ -1322,6 +1354,78 @@ os._exit(0)
     helper.wait(timeout=5)
 
     _wait_until_gone(child_pid)
+
+
+def test_postlaunch_fork_cannot_extend_supervisor_liveness_or_lease(tmp_path):
+    _require_process_table_scan()
+    helper_script = r"""
+import os, sys, time
+os.environ['HYDRA_DATA_DIR'] = sys.argv[1]
+from hydra_suite.runtime.process_supervisor import ContainmentPlan, SupervisedSidecar
+from hydra_suite.runtime.resource_limits import (
+    LimitBackend, ProcessMemoryLimits, build_limited_launch,
+)
+launch = build_limited_launch(
+    [sys.executable, '-c', 'import time; time.sleep(60)'],
+    ProcessMemoryLimits(soft_host_bytes=1024**3, hard_host_bytes=2 * 1024**3),
+    backend=LimitBackend.WATCHDOG_ONLY,
+)
+sidecar = SupervisedSidecar(
+    ContainmentPlan(
+        launch=launch,
+        job_name='fork-holder-parent-death',
+        minimum_system_available_bytes=0,
+    )
+)
+holder_pid = os.fork()
+if holder_pid == 0:
+    time.sleep(60)
+    os._exit(0)
+print(f'{sidecar.process.pid},{holder_pid}', flush=True)
+os._exit(0)
+"""
+    helper = subprocess.Popen(
+        [sys.executable, "-c", helper_script, str(tmp_path)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=_child_env(),
+    )
+    assert helper.stdout is not None
+    report = helper.stdout.readline().strip()
+    helper.wait(timeout=5)
+    assert helper.returncode == 0, (
+        f"helper failed before reporting owned PIDs: {report!r}; "
+        f"stderr={helper.stderr.read() if helper.stderr is not None else ''}"
+    )
+    workload_pid, holder_pid = map(int, report.split(","))
+
+    try:
+        assert psutil.pid_exists(holder_pid), "unrelated fork holder exited too early"
+        _wait_until_gone(workload_pid)
+
+        leases = _cpu_lease_set(tmp_path)
+        deadline = time.monotonic() + 5.0
+        while True:
+            try:
+                leases.acquire()
+                break
+            except ResourceBusyError:
+                if time.monotonic() >= deadline:
+                    raise AssertionError(
+                        "guardian did not release leases after supervisor identity died"
+                    )
+                time.sleep(0.02)
+        leases.release()
+        assert psutil.pid_exists(
+            holder_pid
+        ), "lease was tested only after the unrelated holder exited"
+    finally:
+        try:
+            os.kill(holder_pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        _wait_until_gone(holder_pid)
 
 
 def test_parent_death_guardian_captures_setsid_escapee_when_os_allows_enumeration(

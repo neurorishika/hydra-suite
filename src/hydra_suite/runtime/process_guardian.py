@@ -47,6 +47,8 @@ class GuardedIdentity:
 
 def spawn_parent_guardian(
     *,
+    supervisor_pid: int,
+    supervisor_create_time: float,
     workload_pid: int,
     process_group_id: int,
     liveness_read_fd: int,
@@ -61,6 +63,8 @@ def spawn_parent_guardian(
 
     if os.name != "posix":
         raise RuntimeError("parent guardian requires POSIX process primitives")
+    if supervisor_pid < 1 or supervisor_create_time <= 0:
+        raise ValueError("supervisor identity must be positive")
     if not containment_token:
         raise ValueError("containment token must not be empty")
     if max_identities < 1:
@@ -72,6 +76,10 @@ def spawn_parent_guardian(
         "hydra_suite.runtime.process_guardian",
         "--workload-pid",
         str(workload_pid),
+        "--supervisor-pid",
+        str(supervisor_pid),
+        "--supervisor-create-time",
+        repr(supervisor_create_time),
         "--process-group-id",
         str(process_group_id),
         "--liveness-fd",
@@ -129,6 +137,8 @@ def spawn_parent_guardian(
 
 def run_guardian(
     *,
+    supervisor_pid: int,
+    supervisor_create_time: float,
     workload_pid: int,
     process_group_id: int,
     liveness_read_fd: int,
@@ -156,7 +166,12 @@ def run_guardian(
         os.write(ready_write_fd, b"R")
         os.close(ready_write_fd)
         guardian_ownership_uncertain = False
+        supervisor_identity = GuardedIdentity(supervisor_pid, supervisor_create_time)
         while True:
+            _, supervisor_gone = supervisor_identity.resolve()
+            if supervisor_gone:
+                request = b""
+                break
             readable, _, _ = select.select([liveness_read_fd], [], [], 0.05)
             if readable:
                 try:
@@ -457,15 +472,14 @@ def _terminate_until_quiescent(
                 signal_systemd_scope(systemd_unit, int(signal.SIGKILL))
                 authoritative_ok = systemd_scope_is_quiescent(systemd_unit) is True
         else:
-            try:
-                os.killpg(process_group_id, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            except (PermissionError, OSError):
-                authoritative_ok = False
+            authoritative_ok = _signal_fallback_boundary(
+                tuple(identities.values()), process_group_id, signal.SIGKILL
+            )
+            if not authoritative_ok:
+                permanent_ownership_uncertain = True
 
         direct_ok = True
-        for identity in tuple(identities.values()):
+        for identity in tuple(identities.values()) if systemd_unit is not None else ():
             if systemd_unit is not None:
                 membership = _identity_in_systemd_scope(identity, systemd_unit)
                 if membership is True:
@@ -508,6 +522,50 @@ def _identity_in_systemd_scope(identity: GuardedIdentity, unit: str) -> Optional
     return cgroup_path_contains_unit(cgroup_text, unit)
 
 
+def _signal_fallback_boundary(
+    identities: tuple[GuardedIdentity, ...],
+    process_group_id: int,
+    signum: signal.Signals,
+) -> bool:
+    """Signal a group only while an exact owned identity proves membership."""
+
+    group_members = {
+        identity.pid
+        for identity in identities
+        if _identity_process_group(identity) == process_group_id
+    }
+    group_signalled = False
+    if group_members:
+        try:
+            os.killpg(process_group_id, signum)
+            group_signalled = True
+        except ProcessLookupError:
+            pass
+        except (PermissionError, OSError):
+            return False
+    direct_ok = True
+    for identity in identities:
+        if group_signalled and identity.pid in group_members:
+            continue
+        if not _signal_identity(identity, signum):
+            direct_ok = False
+    return direct_ok
+
+
+def _identity_process_group(identity: GuardedIdentity) -> Optional[int]:
+    process, gone = identity.resolve()
+    if gone or process is None:
+        return None
+    try:
+        process_group = os.getpgid(process.pid)
+    except (ProcessLookupError, PermissionError, OSError):
+        return None
+    validated_again, gone_after_probe = identity.resolve()
+    if gone_after_probe or validated_again is None:
+        return None
+    return process_group
+
+
 def _systemd_scope_contains_workload(
     unit: str, workload_identity: GuardedIdentity
 ) -> Optional[bool]:
@@ -548,6 +606,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     import argparse
 
     parser = argparse.ArgumentParser()
+    parser.add_argument("--supervisor-pid", type=int, required=True)
+    parser.add_argument("--supervisor-create-time", type=float, required=True)
     parser.add_argument("--workload-pid", type=int, required=True)
     parser.add_argument("--process-group-id", type=int, required=True)
     parser.add_argument("--liveness-fd", type=int, required=True)
@@ -558,6 +618,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--systemd-unit")
     args = parser.parse_args(argv)
     return run_guardian(
+        supervisor_pid=args.supervisor_pid,
+        supervisor_create_time=args.supervisor_create_time,
         workload_pid=args.workload_pid,
         process_group_id=args.process_group_id,
         liveness_read_fd=args.liveness_fd,

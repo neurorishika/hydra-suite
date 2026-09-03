@@ -206,12 +206,14 @@ def test_systemd_scope_signal_success_does_not_prove_live_cgroup_empty(
     cgroup = tmp_path / "user.slice" / "hydra-owned.scope"
     cgroup.mkdir(parents=True)
     (cgroup / "cgroup.procs").write_text("123\n", encoding="utf-8")
+    (cgroup / "cgroup.events").write_text("populated 1\nfrozen 0\n", encoding="utf-8")
 
     assert (
         systemd_scope_is_quiescent("hydra-owned.scope", cgroup_root=tmp_path) is False
     )
 
     (cgroup / "cgroup.procs").write_text("", encoding="utf-8")
+    (cgroup / "cgroup.events").write_text("populated 0\nfrozen 0\n", encoding="utf-8")
     assert systemd_scope_is_quiescent("hydra-owned.scope", cgroup_root=tmp_path) is True
 
     missing_membership = subprocess.CompletedProcess(
@@ -221,6 +223,65 @@ def test_systemd_scope_signal_success_does_not_prove_live_cgroup_empty(
         limits_module.subprocess, "run", lambda *_a, **_k: missing_membership
     )
     assert systemd_scope_is_quiescent("hydra-owned.scope", cgroup_root=tmp_path) is None
+
+
+def test_systemd_quiescence_uses_recursive_populated_state_and_nested_members(
+    tmp_path, monkeypatch
+):
+    active = subprocess.CompletedProcess(
+        [],
+        0,
+        stdout="ActiveState=active\nControlGroup=/user.slice/owned.scope\n",
+        stderr="",
+    )
+    monkeypatch.setattr(limits_module.subprocess, "run", lambda *_a, **_k: active)
+    scope = tmp_path / "user.slice" / "owned.scope"
+    nested = scope / "worker"
+    nested.mkdir(parents=True)
+    (scope / "cgroup.procs").write_text("", encoding="utf-8")
+    (scope / "cgroup.events").write_text("populated 1\nfrozen 0\n", encoding="utf-8")
+    (nested / "cgroup.procs").write_text("123\n", encoding="utf-8")
+
+    assert systemd_scope_is_quiescent("owned.scope", cgroup_root=tmp_path) is False
+    assert limits_module.systemd_scope_member_pids(
+        "owned.scope", cgroup_root=tmp_path
+    ) == (123,)
+
+
+@pytest.mark.parametrize("events", [None, "frozen 0\n", "populated maybe\n"])
+def test_existing_inactive_systemd_scope_with_missing_or_bad_events_is_unknown(
+    tmp_path, monkeypatch, events
+):
+    inactive = subprocess.CompletedProcess(
+        [],
+        0,
+        stdout="ActiveState=inactive\nControlGroup=/user.slice/owned.scope\n",
+        stderr="",
+    )
+    monkeypatch.setattr(limits_module.subprocess, "run", lambda *_a, **_k: inactive)
+    scope = tmp_path / "user.slice" / "owned.scope"
+    scope.mkdir(parents=True)
+    (scope / "cgroup.procs").write_text("", encoding="utf-8")
+    if events is not None:
+        (scope / "cgroup.events").write_text(events, encoding="utf-8")
+
+    assert systemd_scope_is_quiescent("owned.scope", cgroup_root=tmp_path) is None
+
+
+def test_existing_inactive_scope_with_missing_cgroup_is_unknown(tmp_path, monkeypatch):
+    inactive = subprocess.CompletedProcess(
+        [],
+        0,
+        stdout="ActiveState=inactive\nControlGroup=/user.slice/owned.scope\n",
+        stderr="",
+    )
+    monkeypatch.setattr(limits_module.subprocess, "run", lambda *_a, **_k: inactive)
+
+    assert systemd_scope_is_quiescent("owned.scope", cgroup_root=tmp_path) is None
+    assert (
+        limits_module.systemd_scope_member_pids("owned.scope", cgroup_root=tmp_path)
+        is None
+    )
 
 
 def test_unloaded_systemd_scope_is_quiescent_but_bus_error_is_unknown(monkeypatch):

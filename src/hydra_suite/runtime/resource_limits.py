@@ -334,12 +334,33 @@ def systemd_scope_is_quiescent(
     timeout_seconds: float = 3.0,
     cgroup_root: Path = _DEFAULT_CGROUP_ROOT,
 ) -> Optional[bool]:
-    """Return whether an exact systemd scope is inactive and has no members."""
+    """Prove the unit inactive and its recursive cgroup population empty."""
 
-    member_pids = systemd_scope_member_pids(
-        unit, timeout_seconds=timeout_seconds, cgroup_root=cgroup_root
-    )
-    return None if member_pids is None else not member_pids
+    properties, absent = _query_systemd_scope_properties(unit, timeout_seconds)
+    if absent:
+        return True
+    if properties is None:
+        return None
+    active_state = properties.get("ActiveState")
+    control_group = properties.get("ControlGroup")
+    if active_state not in {"inactive", "failed"}:
+        return False
+    if not control_group:
+        # A still-loaded unit without a cgroup path has insufficient recursive
+        # population evidence. An unloaded unit was handled above.
+        return None
+    events_path = cgroup_root / control_group.lstrip("/") / "cgroup.events"
+    try:
+        events = _parse_key_value_lines(events_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        # Only an unloaded unit is clear without recursive population evidence.
+        return None
+    except OSError:
+        return None
+    populated = events.get("populated")
+    if populated not in {"0", "1"}:
+        return None
+    return populated == "0"
 
 
 def systemd_scope_member_pids(
@@ -349,6 +370,56 @@ def systemd_scope_member_pids(
     cgroup_root: Path = _DEFAULT_CGROUP_ROOT,
 ) -> Optional[tuple[int, ...]]:
     """Return exact scope members, empty for an unloaded unit, or unknown."""
+
+    properties, absent = _query_systemd_scope_properties(unit, timeout_seconds)
+    if absent:
+        return ()
+    if properties is None:
+        return None
+    active_state = properties.get("ActiveState")
+    if active_state is None or "ControlGroup" not in properties:
+        return None
+    control_group = properties["ControlGroup"]
+    if not control_group:
+        return None
+    cgroup_path = cgroup_root / control_group.lstrip("/")
+    if not cgroup_path.exists():
+        return None
+    pending = [cgroup_path]
+    visited = 0
+    member_pids: set[int] = set()
+    try:
+        while pending:
+            current = pending.pop()
+            visited += 1
+            if visited > 4096:
+                return None
+            try:
+                raw_pids = (
+                    (current / "cgroup.procs").read_text(encoding="utf-8").split()
+                )
+            except FileNotFoundError:
+                if current == cgroup_path:
+                    return () if active_state in {"inactive", "failed"} else None
+                continue
+            member_pids.update(int(pid) for pid in raw_pids)
+            if len(member_pids) > 4096:
+                return None
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    if entry.is_dir(follow_symlinks=False):
+                        if len(pending) + visited >= 4096:
+                            return None
+                        pending.append(Path(entry.path))
+        return tuple(sorted(member_pids))
+    except (OSError, ValueError):
+        return None
+
+
+def _query_systemd_scope_properties(
+    unit: str, timeout_seconds: float
+) -> tuple[Optional[dict[str, str]], bool]:
+    """Return exact unit properties and whether the unit is unloaded."""
 
     if timeout_seconds <= 0:
         raise ValueError("systemd state timeout must be positive")
@@ -368,10 +439,10 @@ def systemd_scope_member_pids(
             timeout=timeout_seconds,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return None
+        return None, False
     if completed.returncode != 0:
         detail = completed.stderr.lower()
-        if any(
+        absent = any(
             marker in detail
             for marker in (
                 "could not be found",
@@ -379,29 +450,22 @@ def systemd_scope_member_pids(
                 "not loaded",
                 "does not exist",
             )
-        ):
-            return ()
-        return None
+        )
+        return None, absent
+    return _parse_key_value_lines(completed.stdout), False
+
+
+def _parse_key_value_lines(text: str) -> dict[str, str]:
     properties: dict[str, str] = {}
-    for line in completed.stdout.splitlines():
+    for line in text.splitlines():
         key, separator, value = line.partition("=")
         if separator:
             properties[key] = value
-    active_state = properties.get("ActiveState")
-    if active_state is None or "ControlGroup" not in properties:
-        return None
-    control_group = properties["ControlGroup"]
-    if not control_group:
-        return () if active_state in {"inactive", "failed"} else None
-    procs_path = cgroup_root / control_group.lstrip("/") / "cgroup.procs"
-    try:
-        raw_pids = procs_path.read_text(encoding="utf-8").split()
-        return tuple(int(pid) for pid in raw_pids)
-    except FileNotFoundError:
-        # A cgroup can only be removed after its final task leaves.
-        return () if active_state in {"inactive", "failed"} else None
-    except (OSError, ValueError):
-        return None
+            continue
+        key, separator, value = line.partition(" ")
+        if separator:
+            properties[key] = value
+    return properties
 
 
 def systemd_scope_invocation_id(
