@@ -121,6 +121,7 @@ nav:
   - Tracking Optimization: developer-guide/tracking-optimization.md
   - GPU Backends: developer-guide/gpu-backends.md
   - Runtime Integration: developer-guide/runtime-integration.md
+  - Resource Containment: developer-guide/resource-containment.md
   - Profiling: developer-guide/profiling.md
   - CUDA Dependency Updates: developer-guide/dependency-cuda-updates.md
   - Performance Tuning: developer-guide/performance-tuning.md
