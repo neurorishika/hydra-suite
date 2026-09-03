@@ -403,10 +403,11 @@ def test_cache_key_mismatch_does_not_return_empty_result(tmp_path):
 
 def _write_manifest(path: Path, *, session_id: str, entries: list[dict], **overrides):
     arrays = {
-        "chunked_format_version": np.asarray([1], np.int32),
+        "chunked_format_version": np.asarray([chunked.CHUNK_FORMAT_VERSION], np.int32),
         "cache_kind": np.asarray(["detection"]),
         "cache_key": np.asarray([_key().as_string()]),
         "session_id": np.asarray([session_id]),
+        "generation_id": np.asarray(["test-generation"]),
         "chunks_json": np.asarray([json.dumps(entries)]),
     }
     arrays.update(overrides)
@@ -427,49 +428,73 @@ def test_manifest_rejects_empty_scalar_arrays_instead_of_raising(tmp_path):
 
 
 @pytest.mark.parametrize("session_id", [".", "..", "a/b", "a\\b", ""])
-def test_manifest_rejects_unsafe_session_ids(tmp_path, session_id):
+def test_manifest_rejects_unsafe_session_ids(tmp_path, monkeypatch, session_id):
     path = tmp_path / "detection.npz"
+    checked_components = []
+    real_safe_component = chunked._safe_component
+
+    def recording_safe_component(value):
+        checked_components.append(value)
+        return real_safe_component(value)
+
+    monkeypatch.setattr(chunked, "_safe_component", recording_safe_component)
     _write_manifest(path, session_id=session_id, entries=[])
     assert DetectionCacheHandle(path, _key()).is_valid() is False
+    assert session_id in checked_components
 
 
 @pytest.mark.parametrize(
-    "ranges",
+    ("ranges", "expected_error"),
     [
-        [[-1, 0]],
-        [[4, 3]],
-        [[0, 2], [2, 4]],
-        [[0, 10**12]],
-        [],
+        ([[-1, 0]], "out of bounds"),
+        ([[4, 3]], "out of bounds"),
+        ([[0, 2], [2, 4]], "ordered and disjoint"),
+        ([[0, 10**12]], "out of bounds"),
+        ([], "nonempty list"),
     ],
 )
-def test_manifest_rejects_invalid_or_attacker_sized_ranges(tmp_path, ranges):
+def test_manifest_rejects_invalid_or_attacker_sized_ranges(
+    tmp_path, monkeypatch, ranges, expected_error
+):
     path = tmp_path / "detection.npz"
     session = "safe-session"
     chunk_dir = tmp_path / "detection.npz.chunks" / session
-    payload_path = chunk_dir / "chunk-00000000.npz"
+    payload_path = chunk_dir / f"chunk-00000000-{'0' * 32}.npz"
     chunked._atomic_npz_save(
         payload_path,
         written_frames=np.asarray([0], np.int64),
         frame_indices=np.asarray([0], np.int64),
         marker=np.asarray([1], np.int64),
     )
+    entry = {
+        "name": payload_path.name,
+        "ranges": ranges,
+        "byte_size": payload_path.stat().st_size,
+        "sha256": chunked._sha256_file(payload_path),
+    }
+    observed_errors = []
+    real_from_dict = chunked.ChunkEntry.from_dict.__func__
+
+    def recording_from_dict(cls, raw):
+        try:
+            return real_from_dict(cls, raw)
+        except ValueError as exc:
+            observed_errors.append(str(exc))
+            raise
+
+    monkeypatch.setattr(
+        chunked.ChunkEntry, "from_dict", classmethod(recording_from_dict)
+    )
     _write_manifest(
         path,
         session_id=session,
-        entries=[
-            {
-                "name": payload_path.name,
-                "ranges": ranges,
-                "byte_size": payload_path.stat().st_size,
-                "sha256": chunked._sha256_file(payload_path),
-            }
-        ],
+        entries=[entry],
     )
 
     reader = DetectionCacheHandle(path, _key())
     assert reader.is_valid() is False
     assert reader.contains_frame(0) is False
+    assert any(expected_error in error for error in observed_errors)
 
 
 def test_contains_frame_uses_index_without_expanding_coverage(tmp_path):
