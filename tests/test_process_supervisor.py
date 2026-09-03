@@ -1279,6 +1279,56 @@ def test_final_admission_runs_under_supervisor_owned_lease_before_popen(
         pass
 
 
+def test_post_exit_validation_runs_before_canonical_lease_release(tmp_path):
+    _require_process_table_scan()
+    launch = build_limited_launch(
+        [sys.executable, "-c", "print('done')"],
+        ProcessMemoryLimits(soft_host_bytes=1024**3, hard_host_bytes=2 * 1024**3),
+        backend=LimitBackend.WATCHDOG_ONLY,
+        environment=_child_env(),
+    )
+    plan = ContainmentPlan(
+        launch=launch, job_name="post-exit-check", minimum_system_available_bytes=0
+    )
+    lease = _cpu_lease_set(tmp_path)
+    resource_key = lease.resource_keys[0]
+    lease_dir = lease.leases[0].path.parent
+    sidecar = SupervisedSidecar(plan)
+
+    def validate(_result):
+        with pytest.raises(ResourceBusyError):
+            HeavyJobLease(resource_key, "competitor", lease_dir).acquire()
+
+    sidecar.wait(timeout=5, post_exit_check=validate)
+
+    with HeavyJobLease(resource_key, "after validation", lease_dir):
+        pass
+
+
+def test_watchdog_records_bounded_accelerator_pressure_telemetry():
+    process = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(.15)"],
+        start_new_session=True,
+    )
+    observations = iter((3, 9, 4))
+    watchdog = ProcessTreeWatchdog(
+        OwnedProcessTree(process, owns_process_group=True),
+        WatchdogPolicy(
+            soft_tree_rss_bytes=1024**3,
+            hard_tree_rss_bytes=2 * 1024**3,
+            minimum_system_available_bytes=0,
+            poll_interval_seconds=0.01,
+        ),
+        accelerator_probe=lambda: next(observations, 4),
+    )
+    watchdog.start()
+    process.wait(timeout=5)
+    watchdog.stop(timeout=2)
+
+    assert watchdog.peak_accelerator_bytes == 9
+    assert watchdog.accelerator_observation_error is None
+
+
 def test_containment_plan_derives_canonical_keys_and_internal_lease_contends(
     tmp_path, monkeypatch
 ):

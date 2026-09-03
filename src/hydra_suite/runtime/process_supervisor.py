@@ -470,10 +470,19 @@ class OwnedProcessTree:
 class ProcessTreeWatchdog:
     """Monitor independently of child output and training-step progress."""
 
-    def __init__(self, tree: OwnedProcessTree, policy: WatchdogPolicy) -> None:
+    def __init__(
+        self,
+        tree: OwnedProcessTree,
+        policy: WatchdogPolicy,
+        *,
+        accelerator_probe: Optional[Callable[[], int]] = None,
+    ) -> None:
         self.tree = tree
         self.policy = policy
         self.outcome: Optional[WatchdogOutcome] = None
+        self.peak_accelerator_bytes: Optional[int] = None
+        self.accelerator_observation_error: Optional[str] = None
+        self._accelerator_probe = accelerator_probe
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
@@ -516,6 +525,16 @@ class ProcessTreeWatchdog:
 
     def _monitor_until_stopped(self) -> None:
         while not self._stop.is_set():
+            if self._accelerator_probe is not None:
+                try:
+                    observed = int(self._accelerator_probe())
+                    if observed < 0:
+                        raise ValueError("accelerator usage cannot be negative")
+                    self.peak_accelerator_bytes = max(
+                        self.peak_accelerator_bytes or 0, observed
+                    )
+                except Exception as exc:  # telemetry is not a CUDA hard cap
+                    self.accelerator_observation_error = str(exc)
             tree_alive = self.tree.is_alive()
             if self.tree.identity_overflowed:
                 self.tree.kill()
@@ -773,6 +792,8 @@ class SupervisedResult:
     watchdog: Optional[WatchdogOutcome]
     cgroup: Optional[CgroupEvidence]
     output_error: Optional[str]
+    peak_accelerator_bytes: Optional[int] = None
+    accelerator_observation_error: Optional[str] = None
 
 
 class WorkloadStillOwnedError(RuntimeError):
@@ -791,6 +812,7 @@ class SupervisedSidecar:
         plan: ContainmentPlan,
         *,
         prelaunch_check: Optional[Callable[[], None]] = None,
+        accelerator_probe: Optional[Callable[[], int]] = None,
         output_max_lines: int = 512,
         output_max_chars: int = 256 * 1024,
     ) -> None:
@@ -828,6 +850,8 @@ class SupervisedSidecar:
             raise RuntimeError("internal canonical lease construction diverged")
         if prelaunch_check is not None and not callable(prelaunch_check):
             raise TypeError("prelaunch_check must be callable")
+        if accelerator_probe is not None and not callable(accelerator_probe):
+            raise TypeError("accelerator_probe must be callable")
         if os.name != "posix" and plan.expected_resource_keys:
             raise RuntimeError(
                 "leased heavy jobs require a parent-death guardian on this platform"
@@ -922,7 +946,9 @@ class SupervisedSidecar:
                 name=f"hydra-output-pump-{self.process.pid}",
                 daemon=True,
             )
-            self.watchdog = ProcessTreeWatchdog(self.tree, watchdog_policy)
+            self.watchdog = ProcessTreeWatchdog(
+                self.tree, watchdog_policy, accelerator_probe=accelerator_probe
+            )
             self._reader.start()
             self.watchdog.start()
         except BaseException:
@@ -964,6 +990,7 @@ class SupervisedSidecar:
         timeout: Optional[float] = None,
         *,
         requested_cancel: bool = False,
+        post_exit_check: Optional[Callable[[SupervisedResult], None]] = None,
     ) -> SupervisedResult:
         """Wait for completion and return bounded output plus classified evidence."""
         if timeout is not None and timeout < 0:
@@ -1008,7 +1035,7 @@ class SupervisedSidecar:
                     limit_backend=self.launch.backend,
                 )
             )
-            return SupervisedResult(
+            result = SupervisedResult(
                 returncode=returncode,
                 classified_exit=classified,
                 output_tail=tail,
@@ -1016,7 +1043,14 @@ class SupervisedSidecar:
                 watchdog=watchdog_outcome,
                 cgroup=cgroup,
                 output_error=str(output_error) if output_error is not None else None,
+                peak_accelerator_bytes=self.watchdog.peak_accelerator_bytes,
+                accelerator_observation_error=(
+                    self.watchdog.accelerator_observation_error
+                ),
             )
+            if post_exit_check is not None:
+                post_exit_check(result)
+            return result
         finally:
             self._release_leases()
 
