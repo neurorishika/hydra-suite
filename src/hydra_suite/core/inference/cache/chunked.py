@@ -150,7 +150,6 @@ def _inspect_npz(
     *,
     max_uncompressed_bytes: int,
     max_members: int = MAX_NPZ_MEMBERS,
-    allow_object: bool = False,
 ) -> dict[str, tuple[tuple[int, ...], np.dtype]]:
     """Validate ZIP and NPY metadata before NumPy may allocate payload arrays."""
     metadata: dict[str, tuple[tuple[int, ...], np.dtype]] = {}
@@ -231,7 +230,7 @@ def _inspect_npz(
                         raise ValueError("unsupported NPY format version")
                     dtype = np.dtype(dtype)
                     if (
-                        (dtype.hasobject and not allow_object)
+                        dtype.hasobject
                         or len(shape) > 4
                         or any(
                             not isinstance(dim, int) or dim < 0 or dim > MAX_FRAME_INDEX
@@ -438,7 +437,8 @@ class ChunkedArrayStore:
         if self._legacy:
             self._deep_validated = self.load_legacy() is not None
             return self._deep_validated
-        cnn_schema: tuple[str, str, tuple[int, ...]] | None = None
+        cnn_schema: tuple[str, str, tuple[int, ...], tuple[int, ...]] | None = None
+        pose_shape: tuple[int, ...] | None = None
         for entry in self._entries:
             arrays = self._load_entry_arrays(entry)
             if arrays is None:
@@ -448,12 +448,22 @@ class ChunkedArrayStore:
                     str(arrays["factor_names_json"][0]),
                     str(arrays["class_names_json"][0]),
                     tuple(int(value) for value in arrays["class_counts"]),
+                    tuple(int(value) for value in arrays["probabilities"].shape[1:]),
                 )
-                if not current_schema[2]:
+                if not current_schema[2] and current_schema[3] == (0, 0):
                     pass
                 elif cnn_schema is None:
                     cnn_schema = current_schema
                 elif cnn_schema != current_schema:
+                    self._valid = False
+                    return False
+            elif self.kind == "pose":
+                current_shape = tuple(
+                    int(value) for value in arrays["keypoints"].shape[1:]
+                )
+                if pose_shape is None:
+                    pose_shape = current_shape
+                elif pose_shape != current_shape:
                     self._valid = False
                     return False
             self._cached_entry = entry
@@ -923,7 +933,16 @@ class ChunkedArrayStore:
                 or len(factor_names) != len(counts)
                 or len(class_names) != len(counts)
                 or any(not isinstance(value, str) for value in factor_names)
+                or any(not value for value in factor_names)
                 or any(not isinstance(values, list) for values in class_names)
+                or any(
+                    not isinstance(value, str)
+                    for values in class_names
+                    for value in values
+                )
+                or any(not value for values in class_names for value in values)
+                or len(set(factor_names)) != len(factor_names)
+                or any(len(set(values)) != len(values) for values in class_names)
                 or any(
                     len(values) != int(count)
                     for values, count in zip(class_names, counts)

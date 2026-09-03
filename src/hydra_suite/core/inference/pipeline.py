@@ -42,7 +42,6 @@ from __future__ import annotations
 
 import queue
 import threading
-import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Iterator
 
@@ -675,16 +674,13 @@ class Pipeline:
             # Supervisor teardown: stop the producer at the next window boundary,
             # drain the queue so a blocked producer ``put`` unblocks, then join.
             stop.set()
-            deadline = time.monotonic() + 2.0
-            while producer_thread.is_alive() and time.monotonic() < deadline:
+            # Python cannot safely terminate a thread that is inside model or
+            # device inference. Keep ownership here until that call returns;
+            # the process-level containment layer owns hard wall-clock limits.
+            # Returning early would let caller teardown race live GPU work.
+            while producer_thread.is_alive():
                 self._drain_queue(handoff_q)
                 producer_thread.join(timeout=0.05)
-            if producer_thread.is_alive():
-                teardown_error = RuntimeError(
-                    "pipeline OBB producer did not terminate within 2 seconds"
-                )
-            else:
-                teardown_error = None
             # Flush + close the (async) cache writer so no write is left pending,
             # regardless of whether we are unwinding an error or finishing clean.
             # ``cache_writer`` is only ``None`` for Pipeline.for_test() shims used
@@ -694,13 +690,6 @@ class Pipeline:
                     self.cache_writer.flush()
                 finally:
                     self.cache_writer.close()
-
-        if teardown_error is not None:
-            if consumer_error is not None:
-                raise teardown_error from consumer_error
-            if producer_error:
-                raise teardown_error from producer_error[0]
-            raise teardown_error
 
         if consumer_error is not None:
             raise consumer_error

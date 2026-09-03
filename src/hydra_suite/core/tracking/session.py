@@ -95,9 +95,11 @@ def detection_cache_has_detections(detection_cache_path) -> bool:
         _inspect_npz(
             Path(detection_cache_path),
             max_uncompressed_bytes=MAX_LEGACY_BYTES,
-            allow_object=True,
         )
-        with np.load(str(detection_cache_path), allow_pickle=True) as data:
+        # Object-dtype NPY members require pickle execution and are retired:
+        # metadata preflight above rejects them before NumPy is invoked. Numeric
+        # legacy frame arrays remain supported without executable deserialization.
+        with np.load(str(detection_cache_path), allow_pickle=False) as data:
             for key in data.files:
                 if key.startswith("frame_") and key.endswith("_meas"):
                     arr = data[key]

@@ -594,6 +594,17 @@ class CNNCacheHandle(_ChunkedHandleMixin, CacheHandle):
         _require_unique_increasing("CNN det_indices", det_indices)
         expected = None
         for prediction in predictions:
+            if any(
+                not isinstance(factor.factor_name, str)
+                or not factor.factor_name
+                or any(
+                    not isinstance(class_name, str) or not class_name
+                    for class_name in factor.class_names
+                )
+                or len(set(factor.class_names)) != len(factor.class_names)
+                for factor in prediction.factors
+            ):
+                raise ValueError("CNN factor and class names must be unique strings")
             signature = [
                 (factor.factor_name, tuple(factor.class_names))
                 for factor in prediction.factors
@@ -714,6 +725,7 @@ class PoseCacheHandle(_ChunkedHandleMixin, CacheHandle):
 
     def __post_init__(self) -> None:
         self._init_store()
+        self._keypoint_shape: tuple[int, ...] | None = None
 
     def write_frame(
         self,
@@ -737,6 +749,11 @@ class PoseCacheHandle(_ChunkedHandleMixin, CacheHandle):
         if arrays[3].ndim != 1:
             raise ValueError("pose valid_mask must be one-dimensional")
         _require_unique_increasing("pose det_indices", arrays[1])
+        keypoint_shape = tuple(int(value) for value in arrays[2].shape[1:])
+        if self._keypoint_shape is None:
+            self._keypoint_shape = keypoint_shape
+        elif keypoint_shape != self._keypoint_shape:
+            raise ValueError("pose keypoint dimensions must remain constant")
         if not self._prepare_frame_write(frame_idx):
             return
         self._append_buffered(frame_idx, arrays)

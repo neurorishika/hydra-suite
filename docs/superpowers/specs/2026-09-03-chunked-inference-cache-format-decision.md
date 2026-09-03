@@ -91,8 +91,11 @@ aggregate bytes, expansion ratios, and NPY headers are bounded. Reusable reads
 then enforce kind-specific fields, dtypes, ranks, shapes, row alignment, frame
 ordering, and per-frame identifier uniqueness.
 
-Legacy NPZ files remain read-only compatible. New writes use the chunked format;
-there is no automatic migration or deletion of a legacy cache.
+Legacy numeric NPZ files remain read-only compatible. Object-dtype legacy NPY
+members are retired because reading them requires executable pickle
+deserialization; metadata preflight rejects them before NumPy loads any array.
+New writes use the chunked format; there is no automatic migration or deletion
+of a legacy cache.
 
 ## Memory and concurrency contract
 
@@ -104,3 +107,10 @@ in asynchronous mode, the queued/current payload. Both synchronous and
 asynchronous writers reject an oversized payload. A worker failure wakes blocked
 producers, while flush and close use bounded deadlines so callers never close a
 handle that a stuck worker may still be using.
+
+The inference pipeline itself is deliberately fail-closed around a backend call:
+Python cannot safely kill a thread inside model/device inference, so `run()` does
+not return or release model ownership until its producer exits. Set 5 therefore
+does not claim a bounded wall-clock teardown for a hung backend. The process
+isolation in Set 6 and the Set 2 watchdog provide that hard bound by terminating
+the owning worker process.

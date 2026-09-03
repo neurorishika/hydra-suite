@@ -602,6 +602,64 @@ def test_chunk_name_collision_retries_without_overwriting(tmp_path, monkeypatch)
     assert DetectionCacheHandle(tmp_path / "detection.npz", _key()).is_reusable()
 
 
+def test_checksumming_does_not_make_numeric_cnn_class_names_reusable(tmp_path):
+    path = tmp_path / "cnn_id.npz"
+    writer = CNNCacheHandle(path, _key(), "id", chunk_size=1)
+    writer.write_frame(0, predictions=_cnn(0))
+    writer.close()
+    payload_path = next((tmp_path / "cnn_id.npz.chunks").rglob("chunk-*.npz"))
+    with np.load(payload_path, allow_pickle=False) as raw:
+        arrays = {name: raw[name] for name in raw.files}
+    arrays["class_names_json"] = np.asarray(["[[1, 2]]"])
+    chunked._atomic_npz_save(payload_path, **arrays)
+    with np.load(path, allow_pickle=False) as raw:
+        manifest = {name: raw[name] for name in raw.files}
+    entries = json.loads(str(manifest["chunks_json"][0]))
+    entries[0]["byte_size"] = payload_path.stat().st_size
+    entries[0]["sha256"] = chunked._sha256_file(payload_path)
+    manifest["chunks_json"] = np.asarray([json.dumps(entries)])
+    chunked._atomic_npz_save(path, **manifest)
+
+    assert not CNNCacheHandle(path, _key(), "id", read_only=True).is_reusable()
+
+
+def test_pose_writer_rejects_keypoint_dimension_change_across_chunks(tmp_path):
+    writer = PoseCacheHandle(tmp_path / "pose.npz", _key(), chunk_size=1)
+    for frame, keypoint_count in ((0, 2), (1, 3)):
+        if frame == 1:
+            with pytest.raises(ValueError, match="keypoint dimensions"):
+                writer.write_frame(
+                    frame,
+                    det_indices=np.asarray([0], np.int32),
+                    keypoints=np.zeros((1, keypoint_count, 3), np.float32),
+                    valid_mask=np.ones(1, np.uint8),
+                )
+            break
+        writer.write_frame(
+            frame,
+            det_indices=np.asarray([0], np.int32),
+            keypoints=np.zeros((1, keypoint_count, 3), np.float32),
+            valid_mask=np.ones(1, np.uint8),
+        )
+
+
+def test_pose_cache_rejects_keypoint_dimension_change_across_chunks(tmp_path):
+    path = tmp_path / "pose.npz"
+    store = chunked.ChunkedArrayStore(path, _key(), "pose")
+    for frame, keypoint_count in ((0, 2), (1, 3)):
+        store.append_chunk(
+            [frame],
+            {
+                "frame_indices": np.asarray([frame], np.int64),
+                "det_indices": np.asarray([0], np.int32),
+                "keypoints": np.zeros((1, keypoint_count, 3), np.float32),
+                "valid_mask": np.ones(1, np.uint8),
+            },
+        )
+
+    assert not PoseCacheHandle(path, _key(), read_only=True).is_reusable()
+
+
 def test_legacy_manifest_remains_visible_until_full_replacement_close(tmp_path):
     path = tmp_path / "detection.npz"
     legacy = _obb(9, 1)

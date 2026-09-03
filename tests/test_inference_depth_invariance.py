@@ -229,3 +229,53 @@ def test_depth2_consumer_error_unblocks_full_producer_queue_without_thread_leak(
         thread.name == "pipeline-obb-producer" and thread.is_alive()
         for thread in threading.enumerate()
     )
+
+
+def test_run_does_not_return_while_detection_call_still_owns_model():
+    """Python cannot kill inference safely; model ownership waits for its exit."""
+    from hydra_suite.core.inference.pipeline import Pipeline
+
+    pipe = Pipeline.for_test(window_size=1, depth=2, stage=lambda window: [])
+    detection_entered = threading.Event()
+    release_detection = threading.Event()
+    outcome: list[BaseException] = []
+    detection_calls = 0
+
+    def blocked_detection(window):
+        nonlocal detection_calls
+        detection_calls += 1
+        if detection_calls == 1:
+            return [object()]
+        detection_entered.set()
+        assert release_detection.wait(5.0)
+        return [object()]
+
+    pipe._run_detection_for_window = blocked_detection  # type: ignore[assignment]
+    pipe._process_obb_results = (  # type: ignore[assignment]
+        lambda window, raw: (_ for _ in ()).throw(RuntimeError("consumer failed"))
+    )
+
+    def invoke():
+        try:
+            pipe.run([(0, object()), (1, object())], range(2), range_total=2)
+        except Exception as exc:  # noqa: BLE001 - asserting supervisor outcome
+            outcome.append(exc)
+
+    caller = threading.Thread(target=invoke, name="pipeline-test-caller")
+    caller.start()
+    assert detection_entered.wait(1.0)
+    time.sleep(2.5)
+    assert caller.is_alive(), "run returned while its producer still owned the model"
+    assert any(
+        thread.name == "pipeline-obb-producer" and thread.is_alive()
+        for thread in threading.enumerate()
+    )
+
+    release_detection.set()
+    caller.join(timeout=2.0)
+    assert not caller.is_alive()
+    assert len(outcome) == 1 and "consumer failed" in str(outcome[0])
+    assert not any(
+        thread.name == "pipeline-obb-producer" and thread.is_alive()
+        for thread in threading.enumerate()
+    )
