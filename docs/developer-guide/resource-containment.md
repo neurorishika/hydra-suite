@@ -75,7 +75,9 @@ Cgroup result properties are collected with a bounded timeout and retain
 an explicit unavailable/error state when the transient unit has disappeared.
 Systemd remains the authoritative tree-wide signal mechanism for a scope. A
 successful `systemctl kill` request is not sufficient: the exact unit must also
-be inactive with an empty (or removed) cgroup. Unit membership compares exact
+be inactive with `cgroup.events` proving its recursive population is zero; only
+an unloaded unit is clear when that cgroup evidence is unavailable. Unit
+membership compares exact
 cgroup path components, never substrings. Only token-captured processes proven
 outside the scope may be signalled directly. The guardian is launched by the
 supervisor outside the limited cgroup, so `MemoryMax` and `TasksMax` cannot kill
@@ -98,7 +100,11 @@ guardian before releasing the workload's start gate. A random launch token is
 inherited by descendants, allowing the guardian to find a short-lived parent's
 daemonized `setsid` child after ancestry has disappeared. On normal completion
 the supervisor requests teardown and waits for an acknowledgement after two
-stable empty token scans. On abrupt parent death, EOF triggers the same cleanup.
+stable empty token scans. On abrupt parent death, pipe EOF or loss of the
+supervisor's PID-plus-creation-time identity triggers the same cleanup, so an
+unrelated post-launch fork cannot conceal parent death by retaining the pipe.
+Supervisor-only liveness, acknowledgement, and lease descriptors are closed in
+such fork children; the guardian remains the sole independent lease holder.
 Fallback token scanning records the launch start identity and does not inspect
 process environments that provably predate it. Any inaccessible concurrent
 process is classified while the workload is still gated; a later new or owned
