@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import textwrap
+from pathlib import Path
 
 _MEASURE_SCRIPT = textwrap.dedent("""
     import json
@@ -57,10 +59,19 @@ _MEASURE_SCRIPT = textwrap.dedent("""
 
 
 def _peak_rss(tile_count: int) -> int:
+    env = os.environ.copy()
+    source_root = str(Path(__file__).resolve().parents[1] / "src")
+    existing_pythonpath = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = (
+        os.pathsep.join((source_root, existing_pythonpath))
+        if existing_pythonpath
+        else source_root
+    )
     completed = subprocess.run(
         [sys.executable, "-c", _MEASURE_SCRIPT, str(tile_count)],
         check=True,
         capture_output=True,
+        env=env,
         text=True,
     )
     result = json.loads(completed.stdout.strip().splitlines()[-1])
