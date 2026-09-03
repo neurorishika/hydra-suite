@@ -96,3 +96,9 @@ def test_validation_matching_is_attached_to_every_main_and_aux_output():
     assert calls == [("main", "target"), ("aux", "target")]
     assert main["indices"] == "indices-main"
     assert main["aux_outputs"][0]["indices"] == "indices-aux"
+
+
+def test_core_loss_uses_metas_actual_loss_key():
+    marker = object()
+
+    assert cli._core_loss({"core_loss": marker}) is marker

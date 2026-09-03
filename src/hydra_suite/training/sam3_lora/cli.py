@@ -119,6 +119,11 @@ def _attach_matcher_indices(outputs: Any, targets: list[Any], matcher: Any) -> N
                 auxiliary["indices"] = matcher(auxiliary, target)
 
 
+def _core_loss(loss_result: Any) -> Any:
+    """Extract Meta's ``CORE_LOSS_KEY`` without importing SAM3 at module load."""
+    return loss_result["core_loss"] if isinstance(loss_result, dict) else loss_result
+
+
 def _build_dataloader(spec: Any, params: Any, *, split: str) -> list:
     """Read the built COCO split into lightweight tile descriptors.
 
@@ -261,7 +266,7 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
             ):
                 outputs = model(model_input)
                 loss_dict = loss_fn(outputs, targets)
-                loss = loss_dict["loss"] if isinstance(loss_dict, dict) else loss_dict
+                loss = _core_loss(loss_dict)
 
             (loss / grad_accum).backward()
 
@@ -328,7 +333,7 @@ def _evaluate_and_write(
                 outputs = model(model_input)
                 _attach_matcher_indices(outputs, targets, matcher)
                 loss_dict = loss_fn(outputs, targets)
-                loss = loss_dict["loss"] if isinstance(loss_dict, dict) else loss_dict
+                loss = _core_loss(loss_dict)
             total_loss += float(loss)
             del batch, model_input, targets, outputs, loss_dict, loss
 
