@@ -279,6 +279,7 @@ class ChunkedArrayStore:
         payload = dict(arrays)
         payload["written_frames"] = np.asarray(frames, dtype=np.int64)
         _atomic_npz_save(chunk_path, **payload)
+        self._validate_staged_chunk(chunk_path, frames, set(payload))
         entry = ChunkEntry(
             name=name,
             ranges=_compress_frames(frames),
@@ -293,6 +294,18 @@ class ChunkedArrayStore:
         self._legacy = False
         self._cached_entry = None
         self._cached_arrays = None
+
+    @staticmethod
+    def _validate_staged_chunk(
+        chunk_path: Path, frames: tuple[int, ...], expected_fields: set[str]
+    ) -> None:
+        """Read back one bounded chunk before the manifest can reference it."""
+        with np.load(chunk_path, allow_pickle=False) as raw:
+            if set(raw.files) != expected_fields:
+                raise ValueError(f"cache chunk fields are incomplete: {chunk_path}")
+            stored = tuple(int(frame) for frame in raw["written_frames"])
+            if stored != frames:
+                raise ValueError(f"cache chunk frame index mismatch: {chunk_path}")
 
     def ensure_manifest(self) -> None:
         """Create a valid empty chunked manifest without migrating on read."""
