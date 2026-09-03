@@ -37,8 +37,8 @@ dependencies = [
     "PySide6>=6.5",
     "timm",
     "huggingface_hub",
-    # 8.4.138 avoids the MPS TaskAlignedAssigner advanced-indexing failure
-    # that can crash one-class segmentation training on dense frames.
+    # DetectKit's training entrypoint adds an MPS TaskAlignedAssigner
+    # compatibility fallback for this PyTorch indexing failure.
     "ultralytics>=8.4.138",
     "hnswlib",
     "usearch",

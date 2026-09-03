@@ -468,10 +468,9 @@ def test_runner_command_falls_back_to_directory_without_dataset_yaml(tmp_path: P
     assert f"data={str(ds_dir)}" in " ".join(cmd)
 
 
-def test_runner_fallback_uses_ultralytics_module(tmp_path: Path, monkeypatch):
+def test_runner_uses_hydra_ultralytics_entrypoint(tmp_path: Path):
     import hydra_suite.training.runner as runner
 
-    monkeypatch.setattr(runner.shutil, "which", lambda _cmd: None)
     spec = TrainingRunSpec(
         role=TrainingRole.SEQ_DETECT,
         source_datasets=[SourceDataset(path="/tmp/src")],
@@ -481,7 +480,11 @@ def test_runner_fallback_uses_ultralytics_module(tmp_path: Path, monkeypatch):
         device="cpu",
     )
     cmd = runner.build_ultralytics_command(spec, tmp_path / "runs" / "abc")
-    assert cmd[:3] == [sys.executable, "-m", "ultralytics"]
+    assert cmd[:3] == [
+        sys.executable,
+        "-m",
+        "hydra_suite.training.ultralytics_entrypoint",
+    ]
 
 
 def test_registry_and_publish_lineage(tmp_path: Path, monkeypatch):

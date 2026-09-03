@@ -9,7 +9,6 @@ import os
 import queue
 import random
 import re
-import shutil
 import signal
 import subprocess
 import sys
@@ -295,10 +294,16 @@ def build_ultralytics_command(spec: TrainingRunSpec, run_dir: str | Path) -> lis
         # over any `scale=` the augmentation profile set above.
         args.append(f"scale={classify_scale_override}")
 
-    yolo_exe = shutil.which("yolo")
-    if yolo_exe:
-        return [yolo_exe, *args]
-    return [sys.executable, "-m", "ultralytics", *args]
+    # The compatibility entrypoint patches only TaskAlignedAssigner on MPS,
+    # avoiding a PyTorch Metal indexing fault while retaining MPS model
+    # forward/backward execution.  It otherwise dispatches Ultralytics' normal
+    # CLI unchanged.
+    return [
+        sys.executable,
+        "-m",
+        "hydra_suite.training.ultralytics_entrypoint",
+        *args,
+    ]
 
 
 def _pick_torch_device(requested: str) -> str:
