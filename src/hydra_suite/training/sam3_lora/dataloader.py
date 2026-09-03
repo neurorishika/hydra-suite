@@ -270,10 +270,12 @@ def collate_batches(
                 batch = collate_datapoints(pending)
                 pending.clear()
                 yield batch
+                del batch
     if pending:
         batch = collate_datapoints(pending)
         pending.clear()
         yield batch
+        del batch
 
 
 def collate_epoch_batches(
