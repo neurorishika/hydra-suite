@@ -303,17 +303,20 @@ def test_tile_datapoint_native_shape_without_importing_full_sam3(monkeypatch):
         [],
     ]
 
+    shared_transform_calls = []
     shared = build_shared_query_datapoints(
         tile,
         "ant",
         [(polygon, True)],
         ["floor", "wall"],
-        lambda _image: "shared-tensor",
+        lambda image: shared_transform_calls.append(image) or "shared-tensor",
     )
+    assert len(shared_transform_calls) == 1
     assert len(shared) == 3
     assert all(len(item.find_queries) == 1 for item in shared)
     assert all(item.images is shared[0].images for item in shared)
     assert all(item.images[0].data == "shared-tensor" for item in shared)
+    assert all(item.images[0].objects is shared[0].images[0].objects for item in shared)
     assert [item.find_queries[0].object_ids_output for item in shared] == [
         [0],
         [],

@@ -72,14 +72,64 @@ def test_main_zero_datapoints_exits_nonzero(tmp_path, monkeypatch, capsys):
     assert not (run_dir / "adapters.pt").exists()
 
 
-def test_collated_batch_is_unwrapped_and_targets_are_back_converted():
-    model_input = SimpleNamespace(find_targets=["target-a", "target-b"])
-    model = SimpleNamespace(back_convert=lambda target: f"converted-{target}")
+def test_collated_batch_moves_to_device_before_target_conversion_and_forward():
+    cpu_input = SimpleNamespace(find_targets=["cpu-target-a", "cpu-target-b"])
+    gpu_input = SimpleNamespace(find_targets=["gpu-target-a", "gpu-target-b"])
+    events = []
 
-    got_input, got_targets = cli._model_input_and_targets({"input": model_input}, model)
+    def copy_to_device(value, device, *, non_blocking):
+        events.append(("copy", value, device, non_blocking))
+        return gpu_input
 
-    assert got_input is model_input
-    assert got_targets == ["converted-target-a", "converted-target-b"]
+    class Model:
+        def back_convert(self, target):
+            events.append(("back_convert", target))
+            return f"converted-{target}"
+
+        def __call__(self, model_input):
+            events.append(("forward", model_input))
+            return "outputs"
+
+    got_input, got_targets, got_outputs = cli._forward_batch(
+        {"input": cpu_input},
+        Model(),
+        "cuda:0",
+        copy_to_device=copy_to_device,
+    )
+
+    assert got_input is gpu_input
+    assert got_targets == ["converted-gpu-target-a", "converted-gpu-target-b"]
+    assert got_outputs == "outputs"
+    assert events == [
+        ("copy", cpu_input, "cuda:0", True),
+        ("back_convert", "gpu-target-a"),
+        ("back_convert", "gpu-target-b"),
+        ("forward", gpu_input),
+    ]
+
+
+def test_loss_wrapper_uses_local_normalization_for_single_process_sidecar():
+    captured = {}
+
+    class LossWrapper:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    matcher = object()
+    o2m_matcher = object()
+    losses = [object()]
+
+    cli._build_loss_wrapper(
+        LossWrapper,
+        loss_fns_find=losses,
+        matcher=matcher,
+        o2m_matcher=o2m_matcher,
+    )
+
+    assert captured["normalization"] == "local"
+    assert captured["loss_fns_find"] is losses
+    assert captured["matcher"] is matcher
+    assert captured["o2m_matcher"] is o2m_matcher
 
 
 def test_validation_matching_is_attached_to_every_main_and_aux_output():

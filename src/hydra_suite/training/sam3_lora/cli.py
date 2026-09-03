@@ -98,11 +98,50 @@ def _cosine_with_warmup(warmup_steps: int, total_steps: int):
     return _fn
 
 
-def _model_input_and_targets(batch: Any, model: Any) -> tuple[Any, list[Any]]:
-    """Unwrap Meta's collator result and build the loss target dictionaries."""
+def _forward_batch(
+    batch: Any,
+    model: Any,
+    device: Any,
+    *,
+    copy_to_device: Any | None = None,
+) -> tuple[Any, list[Any], Any]:
+    """Move one collated batch to ``device``, convert targets, then forward.
+
+    Meta's collator constructs a CPU ``BatchedDatapoint``. Its trainer uses
+    ``copy_data_to_device`` on that unwrapped object before both
+    ``back_convert`` and model forward; keep this sidecar on the same seam so
+    every nested tensor (images, boxes, masks, and validity arrays) moves
+    together.
+    """
+    if copy_to_device is None:
+        from sam3.model.utils.misc import copy_data_to_device
+
+        copy_to_device = copy_data_to_device
+
     model_input = batch["input"] if isinstance(batch, dict) else batch
+    model_input = copy_to_device(model_input, device, non_blocking=True)
     targets = [model.back_convert(target) for target in model_input.find_targets]
-    return model_input, targets
+    outputs = model(model_input)
+    return model_input, targets, outputs
+
+
+def _build_loss_wrapper(
+    loss_wrapper_type: Any,
+    *,
+    loss_fns_find: list[Any],
+    matcher: Any,
+    o2m_matcher: Any,
+) -> Any:
+    """Build Meta's loss without distributed collectives in this sidecar."""
+    return loss_wrapper_type(
+        loss_fns_find=loss_fns_find,
+        normalization="local",
+        matcher=matcher,
+        o2m_weight=2.0,
+        o2m_matcher=o2m_matcher,
+        use_o2m_matcher_on_o2m_aux=False,
+        loss_fn_semantic_seg=None,
+    )
 
 
 def _attach_matcher_indices(outputs: Any, targets: list[Any], matcher: Any) -> None:
@@ -197,7 +236,8 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
     # The image model computes matching internally in training mode. Use the
     # exact same matcher instance as the explicit validation path and loss.
     model.matcher = matcher
-    loss_fn = Sam3LossWrapper(
+    loss_fn = _build_loss_wrapper(
+        Sam3LossWrapper,
         loss_fns_find=[
             Boxes(weight_dict={"loss_bbox": 5.0, "loss_giou": 2.0}),
             IABCEMdetr(
@@ -219,10 +259,7 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
             ),
         ],
         matcher=matcher,
-        o2m_weight=2.0,
         o2m_matcher=BinaryOneToManyMatcher(alpha=0.3, threshold=0.4, topk=4),
-        use_o2m_matcher_on_o2m_aux=False,
-        loss_fn_semantic_seg=None,
     )
 
     grad_accum = max(1, int(params.grad_accum))
@@ -260,11 +297,10 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
         )
         n_epoch_batches = n_batches
         for micro_idx, batch in enumerate(epoch_batches):
-            model_input, targets = _model_input_and_targets(batch, model)
             with torch.autocast(
                 device_type="cuda", dtype=autocast_dtype, enabled=use_bf16
             ):
-                outputs = model(model_input)
+                model_input, targets, outputs = _forward_batch(batch, model, device)
                 loss_dict = loss_fn(outputs, targets)
                 loss = _core_loss(loss_dict)
 
@@ -289,7 +325,15 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
     torch.save(adapter_state_dict(model), artifact_path)
 
     _evaluate_and_write(
-        model, spec, params, matcher, loss_fn, autocast_dtype, use_bf16, run_dir_path
+        model,
+        spec,
+        params,
+        matcher,
+        loss_fn,
+        device,
+        autocast_dtype,
+        use_bf16,
+        run_dir_path,
     )
     return True
 
@@ -300,6 +344,7 @@ def _evaluate_and_write(
     params: Any,
     matcher: Any,
     loss_fn: Any,
+    device: Any,
     autocast_dtype: Any,
     use_bf16: bool,
     run_dir_path: Path,
@@ -326,11 +371,10 @@ def _evaluate_and_write(
     total_loss = 0.0
     with torch.no_grad():
         for batch in val_batches:
-            model_input, targets = _model_input_and_targets(batch, model)
             with torch.autocast(
                 device_type="cuda", dtype=autocast_dtype, enabled=use_bf16
             ):
-                outputs = model(model_input)
+                model_input, targets, outputs = _forward_batch(batch, model, device)
                 _attach_matcher_indices(outputs, targets, matcher)
                 loss_dict = loss_fn(outputs, targets)
                 loss = _core_loss(loss_dict)
