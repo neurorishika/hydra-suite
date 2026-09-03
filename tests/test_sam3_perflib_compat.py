@@ -114,3 +114,38 @@ def test_eager_addmm_act_calls_a_wrapper_without_a_weight_attribute():
 
     eager_addmm_act(torch.nn.GELU, wrapper, x).sum().backward()
     assert wrapper.extra.grad is not None, "adapter branch got no gradient"
+
+
+def test_inject_adapters_skips_fused_attention_out_proj():
+    """Wrapping out_proj breaks a parent that reads .weight directly.
+
+    SAM3's MultiheadAttention passes `self.out_proj.weight` into a functional
+    attention kernel instead of calling the module, so a LoraLinear wrapper
+    there raised AttributeError on the first forward.
+    """
+    from hydra_suite.training.sam3_lora.lora import (
+        LoraConfig,
+        LoraLinear,
+        inject_adapters,
+    )
+
+    class _FusedAttention(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.in_proj_weight = torch.nn.Parameter(torch.randn(12, 4))
+            self.out_proj = torch.nn.Linear(4, 4)
+
+    class _Model(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.attn = _FusedAttention()
+            self.mlp = torch.nn.Module()
+            self.mlp.out_proj = torch.nn.Linear(4, 4)
+
+    model = _Model()
+    cfg = LoraConfig(rank=2, alpha=4, dropout=0.0, target_suffixes=("out_proj",))
+    n = inject_adapters(model, cfg)
+
+    assert not isinstance(model.attn.out_proj, LoraLinear), "fused attn was wrapped"
+    assert isinstance(model.mlp.out_proj, LoraLinear), "ordinary Linear was skipped"
+    assert n == 1
