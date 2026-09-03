@@ -52,6 +52,7 @@ from .dataloader import (
     try_build_descriptors,
 )
 from .lora import adapter_state_dict, inject_adapters, lora_config_from_params
+from .perflib_compat import install_grad_safe_addmm_act
 from .protocol import emit_log, emit_progress
 
 
@@ -202,13 +203,25 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
     from sam3.train.loss.sam3_loss import Sam3LossWrapper
     from sam3.train.matcher import BinaryHungarianMatcherV2, BinaryOneToManyMatcher
 
+    # SAM3's vision trunk MLP is inference-only as shipped (it refuses to run
+    # with grad enabled, and detaches its weights). Swap in an eager,
+    # differentiable equivalent before the model is built. See perflib_compat.
+    if install_grad_safe_addmm_act():
+        emit_log("Patched vitdet.addmm_act with a grad-safe eager equivalent.")
+
     device = torch.device("cuda")
     model = build_sam3_image_model(eval_mode=False)
-    model.to(device)
 
     lora_cfg = lora_config_from_params(params)
     n_adapted = inject_adapters(model, lora_cfg)
     emit_log(f"Injected LoRA adapters into {n_adapted} Linear modules.")
+    # `.to(device)` AFTER injection, not before: `inject_adapters` creates
+    # fresh lora_A/lora_B Parameters on whatever device the module it wraps
+    # was built on, and it does not inherit an earlier `.to()`. Moving the
+    # model first left every adapter on CPU while the frozen base sat on
+    # CUDA, so the first forward died with "Expected all tensors to be on
+    # the same device ... mat2 is on cpu".
+    model.to(device)
 
     trainable_params = [p for p in model.parameters() if p.requires_grad]
 
