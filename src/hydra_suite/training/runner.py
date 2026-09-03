@@ -14,6 +14,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -2203,6 +2204,25 @@ _CUSTOM_CLASSIFY_ROLES = {
 }
 
 
+def _process_group_exists(process_group_id: int) -> bool:
+    try:
+        os.killpg(process_group_id, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _wait_for_process_group_exit(process_group_id: int, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while _process_group_exists(process_group_id):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+    return True
+
+
 def _cancel_subprocess(proc, command):
     """Terminate or kill a subprocess and return a cancellation result dict."""
 
@@ -2214,9 +2234,18 @@ def _cancel_subprocess(proc, command):
             proc.terminate()
     except Exception:
         pass
+    parent_exited = False
     try:
         proc.wait(timeout=5.0)
+        parent_exited = True
     except (subprocess.TimeoutExpired, AttributeError):
+        pass
+
+    group_exited = True
+    if os.name == "posix" and owns_group:
+        group_exited = _wait_for_process_group_exit(proc.pid, 1.0)
+
+    if not parent_exited or not group_exited:
         try:
             if os.name == "posix" and owns_group:
                 os.killpg(proc.pid, signal.SIGKILL)

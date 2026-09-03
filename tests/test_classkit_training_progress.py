@@ -72,6 +72,34 @@ def test_stream_cancels_process_that_has_no_output() -> None:
     assert result["canceled"] is True
 
 
+def test_cancel_kills_surviving_owned_process_group(monkeypatch) -> None:
+    import hydra_suite.training.runner as runner
+
+    class _Proc:
+        pid = 12345
+        _hydra_owns_process_group = True
+
+        @staticmethod
+        def wait(timeout):
+            return 0
+
+    signals = []
+    monkeypatch.setattr(
+        runner.os, "killpg", lambda pid, signum: signals.append((pid, signum))
+    )
+    monkeypatch.setattr(
+        runner, "_wait_for_process_group_exit", lambda _pid, _timeout: False
+    )
+
+    result = runner._cancel_subprocess(_Proc(), ["trainer"])
+
+    assert signals == [
+        (12345, runner.signal.SIGTERM),
+        (12345, runner.signal.SIGKILL),
+    ]
+    assert result["canceled"] is True
+
+
 def test_classkit_training_worker_uses_negative_pct_for_log_messages(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
