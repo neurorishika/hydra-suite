@@ -204,11 +204,17 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
 
     device = torch.device("cuda")
     model = build_sam3_image_model(eval_mode=False)
-    model.to(device)
 
     lora_cfg = lora_config_from_params(params)
     n_adapted = inject_adapters(model, lora_cfg)
     emit_log(f"Injected LoRA adapters into {n_adapted} Linear modules.")
+    # `.to(device)` AFTER injection, not before: `inject_adapters` creates
+    # fresh lora_A/lora_B Parameters on whatever device the module it wraps
+    # was built on, and it does not inherit an earlier `.to()`. Moving the
+    # model first left every adapter on CPU while the frozen base sat on
+    # CUDA, so the first forward died with "Expected all tensors to be on
+    # the same device ... mat2 is on cpu".
+    model.to(device)
 
     trainable_params = [p for p in model.parameters() if p.requires_grad]
 

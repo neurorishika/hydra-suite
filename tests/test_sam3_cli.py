@@ -152,3 +152,25 @@ def test_core_loss_uses_metas_actual_loss_key():
     marker = object()
 
     assert cli._core_loss({"core_loss": marker}) is marker
+
+
+def test_adapters_are_injected_before_the_model_moves_to_device():
+    """LoRA params must be created before `.to(device)`, not after.
+
+    `inject_adapters` builds fresh lora_A/lora_B Parameters on the device of
+    the module it wraps; it does not replay an earlier `.to()`. Injecting
+    after the move left every adapter on CPU while the frozen base was on
+    CUDA, and the first forward died with "Expected all tensors to be on the
+    same device ... mat2 is on cpu".
+    """
+    import inspect
+
+    from hydra_suite.training.sam3_lora import cli
+
+    source = inspect.getsource(cli.run_training)
+    inject_at = source.index("inject_adapters(model")
+    move_at = source.index("model.to(device)")
+    assert inject_at < move_at, (
+        "model.to(device) runs before inject_adapters; the adapters would be "
+        "created on CPU and never moved"
+    )
