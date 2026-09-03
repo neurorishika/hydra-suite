@@ -3,6 +3,8 @@ dataloader.py -- Task-8 fix round 2, findings 2/3/4 and the two minor fixes.
 """
 
 import json
+from dataclasses import asdict, is_dataclass
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -105,6 +107,10 @@ def test_try_build_datapoints_returns_none_when_split_absent(tmp_path):
         dl.try_build_datapoints(str(tmp_path), Sam3LoraParams(prompt="ant"), "valid")
         is None
     )
+    assert (
+        dl.try_build_descriptors(str(tmp_path), Sam3LoraParams(prompt="ant"), "valid")
+        is None
+    )
 
 
 def test_try_build_datapoints_raises_when_split_present_but_empty(tmp_path):
@@ -112,6 +118,8 @@ def test_try_build_datapoints_raises_when_split_present_but_empty(tmp_path):
 
     with pytest.raises(RuntimeError):
         dl.try_build_datapoints(str(tmp_path), Sam3LoraParams(prompt="ant"), "valid")
+    with pytest.raises(RuntimeError):
+        dl.try_build_descriptors(str(tmp_path), Sam3LoraParams(prompt="ant"), "valid")
 
 
 def test_collate_epoch_batches_reshuffles_reproducibly(monkeypatch):
@@ -120,12 +128,215 @@ def test_collate_epoch_batches_reshuffles_reproducibly(monkeypatch):
     monkeypatch.setattr(dl, "collate_datapoints", lambda lst: list(lst))
     datapoints = list(range(10))
 
-    batches_seed1_a = dl.collate_epoch_batches(datapoints, batch_size=2, seed=1)
-    batches_seed1_b = dl.collate_epoch_batches(datapoints, batch_size=2, seed=1)
-    batches_seed2 = dl.collate_epoch_batches(datapoints, batch_size=2, seed=2)
+    monkeypatch.setattr(dl, "load_datapoints", lambda value, transform: [value])
+    monkeypatch.setattr(dl, "_default_transform", lambda: object())
+    batches_seed1_a = list(dl.collate_epoch_batches(datapoints, batch_size=2, seed=1))
+    batches_seed1_b = list(dl.collate_epoch_batches(datapoints, batch_size=2, seed=1))
+    batches_seed2 = list(dl.collate_epoch_batches(datapoints, batch_size=2, seed=2))
 
     assert batches_seed1_a == batches_seed1_b
     assert batches_seed1_a != batches_seed2
 
     flat = sorted(x for batch in batches_seed1_a for x in batch)
     assert flat == datapoints
+
+
+def test_build_descriptors_does_not_decode_or_transform_tiles(tmp_path, monkeypatch):
+    split_dir = tmp_path / "train"
+    _write_coco(
+        split_dir,
+        images=[
+            {"id": 1, "file_name": "a.jpg", "width": 1008, "height": 1008},
+            {"id": 2, "file_name": "b.jpg", "width": 1008, "height": 1008},
+        ],
+        annotations=[],
+    )
+    params = Sam3LoraParams(
+        prompt="ant", num_negatives=1, negative_prompts=["background"]
+    )
+    monkeypatch.setattr(
+        dl.cv2,
+        "imread",
+        lambda *_a, **_k: pytest.fail("descriptor construction decoded a tile"),
+    )
+    monkeypatch.setattr(
+        dl,
+        "_default_transform",
+        lambda: pytest.fail("descriptor construction created a transform"),
+    )
+
+    descriptors = dl.build_descriptors(str(tmp_path), params, "train", seed=7)
+
+    assert len(descriptors) == 2
+    assert all(is_dataclass(descriptor) for descriptor in descriptors)
+    json.dumps([asdict(descriptor) for descriptor in descriptors])
+    assert [Path(descriptor.image_path).name for descriptor in descriptors] == [
+        "a.jpg",
+        "b.jpg",
+    ]
+    assert all(
+        descriptor.negative_prompts == ("background",) for descriptor in descriptors
+    )
+
+
+def test_lazy_batches_decode_and_transform_once_per_tile(tmp_path, monkeypatch):
+    split_dir = tmp_path / "train"
+    images = [
+        {"id": idx, "file_name": f"{idx}.jpg", "width": 1008, "height": 1008}
+        for idx in range(5)
+    ]
+    _write_coco(split_dir, images=images, annotations=[])
+    params = Sam3LoraParams(
+        prompt="ant",
+        num_negatives=3,
+        negative_prompts=["floor", "wall", "food"],
+    )
+    descriptors = dl.build_descriptors(str(tmp_path), params, "train", seed=4)
+    decoded = []
+    transformed = []
+
+    def fake_imread(path):
+        decoded.append(path)
+        return np.zeros((8, 8, 3), dtype=np.uint8)
+
+    def transform(_image):
+        transformed.append(object())
+        return object()
+
+    def fake_build(tile, prompt, instances, negative_prompts, transform_fn):
+        transform_fn(tile)
+        shared_id = id(tile)
+        return [(query, shared_id) for query in (prompt, *tuple(negative_prompts))]
+
+    monkeypatch.setattr(dl.cv2, "imread", fake_imread)
+    monkeypatch.setattr(dl, "_default_transform", lambda: transform)
+    monkeypatch.setattr(dl, "build_shared_query_datapoints", fake_build)
+    monkeypatch.setattr(dl, "collate_datapoints", lambda values: list(values))
+
+    batches = dl.collate_batches(descriptors, batch_size=2)
+    assert decoded == []
+    assert transformed == []
+
+    first = next(batches)
+    assert len(first) == 2
+    assert len(decoded) == 1
+    assert len(transformed) == 1
+    assert first[0][1] == first[1][1]
+
+    remaining = list(batches)
+    assert [len(first), *(len(batch) for batch in remaining)] == [2] * 10
+    assert len(decoded) == len(descriptors)
+    assert len(transformed) == len(descriptors)
+
+
+def test_descriptor_order_contains_every_tile_once_in_incomplete_final_batch(
+    tmp_path, monkeypatch
+):
+    split_dir = tmp_path / "train"
+    images = [
+        {"id": idx, "file_name": f"{idx}.jpg", "width": 1008, "height": 1008}
+        for idx in range(7)
+    ]
+    _write_coco(split_dir, images=images, annotations=[])
+    descriptors = dl.build_descriptors(
+        str(tmp_path), Sam3LoraParams(prompt="ant", num_negatives=0), "train"
+    )
+    monkeypatch.setattr(dl, "_default_transform", lambda: object())
+    monkeypatch.setattr(
+        dl, "load_datapoints", lambda descriptor, _transform: [descriptor]
+    )
+    monkeypatch.setattr(dl, "collate_datapoints", lambda values: list(values))
+
+    batches = list(dl.collate_epoch_batches(descriptors, batch_size=3, seed=11))
+
+    assert [len(batch) for batch in batches] == [3, 3, 1]
+    assert sorted(d.image_id for batch in batches for d in batch) == list(range(7))
+
+
+def test_build_descriptors_keeps_polygon_and_crowd_metadata(tmp_path):
+    split_dir = tmp_path / "train"
+    _write_coco(
+        split_dir,
+        images=[{"id": 3, "file_name": "a.jpg", "width": 20, "height": 10}],
+        annotations=[
+            {
+                "id": 1,
+                "image_id": 3,
+                "segmentation": [[1, 2, 9, 2, 9, 8]],
+                "iscrowd": 1,
+            }
+        ],
+    )
+
+    descriptors = dl.build_descriptors(
+        str(tmp_path), Sam3LoraParams(prompt="ant", num_negatives=0), "train"
+    )
+
+    assert len(descriptors) == 1
+    assert descriptors[0].instances[0].is_crowd is True
+    assert descriptors[0].instances[0].polygon == ((1.0, 2.0), (9.0, 2.0), (9.0, 8.0))
+
+
+def test_query_count_preserves_the_established_batch_and_step_unit(tmp_path):
+    split_dir = tmp_path / "train"
+    _write_coco(
+        split_dir,
+        images=[
+            {"id": 1, "file_name": "a.jpg", "width": 1008, "height": 1008},
+            {"id": 2, "file_name": "b.jpg", "width": 1008, "height": 1008},
+        ],
+        annotations=[],
+    )
+    descriptors = dl.build_descriptors(
+        str(tmp_path),
+        Sam3LoraParams(
+            prompt="ant",
+            num_negatives=3,
+            negative_prompts=["floor", "wall", "food"],
+        ),
+        "train",
+    )
+
+    assert dl.query_count(descriptors) == 8
+    assert dl.batch_count(dl.query_count(descriptors), batch_size=3) == 3
+
+
+def test_every_positive_and_negative_query_appears_once_per_epoch(monkeypatch):
+    descriptors = [
+        dl.TileDescriptor(
+            image_id=1,
+            image_path="one.jpg",
+            positive_prompt="ant-1",
+            negative_prompts=("floor-1", "wall-1"),
+            instances=(),
+        ),
+        dl.TileDescriptor(
+            image_id=2,
+            image_path="two.jpg",
+            positive_prompt="ant-2",
+            negative_prompts=("floor-2", "wall-2"),
+            instances=(),
+        ),
+    ]
+    monkeypatch.setattr(dl, "_default_transform", lambda: object())
+    monkeypatch.setattr(
+        dl,
+        "load_datapoints",
+        lambda descriptor, _transform: [
+            descriptor.positive_prompt,
+            *descriptor.negative_prompts,
+        ],
+    )
+    monkeypatch.setattr(dl, "collate_datapoints", lambda values: list(values))
+
+    batches = list(dl.collate_epoch_batches(descriptors, batch_size=4, seed=9))
+
+    assert [len(batch) for batch in batches] == [4, 2]
+    assert sorted(query for batch in batches for query in batch) == [
+        "ant-1",
+        "ant-2",
+        "floor-1",
+        "floor-2",
+        "wall-1",
+        "wall-2",
+    ]

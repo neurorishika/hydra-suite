@@ -14,13 +14,33 @@ from __future__ import annotations
 
 import json
 import random
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator, Sequence
 
 import cv2
 import numpy as np
 
-from .datapoints import build_datapoint, build_negative_datapoint, collate_datapoints
+from .datapoints import build_shared_query_datapoints, collate_datapoints
+
+
+@dataclass(frozen=True, slots=True)
+class InstanceDescriptor:
+    """Serializable polygon metadata; never owns pixels, masks, or tensors."""
+
+    polygon: tuple[tuple[float, float], ...]
+    is_crowd: bool
+
+
+@dataclass(frozen=True, slots=True)
+class TileDescriptor:
+    """All lightweight information needed to load one tile on demand."""
+
+    image_id: int
+    image_path: str
+    positive_prompt: str
+    negative_prompts: tuple[str, ...]
+    instances: tuple[InstanceDescriptor, ...]
 
 
 def _default_transform():
@@ -106,60 +126,99 @@ def _segmentation_to_polygons(annotations: list[dict]) -> list[tuple[np.ndarray,
     return polygons
 
 
-def iter_split_datapoints(dataset_dir: Path, params: Any, split: str, *, seed: int = 0):
-    """Yield one positive Datapoint per tile, plus its sampled negatives.
+def build_descriptors(
+    dataset_dir: str | Path, params: Any, split: str, *, seed: int = 0
+) -> list[TileDescriptor]:
+    """Read COCO metadata without decoding or transforming any tile.
 
-    Raises (never silently yields nothing) if the split's annotation file is
-    missing, an image cannot be read, or negatives are wanted but
-    unavailable.
+    The returned list scales with annotation metadata only. In particular it
+    contains no OpenCV/PIL images, float tensors, dense masks, or collated
+    batches, making it safe to shuffle and retain for the whole run.
     """
-    split_dir, coco, by_image = _load_coco_split(dataset_dir, split)
-    negatives = _negative_prompts_for(dataset_dir, params)
-    transform = _default_transform()
+    dataset_path = Path(dataset_dir).expanduser().resolve()
+    split_dir, coco, by_image = _load_coco_split(dataset_path, split)
+    negatives = _negative_prompts_for(dataset_path, params)
     rng = random.Random(seed)
+    descriptors: list[TileDescriptor] = []
 
     for image_meta in coco.get("images", []):
         img_path = split_dir / image_meta["file_name"]
-        tile_bgr = cv2.imread(str(img_path))
-        if tile_bgr is None:
-            raise RuntimeError(f"Could not read SAM3 training tile: {img_path}")
         anns = by_image.get(image_meta["id"], [])
         instances = _segmentation_to_polygons(anns)
-        # Every instance in the tile is now represented in `instances`
-        # (crowd or not -- see `_segmentation_to_polygons`), so the query
-        # over this tile is genuinely exhaustive.
-        yield build_datapoint(tile_bgr, params.prompt, instances, transform)
-
         n_neg = min(max(0, int(params.num_negatives)), len(negatives))
-        for neg_prompt in (rng.sample(negatives, n_neg) if n_neg else []):
-            yield build_negative_datapoint(tile_bgr, neg_prompt, transform)
+        sampled_negatives = rng.sample(negatives, n_neg) if n_neg else []
+        descriptors.append(
+            TileDescriptor(
+                image_id=int(image_meta["id"]),
+                image_path=str(img_path),
+                positive_prompt=str(params.prompt),
+                negative_prompts=tuple(sampled_negatives),
+                instances=tuple(
+                    InstanceDescriptor(
+                        polygon=tuple((float(x), float(y)) for x, y in polygon),
+                        is_crowd=is_crowd,
+                    )
+                    for polygon, is_crowd in instances
+                ),
+            )
+        )
+
+    if not descriptors:
+        raise RuntimeError(
+            f"SAM3 {split!r} split at {dataset_path} produced zero tiles; "
+            "refusing to build an empty dataloader."
+        )
+    return descriptors
+
+
+def load_datapoints(descriptor: TileDescriptor, transform: Any) -> list[Any]:
+    """Decode one tile into query-level Datapoints sharing one image tensor."""
+    tile_bgr = cv2.imread(descriptor.image_path)
+    if tile_bgr is None:
+        raise RuntimeError(
+            f"Could not read SAM3 training tile: {descriptor.image_path}"
+        )
+    instances = [
+        (np.asarray(instance.polygon, dtype=np.float32), instance.is_crowd)
+        for instance in descriptor.instances
+    ]
+    return build_shared_query_datapoints(
+        tile_bgr,
+        descriptor.positive_prompt,
+        instances,
+        descriptor.negative_prompts,
+        transform,
+    )
+
+
+def iter_split_datapoints(
+    dataset_dir: Path, params: Any, split: str, *, seed: int = 0
+) -> Iterator[Any]:
+    """Compatibility iterator over query Datapoints, grouped lazily by tile."""
+    descriptors = build_descriptors(dataset_dir, params, split, seed=seed)
+    transform = _default_transform()
+    return (
+        datapoint
+        for descriptor in descriptors
+        for datapoint in load_datapoints(descriptor, transform)
+    )
 
 
 def build_datapoints(
     dataset_dir: str, params: Any, split: str, *, seed: int = 0
-) -> list[Any]:
-    """Read the built COCO split and return its (positive + negative)
-    Datapoints, in dataset order (unshuffled -- see `collate_epoch_batches`
-    for the per-epoch shuffle).
+) -> Iterator[Any]:
+    """Return a lazy compatibility iterator over multi-query Datapoints.
 
-    Raises -- never returns `[]` -- when the split is missing or produces
-    zero datapoints; the caller (`train.py`) is responsible for refusing to
-    train on an empty set, not this function silently pretending there was
-    nothing to do.
+    New training code retains ``build_descriptors`` instead so epochs can
+    shuffle lightweight metadata and decode each tile only for its batch.
     """
     dataset_path = Path(dataset_dir).expanduser().resolve()
-    datapoints = list(iter_split_datapoints(dataset_path, params, split, seed=seed))
-    if not datapoints:
-        raise RuntimeError(
-            f"SAM3 {split!r} split at {dataset_path} produced zero datapoints; "
-            "refusing to build an empty dataloader."
-        )
-    return datapoints
+    return iter_split_datapoints(dataset_path, params, split, seed=seed)
 
 
 def try_build_datapoints(
     dataset_dir: str, params: Any, split: str, *, seed: int = 0
-) -> list[Any] | None:
+) -> Iterator[Any] | None:
     """Like `build_datapoints`, but returns None instead of raising when the
     split's annotation file itself is absent (e.g. no validation frames were
     held out -- see `dataset_build.py`'s `validation: "none"` case). A split
@@ -173,24 +232,62 @@ def try_build_datapoints(
         return None
 
 
-def collate_batches(datapoints: list, batch_size: int) -> list[Any]:
+def try_build_descriptors(
+    dataset_dir: str, params: Any, split: str, *, seed: int = 0
+) -> list[TileDescriptor] | None:
+    """Build lightweight descriptors, or ``None`` for an absent split."""
+    try:
+        return build_descriptors(dataset_dir, params, split, seed=seed)
+    except FileNotFoundError:
+        return None
+
+
+def batch_count(item_count: int, batch_size: int) -> int:
+    """Number of batches including a final incomplete batch."""
+    batch_size = max(1, int(batch_size))
+    return -(-int(item_count) // batch_size)
+
+
+def query_count(descriptors: Sequence[TileDescriptor]) -> int:
+    """Number of logical query Datapoints represented by tile descriptors."""
+    return sum(1 + len(descriptor.negative_prompts) for descriptor in descriptors)
+
+
+def collate_batches(
+    descriptors: Sequence[TileDescriptor], batch_size: int
+) -> Iterator[Any]:
     """Fixed dataset-order batching (no shuffle) -- used for validation,
     where reproducible order across runs is preferable to decorrelation."""
     batch_size = max(1, int(batch_size))
-    return [
-        collate_datapoints(datapoints[i : i + batch_size])
-        for i in range(0, len(datapoints), batch_size)
-    ]
+    transform = _default_transform()
+    pending: list[Any] = []
+    for descriptor in descriptors:
+        # The group remains adjacent so its query Datapoints can share one
+        # transformed Image without a dataset-sized image cache.
+        for datapoint in load_datapoints(descriptor, transform):
+            pending.append(datapoint)
+            if len(pending) == batch_size:
+                batch = collate_datapoints(pending)
+                pending.clear()
+                yield batch
+                del batch
+    if pending:
+        batch = collate_datapoints(pending)
+        pending.clear()
+        yield batch
+        del batch
 
 
-def collate_epoch_batches(datapoints: list, batch_size: int, *, seed: int) -> list[Any]:
-    """Shuffle a *copy* of `datapoints` deterministically from `seed`, then
-    batch it. Call once per epoch with a seed that varies by epoch (e.g.
-    `spec.seed + epoch`) so every epoch sees a different order and a tile's
-    negatives are not always glued to its positive in the same accumulation
-    window, while staying fully reproducible for a given (seed, epoch).
+def collate_epoch_batches(
+    descriptors: Sequence[TileDescriptor], batch_size: int, *, seed: int
+) -> Iterator[Any]:
+    """Shuffle lightweight descriptor indices and lazily yield each batch.
+
+    A tile's positive and negatives deliberately remain adjacent query-level
+    Datapoints so they can share one transformed Image owner without changing
+    the established query-batch semantics.
     """
-    order = list(range(len(datapoints)))
+    order = list(range(len(descriptors)))
     random.Random(seed).shuffle(order)
-    shuffled = [datapoints[i] for i in order]
+    shuffled = [descriptors[i] for i in order]
     return collate_batches(shuffled, batch_size)

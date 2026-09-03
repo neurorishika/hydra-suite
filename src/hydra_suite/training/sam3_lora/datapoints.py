@@ -99,6 +99,28 @@ def build_datapoint(
     than being omitted, so there is nothing left unaccounted for that would
     make an exhaustive claim false.
     """
+    return build_tile_datapoint(tile_bgr, prompt, instances, [], transform)
+
+
+def build_tile_datapoint(
+    tile_bgr: Any,
+    positive_prompt: str,
+    instances: list[tuple[np.ndarray, bool]],
+    negative_prompts: list[str] | tuple[str, ...],
+    transform: Any,
+) -> Any:
+    """Build one transformed image with all of a tile's find queries.
+
+    Meta's collator treats queries and images as separate indexed collections:
+    every query below points to image 0, so the vision transform and backbone
+    input exist once while positive and negative targets remain independent
+    query rows. This is the native multi-query representation used by SAM3.
+
+    ``raw_images`` is intentionally omitted. The image-training model and loss
+    consume ``img_batch``, ``find_inputs`` and ``find_targets`` only;
+    ``raw_images`` is an inference/evaluator payload. Keeping it here would
+    retain another RES x RES RGB image throughout the training step.
+    """
     import cv2
     from PIL import Image as PILImage
     from sam3.train.data.sam3_image_dataset import (
@@ -120,31 +142,34 @@ def build_datapoint(
         _polygon_to_object(polygon, is_crowd)
         for polygon, is_crowd in zip(scaled_polygons, crowd_flags)
     ]
-    query = FindQueryLoaded(
-        query_text=prompt,
-        image_id=0,
-        # `collate_fn_api` (sam3/train/data/collator.py) builds every find
-        # target EXCLUSIVELY from `object_ids_output`, using each entry as a
-        # positional index into `Image.objects` -- `Image.objects` itself is
-        # never consulted any other way. Leaving this `[]` for a positive
-        # query silently collates to num_boxes=0 (indistinguishable from a
-        # negative), so it must enumerate every object's position here.
-        object_ids_output=list(range(len(objects))),
-        is_exhaustive=True,
-        query_processing_order=0,
-        inference_metadata=InferenceMetadata(
-            coco_image_id=0,
-            original_image_id=0,
-            original_category_id=0,
-            original_size=(h, w),
-            object_id=-1,
-            frame_index=-1,
-        ),
-    )
+
+    def make_query(query_text: str, object_ids: list[int]) -> Any:
+        return FindQueryLoaded(
+            query_text=query_text,
+            image_id=0,
+            # `collate_fn_api` builds every find target exclusively from
+            # `object_ids_output`, using entries as positional indices into
+            # Image.objects. Negatives therefore use [], while the positive
+            # enumerates every object.
+            object_ids_output=object_ids,
+            is_exhaustive=True,
+            query_processing_order=0,
+            inference_metadata=InferenceMetadata(
+                coco_image_id=0,
+                original_image_id=0,
+                original_category_id=0,
+                original_size=(h, w),
+                object_id=-1,
+                frame_index=-1,
+            ),
+        )
+
+    queries = [make_query(positive_prompt, list(range(len(objects))))]
+    queries.extend(make_query(prompt, []) for prompt in negative_prompts)
     datapoint = Datapoint(
-        find_queries=[query],
+        find_queries=queries,
         images=[Image(data=transform(pil), objects=objects, size=(RES, RES))],
-        raw_images=[pil],
+        raw_images=None,
     )
     # `Object.bbox` is documented (sam3/train/data/sam3_image_dataset.py) as
     # denormalized XYXY on construction, converted to normalized CxCyWH by
@@ -156,6 +181,41 @@ def build_datapoint(
     # `train_norm_mean`/`train_norm_std`/`val_norm_mean`/`val_norm_std`.
     normalize = NormalizeAPI(mean=SAM3_NORM_MEAN, std=SAM3_NORM_STD)
     return normalize(datapoint)
+
+
+def build_shared_query_datapoints(
+    tile_bgr: Any,
+    positive_prompt: str,
+    instances: list[tuple[np.ndarray, bool]],
+    negative_prompts: list[str] | tuple[str, ...],
+    transform: Any,
+) -> list[Any]:
+    """Build query-level Datapoints that share one normalized image payload.
+
+    Keeping queries as separate Datapoints preserves the established meaning
+    of ``batch`` and ``grad_accum`` and therefore the optimizer schedule and
+    peak decoder width. A native multi-query Datapoint is structurally valid,
+    but it changes stochastic backbone behavior and query batch width; that
+    representation requires forward/loss parity measurements on CUDA before
+    it can replace this conservative form.
+    """
+    from sam3.train.data.sam3_image_dataset import Datapoint
+
+    combined = build_tile_datapoint(
+        tile_bgr,
+        positive_prompt,
+        instances,
+        negative_prompts,
+        transform,
+    )
+    return [
+        Datapoint(
+            find_queries=[query],
+            images=combined.images,
+            raw_images=None,
+        )
+        for query in combined.find_queries
+    ]
 
 
 def build_negative_datapoint(
