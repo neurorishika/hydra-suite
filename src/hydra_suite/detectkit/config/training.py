@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
@@ -52,10 +53,44 @@ def _construct_dataclass(cls, values: dict[str, Any], name: str):
         raise TrainingPlanError(f"Invalid {name}: {exc}") from exc
 
 
-def _resolve_path(value: object, base_dir: Path, name: str) -> Path:
-    text = str(value or "").strip()
-    if not text:
+def _require_bool(value: object, name: str) -> bool:
+    if not isinstance(value, bool):
+        raise TrainingPlanError(f"'{name}' must be a boolean")
+    return value
+
+
+def _require_int(value: object, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TrainingPlanError(f"'{name}' must be an integer")
+    return value
+
+
+def _require_number(value: object, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TrainingPlanError(f"'{name}' must be a number")
+    result = float(value)
+    if not math.isfinite(result):
+        raise TrainingPlanError(f"'{name}' must be finite")
+    return result
+
+
+def _require_string(value: object, name: str, *, allow_empty: bool = True) -> str:
+    if not isinstance(value, str):
+        raise TrainingPlanError(f"'{name}' must be a string")
+    text = value.strip()
+    if not allow_empty and not text:
         raise TrainingPlanError(f"'{name}' must not be empty")
+    return text
+
+
+def _require_list(value: object, name: str) -> list[Any]:
+    if not isinstance(value, list):
+        raise TrainingPlanError(f"'{name}' must be a JSON array")
+    return value
+
+
+def _resolve_path(value: object, base_dir: Path, name: str) -> Path:
+    text = _require_string(value, name, allow_empty=False)
     path = Path(text).expanduser()
     if not path.is_absolute():
         path = base_dir / path
@@ -63,7 +98,7 @@ def _resolve_path(value: object, base_dir: Path, name: str) -> Path:
 
 
 def _resolve_model(value: object, base_dir: Path) -> str:
-    text = str(value or "").strip()
+    text = _require_string(value, "roles[].model")
     if not text:
         return ""
     candidate = Path(text).expanduser()
@@ -96,22 +131,38 @@ class SliceTrainingConfig:
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> "SliceTrainingConfig":
         values = _require_mapping(data, "dataset.slicing")
+        for name in ("enabled", "full_frame_mix"):
+            if name in values:
+                values[name] = _require_bool(values[name], f"dataset.slicing.{name}")
+        if "geometry_mode" in values:
+            values["geometry_mode"] = _require_string(
+                values["geometry_mode"],
+                "dataset.slicing.geometry_mode",
+                allow_empty=False,
+            )
         for name in ("object_tile_fraction", "reference_body_px", "overlap"):
             if name in values:
-                values[name] = float(values[name])
+                values[name] = _require_number(values[name], f"dataset.slicing.{name}")
         for name in ("min_area_ratio", "negative_tile_fraction", "merge_threshold"):
             if name in values:
-                values[name] = float(values[name])
+                values[name] = _require_number(values[name], f"dataset.slicing.{name}")
         for name in ("slice_width", "slice_height"):
             if name in values:
-                values[name] = int(values[name])
+                values[name] = _require_int(values[name], f"dataset.slicing.{name}")
         if "target_size_fractions" in values:
             values["target_size_fractions"] = tuple(
-                float(item) for item in values["target_size_fractions"]
+                _require_number(item, "dataset.slicing.target_size_fractions[]")
+                for item in _require_list(
+                    values["target_size_fractions"],
+                    "dataset.slicing.target_size_fractions",
+                )
             )
         if "target_sizes" in values:
             values["target_sizes"] = tuple(
-                float(item) for item in values["target_sizes"]
+                _require_number(item, "dataset.slicing.target_sizes[]")
+                for item in _require_list(
+                    values["target_sizes"], "dataset.slicing.target_sizes"
+                )
             )
         config = _construct_dataclass(cls, values, "dataset.slicing")
         config.validate()
@@ -126,6 +177,7 @@ class SliceTrainingConfig:
             ("overlap", self.overlap),
             ("min_area_ratio", self.min_area_ratio),
             ("negative_tile_fraction", self.negative_tile_fraction),
+            ("merge_threshold", self.merge_threshold),
         ):
             if not 0.0 <= float(value) <= 1.0:
                 raise TrainingPlanError(
@@ -134,6 +186,22 @@ class SliceTrainingConfig:
         if any(not 0.0 < float(value) <= 1.0 for value in self.target_size_fractions):
             raise TrainingPlanError(
                 "dataset.slicing.target_size_fractions values must be in (0, 1]"
+            )
+        if any(value <= 0.0 for value in self.target_sizes):
+            raise TrainingPlanError(
+                "dataset.slicing.target_sizes values must be positive"
+            )
+        if self.object_tile_fraction <= 0.0:
+            raise TrainingPlanError(
+                "dataset.slicing.object_tile_fraction must be positive"
+            )
+        if self.reference_body_px < 0.0:
+            raise TrainingPlanError(
+                "dataset.slicing.reference_body_px must not be negative"
+            )
+        if self.slice_width < 0 or self.slice_height < 0:
+            raise TrainingPlanError(
+                "dataset.slicing slice dimensions must not be negative"
             )
 
     def target_fractions(self) -> list[float]:
@@ -163,7 +231,9 @@ class RoleTrainingConfig:
     @classmethod
     def from_dict(cls, data: object, base_dir: Path) -> "RoleTrainingConfig":
         values = _require_mapping(data, "roles[]")
-        role_text = str(values.get("role", "")).strip()
+        role_text = _require_string(
+            values.get("role", ""), "roles[].role", allow_empty=False
+        )
         try:
             role = TrainingRole(role_text)
         except ValueError as exc:
@@ -175,7 +245,7 @@ class RoleTrainingConfig:
         )
         if role is not TrainingRole.SEMANTIC_SAM3 and not model:
             raise TrainingPlanError(f"Role {role.value!r} requires a model")
-        imgsz = int(values.get("imgsz", 640))
+        imgsz = _require_int(values.get("imgsz", 640), f"roles[{role.value}].imgsz")
         if imgsz <= 0:
             raise TrainingPlanError(f"Role {role.value!r} imgsz must be positive")
         unknown = sorted(set(values) - {"role", "model", "base_model", "imgsz"})
@@ -223,7 +293,7 @@ class DetectTrainingPlan:
         cls, data: object, *, base_dir: str | Path = "."
     ) -> "DetectTrainingPlan":
         root = _require_mapping(data, "training plan")
-        version = int(root.get("version", 1))
+        version = _require_int(root.get("version", 1), "version")
         if version != 1:
             raise TrainingPlanError(f"Unsupported training plan version: {version}")
 
@@ -248,9 +318,19 @@ class DetectTrainingPlan:
                             source.get("path"), base, f"sources[{index}].path"
                         )
                     ),
-                    source_type=str(source.get("source_type", "yolo_obb")),
-                    name=str(source.get("name", "")),
-                    level=str(source.get("level", "obb")),
+                    source_type=_require_string(
+                        source.get("source_type", "yolo_obb"),
+                        f"sources[{index}].source_type",
+                        allow_empty=False,
+                    ),
+                    name=_require_string(
+                        source.get("name", ""), f"sources[{index}].name"
+                    ),
+                    level=_require_string(
+                        source.get("level", "obb"),
+                        f"sources[{index}].level",
+                        allow_empty=False,
+                    ),
                 )
             )
             if sources[-1].level not in {"aabb", "obb", "polygon"}:
@@ -282,7 +362,9 @@ class DetectTrainingPlan:
         split_values = _require_mapping(dataset.get("split"), "dataset.split")
         for name in ("train", "val", "test"):
             if name in split_values:
-                split_values[name] = float(split_values[name])
+                split_values[name] = _require_number(
+                    split_values[name], f"dataset.split.{name}"
+                )
         split = _construct_dataclass(
             SplitConfig,
             split_values,
@@ -291,9 +373,42 @@ class DetectTrainingPlan:
         slicing = SliceTrainingConfig.from_dict(dataset.get("slicing"))
 
         training = _require_mapping(root.get("training"), "training")
+        augmentation_values = _require_mapping(
+            training.get("augmentation"), "training.augmentation"
+        )
+        for name in ("enabled", "canonical_aug", "monochrome"):
+            if name in augmentation_values:
+                augmentation_values[name] = _require_bool(
+                    augmentation_values[name], f"training.augmentation.{name}"
+                )
+        if "canonical_aug_copies" in augmentation_values:
+            augmentation_values["canonical_aug_copies"] = _require_int(
+                augmentation_values["canonical_aug_copies"],
+                "training.augmentation.canonical_aug_copies",
+            )
+        for name in (
+            "flipud",
+            "fliplr",
+            "rotate",
+            "hue",
+            "saturation",
+            "brightness",
+            "contrast",
+            "decode_color_sim",
+            "resample_sim",
+        ):
+            if name in augmentation_values:
+                augmentation_values[name] = _require_number(
+                    augmentation_values[name], f"training.augmentation.{name}"
+                )
+        for name in ("args", "label_expansion"):
+            if name in augmentation_values:
+                augmentation_values[name] = _require_mapping(
+                    augmentation_values[name], f"training.augmentation.{name}"
+                )
         augmentation = _construct_dataclass(
             AugmentationProfile,
-            _require_mapping(training.get("augmentation"), "training.augmentation"),
+            augmentation_values,
             "training.augmentation",
         )
         hyperparam_names = {item.name for item in fields(TrainingHyperParams)}
@@ -302,9 +417,17 @@ class DetectTrainingPlan:
         }
         for name in ("epochs", "imgsz", "batch", "patience", "workers"):
             if name in hyperparam_values:
-                hyperparam_values[name] = int(hyperparam_values[name])
+                hyperparam_values[name] = _require_int(
+                    hyperparam_values[name], f"training.{name}"
+                )
         if "lr0" in hyperparam_values:
-            hyperparam_values["lr0"] = float(hyperparam_values["lr0"])
+            hyperparam_values["lr0"] = _require_number(
+                hyperparam_values["lr0"], "training.lr0"
+            )
+        if "cache" in hyperparam_values:
+            hyperparam_values["cache"] = _require_bool(
+                hyperparam_values["cache"], "training.cache"
+            )
         unknown_training = sorted(
             set(training) - hyperparam_names - {"device", "seed", "augmentation"}
         )
@@ -318,16 +441,63 @@ class DetectTrainingPlan:
         publish_values = _require_mapping(root.get("publish"), "publish")
         publish_values.setdefault("auto_import", False)
         publish_values.setdefault("auto_select", False)
+        for name in ("auto_import", "auto_select"):
+            publish_values[name] = _require_bool(
+                publish_values[name], f"publish.{name}"
+            )
         publish = _construct_dataclass(
             PublishPolicy,
             publish_values,
             "publish",
         )
         sam3_values = root.get("sam3")
+        if sam3_values is not None:
+            sam3_values = _require_mapping(sam3_values, "sam3")
+            for name in (
+                "adapt_vision_encoder",
+                "adapt_text_encoder",
+                "adapt_geometry_encoder",
+                "adapt_detr_encoder",
+                "adapt_detr_decoder",
+                "adapt_mask_decoder",
+                "keep_empty_tiles",
+                "label_quality_acknowledged",
+            ):
+                if name in sam3_values:
+                    sam3_values[name] = _require_bool(sam3_values[name], f"sam3.{name}")
+            for name in (
+                "rank",
+                "alpha",
+                "epochs",
+                "batch",
+                "grad_accum",
+                "num_negatives",
+                "slice_width",
+                "slice_height",
+            ):
+                if name in sam3_values:
+                    sam3_values[name] = _require_int(sam3_values[name], f"sam3.{name}")
+            for name in ("dropout", "lr", "object_tile_fraction", "tile_overlap"):
+                if name in sam3_values:
+                    sam3_values[name] = _require_number(
+                        sam3_values[name], f"sam3.{name}"
+                    )
+            for name in ("prompt", "mixed_precision", "geometry_mode", "env_name"):
+                if name in sam3_values:
+                    sam3_values[name] = _require_string(
+                        sam3_values[name], f"sam3.{name}"
+                    )
+            if "negative_prompts" in sam3_values:
+                sam3_values["negative_prompts"] = [
+                    _require_string(item, "sam3.negative_prompts[]")
+                    for item in _require_list(
+                        sam3_values["negative_prompts"], "sam3.negative_prompts"
+                    )
+                ]
         sam3_params = (
             _construct_dataclass(
                 Sam3LoraParams,
-                _require_mapping(sam3_values, "sam3"),
+                sam3_values,
                 "sam3",
             )
             if sam3_values is not None
@@ -338,7 +508,9 @@ class DetectTrainingPlan:
         if not isinstance(raw_class_names, list):
             raise TrainingPlanError("'class_names' must be a JSON array")
         class_names = tuple(
-            str(name).strip() for name in raw_class_names if str(name).strip()
+            name
+            for item in raw_class_names
+            if (name := _require_string(item, "class_names[]"))
         )
         known_root = {
             "version",
@@ -365,18 +537,32 @@ class DetectTrainingPlan:
             class_names=class_names,
             roles=roles,
             split=split,
-            seed=int(training.get("seed", 42)),
-            dedup=bool(dataset.get("deduplicate", True)),
-            crop_pad_ratio=float(dataset.get("crop_pad_ratio", 0.15)),
-            min_crop_size_px=int(dataset.get("min_crop_size_px", 64)),
-            enforce_square=bool(dataset.get("enforce_square", True)),
+            seed=_require_int(training.get("seed", 42), "training.seed"),
+            dedup=_require_bool(
+                dataset.get("deduplicate", True), "dataset.deduplicate"
+            ),
+            crop_pad_ratio=_require_number(
+                dataset.get("crop_pad_ratio", 0.15), "dataset.crop_pad_ratio"
+            ),
+            min_crop_size_px=_require_int(
+                dataset.get("min_crop_size_px", 64), "dataset.min_crop_size_px"
+            ),
+            enforce_square=_require_bool(
+                dataset.get("enforce_square", True), "dataset.enforce_square"
+            ),
             slice_settings=slicing,
             hyperparams=hyperparams,
-            device=str(training.get("device", "auto")),
+            device=_require_string(
+                training.get("device", "auto"), "training.device", allow_empty=False
+            ),
             augmentation_profile=augmentation,
             publish_policy=publish,
-            species=str(root.get("species", "species") or "species"),
-            model_tag=str(root.get("model_tag", "train") or "train"),
+            species=_require_string(
+                root.get("species", "species"), "species", allow_empty=False
+            ),
+            model_tag=_require_string(
+                root.get("model_tag", "train"), "model_tag", allow_empty=False
+            ),
             sam3_params=sam3_params,
         )
         plan.validate()
@@ -406,6 +592,18 @@ class DetectTrainingPlan:
                 raise TrainingPlanError(
                     "SAM3 training requires label_quality_acknowledged=true"
                 )
+            if not self.sam3_params.prompt.strip():
+                raise TrainingPlanError("SAM3 training requires a non-empty prompt")
+            if self.sam3_params.epochs <= 0:
+                raise TrainingPlanError("sam3.epochs must be positive")
+            if self.sam3_params.batch <= 0:
+                raise TrainingPlanError("sam3.batch must be positive")
+            if self.sam3_params.grad_accum <= 0:
+                raise TrainingPlanError("sam3.grad_accum must be positive")
+            if not 0.0 <= self.sam3_params.tile_overlap < 1.0:
+                raise TrainingPlanError("sam3.tile_overlap must be in [0, 1)")
+            if self.sam3_params.object_tile_fraction <= 0.0:
+                raise TrainingPlanError("sam3.object_tile_fraction must be positive")
         if self.hyperparams.epochs <= 0:
             raise TrainingPlanError("training.epochs must be positive")
         if self.hyperparams.batch == 0 or self.hyperparams.batch < -1:
@@ -418,6 +616,8 @@ class DetectTrainingPlan:
             raise TrainingPlanError("training.workers must not be negative")
         if self.min_crop_size_px <= 0:
             raise TrainingPlanError("dataset.min_crop_size_px must be positive")
+        if self.crop_pad_ratio < 0.0:
+            raise TrainingPlanError("dataset.crop_pad_ratio must not be negative")
 
     def preparation_request(self):
         from hydra_suite.detectkit.jobs.training import DatasetPreparationRequest

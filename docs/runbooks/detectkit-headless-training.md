@@ -115,9 +115,19 @@ without training:
 detectkit train --config training.json --prepare-only
 ```
 
-The workspace records `resolved_training_plan.json`, `preflight.json`, and
-`prepared_datasets.json`. A completed training session additionally records
-`training_result.json` with run IDs, status, metrics, and artifact paths.
+Each invocation records `resolved_training_plan.json`, `preflight.json`, and
+`prepared_datasets.json` under a unique
+`<workspace>/sessions/<session-id>/` directory. A completed training session
+additionally records `training_result.json` with run IDs, status, metrics, and
+artifact paths. Failed preflight, cancellation, and unexpected failures also
+write a structured `training_result.json`, so an earlier session is never
+overwritten by a later run.
+
+Only one DetectKit training invocation may use a workspace at a time. A second
+invocation exits with a configuration error instead of racing dataset builders
+or corrupting session state. Use a distinct workspace when the server should
+run independent jobs concurrently. The global training-run registry serializes
+updates from jobs that use different workspaces.
 
 ## Resume a run
 
@@ -150,5 +160,9 @@ detectkit train --config /shared/experiment/training.json
 ```
 
 `SIGINT` and `SIGTERM` request cancellation through the same cancellation path
-used by the GUI. Exit status is `0` on success, `1` for a failed training run,
-`2` for a configuration or preflight error, and `130` when canceled.
+used by the GUI. For Ultralytics jobs, DetectKit continues checking for a
+request even while the trainer is silent and terminates the trainer process
+group so data-loader or distributed-training children are not left behind.
+Repeated signals remain cooperative while cleanup completes. Exit status is
+`0` on success, `1` for a failed training run, `2` for a configuration or
+preflight error, and `130` when canceled.
