@@ -5,11 +5,21 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Any
 
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows does not provide fcntl.
+    fcntl = None
+
 from .contracts import TrainingRunSpec
+
+_PROCESS_REGISTRY_LOCK = threading.RLock()
 
 
 def _project_root() -> Path:
@@ -37,8 +47,23 @@ def get_registry_path() -> Path:
     return get_runs_root() / "registry.json"
 
 
-def load_registry() -> dict[str, Any]:
-    """Load the training run registry from disk, returning an empty structure on failure."""
+@contextmanager
+def _registry_lock():
+    """Serialize registry transactions across threads and POSIX processes."""
+
+    with _PROCESS_REGISTRY_LOCK:
+        lock_path = get_runs_root() / ".registry.lock"
+        with lock_path.open("a+", encoding="utf-8") as handle:
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _load_registry_unlocked() -> dict[str, Any]:
     path = get_registry_path()
     if not path.exists():
         return {"runs": []}
@@ -54,10 +79,41 @@ def load_registry() -> dict[str, Any]:
     return data
 
 
+def _save_registry_unlocked(registry: dict[str, Any]) -> None:
+    path = get_registry_path()
+    encoded = json.dumps(registry, indent=2)
+    temp_path: Path | None = None
+    try:
+        with NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=".registry.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temp_path = Path(handle.name)
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        temp_path.replace(path)
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+
+
+def load_registry() -> dict[str, Any]:
+    """Load the training run registry from disk, returning an empty structure on failure."""
+
+    with _registry_lock():
+        return _load_registry_unlocked()
+
+
 def save_registry(registry: dict[str, Any]) -> None:
     """Atomically write the training run registry dict to disk as JSON."""
-    path = get_registry_path()
-    path.write_text(json.dumps(registry, indent=2), encoding="utf-8")
+
+    with _registry_lock():
+        _save_registry_unlocked(registry)
 
 
 def dataset_fingerprint(dataset_dir: str | Path) -> str:
@@ -121,20 +177,22 @@ def create_run_record(
         "run_dir": str(Path(run_dir).expanduser().resolve()),
         "spec": spec.to_dict(),
     }
-    reg = load_registry()
-    reg.setdefault("runs", []).append(rec)
-    save_registry(reg)
+    with _registry_lock():
+        reg = _load_registry_unlocked()
+        reg.setdefault("runs", []).append(rec)
+        _save_registry_unlocked(reg)
     return rec
 
 
 def update_run_record(run_id: str, patch: dict[str, Any]) -> dict[str, Any] | None:
     """Merge *patch* into the registry record for *run_id* and persist; return the updated record or None."""
-    reg = load_registry()
-    for rec in reg.get("runs", []):
-        if rec.get("run_id") == run_id:
-            rec.update(patch)
-            save_registry(reg)
-            return rec
+    with _registry_lock():
+        reg = _load_registry_unlocked()
+        for rec in reg.get("runs", []):
+            if rec.get("run_id") == run_id:
+                rec.update(patch)
+                _save_registry_unlocked(reg)
+                return rec
     return None
 
 
