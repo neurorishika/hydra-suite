@@ -224,6 +224,52 @@ def test_training_worker_is_base_worker(qapp):
     assert issubclass(_TrainingWorker, BaseWorker)
 
 
+def test_resume_builds_shared_role_entry(qapp, tmp_path, monkeypatch):
+    from hydra_suite.detectkit.gui.dialogs import training_dialog as td
+    from hydra_suite.detectkit.jobs.training import RoleTrainingEntry
+
+    run_dir = tmp_path / "runs" / "previous"
+    weights_dir = run_dir / "weights"
+    weights_dir.mkdir(parents=True)
+    (weights_dir / "last.pt").write_bytes(b"checkpoint")
+
+    dialog = td.TrainingDialog(_make_proj(tmp_path))
+    dialog._last_training_results = [
+        {
+            "role": "obb_direct",
+            "_run_dir": str(run_dir),
+            "derived_dataset_dir": str(tmp_path / "derived"),
+        }
+    ]
+    monkeypatch.setattr(dialog, "_get_orchestrator", lambda: object())
+    captured = {}
+
+    class _Signal:
+        def connect(self, *_args, **_kwargs):
+            pass
+
+    class _Worker:
+        def __init__(self, _orchestrator, entries):
+            captured["entries"] = entries
+            self.log_signal = _Signal()
+            self.role_started = _Signal()
+            self.role_finished = _Signal()
+            self.progress_signal = _Signal()
+            self.done_signal = _Signal()
+            self.finished = _Signal()
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(td, "_TrainingWorker", _Worker)
+
+    dialog._resume_training()
+
+    entry = captured["entries"][0]
+    assert isinstance(entry, RoleTrainingEntry)
+    assert entry.spec.derived_dataset_dir == str(tmp_path / "derived")
+
+
 def test_dataset_preparation_worker_is_base_worker(qapp):
     from hydra_suite.detectkit.gui.dialogs.training_dialog import (
         _DatasetPreparationWorker,
