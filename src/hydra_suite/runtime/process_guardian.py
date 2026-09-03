@@ -545,7 +545,7 @@ def _signal_fallback_boundary(
             return False
     direct_ok = True
     for identity in identities:
-        if group_signalled and identity.pid in group_members:
+        if group_signalled and (_identity_process_group(identity) == process_group_id):
             continue
         if not _signal_identity(identity, signum):
             direct_ok = False

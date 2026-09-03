@@ -693,6 +693,33 @@ def test_guardian_never_signals_reused_group_without_live_owned_member(monkeypat
     assert direct == [(42, signal.SIGKILL)]
 
 
+def test_guardian_directly_signals_identity_that_escapes_after_group_proof(monkeypatch):
+    escaped = guardian_module.GuardedIdentity(42, 1.0)
+    observed_groups = iter((123, 999))
+    group_signals = []
+    direct_signals = []
+    monkeypatch.setattr(
+        guardian_module,
+        "_identity_process_group",
+        lambda _identity: next(observed_groups),
+    )
+    monkeypatch.setattr(
+        guardian_module.os,
+        "killpg",
+        lambda group, signum: group_signals.append((group, signum)),
+    )
+
+    def record_signal(identity, signum):
+        direct_signals.append((identity.pid, signum))
+        return True
+
+    monkeypatch.setattr(guardian_module, "_signal_identity", record_signal)
+
+    assert guardian_module._signal_fallback_boundary((escaped,), 123, signal.SIGKILL)
+    assert group_signals == [(123, signal.SIGKILL)]
+    assert direct_signals == [(42, signal.SIGKILL)]
+
+
 def test_guardian_baselines_inaccessible_unrelated_process_before_gate(monkeypatch):
     token = "owned-token"
 
