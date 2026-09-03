@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -74,6 +75,78 @@ def test_plan_rejects_non_detectkit_roles_and_invalid_split(tmp_path):
     path = tmp_path / "bad-role.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(TrainingPlanError, match="not a DetectKit training role"):
+        load_training_plan(path)
+
+
+def test_plan_rejects_string_booleans_and_boolean_numbers(tmp_path):
+    import pytest
+
+    from hydra_suite.detectkit.config.training import (
+        TrainingPlanError,
+        load_training_plan,
+    )
+
+    payload = _plan_payload(tmp_path)
+    payload["dataset"]["deduplicate"] = "false"
+    path = tmp_path / "string-bool.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(TrainingPlanError, match="dataset.deduplicate.*boolean"):
+        load_training_plan(path)
+
+    payload = _plan_payload(tmp_path)
+    payload["training"]["epochs"] = True
+    path = tmp_path / "bool-number.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(TrainingPlanError, match="training.epochs.*integer"):
+        load_training_plan(path)
+
+
+def test_plan_rejects_bad_nested_boolean_types(tmp_path):
+    import pytest
+
+    from hydra_suite.detectkit.config.training import (
+        TrainingPlanError,
+        load_training_plan,
+    )
+
+    payload = _plan_payload(tmp_path)
+    payload["dataset"]["slicing"]["enabled"] = "false"
+    path = tmp_path / "bad-slicing.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(TrainingPlanError, match="dataset.slicing.enabled.*boolean"):
+        load_training_plan(path)
+
+    payload = _plan_payload(tmp_path)
+    payload["publish"]["auto_import"] = "false"
+    path = tmp_path / "bad-publish.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(TrainingPlanError, match="publish.auto_import.*boolean"):
+        load_training_plan(path)
+
+
+def test_plan_rejects_nonfinite_numbers_and_empty_sam3_prompt(tmp_path):
+    import pytest
+
+    from hydra_suite.detectkit.config.training import (
+        TrainingPlanError,
+        load_training_plan,
+    )
+
+    payload = _plan_payload(tmp_path)
+    payload["training"]["lr0"] = float("nan")
+    path = tmp_path / "nan.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(TrainingPlanError, match="training.lr0.*finite"):
+        load_training_plan(path)
+
+    payload = _plan_payload(tmp_path)
+    payload["roles"] = [{"role": "semantic_sam3", "imgsz": 1008}]
+    payload["sam3"] = {"prompt": "   ", "label_quality_acknowledged": True}
+    path = tmp_path / "empty-prompt.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(
+        TrainingPlanError, match="SAM3 training requires a non-empty prompt"
+    ):
         load_training_plan(path)
 
     payload = _plan_payload(tmp_path)
@@ -263,6 +336,66 @@ def test_resume_rewrites_single_role_spec(tmp_path):
         _apply_resume(entries * 2, "last.pt", tmp_path)
 
 
+def test_cli_rejects_invalid_resume_before_dataset_preparation(tmp_path, monkeypatch):
+    from hydra_suite.detectkit import cli
+
+    payload = _plan_payload(tmp_path)
+    config_path = tmp_path / "training.json"
+    config_path.write_text(json.dumps(payload), encoding="utf-8")
+    called = False
+
+    def prepare(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("dataset preparation should not run")
+
+    monkeypatch.setattr(cli, "prepare_role_datasets", prepare)
+
+    assert cli.main(["--config", str(config_path), "--resume", "missing.pt"]) == 2
+    assert called is False
+    assert not (tmp_path / "workspace").exists()
+
+
+def test_repeated_cancel_signal_only_requests_cooperative_shutdown(monkeypatch):
+    from hydra_suite.detectkit import cli
+
+    installed = {}
+    monkeypatch.setattr(cli.signal, "getsignal", lambda _signum: object())
+    monkeypatch.setattr(
+        cli.signal,
+        "signal",
+        lambda signum, handler: installed.update({signum: handler}),
+    )
+    event = threading.Event()
+
+    cli._install_cancel_handlers(event)
+    handler = installed[cli.signal.SIGTERM]
+    handler(cli.signal.SIGTERM, None)
+    handler(cli.signal.SIGTERM, None)
+
+    assert event.is_set()
+
+
+def test_workspace_session_is_unique_and_refuses_concurrent_use(tmp_path):
+    import pytest
+
+    from hydra_suite.detectkit.cli import _workspace_session
+    from hydra_suite.detectkit.config.training import TrainingPlanError
+
+    workspace = tmp_path / "workspace"
+    with _workspace_session(workspace) as first:
+        with pytest.raises(TrainingPlanError, match="already in use"):
+            with _workspace_session(workspace):
+                pass
+
+    with _workspace_session(workspace) as second:
+        pass
+
+    assert first != second
+    assert first.parent == workspace / "sessions"
+    assert second.parent == workspace / "sessions"
+
+
 def test_cli_writes_durable_success_summary(tmp_path, monkeypatch):
     from hydra_suite.detectkit import cli
     from hydra_suite.detectkit.jobs.training import DatasetPreparationResult
@@ -301,8 +434,10 @@ def test_cli_writes_durable_success_summary(tmp_path, monkeypatch):
     )
 
     assert cli.main(["--config", str(config_path)]) == 0
+    session_dirs = list((tmp_path / "workspace/sessions").iterdir())
+    assert len(session_dirs) == 1
     summary = json.loads(
-        (tmp_path / "workspace/training_result.json").read_text(encoding="utf-8")
+        (session_dirs[0] / "training_result.json").read_text(encoding="utf-8")
     )
     assert summary["success"] is True
     assert summary["results"][0]["artifact_path"] == "/tmp/best.pt"

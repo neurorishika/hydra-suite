@@ -42,6 +42,7 @@ from hydra_suite.widgets.workers import BaseWorker
 from ...jobs.training import DatasetPreparationCancelled as _DatasetPreparationCancelled
 from ...jobs.training import DatasetPreparationRequest as _DatasetPreparationRequest
 from ...jobs.training import DatasetPreparationResult as _DatasetPreparationResult
+from ...jobs.training import RoleTrainingEntry
 from ...jobs.training import prepare_role_datasets as _prepare_role_datasets
 from ...jobs.training import run_role_entries
 from ..models import SliceTrainingSettings
@@ -2674,7 +2675,8 @@ QTabBar::tab:selected {
         spec = TrainingRunSpec(
             role=role,
             source_datasets=[],
-            derived_dataset_dir=resume_result.get("_run_dir", ""),
+            derived_dataset_dir=resume_result.get("derived_dataset_dir")
+            or resume_result.get("_run_dir", ""),
             base_model=str(last_pt),
             hyperparams=TrainingHyperParams(
                 epochs=int(self.spin_epochs.value()),
@@ -2688,11 +2690,14 @@ QTabBar::tab:selected {
         )
 
         class_names = self._class_names()
-        entry = {
-            "role": role,
-            "spec": spec,
-            "publish_meta": {"class_names": class_names, "resumed_from": str(last_pt)},
-        }
+        entry = RoleTrainingEntry(
+            role=role,
+            spec=spec,
+            publish_metadata={
+                "class_names": class_names,
+                "resumed_from": str(last_pt),
+            },
+        )
 
         orchestrator = self._get_orchestrator()
         if orchestrator is None:

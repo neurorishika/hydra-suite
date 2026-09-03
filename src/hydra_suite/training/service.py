@@ -527,6 +527,7 @@ class TrainingOrchestrator:
             should_cancel=should_cancel,
         )
         result["run_id"] = run_id
+        result["derived_dataset_dir"] = spec.derived_dataset_dir
         artifact_paths = _result_artifact_paths(result)
 
         if not result.get("success", False):

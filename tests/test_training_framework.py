@@ -552,6 +552,38 @@ def test_registry_and_publish_lineage(tmp_path: Path, monkeypatch):
     assert model_reg["entries"][key]["trained_from_run_id"] == run_id
 
 
+def test_registry_preserves_concurrent_run_creations(tmp_path: Path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+
+    import hydra_suite.training.registry as reg
+
+    monkeypatch.setattr(reg, "_project_root", lambda: tmp_path)
+    dataset_dir = tmp_path / "dataset"
+    dataset_dir.mkdir()
+    spec = TrainingRunSpec(
+        role=TrainingRole.OBB_DIRECT,
+        source_datasets=[SourceDataset(path=str(dataset_dir))],
+        derived_dataset_dir=str(dataset_dir),
+        base_model="yolo26s-obb.pt",
+        hyperparams=TrainingHyperParams(),
+        device="cpu",
+    )
+
+    def create(index: int) -> None:
+        reg.create_run_record(
+            spec,
+            run_id=f"run-{index}",
+            run_dir=tmp_path / "runs" / f"run-{index}",
+            dataset_fp=f"fp-{index}",
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(create, range(24)))
+
+    run_ids = {record["run_id"] for record in reg.load_registry()["runs"]}
+    assert run_ids == {f"run-{index}" for index in range(24)}
+
+
 def test_orchestrator_auto_publish_multihead_classifier_writes_bundle_manifest(
     tmp_path: Path,
     monkeypatch,

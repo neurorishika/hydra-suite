@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import subprocess
+import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -33,6 +37,67 @@ def test_stream_ultralytics_output_parses_multiple_epoch_formats() -> None:
     assert result is None
     assert seen == [(2, 5), (3, 5), (4, 5)]
     assert logs[:3] == ["Epoch 2/5", "Epoch 3 of 5", " 4/5 1.23G loss=0.42"]
+
+
+def test_stream_cancels_process_that_has_no_output() -> None:
+    from hydra_suite.training.runner import _stream_ultralytics_output
+
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(2)"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        start_new_session=True,
+    )
+    canceled = threading.Event()
+    timer = threading.Timer(0.1, canceled.set)
+    started = time.monotonic()
+    timer.start()
+    try:
+        result = _stream_ultralytics_output(
+            proc,
+            log_cb=None,
+            progress_cb=None,
+            should_cancel=canceled.is_set,
+            command=["silent-trainer"],
+        )
+    finally:
+        timer.cancel()
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+
+    assert time.monotonic() - started < 1.0
+    assert result is not None
+    assert result["canceled"] is True
+
+
+def test_cancel_kills_surviving_owned_process_group(monkeypatch) -> None:
+    import hydra_suite.training.runner as runner
+
+    class _Proc:
+        pid = 12345
+        _hydra_owns_process_group = True
+
+        @staticmethod
+        def wait(timeout):
+            return 0
+
+    signals = []
+    monkeypatch.setattr(
+        runner.os, "killpg", lambda pid, signum: signals.append((pid, signum))
+    )
+    monkeypatch.setattr(
+        runner, "_wait_for_process_group_exit", lambda _pid, _timeout: False
+    )
+
+    result = runner._cancel_subprocess(_Proc(), ["trainer"])
+
+    assert signals == [
+        (12345, runner.signal.SIGTERM),
+        (12345, runner.signal.SIGKILL),
+    ]
+    assert result["canceled"] is True
 
 
 def test_classkit_training_worker_uses_negative_pct_for_log_messages(
