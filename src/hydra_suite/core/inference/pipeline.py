@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import queue
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Iterator
 
@@ -589,11 +590,35 @@ class Pipeline:
         # so the producer can run at most ``queue_bound`` windows ahead.
         handoff_q: queue.Queue = queue.Queue(maxsize=max(1, int(self.queue_bound)))
         stop = threading.Event()
+        consumer_done = threading.Event()
         producer_error: list[BaseException] = []
         # Frames read so far (written by producer, read for progress). Guarded by
         # being the producer's sole responsibility; the consumer only reads it
         # after the producer has put the corresponding window on the queue.
         read_counter = {"n": 0}
+
+        def cancellable_put(item) -> bool:
+            """Put without ever pinning the producer behind a dead consumer."""
+            while not stop.is_set() and not consumer_done.is_set():
+                try:
+                    handoff_q.put(item, timeout=0.05)
+                    return True
+                except queue.Full:
+                    continue
+            return False
+
+        def publish_sentinel() -> None:
+            # A producer-requested stop still needs to wake a live consumer.
+            # A failed/departed consumer does not: consumer_done cancels this
+            # otherwise potentially blocking final put.
+            while not consumer_done.is_set():
+                try:
+                    handoff_q.put(None, timeout=0.05)
+                    return
+                except queue.Full:
+                    if stop.is_set():
+                        # The supervisor drains while joining after an error.
+                        continue
 
         def producer() -> None:
             try:
@@ -605,12 +630,13 @@ class Pipeline:
                     read_counter["n"] += len(window)
                     # Carry the running read count so the consumer can emit
                     # progress with the same cadence as the sync path.
-                    handoff_q.put((window, raw_list, read_counter["n"]))
+                    if not cancellable_put((window, raw_list, read_counter["n"])):
+                        break
             except BaseException as exc:  # noqa: BLE001,B036 supervisor
                 producer_error.append(exc)
                 stop.set()
             finally:
-                handoff_q.put(None)  # sentinel (always, even on error)
+                publish_sentinel()
 
         producer_thread = threading.Thread(
             # A new thread starts with a fresh context, so an unbound producer
@@ -626,6 +652,7 @@ class Pipeline:
             while True:
                 item = handoff_q.get()
                 if item is None:  # producer finished or errored
+                    consumer_done.set()
                     break
                 window, raw_list, read_n = item
                 result.frames_processed += len(window)
@@ -643,12 +670,21 @@ class Pipeline:
                     )
         except BaseException as exc:  # noqa: BLE001,B036 supervisor
             consumer_error = exc
+            consumer_done.set()
         finally:
             # Supervisor teardown: stop the producer at the next window boundary,
             # drain the queue so a blocked producer ``put`` unblocks, then join.
             stop.set()
-            self._drain_queue(handoff_q)
-            producer_thread.join(timeout=30.0)
+            deadline = time.monotonic() + 2.0
+            while producer_thread.is_alive() and time.monotonic() < deadline:
+                self._drain_queue(handoff_q)
+                producer_thread.join(timeout=0.05)
+            if producer_thread.is_alive():
+                teardown_error = RuntimeError(
+                    "pipeline OBB producer did not terminate within 2 seconds"
+                )
+            else:
+                teardown_error = None
             # Flush + close the (async) cache writer so no write is left pending,
             # regardless of whether we are unwinding an error or finishing clean.
             # ``cache_writer`` is only ``None`` for Pipeline.for_test() shims used
@@ -658,6 +694,13 @@ class Pipeline:
                     self.cache_writer.flush()
                 finally:
                     self.cache_writer.close()
+
+        if teardown_error is not None:
+            if consumer_error is not None:
+                raise teardown_error from consumer_error
+            if producer_error:
+                raise teardown_error from producer_error[0]
+            raise teardown_error
 
         if consumer_error is not None:
             raise consumer_error

@@ -1,3 +1,6 @@
+import threading
+import time
+
 import pytest
 
 from tests.helpers.tiny_clip import _CNN_LABEL, run_pipeline_to_caches
@@ -194,3 +197,35 @@ def test_depth2_producer_exception_propagates_without_hang():
     frames = [(i, object()) for i in range(6)]
     with pytest.raises(ValueError, match="decode/OBB failed"):
         pipe.run(iter(frames), range(0, 6))
+
+
+def test_depth2_consumer_error_unblocks_full_producer_queue_without_thread_leak():
+    """A consumer failure must cancel both data and sentinel queue puts."""
+    from hydra_suite.core.inference.pipeline import Pipeline
+
+    pipe = Pipeline.for_test(window_size=1, depth=2, stage=lambda window: [])
+    producer_has_filled_queue = threading.Event()
+
+    def fast_obb(window):
+        producer_has_filled_queue.set()
+        return [object()]
+
+    def fail_consumer(window, raw_list):
+        # Let the producer fill its one-slot queue and block on its next put.
+        assert producer_has_filled_queue.wait(1.0)
+        time.sleep(0.05)
+        raise RuntimeError("consumer failed with producer queue full")
+
+    pipe._run_detection_for_window = fast_obb  # type: ignore[assignment]
+    pipe._process_obb_results = fail_consumer  # type: ignore[assignment]
+
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match="consumer failed"):
+        pipe.run([(i, object()) for i in range(100)], range(100), range_total=100)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 2.0
+    assert not any(
+        thread.name == "pipeline-obb-producer" and thread.is_alive()
+        for thread in threading.enumerate()
+    )
