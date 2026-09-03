@@ -22,7 +22,14 @@ from ..result import (
     OBBResult,
 )
 from .base import CacheKey
-from .chunked import DEFAULT_CHUNK_FRAMES, ChunkedArrayStore, _atomic_npz_save
+from .chunked import (
+    DEFAULT_CHUNK_FRAMES,
+    MAX_LEGACY_BYTES,
+    ChunkedArrayStore,
+    _atomic_npz_save,
+    _load_npz_bounded,
+)
+from .set_manifest import resolve_cache_member
 
 
 class CacheHandle(ABC):
@@ -56,8 +63,8 @@ def _check_key(path: Path, key: CacheKey) -> bool:
     if not path.is_file():
         return False
     try:
-        with np.load(path, allow_pickle=False) as data:
-            return str(data["cache_key"][0]) == key.as_string()
+        data = _load_npz_bounded(path, max_bytes=MAX_LEGACY_BYTES)
+        return str(data["cache_key"][0]) == key.as_string()
     except Exception:
         return False
 
@@ -124,11 +131,16 @@ class _ChunkedHandleMixin:
         if int(self.chunk_size) < 1:
             raise ValueError("chunk_size must be >= 1")
         self.path = Path(self.path)
+        if self.read_only:
+            self.path, resolved_generation = resolve_cache_member(self.path)
+            if resolved_generation is not None:
+                self.generation_id = resolved_generation
         self._store = ChunkedArrayStore(
             self.path,
             self.key,
             self._kind,
             require_key=self.require_key,
+            generation_id=getattr(self, "generation_id", None),
         )
         self._write_started = False
         self._buffer_bytes = 0
@@ -185,11 +197,13 @@ class _ChunkedHandleMixin:
         if commit_generation:
             self._store.commit_generation()
 
-    def _prepare_frame_write(self, frame_idx: int) -> None:
+    def _prepare_frame_write(self, frame_idx: int) -> bool:
         if self.read_only:
             raise RuntimeError("cannot write through a read-only cache handle")
+        if self.write_mode == "resume" and self._store.contains_frame(int(frame_idx)):
+            return False
         if self._write_started:
-            return
+            return True
         if self.write_mode == "fresh" or (
             self.write_mode == "auto"
             and self._store.is_valid()
@@ -200,6 +214,7 @@ class _ChunkedHandleMixin:
             # cannot make the old manifest point at overwritten chunks.
             self._store.start_fresh()
         self._write_started = True
+        return True
 
     def is_valid(self) -> bool:
         return self._store.is_valid()
@@ -314,6 +329,7 @@ class DetectionCacheHandle(_ChunkedHandleMixin, CacheHandle):
     require_key: bool = True
     read_only: bool = False
     write_mode: str = "auto"
+    generation_id: str | None = None
     chunk_size: int = DEFAULT_CHUNK_FRAMES
     max_buffer_bytes: int = 16 * 1024 * 1024
     _buffer: list[OBBResult] = field(default_factory=list, repr=False)
@@ -349,7 +365,8 @@ class DetectionCacheHandle(_ChunkedHandleMixin, CacheHandle):
         ]
         if len(set(row_lengths)) != 1:
             raise ValueError("detection result arrays must have aligned lengths")
-        self._prepare_frame_write(frame_idx)
+        if not self._prepare_frame_write(frame_idx):
+            return
         self._append_buffered(frame_idx, result)
 
     def _flush(self) -> None:
@@ -443,6 +460,7 @@ class HeadTailCacheHandle(_ChunkedHandleMixin, CacheHandle):
     require_key: bool = True
     read_only: bool = False
     write_mode: str = "auto"
+    generation_id: str | None = None
     chunk_size: int = DEFAULT_CHUNK_FRAMES
     max_buffer_bytes: int = 16 * 1024 * 1024
     _buffer: list[tuple[int, np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = field(
@@ -476,7 +494,8 @@ class HeadTailCacheHandle(_ChunkedHandleMixin, CacheHandle):
         lengths = [len(value) for value in arrays[1:]]
         if len(set(lengths)) != 1:
             raise ValueError("headtail arrays must have aligned lengths")
-        self._prepare_frame_write(frame_idx)
+        if not self._prepare_frame_write(frame_idx):
+            return
         self._append_buffered(frame_idx, arrays)
 
     def _flush(self) -> None:
@@ -522,6 +541,7 @@ class CNNCacheHandle(_ChunkedHandleMixin, CacheHandle):
     require_key: bool = True
     read_only: bool = False
     write_mode: str = "auto"
+    generation_id: str | None = None
     chunk_size: int = DEFAULT_CHUNK_FRAMES
     max_buffer_bytes: int = 16 * 1024 * 1024
     _buffer: list[tuple[int, list[CNNDetectionPrediction]]] = field(
@@ -538,7 +558,8 @@ class CNNCacheHandle(_ChunkedHandleMixin, CacheHandle):
     def write_frame(
         self, frame_idx: int, *, predictions: list[CNNDetectionPrediction], **_
     ) -> None:
-        self._prepare_frame_write(frame_idx)
+        if not self._prepare_frame_write(frame_idx):
+            return
         self._append_buffered(frame_idx, (int(frame_idx), predictions))
 
     def _flush(self) -> None:
@@ -626,6 +647,7 @@ class PoseCacheHandle(_ChunkedHandleMixin, CacheHandle):
     require_key: bool = True
     read_only: bool = False
     write_mode: str = "auto"
+    generation_id: str | None = None
     chunk_size: int = DEFAULT_CHUNK_FRAMES
     max_buffer_bytes: int = 16 * 1024 * 1024
     _buffer: list[tuple[int, np.ndarray, np.ndarray, np.ndarray]] = field(
@@ -656,7 +678,8 @@ class PoseCacheHandle(_ChunkedHandleMixin, CacheHandle):
         )
         if len(arrays[1]) != len(arrays[2]) or len(arrays[1]) != len(arrays[3]):
             raise ValueError("pose arrays must have aligned lengths")
-        self._prepare_frame_write(frame_idx)
+        if not self._prepare_frame_write(frame_idx):
+            return
         self._append_buffered(frame_idx, arrays)
 
     def _flush(self) -> None:
@@ -700,6 +723,7 @@ class AprilTagCacheHandle(_ChunkedHandleMixin, CacheHandle):
     require_key: bool = True
     read_only: bool = False
     write_mode: str = "auto"
+    generation_id: str | None = None
     chunk_size: int = DEFAULT_CHUNK_FRAMES
     max_buffer_bytes: int = 16 * 1024 * 1024
     _buffer: list[tuple[int, AprilTagResult]] = field(default_factory=list, repr=False)
@@ -720,7 +744,8 @@ class AprilTagCacheHandle(_ChunkedHandleMixin, CacheHandle):
         ]
         if len(set(lengths)) != 1:
             raise ValueError("apriltag arrays must have aligned lengths")
-        self._prepare_frame_write(frame_idx)
+        if not self._prepare_frame_write(frame_idx):
+            return
         self._append_buffered(frame_idx, (int(frame_idx), result))
 
     def _flush(self) -> None:

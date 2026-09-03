@@ -68,7 +68,9 @@ def test_detection_round_trip_across_chunks_and_explicit_empty(tmp_path):
     writer.close()
 
     with np.load(path, allow_pickle=False) as manifest:
-        assert int(manifest["chunked_format_version"][0]) == 1
+        assert (
+            int(manifest["chunked_format_version"][0]) == chunked.CHUNK_FORMAT_VERSION
+        )
     assert len(list((tmp_path / "detection.npz.chunks").rglob("chunk-*.npz"))) == 3
 
     reader = DetectionCacheHandle(path, _key())
@@ -149,9 +151,9 @@ def test_random_indexed_read_opens_only_requested_payload_chunks(tmp_path, monke
     assert reader.read_frame(0).frame_idx == 0
     assert reader.read_frame(1).frame_idx == 1  # same chunk, no reopen
     assert reader.read_frame(5).frame_idx == 5
-    assert [item.name for item in opened] == [
-        "chunk-00000000.npz",
-        "chunk-00000002.npz",
+    assert [item.name.split("-", 2)[:2] for item in opened] == [
+        ["chunk", "00000000"],
+        ["chunk", "00000002"],
     ]
 
 
@@ -236,16 +238,15 @@ def test_failed_chunk_rename_leaves_no_manifest_or_complete_chunk(
     tmp_path, monkeypatch
 ):
     path = tmp_path / "detection.npz"
-    real_replace = chunked.os.replace
-
-    def fail_chunk_replace(source, destination):
-        if str(destination).endswith("chunk-00000000.npz"):
-            raise OSError("simulated crash before chunk rename")
-        return real_replace(source, destination)
-
-    monkeypatch.setattr(chunked.os, "replace", fail_chunk_replace)
+    monkeypatch.setattr(
+        chunked,
+        "_exclusive_npz_save",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            OSError("simulated crash before chunk publish")
+        ),
+    )
     writer = DetectionCacheHandle(path, _key(), chunk_size=1)
-    with pytest.raises(OSError, match="chunk rename"):
+    with pytest.raises(OSError, match="chunk publish"):
         writer.write_frame(0, result=_obb(0, 1))
     assert not path.exists()
     assert not list(tmp_path.rglob("chunk-*.npz"))
@@ -486,18 +487,28 @@ def test_contains_frame_uses_index_without_expanding_coverage(tmp_path):
 
 def test_iter_arrays_emits_only_winning_rows_from_overlapping_chunks(tmp_path):
     store = chunked.ChunkedArrayStore(tmp_path / "detection.npz", _key(), "detection")
-    store.append_chunk(
-        [0], {"frame_indices": np.asarray([0]), "marker": np.asarray([0])}
-    )
-    store.append_chunk(
-        [2], {"frame_indices": np.asarray([2]), "marker": np.asarray([2])}
-    )
-    store.append_chunk(
-        [1, 2],
-        {"frame_indices": np.asarray([1, 2]), "marker": np.asarray([11, 12])},
-    )
 
-    rows = [int(v) for arrays in store.iter_chunk_arrays() for v in arrays["marker"]]
+    def payload(frames, markers):
+        count = len(frames)
+        return {
+            "frame_indices": np.asarray(frames),
+            "centroids": np.column_stack([markers, markers]).astype(np.float32),
+            "angles": np.zeros(count, np.float32),
+            "sizes": np.ones(count, np.float32),
+            "shapes": np.ones((count, 2), np.float32),
+            "confidences": np.ones(count, np.float32),
+            "corners": np.zeros((count, 4, 2), np.float32),
+            "detection_ids": np.asarray(markers, np.int64),
+            "class_ids": np.zeros(count, np.int64),
+        }
+
+    store.append_chunk([0], payload([0], [0]))
+    store.append_chunk([2], payload([2], [2]))
+    store.append_chunk([1, 2], payload([1, 2], [11, 12]))
+
+    rows = [
+        int(v) for arrays in store.iter_chunk_arrays() for v in arrays["detection_ids"]
+    ]
     assert rows == [0, 11, 12]
 
 
@@ -514,6 +525,81 @@ def test_same_size_chunk_corruption_fails_deep_reuse_validation(tmp_path):
     reader = DetectionCacheHandle(path, _key(), read_only=True)
     assert reader.is_valid() is True
     assert reader.is_reusable() is False
+
+
+def test_deep_validation_rejects_wrong_kind_specific_shape_with_valid_checksum(
+    tmp_path,
+):
+    path = tmp_path / "detection.npz"
+    writer = DetectionCacheHandle(path, _key(), chunk_size=1)
+    writer.write_frame(0, result=_obb(0, 1))
+    writer.close()
+    payload_path = next((tmp_path / "detection.npz.chunks").rglob("chunk-*.npz"))
+    with np.load(payload_path, allow_pickle=False) as raw:
+        arrays = {name: raw[name] for name in raw.files}
+    arrays["corners"] = np.zeros((1, 3, 2), np.float32)
+    chunked._atomic_npz_save(payload_path, **arrays)
+    with np.load(path, allow_pickle=False) as raw:
+        manifest = {name: raw[name] for name in raw.files}
+    entries = json.loads(str(manifest["chunks_json"][0]))
+    entries[0]["byte_size"] = payload_path.stat().st_size
+    entries[0]["sha256"] = chunked._sha256_file(payload_path)
+    manifest["chunks_json"] = np.asarray([json.dumps(entries)])
+    chunked._atomic_npz_save(path, **manifest)
+
+    reader = DetectionCacheHandle(path, _key(), read_only=True)
+    assert reader.is_valid()
+    assert not reader.is_reusable()
+    assert reader.read_frame(0) is None
+
+
+def test_zip_bomb_metadata_is_rejected_before_np_load(tmp_path, monkeypatch):
+    path = tmp_path / "detection.npz"
+    # This member declares >1 MiB but compresses to a few KiB, crossing the
+    # expansion-ratio guard before NumPy can allocate it.
+    np.savez_compressed(path, cache_key=np.zeros(3_000_000, np.uint8))
+
+    def forbidden_load(*args, **kwargs):
+        raise AssertionError("np.load must not run for rejected ZIP metadata")
+
+    monkeypatch.setattr(chunked.np, "load", forbidden_load)
+    assert DetectionCacheHandle(path, _key()).is_valid() is False
+
+
+def test_manifest_rejects_duplicate_or_mispositioned_chunk_names(tmp_path):
+    path = tmp_path / "detection.npz"
+    writer = DetectionCacheHandle(path, _key(), chunk_size=1)
+    writer.write_frame(0, result=_obb(0, 1))
+    writer.write_frame(1, result=_obb(1, 1))
+    writer.close()
+    with np.load(path, allow_pickle=False) as raw:
+        manifest = {name: raw[name] for name in raw.files}
+    entries = json.loads(str(manifest["chunks_json"][0]))
+    entries[1]["name"] = entries[0]["name"]
+    manifest["chunks_json"] = np.asarray([json.dumps(entries)])
+    chunked._atomic_npz_save(path, **manifest)
+
+    assert DetectionCacheHandle(path, _key()).is_valid() is False
+
+
+def test_chunk_name_collision_retries_without_overwriting(tmp_path, monkeypatch):
+    real_save = chunked._exclusive_npz_save
+    attempts: list[Path] = []
+
+    def collide_once(path, **arrays):
+        attempts.append(Path(path))
+        if len(attempts) == 1:
+            raise FileExistsError("simulated concurrent orphan")
+        real_save(path, **arrays)
+
+    monkeypatch.setattr(chunked, "_exclusive_npz_save", collide_once)
+    writer = DetectionCacheHandle(tmp_path / "detection.npz", _key(), chunk_size=1)
+    writer.write_frame(0, result=_obb(0, 1))
+    writer.close()
+
+    assert len(attempts) == 2
+    assert attempts[0].name != attempts[1].name
+    assert DetectionCacheHandle(tmp_path / "detection.npz", _key()).is_reusable()
 
 
 def test_legacy_manifest_remains_visible_until_full_replacement_close(tmp_path):
@@ -576,7 +662,7 @@ def test_resume_mode_keeps_generation_when_first_frame_is_already_covered(tmp_pa
 
     reader = DetectionCacheHandle(path, _key())
     assert reader._store._session_id == session
-    assert reader.read_frame(0).num_detections == 2
+    assert reader.read_frame(0).num_detections == 1
     assert reader.read_frame(1).num_detections == 1
 
 

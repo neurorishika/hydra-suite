@@ -9,6 +9,7 @@ import numpy as np
 from ..result import OBBResult
 from .base import CacheKey
 from .keys import bgsub_detection_cache_key, detection_cache_key, with_video_signature
+from .set_manifest import load_cache_set, resolve_cache_member
 from .store import DetectionCacheHandle
 
 # Placeholder key for callers that cannot offer a real OBBConfig-derived key
@@ -155,12 +156,19 @@ def get_or_compute_raw(
         }
 
     key, require_key = _cache_key_for(runner)
+    active_set = load_cache_set(Path(cache_dir))
+    if active_set is not None and len(active_set.members) > 1:
+        raise RuntimeError(
+            "cannot append detection frames independently to a coordinated cache set"
+        )
+    write_path, generation_id = resolve_cache_member(cache_path)
     write_handle = DetectionCacheHandle(
-        path=cache_path,
+        path=write_path,
         key=key,
         require_key=require_key,
         read_only=False,
         write_mode="fresh" if replacement_required else "resume",
+        generation_id=generation_id,
     )
     for idx, result in zip(missing_indices, raw_results):
         write_handle.write_frame(idx, result=result)

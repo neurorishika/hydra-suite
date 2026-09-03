@@ -13,6 +13,8 @@ import json
 import os
 import re
 import tempfile
+import uuid
+import zipfile
 from bisect import bisect_right
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,12 +24,25 @@ import numpy as np
 
 from .base import CacheKey
 
-CHUNK_FORMAT_VERSION = 1
+CHUNK_FORMAT_VERSION = 2
 DEFAULT_CHUNK_FRAMES = 64
 _FORMAT_FIELD = "chunked_format_version"
 MAX_CHUNK_FRAMES = 1_000_000
 MAX_FRAME_INDEX = np.iinfo(np.int32).max
 _SAFE_COMPONENT = re.compile(r"^[A-Za-z0-9_-]+$")
+_SAFE_ARRAY_NAME = re.compile(r"^[A-Za-z0-9_]+\.npy$")
+MAX_MANIFEST_BYTES = 8 * 1024 * 1024
+MAX_CHUNK_BYTES = 256 * 1024 * 1024
+MAX_LEGACY_BYTES = 256 * 1024 * 1024
+MAX_NPZ_MEMBERS = 64
+MAX_STRING_ITEM_BYTES = 1024 * 1024
+_CHUNK_META_FIELDS = {
+    "_cache_kind",
+    "_cache_key",
+    "_session_id",
+    "_generation_id",
+    "_chunk_position",
+}
 
 
 @dataclass(frozen=True)
@@ -44,7 +59,7 @@ class ChunkEntry:
         name = raw["name"]
         if (
             not isinstance(name, str)
-            or re.fullmatch(r"chunk-[0-9]{8}\.npz", name) is None
+            or re.fullmatch(r"chunk-[0-9]{8}-[0-9a-f]{32}\.npz", name) is None
         ):
             raise ValueError("unsafe chunk name")
         byte_size = raw["byte_size"]
@@ -129,6 +144,109 @@ def _safe_component(value: str) -> bool:
     return value not in {".", ".."} and _SAFE_COMPONENT.fullmatch(value) is not None
 
 
+def _inspect_npz(
+    path: Path,
+    *,
+    max_uncompressed_bytes: int,
+    max_members: int = MAX_NPZ_MEMBERS,
+) -> dict[str, tuple[tuple[int, ...], np.dtype]]:
+    """Validate ZIP and NPY metadata before NumPy may allocate payload arrays."""
+    metadata: dict[str, tuple[tuple[int, ...], np.dtype]] = {}
+    try:
+        with zipfile.ZipFile(path) as archive:
+            infos = archive.infolist()
+            if not infos or len(infos) > max_members:
+                raise ValueError("unsafe NPZ member count")
+            total = 0
+            names: set[str] = set()
+            for info in infos:
+                if (
+                    info.is_dir()
+                    or _SAFE_ARRAY_NAME.fullmatch(info.filename) is None
+                    or info.filename in names
+                ):
+                    raise ValueError("unsafe or duplicate NPZ member name")
+                names.add(info.filename)
+                if info.file_size < 0 or info.compress_size < 0:
+                    raise ValueError("invalid NPZ member size")
+                total += info.file_size
+                if (
+                    info.file_size > max_uncompressed_bytes
+                    or total > max_uncompressed_bytes
+                ):
+                    raise ValueError("NPZ declared size exceeds safety limit")
+                # Production uses ZIP_STORED. Permit ordinary compressed legacy
+                # files, but reject extreme expansion before reading a header.
+                if (
+                    info.file_size > 1024 * 1024
+                    and info.file_size > max(1, info.compress_size) * 200
+                ):
+                    raise ValueError("NPZ compression ratio exceeds safety limit")
+                with archive.open(info) as member:
+                    version = np.lib.format.read_magic(member)
+                    if version == (1, 0):
+                        shape, _fortran, dtype = np.lib.format.read_array_header_1_0(
+                            member
+                        )
+                    elif version in {(2, 0), (3, 0)}:
+                        shape, _fortran, dtype = np.lib.format.read_array_header_2_0(
+                            member
+                        )
+                    else:
+                        raise ValueError("unsupported NPY format version")
+                    dtype = np.dtype(dtype)
+                    if (
+                        dtype.hasobject
+                        or len(shape) > 4
+                        or any(
+                            not isinstance(dim, int) or dim < 0 or dim > MAX_FRAME_INDEX
+                            for dim in shape
+                        )
+                    ):
+                        raise ValueError("unsafe NPY dtype or shape")
+                    if dtype.kind in "US" and dtype.itemsize > MAX_STRING_ITEM_BYTES:
+                        raise ValueError("NPY string item exceeds safety limit")
+                    count = 1
+                    for dim in shape:
+                        count *= dim
+                        if count * max(1, dtype.itemsize) > max_uncompressed_bytes:
+                            raise ValueError("NPY declared array exceeds safety limit")
+                    # A truncated member cannot honestly contain its declared
+                    # header plus payload. ZIP metadata is checked before load.
+                    if member.tell() + count * dtype.itemsize != info.file_size:
+                        raise ValueError("NPY member size does not match its header")
+                    metadata[info.filename[:-4]] = (tuple(shape), dtype)
+    except (
+        zipfile.BadZipFile,
+        EOFError,
+        NotImplementedError,
+        OSError,
+        OverflowError,
+        RuntimeError,
+        ValueError,
+    ) as exc:
+        raise ValueError(f"unsafe NPZ archive: {path}") from exc
+    return metadata
+
+
+def _load_npz_bounded(path: Path, *, max_bytes: int) -> dict[str, np.ndarray]:
+    _inspect_npz(path, max_uncompressed_bytes=max_bytes)
+    with np.load(path, allow_pickle=False) as raw:
+        return {name: raw[name] for name in raw.files}
+
+
+def _json_no_duplicate_keys(encoded: str):
+    def build(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate JSON object key")
+            result[key] = value
+        return result
+
+    return json.loads(encoded, object_pairs_hook=build)
+
+
 def _scalar(raw: np.lib.npyio.NpzFile, name: str):
     value = raw[name]
     if value.ndim != 1 or value.size != 1:
@@ -180,6 +298,24 @@ def _atomic_npz_save(path: Path, **arrays: np.ndarray) -> None:
         raise
 
 
+def _exclusive_npz_save(path: Path, **arrays: np.ndarray) -> None:
+    """Create an immutable payload without any overwrite race."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            np.savez(stream, **arrays)
+            stream.flush()
+            os.fsync(stream.fileno())
+        _fsync_directory(path.parent)
+    except BaseException:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+
+
 def _fsync_directory(path: Path) -> None:
     try:
         descriptor = os.open(path, os.O_RDONLY)
@@ -211,11 +347,17 @@ class ChunkedArrayStore:
         kind: str,
         *,
         require_key: bool = True,
+        generation_id: str | None = None,
     ) -> None:
         self.path = Path(path)
         self.key = key
         self.kind = str(kind)
         self.require_key = bool(require_key)
+        if generation_id is not None and not _safe_component(generation_id):
+            raise ValueError("unsafe cache generation id")
+        self._expected_generation_id = generation_id
+        self._generation_id = generation_id or uuid.uuid4().hex
+        self._stored_key = key.as_string()
         self._loaded = False
         self._legacy = False
         self._valid = False
@@ -234,6 +376,11 @@ class ChunkedArrayStore:
     def is_legacy(self) -> bool:
         self._load_manifest()
         return self._legacy
+
+    @property
+    def generation_id(self) -> str:
+        self._load_manifest()
+        return self._generation_id
 
     @property
     def chunk_directory(self) -> Path:
@@ -269,46 +416,87 @@ class ChunkedArrayStore:
         if not self.path.is_file():
             return
         try:
-            with np.load(self.path, allow_pickle=False) as raw:
-                files = set(raw.files)
-                if _FORMAT_FIELD not in files:
-                    self._legacy = True
-                    if self.require_key:
-                        stored_key = str(_scalar(raw, "cache_key"))
-                        self._valid = stored_key == self.key.as_string()
-                    else:
-                        self._valid = True
+            archive_metadata = _inspect_npz(
+                self.path, max_uncompressed_bytes=MAX_LEGACY_BYTES
+            )
+            raw = _load_npz_bounded(
+                self.path,
+                max_bytes=(
+                    MAX_MANIFEST_BYTES
+                    if _FORMAT_FIELD in archive_metadata
+                    else MAX_LEGACY_BYTES
+                ),
+            )
+            files = set(raw)
+            if _FORMAT_FIELD not in files:
+                self._legacy = True
+                if (
+                    raw.get("cache_key") is None
+                    or raw["cache_key"].dtype.kind not in "US"
+                ):
                     return
-                if files != {
-                    _FORMAT_FIELD,
+                stored_key = str(_scalar(raw, "cache_key"))
+                self._stored_key = stored_key
+                if self.require_key:
+                    self._valid = stored_key == self.key.as_string()
+                else:
+                    self._valid = True
+                return
+            if files != {
+                _FORMAT_FIELD,
+                "cache_kind",
+                "cache_key",
+                "session_id",
+                "generation_id",
+                "chunks_json",
+            }:
+                return
+            if raw[_FORMAT_FIELD].dtype.kind not in "iu":
+                return
+            if any(
+                raw[name].dtype.kind not in "US"
+                for name in (
                     "cache_kind",
                     "cache_key",
                     "session_id",
+                    "generation_id",
                     "chunks_json",
-                }:
-                    return
-                if raw[_FORMAT_FIELD].dtype.kind not in "iu":
-                    return
-                if any(
-                    raw[name].dtype.kind not in "US"
-                    for name in ("cache_kind", "cache_key", "session_id", "chunks_json")
-                ):
-                    return
-                version = int(_scalar(raw, _FORMAT_FIELD))
-                stored_kind = str(_scalar(raw, "cache_kind"))
-                stored_key = str(_scalar(raw, "cache_key"))
-                session_id = str(_scalar(raw, "session_id"))
-                entries_raw = json.loads(str(_scalar(raw, "chunks_json")))
+                )
+            ):
+                return
+            version = int(_scalar(raw, _FORMAT_FIELD))
+            stored_kind = str(_scalar(raw, "cache_kind"))
+            stored_key = str(_scalar(raw, "cache_key"))
+            session_id = str(_scalar(raw, "session_id"))
+            generation_id = str(_scalar(raw, "generation_id"))
+            entries_raw = _json_no_duplicate_keys(str(_scalar(raw, "chunks_json")))
             if version != CHUNK_FORMAT_VERSION or stored_kind != self.kind:
                 return
             if self.require_key and stored_key != self.key.as_string():
                 return
-            if not isinstance(entries_raw, list) or len(entries_raw) > MAX_CHUNK_FRAMES:
+            if (
+                not _safe_component(generation_id)
+                or (
+                    self._expected_generation_id is not None
+                    and generation_id != self._expected_generation_id
+                )
+                or not isinstance(entries_raw, list)
+                or len(entries_raw) > MAX_CHUNK_FRAMES
+            ):
                 return
             entries = [ChunkEntry.from_dict(item) for item in entries_raw]
             if not _safe_component(session_id):
                 return
+            if len({entry.name for entry in entries}) != len(entries):
+                return
+            if any(
+                not entry.name.startswith(f"chunk-{position:08d}-")
+                for position, entry in enumerate(entries)
+            ):
+                return
             self._session_id = session_id
+            self._generation_id = generation_id
+            self._stored_key = stored_key
             self._entries = entries
             # Missing or truncated referenced chunks invalidate the cache. A
             # renamed-but-unpublished orphan is absent from entries and ignored.
@@ -404,12 +592,30 @@ class ChunkedArrayStore:
             )
         self._prepare_for_write()
         sequence = len(self._entries)
-        name = f"chunk-{sequence:08d}.npz"
-        chunk_path = self.chunk_directory / name
+        while True:
+            name = f"chunk-{sequence:08d}-{uuid.uuid4().hex}.npz"
+            chunk_path = self.chunk_directory / name
+            if not chunk_path.exists():
+                break
         payload = dict(arrays)
         payload["written_frames"] = np.asarray(frames, dtype=np.int64)
-        _atomic_npz_save(chunk_path, **payload)
-        self._validate_staged_chunk(chunk_path, frames, set(payload))
+        payload.update(
+            {
+                "_cache_kind": np.asarray([self.kind]),
+                "_cache_key": np.asarray([self.key.as_string()]),
+                "_session_id": np.asarray([self._session_id]),
+                "_generation_id": np.asarray([self._generation_id]),
+                "_chunk_position": np.asarray([sequence], dtype=np.int64),
+            }
+        )
+        while True:
+            try:
+                _exclusive_npz_save(chunk_path, **payload)
+                break
+            except FileExistsError:
+                name = f"chunk-{sequence:08d}-{uuid.uuid4().hex}.npz"
+                chunk_path = self.chunk_directory / name
+        self._validate_staged_chunk(chunk_path, frames, set(payload), sequence)
         entry = ChunkEntry(
             name=name,
             ranges=_compress_frames(frames),
@@ -427,17 +633,230 @@ class ChunkedArrayStore:
         self._cached_arrays = None
         self._deep_validated = False
 
-    @staticmethod
     def _validate_staged_chunk(
-        chunk_path: Path, frames: tuple[int, ...], expected_fields: set[str]
+        self,
+        chunk_path: Path,
+        frames: tuple[int, ...],
+        expected_fields: set[str],
+        sequence: int,
     ) -> None:
         """Read back one bounded chunk before the manifest can reference it."""
-        with np.load(chunk_path, allow_pickle=False) as raw:
-            if set(raw.files) != expected_fields:
-                raise ValueError(f"cache chunk fields are incomplete: {chunk_path}")
-            stored = tuple(int(frame) for frame in raw["written_frames"])
-            if stored != frames:
-                raise ValueError(f"cache chunk frame index mismatch: {chunk_path}")
+        raw = _load_npz_bounded(chunk_path, max_bytes=MAX_CHUNK_BYTES)
+        if set(raw) != expected_fields:
+            raise ValueError(f"cache chunk fields are incomplete: {chunk_path}")
+        stored = tuple(int(frame) for frame in raw["written_frames"])
+        if stored != frames:
+            raise ValueError(f"cache chunk frame index mismatch: {chunk_path}")
+        self._validate_chunk_arrays(raw, sequence)
+
+    @staticmethod
+    def _require_array(
+        arrays: dict[str, np.ndarray],
+        name: str,
+        *,
+        rank: int,
+        dtype_kinds: str,
+        trailing: tuple[int, ...] = (),
+    ) -> np.ndarray:
+        value = arrays.get(name)
+        if not isinstance(value, np.ndarray):
+            raise ValueError(f"cache field {name!r} is missing")
+        if value.ndim != rank or value.dtype.kind not in dtype_kinds:
+            raise ValueError(f"cache field {name!r} has an invalid dtype or rank")
+        if trailing and value.shape[-len(trailing) :] != trailing:
+            raise ValueError(f"cache field {name!r} has an invalid shape")
+        return value
+
+    def _validate_chunk_arrays(
+        self, arrays: dict[str, np.ndarray], sequence: int
+    ) -> None:
+        """Validate kind-specific schema and row alignment before reuse."""
+        expected_payloads = {
+            "detection": {
+                "frame_indices",
+                "centroids",
+                "angles",
+                "sizes",
+                "shapes",
+                "confidences",
+                "corners",
+                "detection_ids",
+                "class_ids",
+            },
+            "headtail": {
+                "frame_indices",
+                "det_indices",
+                "heading_hints",
+                "heading_confidences",
+                "directed_mask",
+            },
+            "cnn": {
+                "frame_indices",
+                "det_indices",
+                "factor_names_json",
+                "class_names_json",
+                "class_counts",
+                "probabilities",
+            },
+            "pose": {"frame_indices", "det_indices", "keypoints", "valid_mask"},
+            "apriltag": {
+                "frame_indices",
+                "tag_ids",
+                "det_indices",
+                "centers",
+                "corners",
+            },
+        }
+        required = expected_payloads.get(self.kind)
+        if required is None or set(arrays) != required | _CHUNK_META_FIELDS | {
+            "written_frames"
+        }:
+            raise ValueError(f"invalid {self.kind} cache fields")
+        written = self._require_array(
+            arrays, "written_frames", rank=1, dtype_kinds="iu"
+        )
+        frame_indices = self._require_array(
+            arrays, "frame_indices", rank=1, dtype_kinds="iu"
+        )
+        if len(written) > MAX_CHUNK_FRAMES or (
+            len(written) > 1 and np.any(np.diff(written) <= 0)
+        ):
+            raise ValueError("written_frames must be bounded and strictly increasing")
+        if len(frame_indices) > MAX_CHUNK_FRAMES * 100_000 or (
+            len(frame_indices) > 1 and np.any(np.diff(frame_indices) < 0)
+        ):
+            raise ValueError("frame_indices must be bounded and ordered")
+        if len(frame_indices) and not np.all(np.isin(frame_indices, written)):
+            raise ValueError("row frames must belong to written_frames")
+
+        for name, expected in (
+            ("_cache_kind", self.kind),
+            ("_cache_key", self._stored_key),
+            ("_session_id", self._session_id),
+            ("_generation_id", self._generation_id),
+        ):
+            value = self._require_array(arrays, name, rank=1, dtype_kinds="US")
+            if value.size != 1 or str(value[0]) != expected:
+                raise ValueError(f"cache chunk identity mismatch for {name}")
+        position = self._require_array(
+            arrays, "_chunk_position", rank=1, dtype_kinds="iu"
+        )
+        if position.size != 1 or int(position[0]) != sequence:
+            raise ValueError("cache chunk position mismatch")
+
+        rows = len(frame_indices)
+        one_dimensional = {
+            "angles",
+            "sizes",
+            "confidences",
+            "detection_ids",
+            "class_ids",
+            "det_indices",
+            "heading_hints",
+            "heading_confidences",
+            "directed_mask",
+            "valid_mask",
+            "tag_ids",
+        }
+        integer_fields = {
+            "detection_ids",
+            "class_ids",
+            "det_indices",
+            "directed_mask",
+            "valid_mask",
+            "tag_ids",
+        }
+        for name in required & one_dimensional:
+            value = self._require_array(
+                arrays,
+                name,
+                rank=1,
+                dtype_kinds="iub" if name in integer_fields else "f",
+            )
+            if len(value) != rows:
+                raise ValueError(f"cache field {name!r} is not row-aligned")
+
+        shape_fields = {
+            "centroids": (2,),
+            "shapes": (2,),
+            "corners": (4, 2),
+            "centers": (2,),
+        }
+        for name, trailing in shape_fields.items():
+            if name in required:
+                value = self._require_array(
+                    arrays,
+                    name,
+                    rank=len(trailing) + 1,
+                    dtype_kinds="f",
+                    trailing=trailing,
+                )
+                if len(value) != rows:
+                    raise ValueError(f"cache field {name!r} is not row-aligned")
+
+        if self.kind == "pose":
+            keypoints = self._require_array(
+                arrays, "keypoints", rank=3, dtype_kinds="f", trailing=(3,)
+            )
+            if len(keypoints) != rows:
+                raise ValueError("pose keypoints are not row-aligned")
+        elif self.kind == "cnn":
+            probabilities = self._require_array(
+                arrays, "probabilities", rank=3, dtype_kinds="f"
+            )
+            counts = self._require_array(
+                arrays, "class_counts", rank=1, dtype_kinds="iu"
+            )
+            if len(probabilities) != rows or probabilities.shape[1] != len(counts):
+                raise ValueError("CNN probabilities are not row/factor aligned")
+            if np.any(counts < 0) or (
+                len(counts) and int(np.max(counts)) > probabilities.shape[2]
+            ):
+                raise ValueError("CNN class counts exceed probability shape")
+            decoded: list[object] = []
+            for name in ("factor_names_json", "class_names_json"):
+                encoded = self._require_array(arrays, name, rank=1, dtype_kinds="US")
+                if encoded.size != 1 or len(str(encoded[0])) > MAX_STRING_ITEM_BYTES:
+                    raise ValueError(f"invalid CNN metadata field {name!r}")
+                decoded.append(json.loads(str(encoded[0])))
+            factor_names, class_names = decoded
+            if (
+                not isinstance(factor_names, list)
+                or not isinstance(class_names, list)
+                or len(factor_names) != len(counts)
+                or len(class_names) != len(counts)
+                or any(not isinstance(value, str) for value in factor_names)
+                or any(not isinstance(values, list) for values in class_names)
+                or any(
+                    len(values) != int(count)
+                    for values, count in zip(class_names, counts)
+                )
+            ):
+                raise ValueError("CNN JSON metadata is inconsistent")
+
+    def _validate_legacy_arrays(self, arrays: dict[str, np.ndarray]) -> None:
+        """Apply the same structural contract to monolithic legacy caches."""
+        if "cache_key" not in arrays:
+            raise ValueError("legacy cache is missing cache_key")
+        # Legacy layouts have no chunk identity. Validate through a synthetic
+        # chunk while preserving detection's historically optional class_ids.
+        payload = {name: value for name, value in arrays.items() if name != "cache_key"}
+        if "written_frames" not in payload:
+            payload["written_frames"] = np.unique(payload.get("frame_indices", []))
+        if self.kind == "detection" and "class_ids" not in payload:
+            payload["class_ids"] = np.zeros(
+                len(payload.get("frame_indices", [])), np.int64
+            )
+        payload.update(
+            {
+                "_cache_kind": np.asarray([self.kind]),
+                "_cache_key": np.asarray([self.key.as_string()]),
+                "_session_id": np.asarray([self._session_id]),
+                "_generation_id": np.asarray([self._generation_id]),
+                "_chunk_position": np.asarray([0], np.int64),
+            }
+        )
+        self._validate_chunk_arrays(payload, 0)
 
     def ensure_manifest(self) -> None:
         """Create a valid empty chunked manifest without migrating on read."""
@@ -468,7 +887,7 @@ class ChunkedArrayStore:
         preserve_published_cache = self.path.is_file()
         self._legacy = False
         self._valid = False
-        self._session_id = self._session_prefix() + "-00000000"
+        self._session_id = self._session_prefix() + "-" + uuid.uuid4().hex
         self._entries = []
         self._range_index = []
         self._range_starts = []
@@ -481,13 +900,9 @@ class ChunkedArrayStore:
         self._load_manifest()
         preserve_published_cache = self.path.is_file()
         prefix = self._session_prefix()
-        generation = 0
-        if self._session_id.startswith(prefix + "-"):
-            try:
-                generation = int(self._session_id.rsplit("-", 1)[1]) + 1
-            except ValueError:
-                generation = 0
-        self._session_id = f"{prefix}-{generation:08d}"
+        self._session_id = f"{prefix}-{uuid.uuid4().hex}"
+        if self._expected_generation_id is None:
+            self._generation_id = uuid.uuid4().hex
         self._entries = []
         self._range_index = []
         self._range_starts = []
@@ -516,6 +931,7 @@ class ChunkedArrayStore:
             cache_kind=np.asarray([self.kind]),
             cache_key=np.asarray([self.key.as_string()]),
             session_id=np.asarray([self._session_id]),
+            generation_id=np.asarray([self._generation_id]),
             chunks_json=np.asarray([encoded]),
         )
 
@@ -541,11 +957,12 @@ class ChunkedArrayStore:
             if _sha256_file(chunk_path) != entry.sha256:
                 self._valid = False
                 return None
-            with np.load(chunk_path, allow_pickle=False) as raw:
-                arrays = {name: raw[name] for name in raw.files}
+            arrays = _load_npz_bounded(chunk_path, max_bytes=MAX_CHUNK_BYTES)
             if not _frames_match_ranges(arrays["written_frames"], entry.ranges):
                 self._valid = False
                 return None
+            sequence = self._entries.index(entry)
+            self._validate_chunk_arrays(arrays, sequence)
             return arrays
         except (OSError, ValueError, KeyError):
             self._valid = False
@@ -597,7 +1014,7 @@ class ChunkedArrayStore:
                 "factor_names_json",
                 "class_names_json",
                 "class_counts",
-            }
+            } | _CHUNK_META_FIELDS
             for name, value in arrays.items():
                 if name == "written_frames":
                     filtered[name] = winning_frames
@@ -617,8 +1034,9 @@ class ChunkedArrayStore:
         if not self._valid or not self._legacy:
             return None
         try:
-            with np.load(self.path, allow_pickle=False) as raw:
-                return {name: raw[name] for name in raw.files}
+            arrays = _load_npz_bounded(self.path, max_bytes=MAX_LEGACY_BYTES)
+            self._validate_legacy_arrays(arrays)
+            return arrays
         except (OSError, ValueError):
             self._valid = False
             return None
