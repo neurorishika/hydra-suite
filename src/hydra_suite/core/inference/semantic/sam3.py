@@ -16,6 +16,7 @@ import torch
 
 from hydra_suite.core.inference.masks import mask_to_contour
 from hydra_suite.core.inference.torch_device import resolve_torch_device
+from hydra_suite.utils.sam3_constants import PREDICTOR_IMGSZ
 
 from .base import SemanticInstance
 from .checkpoints import DEFAULT_VARIANT, ensure_checkpoint, probe_availability
@@ -33,13 +34,10 @@ DEFAULT_CONFIDENCE_FLOOR = 0.05
 # 0.7; pinned here so an upstream default change cannot silently alter what
 # reaches our cross-tile merge (which applies its own, separate merge_iou).
 PREDICTOR_NMS_IOU = 0.7
-# Pinned for the same reason as PREDICTOR_NMS_IOU. ultralytics' default cfg
-# imgsz is 640 -- rounded up to 644 for the stride-14 backbone -- but
-# build_sam3.py builds the SAM3 architecture at img_size=1008 and
-# BasePredictor calls model.set_imgsz(self.imgsz). Inheriting the default
-# therefore runs a 1008-native model at 644 with no warning. It also makes
-# train/serve scale disagree for any finetuned checkpoint.
-PREDICTOR_IMGSZ = 1008
+# PREDICTOR_IMGSZ is imported above and re-exported from this module so every
+# existing importer keeps working. It LIVES in utils.sam3_constants -- a
+# dependency-free leaf -- because the training sidecar needs it in an env
+# where importing hydra_suite.core is impossible. See that module.
 
 
 def predictor_overrides(

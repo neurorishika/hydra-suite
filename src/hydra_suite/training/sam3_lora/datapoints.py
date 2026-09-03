@@ -16,7 +16,7 @@ from typing import Any
 
 import numpy as np
 
-from hydra_suite.core.inference.semantic.sam3 import PREDICTOR_IMGSZ
+from hydra_suite.utils.sam3_constants import PREDICTOR_IMGSZ
 
 # ONE definition of SAM3's input size, shared with the predictor overrides.
 RES = PREDICTOR_IMGSZ

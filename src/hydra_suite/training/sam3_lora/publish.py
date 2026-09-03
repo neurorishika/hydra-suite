@@ -17,7 +17,7 @@ from typing import Any
 
 import torch
 
-from hydra_suite.core.inference.semantic.sam3 import PREDICTOR_IMGSZ
+from hydra_suite.utils.sam3_constants import PREDICTOR_IMGSZ
 
 from .lora import adapter_touched_keys, lora_config_from_params, merge_adapters
 
