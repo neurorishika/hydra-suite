@@ -119,6 +119,52 @@ def test_cache_set_promotion_keeps_old_generation_after_each_handle_crash(
     assert recovered.detection.read_frame(0).num_detections == 1
 
 
+@pytest.mark.parametrize("crash_after_handle", [0, 1])
+def test_cache_set_resume_keeps_old_revision_after_each_handle_crash(
+    tmp_path, monkeypatch, crash_after_handle
+):
+    from hydra_suite.core.inference.runner import _open_caches
+
+    cfg = _cfg()
+    cfg.headtail = HeadTailConfig(model_path="/ht.pt")
+    old = _open_caches(cfg, tmp_path, write_mode="fresh")
+    old.detection.write_frame(0, result=_make_obb(1, 0))
+    old.headtail.write_frame(
+        0,
+        det_indices=np.asarray([0], np.int32),
+        heading_hints=np.asarray([0.5], np.float32),
+        heading_confidences=np.asarray([0.9], np.float32),
+        directed_mask=np.asarray([1], np.uint8),
+    )
+    old.close()
+    old_revision = old.revision_id
+
+    resumed = _open_caches(cfg, tmp_path, write_mode="resume")
+    resumed.detection.write_frame(1, result=_make_obb(1, 1))
+    resumed.headtail.write_frame(
+        1,
+        det_indices=np.asarray([0], np.int32),
+        heading_hints=np.asarray([0.6], np.float32),
+        heading_confidences=np.asarray([0.8], np.float32),
+        directed_mask=np.asarray([1], np.uint8),
+    )
+    victim = resumed.all_handles()[crash_after_handle]
+    real_close = victim.close
+
+    def close_then_crash(*args, **kwargs):
+        real_close(*args, **kwargs)
+        raise RuntimeError("simulated resume crash")
+
+    monkeypatch.setattr(victim, "close", close_then_crash)
+    with pytest.raises(RuntimeError, match="resume crash"):
+        resumed.close()
+
+    recovered = _open_caches(cfg, tmp_path, read_only=True)
+    assert recovered.revision_id == old_revision
+    assert recovered.detection.read_frame(0).num_detections == 1
+    assert recovered.detection.read_frame(1) is None
+
+
 def test_coordinated_resume_skips_covered_frames_without_duplicate_chunks(tmp_path):
     from hydra_suite.core.inference.runner import _open_caches
 

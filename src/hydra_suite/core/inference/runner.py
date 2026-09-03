@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import shutil
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -69,6 +71,23 @@ from .stages.pose import PoseModel, run_pose
 logger = logging.getLogger(__name__)
 
 
+def _clone_cache_revision(source: Path, destination: Path) -> None:
+    """Hard-link one revision using O(directory-depth) Python memory."""
+    destination.mkdir(parents=True, exist_ok=False)
+    with os.scandir(source) as entries:
+        for entry in entries:
+            source_entry = Path(entry.path)
+            destination_entry = destination / entry.name
+            if entry.is_symlink():
+                raise ValueError("cache revision must not contain symbolic links")
+            if entry.is_dir(follow_symlinks=False):
+                _clone_cache_revision(source_entry, destination_entry)
+            elif entry.is_file(follow_symlinks=False):
+                os.link(source_entry, destination_entry)
+            else:
+                raise ValueError("cache revision contains an unsupported entry")
+
+
 @dataclass
 class _AllModels:
     # Exactly one of obb/bgsub is set, mirroring InferenceConfig.detection_source
@@ -90,8 +109,11 @@ class _CacheSet:
     apriltag: AprilTagCacheHandle | None = None
     cache_dir: Path | None = None
     generation_id: str | None = None
+    revision_id: str | None = None
     member_names: list[str] = field(default_factory=list)
     pending_promotion: bool = False
+    discard_if_unchanged: bool = False
+    staging_root: Path | None = None
     set_manifest_valid: bool = True
 
     def all_handles(self) -> list[CacheHandle]:
@@ -114,7 +136,18 @@ class _CacheSet:
             handle.close(commit_generation=complete)
         if not complete or not self.pending_promotion:
             return
-        if self.cache_dir is None or self.generation_id is None:
+        if self.discard_if_unchanged and not any(
+            getattr(handle, "_write_started", False) for handle in handles
+        ):
+            if self.staging_root is not None:
+                shutil.rmtree(self.staging_root)
+            self.pending_promotion = False
+            return
+        if (
+            self.cache_dir is None
+            or self.generation_id is None
+            or self.revision_id is None
+        ):
             raise RuntimeError(
                 "cache set cannot be promoted without generation metadata"
             )
@@ -126,7 +159,10 @@ class _CacheSet:
         if any(handle._store.generation_id != self.generation_id for handle in handles):
             raise RuntimeError("refusing to promote mixed cache generations")
         manifest = publish_cache_set(
-            self.cache_dir, self.generation_id, self.member_names
+            self.cache_dir,
+            self.generation_id,
+            self.revision_id,
+            self.member_names,
         )
         publish_compatibility_links(self.cache_dir, manifest)
         self.pending_promotion = False
@@ -370,24 +406,36 @@ def _open_caches(
     active_matches = active is not None and set(active.members) == set(member_names)
     if read_only:
         generation_id = active.generation_id if active_matches else None
+        revision_id = active.revision_id if active_matches else None
         root = (
-            cache_dir / ".cache-generations" / generation_id
-            if generation_id is not None
+            (cache_dir / next(iter(active.members.values()))).parent
+            if active_matches
             else cache_dir
         )
         pending_promotion = False
+        discard_if_unchanged = False
         set_manifest_valid = (
             active_matches or not (cache_dir / CACHE_SET_FILENAME).exists()
         )
     elif write_mode == "resume" and active_matches:
         generation_id = active.generation_id
-        root = cache_dir / ".cache-generations" / generation_id
-        pending_promotion = False
+        revision_id = uuid.uuid4().hex
+        source_root = (cache_dir / next(iter(active.members.values()))).parent
+        root = cache_dir / ".cache-generations" / generation_id / revision_id
+        try:
+            _clone_cache_revision(source_root, root)
+        except BaseException:
+            shutil.rmtree(root, ignore_errors=True)
+            raise
+        pending_promotion = True
+        discard_if_unchanged = True
         set_manifest_valid = True
     else:
         generation_id = uuid.uuid4().hex
-        root = cache_dir / ".cache-generations" / generation_id
+        revision_id = uuid.uuid4().hex
+        root = cache_dir / ".cache-generations" / generation_id / revision_id
         pending_promotion = True
+        discard_if_unchanged = False
         set_manifest_valid = True
 
     caches = _CacheSet(
@@ -444,8 +492,11 @@ def _open_caches(
         ),
         cache_dir=cache_dir,
         generation_id=generation_id,
+        revision_id=revision_id,
         member_names=member_names,
         pending_promotion=pending_promotion,
+        discard_if_unchanged=discard_if_unchanged,
+        staging_root=root if pending_promotion else None,
         set_manifest_valid=set_manifest_valid,
     )
     return caches

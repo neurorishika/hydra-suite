@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 CACHE_SET_FILENAME = "cache_set.json"
-CACHE_SET_VERSION = 1
+CACHE_SET_VERSION = 2
 MAX_CACHE_SET_BYTES = 64 * 1024
 _GENERATION = re.compile(r"^[0-9a-f]{32}$")
 _MEMBER = re.compile(r"^(detection|headtail|pose|apriltag|cnn_[A-Za-z0-9_-]+)\.npz$")
@@ -20,20 +20,23 @@ _MEMBER = re.compile(r"^(detection|headtail|pose|apriltag|cnn_[A-Za-z0-9_-]+)\.n
 @dataclass(frozen=True)
 class CacheSetManifest:
     generation_id: str
+    revision_id: str
     members: dict[str, str]
 
 
-def _validate(generation_id: object, members: object) -> CacheSetManifest | None:
-    if (
-        not isinstance(generation_id, str)
-        or _GENERATION.fullmatch(generation_id) is None
+def _validate(
+    generation_id: object, revision_id: object, members: object
+) -> CacheSetManifest | None:
+    if any(
+        not isinstance(value, str) or _GENERATION.fullmatch(value) is None
+        for value in (generation_id, revision_id)
     ):
         return None
     if not isinstance(members, dict) or not members or len(members) > 64:
         return None
     clean: dict[str, str] = {}
     for name, relative in members.items():
-        expected = f".cache-generations/{generation_id}/{name}"
+        expected = f".cache-generations/{generation_id}/{revision_id}/{name}"
         if (
             not isinstance(name, str)
             or _MEMBER.fullmatch(name) is None
@@ -42,7 +45,9 @@ def _validate(generation_id: object, members: object) -> CacheSetManifest | None
         ):
             return None
         clean[name] = relative
-    return CacheSetManifest(generation_id=generation_id, members=clean)
+    return CacheSetManifest(
+        generation_id=generation_id, revision_id=revision_id, members=clean
+    )
 
 
 def load_cache_set(cache_dir: Path) -> CacheSetManifest | None:
@@ -68,23 +73,28 @@ def load_cache_set(cache_dir: Path) -> CacheSetManifest | None:
         if not isinstance(raw, dict) or set(raw) != {
             "version",
             "generation_id",
+            "revision_id",
             "members",
         }:
             return None
         if raw["version"] != CACHE_SET_VERSION:
             return None
-        return _validate(raw["generation_id"], raw["members"])
+        return _validate(raw["generation_id"], raw["revision_id"], raw["members"])
     except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
         return None
 
 
 def publish_cache_set(
-    cache_dir: Path, generation_id: str, member_names: list[str]
+    cache_dir: Path,
+    generation_id: str,
+    revision_id: str,
+    member_names: list[str],
 ) -> CacheSetManifest:
     members = {
-        name: f".cache-generations/{generation_id}/{name}" for name in member_names
+        name: f".cache-generations/{generation_id}/{revision_id}/{name}"
+        for name in member_names
     }
-    manifest = _validate(generation_id, members)
+    manifest = _validate(generation_id, revision_id, members)
     if manifest is None:
         raise ValueError("invalid cache-set generation or member names")
     cache_dir = Path(cache_dir)
@@ -94,6 +104,7 @@ def publish_cache_set(
         {
             "version": CACHE_SET_VERSION,
             "generation_id": manifest.generation_id,
+            "revision_id": manifest.revision_id,
             "members": manifest.members,
         },
         sort_keys=True,

@@ -22,7 +22,10 @@ payload chunks in a sibling directory. Chunks are created with exclusive-create
 semantics, flushed, and only then referenced by an atomically replaced member
 manifest. One bounded `cache_set.json` indirection selects a shared generation
 of detection, head/tail, CNN, pose, and AprilTag members with a single atomic
-rename. Canonical `*.npz` compatibility links remain available for existing
+rename. Resumes hard-link the selected immutable chunks into a staging revision
+of the same run generation, append only missing frames there, and atomically
+select that revision after all members validate. An unchanged resume discards
+its staging revision. Canonical `*.npz` compatibility links remain available for existing
 artifact discovery, but cache-aware readers treat the set manifest as the
 commit point. Unreferenced generations and chunks from an interruption are
 never considered complete.
