@@ -479,6 +479,7 @@ class ChunkedArrayStore:
     def start_fresh(self) -> None:
         """Stage a new generation while leaving the published cache untouched."""
         self._load_manifest()
+        preserve_published_cache = self.path.is_file()
         prefix = self._session_prefix()
         generation = 0
         if self._session_id.startswith(prefix + "-"):
@@ -497,7 +498,7 @@ class ChunkedArrayStore:
         self._cached_arrays = None
         self._deep_validated = False
         self._fresh_staged = True
-        self._defer_manifest = True
+        self._defer_manifest = preserve_published_cache
 
     def _session_prefix(self) -> str:
         identity = f"{self.kind}\0{self.key.as_string()}".encode("utf-8")

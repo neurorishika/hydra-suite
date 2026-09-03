@@ -547,6 +547,21 @@ def test_legacy_manifest_remains_visible_until_full_replacement_close(tmp_path):
     assert after.covers_frame_range(0, 1)
 
 
+def test_aborted_replacement_close_does_not_promote_partial_generation(tmp_path):
+    path = tmp_path / "detection.npz"
+    first = DetectionCacheHandle(path, _key(), chunk_size=1)
+    first.write_frame(9, result=_obb(9, 1))
+    first.close()
+
+    replacement = DetectionCacheHandle(path, _key(), chunk_size=1, write_mode="fresh")
+    replacement.write_frame(0, result=_obb(0, 1))
+    replacement.close(commit_generation=False)
+
+    reader = DetectionCacheHandle(path, _key(), read_only=True)
+    assert reader.contains_frame(9)
+    assert not reader.contains_frame(0)
+
+
 def test_resume_mode_keeps_generation_when_first_frame_is_already_covered(tmp_path):
     path = tmp_path / "detection.npz"
     first = DetectionCacheHandle(path, _key(), chunk_size=1)
@@ -570,7 +585,7 @@ def test_handle_flushes_on_bytes_before_frame_count(tmp_path):
         tmp_path / "detection.npz",
         _key(),
         chunk_size=100,
-        max_buffer_bytes=700,
+        max_buffer_bytes=3000,
     )
     writer.write_frame(0, result=_obb(0, 2))
     writer.write_frame(1, result=_obb(1, 2))

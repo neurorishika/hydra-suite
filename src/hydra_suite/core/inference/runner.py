@@ -1434,13 +1434,17 @@ class InferenceRunner:
             pipeline = self._build_pipeline(
                 caches, roi_mask=self._frame_space_roi_mask(video_path)
             )
+            complete_pass = False
             try:
-                pipeline.run(
+                pass_result = pipeline.run(
                     frame_source,
                     range(start_frame, end_frame + 1),
                     progress_cb=progress_cb,
                     range_total=range_total,
                     should_stop=should_stop,
+                )
+                complete_pass = pass_result is None or (
+                    pass_result.frames_processed == range_total
                 )
             finally:
                 frame_source.close()
@@ -1452,7 +1456,7 @@ class InferenceRunner:
                 # inside it. CacheWriter.close raises before this point when
                 # its worker fails to stop by the deadline.
                 for h in caches.all_handles():
-                    h.close()
+                    h.close(commit_generation=complete_pass)
 
             # Identity Phase 3, Task 4 (batch seam): write the evidence sidecar
             # AFTER the raw caches above are flushed to disk -- and only on a

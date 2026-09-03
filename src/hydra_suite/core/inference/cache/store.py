@@ -7,6 +7,7 @@ monolithic NPZ caches remain readable through the same public handle classes.
 from __future__ import annotations
 
 import json
+import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -90,15 +91,20 @@ def _buffer_value_bytes(value: Any, seen: set[int] | None = None) -> int:
         return 0
     seen.add(identity)
     if isinstance(value, np.ndarray):
-        return int(value.nbytes)
+        return int(value.nbytes) + sys.getsizeof(value)
     if isinstance(value, dict):
-        return 64 + sum(_buffer_value_bytes(item, seen) for item in value.values())
+        return sys.getsizeof(value) + sum(
+            _buffer_value_bytes(key, seen) + _buffer_value_bytes(item, seen)
+            for key, item in value.items()
+        )
     if isinstance(value, (list, tuple)):
-        return 64 + sum(_buffer_value_bytes(item, seen) for item in value)
+        return sys.getsizeof(value) + sum(
+            _buffer_value_bytes(item, seen) for item in value
+        )
     fields = getattr(value, "__dict__", None)
     if fields is not None:
-        return 256 + _buffer_value_bytes(fields, seen)
-    return 64
+        return sys.getsizeof(value) + _buffer_value_bytes(fields, seen)
+    return sys.getsizeof(value)
 
 
 class _ChunkedHandleMixin:
@@ -170,13 +176,14 @@ class _ChunkedHandleMixin:
         self._buffer.clear()
         self._buffer_bytes = 0
 
-    def _finish_close(self) -> None:
+    def _finish_close(self, *, commit_generation: bool = True) -> None:
         if self.read_only:
             return
         self._flush()
         if not self.path.exists():
             self._store.ensure_manifest()
-        self._store.commit_generation()
+        if commit_generation:
+            self._store.commit_generation()
 
     def _prepare_frame_write(self, frame_idx: int) -> None:
         if self.read_only:
@@ -425,8 +432,8 @@ class DetectionCacheHandle(_ChunkedHandleMixin, CacheHandle):
             class_ids=class_ids,
         )
 
-    def close(self) -> None:
-        self._finish_close()
+    def close(self, *, commit_generation: bool = True) -> None:
+        self._finish_close(commit_generation=commit_generation)
 
 
 @dataclass
@@ -503,8 +510,8 @@ class HeadTailCacheHandle(_ChunkedHandleMixin, CacheHandle):
             arrays["directed_mask"][mask],
         )
 
-    def close(self) -> None:
-        self._finish_close()
+    def close(self, *, commit_generation: bool = True) -> None:
+        self._finish_close(commit_generation=commit_generation)
 
 
 @dataclass
@@ -608,8 +615,8 @@ class CNNCacheHandle(_ChunkedHandleMixin, CacheHandle):
             for row_idx, det_idx in enumerate(det_indices)
         ]
 
-    def close(self) -> None:
-        self._finish_close()
+    def close(self, *, commit_generation: bool = True) -> None:
+        self._finish_close(commit_generation=commit_generation)
 
 
 @dataclass
@@ -682,8 +689,8 @@ class PoseCacheHandle(_ChunkedHandleMixin, CacheHandle):
             arrays["valid_mask"][mask].astype(bool),
         )
 
-    def close(self) -> None:
-        self._finish_close()
+    def close(self, *, commit_generation: bool = True) -> None:
+        self._finish_close(commit_generation=commit_generation)
 
 
 @dataclass
@@ -759,5 +766,5 @@ class AprilTagCacheHandle(_ChunkedHandleMixin, CacheHandle):
             corners=arrays["corners"][mask],
         )
 
-    def close(self) -> None:
-        self._finish_close()
+    def close(self, *, commit_generation: bool = True) -> None:
+        self._finish_close(commit_generation=commit_generation)
