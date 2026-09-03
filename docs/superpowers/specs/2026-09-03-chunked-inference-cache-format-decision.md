@@ -17,12 +17,14 @@ existing NPZ caches readable without destructively migrating them.
 
 ### Immutable NPZ chunks plus an atomic manifest — selected
 
-Each logical cache keeps its existing canonical `*.npz` path, but new files at
-that path contain only a small manifest. Immutable payload chunks live in a
-sibling directory. A chunk is written to a temporary file, flushed, atomically
-renamed, and only then referenced by an atomically replaced manifest. The
-manifest records the cache key, cache kind, format version, covered frame IDs,
-chunk byte sizes, and checksums. Unreferenced chunks from an interruption are
+Each logical cache generation contains a small `*.npz` manifest and immutable
+payload chunks in a sibling directory. Chunks are created with exclusive-create
+semantics, flushed, and only then referenced by an atomically replaced member
+manifest. One bounded `cache_set.json` indirection selects a shared generation
+of detection, head/tail, CNN, pose, and AprilTag members with a single atomic
+rename. Canonical `*.npz` compatibility links remain available for existing
+artifact discovery, but cache-aware readers treat the set manifest as the
+commit point. Unreferenced generations and chunks from an interruption are
 never considered complete.
 
 Advantages:
@@ -30,7 +32,7 @@ Advantages:
 - NumPy is already required, so packaging gains no new dependency.
 - A read opens only the manifest and the chunk containing the requested frame.
 - Chunk size directly bounds write buffering and close-time allocation.
-- The canonical filename remains compatible with artifact discovery code.
+- Canonical filenames remain compatible with artifact discovery code.
 - Legacy monolithic NPZ files can be detected and read through the same handle.
 
 Tradeoffs are additional small files and lower compression/throughput than a
@@ -54,16 +56,17 @@ cross-run analytics store may justify Arrow; this cache does not.
 
 ## On-disk contract
 
-The canonical `*.npz` is an atomic manifest containing:
+Each generation's `*.npz` member is an atomic manifest containing:
 
 - chunked-format version and cache kind;
 - serialized `CacheKey`;
-- session identifier;
+- shared generation and member-session identifiers;
 - ordered chunk metadata, including compressed exact processed-frame ranges;
 - payload byte size and SHA-256 for each referenced immutable chunk.
 
 Payload chunks are ordinary, non-pickled NPZ files. Every chunk includes its
-exact processed-frame array even when all corresponding results are empty. Detection
+expected cache kind, key, generation, session, manifest position, and exact
+processed-frame array even when all corresponding results are empty. Detection
 IDs, class IDs, head/tail arrays, CNN factor vocabulary and probabilities, pose
 validity, and AprilTag arrays remain typed NumPy arrays.
 
@@ -74,10 +77,16 @@ and commit only those results. Cache-key mismatch, missing/truncated referenced
 chunks, and malformed metadata invalidate the cache rather than becoming empty
 results.
 
-A deliberate replacement uses a new session directory and keeps the prior
-canonical manifest visible until the complete pass closes successfully. Stops,
-exceptions, and stuck cache-writer teardown leave replacement chunks orphaned
-rather than promoting partial coverage over the last reusable generation.
+A deliberate replacement uses a new shared generation directory and keeps the
+prior cache-set manifest visible until every enabled member closes and passes
+deep validation with equal coverage. Stops, exceptions, per-member crashes, and
+stuck cache-writer teardown leave replacement generations unselected rather
+than promoting partial coverage over the last reusable generation.
+
+Before `np.load`, ZIP member names/counts, compressed and declared sizes,
+aggregate bytes, expansion ratios, and NPY headers are bounded. Reusable reads
+then enforce kind-specific fields, dtypes, ranks, shapes, row alignment, frame
+ordering, and per-frame identifier uniqueness.
 
 Legacy NPZ files remain read-only compatible. New writes use the chunked format;
 there is no automatic migration or deletion of a legacy cache.

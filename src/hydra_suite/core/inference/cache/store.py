@@ -89,6 +89,14 @@ def _concat(parts: list[np.ndarray], shape: tuple[int, ...], dtype) -> np.ndarra
     return np.concatenate(nonempty) if nonempty else np.zeros(shape, dtype=dtype)
 
 
+def _require_unique_increasing(name: str, values: np.ndarray) -> None:
+    array = np.asarray(values)
+    if array.ndim != 1 or (
+        len(array) > 1 and np.any(np.diff(array.astype(np.int64)) <= 0)
+    ):
+        raise ValueError(f"{name} must be one-dimensional, unique, and increasing")
+
+
 def _buffer_value_bytes(value: Any, seen: set[int] | None = None) -> int:
     """Estimate bytes retained by a handle without double-counting arrays."""
     if seen is None:
@@ -365,6 +373,25 @@ class DetectionCacheHandle(_ChunkedHandleMixin, CacheHandle):
         ]
         if len(set(row_lengths)) != 1:
             raise ValueError("detection result arrays must have aligned lengths")
+        expected_shapes = {
+            "centroids": (row_lengths[0], 2),
+            "angles": (row_lengths[0],),
+            "sizes": (row_lengths[0],),
+            "shapes": (row_lengths[0], 2),
+            "confidences": (row_lengths[0],),
+            "corners": (row_lengths[0], 4, 2),
+            "detection_ids": (row_lengths[0],),
+            "class_ids": (row_lengths[0],),
+        }
+        for name, shape in expected_shapes.items():
+            value = (
+                result.class_ids_or_zeros
+                if name == "class_ids"
+                else np.asarray(getattr(result, name))
+            )
+            if value.shape != shape:
+                raise ValueError(f"detection result {name} has invalid shape")
+        _require_unique_increasing("detection_ids", result.detection_ids)
         if not self._prepare_frame_write(frame_idx):
             return
         self._append_buffered(frame_idx, result)
@@ -420,10 +447,13 @@ class DetectionCacheHandle(_ChunkedHandleMixin, CacheHandle):
             "class_ids": np.int64,
         }
         payload = {
-            name: (
-                np.concatenate(parts)
-                if parts
-                else np.zeros(empty_shapes[name], dtype=dtypes[name])
+            name: np.asarray(
+                (
+                    np.concatenate(parts)
+                    if parts
+                    else np.zeros(empty_shapes[name], dtype=dtypes[name])
+                ),
+                dtype=dtypes[name],
             )
             for name, parts in arrays.items()
         }
@@ -492,8 +522,9 @@ class HeadTailCacheHandle(_ChunkedHandleMixin, CacheHandle):
             np.asarray(directed_mask, dtype=np.uint8),
         )
         lengths = [len(value) for value in arrays[1:]]
-        if len(set(lengths)) != 1:
+        if len(set(lengths)) != 1 or any(value.ndim != 1 for value in arrays[1:]):
             raise ValueError("headtail arrays must have aligned lengths")
+        _require_unique_increasing("headtail det_indices", arrays[1])
         if not self._prepare_frame_write(frame_idx):
             return
         self._append_buffered(frame_idx, arrays)
@@ -554,10 +585,33 @@ class CNNCacheHandle(_ChunkedHandleMixin, CacheHandle):
 
     def __post_init__(self) -> None:
         self._init_store()
+        self._factor_schema: list[tuple[str, tuple[str, ...]]] | None = None
 
     def write_frame(
         self, frame_idx: int, *, predictions: list[CNNDetectionPrediction], **_
     ) -> None:
+        det_indices = np.asarray([prediction.det_index for prediction in predictions])
+        _require_unique_increasing("CNN det_indices", det_indices)
+        expected = None
+        for prediction in predictions:
+            signature = [
+                (factor.factor_name, tuple(factor.class_names))
+                for factor in prediction.factors
+            ]
+            if expected is None:
+                expected = signature
+            elif signature != expected:
+                raise ValueError("CNN factor schemas must match within a frame")
+            if any(
+                np.asarray(factor.raw_probabilities).shape != (len(factor.class_names),)
+                for factor in prediction.factors
+            ):
+                raise ValueError("CNN probability rows must match class names")
+        if expected:
+            if self._factor_schema is None:
+                self._factor_schema = expected
+            elif expected != self._factor_schema:
+                raise ValueError("CNN factor schemas must match across frames")
         if not self._prepare_frame_write(frame_idx):
             return
         self._append_buffered(frame_idx, (int(frame_idx), predictions))
@@ -678,6 +732,11 @@ class PoseCacheHandle(_ChunkedHandleMixin, CacheHandle):
         )
         if len(arrays[1]) != len(arrays[2]) or len(arrays[1]) != len(arrays[3]):
             raise ValueError("pose arrays must have aligned lengths")
+        if arrays[1].ndim != 1 or arrays[2].ndim != 3 or arrays[2].shape[-1:] != (3,):
+            raise ValueError("pose arrays have invalid ranks or shapes")
+        if arrays[3].ndim != 1:
+            raise ValueError("pose valid_mask must be one-dimensional")
+        _require_unique_increasing("pose det_indices", arrays[1])
         if not self._prepare_frame_write(frame_idx):
             return
         self._append_buffered(frame_idx, arrays)
@@ -744,6 +803,14 @@ class AprilTagCacheHandle(_ChunkedHandleMixin, CacheHandle):
         ]
         if len(set(lengths)) != 1:
             raise ValueError("apriltag arrays must have aligned lengths")
+        if (
+            np.asarray(result.tag_ids).ndim != 1
+            or np.asarray(result.det_indices).ndim != 1
+            or np.asarray(result.centers).shape != (lengths[0], 2)
+            or np.asarray(result.corners).shape != (lengths[0], 4, 2)
+        ):
+            raise ValueError("apriltag arrays have invalid ranks or shapes")
+        _require_unique_increasing("apriltag det_indices", result.det_indices)
         if not self._prepare_frame_write(frame_idx):
             return
         self._append_buffered(frame_idx, (int(frame_idx), result))

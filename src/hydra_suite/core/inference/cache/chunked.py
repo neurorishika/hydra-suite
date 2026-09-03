@@ -400,10 +400,24 @@ class ChunkedArrayStore:
         if self._legacy:
             self._deep_validated = self.load_legacy() is not None
             return self._deep_validated
+        cnn_schema: tuple[str, str, tuple[int, ...]] | None = None
         for entry in self._entries:
             arrays = self._load_entry_arrays(entry)
             if arrays is None:
                 return False
+            if self.kind == "cnn":
+                current_schema = (
+                    str(arrays["factor_names_json"][0]),
+                    str(arrays["class_names_json"][0]),
+                    tuple(int(value) for value in arrays["class_counts"]),
+                )
+                if not current_schema[2]:
+                    pass
+                elif cnn_schema is None:
+                    cnn_schema = current_schema
+                elif cnn_schema != current_schema:
+                    self._valid = False
+                    return False
             self._cached_entry = entry
             self._cached_arrays = arrays
         self._deep_validated = True
@@ -670,7 +684,11 @@ class ChunkedArrayStore:
         return value
 
     def _validate_chunk_arrays(
-        self, arrays: dict[str, np.ndarray], sequence: int
+        self,
+        arrays: dict[str, np.ndarray],
+        sequence: int,
+        *,
+        allow_legacy_dtypes: bool = False,
     ) -> None:
         """Validate kind-specific schema and row alignment before reuse."""
         expected_payloads = {
@@ -724,12 +742,42 @@ class ChunkedArrayStore:
             len(written) > 1 and np.any(np.diff(written) <= 0)
         ):
             raise ValueError("written_frames must be bounded and strictly increasing")
+        if len(written) and (int(written[0]) < 0 or int(written[-1]) > MAX_FRAME_INDEX):
+            raise ValueError("written_frames are out of bounds")
         if len(frame_indices) > MAX_CHUNK_FRAMES * 100_000 or (
             len(frame_indices) > 1 and np.any(np.diff(frame_indices) < 0)
         ):
             raise ValueError("frame_indices must be bounded and ordered")
         if len(frame_indices) and not np.all(np.isin(frame_indices, written)):
             raise ValueError("row frames must belong to written_frames")
+
+        if not allow_legacy_dtypes:
+            exact_dtypes = {
+                "written_frames": np.dtype(np.int64),
+                "frame_indices": np.dtype(np.int64),
+                "centroids": np.dtype(np.float32),
+                "angles": np.dtype(np.float32),
+                "sizes": np.dtype(np.float32),
+                "shapes": np.dtype(np.float32),
+                "confidences": np.dtype(np.float32),
+                "corners": np.dtype(np.float32),
+                "detection_ids": np.dtype(np.int64),
+                "class_ids": np.dtype(np.int64),
+                "det_indices": np.dtype(np.int32),
+                "heading_hints": np.dtype(np.float32),
+                "heading_confidences": np.dtype(np.float32),
+                "directed_mask": np.dtype(np.uint8),
+                "class_counts": np.dtype(np.int32),
+                "probabilities": np.dtype(np.float32),
+                "keypoints": np.dtype(np.float32),
+                "valid_mask": np.dtype(np.uint8),
+                "tag_ids": np.dtype(np.int32),
+                "centers": np.dtype(np.float32),
+            }
+            for name in required | {"written_frames"}:
+                expected_dtype = exact_dtypes.get(name)
+                if expected_dtype is not None and arrays[name].dtype != expected_dtype:
+                    raise ValueError(f"cache field {name!r} has an invalid dtype")
 
         for name, expected in (
             ("_cache_kind", self.kind),
@@ -745,6 +793,15 @@ class ChunkedArrayStore:
         )
         if position.size != 1 or int(position[0]) != sequence:
             raise ValueError("cache chunk position mismatch")
+
+        identifier_name = "detection_ids" if self.kind == "detection" else "det_indices"
+        identifiers = np.asarray(arrays[identifier_name])
+        for frame in written:
+            values = identifiers[frame_indices == frame]
+            if len(values) > 1 and np.any(np.diff(values.astype(np.int64)) <= 0):
+                raise ValueError(
+                    f"cache field {identifier_name!r} must be unique and ordered per frame"
+                )
 
         rows = len(frame_indices)
         one_dimensional = {
@@ -862,7 +919,7 @@ class ChunkedArrayStore:
                 "_chunk_position": np.asarray([0], np.int64),
             }
         )
-        self._validate_chunk_arrays(payload, 0)
+        self._validate_chunk_arrays(payload, 0, allow_legacy_dtypes=True)
 
     def ensure_manifest(self) -> None:
         """Create a valid empty chunked manifest without migrating on read."""
