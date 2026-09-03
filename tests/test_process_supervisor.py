@@ -5,12 +5,15 @@ import signal
 import subprocess
 import sys
 import time
+import tracemalloc
 from pathlib import Path
 
 import psutil
 import pytest
 
+import hydra_suite.runtime.child_bootstrap as bootstrap_module
 import hydra_suite.runtime.process_supervisor as supervisor_module
+import hydra_suite.runtime.resource_limits as limits_module
 from hydra_suite.runtime.process_supervisor import (
     BoundedLineBuffer,
     ContainmentPlan,
@@ -24,7 +27,12 @@ from hydra_suite.runtime.process_supervisor import (
     WorkloadStillOwnedError,
     classify_exit,
 )
-from hydra_suite.runtime.resource_lease import HeavyJobLease, ResourceBusyError
+from hydra_suite.runtime.resource_lease import (
+    HeavyJobLease,
+    HeavyJobLeaseSet,
+    ResourceBusyError,
+    canonical_heavy_job_lease_set,
+)
 from hydra_suite.runtime.resource_limits import (
     LimitBackend,
     ProcessMemoryLimits,
@@ -39,6 +47,10 @@ def _child_env() -> dict[str, str]:
     src = str(Path(__file__).resolve().parents[1] / "src")
     env["PYTHONPATH"] = src + os.pathsep + env.get("PYTHONPATH", "")
     return env
+
+
+def _cpu_lease_set(tmp_path: Path) -> HeavyJobLeaseSet:
+    return canonical_heavy_job_lease_set("supervised", "cpu", lease_dir=tmp_path)
 
 
 def _wait_until_gone(pid: int, timeout: float = 5.0) -> None:
@@ -173,6 +185,9 @@ def test_process_group_is_not_signalled_after_all_owned_identities_are_gone(
     tree.process_group_id = 424242
     tree.systemd_unit = None
     tree._known_identities = {}
+    tree.max_tracked_identities = 8
+    tree.identity_overflowed = False
+    tree.scope_signal_failed = False
     calls = []
     monkeypatch.setattr(os, "killpg", lambda *args: calls.append(args))
 
@@ -197,6 +212,9 @@ def test_systemd_scope_is_authoritative_for_tree_signals(monkeypatch):
     tree.process_group_id = 424242
     tree.systemd_unit = "hydra-owned.scope"
     tree._known_identities = {123: LiveIdentity()}
+    tree.max_tracked_identities = 8
+    tree.identity_overflowed = False
+    tree.scope_signal_failed = False
     calls = []
 
     def record_systemd_signal(unit, signum):
@@ -215,6 +233,131 @@ def test_systemd_scope_is_authoritative_for_tree_signals(monkeypatch):
     assert calls == [("hydra-owned.scope", int(signal.SIGKILL))]
 
 
+def test_failed_systemd_signal_targets_only_proven_escapees_and_retains_ownership(
+    monkeypatch,
+):
+    direct_signals = []
+
+    class FakeProcess:
+        pid = 123
+
+        def send_signal(self, signum):
+            direct_signals.append(signum)
+
+    class LiveIdentity:
+        def resolve(self):
+            return FakeProcess()
+
+    tree = object.__new__(OwnedProcessTree)
+    tree.root = type("GoneIdentity", (), {"resolve": lambda _self: None})()
+    tree.process_group_id = 424242
+    tree.systemd_unit = "hydra-owned.scope"
+    tree.scope_signal_failed = False
+    tree._known_identities = {123: LiveIdentity()}
+    tree.max_tracked_identities = 8
+    tree.identity_overflowed = False
+    monkeypatch.setattr(tree, "_discover_identities", lambda: ())
+    monkeypatch.setattr(tree, "_identity_in_systemd_scope", lambda _identity: False)
+    monkeypatch.setattr(
+        supervisor_module, "signal_systemd_scope", lambda _unit, _signum: False
+    )
+
+    assert not tree.kill()
+
+    assert direct_signals == [signal.SIGKILL]
+    assert tree.ownership_uncertain
+
+
+def test_identity_registry_prunes_dead_entries_retains_escapees_and_fails_closed(
+    monkeypatch,
+):
+    killed = []
+
+    class FakeProcess:
+        def __init__(self, pid):
+            self.pid = pid
+
+        def send_signal(self, signum):
+            killed.append((self.pid, signum))
+
+    live_pids = {2, 3, 4}
+    identity_type = supervisor_module._ProcessIdentity
+    monkeypatch.setattr(
+        identity_type,
+        "resolve",
+        lambda identity: (
+            FakeProcess(identity.pid) if identity.pid in live_pids else None
+        ),
+    )
+    tree = object.__new__(OwnedProcessTree)
+    tree.root = identity_type(1, 1.0)
+    tree.process_group_id = None
+    tree.systemd_unit = None
+    tree.scope_signal_failed = False
+    tree._known_identities = {
+        1: identity_type(1, 1.0),  # dead same-group root is pruned
+        2: identity_type(2, 2.0),  # live captured escapee must remain
+    }
+    tree.max_tracked_identities = 2
+    tree.identity_overflowed = False
+    monkeypatch.setattr(
+        tree,
+        "_discover_identities",
+        lambda: (identity_type(3, 3.0), identity_type(4, 4.0)),
+    )
+
+    identities = tree.identities()
+
+    assert {identity.pid for identity in identities} == {2, 3}
+    assert set(tree._known_identities) == {2, 3}
+    assert tree.identity_overflowed
+    assert killed == [
+        (4, signal.SIGKILL),
+        (3, signal.SIGKILL),
+        (2, signal.SIGKILL),
+    ]
+
+
+def test_guardian_registry_prunes_dead_and_kills_every_identity_beyond_bound(
+    monkeypatch,
+):
+    killed = []
+
+    class FakeProcess:
+        def __init__(self, pid, create_time):
+            self.pid = pid
+            self._create_time = create_time
+
+        def create_time(self):
+            return self._create_time
+
+        def children(self, recursive):
+            assert recursive
+            return [FakeProcess(3, 3.0), FakeProcess(4, 4.0)]
+
+        def kill(self):
+            killed.append(self.pid)
+
+    monkeypatch.setattr(
+        bootstrap_module,
+        "_resolve_captured_identity",
+        lambda pid, _create_time: (
+            FakeProcess(pid, float(pid)) if pid in {1, 2} else None
+        ),
+    )
+    monkeypatch.setattr(psutil, "Process", lambda _pid: FakeProcess(1, 1.0))
+    captured = {1: 1.0, 2: 2.0, 5: 5.0}
+
+    succeeded, overflowed = bootstrap_module._capture_descendant_identities(
+        1, 1.0, captured, max_identities=3
+    )
+
+    assert succeeded
+    assert overflowed
+    assert captured == {1: 1.0, 2: 2.0, 3: 3.0}
+    assert killed == [4]
+
+
 def test_noisy_output_retains_only_a_fixed_tail():
     output = BoundedLineBuffer(max_lines=10, max_chars=100)
     for index in range(10_000):
@@ -224,6 +367,25 @@ def test_noisy_output_retains_only_a_fixed_tail():
     assert output.retained_chars <= 100
     assert output.dropped_lines >= 9_990
     assert output.tail()[-1] == "line-09999\n"
+
+
+def test_newline_free_multi_megabyte_output_is_read_in_bounded_chunks(tmp_path):
+    output_path = tmp_path / "newline-free.log"
+    with output_path.open("wb") as target:
+        block = b"x" * 4096
+        for _ in range(2048):
+            target.write(block)
+    output = BoundedLineBuffer(max_lines=4, max_chars=16 * 1024)
+
+    with output_path.open("r", encoding="utf-8") as source:
+        tracemalloc.start()
+        supervisor_module.pump_stdout(source, output, read_chunk_chars=4096)
+        _, peak_bytes = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+
+    assert output.retained_chars <= 16 * 1024
+    assert peak_bytes < 512 * 1024
+    assert output.dropped_lines > 0
 
 
 def test_drained_lines_are_retained_as_tail_without_being_reported_as_dropped():
@@ -238,7 +400,7 @@ def test_drained_lines_are_retained_as_tail_without_being_reported_as_dropped():
     assert output.dropped_lines == 0
 
 
-def test_noisy_child_is_drained_without_an_unbounded_parent_queue():
+def test_noisy_child_is_drained_without_an_unbounded_parent_queue(tmp_path):
     launch = build_limited_launch(
         [
             sys.executable,
@@ -249,14 +411,17 @@ def test_noisy_child_is_drained_without_an_unbounded_parent_queue():
         backend=LimitBackend.WATCHDOG_ONLY,
         environment=_child_env(),
     )
+    leases = _cpu_lease_set(tmp_path)
     plan = ContainmentPlan(
         launch=launch,
         minimum_system_available_bytes=0,
+        expected_resource_keys=leases.resource_keys,
         poll_interval_seconds=0.01,
     )
     assert plan.watchdog_policy.soft_tree_rss_bytes == launch.limits.soft_host_bytes
     sidecar = SupervisedSidecar(
         plan,
+        leases=leases,
         output_max_lines=8,
         output_max_chars=1024,
     )
@@ -269,6 +434,42 @@ def test_noisy_child_is_drained_without_an_unbounded_parent_queue():
     assert result.dropped_output_lines >= 9_992
 
 
+@pytest.mark.parametrize(
+    "backend", [LimitBackend.WATCHDOG_ONLY, LimitBackend.RLIMIT_AS]
+)
+def test_parent_liveness_guardian_is_enabled_for_each_posix_fallback(
+    backend, monkeypatch, tmp_path
+):
+    launch = build_limited_launch(
+        [sys.executable, "-c", "print('done')"],
+        ProcessMemoryLimits(soft_host_bytes=1024**3, hard_host_bytes=2 * 1024**3),
+        backend=backend,
+        environment=_child_env(),
+    )
+    captured_kwargs = []
+    real_popen = subprocess.Popen
+
+    def recording_popen(*args, **kwargs):
+        captured_kwargs.append(kwargs)
+        return real_popen(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", recording_popen)
+    leases = _cpu_lease_set(tmp_path)
+    sidecar = SupervisedSidecar(
+        ContainmentPlan(
+            launch=launch,
+            minimum_system_available_bytes=0,
+            expected_resource_keys=leases.resource_keys,
+        ),
+        leases=leases,
+    )
+    sidecar.wait(timeout=5)
+
+    assert "HYDRA_PARENT_LIVENESS_FD" in captured_kwargs[0]["env"]
+    assert captured_kwargs[0]["env"]["HYDRA_PARENT_MAX_IDENTITIES"] == "512"
+    assert captured_kwargs[0]["pass_fds"]
+
+
 def test_wait_timeout_terminates_reaps_and_releases_owned_lease(tmp_path):
     launch = build_limited_launch(
         [sys.executable, "-c", "import time; time.sleep(60)"],
@@ -276,22 +477,24 @@ def test_wait_timeout_terminates_reaps_and_releases_owned_lease(tmp_path):
         backend=LimitBackend.WATCHDOG_ONLY,
         environment=_child_env(),
     )
+    leases = _cpu_lease_set(tmp_path)
+    resource_key = leases.resource_keys[0]
     plan = ContainmentPlan(
         launch=launch,
         minimum_system_available_bytes=0,
         poll_interval_seconds=0.01,
         terminate_grace_seconds=0.05,
+        expected_resource_keys=leases.resource_keys,
     )
-    lease = HeavyJobLease("host:cpu:memory", "supervised", tmp_path)
-    sidecar = SupervisedSidecar(plan, lease=lease)
+    sidecar = SupervisedSidecar(plan, leases=leases)
     with pytest.raises(ResourceBusyError):
-        HeavyJobLease("host:cpu:memory", "competitor", tmp_path).acquire()
+        HeavyJobLease(resource_key, "competitor", tmp_path).acquire()
 
     with pytest.raises(subprocess.TimeoutExpired):
         sidecar.wait(timeout=0.05)
 
     assert sidecar.process.poll() is not None
-    with HeavyJobLease("host:cpu:memory", "after teardown", tmp_path):
+    with HeavyJobLease(resource_key, "after teardown", tmp_path):
         pass
 
 
@@ -304,13 +507,15 @@ def test_wait_timeout_returns_explicit_owner_when_exit_cannot_be_proved(
         backend=LimitBackend.WATCHDOG_ONLY,
         environment=_child_env(),
     )
+    leases = _cpu_lease_set(tmp_path)
+    resource_key = leases.resource_keys[0]
     plan = ContainmentPlan(
         launch=launch,
         minimum_system_available_bytes=0,
         terminate_grace_seconds=0,
+        expected_resource_keys=leases.resource_keys,
     )
-    lease = HeavyJobLease("host:cpu:memory", "supervised", tmp_path)
-    sidecar = SupervisedSidecar(plan, lease=lease)
+    sidecar = SupervisedSidecar(plan, leases=leases)
     real_teardown = sidecar._terminate_and_reap
     monkeypatch.setattr(sidecar, "_terminate_and_reap", lambda _grace: False)
     try:
@@ -319,7 +524,7 @@ def test_wait_timeout_returns_explicit_owner_when_exit_cannot_be_proved(
 
         assert error.value.sidecar is sidecar
         with pytest.raises(ResourceBusyError):
-            HeavyJobLease("host:cpu:memory", "competitor", tmp_path).acquire()
+            HeavyJobLease(resource_key, "competitor", tmp_path).acquire()
     finally:
         monkeypatch.setattr(sidecar, "_terminate_and_reap", real_teardown)
         sidecar.cancel(grace_seconds=0.05)
@@ -334,14 +539,19 @@ def test_final_admission_runs_under_supervisor_owned_lease_before_popen(
         backend=LimitBackend.WATCHDOG_ONLY,
         environment=_child_env(),
     )
-    plan = ContainmentPlan(launch=launch, minimum_system_available_bytes=0)
-    lease = HeavyJobLease("host:cpu:memory", "supervised", tmp_path)
+    leases = _cpu_lease_set(tmp_path)
+    resource_key = leases.resource_keys[0]
+    plan = ContainmentPlan(
+        launch=launch,
+        minimum_system_available_bytes=0,
+        expected_resource_keys=leases.resource_keys,
+    )
     callback_ran = []
 
     def refuse_while_locked():
         callback_ran.append(True)
         with pytest.raises(ResourceBusyError):
-            HeavyJobLease("host:cpu:memory", "competitor", tmp_path).acquire()
+            HeavyJobLease(resource_key, "competitor", tmp_path).acquire()
         raise RuntimeError("final admission refused")
 
     monkeypatch.setattr(
@@ -351,11 +561,63 @@ def test_final_admission_runs_under_supervisor_owned_lease_before_popen(
     )
 
     with pytest.raises(RuntimeError, match="final admission refused"):
-        SupervisedSidecar(plan, lease=lease, prelaunch_check=refuse_while_locked)
+        SupervisedSidecar(plan, leases=leases, prelaunch_check=refuse_while_locked)
 
     assert callback_ran == [True]
-    with HeavyJobLease("host:cpu:memory", "after refusal", tmp_path):
+    with HeavyJobLease(resource_key, "after refusal", tmp_path):
         pass
+
+
+def test_containment_plan_rejects_noncanonical_or_mismatched_resource_keys(
+    tmp_path, monkeypatch
+):
+    launch = build_limited_launch(
+        [sys.executable, "-c", "pass"],
+        ProcessMemoryLimits(soft_host_bytes=1024**3, hard_host_bytes=2 * 1024**3),
+        backend=LimitBackend.WATCHDOG_ONLY,
+        environment=_child_env(),
+    )
+    with pytest.raises(ValueError, match="unique and sorted"):
+        ContainmentPlan(
+            launch=launch,
+            minimum_system_available_bytes=0,
+            expected_resource_keys=("z-device", "a-host"),
+        )
+    with pytest.raises(ValueError, match="explicit resource lease set"):
+        ContainmentPlan(
+            launch=launch,
+            minimum_system_available_bytes=0,
+            expected_resource_keys=(),
+        )
+
+    cuda_launch = build_limited_launch(
+        [sys.executable, "-c", "pass"],
+        ProcessMemoryLimits(soft_host_bytes=1024**3, hard_host_bytes=2 * 1024**3),
+        backend=LimitBackend.WATCHDOG_ONLY,
+        environment=_child_env(),
+        accelerator_kind="cuda",
+    )
+    with pytest.raises(ValueError, match="cuda memory topology"):
+        ContainmentPlan(
+            launch=cuda_launch,
+            minimum_system_available_bytes=0,
+            expected_resource_keys=("host:cuda:uuid:gpu-only",),
+        )
+
+    leases = _cpu_lease_set(tmp_path)
+    plan = ContainmentPlan(
+        launch=launch,
+        minimum_system_available_bytes=0,
+        expected_resource_keys=("different-host:host-memory",),
+    )
+    monkeypatch.setattr(
+        subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: pytest.fail("mismatched plan started a child"),
+    )
+
+    with pytest.raises(ValueError, match="do not match"):
+        SupervisedSidecar(plan, leases=leases)
 
 
 def test_constructor_failure_after_popen_kills_reaps_and_releases_lease(
@@ -367,15 +629,20 @@ def test_constructor_failure_after_popen_kills_reaps_and_releases_lease(
         backend=LimitBackend.WATCHDOG_ONLY,
         environment=_child_env(),
     )
+    leases = _cpu_lease_set(tmp_path)
+    resource_key = leases.resource_keys[0]
     plan = ContainmentPlan(
         launch=launch,
         minimum_system_available_bytes=0,
         poll_interval_seconds=0.01,
+        expected_resource_keys=leases.resource_keys,
     )
     real_popen = subprocess.Popen
     started = []
+    captured_kwargs = []
 
     def recording_popen(*args, **kwargs):
+        captured_kwargs.append(kwargs)
         process = real_popen(*args, **kwargs)
         started.append(process)
         return process
@@ -387,19 +654,24 @@ def test_constructor_failure_after_popen_kills_reaps_and_releases_lease(
         lambda _self: (_ for _ in ()).throw(RuntimeError("watchdog start failed")),
     )
 
-    lease = HeavyJobLease("host:cpu:memory", "supervised", tmp_path)
     with pytest.raises(RuntimeError, match="watchdog start failed"):
-        SupervisedSidecar(plan, lease=lease)
+        SupervisedSidecar(plan, leases=leases)
 
     assert started and started[0].poll() is not None
-    with HeavyJobLease("host:cpu:memory", "after setup failure", tmp_path):
+    lease_fds = {
+        int(value)
+        for value in captured_kwargs[0]["env"]["HYDRA_PARENT_LEASE_FDS"].split(",")
+    }
+    assert lease_fds.issubset(set(captured_kwargs[0]["pass_fds"]))
+    with HeavyJobLease(resource_key, "after setup failure", tmp_path):
         pass
 
 
-def test_supervisor_process_death_does_not_orphan_watchdog_only_child():
+def test_supervisor_process_death_does_not_orphan_watchdog_only_child(tmp_path):
     helper_script = """
 import os, sys
 from hydra_suite.runtime.process_supervisor import ContainmentPlan, SupervisedSidecar
+from hydra_suite.runtime.resource_lease import canonical_heavy_job_lease_set
 from hydra_suite.runtime.resource_limits import (
     LimitBackend, ProcessMemoryLimits, build_limited_launch,
 )
@@ -408,14 +680,20 @@ launch = build_limited_launch(
     ProcessMemoryLimits(soft_host_bytes=1024**3, hard_host_bytes=2 * 1024**3),
     backend=LimitBackend.WATCHDOG_ONLY,
 )
+leases = canonical_heavy_job_lease_set('test', 'cpu', lease_dir=sys.argv[1])
 sidecar = SupervisedSidecar(
-    ContainmentPlan(launch=launch, minimum_system_available_bytes=0)
+    ContainmentPlan(
+        launch=launch,
+        minimum_system_available_bytes=0,
+        expected_resource_keys=leases.resource_keys,
+    ),
+    leases=leases,
 )
 print(sidecar.process.pid, flush=True)
 os._exit(0)
 """
     helper = subprocess.Popen(
-        [sys.executable, "-c", helper_script],
+        [sys.executable, "-c", helper_script, str(tmp_path)],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -426,6 +704,99 @@ os._exit(0)
     helper.wait(timeout=5)
 
     _wait_until_gone(child_pid)
+
+
+def test_parent_death_guardian_captures_setsid_escapee_when_os_allows_enumeration(
+    tmp_path,
+):
+    helper_script = r"""
+import os, psutil, sys, time
+from hydra_suite.runtime.process_supervisor import ContainmentPlan, SupervisedSidecar
+from hydra_suite.runtime.resource_lease import canonical_heavy_job_lease_set
+from hydra_suite.runtime.resource_limits import (
+    LimitBackend, ProcessMemoryLimits, build_limited_launch,
+)
+workload = '''
+import subprocess, sys, time
+escaped = subprocess.Popen(
+    [sys.executable, '-c', 'import time; time.sleep(60)'],
+    start_new_session=True,
+)
+print(escaped.pid, flush=True)
+time.sleep(60)
+'''
+launch = build_limited_launch(
+    [sys.executable, '-c', workload],
+    ProcessMemoryLimits(soft_host_bytes=1024**3, hard_host_bytes=2 * 1024**3),
+    backend=LimitBackend.WATCHDOG_ONLY,
+)
+leases = canonical_heavy_job_lease_set('test', 'cpu', lease_dir=sys.argv[1])
+sidecar = SupervisedSidecar(
+    ContainmentPlan(
+        launch=launch,
+        minimum_system_available_bytes=0,
+        expected_resource_keys=leases.resource_keys,
+    ),
+    leases=leases,
+)
+escaped_pid = None
+deadline = time.monotonic() + 5
+while escaped_pid is None and time.monotonic() < deadline:
+    lines, _, _ = sidecar.output.drain(timeout=0.05)
+    for line in lines:
+        if line.strip().isdigit():
+            escaped_pid = int(line.strip())
+try:
+    psutil.Process(sidecar.process.pid).children(recursive=True)
+except (psutil.Error, OSError):
+    print('unsupported', flush=True)
+    sidecar.cancel(0.05)
+    raise SystemExit(0)
+print(f'{sidecar.process.pid},{escaped_pid}', flush=True)
+os._exit(0)
+"""
+    helper = subprocess.Popen(
+        [sys.executable, "-c", helper_script, str(tmp_path)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=_child_env(),
+    )
+    assert helper.stdout is not None
+    report = helper.stdout.readline().strip()
+    helper.wait(timeout=10)
+    if report == "unsupported":
+        pytest.skip("sandbox denies descendant enumeration needed by this OS test")
+    root_pid, escaped_pid = map(int, report.split(","))
+
+    _wait_until_gone(root_pid)
+    _wait_until_gone(escaped_pid)
+
+
+def test_systemd_parent_guardian_retries_failed_scope_signal(monkeypatch):
+    results = iter((False, True))
+    signals = []
+    outside_kills = []
+
+    def signal_scope(unit, signum):
+        signals.append((unit, signum))
+        return next(results)
+
+    monkeypatch.setattr(limits_module, "signal_systemd_scope", signal_scope)
+    monkeypatch.setattr(
+        bootstrap_module,
+        "_kill_captured_outside_scope",
+        lambda unit, captured: outside_kills.append((unit, captured.copy())),
+    )
+    monkeypatch.setattr(bootstrap_module.time, "sleep", lambda _seconds: None)
+
+    bootstrap_module._guard_systemd_scope("owned.scope", {123: 1.0})
+
+    assert signals == [
+        ("owned.scope", int(signal.SIGKILL)),
+        ("owned.scope", int(signal.SIGKILL)),
+    ]
+    assert outside_kills == [("owned.scope", {123: 1.0})]
 
 
 def test_success_is_not_reclassified_from_historical_oom_text():

@@ -10,14 +10,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import shutil
 import socket
-import subprocess
 import time
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import IO, Any, Mapping, Optional
+from typing import IO, Any, Optional, Sequence
 
 import psutil
 
@@ -83,9 +81,9 @@ class LeaseOwner:
             return None
 
 
-def resource_key(accelerator: str, index: int | str = 0) -> str:
-    """Return a host-local key for one accelerator or unified-memory pool."""
-    return f"{socket.gethostname()}:{accelerator}:{index}"
+def canonical_host_memory_key() -> str:
+    """Return the one host-wide key for shared physical RAM admission."""
+    return f"{socket.gethostname()}:host-memory"
 
 
 def canonical_resource_key(
@@ -93,97 +91,69 @@ def canonical_resource_key(
     index: int | str = 0,
     *,
     device_uuid: Optional[str] = None,
-    environ: Optional[Mapping[str, str]] = None,
+    device_pci_bus_id: Optional[str] = None,
 ) -> str:
     """Return a stable key for the physical memory pool a job will consume.
 
-    MPS devices always share the host's one unified-memory pool. CUDA prefers a
-    UUID, including UUID tokens in ``CUDA_VISIBLE_DEVICES`` and a bounded
-    ``nvidia-smi`` probe, so two logical indices cannot lease one physical GPU.
+    MPS devices always share the host's one unified-memory pool. CUDA requires
+    a physical UUID or PCI identity supplied by the resolved runtime; a logical
+    index is never accepted as an ownership boundary.
     """
     kind = str(getattr(accelerator, "value", accelerator)).strip().lower()
     host = socket.gethostname()
     if kind == "mps":
         return f"{host}:mps:unified"
     if kind == "cpu":
-        return f"{host}:cpu:host-memory"
+        return canonical_host_memory_key()
     if kind != "cuda":
         raise ValueError(f"unsupported accelerator kind: {accelerator!r}")
 
-    visible_index = _physical_cuda_token(index, environ=environ)
     stable_uuid = (device_uuid or "").strip().lower()
-    if not stable_uuid and visible_index.lower().startswith(("gpu-", "mig-")):
-        stable_uuid = visible_index.lower()
-    if not stable_uuid:
-        stable_uuid = (_probe_cuda_uuid(visible_index) or "").strip().lower()
-    identity = f"uuid:{stable_uuid}" if stable_uuid else f"index:{visible_index}"
+    stable_pci = (device_pci_bus_id or "").strip().lower()
+    if stable_uuid and stable_pci:
+        raise ValueError("provide one physical CUDA identity, not both UUID and PCI")
+    if not stable_uuid and not stable_pci:
+        raise ValueError(
+            "a resolver-supplied physical CUDA UUID or PCI identity is required; "
+            f"logical index {index!r} is not a safe lease key"
+        )
+    identity = f"uuid:{stable_uuid}" if stable_uuid else f"pci:{stable_pci}"
     return f"{host}:cuda:{identity}"
 
 
-def canonical_heavy_job_lease(
+def canonical_heavy_job_lease_set(
     job_name: str,
     accelerator: str,
     index: int | str = 0,
     *,
     device_uuid: Optional[str] = None,
+    device_pci_bus_id: Optional[str] = None,
     lease_dir: Optional[Path] = None,
-    environ: Optional[Mapping[str, str]] = None,
-) -> "HeavyJobLease":
-    """Build, but do not acquire, the shared lease for one heavy job."""
+) -> "HeavyJobLeaseSet":
+    """Build ordered leases for shared host RAM and a physical accelerator."""
     if lease_dir is None:
         from hydra_suite.paths import get_data_dir
 
         lease_dir = get_data_dir() / "runtime" / "heavy-job-leases"
-    key = canonical_resource_key(
-        accelerator,
+    kind = str(getattr(accelerator, "value", accelerator)).strip().lower()
+    accelerator_key = canonical_resource_key(
+        kind,
         index,
         device_uuid=device_uuid,
-        environ=environ,
+        device_pci_bus_id=device_pci_bus_id,
     )
-    return HeavyJobLease(key, job_name, Path(lease_dir))
-
-
-def _physical_cuda_token(
-    index: int | str, *, environ: Optional[Mapping[str, str]]
-) -> str:
-    values = os.environ if environ is None else environ
-    visible = values.get("CUDA_VISIBLE_DEVICES")
-    if not visible:
-        return str(index)
-    tokens = [token.strip() for token in visible.split(",") if token.strip()]
-    try:
-        logical_index = int(index)
-    except (TypeError, ValueError):
-        return str(index)
-    if 0 <= logical_index < len(tokens):
-        return tokens[logical_index]
-    return str(index)
-
-
-def _probe_cuda_uuid(device_token: str) -> Optional[str]:
-    executable = shutil.which("nvidia-smi")
-    if executable is None:
-        return None
-    try:
-        completed = subprocess.run(
-            [
-                executable,
-                "--id",
-                str(device_token),
-                "--query-gpu=uuid",
-                "--format=csv,noheader",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=2.0,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if completed.returncode != 0:
-        return None
-    first_line = completed.stdout.splitlines()[0].strip() if completed.stdout else ""
-    return first_line or None
+    # MPS accelerator allocations are the host allocation pool, so one unified
+    # key represents both resources rather than self-deadlocking on two aliases.
+    if kind == "cuda":
+        keys = [canonical_host_memory_key(), accelerator_key]
+    elif kind == "mps":
+        keys = [accelerator_key]
+    else:
+        keys = [canonical_host_memory_key()]
+    unique_keys = sorted(set(keys))
+    return HeavyJobLeaseSet(
+        [HeavyJobLease(key, job_name, Path(lease_dir)) for key in unique_keys]
+    )
 
 
 def owner_is_live(owner: LeaseOwner) -> bool:
@@ -272,7 +242,58 @@ class HeavyJobLease:
             self._handle = None
             self.owner = None
 
+    def fileno(self) -> int:
+        """Return the acquired lock descriptor for guardian inheritance."""
+        if self._handle is None:
+            raise RuntimeError("lease is not acquired")
+        return self._handle.fileno()
+
     def __enter__(self) -> "HeavyJobLease":
+        return self.acquire()
+
+    def __exit__(self, *_args: object) -> None:
+        self.release()
+
+
+class HeavyJobLeaseSet:
+    """Deadlock-safe ordered leases held and released as one ownership unit."""
+
+    def __init__(self, leases: Sequence[HeavyJobLease]) -> None:
+        ordered = tuple(sorted(leases, key=lambda lease: lease.resource_key))
+        keys = tuple(lease.resource_key for lease in ordered)
+        if len(keys) != len(set(keys)):
+            raise ValueError("lease-set resource keys must be unique")
+        if not ordered:
+            raise ValueError("a heavy-job lease set must not be empty")
+        self.leases = ordered
+        self.resource_keys = keys
+        self._acquired: list[HeavyJobLease] = []
+
+    def acquire(self) -> "HeavyJobLeaseSet":
+        """Acquire every resource in canonical order, unwinding on failure."""
+        if self._acquired:
+            raise RuntimeError("lease set is already acquired")
+        try:
+            for lease in self.leases:
+                lease.acquire()
+                self._acquired.append(lease)
+        except BaseException:
+            self.release()
+            raise
+        return self
+
+    def release(self) -> None:
+        """Release all acquired resources in reverse canonical order."""
+        while self._acquired:
+            self._acquired.pop().release()
+
+    def filenos(self) -> tuple[int, ...]:
+        """Return descriptors that keep every acquired OS lock owned."""
+        if len(self._acquired) != len(self.leases):
+            raise RuntimeError("lease set is not fully acquired")
+        return tuple(lease.fileno() for lease in self._acquired)
+
+    def __enter__(self) -> "HeavyJobLeaseSet":
         return self.acquire()
 
     def __exit__(self, *_args: object) -> None:

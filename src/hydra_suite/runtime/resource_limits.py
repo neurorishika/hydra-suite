@@ -40,12 +40,15 @@ class ProcessMemoryLimits:
     soft_host_bytes: int
     hard_host_bytes: int
     mps_high_watermark_ratio: Optional[float] = None
+    max_processes: int = 512
 
     def __post_init__(self) -> None:
         if self.soft_host_bytes <= 0 or self.hard_host_bytes <= 0:
             raise ValueError("host memory limits must be positive")
         if self.soft_host_bytes > self.hard_host_bytes:
             raise ValueError("soft host limit cannot exceed hard host limit")
+        if self.max_processes < 1:
+            raise ValueError("maximum process count must be positive")
         if self.mps_high_watermark_ratio is not None and not (
             0.0 < self.mps_high_watermark_ratio <= 2.0
         ):
@@ -171,6 +174,7 @@ def build_limited_launch(
             f"--property=MemoryHigh={limits.soft_host_bytes}",
             f"--property=MemoryMax={limits.hard_host_bytes}",
             "--property=MemorySwapMax=0",
+            f"--property=TasksMax={limits.max_processes}",
             "--",
             *bootstrap,
         ]
@@ -314,6 +318,7 @@ def serialize_limit_diagnostic(launch: LimitedLaunch) -> str:
             "soft_host_bytes": launch.limits.soft_host_bytes,
             "hard_host_bytes": launch.limits.hard_host_bytes,
             "mps_high_watermark_ratio": launch.limits.mps_high_watermark_ratio,
+            "max_processes": launch.limits.max_processes,
             "accelerator_kind": launch.accelerator_kind.value,
         },
         sort_keys=True,

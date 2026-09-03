@@ -48,10 +48,16 @@ def test_systemd_command_places_kernel_limits_outside_bootstrap():
     assert "--property=MemoryHigh=100" in launch.command
     assert "--property=MemoryMax=200" in launch.command
     assert "--property=MemorySwapMax=0" in launch.command
+    assert "--property=TasksMax=512" in launch.command
     assert "--address-space-bytes" not in launch.command
     assert launch.systemd_unit == "hydra-test.scope"
     assert launch.limits is limits
     assert dict(launch.environment) == {}
+
+
+def test_process_limit_must_be_positive():
+    with pytest.raises(ValueError, match="process count"):
+        ProcessMemoryLimits(soft_host_bytes=100, hard_host_bytes=200, max_processes=0)
 
 
 def test_rlimit_launch_documents_virtual_memory_and_sets_mps_before_exec():

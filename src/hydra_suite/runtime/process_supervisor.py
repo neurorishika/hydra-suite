@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import platform
 import signal
 import subprocess
 import threading
@@ -10,11 +11,12 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 import psutil
 
-from .resource_lease import HeavyJobLease
+from .resource_lease import HeavyJobLeaseSet
 from .resource_limits import (
     CgroupEvidence,
     LimitBackend,
@@ -30,6 +32,7 @@ class WatchdogTrigger(str, Enum):
     SOFT_RSS = "host-soft-rss"
     HARD_RSS = "host-hard-rss"
     SYSTEM_RESERVE = "host-system-reserve"
+    PROCESS_COUNT = "process-count"
 
 
 @dataclass(frozen=True)
@@ -59,6 +62,7 @@ class ContainmentPlan:
 
     launch: LimitedLaunch
     minimum_system_available_bytes: int
+    expected_resource_keys: tuple[str, ...]
     poll_interval_seconds: float = 0.25
     terminate_grace_seconds: float = 5.0
 
@@ -66,6 +70,35 @@ class ContainmentPlan:
         # Constructing the derived policy here validates every timing/floor
         # value before a child can be created.
         self.watchdog_policy
+        if not self.expected_resource_keys:
+            raise ValueError("containment requires an explicit resource lease set")
+        if any(not key for key in self.expected_resource_keys):
+            raise ValueError("expected resource keys must not be empty")
+        if self.expected_resource_keys != tuple(
+            sorted(set(self.expected_resource_keys))
+        ):
+            raise ValueError("expected resource keys must be unique and sorted")
+        kind = self.launch.accelerator_kind.value
+        host_keys = [
+            key for key in self.expected_resource_keys if key.endswith(":host-memory")
+        ]
+        cuda_keys = [
+            key
+            for key in self.expected_resource_keys
+            if ":cuda:uuid:" in key or ":cuda:pci:" in key
+        ]
+        mps_keys = [
+            key for key in self.expected_resource_keys if key.endswith(":mps:unified")
+        ]
+        expected_shape = {
+            "cpu": (1, 0, 0),
+            "cuda": (1, 1, 0),
+            "mps": (0, 0, 1),
+        }[kind]
+        if (len(host_keys), len(cuda_keys), len(mps_keys)) != expected_shape or len(
+            self.expected_resource_keys
+        ) != sum(expected_shape):
+            raise ValueError(f"resource keys do not match {kind} memory topology")
 
     @property
     def watchdog_policy(self) -> WatchdogPolicy:
@@ -120,13 +153,19 @@ class OwnedProcessTree:
         *,
         owns_process_group: bool,
         systemd_unit: Optional[str] = None,
+        max_tracked_identities: int = 512,
     ):
+        if max_tracked_identities < 1:
+            raise ValueError("maximum tracked process count must be positive")
         root = psutil.Process(process.pid)
         self.process = process
         self.root = _ProcessIdentity(process.pid, root.create_time())
         self._known_identities: dict[int, _ProcessIdentity] = {self.root.pid: self.root}
         self.process_group_id: Optional[int] = None
         self.systemd_unit = systemd_unit
+        self.max_tracked_identities = max_tracked_identities
+        self.identity_overflowed = False
+        self.scope_signal_failed = False
         if owns_process_group and os.name == "posix":
             group = os.getpgid(process.pid)
             if group != process.pid:
@@ -138,7 +177,33 @@ class OwnedProcessTree:
     def identities(self) -> tuple[_ProcessIdentity, ...]:
         """Capture and return every still-live, identity-validated process."""
 
+        self._prune_dead_identities()
+        for identity in self._discover_identities():
+            if self._known_identities.get(identity.pid) == identity:
+                continue
+            if len(self._known_identities) >= self.max_tracked_identities:
+                self.identity_overflowed = True
+                # The first identity beyond the registry bound must not fall
+                # through an owned-group kill merely because it called
+                # ``setsid``. Signal it while its PID/start-time identity is
+                # still validated, without retaining it in the registry.
+                self._signal_snapshot(signal.SIGKILL, (identity,))
+                continue
+            self._known_identities[identity.pid] = identity
+        live = tuple(
+            identity
+            for identity in self._known_identities.values()
+            if identity.resolve() is not None
+        )
+        if self.identity_overflowed:
+            # An unbounded process tree cannot be safely observed by a bounded
+            # registry. Fail closed using only creation-time-validated targets.
+            self._signal_snapshot(signal.SIGKILL, live)
+        return live
+
+    def _discover_identities(self) -> tuple[_ProcessIdentity, ...]:
         root = self.root.resolve()
+        discovered: list[_ProcessIdentity] = []
         if root is not None:
             processes = [root]
             try:
@@ -147,16 +212,17 @@ class OwnedProcessTree:
                 pass
             for process in processes:
                 try:
-                    self._known_identities[process.pid] = _ProcessIdentity(
-                        process.pid, process.create_time()
+                    discovered.append(
+                        _ProcessIdentity(process.pid, process.create_time())
                     )
                 except (psutil.Error, OSError):
                     continue
-        return tuple(
-            identity
-            for identity in self._known_identities.values()
-            if identity.resolve() is not None
-        )
+        return tuple(discovered)
+
+    def _prune_dead_identities(self) -> None:
+        for pid, identity in tuple(self._known_identities.items()):
+            if identity.resolve() is None:
+                self._known_identities.pop(pid, None)
 
     def is_alive(self) -> bool:
         """Return whether any captured member of the owned tree is live."""
@@ -188,17 +254,16 @@ class OwnedProcessTree:
                 continue
         return total
 
-    def terminate(self) -> None:
+    def terminate(self) -> bool:
         """Request graceful termination of the owned boundary."""
 
-        self._signal(signal.SIGTERM)
+        return self._signal(signal.SIGTERM)
 
-    def kill(self) -> None:
+    def kill(self) -> bool:
         """Forcefully terminate the owned boundary."""
 
         if os.name == "posix":
-            self._signal(signal.SIGKILL)
-            return
+            return self._signal(signal.SIGKILL)
         for identity in reversed(self.identities()):  # pragma: no cover - Windows CI
             process = identity.resolve()
             if process is None:
@@ -207,16 +272,44 @@ class OwnedProcessTree:
                 process.kill()
             except (psutil.Error, OSError):
                 continue
+        return True
 
-    def _signal(self, signum: signal.Signals) -> None:
+    @property
+    def ownership_uncertain(self) -> bool:
+        """Return whether the authoritative systemd scope rejected a signal."""
+        return self.scope_signal_failed
+
+    def _signal(self, signum: signal.Signals) -> bool:
         identities = self.identities()
+        return self._signal_snapshot(signum, identities)
+
+    def _signal_snapshot(
+        self,
+        signum: signal.Signals,
+        identities: tuple[_ProcessIdentity, ...],
+    ) -> bool:
         group_signalled = False
         if self.systemd_unit is not None:
             # systemd is authoritative for every process that remains in the
-            # cgroup, including descendants invisible to psutil. Do not mix
-            # direct PID/group signals into this ownership mode.
-            signal_systemd_scope(self.systemd_unit, int(signum))
-            return
+            # cgroup, including descendants invisible to psutil.
+            if signal_systemd_scope(self.systemd_unit, int(signum)):
+                self.scope_signal_failed = False
+                return True
+            self.scope_signal_failed = True
+            # Failure does not authorize directly signalling cgroup members.
+            # Only creation-time-validated escapees proven outside the scope
+            # can be targeted without violating systemd ownership.
+            for identity in reversed(identities):
+                if self._identity_in_systemd_scope(identity) is not False:
+                    continue
+                process = identity.resolve()
+                if process is None:
+                    continue
+                try:
+                    process.send_signal(signum)
+                except (psutil.Error, OSError):
+                    continue
+            return False
         if self.process_group_id is not None and any(
             self._identity_process_group(identity) == self.process_group_id
             for identity in identities
@@ -242,6 +335,7 @@ class OwnedProcessTree:
                 process.send_signal(signum)
             except (psutil.Error, OSError):
                 continue
+        return True
 
     @staticmethod
     def _identity_process_group(identity: _ProcessIdentity) -> Optional[int]:
@@ -252,6 +346,23 @@ class OwnedProcessTree:
             return os.getpgid(process.pid)
         except (ProcessLookupError, PermissionError, OSError):
             return None
+
+    def _identity_in_systemd_scope(self, identity: _ProcessIdentity) -> Optional[bool]:
+        if self.systemd_unit is None or platform.system() != "Linux":
+            return None
+        process = identity.resolve()
+        if process is None:
+            return None
+        try:
+            cgroup_text = Path(f"/proc/{process.pid}/cgroup").read_text(
+                encoding="utf-8"
+            )
+        except (OSError, UnicodeError):
+            return None
+        return any(
+            self.systemd_unit in line.partition("/")[2]
+            for line in cgroup_text.splitlines()
+        )
 
 
 class ProcessTreeWatchdog:
@@ -285,7 +396,20 @@ class ProcessTreeWatchdog:
         return self.outcome
 
     def _run(self) -> None:
-        while not self._stop.is_set() and self.tree.is_alive():
+        while not self._stop.is_set():
+            tree_alive = self.tree.is_alive()
+            if self.tree.identity_overflowed:
+                self.tree.kill()
+                self.outcome = WatchdogOutcome(
+                    WatchdogTrigger.PROCESS_COUNT,
+                    self.tree.rss_bytes(),
+                    int(psutil.virtual_memory().available),
+                    hard_kill_sent=True,
+                    graceful_exit=False,
+                )
+                return
+            if not tree_alive:
+                return
             rss = self.tree.rss_bytes()
             available = int(psutil.virtual_memory().available)
             if available < self.policy.minimum_system_available_bytes:
@@ -425,11 +549,36 @@ class BoundedLineBuffer:
             return tuple(line for _, line in self._lines)
 
 
-def pump_stdout(stdout: Any, output: BoundedLineBuffer) -> None:
-    """Read a pipe into a bounded buffer; safe for a daemon reader thread."""
+def pump_stdout(
+    stdout: Any,
+    output: BoundedLineBuffer,
+    *,
+    read_chunk_chars: int = 64 * 1024,
+) -> None:
+    """Incrementally split fixed-size reads into bounded output records."""
+    if read_chunk_chars < 1:
+        raise ValueError("stdout read chunks must be positive")
+    pending = ""
     try:
-        for line in stdout:
-            output.append(str(line))
+        while True:
+            chunk = stdout.read(read_chunk_chars)
+            if not chunk:
+                break
+            pending += str(chunk)
+            while pending:
+                newline = pending.find("\n")
+                if newline >= 0:
+                    output.append(pending[: newline + 1])
+                    pending = pending[newline + 1 :]
+                elif len(pending) >= read_chunk_chars:
+                    # A newline-free log record must never grow with producer
+                    # output. Preserve it as independently bounded fragments.
+                    output.append(pending[:read_chunk_chars])
+                    pending = pending[read_chunk_chars:]
+                else:
+                    break
+        if pending:
+            output.append(pending)
     except Exception as exc:  # noqa: BLE001 - transferred to owner thread
         output.close(error=exc)
     else:
@@ -498,7 +647,7 @@ class SupervisedSidecar:
         self,
         plan: ContainmentPlan,
         *,
-        lease: Optional[HeavyJobLease] = None,
+        leases: Optional[HeavyJobLeaseSet] = None,
         prelaunch_check: Optional[Callable[[], None]] = None,
         output_max_lines: int = 512,
         output_max_chars: int = 256 * 1024,
@@ -514,30 +663,43 @@ class SupervisedSidecar:
         self.plan = plan
         self.launch = plan.launch
         self.output = output
-        self._lease = lease
-        self._lease_released = lease is None
+        self._leases = leases
+        self._leases_released = leases is None
         self._parent_liveness_write_fd: Optional[int] = None
         self.process: subprocess.Popen[Any]
         self.tree: OwnedProcessTree
         self._reader: threading.Thread
         self.watchdog: ProcessTreeWatchdog
 
-        if lease is not None and lease.owner is not None:
-            raise ValueError("the supervisor must acquire its lease itself")
+        supplied_keys = () if leases is None else leases.resource_keys
+        if supplied_keys != plan.expected_resource_keys:
+            raise ValueError(
+                "supervisor lease keys do not match the containment plan: "
+                f"expected {plan.expected_resource_keys!r}, got {supplied_keys!r}"
+            )
         if prelaunch_check is not None and not callable(prelaunch_check):
             raise TypeError("prelaunch_check must be callable")
+        if os.name != "posix" and plan.expected_resource_keys:
+            raise RuntimeError(
+                "leased heavy jobs require a parent-death guardian on this platform"
+            )
 
         child_env = dict(self.launch.environment)
         pass_fds: tuple[int, ...] = ()
         parent_read_fd: Optional[int] = None
         if self.launch.backend is not LimitBackend.SYSTEMD_CGROUP:
             child_env["HYDRA_SUPERVISOR_PID"] = str(os.getpid())
-        if self.launch.backend is LimitBackend.WATCHDOG_ONLY and os.name == "posix":
+        if os.name == "posix":
             parent_read_fd, parent_write_fd = os.pipe()
             os.set_inheritable(parent_read_fd, True)
             child_env["HYDRA_PARENT_LIVENESS_FD"] = str(parent_read_fd)
             pass_fds = (parent_read_fd,)
             self._parent_liveness_write_fd = parent_write_fd
+            if self.launch.systemd_unit is not None:
+                child_env["HYDRA_PARENT_SYSTEMD_UNIT"] = self.launch.systemd_unit
+            child_env["HYDRA_PARENT_MAX_IDENTITIES"] = str(
+                self.launch.limits.max_processes
+            )
 
         popen_kwargs: dict[str, Any] = {
             "env": child_env,
@@ -553,9 +715,15 @@ class SupervisedSidecar:
                 popen_kwargs["pass_fds"] = pass_fds
         process: Optional[subprocess.Popen[Any]] = None
         try:
-            if lease is not None:
-                lease.acquire()
-                self._lease_released = False
+            if leases is not None:
+                leases.acquire()
+                self._leases_released = False
+                lease_fds = leases.filenos()
+                child_env["HYDRA_PARENT_LEASE_FDS"] = ",".join(
+                    str(descriptor) for descriptor in lease_fds
+                )
+                pass_fds = (*pass_fds, *lease_fds)
+                popen_kwargs["pass_fds"] = pass_fds
             if prelaunch_check is not None:
                 prelaunch_check()
             process = subprocess.Popen(self.launch.command, **popen_kwargs)
@@ -567,6 +735,7 @@ class SupervisedSidecar:
                 self.process,
                 owns_process_group=os.name == "posix",
                 systemd_unit=self.launch.systemd_unit,
+                max_tracked_identities=self.launch.limits.max_processes,
             )
             if self.process.stdout is None:
                 raise RuntimeError("supervised child stdout pipe was not created")
@@ -582,10 +751,10 @@ class SupervisedSidecar:
         except BaseException:
             if parent_read_fd is not None:
                 os.close(parent_read_fd)
-            self._close_parent_liveness_pipe()
             if process is not None:
                 self._kill_and_reap_after_setup_failure(process)
-            self._release_lease()
+            self._close_parent_liveness_pipe()
+            self._release_leases()
             raise
 
     def cancel(self, grace_seconds: float = 5.0) -> None:
@@ -613,12 +782,12 @@ class SupervisedSidecar:
         while self.tree.is_alive():
             if self.process.poll() is not None:
                 self.watchdog.stop(timeout=1.0)
-                self._close_parent_liveness_pipe()
                 if not self._terminate_and_reap(0.0):
                     raise WorkloadStillOwnedError(
                         "root exited but owned descendants survived teardown",
                         self,
                     )
+                self._close_parent_liveness_pipe()
                 break
             if deadline is not None and time.monotonic() >= deadline:
                 self.cancel(self.plan.terminate_grace_seconds)
@@ -657,7 +826,7 @@ class SupervisedSidecar:
                 output_error=str(output_error) if output_error is not None else None,
             )
         finally:
-            self._release_lease()
+            self._release_leases()
 
     def _terminate_and_reap(self, grace_seconds: float) -> bool:
         self.tree.terminate()
@@ -674,12 +843,12 @@ class SupervisedSidecar:
                 self.process.wait(timeout=max(0.1, kill_deadline - time.monotonic()))
             except subprocess.TimeoutExpired:
                 return False
-        return not self.tree.is_alive()
+        return not self.tree.is_alive() and not self.tree.ownership_uncertain
 
     def _finish_local_teardown(self) -> None:
         self._close_parent_liveness_pipe()
         self._reader.join(timeout=2.0)
-        self._release_lease()
+        self._release_leases()
 
     def _close_parent_liveness_pipe(self) -> None:
         descriptor = self._parent_liveness_write_fd
@@ -687,14 +856,18 @@ class SupervisedSidecar:
             return
         self._parent_liveness_write_fd = None
         try:
+            os.write(descriptor, b"N")
+        except OSError:
+            pass
+        try:
             os.close(descriptor)
         except OSError:
             pass
 
-    def _release_lease(self) -> None:
-        if not self._lease_released and self._lease is not None:
-            self._lease.release()
-            self._lease_released = True
+    def _release_leases(self) -> None:
+        if not self._leases_released and self._leases is not None:
+            self._leases.release()
+            self._leases_released = True
 
     def _kill_and_reap_after_setup_failure(
         self, process: subprocess.Popen[Any]
@@ -722,7 +895,9 @@ class SupervisedSidecar:
             raise WorkloadStillOwnedError(
                 "child survived supervisor-construction cleanup", self
             ) from exc
-        if hasattr(self, "tree") and self.tree.is_alive():
+        if hasattr(self, "tree") and (
+            self.tree.is_alive() or self.tree.ownership_uncertain
+        ):
             raise WorkloadStillOwnedError(
                 "descendant survived supervisor-construction cleanup", self
             )
@@ -747,6 +922,11 @@ def classify_exit(evidence: ExitEvidence) -> ClassifiedExit:
             return ClassifiedExit(
                 ExitKind.HOST_SOFT_LIMIT,
                 "Worker crossed its soft host-memory limit" + suffix,
+            )
+        if evidence.watchdog.trigger is WatchdogTrigger.PROCESS_COUNT:
+            return ClassifiedExit(
+                ExitKind.HOST_HARD_LIMIT,
+                "Worker exceeded its bounded process-identity limit",
             )
         return ClassifiedExit(
             ExitKind.HOST_HARD_LIMIT,

@@ -11,8 +11,9 @@ import pytest
 import hydra_suite.runtime.resource_lease as lease_module
 from hydra_suite.runtime.resource_lease import (
     HeavyJobLease,
+    HeavyJobLeaseSet,
     ResourceBusyError,
-    canonical_heavy_job_lease,
+    canonical_heavy_job_lease_set,
     canonical_resource_key,
     owner_is_live,
 )
@@ -83,27 +84,81 @@ def test_stale_metadata_is_replaced_only_after_lock_acquisition(tmp_path):
     assert persisted["job_name"] == "new job"
 
 
-def test_canonical_keys_use_physical_cuda_uuid_and_one_mps_pool():
+def test_cuda_key_requires_resolver_supplied_physical_identity():
     assert canonical_resource_key("cuda", index=0, device_uuid="GPU-ABC") == (
         canonical_resource_key("cuda", index=7, device_uuid="gpu-abc")
     )
+    assert canonical_resource_key(
+        "cuda", index=99, device_pci_bus_id="0000:65:00.0"
+    ).endswith(":cuda:pci:0000:65:00.0")
+    with pytest.raises(ValueError, match="physical CUDA"):
+        canonical_resource_key("cuda", index=1)
+    with pytest.raises(ValueError, match="physical CUDA"):
+        canonical_resource_key("cuda", index="GPU-ONE")
+
+
+def test_canonical_lease_set_covers_host_and_device_and_deduplicates_mps(tmp_path):
+    cuda = canonical_heavy_job_lease_set(
+        "training", "cuda", device_uuid="GPU-ABC", lease_dir=tmp_path
+    )
+    mps = canonical_heavy_job_lease_set("training", "mps", lease_dir=tmp_path)
+
+    assert len(cuda.resource_keys) == 2
+    assert any(key.endswith(":host-memory") for key in cuda.resource_keys)
+    assert any(key.endswith(":cuda:uuid:gpu-abc") for key in cuda.resource_keys)
+    assert mps.resource_keys == (canonical_resource_key("mps"),)
     assert canonical_resource_key("mps", index=0) == canonical_resource_key(
         "mps", index=99, device_uuid="ignored"
     )
     assert canonical_resource_key("mps", index=0).endswith(":mps:unified")
-    assert canonical_resource_key(
-        "cuda",
-        index=1,
-        environ={"CUDA_VISIBLE_DEVICES": "GPU-ONE,GPU-TWO"},
-    ).endswith(":cuda:uuid:gpu-two")
+    assert canonical_resource_key("cpu") == lease_module.canonical_host_memory_key()
+
+
+def test_lease_set_acquires_in_key_order_and_unwinds_partial_failure(
+    tmp_path, monkeypatch
+):
+    first = HeavyJobLease("z-device", "job", tmp_path)
+    second = HeavyJobLease("a-host", "job", tmp_path)
+    lease_set = HeavyJobLeaseSet([first, second])
+    events = []
+
+    monkeypatch.setattr(second, "acquire", lambda: events.append("acquire-host"))
+    monkeypatch.setattr(
+        first,
+        "acquire",
+        lambda: (_ for _ in ()).throw(RuntimeError("device lock failed")),
+    )
+    monkeypatch.setattr(second, "release", lambda: events.append("release-host"))
+
+    with pytest.raises(RuntimeError, match="device lock failed"):
+        lease_set.acquire()
+
+    assert events == ["acquire-host", "release-host"]
+
+
+def test_different_cuda_devices_still_conflict_on_shared_host_pool(tmp_path):
+    first = canonical_heavy_job_lease_set(
+        "first", "cuda", device_uuid="GPU-ONE", lease_dir=tmp_path
+    )
+    second = canonical_heavy_job_lease_set(
+        "second", "cuda", device_uuid="GPU-TWO", lease_dir=tmp_path
+    )
+
+    first.acquire()
+    try:
+        with pytest.raises(ResourceBusyError) as error:
+            second.acquire()
+        assert error.value.resource_key.endswith(":host-memory")
+    finally:
+        first.release()
 
 
 def test_canonical_lease_factory_uses_shared_hydra_data_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("HYDRA_DATA_DIR", str(tmp_path))
-    lease = canonical_heavy_job_lease("training", "mps", index=3)
+    lease_set = canonical_heavy_job_lease_set("training", "mps", index=3)
 
-    assert lease.path.parent == tmp_path / "runtime" / "heavy-job-leases"
-    assert lease.resource_key.endswith(":mps:unified")
+    assert lease_set.leases[0].path.parent == tmp_path / "runtime" / "heavy-job-leases"
+    assert lease_set.resource_keys[0].endswith(":mps:unified")
 
 
 def test_failed_owner_metadata_setup_unlocks_and_closes_handle(tmp_path, monkeypatch):
