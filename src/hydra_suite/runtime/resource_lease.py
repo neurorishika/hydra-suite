@@ -102,7 +102,11 @@ def canonical_resource_key(
     kind = str(getattr(accelerator, "value", accelerator)).strip().lower()
     host = socket.gethostname()
     if kind == "mps":
-        return f"{host}:mps:unified"
+        # MPS allocations and ordinary host allocations consume the exact
+        # same physical RAM pool.  Using that pool's host key is the actual
+        # deduplication; a separate ``mps`` lock would let a CPU-heavy job race
+        # the same memory.
+        return canonical_host_memory_key()
     if kind == "cpu":
         return canonical_host_memory_key()
     if kind != "cuda":
@@ -121,6 +125,29 @@ def canonical_resource_key(
     return f"{host}:cuda:{identity}"
 
 
+def canonical_resource_keys(
+    accelerator: str,
+    *,
+    device_uuid: Optional[str] = None,
+    device_pci_bus_id: Optional[str] = None,
+) -> tuple[str, ...]:
+    """Return the complete canonical ownership set for one resolved backend."""
+    kind = str(getattr(accelerator, "value", accelerator)).strip().lower()
+    accelerator_key = canonical_resource_key(
+        kind,
+        device_uuid=device_uuid,
+        device_pci_bus_id=device_pci_bus_id,
+    )
+    keys: tuple[str, ...]
+    if kind == "cuda":
+        keys = (canonical_host_memory_key(), accelerator_key)
+    elif kind == "mps":
+        keys = (accelerator_key,)
+    else:
+        keys = (canonical_host_memory_key(),)
+    return tuple(sorted(keys))
+
+
 def canonical_heavy_job_lease_set(
     job_name: str,
     accelerator: str,
@@ -136,23 +163,13 @@ def canonical_heavy_job_lease_set(
 
         lease_dir = get_data_dir() / "runtime" / "heavy-job-leases"
     kind = str(getattr(accelerator, "value", accelerator)).strip().lower()
-    accelerator_key = canonical_resource_key(
+    keys = canonical_resource_keys(
         kind,
-        index,
         device_uuid=device_uuid,
         device_pci_bus_id=device_pci_bus_id,
     )
-    # MPS accelerator allocations are the host allocation pool, so one unified
-    # key represents both resources rather than self-deadlocking on two aliases.
-    if kind == "cuda":
-        keys = [canonical_host_memory_key(), accelerator_key]
-    elif kind == "mps":
-        keys = [accelerator_key]
-    else:
-        keys = [canonical_host_memory_key()]
-    unique_keys = sorted(set(keys))
     return HeavyJobLeaseSet(
-        [HeavyJobLease(key, job_name, Path(lease_dir)) for key in unique_keys]
+        [HeavyJobLease(key, job_name, Path(lease_dir)) for key in keys]
     )
 
 

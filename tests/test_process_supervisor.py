@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import itertools
 import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 import tracemalloc
 from pathlib import Path
@@ -11,9 +13,8 @@ from pathlib import Path
 import psutil
 import pytest
 
-import hydra_suite.runtime.child_bootstrap as bootstrap_module
+import hydra_suite.runtime.process_guardian as guardian_module
 import hydra_suite.runtime.process_supervisor as supervisor_module
-import hydra_suite.runtime.resource_limits as limits_module
 from hydra_suite.runtime.process_supervisor import (
     BoundedLineBuffer,
     ContainmentPlan,
@@ -42,6 +43,11 @@ from hydra_suite.runtime.resource_limits import (
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="process-group tests")
 
 
+@pytest.fixture(autouse=True)
+def _isolate_canonical_lease_directory(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HYDRA_DATA_DIR", str(tmp_path))
+
+
 def _child_env() -> dict[str, str]:
     env = dict(os.environ)
     src = str(Path(__file__).resolve().parents[1] / "src")
@@ -50,7 +56,23 @@ def _child_env() -> dict[str, str]:
 
 
 def _cpu_lease_set(tmp_path: Path) -> HeavyJobLeaseSet:
-    return canonical_heavy_job_lease_set("supervised", "cpu", lease_dir=tmp_path)
+    return canonical_heavy_job_lease_set(
+        "supervised", "cpu", lease_dir=tmp_path / "runtime" / "heavy-job-leases"
+    )
+
+
+def _require_guardian_identity_scan() -> None:
+    scan_ok, _ = guardian_module._scan_token_identities(
+        "capability-probe", {}, max_identities=1
+    )
+    if not scan_ok:
+        pytest.skip("sandbox denies the guardian's launch-scoped identity scan")
+
+
+def _initialize_fake_tree(tree: OwnedProcessTree) -> None:
+    tree._state_lock = threading.RLock()
+    tree._overflow_identity = None
+    tree._permanent_ownership_uncertain = False
 
 
 def _wait_until_gone(pid: int, timeout: float = 5.0) -> None:
@@ -181,7 +203,8 @@ def test_process_group_is_not_signalled_after_all_owned_identities_are_gone(
     monkeypatch,
 ):
     tree = object.__new__(OwnedProcessTree)
-    tree.root = type("GoneIdentity", (), {"resolve": lambda _self: None})()
+    _initialize_fake_tree(tree)
+    tree.root = type("GoneIdentity", (), {"probe": lambda _self: (None, True)})()
     tree.process_group_id = 424242
     tree.systemd_unit = None
     tree._known_identities = {}
@@ -204,11 +227,15 @@ def test_systemd_scope_is_authoritative_for_tree_signals(monkeypatch):
             pytest.fail("systemd-owned PID was signalled directly")
 
     class LiveIdentity:
+        def probe(self):
+            return FailOnDirectSignal(), False
+
         def resolve(self):
             return FailOnDirectSignal()
 
     tree = object.__new__(OwnedProcessTree)
-    tree.root = type("GoneIdentity", (), {"resolve": lambda _self: None})()
+    _initialize_fake_tree(tree)
+    tree.root = type("GoneIdentity", (), {"probe": lambda _self: (None, True)})()
     tree.process_group_id = 424242
     tree.systemd_unit = "hydra-owned.scope"
     tree._known_identities = {123: LiveIdentity()}
@@ -226,6 +253,7 @@ def test_systemd_scope_is_authoritative_for_tree_signals(monkeypatch):
         "signal_systemd_scope",
         record_systemd_signal,
     )
+    monkeypatch.setattr(tree, "_identity_in_systemd_scope", lambda _identity: True)
     monkeypatch.setattr(os, "killpg", lambda *_args: pytest.fail("killpg was used"))
 
     tree.kill()
@@ -245,18 +273,22 @@ def test_failed_systemd_signal_targets_only_proven_escapees_and_retains_ownershi
             direct_signals.append(signum)
 
     class LiveIdentity:
+        def probe(self):
+            return FakeProcess(), False
+
         def resolve(self):
             return FakeProcess()
 
     tree = object.__new__(OwnedProcessTree)
-    tree.root = type("GoneIdentity", (), {"resolve": lambda _self: None})()
+    _initialize_fake_tree(tree)
+    tree.root = type("GoneIdentity", (), {"probe": lambda _self: (None, True)})()
     tree.process_group_id = 424242
     tree.systemd_unit = "hydra-owned.scope"
     tree.scope_signal_failed = False
     tree._known_identities = {123: LiveIdentity()}
     tree.max_tracked_identities = 8
     tree.identity_overflowed = False
-    monkeypatch.setattr(tree, "_discover_identities", lambda: ())
+    monkeypatch.setattr(tree, "_discover_identities", lambda: ((), None, False))
     monkeypatch.setattr(tree, "_identity_in_systemd_scope", lambda _identity: False)
     monkeypatch.setattr(
         supervisor_module, "signal_systemd_scope", lambda _unit, _signum: False
@@ -266,6 +298,21 @@ def test_failed_systemd_signal_targets_only_proven_escapees_and_retains_ownershi
 
     assert direct_signals == [signal.SIGKILL]
     assert tree.ownership_uncertain
+
+
+def test_systemd_membership_treats_identity_that_exited_during_signal_as_gone(
+    monkeypatch,
+):
+    class GoneIdentity:
+        def probe(self):
+            return None, True
+
+    tree = object.__new__(OwnedProcessTree)
+    _initialize_fake_tree(tree)
+    tree.systemd_unit = "hydra-owned.scope"
+    monkeypatch.setattr(supervisor_module.platform, "system", lambda: "Linux")
+
+    assert tree._identity_in_systemd_scope(GoneIdentity()) is True
 
 
 def test_identity_registry_prunes_dead_entries_retains_escapees_and_fails_closed(
@@ -284,12 +331,15 @@ def test_identity_registry_prunes_dead_entries_retains_escapees_and_fails_closed
     identity_type = supervisor_module._ProcessIdentity
     monkeypatch.setattr(
         identity_type,
-        "resolve",
+        "probe",
         lambda identity: (
-            FakeProcess(identity.pid) if identity.pid in live_pids else None
+            (FakeProcess(identity.pid), False)
+            if identity.pid in live_pids
+            else (None, True)
         ),
     )
     tree = object.__new__(OwnedProcessTree)
+    _initialize_fake_tree(tree)
     tree.root = identity_type(1, 1.0)
     tree.process_group_id = None
     tree.systemd_unit = None
@@ -303,12 +353,12 @@ def test_identity_registry_prunes_dead_entries_retains_escapees_and_fails_closed
     monkeypatch.setattr(
         tree,
         "_discover_identities",
-        lambda: (identity_type(3, 3.0), identity_type(4, 4.0)),
+        lambda: ((identity_type(3, 3.0),), identity_type(4, 4.0), False),
     )
 
     identities = tree.identities()
 
-    assert {identity.pid for identity in identities} == {2, 3}
+    assert {identity.pid for identity in identities} == {2, 3, 4}
     assert set(tree._known_identities) == {2, 3}
     assert tree.identity_overflowed
     assert killed == [
@@ -318,44 +368,279 @@ def test_identity_registry_prunes_dead_entries_retains_escapees_and_fails_closed
     ]
 
 
-def test_guardian_registry_prunes_dead_and_kills_every_identity_beyond_bound(
+def test_failed_direct_signal_permanently_retains_uncertain_ownership(monkeypatch):
+    class DeniedProcess:
+        pid = 42
+
+        def send_signal(self, _signum):
+            raise psutil.AccessDenied(42)
+
+    identity = supervisor_module._ProcessIdentity(42, 1.0)
+    tree = object.__new__(OwnedProcessTree)
+    _initialize_fake_tree(tree)
+    tree.process_group_id = None
+    tree.systemd_unit = None
+    tree.scope_signal_failed = False
+    tree._known_identities = {42: identity}
+    tree.max_tracked_identities = 1
+    tree.identity_overflowed = False
+    monkeypatch.setattr(
+        supervisor_module._ProcessIdentity,
+        "probe",
+        lambda _identity: (DeniedProcess(), False),
+    )
+    assert not tree._signal_snapshot(signal.SIGKILL, (identity,))
+    assert tree.ownership_uncertain
+    monkeypatch.setattr(
+        supervisor_module._ProcessIdentity,
+        "probe",
+        lambda _identity: (None, True),
+    )
+    assert tree.ownership_uncertain
+
+
+def test_bounded_discovery_never_requests_recursive_materialization():
+    calls = []
+
+    class FakeProcess:
+        def __init__(self, pid):
+            self.pid = pid
+
+        def create_time(self):
+            return float(self.pid)
+
+        def children(self, recursive):
+            calls.append((self.pid, recursive))
+            return [FakeProcess(pid) for pid in range(2, 100)] if self.pid == 1 else []
+
+    tree = object.__new__(OwnedProcessTree)
+    _initialize_fake_tree(tree)
+    root_process = FakeProcess(1)
+    tree.root = type(
+        "RootIdentity", (), {"probe": lambda _self: (root_process, False)}
+    )()
+    tree._known_identities = {1: supervisor_module._ProcessIdentity(1, 1.0)}
+    tree.max_tracked_identities = 2
+
+    discovered, overflow, uncertain = tree._discover_identities()
+
+    assert [identity.pid for identity in discovered] == [2]
+    assert overflow is not None and overflow.pid == 3
+    assert not uncertain
+    assert calls == [(1, False)]
+
+
+def test_owned_tree_registry_operations_are_serialized_across_threads(monkeypatch):
+    identity_type = supervisor_module._ProcessIdentity
+
+    class FakeProcess:
+        def __init__(self, pid):
+            self.pid = pid
+
+        def send_signal(self, _signum):
+            return None
+
+    monkeypatch.setattr(
+        identity_type,
+        "probe",
+        lambda identity: (FakeProcess(identity.pid), False),
+    )
+    tree = object.__new__(OwnedProcessTree)
+    _initialize_fake_tree(tree)
+    tree.root = identity_type(1, 1.0)
+    tree.process_group_id = None
+    tree.systemd_unit = None
+    tree.scope_signal_failed = False
+    tree._known_identities = {1: identity_type(1, 1.0)}
+    tree.max_tracked_identities = 64
+    tree.identity_overflowed = False
+    counter = itertools.cycle(range(2, 20))
+    monkeypatch.setattr(
+        tree,
+        "_discover_identities",
+        lambda: ((identity_type(next(counter), 1.0),), None, False),
+    )
+    errors = []
+
+    def mutate_registry():
+        try:
+            for _ in range(50):
+                tree.identities()
+                tree.kill()
+        except BaseException as exc:  # noqa: B036, BLE001 - asserted below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=mutate_registry) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert not errors
+    assert all(not thread.is_alive() for thread in threads)
+
+
+def test_watchdog_observation_exception_kills_and_marks_tree_uncertain():
+    class BrokenTree:
+        root = type("Root", (), {"pid": 123})()
+        killed = False
+        uncertain = False
+
+        def is_alive(self):
+            raise RuntimeError("registry mutation failed")
+
+        def mark_ownership_uncertain(self):
+            self.uncertain = True
+
+        def kill(self):
+            self.killed = True
+
+    tree = BrokenTree()
+    watchdog = ProcessTreeWatchdog(
+        tree,
+        WatchdogPolicy(1, 2, 0),
+    )
+
+    watchdog._run()
+
+    assert tree.killed
+    assert tree.uncertain
+    assert watchdog.outcome is not None
+    assert watchdog.outcome.trigger is WatchdogTrigger.OBSERVATION_FAILURE
+
+
+def test_guardian_registry_retains_first_overflow_identity_until_proven_gone(
     monkeypatch,
 ):
-    killed = []
+    token = "owned-token"
 
     class FakeProcess:
         def __init__(self, pid, create_time):
             self.pid = pid
             self._create_time = create_time
+            self.info = {"uids": type("Uids", (), {"real": os.getuid()})()}
 
         def create_time(self):
             return self._create_time
 
-        def children(self, recursive):
-            assert recursive
-            return [FakeProcess(3, 3.0), FakeProcess(4, 4.0)]
-
-        def kill(self):
-            killed.append(self.pid)
+        def environ(self):
+            return {"HYDRA_CONTAINMENT_TOKEN": token}
 
     monkeypatch.setattr(
-        bootstrap_module,
-        "_resolve_captured_identity",
-        lambda pid, _create_time: (
-            FakeProcess(pid, float(pid)) if pid in {1, 2} else None
-        ),
+        guardian_module,
+        "_prune_gone_identities",
+        lambda identities: identities.pop(9, None),
     )
-    monkeypatch.setattr(psutil, "Process", lambda _pid: FakeProcess(1, 1.0))
-    captured = {1: 1.0, 2: 2.0, 5: 5.0}
+    monkeypatch.setattr(
+        guardian_module.psutil,
+        "process_iter",
+        lambda _attrs: [
+            FakeProcess(3, 3.0),
+            FakeProcess(4, 4.0),
+            FakeProcess(5, 5.0),
+        ],
+    )
+    identities = {
+        2: guardian_module.GuardedIdentity(2, 2.0),
+        9: guardian_module.GuardedIdentity(9, 9.0),
+    }
 
-    succeeded, overflowed = bootstrap_module._capture_descendant_identities(
-        1, 1.0, captured, max_identities=3
+    complete, overflowed = guardian_module._scan_token_identities(
+        token, identities, max_identities=3
     )
 
-    assert succeeded
+    assert not complete
     assert overflowed
-    assert captured == {1: 1.0, 2: 2.0, 3: 3.0}
-    assert killed == [4]
+    assert identities == {
+        2: guardian_module.GuardedIdentity(2, 2.0),
+        3: guardian_module.GuardedIdentity(3, 3.0),
+        4: guardian_module.GuardedIdentity(4, 4.0),
+        5: guardian_module.GuardedIdentity(5, 5.0),
+    }
+
+
+def test_guardian_does_not_prune_or_acknowledge_unverifiable_identity(monkeypatch):
+    identity = guardian_module.GuardedIdentity(42, 1.0)
+    identities = {42: identity}
+    monkeypatch.setattr(
+        guardian_module.GuardedIdentity,
+        "resolve",
+        lambda _identity: (None, False),
+    )
+
+    guardian_module._prune_gone_identities(identities)
+
+    assert identities == {42: identity}
+    assert not guardian_module._signal_identity(identity, signal.SIGKILL)
+
+
+def test_guardian_is_spawned_as_a_separate_session_outside_systemd(monkeypatch):
+    captured = {}
+
+    class FakeGuardian:
+        returncode = 0
+
+        def terminate(self):
+            pytest.fail("ready guardian was terminated")
+
+    def fake_popen(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return FakeGuardian()
+
+    liveness_read, liveness_write = os.pipe()
+    acknowledgement_read, acknowledgement_write = os.pipe()
+    monkeypatch.setattr(guardian_module.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(
+        guardian_module.select, "select", lambda reads, *_args: (reads, [], [])
+    )
+    monkeypatch.setattr(guardian_module.os, "read", lambda _fd, _size: b"R")
+    try:
+        guardian_module.spawn_parent_guardian(
+            workload_pid=100,
+            process_group_id=100,
+            liveness_read_fd=liveness_read,
+            acknowledgement_write_fd=acknowledgement_write,
+            containment_token="token",
+            max_identities=8,
+            systemd_unit="hydra-owned.scope",
+        )
+    finally:
+        os.close(liveness_write)
+        os.close(acknowledgement_read)
+
+    assert captured["command"][:3] == [
+        sys.executable,
+        "-m",
+        "hydra_suite.runtime.process_guardian",
+    ]
+    assert "systemd-run" not in captured["command"]
+    assert captured["kwargs"]["start_new_session"] is True
+
+
+def test_supervisor_releases_only_after_guardian_quiescence_acknowledgement():
+    liveness_read, liveness_write = os.pipe()
+    acknowledgement_read, acknowledgement_write = os.pipe()
+    os.write(acknowledgement_write, b"Q")
+    os.close(acknowledgement_write)
+
+    class CompletedGuardian:
+        returncode = 0
+
+        def wait(self, timeout):
+            assert timeout == 2.0
+            return 0
+
+    sidecar = object.__new__(SupervisedSidecar)
+    sidecar._guardian_started = True
+    sidecar._guardian_teardown_requested = False
+    sidecar._parent_liveness_write_fd = liveness_write
+    sidecar._guardian_ack_read_fd = acknowledgement_read
+    sidecar._guardian_process = CompletedGuardian()
+
+    assert sidecar._complete_guardian_teardown(timeout=0.1)
+    assert os.read(liveness_read, 1) == b"T"
+    os.close(liveness_read)
 
 
 def test_noisy_output_retains_only_a_fixed_tail():
@@ -432,6 +717,7 @@ def test_drained_lines_are_retained_as_tail_without_being_reported_as_dropped():
 
 
 def test_noisy_child_is_drained_without_an_unbounded_parent_queue(tmp_path):
+    _require_guardian_identity_scan()
     launch = build_limited_launch(
         [
             sys.executable,
@@ -442,17 +728,15 @@ def test_noisy_child_is_drained_without_an_unbounded_parent_queue(tmp_path):
         backend=LimitBackend.WATCHDOG_ONLY,
         environment=_child_env(),
     )
-    leases = _cpu_lease_set(tmp_path)
     plan = ContainmentPlan(
         launch=launch,
+        job_name="noisy-output",
         minimum_system_available_bytes=0,
-        expected_resource_keys=leases.resource_keys,
         poll_interval_seconds=0.01,
     )
     assert plan.watchdog_policy.soft_tree_rss_bytes == launch.limits.soft_host_bytes
     sidecar = SupervisedSidecar(
         plan,
-        leases=leases,
         output_max_lines=8,
         output_max_chars=1024,
     )
@@ -471,6 +755,7 @@ def test_noisy_child_is_drained_without_an_unbounded_parent_queue(tmp_path):
 def test_parent_liveness_guardian_is_enabled_for_each_posix_fallback(
     backend, monkeypatch, tmp_path
 ):
+    _require_guardian_identity_scan()
     launch = build_limited_launch(
         [sys.executable, "-c", "print('done')"],
         ProcessMemoryLimits(soft_host_bytes=1024**3, hard_host_bytes=2 * 1024**3),
@@ -485,23 +770,22 @@ def test_parent_liveness_guardian_is_enabled_for_each_posix_fallback(
         return real_popen(*args, **kwargs)
 
     monkeypatch.setattr(subprocess, "Popen", recording_popen)
-    leases = _cpu_lease_set(tmp_path)
     sidecar = SupervisedSidecar(
         ContainmentPlan(
             launch=launch,
+            job_name="guardian-backend",
             minimum_system_available_bytes=0,
-            expected_resource_keys=leases.resource_keys,
-        ),
-        leases=leases,
+        )
     )
     sidecar.wait(timeout=5)
 
-    assert "HYDRA_PARENT_LIVENESS_FD" in captured_kwargs[0]["env"]
-    assert captured_kwargs[0]["env"]["HYDRA_PARENT_MAX_IDENTITIES"] == "512"
+    assert "HYDRA_START_GATE_FD" in captured_kwargs[0]["env"]
+    assert "HYDRA_CONTAINMENT_TOKEN" in captured_kwargs[0]["env"]
     assert captured_kwargs[0]["pass_fds"]
 
 
 def test_wait_timeout_terminates_reaps_and_releases_owned_lease(tmp_path):
+    _require_guardian_identity_scan()
     launch = build_limited_launch(
         [sys.executable, "-c", "import time; time.sleep(60)"],
         ProcessMemoryLimits(soft_host_bytes=1024**3, hard_host_bytes=2 * 1024**3),
@@ -512,26 +796,28 @@ def test_wait_timeout_terminates_reaps_and_releases_owned_lease(tmp_path):
     resource_key = leases.resource_keys[0]
     plan = ContainmentPlan(
         launch=launch,
+        job_name="supervised",
         minimum_system_available_bytes=0,
         poll_interval_seconds=0.01,
         terminate_grace_seconds=0.05,
-        expected_resource_keys=leases.resource_keys,
     )
-    sidecar = SupervisedSidecar(plan, leases=leases)
+    sidecar = SupervisedSidecar(plan)
+    lease_dir = leases.leases[0].path.parent
     with pytest.raises(ResourceBusyError):
-        HeavyJobLease(resource_key, "competitor", tmp_path).acquire()
+        HeavyJobLease(resource_key, "competitor", lease_dir).acquire()
 
     with pytest.raises(subprocess.TimeoutExpired):
         sidecar.wait(timeout=0.05)
 
     assert sidecar.process.poll() is not None
-    with HeavyJobLease(resource_key, "after teardown", tmp_path):
+    with HeavyJobLease(resource_key, "after teardown", lease_dir):
         pass
 
 
 def test_wait_timeout_returns_explicit_owner_when_exit_cannot_be_proved(
     tmp_path, monkeypatch
 ):
+    _require_guardian_identity_scan()
     launch = build_limited_launch(
         [sys.executable, "-c", "import time; time.sleep(60)"],
         ProcessMemoryLimits(soft_host_bytes=1024**3, hard_host_bytes=2 * 1024**3),
@@ -542,11 +828,12 @@ def test_wait_timeout_returns_explicit_owner_when_exit_cannot_be_proved(
     resource_key = leases.resource_keys[0]
     plan = ContainmentPlan(
         launch=launch,
+        job_name="supervised",
         minimum_system_available_bytes=0,
         terminate_grace_seconds=0,
-        expected_resource_keys=leases.resource_keys,
     )
-    sidecar = SupervisedSidecar(plan, leases=leases)
+    sidecar = SupervisedSidecar(plan)
+    lease_dir = leases.leases[0].path.parent
     real_teardown = sidecar._terminate_and_reap
     monkeypatch.setattr(sidecar, "_terminate_and_reap", lambda _grace: False)
     try:
@@ -555,7 +842,7 @@ def test_wait_timeout_returns_explicit_owner_when_exit_cannot_be_proved(
 
         assert error.value.sidecar is sidecar
         with pytest.raises(ResourceBusyError):
-            HeavyJobLease(resource_key, "competitor", tmp_path).acquire()
+            HeavyJobLease(resource_key, "competitor", lease_dir).acquire()
     finally:
         monkeypatch.setattr(sidecar, "_terminate_and_reap", real_teardown)
         sidecar.cancel(grace_seconds=0.05)
@@ -574,15 +861,17 @@ def test_final_admission_runs_under_supervisor_owned_lease_before_popen(
     resource_key = leases.resource_keys[0]
     plan = ContainmentPlan(
         launch=launch,
+        job_name="supervised",
         minimum_system_available_bytes=0,
-        expected_resource_keys=leases.resource_keys,
     )
     callback_ran = []
 
     def refuse_while_locked():
         callback_ran.append(True)
         with pytest.raises(ResourceBusyError):
-            HeavyJobLease(resource_key, "competitor", tmp_path).acquire()
+            HeavyJobLease(
+                resource_key, "competitor", leases.leases[0].path.parent
+            ).acquire()
         raise RuntimeError("final admission refused")
 
     monkeypatch.setattr(
@@ -592,14 +881,14 @@ def test_final_admission_runs_under_supervisor_owned_lease_before_popen(
     )
 
     with pytest.raises(RuntimeError, match="final admission refused"):
-        SupervisedSidecar(plan, leases=leases, prelaunch_check=refuse_while_locked)
+        SupervisedSidecar(plan, prelaunch_check=refuse_while_locked)
 
     assert callback_ran == [True]
-    with HeavyJobLease(resource_key, "after refusal", tmp_path):
+    with HeavyJobLease(resource_key, "after refusal", leases.leases[0].path.parent):
         pass
 
 
-def test_containment_plan_rejects_noncanonical_or_mismatched_resource_keys(
+def test_containment_plan_derives_canonical_keys_and_internal_lease_contends(
     tmp_path, monkeypatch
 ):
     launch = build_limited_launch(
@@ -608,18 +897,10 @@ def test_containment_plan_rejects_noncanonical_or_mismatched_resource_keys(
         backend=LimitBackend.WATCHDOG_ONLY,
         environment=_child_env(),
     )
-    with pytest.raises(ValueError, match="unique and sorted"):
-        ContainmentPlan(
-            launch=launch,
-            minimum_system_available_bytes=0,
-            expected_resource_keys=("z-device", "a-host"),
-        )
-    with pytest.raises(ValueError, match="explicit resource lease set"):
-        ContainmentPlan(
-            launch=launch,
-            minimum_system_available_bytes=0,
-            expected_resource_keys=(),
-        )
+    plan = ContainmentPlan(
+        launch=launch, job_name="canonical-plan", minimum_system_available_bytes=0
+    )
+    assert plan.expected_resource_keys == _cpu_lease_set(tmp_path).resource_keys
 
     cuda_launch = build_limited_launch(
         [sys.executable, "-c", "pass"],
@@ -627,33 +908,33 @@ def test_containment_plan_rejects_noncanonical_or_mismatched_resource_keys(
         backend=LimitBackend.WATCHDOG_ONLY,
         environment=_child_env(),
         accelerator_kind="cuda",
+        accelerator_device_uuid="GPU-REAL",
     )
-    with pytest.raises(ValueError, match="cuda memory topology"):
-        ContainmentPlan(
-            launch=cuda_launch,
-            minimum_system_available_bytes=0,
-            expected_resource_keys=("host:cuda:uuid:gpu-only",),
-        )
-
-    leases = _cpu_lease_set(tmp_path)
-    plan = ContainmentPlan(
-        launch=launch,
+    cuda_plan = ContainmentPlan(
+        launch=cuda_launch,
+        job_name="cuda-plan",
         minimum_system_available_bytes=0,
-        expected_resource_keys=("different-host:host-memory",),
     )
+    assert any("cuda:uuid:gpu-real" in key for key in cuda_plan.expected_resource_keys)
+
+    true_lease = _cpu_lease_set(tmp_path)
+    true_lease.acquire()
     monkeypatch.setattr(
         subprocess,
         "Popen",
-        lambda *_args, **_kwargs: pytest.fail("mismatched plan started a child"),
+        lambda *_args, **_kwargs: pytest.fail("fabricated lease started a child"),
     )
-
-    with pytest.raises(ValueError, match="do not match"):
-        SupervisedSidecar(plan, leases=leases)
+    try:
+        with pytest.raises(ResourceBusyError):
+            SupervisedSidecar(plan)
+    finally:
+        true_lease.release()
 
 
 def test_constructor_failure_after_popen_kills_reaps_and_releases_lease(
     tmp_path, monkeypatch
 ):
+    _require_guardian_identity_scan()
     launch = build_limited_launch(
         [sys.executable, "-c", "import time; time.sleep(60)"],
         ProcessMemoryLimits(soft_host_bytes=1024**3, hard_host_bytes=2 * 1024**3),
@@ -664,9 +945,9 @@ def test_constructor_failure_after_popen_kills_reaps_and_releases_lease(
     resource_key = leases.resource_keys[0]
     plan = ContainmentPlan(
         launch=launch,
+        job_name="supervised",
         minimum_system_available_bytes=0,
         poll_interval_seconds=0.01,
-        expected_resource_keys=leases.resource_keys,
     )
     real_popen = subprocess.Popen
     started = []
@@ -686,23 +967,21 @@ def test_constructor_failure_after_popen_kills_reaps_and_releases_lease(
     )
 
     with pytest.raises(RuntimeError, match="watchdog start failed"):
-        SupervisedSidecar(plan, leases=leases)
+        SupervisedSidecar(plan)
 
     assert started and started[0].poll() is not None
-    lease_fds = {
-        int(value)
-        for value in captured_kwargs[0]["env"]["HYDRA_PARENT_LEASE_FDS"].split(",")
-    }
-    assert lease_fds.issubset(set(captured_kwargs[0]["pass_fds"]))
-    with HeavyJobLease(resource_key, "after setup failure", tmp_path):
+    assert "HYDRA_PARENT_LEASE_FDS" not in captured_kwargs[0]["env"]
+    with HeavyJobLease(
+        resource_key, "after setup failure", leases.leases[0].path.parent
+    ):
         pass
 
 
 def test_supervisor_process_death_does_not_orphan_watchdog_only_child(tmp_path):
+    _require_guardian_identity_scan()
     helper_script = """
 import os, sys
 from hydra_suite.runtime.process_supervisor import ContainmentPlan, SupervisedSidecar
-from hydra_suite.runtime.resource_lease import canonical_heavy_job_lease_set
 from hydra_suite.runtime.resource_limits import (
     LimitBackend, ProcessMemoryLimits, build_limited_launch,
 )
@@ -711,14 +990,12 @@ launch = build_limited_launch(
     ProcessMemoryLimits(soft_host_bytes=1024**3, hard_host_bytes=2 * 1024**3),
     backend=LimitBackend.WATCHDOG_ONLY,
 )
-leases = canonical_heavy_job_lease_set('test', 'cpu', lease_dir=sys.argv[1])
 sidecar = SupervisedSidecar(
     ContainmentPlan(
         launch=launch,
+        job_name='parent-death',
         minimum_system_available_bytes=0,
-        expected_resource_keys=leases.resource_keys,
-    ),
-    leases=leases,
+    )
 )
 print(sidecar.process.pid, flush=True)
 os._exit(0)
@@ -740,10 +1017,10 @@ os._exit(0)
 def test_parent_death_guardian_captures_setsid_escapee_when_os_allows_enumeration(
     tmp_path,
 ):
+    _require_guardian_identity_scan()
     helper_script = r"""
 import os, psutil, sys, time
 from hydra_suite.runtime.process_supervisor import ContainmentPlan, SupervisedSidecar
-from hydra_suite.runtime.resource_lease import canonical_heavy_job_lease_set
 from hydra_suite.runtime.resource_limits import (
     LimitBackend, ProcessMemoryLimits, build_limited_launch,
 )
@@ -761,14 +1038,12 @@ launch = build_limited_launch(
     ProcessMemoryLimits(soft_host_bytes=1024**3, hard_host_bytes=2 * 1024**3),
     backend=LimitBackend.WATCHDOG_ONLY,
 )
-leases = canonical_heavy_job_lease_set('test', 'cpu', lease_dir=sys.argv[1])
 sidecar = SupervisedSidecar(
     ContainmentPlan(
         launch=launch,
+        job_name='setsid-parent-death',
         minimum_system_available_bytes=0,
-        expected_resource_keys=leases.resource_keys,
-    ),
-    leases=leases,
+    )
 )
 escaped_pid = None
 deadline = time.monotonic() + 5
@@ -813,30 +1088,136 @@ os._exit(0)
     _wait_until_gone(escaped_pid)
 
 
-def test_systemd_parent_guardian_retries_failed_scope_signal(monkeypatch):
-    results = iter((False, True))
+def test_immediate_success_cannot_release_an_uncaptured_setsid_escapee(tmp_path):
+    _require_guardian_identity_scan()
+    workload = """
+import subprocess, sys
+escaped = subprocess.Popen(
+    [sys.executable, '-c', 'import time; time.sleep(60)'],
+    start_new_session=True,
+)
+print(escaped.pid, flush=True)
+"""
+    for attempt in range(5):
+        launch = build_limited_launch(
+            [sys.executable, "-c", workload],
+            ProcessMemoryLimits(soft_host_bytes=1024**3, hard_host_bytes=2 * 1024**3),
+            backend=LimitBackend.WATCHDOG_ONLY,
+            environment=_child_env(),
+        )
+        sidecar = SupervisedSidecar(
+            ContainmentPlan(
+                launch=launch,
+                job_name=f"immediate-{attempt}",
+                minimum_system_available_bytes=0,
+            )
+        )
+
+        result = sidecar.wait(timeout=5)
+        pid_lines = [
+            line.strip() for line in result.output_tail if line.strip().isdigit()
+        ]
+
+        assert result.classified_exit.kind is ExitKind.SUCCESS
+        assert pid_lines, "short-lived root did not report its escaped child PID"
+        _wait_until_gone(int(pid_lines[-1]))
+
+
+def test_abrupt_parent_death_captures_immediate_exit_setsid_escapee_repeatedly(
+    tmp_path,
+):
+    _require_guardian_identity_scan()
+    helper_script = r"""
+import os, sys, time
+from hydra_suite.runtime.process_supervisor import ContainmentPlan, SupervisedSidecar
+from hydra_suite.runtime.resource_limits import (
+    LimitBackend, ProcessMemoryLimits, build_limited_launch,
+)
+workload = '''
+import subprocess, sys
+escaped = subprocess.Popen(
+    [sys.executable, '-c', 'import time; time.sleep(60)'],
+    start_new_session=True,
+)
+print(escaped.pid, flush=True)
+'''
+launch = build_limited_launch(
+    [sys.executable, '-c', workload],
+    ProcessMemoryLimits(soft_host_bytes=1024**3, hard_host_bytes=2 * 1024**3),
+    backend=LimitBackend.WATCHDOG_ONLY,
+)
+sidecar = SupervisedSidecar(
+    ContainmentPlan(
+        launch=launch,
+        job_name='abrupt-immediate',
+        minimum_system_available_bytes=0,
+    )
+)
+deadline = time.monotonic() + 5
+escaped_pid = None
+while escaped_pid is None and time.monotonic() < deadline:
+    lines, _, _ = sidecar.output.drain(timeout=0.05)
+    for line in lines:
+        if line.strip().isdigit():
+            escaped_pid = int(line.strip())
+if escaped_pid is None:
+    sidecar.cancel(0.05)
+    raise SystemExit('missing escaped PID')
+print(escaped_pid, flush=True)
+os._exit(0)
+"""
+    for attempt in range(5):
+        lease_dir = tmp_path / str(attempt)
+        lease_dir.mkdir()
+        helper = subprocess.Popen(
+            [sys.executable, "-c", helper_script, str(lease_dir)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=_child_env(),
+        )
+        assert helper.stdout is not None
+        escaped_pid = int(helper.stdout.readline())
+        helper.wait(timeout=5)
+
+        assert helper.returncode == 0
+        _wait_until_gone(escaped_pid)
+
+
+def test_systemd_parent_guardian_requires_scope_quiescence_after_signal(monkeypatch):
+    quiescence = iter((False, True, True))
     signals = []
-    outside_kills = []
 
     def signal_scope(unit, signum):
         signals.append((unit, signum))
-        return next(results)
+        return True
 
-    monkeypatch.setattr(limits_module, "signal_systemd_scope", signal_scope)
+    monkeypatch.setattr(guardian_module, "signal_systemd_scope", signal_scope)
     monkeypatch.setattr(
-        bootstrap_module,
-        "_kill_captured_outside_scope",
-        lambda unit, captured: outside_kills.append((unit, captured.copy())),
+        guardian_module,
+        "systemd_scope_is_quiescent",
+        lambda _unit: next(quiescence),
     )
-    monkeypatch.setattr(bootstrap_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        guardian_module,
+        "_scan_token_identities",
+        lambda *_args, **_kwargs: (True, False),
+    )
+    monkeypatch.setattr(guardian_module.time, "sleep", lambda _seconds: None)
 
-    bootstrap_module._guard_systemd_scope("owned.scope", {123: 1.0})
+    guardian_module._terminate_until_quiescent(
+        containment_token="token",
+        identities={},
+        max_identities=8,
+        process_group_id=123,
+        systemd_unit="owned.scope",
+    )
 
     assert signals == [
         ("owned.scope", int(signal.SIGKILL)),
         ("owned.scope", int(signal.SIGKILL)),
+        ("owned.scope", int(signal.SIGKILL)),
     ]
-    assert outside_kills == [("owned.scope", {123: 1.0})]
 
 
 def test_success_is_not_reclassified_from_historical_oom_text():

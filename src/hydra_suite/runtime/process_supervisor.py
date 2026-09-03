@@ -5,23 +5,31 @@ from __future__ import annotations
 import codecs
 import os
 import platform
+import select
 import signal
 import subprocess
 import threading
 import time
+import uuid
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Optional
 
 import psutil
 
-from .resource_lease import HeavyJobLeaseSet
+from .process_guardian import spawn_parent_guardian
+from .resource_lease import (
+    HeavyJobLeaseSet,
+    canonical_heavy_job_lease_set,
+    canonical_resource_keys,
+)
 from .resource_limits import (
     CgroupEvidence,
     LimitBackend,
     LimitedLaunch,
+    cgroup_path_contains_unit,
     probe_systemd_cgroup_evidence,
     signal_systemd_scope,
 )
@@ -34,6 +42,7 @@ class WatchdogTrigger(str, Enum):
     HARD_RSS = "host-hard-rss"
     SYSTEM_RESERVE = "host-system-reserve"
     PROCESS_COUNT = "process-count"
+    OBSERVATION_FAILURE = "observation-failure"
 
 
 @dataclass(frozen=True)
@@ -62,8 +71,9 @@ class ContainmentPlan:
     """One immutable source for kernel and watchdog memory boundaries."""
 
     launch: LimitedLaunch
+    job_name: str
     minimum_system_available_bytes: int
-    expected_resource_keys: tuple[str, ...]
+    expected_resource_keys: tuple[str, ...] = field(init=False)
     poll_interval_seconds: float = 0.25
     terminate_grace_seconds: float = 5.0
 
@@ -71,35 +81,15 @@ class ContainmentPlan:
         # Constructing the derived policy here validates every timing/floor
         # value before a child can be created.
         self.watchdog_policy
-        if not self.expected_resource_keys:
-            raise ValueError("containment requires an explicit resource lease set")
-        if any(not key for key in self.expected_resource_keys):
-            raise ValueError("expected resource keys must not be empty")
-        if self.expected_resource_keys != tuple(
-            sorted(set(self.expected_resource_keys))
-        ):
-            raise ValueError("expected resource keys must be unique and sorted")
+        if not self.job_name.strip():
+            raise ValueError("containment job name must not be empty")
         kind = self.launch.accelerator_kind.value
-        host_keys = [
-            key for key in self.expected_resource_keys if key.endswith(":host-memory")
-        ]
-        cuda_keys = [
-            key
-            for key in self.expected_resource_keys
-            if ":cuda:uuid:" in key or ":cuda:pci:" in key
-        ]
-        mps_keys = [
-            key for key in self.expected_resource_keys if key.endswith(":mps:unified")
-        ]
-        expected_shape = {
-            "cpu": (1, 0, 0),
-            "cuda": (1, 1, 0),
-            "mps": (0, 0, 1),
-        }[kind]
-        if (len(host_keys), len(cuda_keys), len(mps_keys)) != expected_shape or len(
-            self.expected_resource_keys
-        ) != sum(expected_shape):
-            raise ValueError(f"resource keys do not match {kind} memory topology")
+        canonical_keys = canonical_resource_keys(
+            kind,
+            device_uuid=self.launch.accelerator_device_uuid,
+            device_pci_bus_id=self.launch.accelerator_pci_bus_id,
+        )
+        object.__setattr__(self, "expected_resource_keys", canonical_keys)
 
     @property
     def watchdog_policy(self) -> WatchdogPolicy:
@@ -131,18 +121,25 @@ class _ProcessIdentity:
     pid: int
     create_time: float
 
-    def resolve(self) -> Optional[psutil.Process]:
-        """Resolve this PID only when its creation time still matches."""
+    def probe(self) -> tuple[Optional[psutil.Process], bool]:
+        """Return ``(process, gone)`` without calling access denial death."""
 
         try:
             process = psutil.Process(self.pid)
             if abs(process.create_time() - self.create_time) >= 0.01:
-                return None
+                return None, True
             if process.status() == psutil.STATUS_ZOMBIE:
-                return None
-            return process
-        except (psutil.Error, OSError):
-            return None
+                return None, True
+            return process, False
+        except (psutil.NoSuchProcess, psutil.ZombieProcess):
+            return None, True
+        except (psutil.AccessDenied, OSError):
+            return None, False
+
+    def resolve(self) -> Optional[psutil.Process]:
+        """Resolve this PID only when its creation time still matches."""
+
+        return self.probe()[0]
 
 
 class OwnedProcessTree:
@@ -162,6 +159,9 @@ class OwnedProcessTree:
         self.process = process
         self.root = _ProcessIdentity(process.pid, root.create_time())
         self._known_identities: dict[int, _ProcessIdentity] = {self.root.pid: self.root}
+        self._overflow_identity: Optional[_ProcessIdentity] = None
+        self._state_lock = threading.RLock()
+        self._permanent_ownership_uncertain = False
         self.process_group_id: Optional[int] = None
         self.systemd_unit = systemd_unit
         self.max_tracked_identities = max_tracked_identities
@@ -178,52 +178,89 @@ class OwnedProcessTree:
     def identities(self) -> tuple[_ProcessIdentity, ...]:
         """Capture and return every still-live, identity-validated process."""
 
-        self._prune_dead_identities()
-        for identity in self._discover_identities():
-            if self._known_identities.get(identity.pid) == identity:
-                continue
-            if len(self._known_identities) >= self.max_tracked_identities:
+        with self._state_lock:
+            self._prune_dead_identities()
+            discovered, overflow, discovery_uncertain = self._discover_identities()
+            if discovery_uncertain:
+                self._permanent_ownership_uncertain = True
+            for identity in discovered:
+                self._known_identities.setdefault(identity.pid, identity)
+            if overflow is not None:
                 self.identity_overflowed = True
-                # The first identity beyond the registry bound must not fall
-                # through an owned-group kill merely because it called
-                # ``setsid``. Signal it while its PID/start-time identity is
-                # still validated, without retaining it in the registry.
-                self._signal_snapshot(signal.SIGKILL, (identity,))
-                continue
-            self._known_identities[identity.pid] = identity
-        live = tuple(
-            identity
-            for identity in self._known_identities.values()
-            if identity.resolve() is not None
-        )
-        if self.identity_overflowed:
-            # An unbounded process tree cannot be safely observed by a bounded
-            # registry. Fail closed using only creation-time-validated targets.
-            self._signal_snapshot(signal.SIGKILL, live)
-        return live
+                # Retain the first over-cap identity separately until it is
+                # proven gone. The registry remains bounded at max + one.
+                self._overflow_identity = overflow
+            live = tuple(
+                identity
+                for identity in (
+                    *self._known_identities.values(),
+                    *((self._overflow_identity,) if self._overflow_identity else ()),
+                )
+                if not identity.probe()[1]
+            )
+            if self.identity_overflowed:
+                if not self._signal_snapshot(signal.SIGKILL, live):
+                    self._permanent_ownership_uncertain = True
+            return live
 
-    def _discover_identities(self) -> tuple[_ProcessIdentity, ...]:
-        root = self.root.resolve()
+    def _discover_identities(
+        self,
+    ) -> tuple[tuple[_ProcessIdentity, ...], Optional[_ProcessIdentity], bool]:
+        root, root_gone = self.root.probe()
+        if root_gone or root is None:
+            return (), None, not root_gone
         discovered: list[_ProcessIdentity] = []
-        if root is not None:
-            processes = [root]
+        queued: deque[psutil.Process] = deque([root])
+        seen: set[int] = set()
+        discovered_pids: set[int] = set()
+        while queued:
+            parent = queued.popleft()
+            if parent.pid in seen:
+                continue
+            seen.add(parent.pid)
             try:
-                processes.extend(root.children(recursive=True))
-            except (psutil.Error, OSError):
-                pass
-            for process in processes:
+                parent.create_time()
+            except (psutil.NoSuchProcess, psutil.ZombieProcess):
+                continue
+            except (psutil.AccessDenied, OSError):
+                return tuple(discovered), None, True
+            try:
+                # Breadth-first, non-recursive traversal avoids first
+                # materializing an unbounded recursive descendant list.
+                children = parent.children(recursive=False)
+            except (psutil.NoSuchProcess, psutil.ZombieProcess):
+                continue
+            except (psutil.AccessDenied, OSError):
+                return tuple(discovered), None, True
+            for child in children:
                 try:
-                    discovered.append(
-                        _ProcessIdentity(process.pid, process.create_time())
-                    )
-                except (psutil.Error, OSError):
+                    child_identity = _ProcessIdentity(child.pid, child.create_time())
+                except (psutil.NoSuchProcess, psutil.ZombieProcess):
                     continue
-        return tuple(discovered)
+                except (psutil.AccessDenied, OSError):
+                    return tuple(discovered), None, True
+                if (
+                    child_identity.pid not in self._known_identities
+                    and child_identity.pid not in discovered_pids
+                ):
+                    if len(self._known_identities) + len(discovered) >= (
+                        self.max_tracked_identities
+                    ):
+                        return tuple(discovered), child_identity, False
+                    discovered.append(child_identity)
+                    discovered_pids.add(child_identity.pid)
+                queued.append(child)
+        return tuple(discovered), None, False
 
     def _prune_dead_identities(self) -> None:
         for pid, identity in tuple(self._known_identities.items()):
-            if identity.resolve() is None:
+            _, gone = identity.probe()
+            if gone:
                 self._known_identities.pop(pid, None)
+        if self._overflow_identity is not None:
+            _, gone = self._overflow_identity.probe()
+            if gone:
+                self._overflow_identity = None
 
     def is_alive(self) -> bool:
         """Return whether any captured member of the owned tree is live."""
@@ -231,29 +268,34 @@ class OwnedProcessTree:
         # Reap a completed root before checking captured descendants.  Without
         # this poll a cooperative child can remain visible as a zombie until
         # the grace period expires and be mislabeled as an unresponsive job.
-        self.process.poll()
-        if any(identity.resolve() is not None for identity in self.identities()):
-            return True
-        if self.process_group_id is not None:
-            return any(
-                self._identity_process_group(identity) == self.process_group_id
-                for identity in self._known_identities.values()
-            )
-        return False
+        with self._state_lock:
+            self.process.poll()
+            if self.identities():
+                return True
+            if self.process_group_id is not None:
+                return any(
+                    self._identity_process_group(identity) == self.process_group_id
+                    for identity in self._known_identities.values()
+                )
+            return False
 
     def rss_bytes(self) -> int:
         """Return current resident bytes across all observable owned members."""
 
-        total = 0
-        for identity in self.identities():
-            process = identity.resolve()
-            if process is None:
-                continue
-            try:
-                total += process.memory_info().rss
-            except (psutil.Error, OSError):
-                continue
-        return total
+        with self._state_lock:
+            total = 0
+            for identity in self.identities():
+                process = identity.resolve()
+                if process is None:
+                    self._permanent_ownership_uncertain = True
+                    continue
+                try:
+                    total += process.memory_info().rss
+                except (psutil.NoSuchProcess, psutil.ZombieProcess):
+                    continue
+                except (psutil.AccessDenied, OSError):
+                    self._permanent_ownership_uncertain = True
+            return total
 
     def terminate(self) -> bool:
         """Request graceful termination of the owned boundary."""
@@ -278,11 +320,19 @@ class OwnedProcessTree:
     @property
     def ownership_uncertain(self) -> bool:
         """Return whether the authoritative systemd scope rejected a signal."""
-        return self.scope_signal_failed
+        with self._state_lock:
+            return self.scope_signal_failed or self._permanent_ownership_uncertain
+
+    def mark_ownership_uncertain(self) -> None:
+        """Permanently retain ownership after an untrustworthy observation."""
+
+        with self._state_lock:
+            self._permanent_ownership_uncertain = True
 
     def _signal(self, signum: signal.Signals) -> bool:
-        identities = self.identities()
-        return self._signal_snapshot(signum, identities)
+        with self._state_lock:
+            identities = self.identities()
+            return self._signal_snapshot(signum, identities)
 
     def _signal_snapshot(
         self,
@@ -293,24 +343,18 @@ class OwnedProcessTree:
         if self.systemd_unit is not None:
             # systemd is authoritative for every process that remains in the
             # cgroup, including descendants invisible to psutil.
-            if signal_systemd_scope(self.systemd_unit, int(signum)):
-                self.scope_signal_failed = False
-                return True
-            self.scope_signal_failed = True
-            # Failure does not authorize directly signalling cgroup members.
-            # Only creation-time-validated escapees proven outside the scope
-            # can be targeted without violating systemd ownership.
+            scope_signalled = signal_systemd_scope(self.systemd_unit, int(signum))
+            self.scope_signal_failed = not scope_signalled
+            direct_ok = True
             for identity in reversed(identities):
-                if self._identity_in_systemd_scope(identity) is not False:
+                membership = self._identity_in_systemd_scope(identity)
+                if membership is True:
                     continue
-                process = identity.resolve()
-                if process is None:
-                    continue
-                try:
-                    process.send_signal(signum)
-                except (psutil.Error, OSError):
-                    continue
-            return False
+                if membership is None or not self._signal_identity(identity, signum):
+                    direct_ok = False
+            if not direct_ok:
+                self._permanent_ownership_uncertain = True
+            return scope_signalled and direct_ok
         if self.process_group_id is not None and any(
             self._identity_process_group(identity) == self.process_group_id
             for identity in identities
@@ -320,8 +364,10 @@ class OwnedProcessTree:
             try:
                 os.killpg(self.process_group_id, signum)
                 group_signalled = True
-            except (ProcessLookupError, PermissionError, OSError):
+            except ProcessLookupError:
                 pass
+            except (PermissionError, OSError):
+                self._permanent_ownership_uncertain = True
         # Also signal every captured descendant that escaped the owned group or
         # cgroup. Descendants go first and every PID is creation-time validated.
         for identity in reversed(identities):
@@ -329,14 +375,25 @@ class OwnedProcessTree:
                 self._identity_process_group(identity) == self.process_group_id
             ):
                 continue
-            process = identity.resolve()
-            if process is None:
-                continue
-            try:
-                process.send_signal(signum)
-            except (psutil.Error, OSError):
-                continue
-        return True
+            if not self._signal_identity(identity, signum):
+                self._permanent_ownership_uncertain = True
+        return not self._permanent_ownership_uncertain
+
+    def _signal_identity(
+        self, identity: _ProcessIdentity, signum: signal.Signals
+    ) -> bool:
+        process, gone = identity.probe()
+        if gone:
+            return True
+        if process is None:
+            return False
+        try:
+            process.send_signal(signum)
+            return True
+        except (psutil.NoSuchProcess, psutil.ZombieProcess):
+            return True
+        except (psutil.AccessDenied, OSError):
+            return False
 
     @staticmethod
     def _identity_process_group(identity: _ProcessIdentity) -> Optional[int]:
@@ -351,7 +408,11 @@ class OwnedProcessTree:
     def _identity_in_systemd_scope(self, identity: _ProcessIdentity) -> Optional[bool]:
         if self.systemd_unit is None or platform.system() != "Linux":
             return None
-        process = identity.resolve()
+        process, gone = identity.probe()
+        if gone:
+            # Exiting between the identity snapshot and membership check is a
+            # successful teardown outcome, not ambiguous ownership.
+            return True
         if process is None:
             return None
         try:
@@ -360,10 +421,7 @@ class OwnedProcessTree:
             )
         except (OSError, UnicodeError):
             return None
-        return any(
-            self.systemd_unit in line.partition("/")[2]
-            for line in cgroup_text.splitlines()
-        )
+        return cgroup_path_contains_unit(cgroup_text, self.systemd_unit)
 
 
 class ProcessTreeWatchdog:
@@ -397,6 +455,23 @@ class ProcessTreeWatchdog:
         return self.outcome
 
     def _run(self) -> None:
+        try:
+            self._monitor_until_stopped()
+        except BaseException:  # noqa: B036, BLE001 - watchdog must fail closed
+            self.tree.mark_ownership_uncertain()
+            try:
+                self.tree.kill()
+            except BaseException:  # noqa: B036, BLE001 - ownership remains uncertain
+                pass
+            self.outcome = WatchdogOutcome(
+                WatchdogTrigger.OBSERVATION_FAILURE,
+                0,
+                0,
+                hard_kill_sent=True,
+                graceful_exit=False,
+            )
+
+    def _monitor_until_stopped(self) -> None:
         while not self._stop.is_set():
             tree_alive = self.tree.is_alive()
             if self.tree.identity_overflowed:
@@ -672,7 +747,6 @@ class SupervisedSidecar:
         self,
         plan: ContainmentPlan,
         *,
-        leases: Optional[HeavyJobLeaseSet] = None,
         prelaunch_check: Optional[Callable[[], None]] = None,
         output_max_lines: int = 512,
         output_max_chars: int = 256 * 1024,
@@ -688,20 +762,25 @@ class SupervisedSidecar:
         self.plan = plan
         self.launch = plan.launch
         self.output = output
-        self._leases = leases
-        self._leases_released = leases is None
+        self._leases: HeavyJobLeaseSet = canonical_heavy_job_lease_set(
+            plan.job_name,
+            self.launch.accelerator_kind,
+            device_uuid=self.launch.accelerator_device_uuid,
+            device_pci_bus_id=self.launch.accelerator_pci_bus_id,
+        )
+        self._leases_released = False
         self._parent_liveness_write_fd: Optional[int] = None
+        self._guardian_ack_read_fd: Optional[int] = None
+        self._guardian_started = False
+        self._guardian_teardown_requested = False
+        self._guardian_process: Optional[subprocess.Popen[bytes]] = None
         self.process: subprocess.Popen[Any]
         self.tree: OwnedProcessTree
         self._reader: threading.Thread
         self.watchdog: ProcessTreeWatchdog
 
-        supplied_keys = () if leases is None else leases.resource_keys
-        if supplied_keys != plan.expected_resource_keys:
-            raise ValueError(
-                "supervisor lease keys do not match the containment plan: "
-                f"expected {plan.expected_resource_keys!r}, got {supplied_keys!r}"
-            )
+        if self._leases.resource_keys != plan.expected_resource_keys:
+            raise RuntimeError("internal canonical lease construction diverged")
         if prelaunch_check is not None and not callable(prelaunch_check):
             raise TypeError("prelaunch_check must be callable")
         if os.name != "posix" and plan.expected_resource_keys:
@@ -711,20 +790,23 @@ class SupervisedSidecar:
 
         child_env = dict(self.launch.environment)
         pass_fds: tuple[int, ...] = ()
-        parent_read_fd: Optional[int] = None
+        guardian_read_fd: Optional[int] = None
+        guardian_ack_write_fd: Optional[int] = None
+        start_gate_read_fd: Optional[int] = None
+        start_gate_write_fd: Optional[int] = None
         if self.launch.backend is not LimitBackend.SYSTEMD_CGROUP:
             child_env["HYDRA_SUPERVISOR_PID"] = str(os.getpid())
         if os.name == "posix":
-            parent_read_fd, parent_write_fd = os.pipe()
-            os.set_inheritable(parent_read_fd, True)
-            child_env["HYDRA_PARENT_LIVENESS_FD"] = str(parent_read_fd)
-            pass_fds = (parent_read_fd,)
+            guardian_read_fd, parent_write_fd = os.pipe()
+            parent_ack_read_fd, guardian_ack_write_fd = os.pipe()
+            start_gate_read_fd, start_gate_write_fd = os.pipe()
+            os.set_inheritable(start_gate_read_fd, True)
+            child_env["HYDRA_START_GATE_FD"] = str(start_gate_read_fd)
+            containment_token = uuid.uuid4().hex
+            child_env["HYDRA_CONTAINMENT_TOKEN"] = containment_token
+            pass_fds = (start_gate_read_fd,)
             self._parent_liveness_write_fd = parent_write_fd
-            if self.launch.systemd_unit is not None:
-                child_env["HYDRA_PARENT_SYSTEMD_UNIT"] = self.launch.systemd_unit
-            child_env["HYDRA_PARENT_MAX_IDENTITIES"] = str(
-                self.launch.limits.max_processes
-            )
+            self._guardian_ack_read_fd = parent_ack_read_fd
 
         popen_kwargs: dict[str, Any] = {
             "env": child_env,
@@ -740,28 +822,39 @@ class SupervisedSidecar:
                 popen_kwargs["pass_fds"] = pass_fds
         process: Optional[subprocess.Popen[Any]] = None
         try:
-            if leases is not None:
-                leases.acquire()
-                self._leases_released = False
-                lease_fds = leases.filenos()
-                child_env["HYDRA_PARENT_LEASE_FDS"] = ",".join(
-                    str(descriptor) for descriptor in lease_fds
-                )
-                pass_fds = (*pass_fds, *lease_fds)
-                popen_kwargs["pass_fds"] = pass_fds
+            self._leases.acquire()
             if prelaunch_check is not None:
                 prelaunch_check()
             process = subprocess.Popen(self.launch.command, **popen_kwargs)
             self.process = process
-            if parent_read_fd is not None:
-                os.close(parent_read_fd)
-                parent_read_fd = None
+            if start_gate_read_fd is not None:
+                os.close(start_gate_read_fd)
+                start_gate_read_fd = None
             self.tree = OwnedProcessTree(
                 self.process,
                 owns_process_group=os.name == "posix",
                 systemd_unit=self.launch.systemd_unit,
                 max_tracked_identities=self.launch.limits.max_processes,
             )
+            if guardian_read_fd is not None and guardian_ack_write_fd is not None:
+                assert start_gate_write_fd is not None
+                self._guardian_process = spawn_parent_guardian(
+                    workload_pid=self.process.pid,
+                    process_group_id=self.tree.process_group_id or self.process.pid,
+                    liveness_read_fd=guardian_read_fd,
+                    acknowledgement_write_fd=guardian_ack_write_fd,
+                    containment_token=containment_token,
+                    max_identities=self.launch.limits.max_processes,
+                    systemd_unit=self.launch.systemd_unit,
+                    lease_fds=self._leases.filenos(),
+                    environment=child_env,
+                )
+                guardian_read_fd = None
+                guardian_ack_write_fd = None
+                self._guardian_started = True
+                os.write(start_gate_write_fd, b"G")
+                os.close(start_gate_write_fd)
+                start_gate_write_fd = None
             if self.process.stdout is None:
                 raise RuntimeError("supervised child stdout pipe was not created")
             self._reader = threading.Thread(
@@ -774,11 +867,24 @@ class SupervisedSidecar:
             self._reader.start()
             self.watchdog.start()
         except BaseException:
-            if parent_read_fd is not None:
-                os.close(parent_read_fd)
+            for descriptor in (
+                guardian_read_fd,
+                guardian_ack_write_fd,
+                start_gate_read_fd,
+                start_gate_write_fd,
+            ):
+                if descriptor is not None:
+                    try:
+                        os.close(descriptor)
+                    except OSError:
+                        pass
             if process is not None:
                 self._kill_and_reap_after_setup_failure(process)
-            self._close_parent_liveness_pipe()
+            if self._guardian_started and not self._complete_guardian_teardown():
+                raise WorkloadStillOwnedError(
+                    "guardian could not prove quiescence after setup failure", self
+                )
+            self._close_unstarted_guardian_fds()
             self._release_leases()
             raise
 
@@ -812,7 +918,6 @@ class SupervisedSidecar:
                         "root exited but owned descendants survived teardown",
                         self,
                     )
-                self._close_parent_liveness_pipe()
                 break
             if deadline is not None and time.monotonic() >= deadline:
                 self.cancel(self.plan.terminate_grace_seconds)
@@ -821,7 +926,10 @@ class SupervisedSidecar:
             time.sleep(0.02)
         returncode = self.process.wait(timeout=1.0)
         watchdog_outcome = self.watchdog.stop(timeout=2.0)
-        self._close_parent_liveness_pipe()
+        if not self._complete_guardian_teardown():
+            raise WorkloadStillOwnedError(
+                "guardian could not prove process-tree quiescence", self
+            )
         self._reader.join(timeout=2.0)
         cgroup = None
         if self.launch.systemd_unit is not None:
@@ -871,26 +979,62 @@ class SupervisedSidecar:
         return not self.tree.is_alive() and not self.tree.ownership_uncertain
 
     def _finish_local_teardown(self) -> None:
-        self._close_parent_liveness_pipe()
+        if not self._complete_guardian_teardown():
+            raise WorkloadStillOwnedError(
+                "guardian could not prove process-tree quiescence", self
+            )
         self._reader.join(timeout=2.0)
         self._release_leases()
 
-    def _close_parent_liveness_pipe(self) -> None:
+    def _complete_guardian_teardown(self, timeout: float = 5.0) -> bool:
+        if not self._guardian_started:
+            return False
         descriptor = self._parent_liveness_write_fd
-        if descriptor is None:
-            return
-        self._parent_liveness_write_fd = None
+        if not self._guardian_teardown_requested and descriptor is not None:
+            self._guardian_teardown_requested = True
+            try:
+                os.write(descriptor, b"T")
+            except OSError:
+                pass
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+            self._parent_liveness_write_fd = None
+        acknowledgement = self._guardian_ack_read_fd
+        if acknowledgement is None:
+            return False
+        readable, _, _ = select.select([acknowledgement], [], [], timeout)
+        if not readable:
+            return False
         try:
-            os.write(descriptor, b"N")
+            confirmed = os.read(acknowledgement, 1) == b"Q"
         except OSError:
-            pass
-        try:
-            os.close(descriptor)
-        except OSError:
-            pass
+            confirmed = False
+        if confirmed:
+            os.close(acknowledgement)
+            self._guardian_ack_read_fd = None
+            if self._guardian_process is not None:
+                try:
+                    self._guardian_process.wait(timeout=2.0)
+                except subprocess.TimeoutExpired:
+                    return False
+                if self._guardian_process.returncode != 0:
+                    return False
+        return confirmed
+
+    def _close_unstarted_guardian_fds(self) -> None:
+        for attribute in ("_parent_liveness_write_fd", "_guardian_ack_read_fd"):
+            descriptor = getattr(self, attribute)
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+                setattr(self, attribute, None)
 
     def _release_leases(self) -> None:
-        if not self._leases_released and self._leases is not None:
+        if not self._leases_released:
             self._leases.release()
             self._leases_released = True
 
@@ -952,6 +1096,11 @@ def classify_exit(evidence: ExitEvidence) -> ClassifiedExit:
             return ClassifiedExit(
                 ExitKind.HOST_HARD_LIMIT,
                 "Worker exceeded its bounded process-identity limit",
+            )
+        if evidence.watchdog.trigger is WatchdogTrigger.OBSERVATION_FAILURE:
+            return ClassifiedExit(
+                ExitKind.HOST_HARD_LIMIT,
+                "Worker was killed because process-tree observation failed",
             )
         return ClassifiedExit(
             ExitKind.HOST_HARD_LIMIT,

@@ -110,7 +110,7 @@ def test_canonical_lease_set_covers_host_and_device_and_deduplicates_mps(tmp_pat
     assert canonical_resource_key("mps", index=0) == canonical_resource_key(
         "mps", index=99, device_uuid="ignored"
     )
-    assert canonical_resource_key("mps", index=0).endswith(":mps:unified")
+    assert canonical_resource_key("mps") == lease_module.canonical_host_memory_key()
     assert canonical_resource_key("cpu") == lease_module.canonical_host_memory_key()
 
 
@@ -158,7 +158,19 @@ def test_canonical_lease_factory_uses_shared_hydra_data_dir(tmp_path, monkeypatc
     lease_set = canonical_heavy_job_lease_set("training", "mps", index=3)
 
     assert lease_set.leases[0].path.parent == tmp_path / "runtime" / "heavy-job-leases"
-    assert lease_set.resource_keys[0].endswith(":mps:unified")
+    assert lease_set.resource_keys == (lease_module.canonical_host_memory_key(),)
+
+
+def test_cpu_and_mps_jobs_contend_on_the_same_physical_host_pool(tmp_path):
+    cpu = canonical_heavy_job_lease_set("cpu-job", "cpu", lease_dir=tmp_path)
+    mps = canonical_heavy_job_lease_set("mps-job", "mps", lease_dir=tmp_path)
+
+    cpu.acquire()
+    try:
+        with pytest.raises(ResourceBusyError):
+            mps.acquire()
+    finally:
+        cpu.release()
 
 
 def test_failed_owner_metadata_setup_unlocks_and_closes_handle(tmp_path, monkeypatch):

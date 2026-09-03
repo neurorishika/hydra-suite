@@ -24,6 +24,8 @@ from typing import Mapping, Optional, Sequence
 
 from .resource_budget import AcceleratorKind
 
+_DEFAULT_CGROUP_ROOT = Path("/sys/fs/cgroup")
+
 
 class LimitBackend(str, Enum):
     """Host-memory enforcement mechanism applied to a protected launch."""
@@ -64,6 +66,8 @@ class LimitedLaunch:
     backend: LimitBackend
     limits: ProcessMemoryLimits
     accelerator_kind: AcceleratorKind
+    accelerator_device_uuid: Optional[str] = None
+    accelerator_pci_bus_id: Optional[str] = None
     systemd_unit: Optional[str] = None
     limitations: tuple[str, ...] = ()
 
@@ -132,11 +136,23 @@ def build_limited_launch(
     python_executable: Optional[str] = None,
     systemd_unit: Optional[str] = None,
     accelerator_kind: AcceleratorKind | str = AcceleratorKind.CPU,
+    accelerator_device_uuid: Optional[str] = None,
+    accelerator_pci_bus_id: Optional[str] = None,
 ) -> LimitedLaunch:
     """Wrap ``command`` so limits are applied before accelerator imports."""
     if not command:
         raise ValueError("child command must not be empty")
     accelerator_kind = AcceleratorKind(accelerator_kind)
+    accelerator_device_uuid = (accelerator_device_uuid or "").strip() or None
+    accelerator_pci_bus_id = (accelerator_pci_bus_id or "").strip() or None
+    if accelerator_kind is AcceleratorKind.CUDA:
+        if bool(accelerator_device_uuid) == bool(accelerator_pci_bus_id):
+            raise ValueError(
+                "CUDA launches require exactly one resolver-supplied physical "
+                "UUID or PCI identity"
+            )
+    elif accelerator_device_uuid is not None or accelerator_pci_bus_id is not None:
+        raise ValueError("physical device identities are valid only for CUDA")
     if (
         accelerator_kind is AcceleratorKind.MPS
         and limits.mps_high_watermark_ratio is None
@@ -196,6 +212,8 @@ def build_limited_launch(
         backend=selected,
         limits=limits,
         accelerator_kind=accelerator_kind,
+        accelerator_device_uuid=accelerator_device_uuid,
+        accelerator_pci_bus_id=accelerator_pci_bus_id,
         systemd_unit=unit,
         limitations=tuple(limitations),
     )
@@ -308,6 +326,68 @@ def signal_systemd_scope(
     return completed.returncode == 0
 
 
+def systemd_scope_is_quiescent(
+    unit: str,
+    *,
+    timeout_seconds: float = 3.0,
+    cgroup_root: Path = _DEFAULT_CGROUP_ROOT,
+) -> Optional[bool]:
+    """Return whether an exact systemd scope is inactive and has no members."""
+
+    if timeout_seconds <= 0:
+        raise ValueError("systemd state timeout must be positive")
+    try:
+        completed = subprocess.run(
+            [
+                "systemctl",
+                "--user",
+                "show",
+                unit,
+                "--property=ActiveState",
+                "--property=ControlGroup",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode != 0:
+        return None
+    properties: dict[str, str] = {}
+    for line in completed.stdout.splitlines():
+        key, separator, value = line.partition("=")
+        if separator:
+            properties[key] = value
+    active_state = properties.get("ActiveState", "")
+    if active_state not in {"inactive", "failed"}:
+        return False
+    if "ControlGroup" not in properties:
+        return None
+    control_group = properties["ControlGroup"]
+    if not control_group:
+        return True
+    procs_path = cgroup_root / control_group.lstrip("/") / "cgroup.procs"
+    try:
+        return not procs_path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        # A cgroup can only be removed after its final task leaves.
+        return True
+    except OSError:
+        return None
+
+
+def cgroup_path_contains_unit(cgroup_text: str, unit: str) -> bool:
+    """Match a systemd unit as one exact cgroup path component."""
+
+    for line in cgroup_text.splitlines():
+        _, separator, path = line.partition("/")
+        if separator and unit in path.split("/"):
+            return True
+    return False
+
+
 def serialize_limit_diagnostic(launch: LimitedLaunch) -> str:
     """Return stable JSON suitable for a run manifest or support report."""
     return json.dumps(
@@ -320,6 +400,8 @@ def serialize_limit_diagnostic(launch: LimitedLaunch) -> str:
             "mps_high_watermark_ratio": launch.limits.mps_high_watermark_ratio,
             "max_processes": launch.limits.max_processes,
             "accelerator_kind": launch.accelerator_kind.value,
+            "accelerator_device_uuid": launch.accelerator_device_uuid,
+            "accelerator_pci_bus_id": launch.accelerator_pci_bus_id,
         },
         sort_keys=True,
     )

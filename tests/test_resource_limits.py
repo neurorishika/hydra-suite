@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import hydra_suite.runtime.resource_limits as limits_module
 from hydra_suite.runtime.child_bootstrap import install_linux_parent_death_signal
 from hydra_suite.runtime.process_supervisor import ExitEvidence, ExitKind, classify_exit
 from hydra_suite.runtime.resource_limits import (
@@ -14,8 +15,10 @@ from hydra_suite.runtime.resource_limits import (
     LimitBackend,
     ProcessMemoryLimits,
     build_limited_launch,
+    cgroup_path_contains_unit,
     probe_systemd_cgroup_evidence,
     select_limit_backend,
+    systemd_scope_is_quiescent,
     systemd_user_scope_available,
 )
 
@@ -58,6 +61,21 @@ def test_systemd_command_places_kernel_limits_outside_bootstrap():
 def test_process_limit_must_be_positive():
     with pytest.raises(ValueError, match="process count"):
         ProcessMemoryLimits(soft_host_bytes=100, hard_host_bytes=200, max_processes=0)
+
+
+def test_cuda_launch_requires_one_resolver_supplied_physical_identity():
+    limits = ProcessMemoryLimits(soft_host_bytes=100, hard_host_bytes=200)
+    with pytest.raises(ValueError, match="exactly one"):
+        build_limited_launch(["python"], limits, accelerator_kind="cuda")
+    launch = build_limited_launch(
+        ["python"],
+        limits,
+        accelerator_kind="cuda",
+        accelerator_device_uuid=" GPU-REAL ",
+    )
+
+    assert launch.accelerator_device_uuid == "GPU-REAL"
+    assert launch.accelerator_pci_bus_id is None
 
 
 def test_rlimit_launch_documents_virtual_memory_and_sets_mps_before_exec():
@@ -164,6 +182,43 @@ def test_systemd_evidence_timeout_and_disappearing_unit_are_explicit(monkeypatch
     evidence = probe_systemd_cgroup_evidence("slow.scope", timeout_seconds=0.25)
     assert not evidence.available
     assert "timed out" in (evidence.error or "").lower()
+
+
+def test_systemd_scope_signal_success_does_not_prove_live_cgroup_empty(
+    tmp_path, monkeypatch
+):
+    completed = subprocess.CompletedProcess(
+        [],
+        0,
+        stdout="ActiveState=inactive\nControlGroup=/user.slice/hydra-owned.scope\n",
+        stderr="",
+    )
+    monkeypatch.setattr(limits_module.subprocess, "run", lambda *_a, **_k: completed)
+    cgroup = tmp_path / "user.slice" / "hydra-owned.scope"
+    cgroup.mkdir(parents=True)
+    (cgroup / "cgroup.procs").write_text("123\n", encoding="utf-8")
+
+    assert (
+        systemd_scope_is_quiescent("hydra-owned.scope", cgroup_root=tmp_path) is False
+    )
+
+    (cgroup / "cgroup.procs").write_text("", encoding="utf-8")
+    assert systemd_scope_is_quiescent("hydra-owned.scope", cgroup_root=tmp_path) is True
+
+    missing_membership = subprocess.CompletedProcess(
+        [], 0, stdout="ActiveState=inactive\n", stderr=""
+    )
+    monkeypatch.setattr(
+        limits_module.subprocess, "run", lambda *_a, **_k: missing_membership
+    )
+    assert systemd_scope_is_quiescent("hydra-owned.scope", cgroup_root=tmp_path) is None
+
+
+def test_cgroup_unit_matching_uses_an_exact_path_component():
+    cgroup = "0::/user.slice/hydra-owned.scope-extra/child\n"
+
+    assert not cgroup_path_contains_unit(cgroup, "hydra-owned.scope")
+    assert cgroup_path_contains_unit(cgroup, "hydra-owned.scope-extra")
 
 
 def test_linux_parent_death_signal_is_installed_before_race_check():
