@@ -174,6 +174,11 @@ def _try_lock(handle: IO[str]) -> None:
     if msvcrt is not None:  # pragma: no cover - exercised on Windows CI
         try:
             handle.seek(0)
+            if not handle.read(1):
+                handle.seek(0)
+                handle.write("\0")
+                handle.flush()
+            handle.seek(0)
             msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
             return
         except OSError as exc:

@@ -156,8 +156,17 @@ class OwnedProcessTree:
         self._signal(signal.SIGTERM)
 
     def kill(self) -> None:
-        hard_signal = signal.SIGKILL if os.name == "posix" else signal.SIGTERM
-        self._signal(hard_signal)
+        if os.name == "posix":
+            self._signal(signal.SIGKILL)
+            return
+        for identity in reversed(self.identities()):  # pragma: no cover - Windows CI
+            process = identity.resolve()
+            if process is None:
+                continue
+            try:
+                process.kill()
+            except (psutil.Error, OSError):
+                continue
 
     def _signal(self, signum: signal.Signals) -> None:
         identities = self.identities()
@@ -302,9 +311,10 @@ class BoundedLineBuffer:
             self._lines.append((sequence, line))
             self._chars += len(line)
             while len(self._lines) > self.max_lines or self._chars > self.max_chars:
-                _, dropped = self._lines.popleft()
+                dropped_sequence, dropped = self._lines.popleft()
                 self._chars -= len(dropped)
-                self._dropped_lines += 1
+                if dropped_sequence > self._drained_through:
+                    self._dropped_lines += 1
             self._condition.notify_all()
 
     def close(self, error: Optional[BaseException] = None) -> None:
@@ -318,7 +328,10 @@ class BoundedLineBuffer:
     ) -> tuple[list[str], bool, Optional[BaseException]]:
         """Return retained lines, whether EOF was seen, and any reader error."""
         with self._condition:
-            if not self._lines and not self._eof and timeout > 0:
+            has_unread = any(
+                sequence > self._drained_through for sequence, _ in self._lines
+            )
+            if not has_unread and not self._eof and timeout > 0:
                 self._condition.wait(timeout)
             unread = [
                 (sequence, line)
@@ -382,6 +395,7 @@ class SupervisedResult:
     dropped_output_lines: int
     watchdog: Optional[WatchdogOutcome]
     cgroup: Optional[CgroupEvidence]
+    output_error: Optional[str]
 
 
 class SupervisedSidecar:
@@ -460,6 +474,7 @@ class SupervisedSidecar:
             except (OSError, subprocess.SubprocessError):
                 cgroup = CgroupEvidence(unit=self.launch.systemd_unit)
         tail = self.output.tail()
+        _, _, output_error = self.output.drain()
         classified = classify_exit(
             ExitEvidence(
                 returncode=returncode,
@@ -477,6 +492,7 @@ class SupervisedSidecar:
             dropped_output_lines=self.output.dropped_lines,
             watchdog=watchdog_outcome,
             cgroup=cgroup,
+            output_error=str(output_error) if output_error is not None else None,
         )
 
 

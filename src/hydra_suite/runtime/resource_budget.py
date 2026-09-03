@@ -41,6 +41,24 @@ class ResourceObservation:
                 raise ValueError(f"{name} must be non-negative")
         if self.available_host_bytes > self.total_host_bytes:
             raise ValueError("available_host_bytes cannot exceed total_host_bytes")
+        device_values = (
+            self.total_accelerator_bytes,
+            self.available_accelerator_bytes,
+        )
+        if any(value is not None and value < 0 for value in device_values):
+            raise ValueError("accelerator memory observations must be non-negative")
+        if (self.total_accelerator_bytes is None) != (
+            self.available_accelerator_bytes is None
+        ):
+            raise ValueError("accelerator total and available bytes must be paired")
+        if (
+            self.total_accelerator_bytes is not None
+            and self.available_accelerator_bytes is not None
+            and self.available_accelerator_bytes > self.total_accelerator_bytes
+        ):
+            raise ValueError(
+                "available_accelerator_bytes cannot exceed total_accelerator_bytes"
+            )
         if self.accelerator_kind is AcceleratorKind.MPS and (
             self.total_accelerator_bytes is not None
             or self.available_accelerator_bytes is not None
@@ -117,6 +135,9 @@ class ResourceRequest:
             raise ValueError("job_name must not be empty")
         if not self.phases:
             raise ValueError("at least one phase estimate is required")
+        phase_names = [phase.name for phase in self.phases]
+        if len(phase_names) != len(set(phase_names)):
+            raise ValueError("phase names must be unique")
 
 
 @dataclass(frozen=True)

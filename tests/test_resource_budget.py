@@ -129,3 +129,18 @@ def test_mps_rejects_a_second_fake_device_pool():
             total_accelerator_bytes=64 * GiB,
             available_accelerator_bytes=32 * GiB,
         )
+
+
+def test_observations_and_phase_names_reject_ambiguous_inputs():
+    with pytest.raises(ValueError, match="paired"):
+        ResourceObservation(
+            total_host_bytes=64 * GiB,
+            available_host_bytes=32 * GiB,
+            accelerator_kind=AcceleratorKind.CUDA,
+            total_accelerator_bytes=24 * GiB,
+        )
+    with pytest.raises(ValueError, match="unique"):
+        ResourceRequest(
+            "duplicate phases",
+            (PhaseEstimate("train"), PhaseEstimate("train")),
+        )

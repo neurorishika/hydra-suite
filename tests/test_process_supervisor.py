@@ -140,6 +140,18 @@ def test_noisy_output_retains_only_a_fixed_tail():
     assert output.tail()[-1] == "line-09999\n"
 
 
+def test_drained_lines_are_retained_as_tail_without_being_reported_as_dropped():
+    output = BoundedLineBuffer(max_lines=2, max_chars=100)
+    output.append("first\n")
+    assert output.drain()[0] == ["first\n"]
+    output.append("second\n")
+    output.append("third\n")
+
+    assert output.drain()[0] == ["second\n", "third\n"]
+    assert output.tail() == ("second\n", "third\n")
+    assert output.dropped_lines == 0
+
+
 def test_noisy_child_is_drained_without_an_unbounded_parent_queue():
     launch = build_limited_launch(
         [
