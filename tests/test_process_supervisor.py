@@ -850,10 +850,34 @@ def test_guardian_fails_closed_for_new_or_owned_inaccessible_identity(monkeypatc
     monkeypatch.setattr(guardian_module.os, "getpid", lambda: 999)
     monkeypatch.setattr(guardian_module.os, "getuid", lambda: 501)
 
-    complete, _ = guardian_module._scan_token_identities(
+    pending = {}
+    complete, overflowed = guardian_module._scan_token_identities(
         "owned-token", {}, external_identities={}, max_identities=8
     )
     assert not complete
+    assert not overflowed
+
+    complete, overflowed = guardian_module._scan_token_identities(
+        "owned-token",
+        {},
+        external_identities={},
+        pending_external_identities=pending,
+        max_identities=8,
+    )
+    assert complete
+    assert not overflowed
+    assert pending == {30: guardian_module.GuardedIdentity(30, 30.0)}
+
+    owned = {30: guardian_module.GuardedIdentity(30, 30.0)}
+    monkeypatch.setattr(
+        guardian_module, "_prune_gone_identities", lambda _identities: None
+    )
+    complete, overflowed = guardian_module._scan_token_identities(
+        "owned-token", owned, external_identities={}, max_identities=8
+    )
+    assert complete
+    assert not overflowed
+    assert set(owned) == {30}
 
 
 def test_guardian_accepts_new_inaccessible_identity_with_captured_external_ancestor(
@@ -904,6 +928,39 @@ def test_guardian_accepts_new_inaccessible_identity_with_captured_external_ances
         "owned-token", owned, external_identities={}, max_identities=8
     )
     assert not complete
+
+
+def test_guardian_waits_for_pending_external_identity_without_permanent_uncertainty(
+    monkeypatch,
+):
+    pending = {30: guardian_module.GuardedIdentity(30, 30.0)}
+    scans = 0
+
+    def scan(*_args, **kwargs):
+        nonlocal scans
+        scans += 1
+        if scans == 2:
+            kwargs["pending_external_identities"].clear()
+        return True, False
+
+    monkeypatch.setattr(guardian_module, "_scan_token_identities", scan)
+    monkeypatch.setattr(
+        guardian_module, "_signal_fallback_boundary", lambda *_args: True
+    )
+    monkeypatch.setattr(guardian_module.time, "sleep", lambda _seconds: None)
+
+    guardian_module._terminate_until_quiescent(
+        containment_token="owned-token",
+        identities={},
+        external_identities={},
+        pending_external_identities=pending,
+        max_identities=8,
+        process_group_id=123,
+        systemd_unit=None,
+    )
+
+    assert scans == 3
+    assert not pending
 
 
 def test_guardian_does_not_pair_old_token_with_reused_pid_identity(monkeypatch):
