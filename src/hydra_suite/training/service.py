@@ -126,7 +126,7 @@ def _failure_details(result: dict) -> dict[str, object]:
 def _failure_message(result: dict) -> str:
     if result.get("canceled"):
         return "canceled"
-    error_value = result.get("error", "") or ""
+    error_value = result.get("error", "") or result.get("error_message", "") or ""
     error = bounded_terminal_text(error_value).strip()
     if error:
         return error

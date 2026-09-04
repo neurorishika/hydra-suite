@@ -256,6 +256,14 @@ def run_with_bounded_oom_retries(
     recoverable = {ExitKind.ACCELERATOR_OOM, ExitKind.HOST_SOFT_LIMIT}
     for attempt in range(max_retries + 1):
         result = launch_fresh(settings, attempt)
+        if (
+            result.telemetry.attempt != attempt
+            or result.telemetry.settings != settings
+            or result.telemetry.exit_kind is not result.exit_kind
+        ):
+            raise ValueError("adaptive attempt telemetry does not match its launch")
+        if result.success is not (result.exit_kind is ExitKind.SUCCESS):
+            raise ValueError("adaptive attempt success disagrees with its exit kind")
         attempts.append(result.telemetry)
         if (
             result.success

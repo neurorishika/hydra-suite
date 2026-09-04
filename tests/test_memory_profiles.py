@@ -191,6 +191,29 @@ def test_retry_does_not_mask_nonrecoverable_failures(kind):
     assert result.result.exit_kind is kind
 
 
+def test_retry_count_is_finite_when_every_fresh_child_ooms():
+    calls = []
+
+    def launch(settings, attempt):
+        calls.append(attempt)
+        return AdaptiveAttemptResult(
+            False,
+            ExitKind.HOST_SOFT_LIMIT,
+            AttemptTelemetry(
+                attempt, ExitKind.HOST_SOFT_LIMIT, settings, hard_host_bytes=20_000
+            ),
+        )
+
+    result = run_with_bounded_oom_retries(
+        _settings(batch_size=16),
+        launch,
+        pressure_order=(PressureField.BATCH_SIZE,),
+    )
+    assert calls == [0, 1, 2]
+    assert len(result.adjustments) == 2
+    assert result.result.success is False
+
+
 def test_structured_telemetry_reports_admission_limits_peaks_and_adjustments():
     budget = SimpleNamespace(
         estimator_version="v1",
