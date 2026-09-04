@@ -110,6 +110,7 @@ nav:
   - DetectKit: user-guide/detectkit.md
   - DetectKit Headless Training: runbooks/detectkit-headless-training.md
   - "DetectKit: Semantic Escalation (SAM3)": user-guide/detectkit-semantic-escalation.md
+  - "DetectKit: SAHI Calibration Profiles": user-guide/detectkit-sahi-calibration.md
   - FilterKit: user-guide/filterkit.md
   - RefineKit: user-guide/refinekit.md
   - Troubleshooting: user-guide/troubleshooting.md

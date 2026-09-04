@@ -151,3 +151,66 @@ def test_a_point_dominated_at_equal_speed_is_dropped_by_the_frontier():
         ]
     )
     assert best.label == "dominating"
+
+
+def test_axis_aligned_matching_counts_crowded_boxes_one_to_one():
+    import numpy as np
+
+    from hydra_suite.core.inference.direct_calibration import (
+        CalibrationDetection,
+        match_frame,
+    )
+
+    def box(x, y, w=10, h=10):
+        return np.array([[x, y], [x + w, y], [x + w, y + h], [x, y + h]], np.float32)
+
+    labels = [CalibrationDetection(0, box(0, 0)), CalibrationDetection(0, box(30, 0))]
+    predictions = [
+        CalibrationDetection(0, box(0, 0)),
+        CalibrationDetection(0, box(1, 1)),  # duplicate on label 0
+        CalibrationDetection(0, box(100, 100)),  # extra
+    ]
+    score = match_frame(predictions, labels, task="detect")
+    assert score.matched == 1
+    assert score.missed == 1
+    assert score.extra == 2
+    assert score.duplicate == 1
+
+
+def test_segment_polygons_match_on_mask_overlap():
+    import numpy as np
+
+    from hydra_suite.core.inference.direct_calibration import (
+        CalibrationDetection,
+        match_frame,
+    )
+
+    triangle = np.array([[0, 0], [20, 0], [10, 20]], np.float32)
+    score = match_frame(
+        [CalibrationDetection(0, triangle)],
+        [CalibrationDetection(0, triangle)],
+        task="segment",
+    )
+    assert score.matched == 1 and score.mean_iou > 0.99
+
+
+def test_rotated_prediction_is_scored_as_its_aabb_under_detect():
+    """A detect model cannot express rotation; scoring must not credit it."""
+    import numpy as np
+
+    from hydra_suite.core.inference.direct_calibration import (
+        CalibrationDetection,
+        match_frame,
+    )
+
+    rotated = np.array([[10, 0], [20, 10], [10, 20], [0, 10]], np.float32)
+    aabb = np.array([[0, 0], [20, 0], [20, 20], [0, 20]], np.float32)
+    obb_score = match_frame(
+        [CalibrationDetection(0, rotated)], [CalibrationDetection(0, aabb)], task="obb"
+    )
+    detect_score = match_frame(
+        [CalibrationDetection(0, rotated)],
+        [CalibrationDetection(0, aabb)],
+        task="detect",
+    )
+    assert detect_score.mean_iou > obb_score.mean_iou

@@ -693,7 +693,7 @@ def run_direct_calibration(request, *, progress=None, should_stop=None):
                         confidence=confidence,
                         tiles=tiles,
                         seconds=seconds_per_frame,
-                        score=score_frames(scored),
+                        score=score_frames(scored, task=request.task),
                         merge_backend=backend,
                     )
                 )

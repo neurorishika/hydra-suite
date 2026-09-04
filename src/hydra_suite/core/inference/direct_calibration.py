@@ -56,13 +56,37 @@ def _valid_polygon(value: np.ndarray) -> np.ndarray | None:
     return polygon if polygon.shape[0] >= 3 else None
 
 
+def _as_task_polygon(polygon: np.ndarray, task: str) -> np.ndarray:
+    """Reduce a polygon to the shape its task's model can actually express.
+
+    A ``detect`` model cannot express rotation, so both the prediction and the
+    label are reduced to their axis-aligned bounding quad before IoU -- scoring
+    a rotated polygon against an axis-aligned one directly would either credit
+    the model with overlap it cannot produce, or penalize it below what an
+    axis-aligned detector could ever achieve. ``obb`` and ``segment`` keep the
+    original polygon and use full polygon IoU.
+    """
+    if task != "detect":
+        return polygon
+    x0, y0 = polygon.min(axis=0)
+    x1, y1 = polygon.max(axis=0)
+    return np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], dtype=np.float32)
+
+
 def match_frame(
     predictions: Sequence[CalibrationDetection],
     labels: Sequence[CalibrationDetection],
     *,
     iou_threshold: float = 0.5,
+    task: str = "obb",
 ) -> FrameCalibrationScore:
     """Score predictions with class-aware, descending-IoU one-to-one matching.
+
+    ``iou_threshold`` defaults to 0.5, the documented localization-quality
+    floor used throughout calibration. ``task`` selects how overlap is
+    computed: ``obb``/``segment`` use full polygon IoU; ``detect`` reduces
+    both sides to their axis-aligned bounding box first (see
+    ``_as_task_polygon``).
 
     Duplicate counts are predictions that clear the match threshold against an
     already matched label. They remain extras for precision/F1, but exposing
@@ -72,12 +96,20 @@ def match_frame(
         (index, prediction, _valid_polygon(prediction.polygon_px))
         for index, prediction in enumerate(predictions)
     ]
-    valid_predictions = [item for item in valid_predictions if item[2] is not None]
+    valid_predictions = [
+        (index, prediction, _as_task_polygon(polygon, task))
+        for index, prediction, polygon in valid_predictions
+        if polygon is not None
+    ]
     valid_labels = [
         (index, label, _valid_polygon(label.polygon_px))
         for index, label in enumerate(labels)
     ]
-    valid_labels = [item for item in valid_labels if item[2] is not None]
+    valid_labels = [
+        (index, label, _as_task_polygon(polygon, task))
+        for index, label, polygon in valid_labels
+        if polygon is not None
+    ]
     pairs: list[tuple[float, int, int]] = []
     duplicate_candidates: set[int] = set()
     for pred_index, prediction, pred_polygon in valid_predictions:
@@ -115,10 +147,15 @@ def score_frames(
     ],
     *,
     iou_threshold: float = 0.5,
+    task: str = "obb",
 ) -> CalibrationScore:
-    """Aggregate full-frame calibration evidence at one operating point."""
+    """Aggregate full-frame calibration evidence at one operating point.
+
+    ``iou_threshold`` defaults to the 0.5 localization-quality floor; ``task``
+    is forwarded to ``match_frame`` (see its docstring for ``detect`` handling).
+    """
     scores = [
-        match_frame(predictions, labels, iou_threshold=iou_threshold)
+        match_frame(predictions, labels, iou_threshold=iou_threshold, task=task)
         for predictions, labels in frames
     ]
     matched = sum(score.matched for score in scores)
