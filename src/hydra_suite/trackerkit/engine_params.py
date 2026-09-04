@@ -35,6 +35,20 @@ from hydra_suite.trackerkit.config.identity_schema import IdentityConfig
 logger = logging.getLogger(__name__)
 
 
+# The cross-tile merge defaults, in ONE place. A SAHI profile that does not
+# claim a merge key must RESET the panel to these -- leaving the previous
+# profile's (or previous model's) value in place silently changes what is
+# tracked, and it feeds the detection cache key. TrackerKit's detection panel
+# imports this so the reset and the engine build can never disagree.
+SLICE_MERGE_DEFAULTS: dict = {
+    "merge_policy": "greedy_nmm",
+    "merge_metric": "ios",
+    "merge_threshold": 0.5,
+    "merge_backend": "cv2",
+}
+SLICE_DEFAULT_CONFIDENCE = 0.25
+
+
 def legacy_detection_runtime_fields(runtime: ResolvedBackend) -> dict:
     """Map a resolved backend to legacy detection config fields.
 
@@ -907,10 +921,18 @@ def build_engine_params(
         "SLICE_WIDTH": advanced.get("slice_width", 0),
         "SLICE_OBJECT_TILE_FRACTION": advanced.get("slice_object_tile_fraction", 0.15),
         "SLICE_TRAINED_BODY_PX": advanced.get("slice_trained_body_px", 0.0),
-        "SLICE_MERGE_POLICY": advanced.get("slice_merge_policy", "greedy_nmm"),
-        "SLICE_MERGE_METRIC": advanced.get("slice_merge_metric", "ios"),
-        "SLICE_MERGE_THRESHOLD": advanced.get("slice_merge_threshold", 0.5),
-        "SLICE_MERGE_BACKEND": advanced.get("slice_merge_backend", "cv2"),
+        "SLICE_MERGE_POLICY": advanced.get(
+            "slice_merge_policy", SLICE_MERGE_DEFAULTS["merge_policy"]
+        ),
+        "SLICE_MERGE_METRIC": advanced.get(
+            "slice_merge_metric", SLICE_MERGE_DEFAULTS["merge_metric"]
+        ),
+        "SLICE_MERGE_THRESHOLD": advanced.get(
+            "slice_merge_threshold", SLICE_MERGE_DEFAULTS["merge_threshold"]
+        ),
+        "SLICE_MERGE_BACKEND": advanced.get(
+            "slice_merge_backend", SLICE_MERGE_DEFAULTS["merge_backend"]
+        ),
         "SLICE_PERFORM_STANDARD_PRED": advanced.get(
             "slice_perform_standard_pred", False
         ),

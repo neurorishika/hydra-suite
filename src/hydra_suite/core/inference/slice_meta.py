@@ -8,6 +8,7 @@ can consume it without importing each other.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -115,20 +116,42 @@ def upsert_slice_profile(
     else:
         profiles[replacement] = profile
     result["profiles"] = profiles
-    if primary or not result["primary_profile_id"]:
+    # Primary is a user designation, never a side effect of saving the first
+    # profile: an inferred default is exactly what the spec forbids.
+    if primary:
         result["primary_profile_id"] = selected_id
     return result
 
 
-def remove_slice_profile(meta: dict[str, Any], profile_id: str) -> dict[str, Any]:
-    """Return v2 metadata with one profile removed, preserving all other data."""
+def remove_slice_profile(
+    meta: dict[str, Any],
+    profile_id: str,
+    *,
+    new_primary_id: str | None = None,
+) -> dict[str, Any]:
+    """Remove one profile, preserving weights, geometry and every other profile.
+
+    Removing the PRIMARY requires an explicit decision: ``new_primary_id=""``
+    clears the designation, an id promotes that profile. Silently promoting
+    whatever happened to be first would hand the user an operating point they
+    never chose.
+    """
     result = normalized_slice_meta(meta)
-    profiles = [p for p in result["profiles"] if p["id"] != str(profile_id)]
-    if len(profiles) == len(result["profiles"]):
+    target = str(profile_id)
+    remaining = [p for p in result["profiles"] if p["id"] != target]
+    if len(remaining) == len(result["profiles"]):
         return result
-    result["profiles"] = profiles
-    if result["primary_profile_id"] == str(profile_id):
-        result["primary_profile_id"] = profiles[0]["id"] if profiles else ""
+    if result["primary_profile_id"] == target:
+        if new_primary_id is None:
+            raise ValueError(
+                "Removing the primary SAHI profile needs a replacement "
+                "(pass new_primary_id) or an explicit clear (new_primary_id='')."
+            )
+        chosen = str(new_primary_id)
+        if chosen and chosen not in {p["id"] for p in remaining}:
+            raise ValueError(f"Unknown replacement primary profile {chosen!r}.")
+        result["primary_profile_id"] = chosen
+    result["profiles"] = remaining
     return result
 
 
@@ -165,6 +188,28 @@ def available_slice_profiles(meta: dict[str, Any]) -> list[dict[str, Any]]:
     return valid
 
 
+def profile_summary(meta: dict[str, Any]) -> dict[str, Any]:
+    """Inventory summary the registry stores; the sidecar stays the source of truth."""
+    profiles = available_slice_profiles(meta)
+    return {
+        "count": len(profiles),
+        "primary_profile_id": str(meta.get("primary_profile_id", "") or ""),
+        "names": [profile["name"] for profile in profiles],
+    }
+
+
+def merge_training_geometry(
+    existing: dict[str, Any] | None, training_geometry: dict[str, Any]
+) -> dict[str, Any]:
+    """Replace training geometry while preserving user-approved profiles.
+
+    Publishing must never destroy calibration a user did before registering.
+    """
+    result = normalized_slice_meta(existing or {})
+    result["training_geometry"] = dict(training_geometry)
+    return result
+
+
 def primary_slice_profile(meta: dict[str, Any]) -> dict[str, Any] | None:
     """Return the explicitly chosen primary profile, if it is still valid."""
     primary_id = str(meta.get("primary_profile_id", "") or "")
@@ -175,6 +220,31 @@ def primary_slice_profile(meta: dict[str, Any]) -> dict[str, Any] | None:
             if profile["id"] == primary_id
         ),
         None,
+    )
+
+
+def profile_evidence_state(
+    profile: dict[str, Any], *, checkpoint_path: str | Path
+) -> tuple[bool, str]:
+    """Is this profile's measured evidence still about THESE weights?
+
+    Missing or unreadable provenance is not fatal -- an imported or legacy
+    profile simply has nothing to contradict. A fingerprint that DISAGREES is:
+    applying settings measured on other weights silently misdescribes the
+    operating point.
+    """
+    recorded = str((profile.get("measurement") or {}).get("checkpoint_fingerprint", ""))
+    if not recorded:
+        return True, ""
+    try:
+        digest = hashlib.sha256(Path(checkpoint_path).read_bytes()).hexdigest()
+    except Exception:
+        return True, ""
+    if recorded.split(":")[-1] == digest:
+        return True, ""
+    return False, (
+        f"'{profile.get('name', 'profile')}' was measured before the model's "
+        "weights changed; its numbers no longer describe this checkpoint."
     )
 
 
@@ -251,13 +321,27 @@ def _training_values(geometry: dict[str, Any]) -> dict[str, Any]:
 def slice_meta_to_panel_values(
     meta: dict[str, Any], profile_id: str | None = None
 ) -> dict[str, Any]:
-    """Translate metadata (and an optional profile) into safe TrackerKit values."""
+    """Translate metadata (and an optional profile) into safe TrackerKit values.
+
+    ``values["resolution"]`` explains WHY the returned profile is the one it
+    is, so callers never have to infer a fallback by comparing ids:
+    ``"requested"`` (the asked-for profile id was found), ``"primary"``
+    (the requested id -- if any -- was not found, so the sidecar's explicit
+    primary profile was used instead), or ``"training"`` (no profile applies
+    at all -- either ``"__training__"`` was requested, or nothing resolved).
+    """
     values = _training_values(training_geometry(meta))
     profile = profile_by_id(meta, profile_id)
     if profile is None:
         values["profile_id"] = None
         values["profile_name"] = "Training geometry"
+        values["resolution"] = "training"
         return values
+
+    if profile_id and str(profile_id) == str(profile.get("id", "")):
+        values["resolution"] = "requested"
+    else:
+        values["resolution"] = "primary"
 
     settings = profile["settings"]
     values.update(
@@ -295,4 +379,54 @@ def slice_meta_to_panel_values(
     )
     if values["geometry_mode"] not in _GEOMETRY_MODES:
         values["geometry_mode"] = "auto_object"
+    return values
+
+
+def slice_meta_values_from_settings(
+    meta: dict[str, Any], settings: dict[str, Any]
+) -> dict[str, Any]:
+    """Translate an explicit effective-settings snapshot into panel values.
+
+    Used to restore a saved session's SAHI configuration when the profile
+    that produced it is no longer present in the sidecar: the settings
+    themselves are the source of truth, not the (now-missing) profile's
+    identity. ``values["resolution"]`` is always ``"saved_settings"``.
+    """
+    values = _training_values(training_geometry(meta))
+    values.update(
+        {
+            "enabled": bool(settings.get("enabled", values["enabled"])),
+            "geometry_mode": str(
+                settings.get("geometry_mode", values["geometry_mode"])
+            ),
+            "overlap": _clamped_float(
+                settings.get("overlap"), values["overlap"], 0.0, 0.9
+            ),
+            "object_tile_fraction": _clamped_float(
+                settings.get("object_tile_fraction"),
+                values["object_tile_fraction"],
+                0.01,
+                0.9,
+            ),
+            "trained_body_px": _clamped_float(
+                settings.get("trained_body_px"), values["trained_body_px"], 0.0, 8192.0
+            ),
+            "slice_width": _clamped_int(
+                settings.get("slice_width"), values["slice_width"], 0, 8192
+            ),
+            "slice_height": _clamped_int(
+                settings.get("slice_height"), values["slice_height"], 0, 8192
+            ),
+            "confidence_threshold": settings.get("confidence_threshold"),
+            "merge_policy": settings.get("merge_policy"),
+            "merge_metric": settings.get("merge_metric"),
+            "merge_threshold": settings.get("merge_threshold"),
+            "merge_backend": settings.get("merge_backend"),
+            "profile_id": None,
+            "profile_name": "Saved settings",
+        }
+    )
+    if values["geometry_mode"] not in _GEOMETRY_MODES:
+        values["geometry_mode"] = "auto_object"
+    values["resolution"] = "saved_settings"
     return values

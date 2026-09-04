@@ -9,6 +9,11 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
+from hydra_suite.core.inference.slice_meta import (
+    merge_training_geometry,
+    profile_summary,
+    read_slice_meta,
+)
 
 from .contracts import TrainingRole
 
@@ -17,6 +22,22 @@ _DIRECT_DETECTOR_ROLES = {
     TrainingRole.DETECT_DIRECT,
     TrainingRole.SEGMENT_DIRECT,
 }
+
+
+def verify_profile_summary(model_path: str | Path, recorded: dict[str, Any]) -> None:
+    """Fail loudly when the registry and the sidecar disagree about profiles.
+
+    ``profile_summary`` is imported at module level on purpose: a function-local
+    import would make this unpatchable and the guard untestable. The sidecar is
+    the portable source of truth; the registry entry is only an inventory
+    summary of it, and the two must never be allowed to drift silently.
+    """
+    actual = profile_summary(read_slice_meta(model_path) or {})
+    if actual != recorded:
+        raise RuntimeError(
+            f"Registry profile summary {recorded} disagrees with the sidecar "
+            f"{actual} for {model_path}."
+        )
 
 
 def _project_root() -> Path:
@@ -849,20 +870,25 @@ def publish_trained_model(
                 _copy_classifier_sidecar(src, dst)
 
     slice_geom_sidecar_name: str | None = None
+    merged_slice_meta: dict[str, Any] | None = None
     if (
         slice_geometry
         and role in _DIRECT_DETECTOR_ROLES
         and dst.suffix.lower() == ".pt"
     ):
-        from hydra_suite.core.inference.slice_meta import normalized_slice_meta
-
         # Append to the full name (foo.pt -> foo.pt.slice_meta.json) so the
         # name matches core.inference.slice_meta.read_slice_meta / the canonical
         # runtime_artifacts._meta_path convention. Replacing the suffix instead
         # would write foo.slice_meta.json, which TrackerKit would never find.
+        #
+        # Read the SOURCE artifact's existing sidecar first: a user may have
+        # calibrated and saved SAHI profiles before registering the model.
+        # Writing a fresh document here would silently destroy them.
+        source_meta = read_slice_meta(src)
+        merged_slice_meta = merge_training_geometry(source_meta, dict(slice_geometry))
         slice_sidecar = dst.with_suffix(dst.suffix + ".slice_meta.json")
         slice_sidecar.write_text(
-            json.dumps(normalized_slice_meta(dict(slice_geometry)), indent=2),
+            json.dumps(merged_slice_meta, indent=2),
             encoding="utf-8",
         )
         slice_geom_sidecar_name = slice_sidecar.name
@@ -904,6 +930,9 @@ def publish_trained_model(
         metadata.update(classifier_meta)
     if slice_geometry and role in _DIRECT_DETECTOR_ROLES:
         metadata["slice_geometry"] = dict(slice_geometry)
+        if merged_slice_meta is not None:
+            metadata["slice_profiles"] = profile_summary(merged_slice_meta)
+            verify_profile_summary(dst, metadata["slice_profiles"])
         if slice_geom_sidecar_name:
             metadata["slice_meta_sidecar"] = slice_geom_sidecar_name
     if canonical_geometry is not None:

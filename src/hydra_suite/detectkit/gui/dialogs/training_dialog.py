@@ -62,6 +62,13 @@ from ...jobs.training import DatasetPreparationResult as _DatasetPreparationResu
 from ...jobs.training import RoleTrainingEntry, run_role_entries
 from ..models import SliceTrainingSettings
 from ..panels.sam3_training_panel import Sam3TrainingPanel
+from .direct_calibration_wizard import open_direct_calibration
+from .history_dialog import (
+    _DIRECT_DETECTOR_ROLES,
+    _ROLE_TO_TASK,
+    _calibration_model_path,
+    _entry_calibration_context,
+)
 
 if TYPE_CHECKING:
     from ..models import DetectKitProject
@@ -467,6 +474,14 @@ class TrainingDialog(BaseDialog):
         self._dataset_fit_dirty = True
         self._training_running = False
         self.role_dataset_dirs: dict[str, str] = {}
+        # Test/caller affordance only -- NOT a source of truth for what
+        # "published" means (publish_trained_model + the training-run
+        # registry own that). Populated by register_with_training_geometry()
+        # / calibrate_then_register() so callers (and tests) can observe
+        # that the already-published artifact was accepted in this review
+        # step; both methods append the SAME already-published path, never
+        # a second registry entry or a copied weight file.
+        self.registered_model_paths: list[str] = []
 
         try:
             from hydra_suite.paths import get_training_workspace_dir
@@ -1473,11 +1488,23 @@ QTabBar::tab:selected {
         )
         self.btn_save_config = QPushButton("Save Preset")
         self.btn_load_config = QPushButton("Load Preset")
+        self.btn_register = QPushButton("Register with training geometry")
+        self.btn_register.setToolTip(
+            "Stamp the trained checkpoint with its training geometry so "
+            "TrackerKit can read it. Does not calibrate SAHI settings."
+        )
+        self.btn_calibrate = QPushButton("Calibrate for TrackerKit…")
+        self.btn_calibrate.setToolTip(
+            "Measure a SAHI candidate frontier against labelled evidence, "
+            "then register the same artifact with the chosen profile(s)."
+        )
         row1.addWidget(self.btn_start)
         row1.addWidget(self.btn_cancel)
         row1.addWidget(self.btn_resume)
         row1.addWidget(self.btn_save_config)
         row1.addWidget(self.btn_load_config)
+        row1.addWidget(self.btn_register)
+        row1.addWidget(self.btn_calibrate)
         v.addLayout(row1)
 
         self.progress = QProgressBar()
@@ -1512,8 +1539,160 @@ QTabBar::tab:selected {
         self.btn_resume.clicked.connect(self._resume_training)
         self.btn_save_config.clicked.connect(self._save_training_config)
         self.btn_load_config.clicked.connect(self._load_training_config)
+        self.btn_register.clicked.connect(self.register_with_training_geometry)
+        self.btn_calibrate.clicked.connect(self.calibrate_then_register)
+        self._refresh_register_controls()
 
         return gb
+
+    # ------------------------------------------------------------------
+    # Review & Register — calibration is optional, registration is not
+    # ------------------------------------------------------------------
+
+    def _published_run_context(
+        self,
+    ) -> tuple[Path, str, dict, Path | None, bool] | None:
+        """The already-published artifact for the latest completed direct-
+        detector run this session, or ``None`` if there is none yet.
+
+        Returns ``(model_path, task, training_geometry, dataset_yaml,
+        is_published)``.
+
+        Publication (copying the checkpoint into the repo AND stamping
+        training geometry onto ``<model>.pt.slice_meta.json`` via
+        ``model_publish.publish_trained_model`` ->
+        ``normalized_slice_meta``) already happened automatically during
+        training, because every DetectKit training run is started with
+        ``PublishPolicy(auto_import=True, ...)`` (see ``_start_training``
+        above). This method does not publish and does not touch the
+        sidecar.
+
+        It resolves the artifact through ``_calibration_model_path`` --
+        published FIRST, project export only as a fallback. The
+        export-first order ``_entry_model_path`` uses is right for
+        "load"/"export" but wrong here: profiles written onto an export are
+        invisible to the registered model and are overwritten by the next
+        publish.
+
+        Training geometry comes from the artifact's OWN sidecar rather than
+        from this dialog's imgsz spinner: a synthesised ``{"imgsz": N}``
+        made ``build_candidate_grid`` fall back to 0.15/0.2/body_px=0 and
+        label the result "Training geometry" when it was nothing of the
+        kind. The spinner survives only as an imgsz supplement when the
+        sidecar has none.
+        """
+        for result in reversed(self._last_training_results or []):
+            role = str(result.get("role", "") or "")
+            if role not in _DIRECT_DETECTOR_ROLES:
+                continue
+            if not result.get("success"):
+                continue
+            model_path, is_published = _calibration_model_path(result)
+            if not model_path:
+                continue
+            spec = dict(result.get("spec") or {})
+            if not spec.get("derived_dataset_dir"):
+                # The in-session result dict may not carry the run spec; the
+                # prepared dataset for this role is the same directory the
+                # run was built from.
+                dataset_dir = self.role_dataset_dirs.get(role, "")
+                if dataset_dir:
+                    spec["derived_dataset_dir"] = dataset_dir
+            enriched = dict(result)
+            enriched["spec"] = spec
+            geometry, dataset_yaml = _entry_calibration_context(enriched)
+            if not geometry.get("imgsz") and hasattr(self, "spin_imgsz_obb_direct"):
+                geometry["imgsz"] = int(self.spin_imgsz_obb_direct.value())
+            return (
+                Path(model_path),
+                _ROLE_TO_TASK.get(role, "obb"),
+                geometry,
+                dataset_yaml,
+                is_published,
+            )
+        return None
+
+    def set_calibration_enabled(self, enabled: bool, reason: str = "") -> None:
+        """External gate (e.g. no labelled val split); mirrors
+        ``SemanticEscalationDialog.set_calibration_enabled``."""
+        self.btn_calibrate.setEnabled(enabled)
+        self.btn_calibrate.setToolTip(reason if not enabled else "")
+
+    def _refresh_register_controls(self) -> None:
+        """(Re)gate ``btn_register``/``btn_calibrate`` on whether a
+        published direct-detector artifact exists yet from this session --
+        never a dead button with no explanation."""
+        context = self._published_run_context()
+        has_artifact = context is not None
+        reason = (
+            ""
+            if has_artifact
+            else "No completed direct-detector run has been published in "
+            "this session yet -- start and finish a training run first."
+        )
+        self.btn_register.setEnabled(has_artifact)
+        self.btn_register.setToolTip(reason)
+        self.set_calibration_enabled(has_artifact, reason)
+
+    def register_with_training_geometry(self) -> None:
+        """Accept the already-published artifact; nothing to write here.
+
+        Publication (including the training-geometry stamp) happened
+        automatically during training via ``PublishPolicy(auto_import=True)``
+        -> ``publish_trained_model`` -> ``normalized_slice_meta``. This
+        method does not write the sidecar and does not publish again --
+        it only records which artifact review has accepted.
+        ``registered_model_paths`` exists purely so tests (and this
+        dialog's caller) can observe that acceptance happened; it is not
+        a second source of truth for what "published" means.
+        """
+        context = self._published_run_context()
+        if context is None:
+            return
+        model_path = context[0]
+        self.registered_model_paths.append(str(model_path))
+
+    def calibrate_then_register(self) -> None:
+        """Open the calibration wizard/results pair on the already-
+        published artifact, then accept it -- same as
+        ``register_with_training_geometry``.
+
+        Publishes nothing itself: ``open_direct_calibration`` ->
+        ``DirectCalibrationResultsDialog.accept()`` is what writes any
+        staged profiles, atomically, via ``write_slice_meta`` onto the
+        SAME sidecar ``publish_trained_model`` already created. No second
+        registry entry, no weight copy, no sidecar write of this method's
+        own.
+        """
+        context = self._published_run_context()
+        if context is None:
+            return
+        model_path, task, geometry, dataset_yaml, is_published = context
+        if not is_published:
+            QMessageBox.information(
+                self,
+                "Calibrate for TrackerKit",
+                "This run has no published artifact, so calibration will "
+                "write its profiles onto the project export. They will not "
+                "be visible to the registered model, and publishing later "
+                "will not carry them over.",
+            )
+        sources = list(self._project.sources) if self._project is not None else []
+        evidence_dir = (
+            Path(self._project.project_dir) / ".sahi_calibration"
+            if self._project is not None
+            else Path(".sahi_calibration")
+        )
+        open_direct_calibration(
+            self,
+            model_path=model_path,
+            task=task,
+            dataset_yaml=dataset_yaml,
+            sources=sources,
+            training_geometry=geometry,
+            evidence_dir=evidence_dir,
+        )
+        self.registered_model_paths.append(str(model_path))
 
     # --- 8. Loss Plot ---
 
@@ -2945,6 +3124,7 @@ QTabBar::tab:selected {
             else:
                 r["_run_dir"] = ""
 
+        self._refresh_register_controls()
         self._update_resume_enabled()
 
         succeeded = [r for r in results if r.get("success")]

@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 
 from hydra_suite.core.inference.model_paths import get_models_root_directory
 from hydra_suite.trackerkit.config.schemas import TrackerConfig
+from hydra_suite.trackerkit.engine_params import SLICE_MERGE_DEFAULTS
 from hydra_suite.trackerkit.gui.panels.reference_scale_preview import (
     ReferenceScalePreviewWidget,
 )
@@ -778,6 +779,16 @@ class DetectionPanel(QWidget):
         self.row_slice_profile = _labeled_row("SAHI profile", self.combo_slice_profile)
         f_yolo.addWidget(self.row_slice_profile, 7, 1)
         self._set_widget_visible(self.row_slice_profile, False)
+
+        self._slice_meta_model_path = None
+        self._slice_profile_requested_id = None
+        self._slice_profile_applied_id = None
+        self._slice_profile_applied_name = "Training geometry"
+        self._slice_profile_resolution = "training"
+        self.lbl_slice_profile_status = QLabel("")
+        self.lbl_slice_profile_status.setWordWrap(True)
+        self.lbl_slice_profile_status.setStyleSheet("color: #b58900;")
+        f_yolo.addWidget(self.lbl_slice_profile_status, 10, 0, 1, 2)
 
         self.combo_slice_geometry = QComboBox()
         self.combo_slice_geometry.addItems(["auto_model", "auto_object", "custom"])
@@ -2577,9 +2588,31 @@ class DetectionPanel(QWidget):
             return
         self._on_yolo_mode_changed(index)
 
+    def _select_slice_profile_combo_item(self, item_data: str, *, label: str) -> None:
+        """Select (adding if absent) a sentinel combo entry without emitting signals."""
+        if not hasattr(self, "combo_slice_profile"):
+            return
+        index = self.combo_slice_profile.findData(item_data, Qt.UserRole)
+        if index < 0:
+            self.combo_slice_profile.addItem(label, item_data)
+            index = self.combo_slice_profile.count() - 1
+        self.combo_slice_profile.blockSignals(True)
+        self.combo_slice_profile.setCurrentIndex(index)
+        self.combo_slice_profile.blockSignals(False)
+
     def _mark_slice_profile_custom(self) -> None:
-        """Mark user changes as custom without mutating artifact metadata."""
+        """Mark user changes as custom without mutating artifact metadata.
+
+        A programmatic config/preset restore touches these same widgets
+        (visibility toggles, mode switches) purely to reflect the config it
+        just loaded -- that is not the user editing anything, and must not
+        stomp the profile id/settings the restore is in the middle of
+        applying (see ``_restoring_config`` guard used the same way for
+        ``yolo_obb_mode`` elsewhere in this module).
+        """
         if self._applying_slice_profile or not hasattr(self, "combo_slice_profile"):
+            return
+        if getattr(self._main_window, "_restoring_config", False):
             return
         if self.combo_slice_profile.count() <= 1:
             return
@@ -2591,6 +2624,7 @@ class DetectionPanel(QWidget):
         self.combo_slice_profile.setCurrentIndex(custom_index)
         self.combo_slice_profile.blockSignals(False)
         self._main_window.advanced_config["slice_profile_id"] = "__custom__"
+        self._update_slice_profile_status_label()
 
     def _on_slice_profile_changed(self, _index: int) -> None:
         if self._applying_slice_profile or self._slice_meta is None:
@@ -2606,13 +2640,56 @@ class DetectionPanel(QWidget):
             return
         self._apply_slice_meta_values(profile_id)
 
-    def _apply_slice_meta_values(self, profile_id: str | None = None) -> None:
-        """Apply selected sidecar profile without touching tracking body size."""
-        from hydra_suite.core.inference.slice_meta import slice_meta_to_panel_values
+    def _apply_slice_meta_values(
+        self,
+        profile_id: str | None = None,
+        *,
+        saved_settings: dict | None = None,
+    ) -> None:
+        """Apply selected sidecar profile without touching tracking body size.
+
+        ``saved_settings`` is the third restore rung: an effective-settings
+        snapshot captured when a session was saved. It is only consulted
+        when ``profile_id`` names a profile that is no longer in this
+        model's sidecar -- a still-valid id or an explicit training/custom
+        request always wins over it.
+        """
+        from hydra_suite.core.inference.slice_meta import (
+            available_slice_profiles,
+            slice_meta_to_panel_values,
+            slice_meta_values_from_settings,
+        )
 
         if self._slice_meta is None:
             return
-        values = slice_meta_to_panel_values(self._slice_meta, profile_id)
+        self._slice_profile_requested_id = profile_id
+        known_ids = {p["id"] for p in available_slice_profiles(self._slice_meta)}
+        # A session saved mid-custom-edit has a complete effective-settings
+        # snapshot. Excluding "__custom__" here made the restore fall through
+        # to the PRIMARY profile, overwrite slice_profile_id with the
+        # primary's id and label the panel with the primary's name -- while
+        # the settings the user actually saved sat unused.
+        is_custom_restore = bool(profile_id == "__custom__" and saved_settings)
+        use_saved_settings = is_custom_restore or bool(
+            profile_id
+            and profile_id not in ("__training__", "__custom__")
+            and profile_id not in known_ids
+            and saved_settings
+        )
+        if use_saved_settings:
+            values = slice_meta_values_from_settings(self._slice_meta, saved_settings)
+        else:
+            values = slice_meta_to_panel_values(self._slice_meta, profile_id)
+        self._slice_profile_applied_id = values["profile_id"]
+        self._slice_profile_applied_name = values["profile_name"]
+        if is_custom_restore:
+            # Never claim a profile the user was not on: the status line says
+            # "Custom (based on <name>)" only when the snapshot recorded what
+            # the edit started from, and plain "Custom" otherwise.
+            self._slice_profile_applied_name = str(
+                (saved_settings or {}).get("base_profile_name") or ""
+            )
+        self._slice_profile_resolution = values.get("resolution", "training")
         self._applying_slice_profile = True
         try:
             self.chk_slice_enabled.setChecked(bool(values["enabled"]))
@@ -2627,7 +2704,22 @@ class DetectionPanel(QWidget):
             advanced["slice_trained_body_px"] = float(values["trained_body_px"])
             advanced["slice_width"] = int(values["slice_width"])
             advanced["slice_height"] = int(values["slice_height"])
-            advanced["slice_profile_id"] = str(values["profile_id"] or "__training__")
+            advanced["slice_profile_id"] = (
+                str(profile_id)
+                if use_saved_settings
+                else str(values["profile_id"] or "__training__")
+            )
+            # Apply UNCONDITIONALLY. Writing only non-None values left the
+            # previous profile's (or the previous MODEL's) merge settings and
+            # confidence in advanced_config while the panel claimed to be on
+            # a different profile -- and those values feed the detection
+            # cache key. A profile that does not claim a key means the
+            # DEFAULT for that key, not "whatever was there before".
+            #
+            # Skipped during a config/preset restore: the loader has already
+            # written the session's own values and there is no previous
+            # model's state to leak, so resetting here would clobber them.
+            resetting = not getattr(self._main_window, "_restoring_config", False)
             for key in (
                 "merge_policy",
                 "merge_metric",
@@ -2636,6 +2728,15 @@ class DetectionPanel(QWidget):
             ):
                 if values[key] is not None:
                     advanced[f"slice_{key}"] = values[key]
+                elif resetting:
+                    advanced[f"slice_{key}"] = SLICE_MERGE_DEFAULTS[key]
+            # Confidence is restored ONLY when a profile explicitly claims
+            # one. Unlike the merge keys above, it is not profile-owned: it
+            # is the user's global YOLO threshold, used on the non-sliced
+            # path too. Resetting it to SLICE_DEFAULT_CONFIDENCE when no
+            # profile claims one silently overwrote the user's operating
+            # point -- on every "Training geometry" selection and on every
+            # switch to a sidecar-bearing model -- with no status message.
             if values["confidence_threshold"] is not None:
                 self.spin_yolo_confidence.setValue(
                     float(values["confidence_threshold"])
@@ -2649,28 +2750,56 @@ class DetectionPanel(QWidget):
                 spin.blockSignals(True)
                 spin.setValue(value)
                 spin.blockSignals(False)
-            target_id = values["profile_id"] or "__training__"
-            target_index = self.combo_slice_profile.findData(target_id, Qt.UserRole)
-            if target_index >= 0:
-                self.combo_slice_profile.blockSignals(True)
-                self.combo_slice_profile.setCurrentIndex(target_index)
-                self.combo_slice_profile.blockSignals(False)
+            if use_saved_settings:
+                self._select_slice_profile_combo_item("__custom__", label="Custom")
+            else:
+                target_id = values["profile_id"] or "__training__"
+                target_index = self.combo_slice_profile.findData(target_id, Qt.UserRole)
+                if target_index >= 0:
+                    self.combo_slice_profile.blockSignals(True)
+                    self.combo_slice_profile.setCurrentIndex(target_index)
+                    self.combo_slice_profile.blockSignals(False)
         finally:
             self._applying_slice_profile = False
         self._notify_matched_geometry()
+        self._update_slice_profile_status_label()
 
     def apply_slice_meta_for_model(self, model_path: str) -> None:
-        """Populate TrackerKit from training geometry and calibrated profiles."""
+        """Populate TrackerKit from training geometry and calibrated profiles.
+
+        A profile id (and its saved effective settings) only ever means
+        something relative to the model it was calibrated on. A *user-driven*
+        switch to a different model -- or finding no sidecar at all -- must
+        clear both, so a stale id can never silently apply to (or collide
+        with) an unrelated model's own profile of the same id.
+
+        During a config/preset restore this method is invoked once for the
+        model the loader just populated -- against whatever model happened
+        to be selected by default beforehand. That is not a user switching
+        models, so the restore-set ``slice_profile_id`` / saved settings
+        (rungs 1 and 3) must survive; ``_restoring_config`` distinguishes
+        the two, matching the guard already used for ``yolo_obb_mode``.
+        """
         from hydra_suite.core.inference.slice_meta import (
             available_slice_profiles,
             read_slice_meta,
         )
 
+        previous_model_path = self._slice_meta_model_path
+        model_changed = (
+            previous_model_path is not None
+            and previous_model_path != model_path
+            and not getattr(self._main_window, "_restoring_config", False)
+        )
+        self._slice_meta_model_path = model_path
         meta = read_slice_meta(model_path)
         if meta is None:
             self._slice_meta = None
             self.combo_slice_profile.clear()
             self._set_widget_visible(self.row_slice_profile, False)
+            self._main_window.advanced_config["slice_profile_id"] = ""
+            self._main_window.advanced_config.pop("_slice_profile_saved_settings", None)
+            self._update_slice_profile_status_label()
             return
         self._slice_meta = meta
         profiles = available_slice_profiles(meta)
@@ -2681,8 +2810,82 @@ class DetectionPanel(QWidget):
             self.combo_slice_profile.addItem(profile["name"], profile["id"])
         self.combo_slice_profile.blockSignals(False)
         self._set_widget_visible(self.row_slice_profile, bool(profiles))
+        if model_changed:
+            self._main_window.advanced_config["slice_profile_id"] = ""
+            self._main_window.advanced_config.pop("_slice_profile_saved_settings", None)
+            self._apply_slice_meta_values(None)
+            return
         requested = self._main_window.advanced_config.get("slice_profile_id")
-        self._apply_slice_meta_values(str(requested) if requested else None)
+        saved_settings = self._main_window.advanced_config.get(
+            "_slice_profile_saved_settings"
+        )
+        self._apply_slice_meta_values(
+            str(requested) if requested else None,
+            saved_settings=saved_settings,
+        )
+
+    def slice_profile_status_text(self) -> str:
+        """Explain which SAHI profile is active and whether to trust it.
+
+        Distinguishes three cases the combo box alone hides: a profile whose
+        measured evidence no longer matches the model's current weights, a
+        saved profile id that fell back silently because it is not in this
+        model's sidecar, and a manual edit that detached the panel from any
+        saved profile.
+        """
+        if self._slice_meta is None:
+            return ""
+        current_id = str(
+            self._main_window.advanced_config.get("slice_profile_id") or ""
+        )
+        applied_name = self._slice_profile_applied_name or "Training geometry"
+        if current_id == "__custom__":
+            base = self._slice_profile_applied_name
+            return f"Custom (based on {base})" if base else "Custom"
+
+        requested = self._slice_profile_requested_id
+        applied_id = self._slice_profile_applied_id
+        was_unknown_request = (
+            requested
+            and requested not in ("__training__", "__custom__")
+            and applied_id != requested
+        )
+        if was_unknown_request:
+            if self._slice_profile_resolution == "saved_settings":
+                return (
+                    "The saved profile is no longer in this model's sidecar; "
+                    "using this session's saved settings."
+                )
+            if self._slice_profile_resolution == "primary":
+                return (
+                    "The saved profile is no longer in this model's sidecar; "
+                    f"using '{applied_name}' (the primary profile)."
+                )
+            return (
+                "Training geometry: the saved profile is no longer in this "
+                "model's sidecar; using Training geometry."
+            )
+
+        if applied_id:
+            from hydra_suite.core.inference.slice_meta import (
+                profile_by_id,
+                profile_evidence_state,
+            )
+
+            profile = profile_by_id(self._slice_meta, applied_id)
+            model_path = self._slice_meta_model_path
+            if profile is not None and model_path:
+                fresh, reason = profile_evidence_state(
+                    profile, checkpoint_path=model_path
+                )
+                if not fresh:
+                    return reason
+
+        return applied_name
+
+    def _update_slice_profile_status_label(self) -> None:
+        if hasattr(self, "lbl_slice_profile_status"):
+            self.lbl_slice_profile_status.setText(self.slice_profile_status_text())
 
     def _notify_matched_geometry(self) -> None:
         """Show a dismissible "Matched trained SAHI geometry" banner.

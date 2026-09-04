@@ -408,6 +408,35 @@ class ConfigOrchestrator:
             get_cfg("dilation_iterations", default=2)
         )
 
+    def _slice_profile_settings_snapshot(self) -> dict:
+        """Capture the effective SAHI settings currently applied to the panel.
+
+        Saved alongside ``slice_profile_id`` so a session can still reproduce
+        its exact SAHI configuration even if the named profile is later
+        deleted from the model's sidecar (restore rung 3).
+        """
+        panel = self._panels.detection
+        advanced = self._mw.advanced_config
+        return {
+            "enabled": bool(panel.chk_slice_enabled.isChecked()),
+            "geometry_mode": panel.combo_slice_geometry.currentText(),
+            "overlap": panel.spin_slice_overlap.value(),
+            "object_tile_fraction": panel.spin_slice_object_fraction.value(),
+            "trained_body_px": advanced.get("slice_trained_body_px", 0.0),
+            "slice_width": panel.spin_slice_tile_w.value(),
+            "slice_height": panel.spin_slice_tile_h.value(),
+            "confidence_threshold": panel.spin_yolo_confidence.value(),
+            "merge_policy": advanced.get("slice_merge_policy"),
+            "merge_metric": advanced.get("slice_merge_metric"),
+            "merge_threshold": advanced.get("slice_merge_threshold"),
+            "merge_backend": advanced.get("slice_merge_backend"),
+            # What a mid-edit "Custom" state was based on, so restoring it can
+            # say "Custom (based on Balanced)" without claiming the profile.
+            "base_profile_name": str(
+                getattr(panel, "_slice_profile_applied_name", "") or ""
+            ),
+        }
+
     def _load_config_yolo(self, cfg, get_cfg, preset_mode):
         yolo_mode = str(get_cfg("yolo_obb_mode", default="direct")).strip().lower()
         if yolo_mode not in {"direct", "sequential"}:
@@ -441,6 +470,16 @@ class ConfigOrchestrator:
         self._mw.advanced_config["slice_profile_id"] = str(
             get_cfg("slice_profile_id", default="") or ""
         )
+        # Third restore rung: a saved effective-settings snapshot, consulted
+        # only if the saved profile id above is no longer in this model's
+        # sidecar (see apply_slice_meta_for_model / _apply_slice_meta_values).
+        saved_slice_settings = get_cfg("slice_profile_settings", default=None)
+        if isinstance(saved_slice_settings, dict) and saved_slice_settings:
+            self._mw.advanced_config["_slice_profile_saved_settings"] = dict(
+                saved_slice_settings
+            )
+        else:
+            self._mw.advanced_config.pop("_slice_profile_saved_settings", None)
 
         yolo_direct_model = get_cfg(
             "yolo_obb_direct_model_path",
@@ -1660,6 +1699,7 @@ class ConfigOrchestrator:
                 "slice_profile_id": str(
                     self._mw.advanced_config.get("slice_profile_id", "") or ""
                 ),
+                "slice_profile_settings": self._slice_profile_settings_snapshot(),
                 "yolo_obb_direct_model_path": make_model_path_relative(
                     yolo_direct_path
                 ),

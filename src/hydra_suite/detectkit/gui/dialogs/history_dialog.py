@@ -20,12 +20,28 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hydra_suite.core.inference.slice_meta import read_slice_meta, training_geometry
+from hydra_suite.detectkit.jobs.direct_calibration import (
+    resolve_calibration_dataset_yaml,
+)
 from hydra_suite.widgets.dialogs import BaseDialog
+
+from .direct_calibration_wizard import open_direct_calibration
 
 if TYPE_CHECKING:
     from ..models import DetectKitProject
 
 logger = logging.getLogger(__name__)
+
+# Roles trained via the direct-detector path (as opposed to sequential
+# detect+crop stages or the SAM3 semantic path); only these can be
+# calibrated for TrackerKit's SAHI slicing.
+_DIRECT_DETECTOR_ROLES = {"obb_direct", "detect_direct", "segment_direct"}
+_ROLE_TO_TASK = {
+    "obb_direct": "obb",
+    "detect_direct": "detect",
+    "segment_direct": "segment",
+}
 
 
 def _load_runs(project: "DetectKitProject") -> list[dict]:
@@ -50,6 +66,48 @@ def _entry_model_path(entry: dict) -> str:
     if artifact_paths:
         return str(artifact_paths[0])
     return ""
+
+
+def _calibration_model_path(entry: dict) -> tuple[str, bool]:
+    """The artifact calibration must write to, and whether it is the published one.
+
+    NOT ``_entry_model_path``: that prefers a project export, and profiles
+    saved on an export are invisible to the registered model -- worse, the
+    next ``publish_trained_model`` merges the SOURCE artifact's sidecar over
+    the destination, silently discarding them. Calibration therefore targets
+    the PUBLISHED artifact whenever one exists; the export is only a
+    fallback, and the caller says so in the UI.
+    """
+    published = str(entry.get("published_model_path", "") or "").strip()
+    if published:
+        return published, True
+    return _entry_model_path(entry), False
+
+
+def _entry_calibration_context(entry: dict) -> tuple[dict, Path | None]:
+    """Real training geometry (from the sidecar) and the run's full-res yaml.
+
+    Reading the sidecar via ``training_geometry()`` -- rather than
+    synthesising ``{"imgsz": N}`` -- is what makes the grid's
+    "Training geometry" row actually the training geometry and stops
+    ``trained_body_px=0.0`` from overriding the sidecar's measured
+    ``reference_body_px`` when the profile is later applied. The helper also
+    handles LEGACY FLAT sidecars, which a bare ``.get("training_geometry")``
+    would miss.
+    """
+    model_path, _published = _calibration_model_path(entry)
+    geometry = dict(training_geometry(read_slice_meta(model_path) or {}))
+    spec = entry.get("spec") or {}
+    hyperparams = spec.get("hyperparams") or {}
+    if not geometry.get("imgsz") and hyperparams.get("imgsz"):
+        # imgsz-only supplement: the sidecar is authoritative for geometry,
+        # but older stamps may omit imgsz, which the wizard's tile estimate
+        # needs.
+        geometry["imgsz"] = hyperparams.get("imgsz")
+    dataset_yaml = resolve_calibration_dataset_yaml(
+        spec.get("derived_dataset_dir") or ""
+    )
+    return geometry, dataset_yaml
 
 
 class HistoryDialog(BaseDialog):
@@ -137,9 +195,13 @@ class HistoryDialog(BaseDialog):
         self._btn_delete = QPushButton("Delete Run")
         self._btn_delete.setEnabled(False)
         self._btn_delete.clicked.connect(self._delete_run)
+        self._btn_calibrate = QPushButton("Calibrate for TrackerKit…")
+        self._btn_calibrate.setEnabled(False)
+        self._btn_calibrate.clicked.connect(self._calibrate_selected)
         btn_row.addWidget(self._btn_load)
         btn_row.addWidget(self._btn_export)
         btn_row.addWidget(self._btn_delete)
+        btn_row.addWidget(self._btn_calibrate)
         layout.addLayout(btn_row)
 
         container = QWidget()
@@ -253,7 +315,63 @@ class HistoryDialog(BaseDialog):
         self._btn_load.setEnabled(has_entry and bool(_entry_model_path(entry)))
         self._btn_export.setEnabled(has_entry and bool(entry.get("artifact_paths")))
         self._btn_delete.setEnabled(has_entry)
+        self._btn_calibrate.setEnabled(has_entry and self._is_calibratable(entry))
         self._set_detail_text(entry)
+
+    @staticmethod
+    def _is_calibratable(entry: dict) -> bool:
+        role = str(entry.get("role", "") or "")
+        status = str(entry.get("status", "") or "")
+        return (
+            role in _DIRECT_DETECTOR_ROLES
+            and status == "completed"
+            and bool(_calibration_model_path(entry)[0])
+        )
+
+    def _calibrate_selected(self) -> None:
+        entry = self._get_selected_entry()
+        if entry is None or not self._is_calibratable(entry):
+            return
+        model_path, is_published = _calibration_model_path(entry)
+        role = str(entry.get("role", "") or "")
+        task = _ROLE_TO_TASK.get(role, "obb")
+        geometry, dataset_yaml = _entry_calibration_context(entry)
+        sources = list(getattr(self._project, "sources", []) or [])
+        evidence_dir = (
+            Path(self._project.project_dir) / ".sahi_calibration"
+            if getattr(self._project, "project_dir", None)
+            else Path(".sahi_calibration")
+        )
+        # open_direct_calibration owns the ONLY write: any staged profile is
+        # committed atomically inside DirectCalibrationResultsDialog.accept()
+        # via write_slice_meta. Publication (including the training-geometry
+        # stamp) already happened during training via
+        # publish_trained_model -> normalized_slice_meta. This action must
+        # not write the sidecar itself -- a cancelled wizard/results dialog
+        # returns [] and must leave the artifact untouched.
+        profiles = open_direct_calibration(
+            self,
+            model_path=Path(model_path),
+            task=task,
+            dataset_yaml=dataset_yaml,
+            sources=sources,
+            training_geometry=geometry,
+            evidence_dir=evidence_dir,
+        )
+        if profiles:
+            where = (
+                f"{Path(model_path).name}"
+                if is_published
+                else (
+                    f"{Path(model_path).name} (this run has no published "
+                    "artifact, so the profiles were saved on the project "
+                    "export; publishing the model later will not carry them)"
+                )
+            )
+            self.detail_label.setText(
+                f"<span style='color:#4ec9b0'>Saved {len(profiles)} calibration "
+                f"profile(s) to:</span> {where}"
+            )
 
     def _load_for_inference(self) -> None:
         entry = self._get_selected_entry()

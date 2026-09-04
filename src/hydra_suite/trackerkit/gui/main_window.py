@@ -2479,7 +2479,13 @@ class MainWindow(QMainWindow):
 
         if role in direct_roles:
             try:
-                panel.apply_slice_meta_for_model(model_path)
+                from hydra_suite.core.inference.model_paths import resolve_model_path
+
+                # Repository model combos store a path relative to the model
+                # repository root; the sidecar lives beside the real file, so
+                # the lookup needs the resolved absolute path, not the raw
+                # combo value.
+                panel.apply_slice_meta_for_model(str(resolve_model_path(model_path)))
             except Exception:
                 logger.exception(
                     "Failed to apply slice_meta sidecar for %s", model_path
