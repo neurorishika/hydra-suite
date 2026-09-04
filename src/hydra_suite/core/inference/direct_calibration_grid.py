@@ -8,7 +8,12 @@ mapping is what makes a measured point expressible as TrackerKit settings.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
 
 FRACTION_STEPS: tuple[float, ...] = (0.75, 1.0, 1.5)
 OVERLAP_STEPS: tuple[float, ...] = (0.1, 0.2, 0.3)
@@ -170,3 +175,72 @@ def estimate_grid_work(
             )
         estimates.append(GridWorkEstimate(candidate, tiles, total, reason))
     return estimates
+
+
+def _file_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def checkpoint_fingerprint(path) -> str:
+    """``sha256:<hex>`` of the weights, as stamped into a profile measurement."""
+    return "sha256:" + _file_digest(Path(path))
+
+
+def candidate_cache_fingerprint(
+    *,
+    checkpoint_path,
+    task: str,
+    image_paths,
+    candidate: CandidateGeometry,
+    imgsz: int,
+    executor_key: str,
+    max_detections: int,
+    confidence_floor: float,
+) -> str:
+    """Identity of one measured candidate pass.
+
+    Weights, task, image list, resolved tile plan, executor/imgsz, the raw
+    detection cap (max_detections bounds the reservoir and truncates results)
+    and the PREDICT-time floor all change which raw predictions exist. The
+    filter-time confidence deliberately does NOT -- that is exactly what makes
+    the offline sweep sound.
+    """
+    payload = json.dumps(
+        {
+            "checkpoint": _file_digest(Path(checkpoint_path)),
+            "task": str(task),
+            "images": [str(Path(p)) for p in image_paths],
+            "candidate": [
+                candidate.enabled,
+                candidate.geometry_mode,
+                candidate.slice_width,
+                candidate.slice_height,
+                round(candidate.overlap, 6),
+                round(candidate.object_tile_fraction, 6),
+                round(candidate.trained_body_px, 6),
+            ],
+            "imgsz": int(imgsz),
+            "executor": str(executor_key),
+            "max_detections": int(max_detections),
+            "confidence_floor": round(float(confidence_floor), 9),
+        },
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def label_set_fingerprint(frames) -> str:
+    """Stable identity of the evidence set: file names plus label geometry."""
+    digest = hashlib.sha256()
+    for path, labels in sorted(frames, key=lambda item: str(item[0])):
+        digest.update(str(Path(path).name).encode("utf-8"))
+        for label in labels:
+            points = np.asarray(label.points, dtype=np.float32).reshape(-1, 2)
+            digest.update(
+                f"{int(label.class_id)}:{np.round(points, 3).tobytes().hex()}".encode()
+            )
+    return digest.hexdigest()

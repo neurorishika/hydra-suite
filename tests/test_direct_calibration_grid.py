@@ -95,3 +95,66 @@ def test_unplannable_candidate_is_flagged_not_dropped():
     assert len(estimates) == len(grid), "a failed candidate must still get a row"
     custom = next(e for e in estimates if e.candidate.geometry_mode == "custom")
     assert custom.failed_reason
+
+
+def _checkpoint(tmp_path, payload=b"weights"):
+    path = tmp_path / "m.pt"
+    path.write_bytes(payload)
+    return path
+
+
+def test_fingerprint_distinguishes_every_geometry(tmp_path):
+    from hydra_suite.core.inference.direct_calibration_grid import (
+        build_candidate_grid,
+        candidate_cache_fingerprint,
+    )
+
+    args = dict(
+        checkpoint_path=_checkpoint(tmp_path),
+        task="obb",
+        image_paths=[tmp_path / "a.png"],
+        imgsz=640,
+        executor_key="torch:cpu",
+        max_detections=64,
+        confidence_floor=1e-3,
+    )
+    keys = {
+        candidate_cache_fingerprint(candidate=c, **args)
+        for c in build_candidate_grid(TRAINING)
+    }
+    assert len(keys) == len(build_candidate_grid(TRAINING))
+
+
+def test_fingerprint_changes_when_weights_or_cap_change(tmp_path):
+    from hydra_suite.core.inference.direct_calibration_grid import (
+        build_candidate_grid,
+        candidate_cache_fingerprint,
+    )
+
+    checkpoint = _checkpoint(tmp_path)
+    candidate = build_candidate_grid(TRAINING)[1]
+    args = dict(
+        checkpoint_path=checkpoint,
+        task="obb",
+        image_paths=[tmp_path / "a.png"],
+        candidate=candidate,
+        imgsz=640,
+        executor_key="torch:cpu",
+        max_detections=64,
+        confidence_floor=1e-3,
+    )
+    before = candidate_cache_fingerprint(**args)
+    assert candidate_cache_fingerprint(**{**args, "max_detections": 8}) != before
+    checkpoint.write_bytes(b"retrained")
+    assert candidate_cache_fingerprint(**args) != before
+
+
+def test_checkpoint_fingerprint_is_prefixed_and_stable(tmp_path):
+    from hydra_suite.core.inference.direct_calibration_grid import (
+        checkpoint_fingerprint,
+    )
+
+    checkpoint = _checkpoint(tmp_path)
+    digest = checkpoint_fingerprint(checkpoint)
+    assert digest.startswith("sha256:") and len(digest) == 71
+    assert digest == checkpoint_fingerprint(checkpoint)
