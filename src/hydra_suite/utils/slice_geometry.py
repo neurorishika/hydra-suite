@@ -45,6 +45,15 @@ def _axis_starts(total: int, size: int, step: int) -> list[int]:
     return starts
 
 
+def _axis_start_count(total: int, size: int, step: int) -> int:
+    """Count edge-flushed starts without constructing their offset list."""
+    if size >= total:
+        return 1
+    last = total - size
+    regular_count = last // step + 1
+    return regular_count + (1 if last % step else 0)
+
+
 def _axis_geometry(frame_h, frame_w, slice_h, slice_w, overlap_h, overlap_w):
     """Return ``(xs, ys, slice_w, slice_h)`` with sizes clamped to the frame."""
     slice_w = min(slice_w, frame_w)
@@ -144,18 +153,23 @@ def plan_tiles(
     pixel; a mask whose shape mismatches the frame is treated as ``None``.
     """
     frame_h, frame_w = int(frame_hw[0]), int(frame_hw[1])
-    xs, ys, eff_w, eff_h = _axis_geometry(
-        frame_h, frame_w, slice_h, slice_w, overlap_h, overlap_w
-    )
-    n_tiles = len(xs) * len(ys)
+    eff_w = min(slice_w, frame_w)
+    eff_h = min(slice_h, frame_h)
+    step_x = max(1, int(eff_w * (1.0 - overlap_w)))
+    step_y = max(1, int(eff_h * (1.0 - overlap_h)))
+    count_x = _axis_start_count(frame_w, eff_w, step_x)
+    count_y = _axis_start_count(frame_h, eff_h, step_y)
+    n_tiles = count_x * count_y
     if n_tiles > MAX_TILES_PER_FRAME:
         raise ValueError(
             f"Sliced tiling would produce {n_tiles} tiles per frame "
-            f"({len(xs)}x{len(ys)}) for a {frame_w}x{frame_h} frame with "
+            f"({count_x}x{count_y}) for a {frame_w}x{frame_h} frame with "
             f"{eff_w}x{eff_h} tiles at overlap ({overlap_w}, {overlap_h}) -- "
             f"above the {MAX_TILES_PER_FRAME}-tile ceiling. Increase the slice "
             f"size or lower the overlap."
         )
+    xs = _axis_starts(frame_w, eff_w, step_x)
+    ys = _axis_starts(frame_h, eff_h, step_y)
     tiles = [(x, y, x + eff_w, y + eff_h) for y in ys for x in xs]
     if roi_mask is not None and roi_mask.shape[:2] != (frame_h, frame_w):
         logger.warning(

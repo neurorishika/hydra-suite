@@ -1031,15 +1031,12 @@ def _extract_obb_from_masks(
         return _empty_obb_result(frame_idx)
     boxes_orig = boxes.xyxy
 
-    # Export-only: native per-detection mask contours, in the SAME frame
-    # pixel space as `corners` (ultralytics' Masks.xy already scales its
-    # cv2.findContours output from mask space back to result.orig_shape via
-    # the identical gain/pad formula used below). Computed in original
-    # (pre-cap, pre-valid-filter) detection order; re-indexed alongside
-    # every subselection below so it stays aligned with cx/cy/... at return.
+    # Export-only contours are deliberately deferred until after the compact
+    # candidate cap below. ``Masks.xy`` expands every retained dense mask into
+    # host polygons, so reading it here would bypass the same memory boundary
+    # that protects the rotated-rectangle kernel.
+    native_masks = masks
     polygons_native: list[np.ndarray] | None = None
-    if emit_native_geometry:
-        polygons_native = list(masks.xy)
 
     # Optimization: the downstream cap keeps only the top-`raw_detection_cap`
     # detections by confidence (see _apply_raw_detection_cap). Select that same
@@ -1049,17 +1046,28 @@ def _extract_obb_from_masks(
     # (confidence descending) and the caller re-applies the cap afterwards, so
     # the final result is unchanged.
     if raw_detection_cap > 0 and int(conf_all.shape[0]) > raw_detection_cap:
-        order = np.argsort(conf_all.detach().cpu().numpy())[::-1][:raw_detection_cap]
+        order = np.ascontiguousarray(
+            np.argsort(conf_all.detach().cpu().numpy())[::-1][:raw_detection_cap]
+        )
         keep = torch.as_tensor(
-            np.ascontiguousarray(order),
+            order,
             device=mask_tensor.device,
             dtype=torch.long,
         )
         mask_tensor = mask_tensor[keep]
         boxes_orig = boxes_orig[keep]
         conf_all = conf_all[keep]
-        if polygons_native is not None:
-            polygons_native = [polygons_native[i] for i in order]
+        if emit_native_geometry:
+            try:
+                native_masks = masks[order]
+            except (AttributeError, IndexError, TypeError) as exc:
+                raise ValueError(
+                    "Segment masks cannot be safely subset before native "
+                    "polygon expansion"
+                ) from exc
+
+    if emit_native_geometry:
+        polygons_native = list(native_masks.xy)
 
     gain, pad_x, pad_y = letterbox_gain_pad(
         tuple(mask_tensor.shape[-2:]), tuple(result.orig_shape)

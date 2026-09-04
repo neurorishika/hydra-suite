@@ -1197,6 +1197,49 @@ def test_extract_raw_tensors_from_masks_precaps_before_kernel(monkeypatch):
     _assert_obb_equal(new_final, cpu_expected)
 
 
+def test_extract_native_mask_polygons_expand_only_after_candidate_cap():
+    from hydra_suite.core.inference.stages.obb import _extract_obb_from_masks
+
+    cap = 2
+    result = _make_segment_result([0.1, 0.9, 0.8, 0.2])
+    expansions = []
+
+    class _BoundedMasks:
+        def __init__(self, data, polygons):
+            self.data = data
+            self._polygons = polygons
+
+        def __getitem__(self, indices):
+            selected = np.asarray(indices, dtype=np.int64)
+            return _BoundedMasks(
+                self.data[selected],
+                [self._polygons[int(index)] for index in selected],
+            )
+
+        @property
+        def xy(self):
+            expansions.append(int(self.data.shape[0]))
+            assert self.data.shape[0] <= cap
+            return self._polygons
+
+    polygons = [
+        np.array([[10 + i, 10], [11 + i, 10], [11 + i, 11]], np.float32)
+        for i in range(4)
+    ]
+    result.masks = _BoundedMasks(result.masks.data, polygons)
+
+    out = _extract_obb_from_masks(
+        result,
+        frame_idx=0,
+        raw_detection_cap=cap,
+        emit_native_geometry=True,
+    )
+
+    assert expansions == [cap]
+    assert out.num_detections == cap
+    assert out.polygons is not None and len(out.polygons) == cap
+
+
 def test_extract_raw_tensors_from_masks_precap_is_cpu_free(monkeypatch):
     """The raw path (pre-cap + kernel) must not sync: no .cpu/.item/.numpy/.tolist."""
     from hydra_suite.core.inference.stages.obb import _extract_raw_tensors_from_masks

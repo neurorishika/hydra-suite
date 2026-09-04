@@ -1245,6 +1245,24 @@ def test_pathological_tile_count_raises_instead_of_hanging():
     assert 0 < len(ok.tiles) <= MAX_TILES_PER_FRAME
 
 
+def test_pathological_tile_count_refuses_before_axis_materialization(monkeypatch):
+    """The cardinality gate must run before building either axis list."""
+    from hydra_suite.utils import slice_geometry
+
+    def _must_not_materialize(*_args):
+        raise AssertionError("axis offsets were materialized before admission")
+
+    monkeypatch.setattr(slice_geometry, "_axis_starts", _must_not_materialize)
+    with pytest.raises(ValueError, match="tile ceiling"):
+        slice_geometry.plan_tiles(
+            (1_000_000, 1_000_000),
+            slice_w=1,
+            slice_h=1,
+            overlap_w=0.0,
+            overlap_h=0.0,
+        )
+
+
 # ---- ROI tile-gating wired end-to-end through run_direct_sliced ----
 
 
