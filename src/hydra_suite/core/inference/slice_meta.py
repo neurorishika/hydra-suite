@@ -380,3 +380,53 @@ def slice_meta_to_panel_values(
     if values["geometry_mode"] not in _GEOMETRY_MODES:
         values["geometry_mode"] = "auto_object"
     return values
+
+
+def slice_meta_values_from_settings(
+    meta: dict[str, Any], settings: dict[str, Any]
+) -> dict[str, Any]:
+    """Translate an explicit effective-settings snapshot into panel values.
+
+    Used to restore a saved session's SAHI configuration when the profile
+    that produced it is no longer present in the sidecar: the settings
+    themselves are the source of truth, not the (now-missing) profile's
+    identity. ``values["resolution"]`` is always ``"saved_settings"``.
+    """
+    values = _training_values(training_geometry(meta))
+    values.update(
+        {
+            "enabled": bool(settings.get("enabled", values["enabled"])),
+            "geometry_mode": str(
+                settings.get("geometry_mode", values["geometry_mode"])
+            ),
+            "overlap": _clamped_float(
+                settings.get("overlap"), values["overlap"], 0.0, 0.9
+            ),
+            "object_tile_fraction": _clamped_float(
+                settings.get("object_tile_fraction"),
+                values["object_tile_fraction"],
+                0.01,
+                0.9,
+            ),
+            "trained_body_px": _clamped_float(
+                settings.get("trained_body_px"), values["trained_body_px"], 0.0, 8192.0
+            ),
+            "slice_width": _clamped_int(
+                settings.get("slice_width"), values["slice_width"], 0, 8192
+            ),
+            "slice_height": _clamped_int(
+                settings.get("slice_height"), values["slice_height"], 0, 8192
+            ),
+            "confidence_threshold": settings.get("confidence_threshold"),
+            "merge_policy": settings.get("merge_policy"),
+            "merge_metric": settings.get("merge_metric"),
+            "merge_threshold": settings.get("merge_threshold"),
+            "merge_backend": settings.get("merge_backend"),
+            "profile_id": None,
+            "profile_name": "Saved settings",
+        }
+    )
+    if values["geometry_mode"] not in _GEOMETRY_MODES:
+        values["geometry_mode"] = "auto_object"
+    values["resolution"] = "saved_settings"
+    return values
