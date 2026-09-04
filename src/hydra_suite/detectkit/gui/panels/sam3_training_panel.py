@@ -95,6 +95,8 @@ class _BoundedPromptListEdit(QPlainTextEdit):
                 continue
             previous_was_cr = False
             codepoint = ord(original_char)
+            if codepoint < 0x20 or codepoint == 0x7F:
+                continue
             if 0xD800 <= codepoint <= 0xDFFF:
                 char = "\N{REPLACEMENT CHARACTER}"
                 char_bytes = 3
@@ -495,8 +497,13 @@ class Sam3TrainingPanel(QWidget):
             for line in self.negative_prompts_edit.toPlainText().splitlines()
             if line.strip()
         ]
+        prompt = "".join(
+            char
+            for char in self.prompt_edit.text()
+            if ord(char) >= 0x20 and ord(char) != 0x7F
+        )
         return Sam3LoraParams(
-            prompt=self.prompt_edit.text(),
+            prompt=prompt,
             negative_prompts=negative_prompts,
             num_negatives=self.num_negatives_spin.value(),
             rank=self.rank_spin.value(),

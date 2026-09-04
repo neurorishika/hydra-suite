@@ -142,6 +142,38 @@ def test_base_worker_never_calls_arbitrary_exception_str(qapp):
     assert errors == ["_ExplosiveError: safe diagnostic"]
 
 
+def test_base_worker_handles_exception_with_explosive_args_property(qapp):
+    from hydra_suite.widgets.workers import BaseWorker
+
+    class _ExplosiveArgsError(RuntimeError):
+        @property
+        def args(self):
+            raise RuntimeError("args unavailable")
+
+    owned = _ExplosiveArgsError()
+
+    class _ExplosiveWorker(BaseWorker):
+        def execute(self):
+            raise owned
+
+    worker = _ExplosiveWorker()
+    errors = []
+    worker.error.connect(errors.append)
+    worker.run()
+
+    assert worker.failure_exception is owned
+    assert errors == ["_ExplosiveArgsError"]
+
+
+def test_bounded_worker_message_always_returns_valid_utf8(qapp):
+    from hydra_suite.widgets.workers import bounded_worker_message
+
+    message = bounded_worker_message("before\ud800after")
+
+    assert "\ud800" not in message
+    assert message.encode("utf-8")
+
+
 def test_base_worker_no_error_on_success(qapp):
     """error signal is not emitted when execute succeeds, but finished is."""
     from PySide6.QtCore import QCoreApplication

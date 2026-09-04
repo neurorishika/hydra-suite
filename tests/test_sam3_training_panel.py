@@ -81,6 +81,9 @@ def test_prompt_editors_bound_programmatic_and_pasted_input(qapp):
     assert len(stored.encode("utf-8")) <= SAM3_MAX_CONFIGURED_PROMPT_BYTES
     assert len(stored.splitlines()) <= SAM3_MAX_NEGATIVE_PROMPT_COUNT
 
+    panel.negative_prompts_edit.setPlainText("valid\x00\x01\ttext")
+    assert panel.negative_prompts_edit.toPlainText() == "validtext"
+
 
 def test_gui_exposes_only_verified_bf16_mode(qapp):
     from hydra_suite.detectkit.gui.panels.sam3_training_panel import Sam3TrainingPanel

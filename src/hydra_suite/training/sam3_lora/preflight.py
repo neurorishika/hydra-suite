@@ -361,7 +361,7 @@ def _resolved_negative_prompts(dataset_dir: str, params: Any) -> tuple[object, .
     configured = getattr(params, "negative_prompts", None)
     if configured is None:
         configured = []
-    if isinstance(configured, (list, tuple)) and len(configured) > (
+    if type(configured) in (list, tuple) and len(configured) > (
         _MAX_NEGATIVE_PROMPT_COUNT
     ):
         # Preserve an over-limit cardinality signal without traversing or
@@ -370,22 +370,18 @@ def _resolved_negative_prompts(dataset_dir: str, params: Any) -> tuple[object, .
     if int(getattr(params, "num_negatives", 0)) <= 0:
         # These prompts are not queried, but they are still serialized into
         # spec.json by the parent and therefore remain subject to metadata caps.
-        return (
-            tuple(configured)
-            if isinstance(configured, (list, tuple))
-            else (configured,)
-        )
+        return tuple(configured) if type(configured) in (list, tuple) else (configured,)
     manifest_path = Path(dataset_dir).expanduser().resolve() / "build_manifest.json"
     if manifest_path.exists():
         manifest, _size = _load_coco(manifest_path)
         negatives = manifest.get("negative_prompts") or []
-        if isinstance(negatives, list) and negatives:
+        if type(negatives) is list and negatives:
             if len(negatives) > _MAX_NEGATIVE_PROMPT_COUNT:
                 return _OVER_LIMIT_NEGATIVE_PROMPTS
             return tuple(negatives)
         if negatives:
             return (negatives,)
-    return tuple(configured) if isinstance(configured, (list, tuple)) else (configured,)
+    return tuple(configured) if type(configured) in (list, tuple) else (configured,)
 
 
 def _free_disk_gb(path: str) -> float:
@@ -637,19 +633,17 @@ def build_resource_request(
     prompt_pool_bytes = sum(_utf8_size(prompt) for prompt in negative_prompts)
     configured_prompt = getattr(params, "prompt", "")
     configured_prompt_bytes = _utf8_size(
-        configured_prompt if isinstance(configured_prompt, str) else ""
+        configured_prompt if type(configured_prompt) is str else ""
     )
     configured_negatives = getattr(params, "negative_prompts", ())
     if configured_negatives is None:
         configured_negatives = ()
     if (
-        isinstance(configured_negatives, (list, tuple))
+        type(configured_negatives) in (list, tuple)
         and len(configured_negatives) <= _MAX_NEGATIVE_PROMPT_COUNT
     ):
         configured_prompt_bytes += sum(
-            _utf8_size(prompt)
-            for prompt in configured_negatives
-            if isinstance(prompt, str)
+            _utf8_size(prompt) for prompt in configured_negatives if type(prompt) is str
         )
     descriptor_query_bytes = dataset.tile_count * (48 + 8 * selected_negatives)
     metadata = (
@@ -814,8 +808,9 @@ def assess_preflight(
     # traversal. Direct callers need the same bounded admission behavior as the
     # orchestrator even when a manifest would otherwise take precedence.
     configured_negatives_at_entry = getattr(params, "negative_prompts", ())
-    configured_pool_shape_error = not isinstance(
-        configured_negatives_at_entry, (list, tuple)
+    configured_pool_shape_error = type(configured_negatives_at_entry) not in (
+        list,
+        tuple,
     )
     configured_pool_over_limit = (
         not configured_pool_shape_error
@@ -828,7 +823,7 @@ def assess_preflight(
     valid_negative_prompts = tuple(
         prompt
         for prompt in resolved_negative_prompts
-        if isinstance(prompt, str) and bool(prompt.strip())
+        if type(prompt) is str and bool(prompt.strip())
     )
     request = build_resource_request(
         spec,
@@ -910,7 +905,7 @@ def assess_preflight(
             f"safe cap of {_MAX_LORA_TRAINABLE_PARAMS:,}."
         )
     raw_prompt = getattr(params, "prompt", "")
-    prompt = raw_prompt if isinstance(raw_prompt, str) else ""
+    prompt = raw_prompt if type(raw_prompt) is str else ""
     if not prompt.strip():
         refusals.append(
             "Prompt is empty; SAM3 requires a text prompt to train against."
@@ -937,9 +932,7 @@ def assess_preflight(
     configured_prompt_bytes = _utf8_size(prompt)
     if configured_pool_is_safe:
         configured_prompt_bytes += sum(
-            _utf8_size(value)
-            for value in configured_negatives
-            if isinstance(value, str)
+            _utf8_size(value) for value in configured_negatives if type(value) is str
         )
     else:
         configured_prompt_bytes = SAM3_MAX_CONFIGURED_PROMPT_BYTES + 1

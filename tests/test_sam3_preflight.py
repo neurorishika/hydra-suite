@@ -498,6 +498,9 @@ def test_over_cardinality_configured_pool_is_not_iterated_even_with_manifest(
     tmp_path,
 ):
     class BombList(list):
+        def __len__(self):
+            return 0
+
         def __iter__(self):
             pytest.fail("unsafe configured prompt pool must not be iterated")
 
@@ -512,9 +515,7 @@ def test_over_cardinality_configured_pool_is_not_iterated_even_with_manifest(
     decision = _decision(spec)
 
     assert not decision.admitted
-    assert any(
-        "configured negative prompts" in reason.lower() for reason in decision.refusals
-    )
+    assert any("list or tuple" in reason.lower() for reason in decision.refusals)
 
 
 def test_resolved_manifest_prompt_obeys_per_prompt_cap(tmp_path):

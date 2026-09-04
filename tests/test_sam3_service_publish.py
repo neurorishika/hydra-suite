@@ -115,6 +115,9 @@ def test_direct_orchestrator_rejects_oversized_prompt_pool_before_registry_work(
     from hydra_suite.training.contracts import SAM3_MAX_NEGATIVE_PROMPT_COUNT
 
     class BombList(list):
+        def __len__(self):
+            return 0
+
         def __iter__(self):
             pytest.fail("over-cardinality prompt list must not be iterated")
 
@@ -133,7 +136,7 @@ def test_direct_orchestrator_rejects_oversized_prompt_pool_before_registry_work(
         lambda *_args, **_kwargs: pytest.fail("registry must follow text admission"),
     )
 
-    with pytest.raises(ValueError, match="4096 entries"):
+    with pytest.raises(ValueError, match="list or tuple"):
         svc.TrainingOrchestrator(tmp_path / "workspace").run_role_training(spec)
 
 
@@ -141,6 +144,7 @@ def test_direct_orchestrator_rejects_oversized_prompt_pool_before_registry_work(
     "prompt,negative_prompts,match",
     [
         (123, [], "prompt must be a string"),
+        ("ant\x00", [], "control characters"),
         ("ant", "background", "must be a list or tuple"),
         ("ant", ["x" * 256] * 1025, "serialized text cap"),
     ],
@@ -189,6 +193,31 @@ def test_training_exception_finalizes_registry_and_preserves_run_identity(
     assert record["finished_at"]
     assert record["failure_kind"] == "training-exception"
     assert record["error_message"] == "sidecar bootstrap exploded"
+
+
+def test_training_exception_diagnostic_never_calls_arbitrary_str(monkeypatch, tmp_path):
+    import hydra_suite.training.registry as registry
+    from hydra_suite.runtime.safe_text import MAX_TERMINAL_TEXT_BYTES
+
+    class _ExplosiveError(RuntimeError):
+        def __str__(self):
+            pytest.fail("TrainingOrchestrator must use the safe formatter")
+
+    monkeypatch.setattr(registry, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        svc,
+        "run_training",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            _ExplosiveError("x" * (MAX_TERMINAL_TEXT_BYTES * 8))
+        ),
+    )
+
+    result = svc.TrainingOrchestrator(tmp_path / "workspace").run_role_training(
+        _registered_spec(tmp_path)
+    )
+
+    assert result["error"].startswith("x")
+    assert len(result["error"].encode("utf-8")) <= MAX_TERMINAL_TEXT_BYTES
 
 
 def test_owned_workload_error_is_reraised_with_recovery_handle(monkeypatch, tmp_path):

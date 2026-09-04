@@ -368,6 +368,36 @@ def test_role_workflow_preserves_owned_workload_and_stops_later_roles(tmp_path):
     assert calls == [entries[0].role]
 
 
+def test_role_workflow_formats_exception_without_calling_str(tmp_path):
+    from hydra_suite.detectkit.config.training import DetectTrainingPlan
+    from hydra_suite.detectkit.jobs.training import run_role_entries
+    from hydra_suite.runtime.safe_text import MAX_TERMINAL_TEXT_BYTES
+
+    class _ExplosiveError(RuntimeError):
+        def __str__(self):
+            pytest.fail("run_role_entries must not stringify arbitrary exceptions")
+
+    plan = DetectTrainingPlan.from_dict(_plan_payload(tmp_path), base_dir=tmp_path)
+    entries = plan.role_entries(
+        {"detect_direct": "/tmp/detect", "seq_detect": "/tmp/seq"}
+    )[:1]
+
+    class _Orchestrator:
+        def run_role_training(self, _spec, **_kwargs):
+            raise _ExplosiveError("x" * (MAX_TERMINAL_TEXT_BYTES * 8))
+
+    results = run_role_entries(
+        _Orchestrator(),
+        entries,
+        log=lambda _message: None,
+        progress=lambda _role, _current, _total: None,
+        should_cancel=lambda: False,
+    )
+
+    assert results[0]["error"].startswith("x")
+    assert len(results[0]["error"].encode("utf-8")) <= MAX_TERMINAL_TEXT_BYTES
+
+
 def test_preflight_uses_native_polygon_geometry(tmp_path):
     from hydra_suite.detectkit.jobs.training import preflight_sources
     from hydra_suite.training import SourceDataset

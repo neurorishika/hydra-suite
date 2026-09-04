@@ -9,6 +9,7 @@ from typing import Callable
 
 from hydra_suite.core.inference.semantic.checkpoints import ensure_checkpoint
 from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
+from hydra_suite.runtime.safe_text import bounded_terminal_text
 
 from .contracts import (
     DatasetBuildResult,
@@ -119,10 +120,11 @@ def _failure_details(result: dict) -> dict[str, object]:
 def _failure_message(result: dict) -> str:
     if result.get("canceled"):
         return "canceled"
-    error = str(result.get("error", "") or "").strip()
+    error_value = result.get("error", "") or ""
+    error = bounded_terminal_text(error_value).strip()
     if error:
         return error
-    return f"exit_code={result.get('exit_code', 'unknown')}"
+    return f"exit_code={bounded_terminal_text(result.get('exit_code', 'unknown'))}"
 
 
 def _slice_geometry_for_publish(spec: TrainingRunSpec) -> dict | None:
@@ -567,13 +569,17 @@ class TrainingOrchestrator:
                     run_id,
                     {
                         "status": "recovery-required",
-                        "error_message": str(exc),
+                        "error_message": bounded_terminal_text(
+                            exc, include_exception_type=False
+                        ),
                         "failure_kind": "workload-still-owned",
                         "containment": {"ownership": "retained"},
                     },
                 )
             except Exception as registry_exc:  # noqa: BLE001 - preserve owner
-                exc.registry_update_error = str(registry_exc)
+                exc.registry_update_error = bounded_terminal_text(
+                    registry_exc, include_exception_type=False
+                )
             # The GUI recovery owner needs the registry identity so a later
             # successful cleanup can turn this nonterminal record into an
             # explicit failed terminal run.
@@ -582,7 +588,7 @@ class TrainingOrchestrator:
         except Exception as exc:
             result = {
                 "success": False,
-                "error": str(exc),
+                "error": bounded_terminal_text(exc, include_exception_type=False),
                 "failure_kind": "training-exception",
             }
         result["run_id"] = run_id
@@ -619,7 +625,9 @@ class TrainingOrchestrator:
                 )
             except Exception as exc:
                 result["success"] = False
-                result["error"] = str(exc)
+                result["error"] = bounded_terminal_text(
+                    exc, include_exception_type=False
+                )
                 result["failure_kind"] = "publish-exception"
                 result["published_registry_key"] = ""
                 result["published_model_path"] = ""

@@ -150,6 +150,8 @@ def sam3_prompt_text_error(value: object) -> str | None:
         return "must be a string"
     if len(value) > SAM3_MAX_PROMPT_CODEPOINTS:
         return f"exceeds the per-prompt cap of {SAM3_MAX_PROMPT_CODEPOINTS} characters"
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+        return "must not contain control characters"
     try:
         encoded_size = len(value.encode("utf-8"))
     except UnicodeEncodeError:
@@ -170,7 +172,7 @@ def sam3_prompt_pool_error(prompt: object, negative_prompts: object) -> str | No
     assert type(prompt) is str
     if not prompt.strip():
         return "prompt must be non-empty"
-    if not isinstance(negative_prompts, (list, tuple)):
+    if type(negative_prompts) not in (list, tuple):
         return "negative_prompts must be a list or tuple of strings"
     # Check cardinality before inspecting any element. This makes adversarial
     # caller work independent of an unbounded supplied collection.

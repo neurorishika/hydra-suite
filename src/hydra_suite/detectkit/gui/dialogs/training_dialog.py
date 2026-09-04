@@ -38,6 +38,10 @@ from PySide6.QtWidgets import (
 )
 
 from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
+from hydra_suite.runtime.safe_text import (
+    bounded_terminal_text,
+    sanitize_terminal_text_fields,
+)
 from hydra_suite.training.contracts import (
     Sam3LoraParams,
     SourceDataset,
@@ -379,14 +383,20 @@ class _TrainingWorker(_BoundedLogWorker):
             self.failure_exception = retry_error
             return False
         except Exception as retry_error:  # noqa: BLE001 - retain uncertain owner
-            error.recovery_error = str(retry_error)
+            error.recovery_error = bounded_terminal_text(
+                retry_error, include_exception_type=False
+            )
             return False
         if error.recovery_cleanup is not None:
             try:
                 error.recovery_cleanup()
             except Exception as cleanup_error:  # noqa: BLE001 - workload is safe
-                error.recovery_error = str(cleanup_error)
-                self.recovery_cleanup_error = str(cleanup_error)
+                error.recovery_error = bounded_terminal_text(
+                    cleanup_error, include_exception_type=False
+                )
+                self.recovery_cleanup_error = bounded_terminal_text(
+                    cleanup_error, include_exception_type=False
+                )
         self.failure_exception = None
         run_id = str(error.run_id or "")
         if run_id:
@@ -420,7 +430,9 @@ class _TrainingWorker(_BoundedLogWorker):
             role_started=self._queue_role_started,
             role_finished=self._queue_role_finished,
         )
-        self.done_signal.emit(results)
+        sanitized_results = sanitize_terminal_text_fields(results)
+        assert isinstance(sanitized_results, list)
+        self.done_signal.emit(sanitized_results)
 
 
 # ---------------------------------------------------------------------------

@@ -316,6 +316,81 @@ def test_training_worker_bounds_role_finished_signal_message(qapp):
     assert delivered[0][2].endswith("[message truncated]")
 
 
+def test_training_worker_bounds_all_result_text_without_calling_exception_str(qapp):
+    from types import SimpleNamespace
+
+    from hydra_suite.detectkit.gui.dialogs import training_dialog as td
+    from hydra_suite.runtime.safe_text import MAX_TERMINAL_TEXT_BYTES
+    from hydra_suite.training.contracts import TrainingRole
+
+    class _HugeStringError(RuntimeError):
+        str_calls = 0
+
+        def __str__(self):
+            type(self).str_calls += 1
+            return "z" * (MAX_TERMINAL_TEXT_BYTES * 32)
+
+    class _Orchestrator:
+        def run_role_training(self, _spec, **_kwargs):
+            raise _HugeStringError("safe diagnostic")
+
+    entry = SimpleNamespace(
+        role=TrainingRole.SEMANTIC_SAM3,
+        spec=SimpleNamespace(role=TrainingRole.SEMANTIC_SAM3),
+        publish_metadata={},
+    )
+    worker = td._TrainingWorker(_Orchestrator(), [entry])
+    completed = []
+    worker.done_signal.connect(completed.append)
+
+    worker.run()
+
+    assert worker.failure_exception is None
+    assert _HugeStringError.str_calls == 0
+    assert len(completed) == 1
+    error = completed[0][0]["error"]
+    assert error == "safe diagnostic"
+    assert len(error.encode("utf-8")) <= MAX_TERMINAL_TEXT_BYTES
+
+
+def test_training_worker_caps_nested_terminal_result_strings(qapp):
+    from types import SimpleNamespace
+
+    from hydra_suite.detectkit.gui.dialogs import training_dialog as td
+    from hydra_suite.runtime.safe_text import MAX_TERMINAL_TEXT_BYTES
+    from hydra_suite.training.contracts import TrainingRole
+
+    huge = "x" * (MAX_TERMINAL_TEXT_BYTES * 8)
+
+    class _Orchestrator:
+        def run_role_training(self, _spec, **_kwargs):
+            return {
+                "success": False,
+                "error": huge,
+                "command": [huge],
+                "containment": {"diagnostic": huge},
+            }
+
+    entry = SimpleNamespace(
+        role=TrainingRole.SEMANTIC_SAM3,
+        spec=SimpleNamespace(role=TrainingRole.SEMANTIC_SAM3),
+        publish_metadata={},
+    )
+    worker = td._TrainingWorker(_Orchestrator(), [entry])
+    completed = []
+    worker.done_signal.connect(completed.append)
+
+    worker.run()
+
+    result = completed[0][0]
+    assert len(result["error"].encode("utf-8")) <= MAX_TERMINAL_TEXT_BYTES
+    assert len(result["command"][0].encode("utf-8")) <= MAX_TERMINAL_TEXT_BYTES
+    assert (
+        len(result["containment"]["diagnostic"].encode("utf-8"))
+        <= MAX_TERMINAL_TEXT_BYTES
+    )
+
+
 def test_training_worker_retains_owned_sidecar_until_recovery(qapp, monkeypatch):
     from types import SimpleNamespace
 
@@ -1067,3 +1142,30 @@ def test_training_dialog_refuses_oversized_preset_before_applying(
     assert applied == []
     assert errors
     assert "safe input cap" in errors[0][1]
+
+
+def test_training_dialog_state_cannot_expand_control_text_past_loader_cap(
+    qapp, tmp_path, monkeypatch
+):
+    from hydra_suite.detectkit.gui import utils as gui_utils
+    from hydra_suite.detectkit.gui.dialogs import training_dialog as td
+    from hydra_suite.training.contracts import SAM3_MAX_NEGATIVE_PROMPT_COUNT
+
+    dlg = td.TrainingDialog(_make_proj(tmp_path))
+    preset = tmp_path / "control-heavy-preset.json"
+    dlg.sam3_panel.negative_prompts_edit.setPlainText(
+        "\n".join("\x00" * 256 for _ in range(SAM3_MAX_NEGATIVE_PROMPT_COUNT))
+    )
+    monkeypatch.setattr(
+        td.QFileDialog,
+        "getSaveFileName",
+        lambda *_args, **_kwargs: (str(preset), "JSON (*.json)"),
+    )
+    monkeypatch.setattr(td.QMessageBox, "information", lambda *_args, **_kwargs: None)
+
+    dlg._save_training_config()
+
+    encoded = preset.read_bytes()
+    assert b"\\u0000" not in encoded
+    assert len(encoded) <= gui_utils.MAX_UI_JSON_BYTES
+    assert gui_utils.load_bounded_json_mapping(preset)
