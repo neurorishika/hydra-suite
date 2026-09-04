@@ -93,14 +93,6 @@ def _timestamp() -> str:
     return datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
-def _collect_frames(source: Path) -> list[Path]:
-    """Legacy compatibility helper; production building uses a disk index."""
-    images_dir = source / "images"
-    if not images_dir.exists():
-        raise RuntimeError(f"Missing images/ directory in SAM3 source {source}")
-    return sorted(p for p in images_dir.rglob("*") if p.suffix.lower() in IMAGE_EXTS)
-
-
 def _labels_for_frame(
     img_path: Path,
     images_dir: Path,
@@ -167,23 +159,6 @@ def _bbox_for_poly(poly: np.ndarray) -> list[float]:
     x1, y1 = float(poly[:, 0].min()), float(poly[:, 1].min())
     x2, y2 = float(poly[:, 0].max()), float(poly[:, 1].max())
     return [x1, y1, max(0.0, x2 - x1), max(0.0, y2 - y1)]
-
-
-def _write_coco_split(
-    split_dir: Path,
-    category_name: str,
-    images: list[dict],
-    annotations: list[dict],
-) -> None:
-    split_dir.mkdir(parents=True, exist_ok=True)
-    coco = {
-        "images": images,
-        "annotations": annotations,
-        "categories": [{"id": 1, "name": category_name, "supercategory": "object"}],
-    }
-    (split_dir / "_annotations.coco.json").write_text(
-        json.dumps(coco), encoding="utf-8"
-    )
 
 
 def _assemble_coco_split(

@@ -9,6 +9,7 @@ from typing import Any, Iterable, Literal
 from .dataset_io import (
     DEFAULT_DATASET_IO_LIMITS,
     DatasetIOLimits,
+    DatasetLimitError,
     iter_bounded_text_lines,
     iter_indexed_paths,
     read_bounded_text,
@@ -630,15 +631,18 @@ def _read_class_ids_from_label(label_path: str) -> set[int]:
     Returns the set of integer class IDs found.
     """
     try:
-        text = Path(label_path).read_text(encoding="utf-8").strip()
-        if not text:
-            return set()
         ids: set[int] = set()
-        for line in text.splitlines():
+        for line in iter_bounded_text_lines(Path(label_path)):
             parts = line.split()
             if parts:
                 ids.add(int(float(parts[0])))
+                if len(ids) > DEFAULT_DATASET_IO_LIMITS.max_classes:
+                    raise DatasetLimitError(
+                        "Label exceeds the distinct-class cardinality cap"
+                    )
         return ids
+    except DatasetLimitError:
+        raise
     except Exception:
         return set()
 
