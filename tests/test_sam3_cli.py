@@ -402,3 +402,37 @@ def test_non_finite_abort_names_the_step_and_terms():
     message = str(excinfo.value)
     assert "epoch 4" in message and "step 730" in message
     assert "loss_mask=0.0000" in message
+
+
+def test_loss_window_averages_positives_and_negatives_together():
+    """The bug this replaces: the logged micro-batch was always a negative.
+
+    The accumulation boundary lands on a fixed micro_idx, so with one
+    negative interleaved per tile every logged line had zero matched loss
+    and the run looked collapsed while training normally.
+    """
+    torch = pytest.importorskip("torch")
+    from hydra_suite.training.sam3_lora.cli import _LossWindow
+
+    window = _LossWindow()
+    positive = {"loss_ce": torch.tensor(0.40), "presence_loss": torch.tensor(0.10)}
+    negative = {"loss_ce": torch.tensor(0.00), "presence_loss": torch.tensor(0.02)}
+    window.add(torch.tensor(300.0), positive)
+    window.add(torch.tensor(20.0), negative)
+
+    summary = window.summary()
+    assert "loss 160.0000" in summary
+    assert "loss_ce=0.2000" in summary, "a positive batch must not be averaged away"
+    assert "presence_loss=0.0600" in summary
+
+
+def test_loss_window_reset_clears_the_previous_window():
+    torch = pytest.importorskip("torch")
+    from hydra_suite.training.sam3_lora.cli import _LossWindow
+
+    window = _LossWindow()
+    window.add(torch.tensor(9.0), {"loss_ce": torch.tensor(9.0)})
+    window.reset()
+    assert window.summary() == "loss n/a"
+    window.add(torch.tensor(2.0), {"loss_ce": torch.tensor(1.0)})
+    assert "loss 2.0000" in window.summary()

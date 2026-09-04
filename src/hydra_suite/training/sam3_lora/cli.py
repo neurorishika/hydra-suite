@@ -383,6 +383,47 @@ def _assert_finite_loss(loss: Any, *, epoch: int, step: int, loss_dict: Any) -> 
     )
 
 
+class _LossWindow:
+    """Mean core loss and per-term losses across one accumulation window.
+
+    Logging the LAST micro-batch of a window is structurally misleading: the
+    boundary lands on ``micro_idx = grad_accum - 1``, and with negatives
+    interleaved one per tile that index always holds the same query TYPE.
+    With ``num_negatives=1`` every logged line was a negative -- which
+    legitimately has zero matched loss -- so loss_ce/bbox/giou/mask/dice read
+    as 0.0000 forever and a normally-training run looked like a total
+    collapse. Averaging the window reports what the optimizer stepped on.
+    """
+
+    def __init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        self._core = 0.0
+        self._terms: dict[str, float] = {}
+        self._n = 0
+
+    def add(self, loss: Any, loss_dict: Any) -> None:
+        self._n += 1
+        self._core += float(loss)
+        if not isinstance(loss_dict, dict):
+            return
+        for term in LOGGED_LOSS_TERMS:
+            value = loss_dict.get(term)
+            if value is not None and getattr(value, "numel", lambda: 0)() == 1:
+                self._terms[term] = self._terms.get(term, 0.0) + float(value)
+
+    def summary(self) -> str:
+        if not self._n:
+            return "loss n/a"
+        terms = " ".join(
+            f"{term}={self._terms[term] / self._n:.4f}"
+            for term in LOGGED_LOSS_TERMS
+            if term in self._terms
+        )
+        return f"loss {self._core / self._n:.4f}" + (f"  {terms}" if terms else "")
+
+
 def run_training(spec: Any, run_dir_path: Path) -> bool:
     """Run the SAM3 LoRA training loop and write `adapters.pt`.
 
@@ -516,6 +557,7 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
 
     global_step = 0
     logging_steps = 10
+    loss_window = _LossWindow()
     optimizer.zero_grad()
 
     for epoch in range(params.epochs):
@@ -548,9 +590,9 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
                 global_step += 1
                 if global_step % logging_steps == 0:
                     emit_log(
-                        f"epoch {epoch} step {global_step} "
-                        f"loss {float(loss):.4f}{_loss_term_summary(loss_dict)}"
+                        f"epoch {epoch} step {global_step} " f"{loss_window.summary()}"
                     )
+                loss_window.reset()
             del batch, model_input, targets, outputs, loss_dict, loss
 
         emit_progress(epoch + 1, params.epochs)
