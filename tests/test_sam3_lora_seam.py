@@ -1,5 +1,9 @@
 """LoRA inject/merge round-trip, provable without SAM3 or a GPU."""
 
+import multiprocessing
+import resource
+import sys
+
 import pytest
 import torch
 from torch import nn
@@ -36,9 +40,10 @@ def test_zero_initialised_adapter_merges_as_a_no_op():
     m = Toy()
     inject_adapters(m, _cfg())
     base = {"detector.qkv.weight": torch.randn(8, 8)}
+    before = base["detector.qkv.weight"].clone()
     merged = merge_adapters(base, adapter_state_dict(m), _cfg())
     # lora_B is zero-initialised, so an untrained adapter must change nothing.
-    assert torch.equal(merged["detector.qkv.weight"], base["detector.qkv.weight"])
+    assert torch.equal(merged["detector.qkv.weight"], before)
 
 
 def test_merge_applies_the_scaled_low_rank_delta():
@@ -50,8 +55,9 @@ def test_merge_applies_the_scaled_low_rank_delta():
     b_key = next(k for k in sd if k.endswith("lora_B"))
     sd[b_key] = torch.randn_like(sd[b_key])
     w = torch.randn(8, 8)
+    before = w.clone()
     merged = merge_adapters({"detector.qkv.weight": w}, sd, cfg)
-    expected = w + (sd[b_key] @ sd[a_key]) * (cfg.alpha / cfg.rank)
+    expected = before + (sd[b_key] @ sd[a_key]) * (cfg.alpha / cfg.rank)
     assert torch.allclose(merged["detector.qkv.weight"], expected, atol=1e-6)
 
 
@@ -194,3 +200,81 @@ def test_non_targeted_base_keys_pass_through_untouched():
     base = {"detector.qkv.weight": torch.randn(8, 8), "detector.buffer": torch.randn(3)}
     merged = merge_adapters(base, adapter_state_dict(m), _cfg())
     assert torch.equal(merged["detector.buffer"], base["detector.buffer"])
+
+
+def test_merge_reuses_the_base_mapping_and_untouched_tensor_storage():
+    base = {
+        "detector.qkv.weight": torch.randn(8, 8),
+        "detector.stock_only": torch.randn(8, 8),
+    }
+    untouched = base["detector.stock_only"]
+    adapters = {
+        "qkv.lora_A": torch.randn(2, 8),
+        "qkv.lora_B": torch.randn(8, 2),
+    }
+
+    merged = merge_adapters(base, adapters, _cfg())
+
+    assert merged is base
+    assert merged["detector.stock_only"] is untouched
+
+
+def test_every_adapter_mapping_is_validated_before_in_place_mutation():
+    original = torch.randn(8, 8)
+    base = {"detector.a.weight": original.clone()}
+    adapters = {
+        "a.lora_A": torch.randn(2, 8),
+        "a.lora_B": torch.randn(8, 2),
+        "z_missing.lora_A": torch.randn(2, 8),
+        "z_missing.lora_B": torch.randn(8, 2),
+    }
+
+    with pytest.raises(KeyError, match="z_missing"):
+        merge_adapters(base, adapters, _cfg())
+
+    assert torch.equal(base["detector.a.weight"], original)
+
+
+def _peak_rss_merge_probe(connection):
+    # Eight 16 MiB tensors make the old full-state clone clearly distinguishable
+    # from allocator noise while remaining safe on developer machines.
+    tensor_width = 2048
+    tensor_count = 8
+    base = {
+        f"detector.layer_{index}.weight": torch.ones(tensor_width, tensor_width)
+        for index in range(tensor_count)
+    }
+    adapters = {}
+    for index in range(tensor_count):
+        adapters[f"layer_{index}.lora_A"] = torch.ones(1, tensor_width)
+        adapters[f"layer_{index}.lora_B"] = torch.ones(tensor_width, 1)
+
+    rss_scale = 1 if sys.platform == "darwin" else 1024
+    before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * rss_scale
+    merge_adapters(
+        base,
+        adapters,
+        LoraConfig(
+            rank=1,
+            alpha=1,
+            dropout=0.0,
+            target_suffixes=("weight",),
+        ),
+    )
+    after = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * rss_scale
+    connection.send((after - before, tensor_count * tensor_width**2 * 4))
+    connection.close()
+
+
+def test_merge_peak_rss_does_not_include_a_second_complete_checkpoint():
+    context = multiprocessing.get_context("spawn")
+    parent, child = context.Pipe(duplex=False)
+    process = context.Process(target=_peak_rss_merge_probe, args=(child,))
+    process.start()
+    growth, checkpoint_bytes = parent.recv()
+    process.join(timeout=30)
+
+    assert process.exitcode == 0
+    # The active 16 MiB matrix product plus generous allocator/test noise fits
+    # below half of the 128 MiB fixture. A full-state clone cannot.
+    assert growth < checkpoint_bytes // 2

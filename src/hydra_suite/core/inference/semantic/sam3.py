@@ -7,7 +7,6 @@ message instead of letting ultralytics AutoUpdate pip-install packages.
 
 from __future__ import annotations
 
-import hashlib
 import logging
 from pathlib import Path
 
@@ -16,6 +15,7 @@ import torch
 
 from hydra_suite.core.inference.masks import mask_to_contour
 from hydra_suite.core.inference.torch_device import resolve_torch_device
+from hydra_suite.runtime.sam3_checkpoint_guard import assert_sam3_checkpoint_loaded
 from hydra_suite.utils.sam3_constants import PREDICTOR_IMGSZ
 
 from .base import SemanticInstance
@@ -63,15 +63,11 @@ def predictor_overrides(
 
 
 def _tensor_sha256(tensor: torch.Tensor) -> str:
-    # MUST match training.sam3_lora.publish._tensor_sha256 exactly: both
-    # normalise to float32 before hashing, because the live model's dtype
-    # after ultralytics reconstructs it may differ from what was saved to
-    # disk. Hashing at two different dtypes would make the guard raise on
-    # every correctly-loaded checkpoint. `.float()` also sidesteps
-    # `.numpy()` raising TypeError on bf16.
-    return hashlib.sha256(
-        tensor.detach().cpu().contiguous().float().view(torch.uint8).numpy().tobytes()
-    ).hexdigest()
+    """Compatibility seam for tests and older callers."""
+
+    from hydra_suite.runtime.sam3_checkpoint_guard import tensor_sha256
+
+    return tensor_sha256(tensor)
 
 
 def assert_checkpoint_loaded(
@@ -103,75 +99,7 @@ def assert_checkpoint_loaded(
     for: if ultralytics' key transform drifts, the namespaces stop
     overlapping and nearly every live key goes uncovered.
     """
-    if meta is None:
-        return
-    stripped = set(meta.get("stripped_keys", []))
-    live_keys = set(live_state_dict)
-    if not live_keys or not stripped:
-        # A coverage test over an empty set passes trivially -- exactly the
-        # silent no-op this guard exists to prevent.
-        raise RuntimeError(
-            "SAM3 finetuned checkpoint cannot be guarded: "
-            f"{len(live_keys)} live keys against {len(stripped)} recorded "
-            "checkpoint keys. An empty side makes the coverage check pass "
-            "vacuously -- refusing rather than serving unchecked."
-        )
-    uncovered = sorted(live_keys - stripped)
-    if uncovered:
-        raise RuntimeError(
-            "SAM3 finetuned checkpoint failed to load: "
-            f"{len(uncovered)} of {len(live_keys)} live model keys are not "
-            f"present in the published checkpoint (e.g. {uncovered[:3]}). "
-            "ultralytics' load transform likely changed, so those weights "
-            "stayed stock SAM3 rather than coming from the checkpoint."
-        )
-    for key, expected_fp in meta.get("tuned_fingerprints", {}).items():
-        # `tuned_fingerprints` keys are recorded in the STRIPPED namespace
-        # (training.sam3_lora.publish.publish_sam3_model normalises them to
-        # match `stripped_keys` / the live, post-load state dict) -- a bare
-        # subscript here would KeyError instead of raising the intended
-        # refusal if that namespace convention is ever violated again.
-        if key not in live_state_dict:
-            raise RuntimeError(
-                f"SAM3 finetuned checkpoint failed to load: tuned key "
-                f"{key!r} recorded at publish time is absent from the live "
-                "model's state dict."
-            )
-        actual_fp = _tensor_sha256(live_state_dict[key])
-        if actual_fp != expected_fp:
-            raise RuntimeError(
-                f"SAM3 finetuned checkpoint failed to load: tensor {key!r} "
-                f"has fingerprint {actual_fp}, expected {expected_fp}. The "
-                "key is present but holds different weights than the "
-                "published checkpoint -- the load likely fell back to base "
-                "weights while reporting success."
-            )
-    if "imgsz" in meta and meta["imgsz"] is None:
-        # An explicit ``null`` is not "absent" -- publish.py always writes a
-        # concrete imgsz, so a null here means the sidecar was corrupted or
-        # hand-edited. Silently skipping the comparison would defeat the
-        # very guard this field exists for.
-        raise RuntimeError(
-            "SAM3 finetuned checkpoint sidecar has imgsz=null. A published "
-            "artifact must record the training imgsz to be guarded against "
-            "a silent train/serve scale mismatch -- refusing rather than "
-            "skipping the check."
-        )
-    meta_imgsz = meta.get("imgsz")
-    if meta_imgsz is not None and meta_imgsz != imgsz:
-        # This can only fire if PREDICTOR_IMGSZ changes between publish time
-        # and serve time: publish.py stamps the sidecar with the SAME
-        # PREDICTOR_IMGSZ constant this module defines, so today the two
-        # always agree. It is not dead code -- it is the guard against this
-        # constant ever drifting (or a future multi-imgsz world) without
-        # anyone noticing the train/serve scale disagreement.
-        raise RuntimeError(
-            f"SAM3 finetuned checkpoint was trained at imgsz={meta_imgsz} "
-            f"but is being served at imgsz={imgsz}. This loads perfectly "
-            "cleanly -- keys and tensors all match -- so nothing else in "
-            "the system would ever notice the train/serve scale mismatch. "
-            "Refusing rather than silently rescaling."
-        )
+    assert_sam3_checkpoint_loaded(live_state_dict, meta, imgsz=imgsz)
 
 
 def _sidecar_for_checkpoint(checkpoint: Path) -> dict:

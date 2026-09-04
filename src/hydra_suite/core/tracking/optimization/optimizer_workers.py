@@ -318,18 +318,20 @@ def run_tracking_preview(
     # flushes its (empty, since we never write) buffer and would clobber
     # the on-disk cache with zero frames (see optimizer._open_and_validate_cache).
     cfg = build_inference_config_from_params(params)
-    cache = _open_caches(
+    caches = _open_caches(
         cfg,
         Path(detection_cache_path),
         video_signature(video_path),
         params.get("ROI_MASK", None),
-    ).detection
+        read_only=True,
+    )
+    cache = caches.detection
     _pose_cache = None
     try:
         if not cap.isOpened():
             logger.error("PreviewWorker: could not open video: %s", video_path)
             return
-        if cache is None or not cache.is_valid():
+        if not caches.set_manifest_valid or cache is None or not cache.is_valid():
             logger.error("PreviewWorker: incompatible detection cache.")
             return
 

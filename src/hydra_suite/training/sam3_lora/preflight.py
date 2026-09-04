@@ -52,13 +52,19 @@ _CHECKPOINT_BYTES = int(3.5 * GiB)
 _PUBLISH_DISK_BYTES = 8 * GiB
 _TRAIN_HOST_FIXED_BYTES = 6 * GiB
 _MODEL_LOAD_HOST_BYTES = 2 * _CHECKPOINT_BYTES
-_PUBLISH_HOST_BYTES = 3 * _CHECKPOINT_BYTES
+_RUNTIME_HOST_ALLOWANCE_BYTES = 2 * GiB
+# The Set 3 publisher mutates the loaded state in place and releases it before
+# mmap validation. Conservatively bound the one active tensor temporary by the
+# entire checkpoint without claiming torch.save itself is a streaming format.
+_PUBLISH_ACTIVE_TENSOR_BYTES = _CHECKPOINT_BYTES
+_PUBLISH_HOST_BYTES = (
+    _CHECKPOINT_BYTES + _PUBLISH_ACTIVE_TENSOR_BYTES + _RUNTIME_HOST_ALLOWANCE_BYTES
+)
 _MEASURED_BF16_DEVICE_PEAK_BYTES = 29 * GiB
 _EXTRA_BATCH_DEVICE_BYTES = 18 * GiB
 _DEVICE_STEADY_BYTES = 8 * GiB
 _MASK_DEVICE_BYTES_PER_PIXEL = 16
 _MASK_HOST_BYTES_PER_PIXEL = 5
-_RUNTIME_HOST_ALLOWANCE_BYTES = 2 * GiB
 _MAX_COCO_METADATA_BYTES = 16 * MiB
 _MAX_JSON_DEPTH = 24
 _MAX_JSON_VALUES = 2_000_000
@@ -752,8 +758,8 @@ def build_resource_request(
                 disk_transient_bytes=_PUBLISH_DISK_BYTES,
                 dominant_allocations=(
                     ("base checkpoint", _CHECKPOINT_BYTES),
-                    ("merged checkpoint", _CHECKPOINT_BYTES),
-                    ("serialization temporary", _CHECKPOINT_BYTES),
+                    ("largest possible active tensor", _PUBLISH_ACTIVE_TENSOR_BYTES),
+                    ("Torch/serialization runtime", _RUNTIME_HOST_ALLOWANCE_BYTES),
                     ("LoRA adapter", lora_artifact),
                     ("LoRA reload copy", lora_reload_copy),
                     ("LoRA serialization copies", lora_serialization_copies),

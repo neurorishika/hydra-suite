@@ -433,9 +433,36 @@ def _run_pass(video_path: Path, cache_dir: Path, depth: int) -> dict[str, str]:
 
 
 def _hash_npz_files(directory: Path) -> dict[str, str]:
-    """Return {filename: sha256hex} for every .npz in *directory*, sorted by name."""
+    """Return stable logical hashes across random crash-safe generation names."""
+    import json
+
+    from hydra_suite.core.inference.cache.set_manifest import load_cache_set
+
     result: dict[str, str] = {}
-    for npz_path in sorted(directory.glob("*.npz")):
-        digest = hashlib.sha256(npz_path.read_bytes()).hexdigest()
-        result[npz_path.name] = digest
+    cache_set = load_cache_set(directory)
+    if cache_set is None:
+        paths = {path.name: path for path in directory.glob("*.npz")}
+    else:
+        paths = {
+            name: directory / relative for name, relative in cache_set.members.items()
+        }
+    for name, npz_path in sorted(paths.items()):
+        digest = hashlib.sha256()
+        with np.load(npz_path, allow_pickle=False) as manifest:
+            entries = json.loads(str(manifest["chunks_json"][0]))
+            session = str(manifest["session_id"][0])
+        for entry in entries:
+            chunk = (
+                npz_path.parent / f"{npz_path.name}.chunks" / session / entry["name"]
+            )
+            with np.load(chunk, allow_pickle=False) as arrays:
+                for field in sorted(
+                    field for field in arrays.files if not field.startswith("_")
+                ):
+                    value = arrays[field]
+                    digest.update(field.encode())
+                    digest.update(value.dtype.str.encode())
+                    digest.update(repr(value.shape).encode())
+                    digest.update(value.tobytes())
+        result[name] = digest.hexdigest()
     return result
