@@ -152,25 +152,9 @@ def preview_object_tile_fraction(target_sizes, object_tile_fraction, imgsz) -> f
 
 def _resolve_torch_device(device_preference: str) -> str:
     """Map a high-level device preference to a torch-style device string."""
-    pref = str(device_preference or "auto").strip().lower()
+    from hydra_suite.core.inference.torch_device import resolve_torch_device
 
-    if pref.startswith("cuda"):
-        return pref if ":" in pref else "cuda:0"
-    if pref == "mps":
-        return "mps"
-    if pref == "cpu":
-        return "cpu"
-
-    try:
-        from hydra_suite.utils.gpu_utils import MPS_AVAILABLE, TORCH_CUDA_AVAILABLE
-    except Exception:
-        return "cpu"
-
-    if TORCH_CUDA_AVAILABLE:
-        return "cuda:0"
-    if MPS_AVAILABLE:
-        return "mps"
-    return "cpu"
+    return resolve_torch_device(device_preference)
 
 
 def _resolve_compute_runtime(device_preference: str) -> str:

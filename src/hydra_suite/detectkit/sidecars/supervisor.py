@@ -81,6 +81,24 @@ def _operation_estimate(operation: Operation, input_paths: Iterable[Path]) -> in
     return base + min(model_bytes * 6, 12 * GiB)
 
 
+def _containment_limits(budget, observation, accelerator: AcceleratorKind):
+    """Derive the child boundary from admitted capacity, not its estimate.
+
+    ``budget.host_peak_bytes`` is deliberately conservative so admission can
+    refuse workloads that would consume the protected system reserve.  It is
+    not a safe containment boundary: using it as one turns a small model's
+    estimate into an arbitrary cap even on a machine with abundant memory.
+    """
+    hard = int(budget.usable_host_bytes)
+    soft = max(1, int(hard * 0.9))
+    mps_ratio = (
+        min(0.9, hard / max(1, observation.total_host_bytes))
+        if accelerator is AcceleratorKind.MPS
+        else None
+    )
+    return soft, hard, mps_ratio
+
+
 def _accelerator_for(device: str):
     value = str(device or "auto").strip().lower()
     if value.startswith("cuda") or (value == "auto" and sys.platform != "darwin"):
@@ -141,6 +159,35 @@ def _failed_outcome(
         peak_accelerator_bytes=supervised.peak_accelerator_bytes,
         dropped_output_lines=supervised.dropped_output_lines,
         telemetry=dict(telemetry or {}),
+    )
+
+
+def _reported_failure_outcome(
+    supervised, result, hard: int, telemetry: dict[str, Any] | None = None
+) -> ProtectedOutcome:
+    """Prefer a valid failure report written by a normally exiting child.
+
+    The entrypoint catches operational exceptions, writes a bounded result, and
+    exits with code 1.  That is an ordinary failure, not evidence of a memory
+    limit, so surfacing the report is essential for actionable GUI feedback.
+    A child killed by a containment limit cannot reliably write this result;
+    callers only reach here after protocol validation succeeds.
+    """
+    fallback = _failed_outcome(supervised, hard, telemetry)
+    message = str(getattr(result, "message", "") or "").strip()
+    if not message:
+        return fallback
+    canceled = result.status is SidecarStatus.CANCELED
+    return ProtectedOutcome(
+        False,
+        canceled,
+        ExitKind.CANCELED.value if canceled else fallback.failure_kind,
+        message,
+        hard_host_bytes=fallback.hard_host_bytes,
+        peak_tree_rss_bytes=fallback.peak_tree_rss_bytes,
+        peak_accelerator_bytes=fallback.peak_accelerator_bytes,
+        dropped_output_lines=fallback.dropped_output_lines,
+        telemetry=fallback.telemetry,
     )
 
 
@@ -260,12 +307,8 @@ class ProtectedOperation:
                         budget, hard_host_bytes=0, soft_host_bytes=0
                     ),
                 )
-            hard = min(budget.usable_host_bytes, max(estimate, 2 * GiB))
-            soft = max(1, int(hard * 0.9))
-            mps_ratio = (
-                min(0.9, hard / max(1, observation.total_host_bytes))
-                if accelerator is AcceleratorKind.MPS
-                else None
+            soft, hard, mps_ratio = _containment_limits(
+                budget, observation, accelerator
             )
             environment = dict(os.environ)
             if cuda_uuid:
@@ -389,30 +432,40 @@ class ProtectedOperation:
             with self._lock:
                 self._sidecar = None
             if supervised.classified_exit.kind is not ExitKind.SUCCESS:
+                telemetry = resource_telemetry(
+                    budget,
+                    hard_host_bytes=hard,
+                    soft_host_bytes=soft,
+                    result=supervised,
+                    effective_parameters={
+                        "operation": self.request.operation.value,
+                        "chunk_frames": int(
+                            self.request.payload.get("chunk_frames", 1)
+                        ),
+                        "max_targets": int(self.request.payload.get("max_targets", 1)),
+                    },
+                    cache_chunk_size=(
+                        int(self.request.payload.get("chunk_frames", 1))
+                        if self.request.operation is Operation.DATASET_INFERENCE
+                        else None
+                    ),
+                )
+                try:
+                    reported_result = read_result(result_path, expected=self.request)
+                except (OSError, ValueError):
+                    reported_result = None
                 self._cleanup()
+                if (
+                    reported_result is not None
+                    and reported_result.status is not SidecarStatus.SUCCESS
+                ):
+                    return _reported_failure_outcome(
+                        supervised, reported_result, hard, telemetry
+                    )
                 return _failed_outcome(
                     supervised,
                     hard,
-                    resource_telemetry(
-                        budget,
-                        hard_host_bytes=hard,
-                        soft_host_bytes=soft,
-                        result=supervised,
-                        effective_parameters={
-                            "operation": self.request.operation.value,
-                            "chunk_frames": int(
-                                self.request.payload.get("chunk_frames", 1)
-                            ),
-                            "max_targets": int(
-                                self.request.payload.get("max_targets", 1)
-                            ),
-                        },
-                        cache_chunk_size=(
-                            int(self.request.payload.get("chunk_frames", 1))
-                            if self.request.operation is Operation.DATASET_INFERENCE
-                            else None
-                        ),
-                    ),
+                    telemetry,
                 )
             result = read_result(result_path, expected=self.request)
             if result.status is not SidecarStatus.SUCCESS:

@@ -280,21 +280,77 @@ when the tab is first shown and whenever you click "Check".
 
 #### Building the `hydra-sam3` env
 
-This recipe is verified on macOS and mirrors the CUDA-box setup (swap the
-`torch`/`torchvision` install line for a CUDA wheel there):
+`make setup-sam3-train` automates the recipe below (auto-detects
+cpu/mps/cuda12; override with `make setup-sam3-train
+SAM3_TRAIN_PLATFORM=cuda13`, or run `tools/setup_sam3_train_env.sh
+[cpu|mps|cuda12|cuda13]` directly). It's idempotent — safe to re-run, and
+reuses the env if it already exists.
+
+The manual recipe it runs (verified on macOS; swap the `torch`/`torchvision`
+install line for a CUDA wheel on a GPU box):
 
 ```bash
 conda create -n hydra-sam3 python=3.12 'numpy<2'
 conda run -n hydra-sam3 pip install torch torchvision
 conda run -n hydra-sam3 pip install 'setuptools<81'
-conda run -n hydra-sam3 pip install einops torchmetrics scipy decord iopath \
-    opencv-python-headless pillow platformdirs pandas numba
+conda run -n hydra-sam3 pip install einops torchmetrics 'scipy<1.14' decord iopath \
+    opencv-python-headless pillow platformdirs pandas numba pycocotools psutil
 conda run -n hydra-sam3 pip install git+https://github.com/facebookresearch/sam3.git
-conda run -n hydra-sam3 pip install -e /path/to/hydra-suite
+conda run -n hydra-sam3 pip install --no-deps -e /path/to/hydra-suite
 ```
 
-Three of these pins are not obvious, and were found the hard way:
+#### Hugging Face access is required on every training machine
 
+Building the model calls `build_sam3_image_model`, which fetches the SAM3
+config from the **gated** `facebook/sam3` repo on Hugging Face. Having the
+3.45 GB checkpoint already on disk does **not** remove this requirement --
+the local file supplies weights, not the architecture config.
+
+So on each machine that will *train* (escalation-only machines need none of
+this):
+
+1. Accept the licence at <https://huggingface.co/facebook/sam3> with the
+   account you will authenticate as.
+2. Authenticate on that machine:
+
+```bash
+conda run -n hydra-sam3 hf auth login       # or: export HF_TOKEN=hf_...
+```
+
+Without it, model construction fails with
+`huggingface_hub.errors.GatedRepoError: 401`. Preflight checks for a
+credential up front and refuses in milliseconds with this instruction, rather
+than letting the run die minutes later inside the sidecar subprocess -- but
+preflight can only see whether a token EXISTS. If the token's account has not
+accepted the licence, the 401 still arrives at build time.
+
+#### Hardware requirements
+
+Measured on this pipeline's own configuration (batch 1, rank 16, 1008 px
+tiles, 206 adapters), via `torch.cuda.max_memory_reserved`:
+
+| Resource | Minimum | Measured |
+|---|---|---|
+| GPU | CUDA, **12 GiB VRAM**, compute capability >= 8.0 | 7.8 GiB peak, identical on an RTX 6000 Ada and an RTX 4090 |
+| Host RAM | ~16 GB | ~7 GB peak |
+| Free disk | 8 GB | 3.45 GB base checkpoint + ~3.2 GB merged artifact |
+
+Compute capability 8.0 is required for bf16 autocast; a 24 GB RTX 4090
+(capability 8.9) trains this role comfortably. `batch > 1` has never been
+measured, and preflight's per-extra-batch allowance is deliberately
+conservative -- raising the batch size may be refused on a card that handles
+batch 1 easily. Every run logs its own `vram_peak` on each progress line, so
+these figures can be re-derived on your hardware rather than trusted.
+
+Four of these pins are not obvious, and were found the hard way:
+
+- **`--no-deps` on the editable install** — `pyproject.toml`'s core
+  dependency is an unpinned `numpy>=1.24`, which pip resolves to the latest
+  numpy 2.x. Installing `hydra-suite` without `--no-deps` silently upgrades
+  the env's numpy past 2, breaking `sam3`'s `numpy<2` pin that this whole
+  sidecar env exists to satisfy. Every runtime dependency the training CLI
+  actually imports (torch, sam3, pandas, numba, opencv, ...) is already
+  installed explicitly by the steps above, so `--no-deps` costs nothing.
 - **`setuptools<81`** — setuptools 81 removed `pkg_resources`, which
   `sam3/model_builder.py:8` imports at module scope. Without this pin,
   `import sam3` fails immediately with `ModuleNotFoundError:
@@ -302,6 +358,15 @@ Three of these pins are not obvious, and were found the hard way:
 - **`einops`** — imported by `sam3/sam/rope.py` at module scope but absent
   from sam3's declared dependencies, so a bare `pip install sam3` leaves it
   missing until the first LoRA-adapted forward pass fails.
+- **`pycocotools`** and **`psutil`** — imported by
+  `sam3/train/data/coco_json_loaders.py` and
+  `sam3/model/sam3_video_predictor.py` respectively, both at module scope
+  (reached via `sam3/model_builder.py`) and both absent from sam3's declared
+  dependencies. Without either, `import sam3` fails.
+- **`scipy<1.14`** — scipy 1.14+ requires `numpy>=2.0`, so a bare
+  `pip install scipy` (pulled in by `torchmetrics`) silently drags numpy back
+  above the `numpy<2` pin `sam3` needs. Pin it explicitly in the same
+  `pip install` as `torchmetrics` so they resolve together.
 - **`pandas`/`numba`** — training's in-env CLI runs as
   `python -m hydra_suite.training.sam3_lora.cli`, and importing
   `hydra_suite` this way eagerly imports `hydra_suite.training.service`,

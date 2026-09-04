@@ -60,7 +60,18 @@ _PUBLISH_ACTIVE_TENSOR_BYTES = _CHECKPOINT_BYTES
 _PUBLISH_HOST_BYTES = (
     _CHECKPOINT_BYTES + _PUBLISH_ACTIVE_TENSOR_BYTES + _RUNTIME_HOST_ALLOWANCE_BYTES
 )
-_MEASURED_BF16_DEVICE_PEAK_BYTES = 29 * GiB
+# MEASURED on this repo's own configuration (batch 1, rank 16, 1008px SAHI
+# tiles, 206 adapters) via torch.cuda.max_memory_reserved on an RTX 6000 Ada:
+# a steady 7.83 GiB across ~130 optimizer steps and a full shuffle of tiles,
+# including the densest. 12 GiB gives ~53% headroom over that.
+#
+# The previous value, 29 GiB, was inherited from the spike's very different
+# setup (batch 4, rank 32, whole-image inputs) and was never a measurement of
+# THIS role. At 3.7x the real figure it refused any card below ~32 GiB --
+# excluding a 24 GB RTX 4090, which the measurement shows is comfortably
+# sufficient. An admission gate calibrated against someone else's
+# configuration rejects hardware that would in fact work.
+_MEASURED_BF16_DEVICE_PEAK_BYTES = 12 * GiB
 # FP32 keeps the same parameters resident but doubles every activation and
 # autograd-saved tensor. Applied to the measured BF16 envelope this is a
 # deliberate OVER-estimate (parameters do not double), which is the safe
@@ -167,6 +178,33 @@ class Sam3PreflightDecision:
             "refusals": list(self.refusals),
             "warnings": list(self.warnings),
         }
+
+
+# Set by `hf auth login`, or supplied directly by either environment variable.
+_HF_TOKEN_ENV_VARS = ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN")
+
+
+def _huggingface_token_present() -> bool:  # seam for tests
+    """True when a Hugging Face credential is available to this user.
+
+    Deliberately a LOCAL check -- no network call. Preflight must stay a
+    millisecond, offline-safe gate; reaching out to huggingface.co would make
+    admission depend on the network and could hang a run before it starts.
+
+    A present token is necessary but not sufficient: the account must also
+    have accepted the gated `facebook/sam3` licence. The refusal message says
+    so, because the two failures are indistinguishable from here.
+    """
+    for name in _HF_TOKEN_ENV_VARS:
+        if os.environ.get(name, "").strip():
+            return True
+    hf_home = os.environ.get("HF_HOME", "").strip()
+    root = Path(hf_home) if hf_home else Path.home() / ".cache" / "huggingface"
+    try:
+        token_file = root / "token"
+        return token_file.is_file() and token_file.stat().st_size > 0
+    except OSError:
+        return False
 
 
 def _free_disk_bytes(path: str) -> int:
@@ -896,6 +934,21 @@ def assess_preflight(
             "SAM3 LoRA training requires CUDA BF16 on compute capability >= 8.0; "
             f"the selected GPU reports {major}.{minor}. FP32 fallback is unsafe and disabled."
         )
+    if not _huggingface_token_present():
+        # `build_sam3_image_model` fetches the model config from the GATED
+        # facebook/sam3 repo at build time, so a local checkpoint is not
+        # sufficient -- every training machine needs its own credential.
+        # Without this check the run dies minutes in, inside a sidecar
+        # subprocess, as a bare `GatedRepoError: 401` with no hint about what
+        # to do; observed on a freshly provisioned box.
+        refusals.append(
+            "No Hugging Face credential found. SAM3 training builds the model "
+            "from the gated 'facebook/sam3' repo, which a local checkpoint "
+            "does not replace. Run `hf auth login` on this machine (or set "
+            f"{' / '.join(_HF_TOKEN_ENV_VARS)}), and make sure that account "
+            "has accepted the licence at https://huggingface.co/facebook/sam3."
+        )
+
     if getattr(params, "mixed_precision", None) not in SUPPORTED_PRECISIONS:
         # FP32 is supported again. The original refusal blamed "SAM3's BF16
         # activation path", which was `perflib.fused.addmm_act` -- a kernel

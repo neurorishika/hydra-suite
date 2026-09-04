@@ -25,6 +25,7 @@ from typing import Mapping, Optional, Sequence
 from .resource_budget import AcceleratorKind
 
 _DEFAULT_CGROUP_ROOT = Path("/sys/fs/cgroup")
+_MPS_DEFAULT_LOW_WATERMARK_RATIO = 1.4
 
 
 class LimitBackend(str, Enum):
@@ -247,7 +248,15 @@ def apply_child_limits(
     if mps_high_watermark_ratio is not None:
         if not 0.0 < mps_high_watermark_ratio <= 2.0:
             raise ValueError("MPS high-watermark ratio must be in (0, 2]")
+        # PyTorch defaults the MPS low watermark to 1.4 on unified-memory Macs.
+        # Its allocator rejects a low watermark above the configured high limit,
+        # so a containment-derived high ratio below 1.4 must set both values.
+        # Set this explicitly rather than inheriting an app-launch environment.
+        low_watermark_ratio = min(
+            _MPS_DEFAULT_LOW_WATERMARK_RATIO, mps_high_watermark_ratio
+        )
         os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = str(mps_high_watermark_ratio)
+        os.environ["PYTORCH_MPS_LOW_WATERMARK_RATIO"] = str(low_watermark_ratio)
 
 
 def probe_systemd_cgroup_evidence(

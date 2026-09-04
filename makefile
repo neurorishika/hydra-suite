@@ -1,4 +1,4 @@
-.PHONY: configure-mps-libs env-create env-create-cuda env-create-mps env-update env-update-cuda env-update-mps env-remove env-remove-cuda env-remove-mps install install-cuda install-mps install-apriltag-fork install-dev configure-cuda-ort setup setup-cuda setup-mps test pytest test-cov test-cov-html clean docs-install docs-serve docs-build docs-quality docs-check techref-build techref-clean pre-commit-install pre-commit-autopep8 pre-commit-run pre-commit-update format format-check lint lint-fix lint-strict lint-report dead-code dead-code-fix dep-graph dep-graph-text type-check audit benchmark build publish publish-test help
+.PHONY: configure-mps-libs env-create env-create-cuda env-create-mps env-update env-update-cuda env-update-mps env-remove env-remove-cuda env-remove-mps install install-cuda install-mps install-apriltag-fork install-sam3-clip setup-sam3-train install-dev configure-cuda-ort setup setup-cuda setup-mps test pytest test-cov test-cov-html clean docs-install docs-serve docs-build docs-quality docs-check techref-build techref-clean pre-commit-install pre-commit-autopep8 pre-commit-run pre-commit-update format format-check lint lint-fix lint-strict lint-report dead-code dead-code-fix dep-graph dep-graph-text type-check audit benchmark build publish publish-test help
 
 # Environment names for different platforms
 ENV_NAME = hydra
@@ -91,6 +91,21 @@ install-apriltag-fork:
 	cmake --install build; \
 	echo "Installed apriltag fork $(APRILTAG_FORK_REF)."
 
+install-sam3-clip:
+	@prefix="$${CONDA_PREFIX:-$${VIRTUAL_ENV:-}}"; \
+	if [ -z "$$prefix" ]; then \
+		echo "ERROR: activate a conda environment or virtualenv before installing the SAM3 CLIP dependency."; \
+		exit 1; \
+	fi; \
+	echo "Installing ultralytics/CLIP fork for SAM3 semantic escalation..."; \
+	"$$prefix/bin/python" -m pip install --quiet git+https://github.com/ultralytics/CLIP.git; \
+	echo "Installed CLIP for SAM3 semantic escalation."
+
+SAM3_TRAIN_PLATFORM ?=
+
+setup-sam3-train:
+	@bash tools/setup_sam3_train_env.sh $(SAM3_TRAIN_PLATFORM)
+
 configure-mps-libs:
 	@if [ -z "$$CONDA_PREFIX" ]; then \
 		echo "ERROR: activate the MPS conda env first (conda activate $(ENV_NAME_MPS))"; \
@@ -102,6 +117,7 @@ install:
 	@echo "Installing CPU packages..."
 	$(UV_PIP) install $(UV_PIP_PYTHON) -v -r requirements.txt
 	@$(MAKE) install-apriltag-fork
+	@$(MAKE) install-sam3-clip
 
 install-cuda:
 	@echo "Installing NVIDIA GPU (CUDA) packages..."
@@ -113,6 +129,7 @@ install-cuda:
 	$(call reset_tensorrt_packages)
 	$(UV_PIP) install $(UV_PIP_PYTHON) -v -r requirements-cuda$(CUDA_MAJOR).txt
 	@$(MAKE) install-apriltag-fork
+	@$(MAKE) install-sam3-clip
 	@$(MAKE) configure-cuda-ort
 
 install-mps:
@@ -120,6 +137,7 @@ install-mps:
 	$(call reset_onnxruntime_packages)
 	$(UV_PIP) install $(UV_PIP_PYTHON) -v -r requirements-mps.txt
 	@$(MAKE) install-apriltag-fork
+	@$(MAKE) install-sam3-clip
 	@$(MAKE) configure-mps-libs
 
 # =============================================================================
@@ -132,6 +150,7 @@ env-update:
 	mamba env update -f environment.yml --prune
 	$(UV_PIP) install $(UV_PIP_PYTHON) -v -r requirements.txt --upgrade
 	@$(MAKE) install-apriltag-fork
+	@$(MAKE) install-sam3-clip
 
 env-update-cuda:
 	@echo "Updating NVIDIA GPU (CUDA) environment..."
@@ -144,6 +163,7 @@ env-update-cuda:
 	$(call reset_tensorrt_packages)
 	$(UV_PIP) install $(UV_PIP_PYTHON) -v -r requirements-cuda$(CUDA_MAJOR).txt --upgrade
 	@$(MAKE) install-apriltag-fork
+	@$(MAKE) install-sam3-clip
 	@if [ -n "$$CONDA_PREFIX" ]; then \
 		$(MAKE) configure-cuda-ort; \
 	else \
@@ -156,6 +176,7 @@ env-update-mps:
 	$(call reset_onnxruntime_packages)
 	$(UV_PIP) install $(UV_PIP_PYTHON) -v -r requirements-mps.txt --upgrade
 	@$(MAKE) install-apriltag-fork
+	@$(MAKE) install-sam3-clip
 
 # Remove environments
 env-remove:

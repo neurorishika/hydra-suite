@@ -1477,6 +1477,17 @@ def merge_obb_results(frame_idx: int, parts: list[OBBResult]) -> OBBResult:
     if not non_empty:
         return _empty_obb_result(frame_idx)
     total = sum(r.num_detections for r in non_empty)
+    # Native contours are requested only for export/display paths.  They must
+    # survive a region concat so a segment model does not silently turn back
+    # into derived OBBs before the caller can display or save its masks.
+    # Retain them only when EVERY source row has one: fabricating a contour for
+    # a mixed geometry result would falsely advertise a derived box as native.
+    polygons = None
+    if all(
+        r.polygons is not None and len(r.polygons) == r.num_detections
+        for r in non_empty
+    ):
+        polygons = [polygon for r in non_empty for polygon in r.polygons]
     return OBBResult(
         frame_idx=frame_idx,
         centroids=np.concatenate([r.centroids for r in non_empty], axis=0),
@@ -1488,6 +1499,7 @@ def merge_obb_results(frame_idx: int, parts: list[OBBResult]) -> OBBResult:
         # Regenerate IDs across the merged frame so they remain contiguous
         detection_ids=OBBResult.make_detection_ids(frame_idx, total),
         class_ids=np.concatenate([r.class_ids_or_zeros for r in non_empty]),
+        polygons=polygons,
     )
 
 

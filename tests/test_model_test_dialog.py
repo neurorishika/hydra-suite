@@ -105,10 +105,12 @@ def test_build_test_params_no_legacy_keys():
 def test_training_device_auto_resolves_to_cuda_when_available(monkeypatch):
     """``"auto"`` must autodetect (CUDA > MPS > CPU), not regress to CPU."""
     monkeypatch.setattr(
-        "hydra_suite.utils.gpu_utils.TORCH_CUDA_AVAILABLE", True, raising=False
+        "hydra_suite.core.inference.torch_device.TORCH_CUDA_AVAILABLE",
+        True,
+        raising=False,
     )
     monkeypatch.setattr(
-        "hydra_suite.utils.gpu_utils.MPS_AVAILABLE", False, raising=False
+        "hydra_suite.core.inference.torch_device.MPS_AVAILABLE", False, raising=False
     )
 
     assert training_device_to_compute_runtime("auto") == "cuda"
@@ -116,10 +118,12 @@ def test_training_device_auto_resolves_to_cuda_when_available(monkeypatch):
 
 def test_training_device_auto_resolves_to_mps_when_no_cuda(monkeypatch):
     monkeypatch.setattr(
-        "hydra_suite.utils.gpu_utils.TORCH_CUDA_AVAILABLE", False, raising=False
+        "hydra_suite.core.inference.torch_device.TORCH_CUDA_AVAILABLE",
+        False,
+        raising=False,
     )
     monkeypatch.setattr(
-        "hydra_suite.utils.gpu_utils.MPS_AVAILABLE", True, raising=False
+        "hydra_suite.core.inference.torch_device.MPS_AVAILABLE", True, raising=False
     )
 
     assert training_device_to_compute_runtime("auto") == "mps"
@@ -127,27 +131,44 @@ def test_training_device_auto_resolves_to_mps_when_no_cuda(monkeypatch):
 
 def test_training_device_auto_resolves_to_cpu_when_no_gpu(monkeypatch):
     monkeypatch.setattr(
-        "hydra_suite.utils.gpu_utils.TORCH_CUDA_AVAILABLE", False, raising=False
+        "hydra_suite.core.inference.torch_device.TORCH_CUDA_AVAILABLE",
+        False,
+        raising=False,
     )
     monkeypatch.setattr(
-        "hydra_suite.utils.gpu_utils.MPS_AVAILABLE", False, raising=False
+        "hydra_suite.core.inference.torch_device.MPS_AVAILABLE", False, raising=False
     )
 
     assert training_device_to_compute_runtime("auto") == "cpu"
 
 
-def test_training_device_explicit_values_unaffected_by_availability(monkeypatch):
-    """Explicit ``cpu``/``cuda``/``mps``/``cuda:N`` must not be autodetected."""
+def test_training_device_explicit_values_use_their_available_backend(monkeypatch):
+    """Available explicit CUDA/MPS preferences remain honored."""
     monkeypatch.setattr(
-        "hydra_suite.utils.gpu_utils.TORCH_CUDA_AVAILABLE", True, raising=False
+        "hydra_suite.core.inference.torch_device.TORCH_CUDA_AVAILABLE",
+        True,
+        raising=False,
     )
     monkeypatch.setattr(
-        "hydra_suite.utils.gpu_utils.MPS_AVAILABLE", True, raising=False
+        "hydra_suite.core.inference.torch_device.MPS_AVAILABLE", True, raising=False
     )
 
     assert training_device_to_compute_runtime("cpu") == "cpu"
     assert training_device_to_compute_runtime("cuda:0") == "cuda"
     assert training_device_to_compute_runtime("mps") == "mps"
+
+
+def test_training_device_falls_back_from_unavailable_mps_to_cuda(monkeypatch):
+    monkeypatch.setattr(
+        "hydra_suite.core.inference.torch_device.TORCH_CUDA_AVAILABLE",
+        True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "hydra_suite.core.inference.torch_device.MPS_AVAILABLE", False, raising=False
+    )
+
+    assert training_device_to_compute_runtime("mps") == "cuda"
 
 
 class _FakeOBB:

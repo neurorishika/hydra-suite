@@ -170,6 +170,51 @@ def test_close_stops_owned_background_workers_before_destroying_window(qapp):
     window.close()
 
 
+def test_inference_finish_retains_worker_while_containment_recovery_is_required(qapp):
+    window = MainWindow()
+
+    class _Worker:
+        containment_recovery_required = True
+
+        def is_cancelled(self):
+            return False
+
+    class _Progress:
+        def __init__(self):
+            self.closed = False
+            self.shown = False
+            self.label = ""
+            self.cancel_text = ""
+
+        def close(self):
+            self.closed = True
+
+        def setLabelText(self, value):
+            self.label = value
+
+        def setCancelButtonText(self, value):
+            self.cancel_text = value
+
+        def show(self):
+            self.shown = True
+
+    worker = _Worker()
+    progress = _Progress()
+    window._inference_worker = worker
+    window._inference_progress_dialog = progress
+
+    window._finish_inference_worker(worker, progress)
+
+    assert window._inference_worker is worker
+    assert window._inference_progress_dialog is progress
+    assert not progress.closed
+    assert progress.shown
+    assert progress.cancel_text == "Retry cleanup"
+    window._inference_worker = None
+    window._inference_progress_dialog = None
+    window.close()
+
+
 def test_close_is_rejected_when_project_save_fails(qapp, tmp_path, monkeypatch):
     from PySide6.QtGui import QCloseEvent
 
