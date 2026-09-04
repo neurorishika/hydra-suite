@@ -6,7 +6,10 @@ frames, drives the production runner, and persists project-local evidence.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,6 +28,7 @@ from hydra_suite.core.inference.direct_calibration import (
     score_frames,
 )
 from hydra_suite.core.inference.direct_calibration_grid import (
+    checkpoint_fingerprint,
     estimate_grid_work,
     label_set_fingerprint,
 )
@@ -238,6 +242,197 @@ class CalibrationPreview:
 
     candidate_label: str
     frames: list  # list[tuple[Path, list[np.ndarray], list[np.ndarray]]]
+
+
+EVIDENCE_FILENAME = "direct_calibration.json"
+EVIDENCE_VERSION = 1
+
+
+def _polygon_to_list(points) -> list[list[float]]:
+    return np.asarray(points, dtype=np.float32).reshape(-1, 2).astype(float).tolist()
+
+
+def _point_to_dict(point: DirectCalibrationPoint) -> dict:
+    """Flatten a point (with its nested ``score``) into a plain JSON dict."""
+    score = point.score
+    return {
+        "label": point.label,
+        "enabled": point.enabled,
+        "geometry_mode": point.geometry_mode,
+        "tile_width": point.tile_width,
+        "tile_height": point.tile_height,
+        "overlap": point.overlap,
+        "object_tile_fraction": point.object_tile_fraction,
+        "max_detections": point.max_detections,
+        "tiles_per_frame": point.tiles_per_frame,
+        "seconds_per_frame": point.seconds_per_frame,
+        "confidence": point.confidence,
+        "merge_policy": point.merge_policy,
+        "merge_metric": point.merge_metric,
+        "merge_threshold": point.merge_threshold,
+        "merge_backend": point.merge_backend,
+        "failed_reason": point.failed_reason,
+        "score": {
+            "frames": score.frames,
+            "matched": score.matched,
+            "missed": score.missed,
+            "extra": score.extra,
+            "duplicate": score.duplicate,
+            "precision": score.precision,
+            "recall": score.recall,
+            "f1": score.f1,
+            "mean_iou": score.mean_iou,
+        },
+    }
+
+
+def _point_from_dict(raw: dict) -> DirectCalibrationPoint:
+    score_raw = raw["score"]
+    score = CalibrationScore(
+        frames=int(score_raw["frames"]),
+        matched=int(score_raw["matched"]),
+        missed=int(score_raw["missed"]),
+        extra=int(score_raw["extra"]),
+        duplicate=int(score_raw["duplicate"]),
+        precision=float(score_raw["precision"]),
+        recall=float(score_raw["recall"]),
+        f1=float(score_raw["f1"]),
+        mean_iou=float(score_raw["mean_iou"]),
+    )
+    return DirectCalibrationPoint(
+        label=str(raw["label"]),
+        enabled=bool(raw["enabled"]),
+        geometry_mode=str(raw["geometry_mode"]),
+        tile_width=int(raw["tile_width"]),
+        tile_height=int(raw["tile_height"]),
+        overlap=float(raw["overlap"]),
+        object_tile_fraction=float(raw["object_tile_fraction"]),
+        max_detections=int(raw["max_detections"]),
+        tiles_per_frame=int(raw["tiles_per_frame"]),
+        seconds_per_frame=float(raw["seconds_per_frame"]),
+        confidence=float(raw["confidence"]),
+        merge_policy=str(raw["merge_policy"]),
+        merge_metric=str(raw["merge_metric"]),
+        merge_threshold=float(raw["merge_threshold"]),
+        merge_backend=str(raw["merge_backend"]),
+        score=score,
+        failed_reason=str(raw.get("failed_reason", "")),
+    )
+
+
+def _preview_to_dict(evidence_dir: Path, preview: CalibrationPreview) -> dict:
+    frames = []
+    for image_path, gt_polygons, pred_polygons in preview.frames:
+        image_path = Path(image_path)
+        try:
+            stored_path = {"relative": os.path.relpath(image_path, evidence_dir)}
+        except ValueError:
+            stored_path = {"absolute": str(image_path)}
+        frames.append(
+            {
+                "image_path": stored_path,
+                "ground_truth": [_polygon_to_list(p) for p in gt_polygons],
+                "predictions": [_polygon_to_list(p) for p in pred_polygons],
+            }
+        )
+    return {"candidate_label": preview.candidate_label, "frames": frames}
+
+
+def _preview_from_dict(evidence_dir: Path, raw: dict) -> CalibrationPreview:
+    frames = []
+    for raw_frame in raw.get("frames", []):
+        stored = raw_frame["image_path"]
+        if isinstance(stored, dict) and stored.get("relative") is not None:
+            image_path = (evidence_dir / str(stored["relative"])).resolve()
+        elif isinstance(stored, dict):
+            image_path = Path(str(stored.get("absolute", "")))
+        else:
+            image_path = Path(str(stored))
+        gt_polygons = [
+            np.asarray(p, dtype=np.float32).reshape(-1, 2)
+            for p in raw_frame.get("ground_truth", [])
+        ]
+        pred_polygons = [
+            np.asarray(p, dtype=np.float32).reshape(-1, 2)
+            for p in raw_frame.get("predictions", [])
+        ]
+        frames.append((image_path, gt_polygons, pred_polygons))
+    return CalibrationPreview(
+        candidate_label=str(raw.get("candidate_label", "")), frames=frames
+    )
+
+
+def save_direct_calibration(
+    evidence_dir: Path,
+    outcome: DirectCalibrationOutcome,
+    request: DirectCalibrationRequest,
+) -> Path:
+    """Persist the frontier. A partial run NEVER replaces complete evidence.
+
+    Writes are atomic: the payload is written to a ``.tmp`` sibling and
+    ``os.replace``-d onto the target, so a crash mid-write cannot leave a
+    truncated or corrupt record on disk.
+    """
+    evidence_dir = Path(evidence_dir)
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    target = evidence_dir / EVIDENCE_FILENAME
+    existing = load_direct_calibration(evidence_dir)
+    if outcome.partial and existing is not None and not existing.partial:
+        return target
+    payload = {
+        "version": EVIDENCE_VERSION,
+        "partial": bool(outcome.partial),
+        "message": outcome.message,
+        "provenance": {
+            "checkpoint_fingerprint": checkpoint_fingerprint(request.model_path),
+            "label_set_fingerprint": request.evidence.fingerprint,
+            "split": request.evidence.split,
+            "runtime_tier": request.runtime_tier,
+            "max_targets": request.max_targets,
+        },
+        "points": [_point_to_dict(point) for point in outcome.points],
+        "previews": [
+            _preview_to_dict(evidence_dir, preview) for preview in outcome.previews
+        ],
+    }
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(evidence_dir), prefix=f".{EVIDENCE_FILENAME}.", suffix=".tmp"
+    )
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(payload, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(tmp_path, target)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
+    return target
+
+
+def load_direct_calibration(evidence_dir: Path) -> DirectCalibrationOutcome | None:
+    """Load a persisted frontier, or ``None`` if absent, missing, or corrupt."""
+    target = Path(evidence_dir) / EVIDENCE_FILENAME
+    if not target.is_file():
+        return None
+    try:
+        payload = json.loads(target.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return None
+        points = [_point_from_dict(raw) for raw in payload.get("points", [])]
+        previews = [
+            _preview_from_dict(Path(evidence_dir), raw)
+            for raw in payload.get("previews", [])
+        ]
+        return DirectCalibrationOutcome(
+            points=points,
+            previews=previews,
+            partial=bool(payload.get("partial", False)),
+            message=str(payload.get("message", "")),
+        )
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+        return None
 
 
 def load_calibration_models(request: DirectCalibrationRequest, candidate):

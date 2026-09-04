@@ -293,3 +293,139 @@ def test_points_record_the_detection_cap_they_were_measured_under(
     )
     outcome = job.run_direct_calibration(_request(tmp_path))
     assert all(point.max_detections == 64 for point in outcome.points)
+
+
+def _scored_point(label="Training geometry"):
+    from hydra_suite.core.inference.direct_calibration import (
+        CalibrationScore,
+        DirectCalibrationPoint,
+    )
+
+    return DirectCalibrationPoint(
+        label=label,
+        enabled=True,
+        geometry_mode="auto_object",
+        tile_width=640,
+        tile_height=640,
+        overlap=0.2,
+        object_tile_fraction=0.4,
+        max_detections=64,
+        tiles_per_frame=9,
+        seconds_per_frame=0.42,
+        confidence=0.35,
+        merge_policy="greedy_nmm",
+        merge_metric="ios",
+        merge_threshold=0.5,
+        merge_backend="cv2",
+        score=CalibrationScore(
+            frames=20,
+            matched=200,
+            missed=10,
+            extra=10,
+            duplicate=1,
+            precision=0.95,
+            recall=0.95,
+            f1=0.95,
+            mean_iou=0.81,
+        ),
+    )
+
+
+def _failed_point(label="Failed geometry"):
+    from hydra_suite.core.inference.direct_calibration import DirectCalibrationPoint
+
+    return DirectCalibrationPoint(
+        label=label,
+        enabled=True,
+        geometry_mode="auto_object",
+        tile_width=640,
+        tile_height=640,
+        overlap=0.2,
+        object_tile_fraction=0.4,
+        max_detections=64,
+        tiles_per_frame=0,
+        seconds_per_frame=0.0,
+        confidence=0.35,
+        merge_policy="greedy_nmm",
+        merge_metric="ios",
+        merge_threshold=0.5,
+        merge_backend="cv2",
+        score=job_zero_score(),
+        failed_reason="tile budget exceeded",
+    )
+
+
+def job_zero_score():
+    from hydra_suite.detectkit.jobs.direct_calibration import _zero_score
+
+    return _zero_score()
+
+
+def test_evidence_round_trips(tmp_path):
+    from hydra_suite.detectkit.jobs.direct_calibration import (
+        DirectCalibrationOutcome,
+        load_direct_calibration,
+        save_direct_calibration,
+    )
+
+    request = _request(tmp_path)
+    save_direct_calibration(
+        request.evidence_dir,
+        DirectCalibrationOutcome(points=[_scored_point()]),
+        request,
+    )
+    restored = load_direct_calibration(request.evidence_dir)
+    assert restored is not None and restored.partial is False
+    assert restored.points[0].score.f1 == 0.95
+    assert restored.points[0].max_detections == 64
+
+
+def test_partial_work_never_overwrites_complete_evidence(tmp_path):
+    from hydra_suite.detectkit.jobs.direct_calibration import (
+        DirectCalibrationOutcome,
+        load_direct_calibration,
+        save_direct_calibration,
+    )
+
+    request = _request(tmp_path)
+    save_direct_calibration(
+        request.evidence_dir,
+        DirectCalibrationOutcome(points=[_scored_point()]),
+        request,
+    )
+    save_direct_calibration(
+        request.evidence_dir,
+        DirectCalibrationOutcome(points=[], partial=True),
+        request,
+    )
+    still = load_direct_calibration(request.evidence_dir)
+    assert still.partial is False and still.points
+
+
+def test_failed_point_round_trips(tmp_path):
+    from hydra_suite.detectkit.jobs.direct_calibration import (
+        DirectCalibrationOutcome,
+        load_direct_calibration,
+        save_direct_calibration,
+    )
+
+    request = _request(tmp_path)
+    save_direct_calibration(
+        request.evidence_dir,
+        DirectCalibrationOutcome(points=[_failed_point()]),
+        request,
+    )
+    restored = load_direct_calibration(request.evidence_dir)
+    assert restored is not None
+    point = restored.points[0]
+    assert point.failed_reason == "tile budget exceeded"
+    assert point.score.frames == 0 and point.score.f1 == 0.0
+
+
+def test_corrupt_record_loads_as_none(tmp_path):
+    from hydra_suite.detectkit.jobs.direct_calibration import load_direct_calibration
+
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    (evidence_dir / "direct_calibration.json").write_text("{not valid json")
+    assert load_direct_calibration(evidence_dir) is None
