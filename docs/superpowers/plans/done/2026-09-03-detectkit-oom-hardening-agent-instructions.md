@@ -1,6 +1,6 @@
 # DetectKit OOM Hardening — Agent Execution Instructions
 
-Status: Implementation complete — Sets 1–7 verified; awaiting final merge
+Status: Shipped — merged to main (9cab84ae)
 
 Implementation record (2026-09-04): Sets 1, 2, 2B, 3, 4, 5, and 6 were
 merged independently as required. Set 7 adds versioned device/model-specific
@@ -9,7 +9,8 @@ structured peak/high-water telemetry, and durable retry history. The final
 focused safety matrix passed 572 tests with one platform skip. MPS equivalence
 was exact and non-empty for sequential (12,450 forward / 941 final rows, 1.12x)
 and direct fly inference (1,494 / 1,500 rows, 0.99x). CUDA passed 167 focused
-tests and exact non-empty fly equivalence (1,494 / 1,500 rows, 1.17x). The SAM3
+tests and exact non-empty fly equivalence (1,494 / 1,500 rows, 1.17x). The final
+post-audit affected matrix passed 614 tests with 14 platform skips. The SAM3
 dataset-build soak measured 551,895,040 bytes at 100 frames and 553,271,296
 bytes at 2,000 frames (+0.25% for 20x the source length).
 
@@ -933,7 +934,7 @@ The hardening program is complete only when all of the following are true:
       host/device.
 - [x] MPS and CUDA tests, equivalence comparisons, and soak tests are complete
       with non-empty outputs and recorded peak metrics.
-- [ ] All completed implementation plans/designs are moved to their done/
+- [x] All completed implementation plans/designs are moved to their done/
       directories during final merge according to AGENTS.md.
 
 ## Required final handoff from every agent
