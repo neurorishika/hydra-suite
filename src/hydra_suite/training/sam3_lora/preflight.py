@@ -180,6 +180,33 @@ class Sam3PreflightDecision:
         }
 
 
+# Set by `hf auth login`, or supplied directly by either environment variable.
+_HF_TOKEN_ENV_VARS = ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN")
+
+
+def _huggingface_token_present() -> bool:  # seam for tests
+    """True when a Hugging Face credential is available to this user.
+
+    Deliberately a LOCAL check -- no network call. Preflight must stay a
+    millisecond, offline-safe gate; reaching out to huggingface.co would make
+    admission depend on the network and could hang a run before it starts.
+
+    A present token is necessary but not sufficient: the account must also
+    have accepted the gated `facebook/sam3` licence. The refusal message says
+    so, because the two failures are indistinguishable from here.
+    """
+    for name in _HF_TOKEN_ENV_VARS:
+        if os.environ.get(name, "").strip():
+            return True
+    hf_home = os.environ.get("HF_HOME", "").strip()
+    root = Path(hf_home) if hf_home else Path.home() / ".cache" / "huggingface"
+    try:
+        token_file = root / "token"
+        return token_file.is_file() and token_file.stat().st_size > 0
+    except OSError:
+        return False
+
+
 def _free_disk_bytes(path: str) -> int:
     target = Path(path).expanduser().resolve()
     while not target.exists() and target != target.parent:
@@ -907,6 +934,21 @@ def assess_preflight(
             "SAM3 LoRA training requires CUDA BF16 on compute capability >= 8.0; "
             f"the selected GPU reports {major}.{minor}. FP32 fallback is unsafe and disabled."
         )
+    if not _huggingface_token_present():
+        # `build_sam3_image_model` fetches the model config from the GATED
+        # facebook/sam3 repo at build time, so a local checkpoint is not
+        # sufficient -- every training machine needs its own credential.
+        # Without this check the run dies minutes in, inside a sidecar
+        # subprocess, as a bare `GatedRepoError: 401` with no hint about what
+        # to do; observed on a freshly provisioned box.
+        refusals.append(
+            "No Hugging Face credential found. SAM3 training builds the model "
+            "from the gated 'facebook/sam3' repo, which a local checkpoint "
+            "does not replace. Run `hf auth login` on this machine (or set "
+            f"{' / '.join(_HF_TOKEN_ENV_VARS)}), and make sure that account "
+            "has accepted the licence at https://huggingface.co/facebook/sam3."
+        )
+
     if getattr(params, "mixed_precision", None) not in SUPPORTED_PRECISIONS:
         # FP32 is supported again. The original refusal blamed "SAM3's BF16
         # activation path", which was `perflib.fused.addmm_act` -- a kernel

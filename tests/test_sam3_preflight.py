@@ -1002,3 +1002,52 @@ def test_diagnostics_report_phases_reserves_observations_and_effective_limits(tm
         "validation",
         "publish",
     }
+
+
+def test_missing_huggingface_credential_is_refused_at_preflight(tmp_path, monkeypatch):
+    """A local checkpoint does not replace HF auth.
+
+    `build_sam3_image_model` fetches the config from the GATED facebook/sam3
+    repo at build time. Without this gate the run dies minutes in, inside a
+    sidecar subprocess, as a bare `GatedRepoError: 401` with no hint about
+    what to do.
+    """
+    _write_coco(tmp_path)
+    monkeypatch.setattr(pf, "_huggingface_token_present", lambda: False)
+
+    decision = _decision(_spec(tmp_path))
+
+    assert not decision.admitted
+    reason = next(r for r in decision.refusals if "Hugging Face" in r)
+    assert "hf auth login" in reason
+    assert "huggingface.co/facebook/sam3" in reason
+
+
+def test_present_huggingface_credential_does_not_refuse(tmp_path, monkeypatch):
+    _write_coco(tmp_path)
+    monkeypatch.setattr(pf, "_huggingface_token_present", lambda: True)
+
+    decision = _decision(_spec(tmp_path))
+
+    assert not any("Hugging Face" in reason for reason in decision.refusals)
+
+
+def test_token_probe_reads_env_vars_then_the_token_file(tmp_path, monkeypatch):
+    """Local-only probe: no network call belongs in a millisecond gate."""
+    for name in pf._HF_TOKEN_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("HF_HOME", str(tmp_path))
+    assert pf._huggingface_token_present() is False
+
+    # An empty token file is not a credential.
+    (tmp_path / "token").write_text("")
+    assert pf._huggingface_token_present() is False
+
+    (tmp_path / "token").write_text("hf_xxx")
+    assert pf._huggingface_token_present() is True
+
+    # An env var alone is enough, with no file at all.
+    monkeypatch.setenv("HF_HOME", str(tmp_path / "empty"))
+    assert pf._huggingface_token_present() is False
+    monkeypatch.setenv("HF_TOKEN", "hf_yyy")
+    assert pf._huggingface_token_present() is True
