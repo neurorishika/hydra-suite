@@ -2424,7 +2424,7 @@ def run_training(
             "success": False,
             "artifact_path": "",
             "metrics_path": "",
-            "command": command,
+            "command": supervised.get("effective_command", command),
             **supervised,
         }
 
@@ -2442,10 +2442,11 @@ def run_training(
     if best_val_acc is not None:
         _safe_log(log_cb, f"YOLO best val accuracy: {best_val_acc:.4f}")
     return {
+        **supervised,
         "success": artifact is not None,
         "artifact_path": str(artifact) if artifact is not None else "",
         "metrics_path": str(metrics_path) if metrics_path.exists() else "",
         "best_val_acc": best_val_acc,
-        "command": command,
+        "command": supervised.get("effective_command", command),
         "task": _ultralytics_task_for_role(spec.role),
     }

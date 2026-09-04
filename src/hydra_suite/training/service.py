@@ -112,7 +112,13 @@ def _failure_details(result: dict) -> dict[str, object]:
 
     return {
         key: result[key]
-        for key in ("failure_kind", "resource_preflight", "containment")
+        for key in (
+            "failure_kind",
+            "resource_preflight",
+            "containment",
+            "resource_telemetry",
+            "retry_history",
+        )
         if key in result and result[key] is not None
     }
 
@@ -687,6 +693,7 @@ class TrainingOrchestrator:
             artifact_paths=artifact_paths,
             published_model_path=published_path,
             published_registry_entry=published_key,
+            failure_details=_failure_details(result),
         )
 
         result["published_registry_key"] = published_key

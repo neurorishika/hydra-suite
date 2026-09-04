@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from hydra_suite.runtime.memory_profiles import resource_telemetry
 from hydra_suite.runtime.process_supervisor import (
     ContainmentPlan,
     ExitKind,
@@ -59,6 +60,7 @@ class ProtectedOutcome:
     peak_tree_rss_bytes: int = 0
     peak_accelerator_bytes: int | None = None
     dropped_output_lines: int = 0
+    telemetry: dict[str, Any] = field(default_factory=dict)
 
 
 def _operation_estimate(operation: Operation, input_paths: Iterable[Path]) -> int:
@@ -121,7 +123,9 @@ def _parse_progress(line: str) -> tuple[int, str] | None:
     return max(0, min(100, raw["percent"])), raw["message"]
 
 
-def _failed_outcome(supervised, hard: int) -> ProtectedOutcome:
+def _failed_outcome(
+    supervised, hard: int, telemetry: dict[str, Any] | None = None
+) -> ProtectedOutcome:
     peak = supervised.peak_tree_rss_bytes
     return ProtectedOutcome(
         False,
@@ -136,6 +140,7 @@ def _failed_outcome(supervised, hard: int) -> ProtectedOutcome:
         peak_tree_rss_bytes=peak,
         peak_accelerator_bytes=supervised.peak_accelerator_bytes,
         dropped_output_lines=supervised.dropped_output_lines,
+        telemetry=dict(telemetry or {}),
     )
 
 
@@ -251,6 +256,9 @@ class ProtectedOperation:
                     False,
                     ExitKind.HOST_ADMISSION_REFUSAL.value,
                     "; ".join(budget.refusals),
+                    telemetry=resource_telemetry(
+                        budget, hard_host_bytes=0, soft_host_bytes=0
+                    ),
                 )
             hard = min(budget.usable_host_bytes, max(estimate, 2 * GiB))
             soft = max(1, int(hard * 0.9))
@@ -382,7 +390,30 @@ class ProtectedOperation:
                 self._sidecar = None
             if supervised.classified_exit.kind is not ExitKind.SUCCESS:
                 self._cleanup()
-                return _failed_outcome(supervised, hard)
+                return _failed_outcome(
+                    supervised,
+                    hard,
+                    resource_telemetry(
+                        budget,
+                        hard_host_bytes=hard,
+                        soft_host_bytes=soft,
+                        result=supervised,
+                        effective_parameters={
+                            "operation": self.request.operation.value,
+                            "chunk_frames": int(
+                                self.request.payload.get("chunk_frames", 1)
+                            ),
+                            "max_targets": int(
+                                self.request.payload.get("max_targets", 1)
+                            ),
+                        },
+                        cache_chunk_size=(
+                            int(self.request.payload.get("chunk_frames", 1))
+                            if self.request.operation is Operation.DATASET_INFERENCE
+                            else None
+                        ),
+                    ),
+                )
             result = read_result(result_path, expected=self.request)
             if result.status is not SidecarStatus.SUCCESS:
                 self._cleanup()
@@ -393,6 +424,12 @@ class ProtectedOperation:
                     result.message or "DetectKit sidecar failed without a diagnostic.",
                     hard_host_bytes=hard,
                     peak_tree_rss_bytes=supervised.peak_tree_rss_bytes,
+                    telemetry=resource_telemetry(
+                        budget,
+                        hard_host_bytes=hard,
+                        soft_host_bytes=soft,
+                        result=supervised,
+                    ),
                 )
             return ProtectedOutcome(
                 True,
@@ -404,6 +441,24 @@ class ProtectedOperation:
                 peak_tree_rss_bytes=supervised.peak_tree_rss_bytes,
                 peak_accelerator_bytes=supervised.peak_accelerator_bytes,
                 dropped_output_lines=supervised.dropped_output_lines,
+                telemetry=resource_telemetry(
+                    budget,
+                    hard_host_bytes=hard,
+                    soft_host_bytes=soft,
+                    result=supervised,
+                    effective_parameters={
+                        "operation": self.request.operation.value,
+                        "chunk_frames": int(
+                            self.request.payload.get("chunk_frames", 1)
+                        ),
+                        "max_targets": int(self.request.payload.get("max_targets", 1)),
+                    },
+                    cache_chunk_size=(
+                        int(self.request.payload.get("chunk_frames", 1))
+                        if self.request.operation is Operation.DATASET_INFERENCE
+                        else None
+                    ),
+                ),
             )
         except WorkloadStillOwnedError as exc:
             retain_recovery(exc)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,6 +17,7 @@ from hydra_suite.runtime.memory_profiles import (
     ProbePlan,
     ProfileIdentity,
     recommend_batch_size,
+    resource_telemetry,
     run_with_bounded_oom_retries,
 )
 from hydra_suite.runtime.process_supervisor import ExitKind
@@ -187,3 +189,39 @@ def test_retry_does_not_mask_nonrecoverable_failures(kind):
     )
     assert calls == [0]
     assert result.result.exit_kind is kind
+
+
+def test_structured_telemetry_reports_admission_limits_peaks_and_adjustments():
+    budget = SimpleNamespace(
+        estimator_version="v1",
+        host_peak_bytes=100,
+        accelerator_peak_bytes=200,
+        reserved_host_bytes=300,
+        usable_host_bytes=400,
+        usable_accelerator_bytes=500,
+        dominant_phase="inference",
+        limits=SimpleNamespace(batch_size=2, workers=1, prefetch_batches=3),
+    )
+    supervised = SimpleNamespace(
+        peak_tree_rss_bytes=90,
+        minimum_system_available_bytes=310,
+        peak_accelerator_bytes=180,
+        classified_exit=SimpleNamespace(kind=ExitKind.SUCCESS),
+    )
+    telemetry = resource_telemetry(
+        budget,
+        hard_host_bytes=120,
+        soft_host_bytes=110,
+        result=supervised,
+        effective_parameters={"tile_chunk": 4},
+        queue_high_water_bytes=70,
+        cache_chunk_size=8,
+        retry_history=({"field": "tile_chunk", "from": 8, "to": 4},),
+    )
+    assert telemetry["admission"]["host_peak_bytes"] == 100
+    assert telemetry["applied_limits"]["hard_host_bytes"] == 120
+    assert telemetry["effective_parameters"]["tile_chunk"] == 4
+    assert telemetry["observed"]["peak_tree_rss_bytes"] == 90
+    assert telemetry["observed"]["minimum_system_available_bytes"] == 310
+    assert telemetry["observed"]["queue_high_water_bytes"] == 70
+    assert telemetry["retry_history"][0]["to"] == 4

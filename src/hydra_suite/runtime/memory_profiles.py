@@ -22,6 +22,7 @@ PROFILE_SCHEMA_VERSION = 1
 MAX_PROFILE_BYTES = 4 * 1024 * 1024
 MAX_PROFILE_RECORDS = 2_048
 MAX_RETRIES = 2
+TELEMETRY_SCHEMA_VERSION = 1
 
 
 def _bounded_text(value: object, name: str) -> str:
@@ -333,3 +334,63 @@ class MemoryProfileStore:
             except FileNotFoundError:
                 pass
             raise
+
+
+def resource_telemetry(
+    budget,
+    *,
+    hard_host_bytes: int,
+    soft_host_bytes: int,
+    result=None,
+    effective_parameters: Mapping[str, int | float | str | bool] | None = None,
+    queue_high_water_bytes: int = 0,
+    cache_chunk_size: int | None = None,
+    retry_history: Iterable[Mapping[str, int | str]] = (),
+) -> dict:
+    """Build bounded, path-free telemetry shared by training and inference."""
+
+    retries = tuple(dict(item) for item in retry_history)
+    if len(retries) > MAX_RETRIES:
+        raise ValueError("retry telemetry exceeds the bounded retry count")
+    effective = dict(effective_parameters or {})
+    if len(effective) > 32 or any(len(str(key)) > 64 for key in effective):
+        raise ValueError("effective parameter telemetry exceeds its field cap")
+    limits = budget.limits
+    return {
+        "schema_version": TELEMETRY_SCHEMA_VERSION,
+        "estimator_version": budget.estimator_version,
+        "admission": {
+            "host_peak_bytes": int(budget.host_peak_bytes),
+            "accelerator_peak_bytes": int(budget.accelerator_peak_bytes),
+            "reserved_host_bytes": int(budget.reserved_host_bytes),
+            "usable_host_bytes": int(budget.usable_host_bytes),
+            "usable_accelerator_bytes": budget.usable_accelerator_bytes,
+            "dominant_phase": str(budget.dominant_phase),
+        },
+        "applied_limits": {
+            "soft_host_bytes": int(soft_host_bytes),
+            "hard_host_bytes": int(hard_host_bytes),
+        },
+        "effective_parameters": {
+            "batch_size": int(limits.batch_size),
+            "workers": int(limits.workers),
+            "prefetch_batches": int(limits.prefetch_batches),
+            **effective,
+        },
+        "observed": {
+            "peak_tree_rss_bytes": int(getattr(result, "peak_tree_rss_bytes", 0)),
+            "minimum_system_available_bytes": getattr(
+                result, "minimum_system_available_bytes", None
+            ),
+            "peak_accelerator_bytes": getattr(result, "peak_accelerator_bytes", None),
+            "queue_high_water_bytes": max(0, int(queue_high_water_bytes)),
+            "cache_chunk_size": cache_chunk_size,
+        },
+        "exit_kind": (
+            getattr(getattr(result, "classified_exit", None), "kind", None).value
+            if getattr(getattr(result, "classified_exit", None), "kind", None)
+            is not None
+            else None
+        ),
+        "retry_history": list(retries),
+    }
