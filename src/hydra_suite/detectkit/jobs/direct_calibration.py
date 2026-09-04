@@ -172,6 +172,49 @@ def _bounded_by_recording(frames: list, budget: int) -> list:
     return output or frames[:budget]
 
 
+def resolve_calibration_dataset_yaml(dataset_dir) -> Path | None:
+    """The FULL-RESOLUTION ``dataset.yaml`` for a training run's dataset dir.
+
+    A sliced-training run's derived dataset holds TILES, not acquisition
+    frames. Calibrating SAHI on tiles measures the wrong thing entirely --
+    the whole point of the sweep is how slicing behaves on full frames -- so
+    a sliced manifest (``type == "sliced_obb"``) is followed back to the
+    unsliced ``source`` dataset it was cut from. The hop is bounded so a
+    corrupt manifest chain cannot loop forever.
+
+    Returns ``None`` when no yaml can be resolved; callers must then fall
+    back to raw sources and say so (``EvidenceSet.split == "sources"``).
+    """
+    current = Path(dataset_dir) if dataset_dir else None
+    seen: set[str] = set()
+    for _hop in range(8):
+        if current is None or not current.is_dir() or str(current) in seen:
+            return None
+        seen.add(str(current))
+        manifest_path = current / "manifest.json"
+        if manifest_path.is_file():
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                manifest = {}
+            if isinstance(manifest, dict) and str(manifest.get("type", "")).startswith(
+                "sliced"
+            ):
+                source = str(manifest.get("source", "") or "").strip()
+                if not source:
+                    _LOGGER.warning(
+                        "Sliced dataset %s names no source dataset; refusing to "
+                        "calibrate SAHI on tiles.",
+                        current,
+                    )
+                    return None
+                current = Path(source)
+                continue
+        candidate = current / "dataset.yaml"
+        return candidate if candidate.is_file() else None
+    return None
+
+
 def collect_evidence(
     *,
     dataset_yaml: Path | None,

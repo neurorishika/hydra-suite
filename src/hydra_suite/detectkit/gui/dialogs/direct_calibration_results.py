@@ -8,17 +8,17 @@ without confirmation saves nothing. Scoring, recommendation and profile
 mutation all live in core; this dialog only calls them and renders their
 output.
 
-Note: a calibration done here AFTER a model is already registered edits the
-sidecar directly and does not touch the registry entry. The registry's
-``slice_profiles`` summary is only refreshed the next time the model is
-published (see ``training.model_publish.verify_profile_summary``); until
-then it can be stale. The sidecar is always the source of truth on read --
-any consumer resolving profiles should read it directly rather than trust
-the registry summary as authoritative.
+A calibration done here AFTER a model is already registered edits the
+sidecar and then refreshes that artifact's registry ``slice_profiles``
+summary in the same ``accept()``, so the two can never disagree (see
+``training.model_publish.verify_profile_summary``, which is asserted right
+after the refresh). The sidecar remains the source of truth on read; the
+registry summary is an inventory, never a second authority.
 """
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -48,6 +48,7 @@ from hydra_suite.core.inference.direct_calibration import (
 )
 from hydra_suite.core.inference.direct_calibration_grid import checkpoint_fingerprint
 from hydra_suite.core.inference.slice_meta import (
+    profile_summary,
     read_slice_meta,
     remove_slice_profile,
     upsert_slice_profile,
@@ -57,6 +58,8 @@ from hydra_suite.detectkit.gui.canvas import OBBCanvas
 from hydra_suite.widgets.dialogs import BaseDialog
 
 from ._overlay_helpers import dialog_gt_layer, dialog_pred_layer
+
+_LOGGER = logging.getLogger(__name__)
 
 # Column layout for the measured-row table. Declared as module constants so
 # tests can assert on them without hard-coding integers.
@@ -163,6 +166,9 @@ class DirectCalibrationResultsDialog(BaseDialog):
         previews: list | None = None,
         task: str = "obb",
         class_names=None,
+        runtime_tier: str = "",
+        evidence_split: str = "",
+        label_set_fingerprint: str = "",
     ) -> None:
         super().__init__(
             "SAHI calibration results",
@@ -175,6 +181,12 @@ class DirectCalibrationResultsDialog(BaseDialog):
         self._previews = list(previews or [])
         self._task = task
         self._class_names = class_names
+        # Measurement provenance carried from the request/evidence, so a
+        # profile records the tier it was timed on and the labels it was
+        # scored against -- not the literal string "measured".
+        self._runtime_tier = str(runtime_tier or "")
+        self._evidence_split = str(evidence_split or "")
+        self._label_set_fingerprint = str(label_set_fingerprint or "")
         self._frame_index = 0
 
         self._recommended_point, self._recommendation_reason = recommend_balanced(
@@ -286,10 +298,18 @@ class DirectCalibrationResultsDialog(BaseDialog):
         outer.addLayout(entry_row)
 
         save_row = QHBoxLayout()
+        # The combo SELECTS a staged profile; it does not designate one.
+        # Wiring designation to currentIndexChanged meant that merely picking
+        # a profile in order to remove it silently made that profile primary
+        # (and then the removal always hit the "you removed the primary"
+        # prompt). Primary is only ever an explicit decision -- the button
+        # below is that decision.
         self.combo_primary = QComboBox()
-        self.combo_primary.currentIndexChanged.connect(self._on_primary_combo_changed)
         save_row.addWidget(QLabel("Staged profiles (primary marked):"))
         save_row.addWidget(self.combo_primary, 1)
+        self.btn_set_primary = QPushButton("Set as primary")
+        self.btn_set_primary.clicked.connect(self._on_set_primary_clicked)
+        save_row.addWidget(self.btn_set_primary)
         self.btn_remove_profile = QPushButton("Remove selected")
         self.btn_remove_profile.clicked.connect(self._on_remove_profile_clicked)
         save_row.addWidget(self.btn_remove_profile)
@@ -498,7 +518,13 @@ class DirectCalibrationResultsDialog(BaseDialog):
             "task": self._task,
             "frames": int(point.score.frames),
             "instances": int(point.score.matched + point.score.missed),
-            "runtime": "measured",
+            "label_set_fingerprint": self._label_set_fingerprint,
+            "split": self._evidence_split,
+            # The runtime TIER the sweep was timed on (cpu/gpu/gpu_fast).
+            # Timings are measurements on this data and this tier, never
+            # portable guarantees.
+            "runtime": self._runtime_tier,
+            "merge_backend": str(point.merge_backend or ""),
             "seconds_per_frame": float(point.seconds_per_frame),
             "precision": float(point.score.precision),
             "recall": float(point.score.recall),
@@ -632,11 +658,12 @@ class DirectCalibrationResultsDialog(BaseDialog):
                 return
             self.remove_profile(profile_id, new_primary_id=chosen)
 
-    def _on_primary_combo_changed(self, index: int) -> None:
-        if self._updating_primary_combo or index < 0:
-            return
-        profile_id = self.combo_primary.itemData(index)
-        if not profile_id:
+    def _on_set_primary_clicked(self) -> None:
+        self.set_primary(self.combo_primary.currentData())
+
+    def set_primary(self, profile_id: str | None) -> None:
+        """Designate ``profile_id`` primary. Only ever called by an explicit act."""
+        if self._updating_primary_combo or not profile_id:
             return
         if self._staged_meta.get("primary_profile_id") == profile_id:
             return
@@ -660,9 +687,45 @@ class DirectCalibrationResultsDialog(BaseDialog):
     # Commit
     # ------------------------------------------------------------------
 
+    def _refresh_registry_profile_summary(self) -> None:
+        """Keep the registry's ``slice_profiles`` summary equal to the sidecar.
+
+        Post-publish calibration writes only the sidecar, so without this the
+        registry summary is permanently stale -- and the spec's rule is that
+        any disagreement between the two is a visible failure, never a second
+        source of truth. If the calibrated checkpoint is not a registered
+        artifact there is nothing to refresh and this does nothing.
+        """
+        try:
+            from hydra_suite.training.model_publish import (
+                _registry_key_for_model,
+                load_model_registry,
+                save_model_registry,
+                verify_profile_summary,
+            )
+
+            registry = load_model_registry() or {}
+            entries = registry.get("entries")
+            if not isinstance(entries, dict):
+                return
+            key = _registry_key_for_model(self._model_path)
+            entry = entries.get(key)
+            if not isinstance(entry, dict):
+                return
+            entry["slice_profiles"] = profile_summary(self._staged_meta)
+            save_model_registry(registry)
+            verify_profile_summary(self._model_path, entry["slice_profiles"])
+        except Exception:
+            _LOGGER.exception(
+                "Could not refresh the registry's SAHI profile summary for %s; "
+                "the sidecar remains the source of truth.",
+                self._model_path,
+            )
+
     def accept(self) -> None:
         if self._staged_meta != self._initial_meta_snapshot:
             write_slice_meta(self._model_path, self._staged_meta)
+            self._refresh_registry_profile_summary()
         super().accept()
 
     def reject(self) -> None:

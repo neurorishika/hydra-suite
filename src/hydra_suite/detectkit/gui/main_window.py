@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from hydra_suite.core.inference.slice_meta import read_slice_meta
+from hydra_suite.core.inference.slice_meta import read_slice_meta, training_geometry
 from hydra_suite.data.al.merge import MergeMode
 from hydra_suite.data.project_bundle import (
     export_project_bundle_archive,
@@ -422,6 +422,43 @@ QScrollBar::sub-line:horizontal {
     height: 0px;
 }
 """
+
+
+_CALIBRATION_TASKS = ("obb", "detect", "segment")
+
+
+def _resolve_calibration_task(model_path, geometry: dict) -> str | None:
+    """The real task of a registered checkpoint, or ``None`` if unknowable.
+
+    Never defaults to ``"obb"``: calibration scores predictions against
+    labels with task-specific geometry (``direct_calibration._as_task_polygon``
+    reduces both sides to an AABB for ``detect``), so sweeping a segment or
+    detect model as OBB silently misreports every row. History's role -> task
+    mapping is the reference; the registry records the same fact per artifact
+    as ``usage_role``/``task_family``.
+    """
+    from hydra_suite.training.model_publish import (
+        _registry_key_for_model,
+        load_model_registry,
+    )
+
+    from .dialogs.history_dialog import _ROLE_TO_TASK
+
+    try:
+        entries = (load_model_registry() or {}).get("entries") or {}
+        entry = entries.get(_registry_key_for_model(Path(model_path))) or {}
+    except Exception:  # a corrupt registry must not crash the menu action
+        entry = {}
+    task = _ROLE_TO_TASK.get(str(entry.get("usage_role", "") or ""))
+    if task in _CALIBRATION_TASKS:
+        return task
+    family = str(entry.get("task_family", "") or "").strip().lower()
+    if family in _CALIBRATION_TASKS:
+        return family
+    stamped = str((geometry or {}).get("task", "") or "").strip().lower()
+    if stamped in _CALIBRATION_TASKS:
+        return stamped
+    return None
 
 
 class DetectKitMainWindow(QMainWindow):
@@ -827,9 +864,24 @@ class DetectKitMainWindow(QMainWindow):
         if not model_path_str:
             return
         model_path = Path(model_path_str)
-        sidecar = read_slice_meta(model_path) or {}
-        training_geometry = sidecar.get("training_geometry") or {}
-        task = str(training_geometry.get("task") or "obb")
+        # training_geometry() -- not sidecar.get("training_geometry") -- so a
+        # LEGACY FLAT sidecar still yields real geometry instead of {}, which
+        # would make build_candidate_grid fall back to 0.15/0.2/body_px=0 and
+        # label the result "Training geometry" when it is not.
+        geometry = training_geometry(read_slice_meta(model_path) or {})
+        task = _resolve_calibration_task(model_path, geometry)
+        if task is None:
+            QMessageBox.warning(
+                self,
+                "Calibrate for TrackerKit",
+                "Could not determine whether this checkpoint is an OBB, "
+                "detect or segment model. Calibration scores predictions "
+                "against labels using task-specific geometry, so guessing "
+                "'obb' would silently misreport a detect/segment model.\n\n"
+                "Register the model through DetectKit training (which records "
+                "its task) or calibrate it from Run History instead.",
+            )
+            return
         sources = list(self._project.sources) if self._project is not None else []
         evidence_dir = (
             self._project.project_dir / ".sahi_calibration"
@@ -845,9 +897,14 @@ class DetectKitMainWindow(QMainWindow):
             self,
             model_path=model_path,
             task=task,
+            # An arbitrary registered checkpoint has no run behind it, so
+            # there is no dataset yaml (and therefore no held-out val split)
+            # to resolve. Evidence falls back to the project's raw sources
+            # and the wizard reports split == "sources". The training-dialog
+            # and History entry points DO thread a real yaml.
             dataset_yaml=None,
             sources=sources,
-            training_geometry=training_geometry,
+            training_geometry=geometry,
             evidence_dir=evidence_dir,
         )
         if profiles:

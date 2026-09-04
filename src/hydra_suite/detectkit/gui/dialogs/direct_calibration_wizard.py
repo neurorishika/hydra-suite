@@ -431,6 +431,13 @@ def open_direct_calibration(
         training_geometry=training_geometry,
         previews=outcome.previews,
         task=task,
+        # Real measurement provenance: which tier the timings were taken on,
+        # which split the evidence came from, and which labels it was scored
+        # against. Without these a saved profile cannot be told apart from a
+        # measurement on other data.
+        runtime_tier=request.runtime_tier,
+        evidence_split=request.evidence.split,
+        label_set_fingerprint=request.evidence.fingerprint,
     )
     if outcome.partial:
         # Shown for inspection only -- clearly marked, never silently

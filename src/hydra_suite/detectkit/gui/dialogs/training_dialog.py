@@ -63,7 +63,12 @@ from ...jobs.training import RoleTrainingEntry, run_role_entries
 from ..models import SliceTrainingSettings
 from ..panels.sam3_training_panel import Sam3TrainingPanel
 from .direct_calibration_wizard import open_direct_calibration
-from .history_dialog import _DIRECT_DETECTOR_ROLES, _ROLE_TO_TASK, _entry_model_path
+from .history_dialog import (
+    _DIRECT_DETECTOR_ROLES,
+    _ROLE_TO_TASK,
+    _calibration_model_path,
+    _entry_calibration_context,
+)
 
 if TYPE_CHECKING:
     from ..models import DetectKitProject
@@ -1544,9 +1549,14 @@ QTabBar::tab:selected {
     # Review & Register — calibration is optional, registration is not
     # ------------------------------------------------------------------
 
-    def _published_run_context(self) -> tuple[Path, str, dict] | None:
+    def _published_run_context(
+        self,
+    ) -> tuple[Path, str, dict, Path | None, bool] | None:
         """The already-published artifact for the latest completed direct-
         detector run this session, or ``None`` if there is none yet.
+
+        Returns ``(model_path, task, training_geometry, dataset_yaml,
+        is_published)``.
 
         Publication (copying the checkpoint into the repo AND stamping
         training geometry onto ``<model>.pt.slice_meta.json`` via
@@ -1555,11 +1565,21 @@ QTabBar::tab:selected {
         training, because every DetectKit training run is started with
         ``PublishPolicy(auto_import=True, ...)`` (see ``_start_training``
         above). This method does not publish and does not touch the
-        sidecar -- it only resolves the SAME path History would show for
-        this run, reusing ``history_dialog._entry_model_path``'s
-        resolution order (project export > published_model_path > first
-        raw artifact) so "the model this dialog acts on" means the same
-        thing everywhere in DetectKit.
+        sidecar.
+
+        It resolves the artifact through ``_calibration_model_path`` --
+        published FIRST, project export only as a fallback. The
+        export-first order ``_entry_model_path`` uses is right for
+        "load"/"export" but wrong here: profiles written onto an export are
+        invisible to the registered model and are overwritten by the next
+        publish.
+
+        Training geometry comes from the artifact's OWN sidecar rather than
+        from this dialog's imgsz spinner: a synthesised ``{"imgsz": N}``
+        made ``build_candidate_grid`` fall back to 0.15/0.2/body_px=0 and
+        label the result "Training geometry" when it was nothing of the
+        kind. The spinner survives only as an imgsz supplement when the
+        sidecar has none.
         """
         for result in reversed(self._last_training_results or []):
             role = str(result.get("role", "") or "")
@@ -1567,13 +1587,29 @@ QTabBar::tab:selected {
                 continue
             if not result.get("success"):
                 continue
-            model_path = _entry_model_path(result)
+            model_path, is_published = _calibration_model_path(result)
             if not model_path:
                 continue
-            geometry: dict = {}
-            if hasattr(self, "spin_imgsz_obb_direct"):
+            spec = dict(result.get("spec") or {})
+            if not spec.get("derived_dataset_dir"):
+                # The in-session result dict may not carry the run spec; the
+                # prepared dataset for this role is the same directory the
+                # run was built from.
+                dataset_dir = self.role_dataset_dirs.get(role, "")
+                if dataset_dir:
+                    spec["derived_dataset_dir"] = dataset_dir
+            enriched = dict(result)
+            enriched["spec"] = spec
+            geometry, dataset_yaml = _entry_calibration_context(enriched)
+            if not geometry.get("imgsz") and hasattr(self, "spin_imgsz_obb_direct"):
                 geometry["imgsz"] = int(self.spin_imgsz_obb_direct.value())
-            return Path(model_path), _ROLE_TO_TASK.get(role, "obb"), geometry
+            return (
+                Path(model_path),
+                _ROLE_TO_TASK.get(role, "obb"),
+                geometry,
+                dataset_yaml,
+                is_published,
+            )
         return None
 
     def set_calibration_enabled(self, enabled: bool, reason: str = "") -> None:
@@ -1613,7 +1649,7 @@ QTabBar::tab:selected {
         context = self._published_run_context()
         if context is None:
             return
-        model_path, _task, _geometry = context
+        model_path = context[0]
         self.registered_model_paths.append(str(model_path))
 
     def calibrate_then_register(self) -> None:
@@ -1631,7 +1667,16 @@ QTabBar::tab:selected {
         context = self._published_run_context()
         if context is None:
             return
-        model_path, task, geometry = context
+        model_path, task, geometry, dataset_yaml, is_published = context
+        if not is_published:
+            QMessageBox.information(
+                self,
+                "Calibrate for TrackerKit",
+                "This run has no published artifact, so calibration will "
+                "write its profiles onto the project export. They will not "
+                "be visible to the registered model, and publishing later "
+                "will not carry them over.",
+            )
         sources = list(self._project.sources) if self._project is not None else []
         evidence_dir = (
             Path(self._project.project_dir) / ".sahi_calibration"
@@ -1642,7 +1687,7 @@ QTabBar::tab:selected {
             self,
             model_path=model_path,
             task=task,
-            dataset_yaml=None,
+            dataset_yaml=dataset_yaml,
             sources=sources,
             training_geometry=geometry,
             evidence_dir=evidence_dir,

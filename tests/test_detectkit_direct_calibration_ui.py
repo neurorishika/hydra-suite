@@ -442,24 +442,62 @@ def test_duplicate_name_save_click_warns_and_does_not_add_a_second_profile(
     assert [p["name"] for p in dialog.staged_profiles()] == ["Balanced"]
 
 
-def test_selecting_a_different_primary_combo_entry_changes_staged_primary(
-    results_dialog,
-):
-    dialog = results_dialog
+def _two_staged_profiles(dialog):
     dialog.table_rows.setCurrentCell(1, 0)
     dialog.edit_profile_name.setText("Balanced")
+    dialog.chk_make_primary.setChecked(True)
     dialog.btn_save_profile.click()
     dialog.table_rows.setCurrentCell(2, 0)
     dialog.edit_profile_name.setText("High recall")
     dialog.btn_save_profile.click()
-
     staged = dialog.staged_profiles()
-    high_recall_id = next(p["id"] for p in staged if p["name"] == "High recall")
+    return (
+        next(p["id"] for p in staged if p["name"] == "Balanced"),
+        next(p["id"] for p in staged if p["name"] == "High recall"),
+    )
+
+
+def test_selecting_a_combo_entry_never_redesignates_the_primary(results_dialog):
+    """Important 5: the combo is a SELECTOR. Merely picking a profile in
+    order to remove it must not silently make it primary."""
+    dialog = results_dialog
+    balanced_id, high_recall_id = _two_staged_profiles(dialog)
+    assert dialog.staged_meta()["primary_profile_id"] == balanced_id
+
     index = dialog.combo_primary.findData(high_recall_id)
     assert index >= 0
     dialog.combo_primary.setCurrentIndex(index)
 
+    assert dialog.staged_meta()["primary_profile_id"] == balanced_id
+
+
+def test_primary_is_designated_only_by_the_explicit_button(results_dialog):
+    dialog = results_dialog
+    _balanced_id, high_recall_id = _two_staged_profiles(dialog)
+    dialog.combo_primary.setCurrentIndex(dialog.combo_primary.findData(high_recall_id))
+    dialog.btn_set_primary.click()
     assert dialog.staged_meta()["primary_profile_id"] == high_recall_id
+
+
+def test_removing_a_non_primary_profile_never_prompts(results_dialog, monkeypatch):
+    """Follows from Important 5: selecting B to remove it used to make B
+    primary, so Remove always hit the replacement prompt."""
+    from PySide6.QtWidgets import QInputDialog
+
+    dialog = results_dialog
+    balanced_id, high_recall_id = _two_staged_profiles(dialog)
+    prompts = []
+    monkeypatch.setattr(
+        QInputDialog,
+        "getItem",
+        staticmethod(lambda *a, **k: prompts.append(a) or ("", False)),
+    )
+    dialog.combo_primary.setCurrentIndex(dialog.combo_primary.findData(high_recall_id))
+    dialog.btn_remove_profile.click()
+
+    assert prompts == []
+    assert [p["id"] for p in dialog.staged_profiles()] == [balanced_id]
+    assert dialog.staged_meta()["primary_profile_id"] == balanced_id
 
 
 def test_removing_the_staged_primary_prompts_and_honours_the_choice(
@@ -705,6 +743,12 @@ def test_tools_menu_calibrate_cancel_does_not_touch_the_sidecar(monkeypatch, tmp
     sidecar = sidecar_path(model_path)
     assert not sidecar.exists()
 
+    # The Tools menu refuses to sweep a model whose task it cannot determine
+    # (it must never default to "obb"), so give this one a resolvable task.
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.main_window._resolve_calibration_task",
+        lambda *a, **k: "obb",
+    )
     win, mw = _main_window_with_project(tmp_path)
     monkeypatch.setattr(
         mw.QFileDialog,
@@ -733,6 +777,12 @@ def test_tools_menu_calibrate_with_saved_profiles_still_writes_nothing_itself(
     sidecar = sidecar_path(model_path)
     assert not sidecar.exists()
 
+    # The Tools menu refuses to sweep a model whose task it cannot determine
+    # (it must never default to "obb"), so give this one a resolvable task.
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.main_window._resolve_calibration_task",
+        lambda *a, **k: "obb",
+    )
     win, mw = _main_window_with_project(tmp_path)
     monkeypatch.setattr(
         mw.QFileDialog,
@@ -934,3 +984,340 @@ def test_each_merge_setting_has_its_own_overlay(tmp_path):
         assert "0.7" in dialog.lbl_overlay_caption.text()
     finally:
         dialog.close()
+
+
+# ---------------------------------------------------------------------------
+# Critical 2 / 3, Important 6 / 7 -- what the GUI entry points actually pass.
+# ---------------------------------------------------------------------------
+
+
+def _run_dataset(tmp_path: Path) -> Path:
+    """A prepared run dataset with a labelled val split (full resolution)."""
+    root = tmp_path / "dataset"
+    _dataset(root, "val", ["rec1_000", "rec1_001"])
+    _dataset(root, "train", ["rec2_000"])
+    (root / "dataset.yaml").write_text(
+        f"path: {root}\ntrain: images/train\nval: images/val\nnames:\n  0: ant\n"
+    )
+    return root
+
+
+def _stamp_sidecar(model_path: Path, geometry: dict) -> None:
+    from hydra_suite.core.inference.slice_meta import write_slice_meta
+
+    write_slice_meta(model_path, geometry)
+
+
+def test_history_calibration_uses_the_runs_val_split(monkeypatch, tmp_path):
+    """Critical 2: the val-split default must actually fire from the GUI."""
+    import hydra_suite.detectkit.gui.dialogs.history_dialog as hd
+    from hydra_suite.detectkit.jobs.direct_calibration import collect_evidence
+
+    dataset = _run_dataset(tmp_path)
+    dlg, model_path = _history_dialog_with_calibratable_run(tmp_path)
+    dlg._runs[0]["spec"]["derived_dataset_dir"] = str(dataset)
+    seen = {}
+    monkeypatch.setattr(
+        hd, "open_direct_calibration", lambda *a, **k: seen.update(k) or []
+    )
+    dlg._calibrate_selected()
+    dlg.close()
+
+    assert seen["dataset_yaml"] is not None
+    evidence = collect_evidence(dataset_yaml=seen["dataset_yaml"], sources=[])
+    assert evidence.split == "val"
+    assert evidence.frames
+
+
+def test_history_calibration_follows_a_sliced_dataset_back_to_full_frames(tmp_path):
+    """A sliced run's derived dataset is TILES; calibrating on it is wrong."""
+    import json
+
+    from hydra_suite.detectkit.jobs.direct_calibration import (
+        resolve_calibration_dataset_yaml,
+    )
+
+    source = _run_dataset(tmp_path)
+    sliced = tmp_path / "sliced"
+    sliced.mkdir()
+    (sliced / "dataset.yaml").write_text("path: .\n")
+    (sliced / "manifest.json").write_text(
+        json.dumps({"type": "sliced_obb", "source": str(source)})
+    )
+    assert resolve_calibration_dataset_yaml(sliced) == source / "dataset.yaml"
+
+
+def test_history_calibration_reads_geometry_from_a_legacy_flat_sidecar(
+    monkeypatch, tmp_path
+):
+    """Critical 3: a legacy FLAT sidecar must still yield a real grid."""
+    import hydra_suite.detectkit.gui.dialogs.history_dialog as hd
+    from hydra_suite.core.inference.direct_calibration_grid import build_candidate_grid
+
+    dlg, model_path = _history_dialog_with_calibratable_run(tmp_path)
+    _stamp_sidecar(
+        model_path,
+        {
+            "geometry_mode": "auto_object",
+            "imgsz": 960,
+            "object_tile_fraction": 0.5,
+            "overlap": 0.35,
+            "reference_body_px": 480.0,
+        },
+    )
+    seen = {}
+    monkeypatch.setattr(
+        hd, "open_direct_calibration", lambda *a, **k: seen.update(k) or []
+    )
+    dlg._calibrate_selected()
+    dlg.close()
+
+    geometry = seen["training_geometry"]
+    assert geometry["reference_body_px"] == 480.0
+    assert geometry["object_tile_fraction"] == 0.5
+    grid = build_candidate_grid(geometry)
+    trained = next(c for c in grid if c.label == "Training geometry")
+    assert trained.object_tile_fraction == 0.5
+    assert trained.overlap == 0.35
+
+
+def test_history_calibration_targets_the_published_artifact(tmp_path):
+    """Important 6: profiles on a project export are invisible to the model."""
+    from hydra_suite.detectkit.gui.dialogs.history_dialog import (
+        _calibration_model_path,
+        _entry_model_path,
+    )
+
+    entry = {
+        "project_model_paths": ["/exports/copy.pt"],
+        "published_model_path": "/models/published.pt",
+    }
+    assert _entry_model_path(entry) == "/exports/copy.pt"
+    assert _calibration_model_path(entry) == ("/models/published.pt", True)
+    assert _calibration_model_path({"project_model_paths": ["/exports/copy.pt"]}) == (
+        "/exports/copy.pt",
+        False,
+    )
+
+
+def test_tools_menu_refuses_rather_than_claiming_obb(monkeypatch, tmp_path):
+    """Important 7: a segment/detect model must not be swept as OBB."""
+    from hydra_suite.detectkit.gui.main_window import _resolve_calibration_task
+
+    model = tmp_path / "m.pt"
+    model.write_bytes(b"weights")
+    monkeypatch.setattr(
+        "hydra_suite.training.model_publish.load_model_registry", lambda: {}
+    )
+    assert _resolve_calibration_task(model, {}) is None
+    assert _resolve_calibration_task(model, {"task": "segment"}) == "segment"
+
+    monkeypatch.setattr(
+        "hydra_suite.training.model_publish.load_model_registry",
+        lambda: {
+            "entries": {
+                "m.pt": {"usage_role": "segment_direct", "task_family": "segment"}
+            }
+        },
+    )
+    monkeypatch.setattr(
+        "hydra_suite.training.model_publish._registry_key_for_model",
+        lambda path: "m.pt",
+    )
+    assert _resolve_calibration_task(model, {}) == "segment"
+
+
+def test_tools_menu_does_not_open_calibration_for_an_unknown_task(
+    monkeypatch, tmp_path
+):
+    from hydra_suite.detectkit.gui import main_window as mw
+
+    model_path = tmp_path / "unknown.pt"
+    model_path.write_bytes(b"weights")
+    win, mw_mod = _main_window_with_project(tmp_path)
+    monkeypatch.setattr(
+        mw_mod.QFileDialog,
+        "getOpenFileName",
+        staticmethod(lambda *a, **k: (str(model_path), "")),
+    )
+    monkeypatch.setattr(mw, "_resolve_calibration_task", lambda *a, **k: None)
+    warned = []
+    monkeypatch.setattr(
+        mw_mod.QMessageBox, "warning", staticmethod(lambda *a, **k: warned.append(a))
+    )
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.dialogs.direct_calibration_wizard."
+        "open_direct_calibration",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("must not sweep an unknown task")
+        ),
+    )
+    win.calibrate_registered_model()
+    assert warned
+    win.deleteLater()
+
+
+def test_training_dialog_threads_geometry_and_dataset_yaml(monkeypatch, tmp_path):
+    """Critical 2 + 3 on the Review & Register path."""
+    from hydra_suite.detectkit.gui.dialogs import training_dialog as td
+
+    dataset = _run_dataset(tmp_path)
+    dlg = _make_training_dialog(tmp_path)
+    published = tmp_path / "published" / "m.pt"
+    published.parent.mkdir(parents=True, exist_ok=True)
+    published.write_bytes(b"weights")
+    _stamp_sidecar(
+        published,
+        {
+            "training_geometry": {
+                "geometry_mode": "auto_object",
+                "imgsz": 1024,
+                "object_tile_fraction": 0.6,
+                "overlap": 0.25,
+                "reference_body_px": 512.0,
+            }
+        },
+    )
+    dlg._last_training_results = [
+        {
+            "role": "obb_direct",
+            "success": True,
+            "published_model_path": str(published),
+            "spec": {"derived_dataset_dir": str(dataset)},
+        }
+    ]
+    seen = {}
+    monkeypatch.setattr(
+        td, "open_direct_calibration", lambda *a, **k: seen.update(k) or []
+    )
+    dlg.calibrate_then_register()
+    dlg.close()
+
+    assert seen["dataset_yaml"] is not None
+    assert seen["training_geometry"]["reference_body_px"] == 512.0
+    assert seen["training_geometry"]["object_tile_fraction"] == 0.6
+
+
+def test_detect_format_labels_are_read_from_a_val_split(tmp_path):
+    """Critical 2 trap: _split_frames was dead code and had never seen a
+    5-field detect label."""
+    from hydra_suite.detectkit.jobs.direct_calibration import collect_evidence
+
+    root = tmp_path / "detect_ds"
+    images = root / "images" / "val"
+    labels = root / "labels" / "val"
+    images.mkdir(parents=True)
+    labels.mkdir(parents=True)
+    cv2.imwrite(str(images / "a.png"), np.zeros((200, 300, 3), np.uint8))
+    (labels / "a.txt").write_text("0 0.5 0.5 0.2 0.2\n")
+    yaml = root / "dataset.yaml"
+    yaml.write_text(
+        f"path: {root}\ntrain: images/train\nval: images/val\nnames:\n  0: ant\n"
+    )
+    evidence = collect_evidence(dataset_yaml=yaml, sources=[])
+    assert evidence.split == "val"
+    assert evidence.instances == 1
+
+
+# ---------------------------------------------------------------------------
+# Important 8 / 9 -- registry agreement and measurement provenance.
+# ---------------------------------------------------------------------------
+
+
+def test_measurement_records_real_provenance(tmp_path):
+    dialog = _overlay_dialog(
+        tmp_path,
+        [
+            _overlay_point(
+                confidence=0.35, merge_threshold=0.5, candidate_index=0, label="T"
+            )
+        ],
+        [],
+    )
+    dialog._runtime_tier = "gpu_fast"
+    dialog._evidence_split = "val"
+    dialog._label_set_fingerprint = "sha256:abc"
+    try:
+        measurement = dialog.measurement_for_row(0)
+    finally:
+        dialog.close()
+    assert measurement["runtime"] == "gpu_fast"
+    assert measurement["split"] == "val"
+    assert measurement["label_set_fingerprint"] == "sha256:abc"
+    assert measurement["merge_backend"] == "cv2"
+    assert measurement["runtime"] != "measured"
+
+
+def test_wizard_threads_measurement_provenance_into_the_results_dialog(
+    monkeypatch, tmp_path
+):
+    """The dialog cannot stamp provenance it was never given."""
+    import inspect
+
+    from hydra_suite.detectkit.gui.dialogs import direct_calibration_wizard as wiz
+
+    source = inspect.getsource(wiz.open_direct_calibration)
+    assert "runtime_tier=request.runtime_tier" in source
+    assert "evidence_split=request.evidence.split" in source
+    assert "label_set_fingerprint=request.evidence.fingerprint" in source
+
+
+def test_accept_refreshes_the_registry_profile_summary(monkeypatch, tmp_path):
+    """Important 8: sidecar and registry summary can never be allowed to drift."""
+    import hydra_suite.training.model_publish as mp
+    from hydra_suite.core.inference.slice_meta import read_slice_meta
+
+    model = tmp_path / "m.pt"
+    registry = {"schema_version": 2, "entries": {"m.pt": {"slice_profiles": {}}}}
+    monkeypatch.setattr(mp, "_registry_key_for_model", lambda path: "m.pt")
+    monkeypatch.setattr(mp, "load_model_registry", lambda: registry)
+    saved = []
+    monkeypatch.setattr(mp, "save_model_registry", lambda reg: saved.append(reg))
+
+    dialog = _overlay_dialog(
+        tmp_path,
+        [
+            _overlay_point(
+                confidence=0.35, merge_threshold=0.5, candidate_index=0, label="T"
+            )
+        ],
+        [],
+    )
+    dialog.table_rows.selectRow(0)
+    dialog.save_profile("Balanced", primary=True)
+    dialog.accept()
+
+    assert saved, "the registry must be rewritten alongside the sidecar"
+    summary = registry["entries"]["m.pt"]["slice_profiles"]
+    assert summary["names"] == ["Balanced"]
+    assert summary["count"] == 1
+    meta = read_slice_meta(model)
+    assert summary["primary_profile_id"] == meta["primary_profile_id"]
+
+
+def test_accept_leaves_an_unregistered_model_alone(monkeypatch, tmp_path):
+    import hydra_suite.training.model_publish as mp
+
+    monkeypatch.setattr(mp, "_registry_key_for_model", lambda path: "absent.pt")
+    monkeypatch.setattr(
+        mp, "load_model_registry", lambda: {"schema_version": 2, "entries": {}}
+    )
+    monkeypatch.setattr(
+        mp,
+        "save_model_registry",
+        lambda reg: (_ for _ in ()).throw(
+            AssertionError("must not write the registry for an unregistered model")
+        ),
+    )
+    dialog = _overlay_dialog(
+        tmp_path,
+        [
+            _overlay_point(
+                confidence=0.35, merge_threshold=0.5, candidate_index=0, label="T"
+            )
+        ],
+        [],
+    )
+    dialog.table_rows.selectRow(0)
+    dialog.save_profile("Balanced")
+    dialog.accept()
