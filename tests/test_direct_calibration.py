@@ -138,3 +138,16 @@ def test_poor_localization_is_excluded_even_at_high_f1():
 def test_empty_input_refuses_rather_than_raising():
     best, reason = recommend_balanced([])
     assert best is None and RECOMMENDATION_RULE in reason
+
+
+def test_a_point_dominated_at_equal_speed_is_dropped_by_the_frontier():
+    """Removing _pareto's filtering flips this result, so it proves the frontier runs."""
+    best, _reason = recommend_balanced(
+        [
+            _point(
+                "dominated", 0.930, 1.0, missed=20, extra=20
+            ),  # first in list, same speed
+            _point("dominating", 0.935, 1.0, missed=5, extra=5),
+        ]
+    )
+    assert best.label == "dominating"
