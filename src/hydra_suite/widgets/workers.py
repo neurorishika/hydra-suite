@@ -2,6 +2,16 @@
 
 from PySide6.QtCore import QThread, Signal
 
+from hydra_suite.runtime.safe_text import MAX_TERMINAL_TEXT_BYTES, bounded_terminal_text
+
+MAX_WORKER_TERMINAL_MESSAGE_BYTES = MAX_TERMINAL_TEXT_BYTES
+
+
+def bounded_worker_message(value: object) -> str:
+    """Return a UTF-8-safe, fixed-size Qt signal payload."""
+
+    return bounded_terminal_text(value)
+
 
 class BaseWorker(QThread):
     """Base class for all background task workers.
@@ -28,12 +38,21 @@ class BaseWorker(QThread):
     status: Signal = Signal(str)
     error: Signal = Signal(str)
 
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        # Keep the exact exception object available to the durable worker
+        # owner. Some failures carry recovery state that must not be reduced
+        # to the human-readable error signal.
+        self.failure_exception: Exception | None = None
+
     def run(self) -> None:
         """Wrap execute() in error handling, emitting the error signal on failure."""
+        self.failure_exception = None
         try:
             self.execute()
         except Exception as exc:  # noqa: BLE001
-            self.error.emit(str(exc))
+            self.failure_exception = exc
+            self.error.emit(bounded_worker_message(exc))
 
     def execute(self) -> None:
         """Override in subclasses with the actual work."""

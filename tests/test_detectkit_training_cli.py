@@ -10,6 +10,8 @@ import threading
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 
 def _plan_payload(tmp_path: Path) -> dict:
     return {
@@ -149,12 +151,107 @@ def test_plan_rejects_nonfinite_numbers_and_empty_sam3_prompt(tmp_path):
     ):
         load_training_plan(path)
 
+    payload["sam3"]["prompt"] = "ant"
+    payload["sam3"]["mixed_precision"] = "fp32"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    legacy_plan = load_training_plan(path)
+    assert legacy_plan.sam3_params.mixed_precision == "fp32"
+
     payload = _plan_payload(tmp_path)
     payload["dataset"]["split"] = {"train": 0.9, "val": 0.2}
     path = tmp_path / "bad-split.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(TrainingPlanError, match="sum to 1.0"):
         load_training_plan(path)
+
+
+def test_plan_rejects_negative_query_counts_outside_ui_bound(tmp_path):
+    from hydra_suite.detectkit.config.training import (
+        TrainingPlanError,
+        load_training_plan,
+    )
+
+    payload = _plan_payload(tmp_path)
+    payload["roles"] = [{"role": "semantic_sam3", "imgsz": 1008}]
+    payload["sam3"] = {
+        "prompt": "ant",
+        "label_quality_acknowledged": True,
+        "num_negatives": 101,
+    }
+    path = tmp_path / "too-many-negatives.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(TrainingPlanError, match="num_negatives.*between 0 and 100"):
+        load_training_plan(path)
+
+
+def test_plan_read_and_json_materialization_are_bounded(tmp_path):
+    from hydra_suite.detectkit.config import training as config
+
+    oversized = tmp_path / "oversized.json"
+    oversized.write_bytes(b" " * (config._MAX_TRAINING_PLAN_BYTES + 1))
+    with pytest.raises(config.TrainingPlanError, match="safe input cap"):
+        config.load_training_plan(oversized)
+
+    invalid_utf8 = tmp_path / "invalid-utf8.json"
+    invalid_utf8.write_bytes(b'{"version": 1, "bad": "\xff"}')
+    with pytest.raises(config.TrainingPlanError, match="Invalid JSON"):
+        config.load_training_plan(invalid_utf8)
+
+    too_deep = tmp_path / "too-deep.json"
+    too_deep.write_text("[" * 2_000 + "0" + "]" * 2_000, encoding="utf-8")
+    with pytest.raises(config.TrainingPlanError, match="Invalid JSON"):
+        config.load_training_plan(too_deep)
+
+
+def test_plan_rejects_oversized_or_non_utf8_sam3_prompt_text(tmp_path):
+    from hydra_suite.detectkit.config import training as config
+    from hydra_suite.training.contracts import SAM3_MAX_PROMPT_CODEPOINTS
+
+    payload = _plan_payload(tmp_path)
+    payload["roles"] = [{"role": "semantic_sam3", "imgsz": 1008}]
+    payload["sam3"] = {
+        "prompt": "ant",
+        "negative_prompts": ["x" * (SAM3_MAX_PROMPT_CODEPOINTS + 1)],
+        "label_quality_acknowledged": True,
+    }
+    path = tmp_path / "large-prompt.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(config.TrainingPlanError, match="per-prompt cap"):
+        config.load_training_plan(path)
+
+    payload["sam3"]["negative_prompts"] = []
+    payload["sam3"]["prompt"] = "\ud800"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(config.TrainingPlanError, match="valid UTF-8"):
+        config.load_training_plan(path)
+
+
+def test_plan_accepts_prompt_limit_but_keeps_aggregate_cap(tmp_path):
+    from hydra_suite.detectkit.config import training as config
+    from hydra_suite.training.contracts import (
+        SAM3_MAX_CONFIGURED_PROMPT_BYTES,
+        SAM3_MAX_PROMPT_CODEPOINTS,
+    )
+
+    payload = _plan_payload(tmp_path)
+    payload["roles"] = [{"role": "semantic_sam3", "imgsz": 1008}]
+    payload["sam3"] = {
+        "prompt": "x" * SAM3_MAX_PROMPT_CODEPOINTS,
+        "negative_prompts": [],
+        "label_quality_acknowledged": True,
+    }
+    path = tmp_path / "prompt-boundary.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    assert config.load_training_plan(path).sam3_params is not None
+
+    payload["sam3"]["negative_prompts"] = [
+        "x" * SAM3_MAX_PROMPT_CODEPOINTS
+        for _ in range(SAM3_MAX_CONFIGURED_PROMPT_BYTES // SAM3_MAX_PROMPT_CODEPOINTS)
+    ]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(config.TrainingPlanError, match="serialized text cap"):
+        config.load_training_plan(path)
 
 
 def test_headless_plan_defaults_to_no_server_local_publish(tmp_path):
@@ -236,6 +333,71 @@ def test_shared_workflow_prepares_and_runs_roles_with_parent_lineage(tmp_path):
     ]
 
 
+def test_role_workflow_preserves_owned_workload_and_stops_later_roles(tmp_path):
+    from hydra_suite.detectkit.config.training import DetectTrainingPlan
+    from hydra_suite.detectkit.jobs.training import run_role_entries
+    from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
+
+    plan = DetectTrainingPlan.from_dict(_plan_payload(tmp_path), base_dir=tmp_path)
+    entries = plan.role_entries(
+        {
+            "detect_direct": "/tmp/detect",
+            "seq_detect": "/tmp/seq",
+        }
+    )
+    sidecar = object()
+    owned = WorkloadStillOwnedError("ownership retained", sidecar)
+    calls = []
+
+    class _Orchestrator:
+        def run_role_training(self, spec, **_kwargs):
+            calls.append(spec.role)
+            raise owned
+
+    with pytest.raises(WorkloadStillOwnedError) as raised:
+        run_role_entries(
+            _Orchestrator(),
+            entries,
+            log=lambda _message: None,
+            progress=lambda _role, _current, _total: None,
+            should_cancel=lambda: False,
+        )
+
+    assert raised.value is owned
+    assert raised.value.sidecar is sidecar
+    assert calls == [entries[0].role]
+
+
+def test_role_workflow_formats_exception_without_calling_str(tmp_path):
+    from hydra_suite.detectkit.config.training import DetectTrainingPlan
+    from hydra_suite.detectkit.jobs.training import run_role_entries
+    from hydra_suite.runtime.safe_text import MAX_TERMINAL_TEXT_BYTES
+
+    class _ExplosiveError(RuntimeError):
+        def __str__(self):
+            pytest.fail("run_role_entries must not stringify arbitrary exceptions")
+
+    plan = DetectTrainingPlan.from_dict(_plan_payload(tmp_path), base_dir=tmp_path)
+    entries = plan.role_entries(
+        {"detect_direct": "/tmp/detect", "seq_detect": "/tmp/seq"}
+    )[:1]
+
+    class _Orchestrator:
+        def run_role_training(self, _spec, **_kwargs):
+            raise _ExplosiveError("x" * (MAX_TERMINAL_TEXT_BYTES * 8))
+
+    results = run_role_entries(
+        _Orchestrator(),
+        entries,
+        log=lambda _message: None,
+        progress=lambda _role, _current, _total: None,
+        should_cancel=lambda: False,
+    )
+
+    assert results[0]["error"].startswith("x")
+    assert len(results[0]["error"].encode("utf-8")) <= MAX_TERMINAL_TEXT_BYTES
+
+
 def test_preflight_uses_native_polygon_geometry(tmp_path):
     from hydra_suite.detectkit.jobs.training import preflight_sources
     from hydra_suite.training import SourceDataset
@@ -266,6 +428,132 @@ def test_cli_dry_run_is_qt_free_and_does_not_create_workspace(tmp_path, monkeypa
 
     assert cli.main(["--config", str(config_path), "--dry-run"]) == 0
     assert not (tmp_path / "must-not-exist").exists()
+
+
+def test_cli_retries_and_finalizes_retained_workload(monkeypatch):
+    from hydra_suite.detectkit import cli
+    from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
+
+    canceled = []
+    sidecar = type("Sidecar", (), {"cancel": lambda self: canceled.append(True)})()
+    owned = WorkloadStillOwnedError("ownership retained", sidecar)
+    owned.run_id = "run-owned"
+    finalized = []
+    monkeypatch.setattr(cli, "run", lambda _args: (_ for _ in ()).throw(owned))
+    monkeypatch.setattr(
+        cli,
+        "finalize_run_record",
+        lambda run_id, **kwargs: finalized.append((run_id, kwargs)),
+    )
+
+    assert cli.main(["--config", "unused.json"]) == 1
+    assert canceled == [True]
+    assert finalized[0][0] == "run-owned"
+    assert finalized[0][1]["failure_details"]["containment"] == {
+        "ownership": "recovered"
+    }
+
+
+def test_cli_reports_post_recovery_artifact_cleanup_failure(monkeypatch, capsys):
+    from hydra_suite.detectkit import cli
+    from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
+
+    sidecar = type("Sidecar", (), {"cancel": lambda self: None})()
+    owned = WorkloadStillOwnedError("ownership retained", sidecar)
+    owned.recovery_cleanup = lambda: (_ for _ in ()).throw(
+        OSError("staging cleanup failed")
+    )
+    monkeypatch.setattr(cli, "run", lambda _args: (_ for _ in ()).throw(owned))
+
+    assert cli.main(["--config", "unused.json"]) == 1
+    assert "temporary artifact cleanup failed" in capsys.readouterr().err
+    assert owned.recovery_error == "staging cleanup failed"
+
+
+def test_cli_never_flattens_a_still_owned_recovery_handle(monkeypatch):
+    from hydra_suite.detectkit import cli
+    from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
+
+    class Sidecar:
+        def cancel(self):
+            raise retry
+
+    original = WorkloadStillOwnedError("ownership retained", Sidecar())
+    original.run_id = "run-owned"
+    retry = WorkloadStillOwnedError("still owned", original.sidecar)
+    monkeypatch.setattr(cli, "run", lambda _args: (_ for _ in ()).throw(original))
+
+    with pytest.raises(WorkloadStillOwnedError) as raised:
+        cli.main(["--config", "unused.json"])
+
+    assert raised.value is retry
+    assert raised.value.sidecar is original.sidecar
+    assert raised.value.run_id == "run-owned"
+
+
+def test_run_summary_write_cannot_replace_owned_workload_handle(tmp_path, monkeypatch):
+    from hydra_suite.detectkit import cli
+    from hydra_suite.detectkit.jobs.training import DatasetPreparationResult
+    from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
+    from hydra_suite.training import TrainingRole, ValidationReport
+
+    payload = _plan_payload(tmp_path)
+    payload["roles"] = payload["roles"][:1]
+    config_path = tmp_path / "training.json"
+    config_path.write_text(json.dumps(payload), encoding="utf-8")
+    owned = WorkloadStillOwnedError("ownership retained", object())
+    monkeypatch.setattr(cli, "TrainingOrchestrator", lambda _workspace: object())
+    monkeypatch.setattr(
+        cli, "preflight_sources", lambda _sources: ValidationReport(valid=True)
+    )
+    monkeypatch.setattr(
+        cli,
+        "prepare_role_datasets",
+        lambda *_args, **_kwargs: DatasetPreparationResult(
+            role_dataset_dirs={"detect_direct": "/tmp/detect"},
+            roles=(TrainingRole.DETECT_DIRECT,),
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_role_entries",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(owned),
+    )
+    real_write = cli._write_session_file
+    result_write_attempted = False
+
+    def fail_result_write(session_dir, name, data):
+        nonlocal result_write_attempted
+        if name == "training_result.json":
+            result_write_attempted = True
+            raise OSError("session filesystem unavailable")
+        return real_write(session_dir, name, data)
+
+    monkeypatch.setattr(cli, "_write_session_file", fail_result_write)
+    monkeypatch.setattr(
+        cli,
+        "_restore_signal_handlers",
+        lambda _previous: (_ for _ in ()).throw(OSError("signal restore failed")),
+    )
+
+    def flock(_fd, operation):
+        if operation == 4:
+            raise OSError("workspace unlock failed")
+
+    monkeypatch.setattr(
+        cli,
+        "fcntl",
+        SimpleNamespace(LOCK_EX=1, LOCK_NB=2, LOCK_UN=4, flock=flock),
+    )
+    args = cli.build_parser().parse_args(["--config", str(config_path)])
+
+    with pytest.raises(WorkloadStillOwnedError) as raised:
+        cli.run(args)
+
+    assert raised.value is owned
+    assert not result_write_attempted
+    assert "signal-handler restoration failed" in owned.recovery_error
+    assert "workspace unlock failed" in owned.recovery_error
 
 
 def test_detectkit_app_dispatches_train_without_importing_qt(monkeypatch):

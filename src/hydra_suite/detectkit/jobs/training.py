@@ -6,6 +6,11 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
+from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
+from hydra_suite.runtime.safe_text import (
+    bounded_terminal_text,
+    sanitize_terminal_text_fields,
+)
 from hydra_suite.training.contracts import (
     Sam3LoraParams,
     SourceDataset,
@@ -351,7 +356,7 @@ def run_role_entries(
             role_started(entry.role.value)
 
         def role_log(message: str, role=entry.role) -> None:
-            log(f"[{role.value}] {message}")
+            log(f"[{role.value}] {bounded_terminal_text(message)}")
 
         def role_progress(current: int, total: int, role=entry.role) -> None:
             progress(role.value, int(current), int(total))
@@ -365,24 +370,33 @@ def run_role_entries(
                 progress_cb=role_progress,
                 should_cancel=should_cancel,
             )
+        except WorkloadStillOwnedError:
+            # This exception owns the live sidecar and its leases. Stop the
+            # role sequence and preserve the exact recovery handle for the
+            # worker/UI owner.
+            raise
         except Exception as exc:
             result = {
                 "run_id": "",
                 "success": False,
-                "error": str(exc),
+                "error": bounded_terminal_text(exc, include_exception_type=False),
                 "published_registry_key": "",
                 "published_model_path": "",
             }
         result["role"] = entry.role.value
+        sanitized_result = sanitize_terminal_text_fields(result)
+        assert isinstance(sanitized_result, dict)
+        result = sanitized_result
         results.append(result)
         ok = bool(result.get("success", False))
         message = (
-            f"run_id={result.get('run_id', '')}"
+            f"run_id={bounded_terminal_text(result.get('run_id', ''))}"
             if ok
-            else result.get("error") or f"exit={result.get('exit_code', 'unknown')}"
+            else result.get("error")
+            or f"exit={bounded_terminal_text(result.get('exit_code', 'unknown'))}"
         )
         if role_finished is not None:
-            role_finished(entry.role.value, ok, str(message))
+            role_finished(entry.role.value, ok, bounded_terminal_text(message))
         if result.get("run_id"):
-            parent_run_id = str(result["run_id"])
+            parent_run_id = bounded_terminal_text(result["run_id"])
     return results

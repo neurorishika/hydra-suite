@@ -44,6 +44,9 @@ dependencies = [
     "usearch",
     "annoy",
     "platformdirs>=3.0",
+    # Resource admission, cross-process lease validation, and process-tree
+    # watchdogs require portable host/process memory observations.
+    "psutil>=5.9",
     "ruptures>=1.1",
     "sam2>=1.1",
 ]

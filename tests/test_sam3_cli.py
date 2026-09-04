@@ -14,7 +14,11 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+import pytest
+
+from hydra_suite.training.contracts import Sam3LoraParams
 from hydra_suite.training.sam3_lora import cli
+from hydra_suite.training.sam3_lora.artifacts import completion_path, remove_artifact
 
 
 def _write_spec(tmp_path, prompt="ant"):
@@ -44,6 +48,20 @@ def test_load_spec_reconstructs_sam3_params(tmp_path):
     assert spec.sam3_params.prompt == "ant"
 
 
+def test_child_runtime_refuses_oversized_prompt_before_sam3_import():
+    from hydra_suite.training.contracts import SAM3_MAX_PROMPT_CODEPOINTS
+
+    params = Sam3LoraParams(
+        prompt="x" * (SAM3_MAX_PROMPT_CODEPOINTS + 1), mixed_precision="bf16"
+    )
+    torch_module = SimpleNamespace(cuda=SimpleNamespace())
+
+    refusal = cli._runtime_admission_refusal(torch_module, params)
+
+    assert refusal is not None
+    assert "per-prompt cap" in refusal
+
+
 def test_run_training_zero_datapoints_returns_false_without_importing_sam3(
     tmp_path, monkeypatch
 ):
@@ -70,6 +88,132 @@ def test_main_zero_datapoints_exits_nonzero(tmp_path, monkeypatch, capsys):
 
     assert rc != 0
     assert not (run_dir / "adapters.pt").exists()
+
+
+class _FakeCuda:
+    def __init__(self, available=True, capability=(8, 0)):
+        self._available = available
+        self._capability = capability
+
+    def is_available(self):
+        return self._available
+
+    def get_device_capability(self):
+        return self._capability
+
+    def is_bf16_supported(self):
+        return self._available and self._capability[0] >= 8
+
+
+def test_runtime_precision_matrix_fails_closed():
+    torch = SimpleNamespace(cuda=_FakeCuda())
+    assert cli._runtime_admission_refusal(torch, Sam3LoraParams()) is None
+    assert "only CUDA BF16" in cli._runtime_admission_refusal(
+        torch, Sam3LoraParams(mixed_precision="fp16")
+    )
+    assert "only CUDA BF16" in cli._runtime_admission_refusal(
+        torch, Sam3LoraParams(mixed_precision="fp32")
+    )
+    assert "CUDA device" in cli._runtime_admission_refusal(
+        SimpleNamespace(cuda=_FakeCuda(available=False)), Sam3LoraParams()
+    )
+    assert "8.0" in cli._runtime_admission_refusal(
+        SimpleNamespace(cuda=_FakeCuda(capability=(7, 5))), Sam3LoraParams()
+    )
+
+    cuda = _FakeCuda()
+    cuda.is_bf16_supported = lambda: False
+    assert "BF16" in cli._runtime_admission_refusal(
+        SimpleNamespace(cuda=cuda), Sam3LoraParams()
+    )
+
+
+def test_runtime_refuses_empty_adapter_scope():
+    params = Sam3LoraParams(
+        adapt_vision_encoder=False,
+        adapt_text_encoder=False,
+        adapt_geometry_encoder=False,
+        adapt_detr_encoder=False,
+        adapt_detr_decoder=False,
+        adapt_mask_decoder=False,
+    )
+
+    assert (
+        "adapter"
+        in cli._runtime_admission_refusal(
+            SimpleNamespace(cuda=_FakeCuda()), params
+        ).lower()
+    )
+
+
+def test_atomic_adapter_writer_rejects_noop_and_promotes_valid_pairs(tmp_path):
+    torch = pytest.importorskip("torch")
+    artifact = tmp_path / "adapters.pt"
+    noop = {
+        "block.lora_A": torch.ones((2, 3)),
+        "block.lora_B": torch.zeros((4, 2)),
+    }
+
+    with pytest.raises(ValueError, match="no-op"):
+        cli._write_validated_adapter_artifact(noop, artifact, torch)
+    assert not artifact.exists()
+    assert not completion_path(artifact).exists()
+
+    valid = {**noop, "block.lora_B": torch.ones((4, 2))}
+    cli._write_validated_adapter_artifact(valid, artifact, torch)
+
+    assert artifact.exists()
+    assert completion_path(artifact).exists()
+    loaded = torch.load(artifact, map_location="cpu", weights_only=True)
+    assert set(loaded) == set(valid)
+
+
+@pytest.mark.parametrize(
+    "matrix_a,matrix_b",
+    [
+        ([[0.0, 0.0], [0.0, 0.0]], [[1.0, 1.0]]),
+        ([[1.0, 0.0], [0.0, 0.0]], [[0.0, 1.0]]),
+    ],
+)
+def test_atomic_adapter_writer_rejects_zero_product_pairs(tmp_path, matrix_a, matrix_b):
+    torch = pytest.importorskip("torch")
+    adapters = {
+        "block.lora_A": torch.tensor(matrix_a),
+        "block.lora_B": torch.tensor(matrix_b),
+    }
+
+    with pytest.raises(ValueError, match="no-op"):
+        cli._write_validated_adapter_artifact(adapters, tmp_path / "adapters.pt", torch)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"block.lora_A": object()},
+    ],
+)
+def test_atomic_adapter_writer_rejects_incomplete_schema(tmp_path, payload):
+    torch = pytest.importorskip("torch")
+
+    with pytest.raises(ValueError):
+        cli._write_validated_adapter_artifact(payload, tmp_path / "adapters.pt", torch)
+
+
+def test_parent_cleanup_removes_only_exact_private_artifact_staging(tmp_path):
+    artifact = tmp_path / "adapters.pt"
+    staging = tmp_path / ".adapters.pt.123.validated.tmp"
+    marker_staging = tmp_path / ".adapters.pt.complete.json.123.tmp"
+    unrelated = tmp_path / ".other.pt.123.validated.tmp"
+    for path in (artifact, staging, marker_staging, unrelated):
+        path.write_bytes(b"partial")
+
+    remove_artifact(artifact, remove_staging=True)
+
+    assert not artifact.exists()
+    assert not staging.exists()
+    assert not marker_staging.exists()
+    assert unrelated.exists()
 
 
 def test_collated_batch_moves_to_device_before_target_conversion_and_forward():
@@ -168,9 +312,35 @@ def test_adapters_are_injected_before_the_model_moves_to_device():
     from hydra_suite.training.sam3_lora import cli
 
     source = inspect.getsource(cli.run_training)
+    freeze_at = source.index("model.requires_grad_(False)")
     inject_at = source.index("inject_adapters(model")
     move_at = source.index("model.to(device)")
+    assert (
+        freeze_at < inject_at
+    ), "the complete SAM3 base must be frozen before LoRA adapters are injected"
     assert inject_at < move_at, (
         "model.to(device) runs before inject_adapters; the adapters would be "
         "created on CPU and never moved"
     )
+    assert "_validated_lora_trainables" in source
+
+
+def test_lora_trainable_validation_rejects_estimator_shape_drift():
+    torch = pytest.importorskip("torch")
+
+    class Adapter(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.lora_A = torch.nn.Parameter(torch.zeros(2, 3))
+            self.lora_B = torch.nn.Parameter(torch.zeros(4, 2))
+
+    model = torch.nn.Module()
+    model.adapter = Adapter()
+    tensors, count = cli._validated_lora_trainables(
+        model, adapted_modules=1, expected_parameters=14
+    )
+    assert len(tensors) == 2
+    assert count == 14
+
+    with pytest.raises(RuntimeError, match="expected_parameters=13"):
+        cli._validated_lora_trainables(model, adapted_modules=1, expected_parameters=13)

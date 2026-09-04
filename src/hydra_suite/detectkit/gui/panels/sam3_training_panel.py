@@ -12,7 +12,8 @@ training dependency must never raise at click time.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QMimeData, Qt, Signal
+from PySide6.QtGui import QInputMethodEvent, QKeyEvent, QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -29,7 +30,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from hydra_suite.training.contracts import Sam3LoraParams
+from hydra_suite.training.contracts import (
+    SAM3_MAX_CONFIGURED_PROMPT_BYTES,
+    SAM3_MAX_NEGATIVE_PROMPT_COUNT,
+    SAM3_MAX_NEGATIVE_QUERIES_PER_TILE,
+    SAM3_MAX_PROMPT_CODEPOINTS,
+    SAM3_MAX_PROMPT_UTF8_BYTES,
+    Sam3LoraParams,
+)
 from hydra_suite.training.sam3_lora.availability import (
     Sam3TrainingAvailability,
     probe_sam3_training_availability,
@@ -38,13 +46,126 @@ from hydra_suite.training.sam3_lora.env import DEFAULT_SAM3_ENV
 from hydra_suite.widgets.workers import BaseWorker
 
 _GEOMETRY_MODES = ("auto_object", "auto_model", "custom")
-_PRECISIONS = ("bf16", "fp16", "fp32")
+_PRECISIONS = ("bf16",)
 
 # Kept short: the probe spawns a `conda run` subprocess, and the panel must
 # never block the GUI thread for the probe's full default timeout on every
 # construction/show. Users pointed at a genuinely slow/hanging env can still
 # hit "Check" and wait -- the button has no shortened timeout.
 _AUTO_PROBE_TIMEOUT_S = 5.0
+
+
+class _BoundedPromptListEdit(QPlainTextEdit):
+    """Plain-text editor that caps content before it enters the Qt document."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setAcceptDrops(False)
+
+    @staticmethod
+    def _bounded_text(value: object) -> str:
+        if type(value) is not str:
+            return ""
+        text = value[
+            : SAM3_MAX_CONFIGURED_PROMPT_BYTES + SAM3_MAX_NEGATIVE_PROMPT_COUNT
+        ]
+        if not text:
+            return ""
+        output: list[str] = []
+        total_bytes = 0
+        line_bytes = 0
+        line_codepoints = 0
+        line_count = 1
+        previous_was_cr = False
+        for original_char in text:
+            if original_char == "\n" and previous_was_cr:
+                previous_was_cr = False
+                continue
+            if original_char in ("\r", "\n"):
+                previous_was_cr = original_char == "\r"
+                if line_count >= SAM3_MAX_NEGATIVE_PROMPT_COUNT:
+                    break
+                if total_bytes + 1 > SAM3_MAX_CONFIGURED_PROMPT_BYTES:
+                    break
+                output.append("\n")
+                total_bytes += 1
+                line_bytes = 0
+                line_codepoints = 0
+                line_count += 1
+                continue
+            previous_was_cr = False
+            codepoint = ord(original_char)
+            if codepoint < 0x20 or codepoint == 0x7F:
+                continue
+            if 0xD800 <= codepoint <= 0xDFFF:
+                char = "\N{REPLACEMENT CHARACTER}"
+                char_bytes = 3
+            else:
+                char = original_char
+                char_bytes = (
+                    1
+                    + (codepoint >= 0x80)
+                    + (codepoint >= 0x800)
+                    + (codepoint >= 0x10000)
+                )
+            if (
+                line_codepoints >= SAM3_MAX_PROMPT_CODEPOINTS
+                or line_bytes + char_bytes > SAM3_MAX_PROMPT_UTF8_BYTES
+            ):
+                continue
+            if total_bytes + char_bytes > SAM3_MAX_CONFIGURED_PROMPT_BYTES:
+                break
+            output.append(char)
+            total_bytes += char_bytes
+            line_bytes += char_bytes
+            line_codepoints += 1
+        return "".join(output)
+
+    def setPlainText(self, text: str) -> None:  # noqa: N802 - Qt override
+        super().setPlainText(self._bounded_text(text))
+
+    def _replace_selection(self, text: str) -> None:
+        cursor = self.textCursor()
+        current = self.toPlainText()
+        start, end = cursor.selectionStart(), cursor.selectionEnd()
+        # Truncate the incoming fragment before concatenation. The current
+        # document is already bounded, so the temporary candidate is bounded.
+        incoming = str(text)[:SAM3_MAX_CONFIGURED_PROMPT_BYTES]
+        candidate = current[:start] + incoming + current[end:]
+        bounded = self._bounded_text(candidate)
+        super().setPlainText(bounded)
+        cursor = self.textCursor()
+        cursor.setPosition(min(start + len(incoming), len(bounded)))
+        self.setTextCursor(cursor)
+
+    def insertPlainText(self, text: str) -> None:  # noqa: N802 - Qt override
+        self._replace_selection(text)
+
+    def insertFromMimeData(self, source: QMimeData) -> None:  # noqa: N802
+        self._replace_selection(source.text())
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
+        if event.matches(QKeySequence.StandardKey.Paste):
+            self.paste()
+            event.accept()
+            return
+        modifiers = event.modifiers()
+        if event.text() and not modifiers & (
+            Qt.KeyboardModifier.ControlModifier
+            | Qt.KeyboardModifier.AltModifier
+            | Qt.KeyboardModifier.MetaModifier
+        ):
+            self._replace_selection(event.text())
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def inputMethodEvent(self, event: QInputMethodEvent) -> None:  # noqa: N802
+        if event.commitString():
+            self._replace_selection(event.commitString())
+            event.accept()
+            return
+        super().inputMethodEvent(event)
 
 
 class _AvailabilityProbeWorker(BaseWorker):
@@ -232,13 +353,14 @@ class Sam3TrainingPanel(QWidget):
         prompt_group = QGroupBox("Concept")
         prompt_form = QFormLayout(prompt_group)
         self.prompt_edit = QLineEdit()
+        self.prompt_edit.setMaxLength(SAM3_MAX_PROMPT_CODEPOINTS)
         prompt_form.addRow("Prompt", self.prompt_edit)
-        self.negative_prompts_edit = QPlainTextEdit()
+        self.negative_prompts_edit = _BoundedPromptListEdit()
         self.negative_prompts_edit.setPlaceholderText("One negative prompt per line")
         self.negative_prompts_edit.setMaximumHeight(60)
         prompt_form.addRow("Negative prompts", self.negative_prompts_edit)
         self.num_negatives_spin = QSpinBox()
-        self.num_negatives_spin.setRange(0, 100)
+        self.num_negatives_spin.setRange(0, SAM3_MAX_NEGATIVE_QUERIES_PER_TILE)
         prompt_form.addRow("Num negatives", self.num_negatives_spin)
         layout.addWidget(prompt_group)
 
@@ -276,6 +398,33 @@ class Sam3TrainingPanel(QWidget):
         self.precision_combo.addItems(_PRECISIONS)
         opt_form.addRow("Mixed precision", self.precision_combo)
         layout.addWidget(opt_group)
+
+        safety_group = QGroupBox("Resource safety")
+        safety_form = QFormLayout(safety_group)
+        self.host_reserve_gb_spin = QDoubleSpinBox()
+        self.host_reserve_gb_spin.setRange(0.0, 1024.0)
+        self.host_reserve_gb_spin.setDecimals(1)
+        safety_form.addRow("Host reserve (GiB)", self.host_reserve_gb_spin)
+        self.host_reserve_fraction_spin = QDoubleSpinBox()
+        self.host_reserve_fraction_spin.setRange(0.0, 1.0)
+        self.host_reserve_fraction_spin.setDecimals(2)
+        self.host_reserve_fraction_spin.setSingleStep(0.05)
+        safety_form.addRow("Host reserve fraction", self.host_reserve_fraction_spin)
+        self.cuda_safety_fraction_spin = QDoubleSpinBox()
+        self.cuda_safety_fraction_spin.setRange(0.01, 1.0)
+        self.cuda_safety_fraction_spin.setDecimals(2)
+        self.cuda_safety_fraction_spin.setSingleStep(0.05)
+        safety_form.addRow("CUDA usable fraction", self.cuda_safety_fraction_spin)
+        self.host_limit_headroom_spin = QDoubleSpinBox()
+        self.host_limit_headroom_spin.setRange(1.0, 4.0)
+        self.host_limit_headroom_spin.setDecimals(2)
+        self.host_limit_headroom_spin.setSingleStep(0.05)
+        safety_form.addRow("Hard-limit headroom", self.host_limit_headroom_spin)
+        self.watchdog_poll_spin = QDoubleSpinBox()
+        self.watchdog_poll_spin.setRange(0.1, 60.0)
+        self.watchdog_poll_spin.setDecimals(1)
+        safety_form.addRow("Watchdog interval (s)", self.watchdog_poll_spin)
+        layout.addWidget(safety_group)
 
         adapt_group = QGroupBox("Adapted submodules")
         adapt_form = QFormLayout(adapt_group)
@@ -348,8 +497,13 @@ class Sam3TrainingPanel(QWidget):
             for line in self.negative_prompts_edit.toPlainText().splitlines()
             if line.strip()
         ]
+        prompt = "".join(
+            char
+            for char in self.prompt_edit.text()
+            if ord(char) >= 0x20 and ord(char) != 0x7F
+        )
         return Sam3LoraParams(
-            prompt=self.prompt_edit.text(),
+            prompt=prompt,
             negative_prompts=negative_prompts,
             num_negatives=self.num_negatives_spin.value(),
             rank=self.rank_spin.value(),
@@ -360,6 +514,11 @@ class Sam3TrainingPanel(QWidget):
             batch=self.batch_spin.value(),
             grad_accum=self.grad_accum_spin.value(),
             mixed_precision=self.precision_combo.currentText(),
+            host_reserve_gb=self.host_reserve_gb_spin.value(),
+            host_reserve_fraction=self.host_reserve_fraction_spin.value(),
+            cuda_safety_fraction=self.cuda_safety_fraction_spin.value(),
+            host_limit_headroom_fraction=self.host_limit_headroom_spin.value(),
+            watchdog_poll_seconds=self.watchdog_poll_spin.value(),
             adapt_vision_encoder=self.chk_adapt_vision_encoder.isChecked(),
             adapt_text_encoder=self.chk_adapt_text_encoder.isChecked(),
             adapt_geometry_encoder=self.chk_adapt_geometry_encoder.isChecked(),
@@ -390,6 +549,13 @@ class Sam3TrainingPanel(QWidget):
         idx = self.precision_combo.findText(p.mixed_precision)
         if idx >= 0:
             self.precision_combo.setCurrentIndex(idx)
+        else:
+            self.precision_combo.setCurrentIndex(0)
+        self.host_reserve_gb_spin.setValue(p.host_reserve_gb)
+        self.host_reserve_fraction_spin.setValue(p.host_reserve_fraction)
+        self.cuda_safety_fraction_spin.setValue(p.cuda_safety_fraction)
+        self.host_limit_headroom_spin.setValue(p.host_limit_headroom_fraction)
+        self.watchdog_poll_spin.setValue(p.watchdog_poll_seconds)
         self.chk_adapt_vision_encoder.setChecked(p.adapt_vision_encoder)
         self.chk_adapt_text_encoder.setChecked(p.adapt_text_encoder)
         self.chk_adapt_geometry_encoder.setChecked(p.adapt_geometry_encoder)

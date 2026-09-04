@@ -130,6 +130,74 @@ class CustomCNNParams:
     head_dropout: float = 0.1
 
 
+SAM3_MAX_NEGATIVE_QUERIES_PER_TILE = 100
+SAM3_MAX_NEGATIVE_PROMPT_COUNT = 4096
+SAM3_MAX_NEGATIVE_PROMPT_BYTES = 256 * 1024
+SAM3_MAX_CONFIGURED_PROMPT_BYTES = 256 * 1024
+# SAM3's text encoder has a short context.  Keep a separate per-prompt cap so
+# one entry cannot turn the otherwise bounded prompt pool into an enormous
+# tokenization request.  Code points and encoded bytes are both bounded: the
+# former protects Qt/runtime string handling, while the latter handles dense
+# Unicode input.
+SAM3_MAX_PROMPT_CODEPOINTS = 256
+SAM3_MAX_PROMPT_UTF8_BYTES = 1024
+
+
+def sam3_prompt_text_error(value: object) -> str | None:
+    """Return a stable admission error for one SAM3 prompt, if unsafe."""
+
+    if type(value) is not str:
+        return "must be a string"
+    if len(value) > SAM3_MAX_PROMPT_CODEPOINTS:
+        return f"exceeds the per-prompt cap of {SAM3_MAX_PROMPT_CODEPOINTS} characters"
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+        return "must not contain control characters"
+    try:
+        encoded_size = len(value.encode("utf-8"))
+    except UnicodeEncodeError:
+        return "must be valid UTF-8 text"
+    if encoded_size > SAM3_MAX_PROMPT_UTF8_BYTES:
+        return (
+            "exceeds the per-prompt cap of " f"{SAM3_MAX_PROMPT_UTF8_BYTES} UTF-8 bytes"
+        )
+    return None
+
+
+def sam3_prompt_pool_error(prompt: object, negative_prompts: object) -> str | None:
+    """Validate configured SAM3 text with work bounded by public caps."""
+
+    prompt_error = sam3_prompt_text_error(prompt)
+    if prompt_error is not None:
+        return f"prompt {prompt_error}"
+    assert type(prompt) is str
+    if not prompt.strip():
+        return "prompt must be non-empty"
+    if type(negative_prompts) not in (list, tuple):
+        return "negative_prompts must be a list or tuple of strings"
+    # Check cardinality before inspecting any element. This makes adversarial
+    # caller work independent of an unbounded supplied collection.
+    if len(negative_prompts) > SAM3_MAX_NEGATIVE_PROMPT_COUNT:
+        return (
+            "negative_prompts exceeds the safe cap of "
+            f"{SAM3_MAX_NEGATIVE_PROMPT_COUNT} entries"
+        )
+
+    aggregate_bytes = len(prompt.encode("utf-8"))
+    for index, value in enumerate(negative_prompts):
+        prompt_error = sam3_prompt_text_error(value)
+        if prompt_error is not None:
+            return f"negative_prompts[{index}] {prompt_error}"
+        # Each value was capped before encoding, so this allocation is bounded.
+        assert type(value) is str
+        aggregate_bytes += len(value.encode("utf-8"))
+        if aggregate_bytes > SAM3_MAX_CONFIGURED_PROMPT_BYTES:
+            return (
+                "prompt and negative_prompts exceed the safe serialized text "
+                f"cap of {SAM3_MAX_CONFIGURED_PROMPT_BYTES} UTF-8 bytes"
+            )
+    return None
+
+
 @dataclass(slots=True)
 class Sam3LoraParams:
     """SAM3 LoRA finetuning hyperparameters.
@@ -151,6 +219,14 @@ class Sam3LoraParams:
     grad_accum: int = 8
     mixed_precision: str = "bf16"
     num_negatives: int = 3
+    # Admission/containment policy.  These conservative defaults leave space
+    # for the desktop and other services while the separately supervised
+    # sidecar owns the remainder of the training budget.
+    host_reserve_gb: float = 8.0
+    host_reserve_fraction: float = 0.15
+    cuda_safety_fraction: float = 0.85
+    host_limit_headroom_fraction: float = 1.25
+    watchdog_poll_seconds: float = 1.0
     # Which submodules receive adapters. The text encoder is False as a
     # precaution against eroding prompt discrimination -- untested; the spike
     # froze it in every configuration.

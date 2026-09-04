@@ -351,6 +351,44 @@ def test_record_training_results_exports_models_and_logs_to_project(
     assert detectkit_project_model_paths(project) == [entry["project_model_path"]]
 
 
+def test_record_training_results_preserves_resource_failure_diagnostics(
+    tmp_path: Path,
+) -> None:
+    project = create_project(tmp_path / "project", class_names=["ant"])
+    diagnostics = {
+        "failure_kind": "accelerator-oom",
+        "resource_preflight": "/workspace/run/resource_preflight.json",
+        "containment": {
+            "backend": "systemd",
+            "peak_observed_tree_rss_bytes": 3 << 30,
+            "peak_observed_device_used_bytes": 2 << 30,
+        },
+    }
+
+    persisted = record_training_results(
+        project,
+        [
+            {
+                "run_id": "sam3-failed-run",
+                "role": "semantic_sam3",
+                "success": False,
+                "error": "CUDA out of memory",
+                **diagnostics,
+            }
+        ],
+    )
+
+    assert persisted[0]["failure_kind"] == diagnostics["failure_kind"]
+    assert persisted[0]["resource_preflight"] == diagnostics["resource_preflight"]
+    assert persisted[0]["containment"] == diagnostics["containment"]
+    loaded = open_project(project.project_dir)
+    assert loaded is not None
+    assert loaded.training_history[0]["failure_kind"] == "accelerator-oom"
+    assert loaded.training_history[0]["containment"][
+        "peak_observed_device_used_bytes"
+    ] == (2 << 30)
+
+
 def test_detectkit_project_model_paths_prefers_active_model(tmp_path: Path) -> None:
     project = DetectKitProject(project_dir=tmp_path, class_names=["ant"])
     model_a = tmp_path / "models" / "a.pt"

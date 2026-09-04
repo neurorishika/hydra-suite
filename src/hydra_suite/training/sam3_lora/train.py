@@ -1,67 +1,126 @@
-"""SAM3 LoRA training launcher.
+"""Contained SAM3 LoRA sidecar launcher.
 
-Qt-free. This module never imports ``sam3`` or ``torch`` -- it only launches
-and streams a subprocess that does. The actual training loop lives in
-``cli.py``, which runs inside the dedicated ``hydra-sam3`` sidecar conda env
-(see ``docs/superpowers/specs/2026-09-01-sam3-training-sidecar-env-design.md``),
-because ``sam3`` pins ``numpy<2`` and cannot coexist with the numpy 2.x
-runtimes in ``hydra-mps``/``hydra-cuda``.
-
-``train_sam3_lora``'s signature and return contract are unchanged from the
-in-process version: callers (the training dispatch, the publish path) do not
-need to know training now happens in a child process.
-
-THE CRITICAL RULE, carried across the process boundary: a child that exits 0
-without having written ``adapters.pt`` must still produce `success: False`.
-Zero-initialised LoRA `lora_B` makes an untrained adapter a mathematical
-no-op, so treating a clean exit code as success would publish a checkpoint
-identical to stock SAM3 -- exactly the failure mode `cli.py`'s in-process
-predecessor guarded against with its zero-datapoint refusal. Never infer
-success from the exit code alone.
+The parent never imports torch or SAM3. Metadata-only admission happens
+before launch and is repeated from live host/CUDA observations while the
+canonical host and physical-GPU leases are held. The child bootstrap applies
+the selected host boundary before conda, torch, or SAM3 can be imported.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import platform
-import queue
-import signal
-import subprocess
-import threading
+import time
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from hydra_suite.utils.conda_utils import popen_conda
+from hydra_suite.runtime.process_supervisor import (
+    ContainmentPlan,
+    ExitKind,
+    SupervisedResult,
+    SupervisedSidecar,
+    WorkloadStillOwnedError,
+)
+from hydra_suite.runtime.resource_budget import AcceleratorKind
+from hydra_suite.runtime.resource_lease import ResourceBusyError
+from hydra_suite.runtime.resource_limits import (
+    ProcessMemoryLimits,
+    build_limited_launch,
+)
 
+from ..model_publish import get_models_root
+from . import preflight as preflight_module
+from .artifacts import remove_artifact, validate_completion
 from .env import resolve_sam3_env, sam3_env_command, sam3_env_environ
-from .preflight import preflight
 from .protocol import dispatch_record, parse_record
 
-# How long to wait for a graceful `terminate()` before escalating to `kill()`.
-TERMINATE_GRACE_S = 5.0
+OUTPUT_MAX_LINES = 512
+OUTPUT_MAX_CHARS = 256 * 1024
+MAX_PROCESSES = 512
 
-# How often the main loop polls the stdout queue (and, on every poll, checks
-# `should_cancel()`). The child emits progress roughly once per epoch, which
-# can be minutes apart; sampling `should_cancel()` only when a line arrives
-# left Cancel unresponsive (or entirely inert against a silent/hung child)
-# for that whole window. Polling on a timer instead of on output arrival
-# decouples cancellation latency from the child's output cadence.
-CANCEL_POLL_INTERVAL_S = 0.2
 
-# How many trailing plain-text lines to keep for the error message on a
-# non-zero exit (the child's own stderr is merged into this stream).
-STDERR_TAIL_LINES = 20
+class _AdmissionRefused(RuntimeError):
+    """A lease-held final resource observation no longer fits the budget."""
 
-# `conda run` execs a shell wrapper around the real python grandchild that
-# does the training; signalling only the wrapper (`process.terminate()`)
-# can leave that grandchild alive holding tens of GB of VRAM. On POSIX we
-# launch the child in its own session (`start_new_session=True`) and signal
-# the whole process group instead. `conda_utils` exists precisely because
-# Windows differs here -- there `start_new_session`/process groups work
-# differently, so Windows keeps the plain `process.terminate()`/`.kill()`
-# path, same as before this fix.
-_IS_POSIX = platform.system() != "Windows"
+
+class _ArtifactInvalid(RuntimeError):
+    """A successful child did not publish a usable adapter artifact."""
+
+
+def _write_json(path: Path, payload: Any) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    temporary.replace(path)
+
+
+def _result(
+    *,
+    success: bool,
+    canceled: bool = False,
+    message: str = "",
+    failure_kind: str = "",
+    exit_code: Optional[int] = None,
+    artifact_path: Optional[Path] = None,
+    metrics_path: Optional[Path] = None,
+    command: tuple[str, ...] = (),
+    resource_preflight: Optional[str] = None,
+    containment: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "success": success,
+        "canceled": canceled,
+        "artifact_path": str(artifact_path) if artifact_path else None,
+        "metrics_path": str(metrics_path) if metrics_path else None,
+        "command": list(command),
+        "exit_code": exit_code,
+        "failure_kind": failure_kind,
+        "resource_preflight": resource_preflight,
+        "containment": containment or {},
+    }
+    if message:
+        payload["error_message"] = message
+        payload["error"] = message
+    return payload
+
+
+def _memory_limits(decision: Any) -> ProcessMemoryLimits:
+    return ProcessMemoryLimits(
+        soft_host_bytes=decision.containment_soft_host_bytes,
+        hard_host_bytes=decision.containment_hard_host_bytes,
+        max_processes=MAX_PROCESSES,
+    )
+
+
+def _containment_diagnostic(
+    plan: ContainmentPlan,
+    result: Optional[SupervisedResult] = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "backend": plan.launch.backend.value,
+        "soft_host_bytes": plan.launch.limits.soft_host_bytes,
+        "hard_host_bytes": plan.launch.limits.hard_host_bytes,
+        "minimum_system_available_bytes": plan.minimum_system_available_bytes,
+        "poll_interval_seconds": plan.poll_interval_seconds,
+        "resource_keys": list(plan.expected_resource_keys),
+        "limitations": list(plan.launch.limitations),
+        "cuda_vram_enforcement": (
+            "telemetry-and-admission-only; discrete CUDA VRAM is not kernel-capped"
+        ),
+    }
+    if result is not None:
+        payload.update(
+            {
+                "peak_observed_device_used_bytes": result.peak_accelerator_bytes,
+                "peak_observed_tree_rss_bytes": result.peak_tree_rss_bytes,
+                "minimum_observed_system_available_bytes": (
+                    result.minimum_system_available_bytes
+                ),
+                "accelerator_observation_error": result.accelerator_observation_error,
+                "dropped_output_lines": result.dropped_output_lines,
+                "output_error": result.output_error,
+            }
+        )
+    return payload
 
 
 def train_sam3_lora(
@@ -71,39 +130,46 @@ def train_sam3_lora(
     log_cb: Optional[Callable[[str], None]] = None,
     progress_cb: Optional[Callable[[int, int], None]] = None,
     should_cancel: Optional[Callable[[], bool]] = None,
-) -> dict:
-    """Finetune SAM3 with LoRA adapters against `spec`, in the sidecar env.
+) -> dict[str, Any]:
+    """Run SAM3 training under immutable limits and canonical leases."""
 
-    Returns a dict with keys `success`, `artifact_path`, `metrics_path`,
-    `canceled` (and `error_message` on refusal/failure).
-    """
-    log_cb = log_cb or (lambda msg: None)
-    progress_cb = progress_cb or (lambda epoch, total: None)
+    log_cb = log_cb or (lambda _message: None)
+    progress_cb = progress_cb or (lambda _epoch, _total: None)
     should_cancel = should_cancel or (lambda: False)
-
-    def _refuse(message: str) -> dict:
-        return {
-            "success": False,
-            "error_message": message,
-            "artifact_path": None,
-            "metrics_path": None,
-            "canceled": False,
-        }
-
-    refusals = preflight(spec)
-    if refusals:
-        return _refuse("; ".join(refusals))
-
     run_dir_path = Path(run_dir).expanduser().resolve()
+
+    try:
+        auto_import = bool(getattr(spec.publish_policy, "auto_import", True))
+        models_root = get_models_root() if auto_import else None
+        initial = preflight_module.assess_preflight(
+            spec,
+            run_dir=run_dir_path,
+            models_root=models_root,
+        )
+    except (OSError, ValueError) as exc:
+        return _result(
+            success=False,
+            message=f"SAM3 resource preflight could not inspect the run: {exc}",
+            failure_kind=ExitKind.HOST_ADMISSION_REFUSAL.value,
+        )
+    if not initial.admitted:
+        return _result(
+            success=False,
+            message="; ".join(initial.refusals),
+            failure_kind=ExitKind.HOST_ADMISSION_REFUSAL.value,
+        )
+    initial_cuda_device = initial.cuda_device
+    assert initial_cuda_device is not None
+
     run_dir_path.mkdir(parents=True, exist_ok=True)
-
     spec_path = run_dir_path / "spec.json"
-    spec_path.write_text(json.dumps(spec.to_dict(), indent=2), encoding="utf-8")
+    diagnostics_path = run_dir_path / "resource_preflight.json"
+    _write_json(spec_path, spec.to_dict())
 
-    sam3_params = getattr(spec, "sam3_params", None)
-    configured_env = getattr(sam3_params, "env_name", None) if sam3_params else None
-    env_name = resolve_sam3_env(configured_env)
-
+    artifact_path = run_dir_path / "adapters.pt"
+    remove_artifact(artifact_path, remove_staging=True)
+    params = spec.sam3_params
+    env_name = resolve_sam3_env(params.env_name)
     command = sam3_env_command(
         env_name,
         [
@@ -114,177 +180,203 @@ def train_sam3_lora(
             str(run_dir_path),
         ],
     )
-    child_environ = {**os.environ, **sam3_env_environ()}
+    child_environment = {
+        **os.environ,
+        **sam3_env_environ(),
+        # Bind the child logical cuda:0 to the exact physical GPU admitted,
+        # probed, and leased by UUID. Never let the runtime choose another GPU.
+        "CUDA_VISIBLE_DEVICES": initial_cuda_device.uuid,
+    }
+    limits = _memory_limits(initial)
+    launch = build_limited_launch(
+        command,
+        limits,
+        environment=child_environment,
+        accelerator_kind=AcceleratorKind.CUDA,
+        accelerator_device_uuid=initial_cuda_device.uuid,
+    )
+    plan = ContainmentPlan(
+        launch=launch,
+        job_name="SAM3 LoRA training",
+        minimum_system_available_bytes=initial.budget.reserved_host_bytes,
+        poll_interval_seconds=float(params.watchdog_poll_seconds),
+    )
+    diagnostic: dict[str, Any] = {
+        "initial": initial.to_dict(),
+        "live": None,
+        "containment": _containment_diagnostic(plan),
+    }
+    _write_json(diagnostics_path, diagnostic)
 
-    # A stale adapters.pt from a reused run_dir must never be mistaken for
-    # this run's output: if the child exits 0 without writing a new one, the
-    # existence check below has to see it genuinely absent, not a leftover.
-    artifact_path = run_dir_path / "adapters.pt"
-    artifact_path.unlink(missing_ok=True)
+    def final_live_check() -> None:
+        live = preflight_module.assess_preflight(
+            spec,
+            run_dir=run_dir_path,
+            models_root=models_root,
+        )
+        diagnostic["live"] = live.to_dict()
+        _write_json(diagnostics_path, diagnostic)
+        if live.cuda_device is None:
+            raise _AdmissionRefused("CUDA disappeared before SAM3 launch")
+        if live.cuda_device.uuid != initial_cuda_device.uuid:
+            raise _AdmissionRefused(
+                "The selected physical CUDA device changed between admission "
+                "and launch; refusing to use a different GPU."
+            )
+        immutable_hard_limit = initial.containment_hard_host_bytes
+        if immutable_hard_limit > live.budget.usable_host_bytes:
+            raise _AdmissionRefused(
+                "Available host memory changed before launch: the immutable "
+                "containment limit would expose the reserved host-memory floor."
+            )
+        if live.containment_hard_host_bytes > immutable_hard_limit:
+            raise _AdmissionRefused(
+                "The SAM3 workload profile grew after initial admission and "
+                "no longer fits the immutable containment limit."
+            )
+        if not live.admitted:
+            raise _AdmissionRefused("; ".join(live.refusals))
 
-    popen_kwargs: dict[str, Any] = {}
-    if _IS_POSIX:
-        popen_kwargs["start_new_session"] = True
+    def accelerator_used_bytes() -> int:
+        current = preflight_module._probe_cuda_device(str(spec.device))
+        if current is None or current.uuid != initial_cuda_device.uuid:
+            raise RuntimeError("selected CUDA device telemetry became unavailable")
+        return max(0, current.total_bytes - current.free_bytes)
 
     try:
-        process = popen_conda(
-            command,
-            env=child_environ,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            errors="replace",
-            bufsize=1,
-            **popen_kwargs,
+        sidecar = SupervisedSidecar(
+            plan,
+            prelaunch_check=final_live_check,
+            accelerator_probe=accelerator_used_bytes,
+            output_max_lines=OUTPUT_MAX_LINES,
+            output_max_chars=OUTPUT_MAX_CHARS,
         )
-    except FileNotFoundError as exc:
-        return _refuse(
-            f"conda was not found on PATH while launching the {env_name!r} "
-            f"sidecar env: {exc}"
+    except WorkloadStillOwnedError as owned_error:
+        owned_error.recovery_cleanup = lambda: remove_artifact(
+            artifact_path, remove_staging=True
         )
-
-    canceled = False
-    tail_lines: list[str] = []
-    stream_error: Optional[Exception] = None
-
-    assert process.stdout is not None
-    line_queue: "queue.Queue[tuple[str, Any]]" = queue.Queue()
-    reader_thread = threading.Thread(
-        target=_pump_stdout,
-        args=(process.stdout, line_queue),
-        daemon=True,
-    )
-    reader_thread.start()
+        raise
+    except (
+        ResourceBusyError,
+        _AdmissionRefused,
+        FileNotFoundError,
+        RuntimeError,
+    ) as exc:
+        # These paths either refused before Popen or completed constructor
+        # cleanup and proved quiescence. Any exact private-run staging file is
+        # now stale and safe to remove.
+        remove_artifact(artifact_path, remove_staging=True)
+        return _result(
+            success=False,
+            message=f"SAM3 sidecar launch refused: {exc}",
+            failure_kind=ExitKind.HOST_ADMISSION_REFUSAL.value,
+            command=launch.command,
+            resource_preflight=str(diagnostics_path),
+            containment=_containment_diagnostic(plan),
+        )
 
     try:
         while True:
+            lines, eof, output_error = sidecar.output.drain(
+                float(params.watchdog_poll_seconds)
+            )
+            for raw_line in lines:
+                line = raw_line.rstrip("\r\n")
+                if not line:
+                    continue
+                record = parse_record(line)
+                if record is None:
+                    log_cb(line)
+                else:
+                    dispatch_record(record, log_cb, progress_cb)
+            if output_error is not None:
+                raise output_error
+            process_returncode = sidecar.process.poll()
+            # Root exit transfers control to wait(), which owns final tree
+            # quiescence. A descendant may inherit stdout and hold EOF open.
+            if process_returncode is not None:
+                break
             if should_cancel():
-                canceled = True
-                break
-            try:
-                kind, payload = line_queue.get(timeout=CANCEL_POLL_INTERVAL_S)
-            except queue.Empty:
-                # No output since the last poll -- but we still re-check
-                # `should_cancel()` on this timer regardless of whether the
-                # child has said anything, which is the whole point.
-                continue
-            if kind == "eof":
-                break
-            if kind == "error":
-                stream_error = payload
-                break
-            raw_line: str = payload
-            line = raw_line.rstrip("\n")
-            if not line:
-                continue
-            record = parse_record(line)
-            if record is not None:
-                dispatch_record(record, log_cb, progress_cb)
-                continue
-            log_cb(line)
-            tail_lines.append(line)
-            if len(tail_lines) > STDERR_TAIL_LINES:
-                tail_lines.pop(0)
-    except Exception as exc:  # noqa: BLE001 -- anything here (log_cb or
-        # progress_cb raising) must still reap the child below, never
-        # propagate past a live orphaned process. Re-raised after the
-        # child is reaped.
-        stream_error = exc
-    finally:
-        # Reap the child on EVERY exit path -- cancellation, a clean finish,
-        # or an exception above -- so a raising caller can never orphan a
-        # live, multi-hour training process. This must happen BEFORE joining
-        # the reader thread below: the thread's blocking read only returns
-        # once the child's stdout pipe closes, which happens when the child
-        # exits (or is killed here), not before.
-        if canceled or stream_error is not None:
-            _terminate_then_kill(process)
-        else:
-            try:
-                process.wait(timeout=TERMINATE_GRACE_S)
-            except subprocess.TimeoutExpired:
-                _terminate_then_kill(process)
-        # The reader thread is daemonic and exits on its own once the pipe
-        # closes, so this join is best-effort cleanup, not a correctness
-        # requirement (the process is already reaped above either way).
-        reader_thread.join(timeout=TERMINATE_GRACE_S)
+                sidecar.cancel(plan.terminate_grace_seconds)
+                remove_artifact(artifact_path, remove_staging=True)
+                return _result(
+                    success=False,
+                    canceled=True,
+                    failure_kind=ExitKind.CANCELED.value,
+                    command=launch.command,
+                    resource_preflight=str(diagnostics_path),
+                    containment=_containment_diagnostic(plan),
+                )
+            if eof:
+                # A workload may deliberately close stdout before it exits.
+                # Once the buffer is at EOF, drain() cannot block for us.
+                time.sleep(float(params.watchdog_poll_seconds))
 
-    if stream_error is not None:
-        raise stream_error
+        def validate_artifact(result: SupervisedResult) -> None:
+            validation_error = validate_completion(artifact_path)
+            if result.classified_exit.kind is ExitKind.SUCCESS and validation_error:
+                raise _ArtifactInvalid(
+                    "SAM3 training subprocess exited successfully but did not "
+                    f"produce a validated artifact: {validation_error}; refusing "
+                    "to report success for a run that trained nothing."
+                )
 
-    if canceled:
-        return {
-            "success": False,
-            "canceled": True,
-            "artifact_path": None,
-            "metrics_path": None,
-        }
-
-    if process.returncode != 0:
-        tail = "\n".join(tail_lines) if tail_lines else "(no output)"
-        return _refuse(
-            f"SAM3 training subprocess (env {env_name!r}) exited with code "
-            f"{process.returncode}. Child output tail:\n{tail}"
+        supervised = sidecar.wait(post_exit_check=validate_artifact)
+    except _ArtifactInvalid as exc:
+        remove_artifact(artifact_path, remove_staging=True)
+        return _result(
+            success=False,
+            message=str(exc),
+            failure_kind=ExitKind.ORDINARY_FAILURE.value,
+            exit_code=0,
+            command=launch.command,
+            resource_preflight=str(diagnostics_path),
+            containment=_containment_diagnostic(plan),
         )
+    except WorkloadStillOwnedError as owned_error:
+        owned_error.recovery_cleanup = lambda: remove_artifact(
+            artifact_path, remove_staging=True
+        )
+        raise
+    except BaseException:
+        try:
+            sidecar.cancel(plan.terminate_grace_seconds)
+        except WorkloadStillOwnedError as owned_error:
+            owned_error.recovery_cleanup = lambda: remove_artifact(
+                artifact_path, remove_staging=True
+            )
+            raise
+        remove_artifact(artifact_path, remove_staging=True)
+        raise
 
-    if not artifact_path.exists() or artifact_path.stat().st_size == 0:
-        return _refuse(
-            "SAM3 training subprocess exited successfully but did not write "
-            f"a non-empty {artifact_path.name}; refusing to report success "
-            "for a run that trained nothing."
+    classified = supervised.classified_exit
+    if classified.kind is not ExitKind.SUCCESS:
+        # wait() proved the complete workload quiescent. Remove failed-run
+        # staging before any diagnostics I/O can fail and bypass cleanup.
+        remove_artifact(artifact_path, remove_staging=True)
+    diagnostic["containment"] = _containment_diagnostic(plan, supervised)
+    _write_json(diagnostics_path, diagnostic)
+    if classified.kind is not ExitKind.SUCCESS:
+        tail = "".join(supervised.output_tail).strip() or "(no output)"
+        return _result(
+            success=False,
+            canceled=classified.kind is ExitKind.CANCELED,
+            message=f"{classified.message}. Child output tail:\n{tail}",
+            failure_kind=classified.kind.value,
+            exit_code=supervised.returncode,
+            command=launch.command,
+            resource_preflight=str(diagnostics_path),
+            containment=diagnostic["containment"],
         )
 
     metrics_candidate = run_dir_path / "val_stats.json"
     metrics_path = metrics_candidate if metrics_candidate.exists() else None
-
-    return {
-        "success": True,
-        "artifact_path": str(artifact_path),
-        "metrics_path": str(metrics_path) if metrics_path else None,
-        "canceled": False,
-    }
-
-
-def _pump_stdout(stdout: Any, line_queue: "queue.Queue[tuple[str, Any]]") -> None:
-    """Read `stdout` line-by-line on a background thread, feeding `line_queue`.
-
-    Runs entirely off the main loop so `should_cancel()` can be polled on a
-    timer (`CANCEL_POLL_INTERVAL_S`) instead of once per line -- a silent or
-    slow-to-produce-output child would otherwise never (or only very late)
-    get its cancellation checked.
-    """
-    try:
-        for raw_line in stdout:
-            line_queue.put(("line", raw_line))
-    except Exception as exc:  # noqa: BLE001 -- surfaced to the main thread
-        # via the queue rather than raised here, where nothing could react.
-        line_queue.put(("error", exc))
-    finally:
-        line_queue.put(("eof", None))
-
-
-def _terminate_then_kill(process: "subprocess.Popen[str]") -> None:
-    """Escalate terminate -> grace period -> kill, signalling the whole
-    process group on POSIX so `conda run`'s python grandchild is reached
-    too (see `_IS_POSIX` above)."""
-    _send_signal(process, terminate=True)
-    try:
-        process.wait(timeout=TERMINATE_GRACE_S)
-    except subprocess.TimeoutExpired:
-        _send_signal(process, terminate=False)
-        process.wait()
-
-
-def _send_signal(process: "subprocess.Popen[str]", *, terminate: bool) -> None:
-    if _IS_POSIX:
-        sig = signal.SIGTERM if terminate else signal.SIGKILL
-        try:
-            os.killpg(os.getpgid(process.pid), sig)
-            return
-        except (ProcessLookupError, PermissionError, OSError):
-            pass  # process group already gone, or this process is not a
-            # session leader (e.g. a test double) -- fall back below.
-    if terminate:
-        process.terminate()
-    else:
-        process.kill()
+    return _result(
+        success=True,
+        artifact_path=artifact_path,
+        metrics_path=metrics_path,
+        exit_code=supervised.returncode,
+        command=launch.command,
+        resource_preflight=str(diagnostics_path),
+        containment=diagnostic["containment"],
+    )

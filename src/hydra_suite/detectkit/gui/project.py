@@ -822,6 +822,13 @@ def record_training_results(
             entry["dataset_fingerprint"] = str(result.get("dataset_fingerprint"))
         if result.get("command"):
             entry["command"] = list(result.get("command") or [])
+        for diagnostic_key in (
+            "failure_kind",
+            "resource_preflight",
+            "containment",
+        ):
+            if diagnostic_key in result:
+                entry[diagnostic_key] = copy.deepcopy(result[diagnostic_key])
 
         artifact_paths = _normalize_path_list(entry.get("artifact_paths"))
         if not artifact_paths:
