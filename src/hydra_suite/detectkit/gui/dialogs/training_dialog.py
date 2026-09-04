@@ -37,7 +37,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from hydra_suite.core.inference.slice_meta import read_slice_meta, write_slice_meta
 from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
 from hydra_suite.runtime.safe_text import (
     bounded_terminal_text,
@@ -64,6 +63,7 @@ from ...jobs.training import RoleTrainingEntry, run_role_entries
 from ..models import SliceTrainingSettings
 from ..panels.sam3_training_panel import Sam3TrainingPanel
 from .direct_calibration_wizard import open_direct_calibration
+from .history_dialog import _DIRECT_DETECTOR_ROLES, _ROLE_TO_TASK, _entry_model_path
 
 if TYPE_CHECKING:
     from ..models import DetectKitProject
@@ -469,10 +469,13 @@ class TrainingDialog(BaseDialog):
         self._dataset_fit_dirty = True
         self._training_running = False
         self.role_dataset_dirs: dict[str, str] = {}
-        # Model paths this dialog has registered (stamped with training
-        # geometry, optionally plus calibrated profiles). Populated by
-        # register_with_training_geometry()/calibrate_then_register() -- one
-        # entry per artifact, never a second registry entry or weight copy.
+        # Test/caller affordance only -- NOT a source of truth for what
+        # "published" means (publish_trained_model + the training-run
+        # registry own that). Populated by register_with_training_geometry()
+        # / calibrate_then_register() so callers (and tests) can observe
+        # that the already-published artifact was accepted in this review
+        # step; both methods append the SAME already-published path, never
+        # a second registry entry or a copied weight file.
         self.registered_model_paths: list[str] = []
 
         try:
@@ -1533,6 +1536,7 @@ QTabBar::tab:selected {
         self.btn_load_config.clicked.connect(self._load_training_config)
         self.btn_register.clicked.connect(self.register_with_training_geometry)
         self.btn_calibrate.clicked.connect(self.calibrate_then_register)
+        self._refresh_register_controls()
 
         return gb
 
@@ -1540,55 +1544,94 @@ QTabBar::tab:selected {
     # Review & Register — calibration is optional, registration is not
     # ------------------------------------------------------------------
 
-    def _current_model_context(self) -> tuple[Path, str, dict]:
-        """Best-known (model_path, task, training_geometry) to register.
+    def _published_run_context(self) -> tuple[Path, str, dict] | None:
+        """The already-published artifact for the latest completed direct-
+        detector run this session, or ``None`` if there is none yet.
 
-        Prefers the most recently completed run's artifact; falls back to
-        the configured task/imgsz with a project-scoped placeholder path
-        when no run has completed yet (e.g. calibrating before training in
-        a fresh dialog is not a supported real flow, but this keeps the
-        wiring exercisable without requiring a real training run).
+        Publication (copying the checkpoint into the repo AND stamping
+        training geometry onto ``<model>.pt.slice_meta.json`` via
+        ``model_publish.publish_trained_model`` ->
+        ``normalized_slice_meta``) already happened automatically during
+        training, because every DetectKit training run is started with
+        ``PublishPolicy(auto_import=True, ...)`` (see ``_start_training``
+        above). This method does not publish and does not touch the
+        sidecar -- it only resolves the SAME path History would show for
+        this run, reusing ``history_dialog._entry_model_path``'s
+        resolution order (project export > published_model_path > first
+        raw artifact) so "the model this dialog acts on" means the same
+        thing everywhere in DetectKit.
         """
-        geometry: dict = {}
-        if hasattr(self, "spin_imgsz_obb_direct"):
-            geometry["imgsz"] = int(self.spin_imgsz_obb_direct.value())
         for result in reversed(self._last_training_results or []):
-            artifact = result.get("artifact_path")
-            if artifact:
-                task = str(result.get("task") or self._selected_task())
-                return Path(artifact), task, geometry
-        task = self._selected_task() if hasattr(self, "task_combo") else "obb"
-        project_dir = (
-            Path(self._project.project_dir) if self._project is not None else Path(".")
-        )
-        return project_dir / "model.pt", task, geometry
+            role = str(result.get("role", "") or "")
+            if role not in _DIRECT_DETECTOR_ROLES:
+                continue
+            if not result.get("success"):
+                continue
+            model_path = _entry_model_path(result)
+            if not model_path:
+                continue
+            geometry: dict = {}
+            if hasattr(self, "spin_imgsz_obb_direct"):
+                geometry["imgsz"] = int(self.spin_imgsz_obb_direct.value())
+            return Path(model_path), _ROLE_TO_TASK.get(role, "obb"), geometry
+        return None
 
     def set_calibration_enabled(self, enabled: bool, reason: str = "") -> None:
         """External gate (e.g. no labelled val split); mirrors
         ``SemanticEscalationDialog.set_calibration_enabled``."""
         self.btn_calibrate.setEnabled(enabled)
-        if not enabled and reason:
-            self.btn_calibrate.setToolTip(reason)
+        self.btn_calibrate.setToolTip(reason if not enabled else "")
+
+    def _refresh_register_controls(self) -> None:
+        """(Re)gate ``btn_register``/``btn_calibrate`` on whether a
+        published direct-detector artifact exists yet from this session --
+        never a dead button with no explanation."""
+        context = self._published_run_context()
+        has_artifact = context is not None
+        reason = (
+            ""
+            if has_artifact
+            else "No completed direct-detector run has been published in "
+            "this session yet -- start and finish a training run first."
+        )
+        self.btn_register.setEnabled(has_artifact)
+        self.btn_register.setToolTip(reason)
+        self.set_calibration_enabled(has_artifact, reason)
 
     def register_with_training_geometry(self) -> None:
-        """Today's path, untouched: stamp training geometry, no calibration."""
-        model_path, _task, geometry = self._current_model_context()
-        meta = read_slice_meta(model_path) or {}
-        meta["training_geometry"] = geometry
-        write_slice_meta(model_path, meta)
+        """Accept the already-published artifact; nothing to write here.
+
+        Publication (including the training-geometry stamp) happened
+        automatically during training via ``PublishPolicy(auto_import=True)``
+        -> ``publish_trained_model`` -> ``normalized_slice_meta``. This
+        method does not write the sidecar and does not publish again --
+        it only records which artifact review has accepted.
+        ``registered_model_paths`` exists purely so tests (and this
+        dialog's caller) can observe that acceptance happened; it is not
+        a second source of truth for what "published" means.
+        """
+        context = self._published_run_context()
+        if context is None:
+            return
+        model_path, _task, _geometry = context
         self.registered_model_paths.append(str(model_path))
 
     def calibrate_then_register(self) -> None:
-        """Open the calibration wizard/results pair, then register once.
+        """Open the calibration wizard/results pair on the already-
+        published artifact, then accept it -- same as
+        ``register_with_training_geometry``.
 
-        ``open_direct_calibration`` (when real, not monkeypatched) already
-        writes any staged profiles onto the model's sidecar via
-        ``DirectCalibrationResultsDialog.accept()``. This method registers
-        the SAME artifact -- it never creates a second registry entry or
-        copies weights, and it runs whether or not the user staged any
-        profile.
+        Publishes nothing itself: ``open_direct_calibration`` ->
+        ``DirectCalibrationResultsDialog.accept()`` is what writes any
+        staged profiles, atomically, via ``write_slice_meta`` onto the
+        SAME sidecar ``publish_trained_model`` already created. No second
+        registry entry, no weight copy, no sidecar write of this method's
+        own.
         """
-        model_path, task, geometry = self._current_model_context()
+        context = self._published_run_context()
+        if context is None:
+            return
+        model_path, task, geometry = context
         sources = list(self._project.sources) if self._project is not None else []
         evidence_dir = (
             Path(self._project.project_dir) / ".sahi_calibration"
@@ -1604,9 +1647,6 @@ QTabBar::tab:selected {
             training_geometry=geometry,
             evidence_dir=evidence_dir,
         )
-        meta = read_slice_meta(model_path) or {}
-        meta.setdefault("training_geometry", geometry)
-        write_slice_meta(model_path, meta)
         self.registered_model_paths.append(str(model_path))
 
     # --- 8. Loss Plot ---
@@ -3039,6 +3079,7 @@ QTabBar::tab:selected {
             else:
                 r["_run_dir"] = ""
 
+        self._refresh_register_controls()
         self._update_resume_enabled()
 
         succeeded = [r for r in results if r.get("success")]

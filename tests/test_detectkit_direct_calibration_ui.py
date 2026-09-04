@@ -504,14 +504,42 @@ def test_accept_with_nothing_staged_does_not_create_the_sidecar(
     assert not sidecar_path(tmp_path / "m.pt").exists()
 
 
-@pytest.fixture
-def training_dialog(tmp_path):
+def _make_training_dialog(tmp_path):
     from hydra_suite.detectkit.gui.dialogs.training_dialog import TrainingDialog
     from hydra_suite.detectkit.gui.models import DetectKitProject, OBBSource
 
     proj = DetectKitProject(project_dir=tmp_path, class_names=["ant"])
     proj.sources = [OBBSource(path=str(tmp_path / "ds1"), name="ds1")]
-    dlg = TrainingDialog(proj)
+    return TrainingDialog(proj)
+
+
+@pytest.fixture
+def training_dialog(tmp_path):
+    """A dialog whose session already has one completed, published
+    obb_direct run -- exercises register/calibrate against the SAME
+    already-published artifact publish_trained_model would have created,
+    without actually running training or model_publish in a test."""
+    dlg = _make_training_dialog(tmp_path)
+    published = tmp_path / "published" / "m.pt"
+    published.parent.mkdir(parents=True, exist_ok=True)
+    published.write_bytes(b"weights")
+    dlg._last_training_results = [
+        {
+            "role": "obb_direct",
+            "success": True,
+            "published_model_path": str(published),
+        }
+    ]
+    dlg._refresh_register_controls()
+    yield dlg
+    dlg.close()
+
+
+@pytest.fixture
+def training_dialog_no_run(tmp_path):
+    """A fresh dialog with no completed run -- the "nothing to act on yet"
+    case both buttons must disable with a stated reason for."""
+    dlg = _make_training_dialog(tmp_path)
     yield dlg
     dlg.close()
 
@@ -542,3 +570,45 @@ def test_calibration_is_disabled_with_a_reason_when_labels_are_missing(training_
     training_dialog.set_calibration_enabled(False, "no labelled val split")
     assert training_dialog.btn_calibrate.isEnabled() is False
     assert "no labelled val split" in training_dialog.btn_calibrate.toolTip()
+
+
+def test_register_with_training_geometry_does_not_touch_the_sidecar(
+    training_dialog,
+):
+    from hydra_suite.core.inference.slice_meta import sidecar_path
+
+    context = training_dialog._published_run_context()
+    sidecar = sidecar_path(context[0])
+    before_exists = sidecar.exists()
+    before_bytes = sidecar.read_bytes() if before_exists else None
+
+    training_dialog.register_with_training_geometry()
+
+    after_exists = sidecar.exists()
+    assert after_exists == before_exists
+    if before_exists:
+        assert sidecar.read_bytes() == before_bytes
+
+
+def test_calibrate_then_register_never_publishes_again(monkeypatch, training_dialog):
+    def _boom(*args, **kwargs):
+        raise AssertionError("publish_trained_model must not be called here")
+
+    monkeypatch.setattr(
+        "hydra_suite.training.model_publish.publish_trained_model", _boom
+    )
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.dialogs.training_dialog.open_direct_calibration",
+        lambda *a, **k: [],
+    )
+    training_dialog.calibrate_then_register()
+    assert len(training_dialog.registered_model_paths) == 1
+
+
+def test_no_completed_run_disables_both_buttons_with_a_reason(
+    training_dialog_no_run,
+):
+    assert training_dialog_no_run.btn_register.isEnabled() is False
+    assert training_dialog_no_run.btn_calibrate.isEnabled() is False
+    assert training_dialog_no_run.btn_register.toolTip()
+    assert training_dialog_no_run.btn_calibrate.toolTip()
