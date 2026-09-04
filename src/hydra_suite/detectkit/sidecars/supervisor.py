@@ -144,6 +144,35 @@ def _failed_outcome(
     )
 
 
+def _reported_failure_outcome(
+    supervised, result, hard: int, telemetry: dict[str, Any] | None = None
+) -> ProtectedOutcome:
+    """Prefer a valid failure report written by a normally exiting child.
+
+    The entrypoint catches operational exceptions, writes a bounded result, and
+    exits with code 1.  That is an ordinary failure, not evidence of a memory
+    limit, so surfacing the report is essential for actionable GUI feedback.
+    A child killed by a containment limit cannot reliably write this result;
+    callers only reach here after protocol validation succeeds.
+    """
+    fallback = _failed_outcome(supervised, hard, telemetry)
+    message = str(getattr(result, "message", "") or "").strip()
+    if not message:
+        return fallback
+    canceled = result.status is SidecarStatus.CANCELED
+    return ProtectedOutcome(
+        False,
+        canceled,
+        ExitKind.CANCELED.value if canceled else fallback.failure_kind,
+        message,
+        hard_host_bytes=fallback.hard_host_bytes,
+        peak_tree_rss_bytes=fallback.peak_tree_rss_bytes,
+        peak_accelerator_bytes=fallback.peak_accelerator_bytes,
+        dropped_output_lines=fallback.dropped_output_lines,
+        telemetry=fallback.telemetry,
+    )
+
+
 class ProtectedOperation:
     """One synchronously executed sidecar with thread-safe group cancellation."""
 
@@ -389,30 +418,40 @@ class ProtectedOperation:
             with self._lock:
                 self._sidecar = None
             if supervised.classified_exit.kind is not ExitKind.SUCCESS:
+                telemetry = resource_telemetry(
+                    budget,
+                    hard_host_bytes=hard,
+                    soft_host_bytes=soft,
+                    result=supervised,
+                    effective_parameters={
+                        "operation": self.request.operation.value,
+                        "chunk_frames": int(
+                            self.request.payload.get("chunk_frames", 1)
+                        ),
+                        "max_targets": int(self.request.payload.get("max_targets", 1)),
+                    },
+                    cache_chunk_size=(
+                        int(self.request.payload.get("chunk_frames", 1))
+                        if self.request.operation is Operation.DATASET_INFERENCE
+                        else None
+                    ),
+                )
+                try:
+                    reported_result = read_result(result_path, expected=self.request)
+                except (OSError, ValueError):
+                    reported_result = None
                 self._cleanup()
+                if (
+                    reported_result is not None
+                    and reported_result.status is not SidecarStatus.SUCCESS
+                ):
+                    return _reported_failure_outcome(
+                        supervised, reported_result, hard, telemetry
+                    )
                 return _failed_outcome(
                     supervised,
                     hard,
-                    resource_telemetry(
-                        budget,
-                        hard_host_bytes=hard,
-                        soft_host_bytes=soft,
-                        result=supervised,
-                        effective_parameters={
-                            "operation": self.request.operation.value,
-                            "chunk_frames": int(
-                                self.request.payload.get("chunk_frames", 1)
-                            ),
-                            "max_targets": int(
-                                self.request.payload.get("max_targets", 1)
-                            ),
-                        },
-                        cache_chunk_size=(
-                            int(self.request.payload.get("chunk_frames", 1))
-                            if self.request.operation is Operation.DATASET_INFERENCE
-                            else None
-                        ),
-                    ),
+                    telemetry,
                 )
             result = read_result(result_path, expected=self.request)
             if result.status is not SidecarStatus.SUCCESS:

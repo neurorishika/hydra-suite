@@ -62,6 +62,80 @@ def test_progress_protocol_is_typed_and_bounded():
     assert _parse_progress(oversized) is None
 
 
+def test_protected_operation_surfaces_a_valid_child_failure_report(
+    monkeypatch, tmp_path
+):
+    from hydra_suite.detectkit.sidecars import supervisor
+    from hydra_suite.detectkit.sidecars.protocol import (
+        Operation,
+        SidecarRequest,
+        SidecarResult,
+        SidecarStatus,
+        read_request,
+        write_result,
+    )
+    from hydra_suite.runtime.resource_budget import AcceleratorKind
+
+    observation = SimpleNamespace(
+        total_host_bytes=64 * supervisor.GiB,
+        available_host_bytes=48 * supervisor.GiB,
+    )
+    budget = SimpleNamespace(
+        admitted=True,
+        refusals=(),
+        usable_host_bytes=32 * supervisor.GiB,
+        reserved_host_bytes=8 * supervisor.GiB,
+        accelerator_peak_bytes=0,
+    )
+    supervised = SimpleNamespace(
+        classified_exit=SimpleNamespace(
+            kind=ExitKind.ORDINARY_FAILURE,
+            message="Worker exited with code 1",
+        ),
+        peak_tree_rss_bytes=2 * supervisor.GiB,
+        peak_accelerator_bytes=None,
+        dropped_output_lines=0,
+    )
+
+    def fake_sidecar(plan, **_kwargs):
+        request_path = Path(plan.launch.command[-3])
+        result_path = Path(plan.launch.command[-1])
+        request = read_request(request_path)
+        write_result(
+            result_path,
+            SidecarResult(
+                request.request_id,
+                request.operation,
+                SidecarStatus.FAILED,
+                "MPS backend initialization failed",
+            ),
+        )
+        return SimpleNamespace(process=None, wait=lambda: supervised)
+
+    monkeypatch.setattr(
+        supervisor,
+        "_accelerator_for",
+        lambda _device: (AcceleratorKind.CPU, None, None, None),
+    )
+    monkeypatch.setattr(supervisor, "probe_resources", lambda *_a, **_k: observation)
+    monkeypatch.setattr(
+        supervisor, "evaluate_resource_request", lambda *_a, **_k: budget
+    )
+    monkeypatch.setattr(supervisor, "resource_telemetry", lambda *_a, **_k: {})
+    monkeypatch.setattr(supervisor, "SupervisedSidecar", fake_sidecar)
+
+    outcome = supervisor.ProtectedOperation(
+        SidecarRequest("request", Operation.DATASET_INFERENCE, {}),
+        device="cpu",
+        cleanup_paths=(tmp_path / "output.npz",),
+    ).run()
+
+    assert not outcome.success
+    assert outcome.failure_kind == ExitKind.ORDINARY_FAILURE.value
+    assert outcome.message == "MPS backend initialization failed"
+    assert "Memory cap" not in outcome.message
+
+
 def test_auto_device_binds_visible_cuda_on_linux(monkeypatch):
     from hydra_suite.detectkit.sidecars import supervisor
     from hydra_suite.runtime.resource_budget import AcceleratorKind
