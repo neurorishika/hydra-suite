@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import asdict, fields
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -34,7 +35,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from hydra_suite.training.contracts import SourceDataset, SplitConfig, TrainingRole
+from hydra_suite.training.contracts import (
+    Sam3LoraParams,
+    SourceDataset,
+    SplitConfig,
+    TrainingRole,
+)
 from hydra_suite.training.geometry_levels import GeometryLevel
 from hydra_suite.widgets.dialogs import BaseDialog
 from hydra_suite.widgets.workers import BaseWorker
@@ -2737,6 +2743,7 @@ QTabBar::tab:selected {
                 "seq_detect": self.chk_role_seq_detect.isChecked(),
                 "seq_crop_obb": self.chk_role_seq_crop_obb.isChecked(),
                 "seq_crop_segment": self.chk_role_seq_crop_segment.isChecked(),
+                "semantic_sam3": self.chk_semantic_sam3.isChecked(),
             },
             "training_mode": self._selected_mode(),
             "training_task": self._selected_task(),
@@ -2776,6 +2783,11 @@ QTabBar::tab:selected {
             "aug_hsv_h": self.aug_hsv_h.value(),
             "aug_hsv_s": self.aug_hsv_s.value(),
             "aug_hsv_v": self.aug_hsv_v.value(),
+            "sam3": {
+                key: value
+                for key, value in asdict(self.sam3_panel.params()).items()
+                if key != "label_quality_acknowledged"
+            },
         }
 
     def _apply_training_state(self, data: dict) -> None:
@@ -2838,6 +2850,22 @@ QTabBar::tab:selected {
 
         if "device" in data:
             self._set_device_combo(str(data["device"]))
+
+        sam3_data = data.get("sam3")
+        if isinstance(sam3_data, dict):
+            persistent_names = {
+                field.name
+                for field in fields(Sam3LoraParams)
+                if field.name != "label_quality_acknowledged"
+            }
+            values = {
+                name: sam3_data[name] for name in persistent_names if name in sam3_data
+            }
+            values["label_quality_acknowledged"] = False
+            self.sam3_panel.set_params(Sam3LoraParams(**values))
+        # This is an explicit per-run safety affirmation, not reusable config.
+        # Reset it even for old presets that happened to persist the field.
+        self.sam3_panel.chk_ack.setChecked(False)
 
         self._refresh_role_gating()
         self._on_training_selection_changed()

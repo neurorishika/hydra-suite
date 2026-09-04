@@ -2,12 +2,14 @@
 
 import hydra_suite.training.service as svc
 from hydra_suite.training.contracts import (
+    PublishPolicy,
     Sam3LoraParams,
     SourceDataset,
     TrainingHyperParams,
     TrainingRole,
     TrainingRunSpec,
 )
+from hydra_suite.training.registry import load_registry
 
 
 def _spec(role=TrainingRole.SEMANTIC_SAM3):
@@ -89,3 +91,118 @@ def test_builder_geometry_reaches_the_sidecar(monkeypatch, tmp_path):
     )
     assert seen["build_manifest"]["tile_px"] == 1007
     assert seen["source_fingerprint"] == "fp1"
+
+
+def _registered_spec(tmp_path, *, auto_import=False):
+    derived = tmp_path / "derived"
+    derived.mkdir(exist_ok=True)
+    return TrainingRunSpec(
+        role=TrainingRole.SEMANTIC_SAM3,
+        source_datasets=[SourceDataset(path=str(derived), level="polygon")],
+        derived_dataset_dir=str(derived),
+        base_model="sam3",
+        hyperparams=TrainingHyperParams(),
+        publish_policy=PublishPolicy(auto_import=auto_import),
+        sam3_params=Sam3LoraParams(prompt="ant"),
+    )
+
+
+def test_training_exception_finalizes_registry_and_preserves_run_identity(
+    monkeypatch, tmp_path
+):
+    import hydra_suite.training.registry as registry
+
+    monkeypatch.setattr(registry, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        svc,
+        "run_training",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError("sidecar bootstrap exploded")
+        ),
+    )
+
+    result = svc.TrainingOrchestrator(tmp_path / "workspace").run_role_training(
+        _registered_spec(tmp_path)
+    )
+
+    assert result["success"] is False
+    assert result["run_id"]
+    assert result["failure_kind"] == "training-exception"
+    assert result["error"] == "sidecar bootstrap exploded"
+    record = load_registry()["runs"][0]
+    assert record["run_id"] == result["run_id"]
+    assert record["status"] == "failed"
+    assert record["finished_at"]
+    assert record["failure_kind"] == "training-exception"
+    assert record["error_message"] == "sidecar bootstrap exploded"
+
+
+def test_auto_publish_exception_finalizes_registry_with_training_diagnostics(
+    monkeypatch, tmp_path
+):
+    import hydra_suite.training.registry as registry
+
+    monkeypatch.setattr(registry, "_project_root", lambda: tmp_path)
+    artifact = tmp_path / "adapters.pt"
+    artifact.write_bytes(b"adapter")
+    monkeypatch.setattr(
+        svc,
+        "run_training",
+        lambda *args, **kwargs: {
+            "success": True,
+            "artifact_path": str(artifact),
+            "resource_preflight": "/tmp/resource_preflight.json",
+            "containment": {"backend": "systemd", "peak_tree_rss_bytes": 123},
+        },
+    )
+    monkeypatch.setattr(
+        svc,
+        "_publish_training_artifacts",
+        lambda **kwargs: (_ for _ in ()).throw(ValueError("corrupt adapter")),
+    )
+
+    result = svc.TrainingOrchestrator(tmp_path / "workspace").run_role_training(
+        _registered_spec(tmp_path, auto_import=True)
+    )
+
+    assert result["success"] is False
+    assert result["run_id"]
+    assert result["failure_kind"] == "publish-exception"
+    assert result["resource_preflight"] == "/tmp/resource_preflight.json"
+    assert result["containment"]["backend"] == "systemd"
+    record = load_registry()["runs"][0]
+    assert record["status"] == "failed"
+    assert record["failure_kind"] == "publish-exception"
+    assert record["resource_preflight"] == "/tmp/resource_preflight.json"
+    assert record["containment"]["peak_tree_rss_bytes"] == 123
+
+
+def test_returned_resource_refusal_is_preserved_in_final_registry_record(
+    monkeypatch, tmp_path
+):
+    import hydra_suite.training.registry as registry
+
+    monkeypatch.setattr(registry, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        svc,
+        "run_training",
+        lambda *args, **kwargs: {
+            "success": False,
+            "error": "insufficient host memory",
+            "failure_kind": "host-admission-refusal",
+            "resource_preflight": "/tmp/preflight.json",
+            "containment": {"backend": "rlimit_as", "host_limit_bytes": 456},
+        },
+    )
+
+    result = svc.TrainingOrchestrator(tmp_path / "workspace").run_role_training(
+        _registered_spec(tmp_path)
+    )
+
+    assert result["run_id"]
+    record = load_registry()["runs"][0]
+    assert record["status"] == "failed"
+    assert record["error_message"] == "insufficient host memory"
+    assert record["failure_kind"] == "host-admission-refusal"
+    assert record["resource_preflight"] == "/tmp/preflight.json"
+    assert record["containment"]["host_limit_bytes"] == 456

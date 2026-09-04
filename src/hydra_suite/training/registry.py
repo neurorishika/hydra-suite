@@ -206,6 +206,7 @@ def finalize_run_record(
     published_model_path: str = "",
     published_registry_entry: str = "",
     error_message: str = "",
+    failure_details: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Finalize a run record with terminal status."""
 
@@ -220,4 +221,8 @@ def finalize_run_record(
     }
     if error_message:
         patch["error_message"] = error_message
+    if failure_details:
+        for key in ("failure_kind", "resource_preflight", "containment"):
+            if key in failure_details:
+                patch[key] = failure_details[key]
     return update_run_record(run_id, patch)

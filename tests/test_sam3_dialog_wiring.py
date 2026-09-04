@@ -3,12 +3,71 @@
 from __future__ import annotations
 
 import os
+from dataclasses import asdict, replace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 
 pytest.importorskip("PySide6")
+
+
+def test_training_preset_round_trips_sam3_selection_and_safety_without_ack(
+    tmp_path,
+):
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+
+    from hydra_suite.detectkit.gui.dialogs import training_dialog as td
+    from hydra_suite.detectkit.gui.models import DetectKitProject
+    from hydra_suite.training.contracts import Sam3LoraParams
+
+    dialog = td.TrainingDialog(DetectKitProject(project_dir=tmp_path))
+    dialog._set_combo_data(dialog.mode_combo, "semantic")
+    dialog._set_combo_data(dialog.task_combo, "segment")
+    dialog._on_training_selection_changed()
+    params = Sam3LoraParams(
+        prompt="worker ant",
+        negative_prompts=["debris", "reflection"],
+        num_negatives=2,
+        rank=8,
+        alpha=24,
+        dropout=0.2,
+        lr=0.0001,
+        epochs=7,
+        batch=1,
+        grad_accum=4,
+        mixed_precision="bf16",
+        host_reserve_gb=11.0,
+        host_reserve_fraction=0.22,
+        cuda_safety_fraction=0.78,
+        host_limit_headroom_fraction=1.4,
+        watchdog_poll_seconds=2.5,
+        adapt_text_encoder=True,
+        geometry_mode="custom",
+        slice_width=896,
+        slice_height=768,
+        tile_overlap=0.3,
+        keep_empty_tiles=False,
+        label_quality_acknowledged=True,
+        env_name="hydra-sam3-custom",
+    )
+    dialog.sam3_panel.set_params(params)
+
+    state = dialog._collect_training_state()
+
+    assert state["roles"]["semantic_sam3"] is True
+    assert "label_quality_acknowledged" not in state["sam3"]
+    dialog._set_combo_data(dialog.mode_combo, "direct")
+    dialog.sam3_panel.set_params(Sam3LoraParams(prompt="changed"))
+    dialog.sam3_panel.chk_ack.setChecked(True)
+    dialog._apply_training_state(state)
+
+    assert dialog._selected_plan_key() == ("semantic", "segment")
+    assert dialog.chk_semantic_sam3.isChecked()
+    expected = replace(params, label_quality_acknowledged=False)
+    assert asdict(dialog.sam3_panel.params()) == asdict(expected)
 
 
 def test_mode_combo_offers_semantic():

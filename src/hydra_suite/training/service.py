@@ -103,6 +103,25 @@ def _result_artifact_paths(result: dict) -> list[str]:
     return [artifact_path] if artifact_path else []
 
 
+def _failure_details(result: dict) -> dict[str, object]:
+    """Return durable structured diagnostics from a failed runner result."""
+
+    return {
+        key: result[key]
+        for key in ("failure_kind", "resource_preflight", "containment")
+        if key in result and result[key] is not None
+    }
+
+
+def _failure_message(result: dict) -> str:
+    if result.get("canceled"):
+        return "canceled"
+    error = str(result.get("error", "") or "").strip()
+    if error:
+        return error
+    return f"exit_code={result.get('exit_code', 'unknown')}"
+
+
 def _slice_geometry_for_publish(spec: TrainingRunSpec) -> dict | None:
     """Return a direct detector's derived-dataset slice geometry, if any.
 
@@ -519,15 +538,23 @@ class TrainingOrchestrator:
             parent_run_id=parent_run_id,
         )
 
-        result = run_training(
-            spec,
-            run_dir,
-            log_cb=log_cb,
-            progress_cb=progress_cb,
-            should_cancel=should_cancel,
-        )
+        try:
+            result = run_training(
+                spec,
+                run_dir,
+                log_cb=log_cb,
+                progress_cb=progress_cb,
+                should_cancel=should_cancel,
+            )
+        except Exception as exc:
+            result = {
+                "success": False,
+                "error": str(exc),
+                "failure_kind": "training-exception",
+            }
         result["run_id"] = run_id
         result["derived_dataset_dir"] = spec.derived_dataset_dir
+        result["dataset_fingerprint"] = ds_fp
         artifact_paths = _result_artifact_paths(result)
 
         if not result.get("success", False):
@@ -541,24 +568,42 @@ class TrainingOrchestrator:
                     else []
                 ),
                 artifact_paths=artifact_paths,
-                error_message=(
-                    "canceled"
-                    if result.get("canceled")
-                    else f"exit_code={result.get('exit_code', 'unknown')}"
-                ),
+                error_message=_failure_message(result),
+                failure_details=_failure_details(result),
             )
             return result
 
         published_key = ""
         published_path = ""
         if spec.publish_policy.auto_import and artifact_paths:
-            published_key, published_path = _publish_training_artifacts(
-                spec=spec,
-                artifact_paths=artifact_paths,
-                publish_metadata=publish_metadata or {},
-                run_id=run_id,
-                dataset_fingerprint_value=ds_fp,
-            )
+            try:
+                published_key, published_path = _publish_training_artifacts(
+                    spec=spec,
+                    artifact_paths=artifact_paths,
+                    publish_metadata=publish_metadata or {},
+                    run_id=run_id,
+                    dataset_fingerprint_value=ds_fp,
+                )
+            except Exception as exc:
+                result["success"] = False
+                result["error"] = str(exc)
+                result["failure_kind"] = "publish-exception"
+                result["published_registry_key"] = ""
+                result["published_model_path"] = ""
+                finalize_run_record(
+                    run_id,
+                    status="failed",
+                    command=result.get("command", []),
+                    metrics_paths=(
+                        [result.get("metrics_path", "")]
+                        if result.get("metrics_path")
+                        else []
+                    ),
+                    artifact_paths=artifact_paths,
+                    error_message=_failure_message(result),
+                    failure_details=_failure_details(result),
+                )
+                return result
 
         finalize_run_record(
             run_id,
@@ -574,5 +619,4 @@ class TrainingOrchestrator:
 
         result["published_registry_key"] = published_key
         result["published_model_path"] = published_path
-        result["dataset_fingerprint"] = ds_fp
         return result
