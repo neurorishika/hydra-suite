@@ -349,11 +349,14 @@ def train_sam3_lora(
         remove_artifact(artifact_path, remove_staging=True)
         raise
 
-    diagnostic["containment"] = _containment_diagnostic(plan, supervised)
-    _write_json(diagnostics_path, diagnostic)
     classified = supervised.classified_exit
     if classified.kind is not ExitKind.SUCCESS:
+        # wait() proved the complete workload quiescent. Remove failed-run
+        # staging before any diagnostics I/O can fail and bypass cleanup.
         remove_artifact(artifact_path, remove_staging=True)
+    diagnostic["containment"] = _containment_diagnostic(plan, supervised)
+    _write_json(diagnostics_path, diagnostic)
+    if classified.kind is not ExitKind.SUCCESS:
         tail = "".join(supervised.output_tail).strip() or "(no output)"
         return _result(
             success=False,

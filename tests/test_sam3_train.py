@@ -339,6 +339,42 @@ def test_quiescent_constructor_failure_removes_private_staging(tmp_path, monkeyp
     assert not staging.exists()
 
 
+def test_failed_run_cleans_staging_before_fallible_final_diagnostics(
+    tmp_path, monkeypatch
+):
+    _install(
+        monkeypatch,
+        tmp_path,
+        result=_supervised(ExitKind.ORDINARY_FAILURE, returncode=2),
+        write_artifact=False,
+    )
+    staging = tmp_path / "run" / ".adapters.pt.123.validated.tmp"
+    installed_sidecar = tr.SupervisedSidecar
+
+    class StagingSidecar(installed_sidecar):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            staging.write_bytes(b"partial")
+
+    monkeypatch.setattr(tr, "SupervisedSidecar", StagingSidecar)
+    real_write_json = tr._write_json
+
+    def fail_final_diagnostics(path, payload):
+        containment = payload.get("containment", {})
+        if path.name == "resource_preflight.json" and (
+            "peak_observed_tree_rss_bytes" in containment
+        ):
+            raise OSError("diagnostics disk full")
+        real_write_json(path, payload)
+
+    monkeypatch.setattr(tr, "_write_json", fail_final_diagnostics)
+
+    with pytest.raises(OSError, match="diagnostics disk full"):
+        tr.train_sam3_lora(_spec(tmp_path), str(tmp_path / "run"))
+
+    assert not staging.exists()
+
+
 def test_progress_plain_logs_and_bounded_diagnostics_are_propagated(
     tmp_path, monkeypatch
 ):
