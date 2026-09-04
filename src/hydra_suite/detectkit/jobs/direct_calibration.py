@@ -808,9 +808,11 @@ def run_direct_calibration(request, *, progress=None, should_stop=None):
                         candidate_index=index,
                     )
                 )
-        # ONE preview per measured ROW. Neither the merge threshold NOR the
-        # confidence can be reproduced from a permissive preview: both change
-        # which detections reach the merge, and the merge unions members.
+        # ONE preview per measured ROW. The merge threshold changes which
+        # polygons exist at all; the confidence gate is post-merge, but
+        # recovering a row from a permissive preview needs an UNCAPPED
+        # post-filter set, and that cap is clamped at
+        # MAX_DOWNSTREAM_CROPS_PER_FRAME -- so no superset exists above it.
         for merge in request.merge_settings:
             for confidence in request.confidences:
                 outcome.previews.append(
