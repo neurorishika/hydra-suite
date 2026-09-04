@@ -564,6 +564,17 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
     loss_window = _LossWindow()
     skipped_steps = 0
     consecutive_skipped = 0
+    # Announce the run's shape before the first step. Without this the only
+    # output for the first several minutes is silence, and there is no way to
+    # tell a slow run from a wedged one -- or to sanity-check the step budget
+    # against the epochs actually requested.
+    emit_log(
+        f"training shape: {len(train_descriptors)} tiles, "
+        f"{query_count(train_descriptors)} datapoints, "
+        f"batch={batch_size} grad_accum={grad_accum}, "
+        f"{n_batches} micro-batches/epoch, "
+        f"~{max(1, n_batches // grad_accum)} steps/epoch x {params.epochs} epochs"
+    )
     optimizer.zero_grad()
 
     for epoch in range(params.epochs):
@@ -630,7 +641,9 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
                 scheduler.step()
                 optimizer.zero_grad()
                 global_step += 1
-                if global_step % logging_steps == 0:
+                # Early steps log every time: waiting for step 10 hides both a
+                # fast crash and a pathologically slow first epoch.
+                if global_step <= 3 or global_step % logging_steps == 0:
                     emit_log(
                         f"epoch {epoch} step {global_step} "
                         f"{loss_window.summary()}"

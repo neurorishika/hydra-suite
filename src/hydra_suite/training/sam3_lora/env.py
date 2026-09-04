@@ -35,13 +35,31 @@ def resolve_sam3_env(configured: Optional[str] = None) -> str:
 def sam3_env_command(env: str, module_args: List[str]) -> List[str]:
     """Build the ``conda run`` command line to invoke a module in ``env``.
 
-    ``-u`` (unbuffered stdout/stderr) matters here: the launcher parses the
+    Two flags, for two different buffers:
+
+    ``--no-capture-output`` stops ``conda run`` itself from swallowing the
+    child's streams. Without it conda buffers stdout and stderr in full and
+    releases them only when the child EXITS -- so a training run emits
+    nothing for its entire duration, then dumps everything at once. A 6-hour
+    run was killed after printing not one progress line, and a run that dies
+    without flushing loses its diagnostics entirely. ``-u`` alone does not
+    help: it unbuffers PYTHON, while the capture happens a level above it.
+
+    ``-u`` (unbuffered stdout/stderr) still matters: the launcher parses the
     child's stdout line by line for progress, and ordinary ``sam3``/``torch``
-    prints are not flushed like this package's own sentinel records are --
-    without it, plain log output can arrive in bursts or be lost entirely if
-    the child is killed before its buffer flushes.
+    prints are not flushed like this package's own sentinel records are.
     """
-    return ["conda", "run", "-n", env, "python", "-u", "-m", *module_args]
+    return [
+        "conda",
+        "run",
+        "-n",
+        env,
+        "--no-capture-output",
+        "python",
+        "-u",
+        "-m",
+        *module_args,
+    ]
 
 
 def sam3_env_environ() -> Dict[str, str]:
