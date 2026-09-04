@@ -1,16 +1,22 @@
 """Tiling, iscrowd boundary, frame-level split, negative-prompt resolution."""
 
 import json
+from collections.abc import Iterator
 
 import cv2
 import numpy as np
+import pytest
 
-from hydra_suite.training.contracts import Sam3LoraParams
+from hydra_suite.training.contracts import Sam3LoraParams, SplitConfig
+from hydra_suite.training.dataset_io import DatasetIOLimits, DatasetLimitError
 from hydra_suite.training.sam3_lora.dataset_build import (
     CURATED_NEGATIVES,
+    _split_frame_stems,
+    _tile_frame,
     build_sam3_coco_dataset,
     resolve_negative_prompts,
 )
+from hydra_suite.training.validation import validate_coco_dataset
 
 
 def _source(tmp_path, n_frames=3, size=2048):
@@ -52,6 +58,17 @@ def test_category_name_is_the_prompt(tmp_path):
     out = tmp_path / "out"
     build_sam3_coco_dataset(_source(tmp_path / "src"), out, _params())
     assert _load(out, "train")["categories"][0]["name"] == "ant with color patch"
+
+
+def test_streaming_coco_validation_counts_generated_records(tmp_path):
+    out = tmp_path / "out"
+    stats = build_sam3_coco_dataset(
+        _source(tmp_path / "src"), out, _params(keep_empty_tiles=True)
+    )
+    report = validate_coco_dataset(out, min_train=1, min_val=1)
+    assert report.valid
+    assert report.stats["train_images"] == stats["train_images"]
+    assert report.stats["train_annotations"] == stats["train_annotations"]
 
 
 def test_split_is_by_frame_not_by_tile(tmp_path):
@@ -106,6 +123,24 @@ def test_split_is_deterministic_under_seed(tmp_path):
     }
 
 
+def test_disk_backed_split_preserves_legacy_exact_order(tmp_path):
+    output = tmp_path / "out"
+    source = _source(tmp_path / "src", n_frames=7, size=32)
+    build_sam3_coco_dataset(
+        source, output, _params(slice_width=16, slice_height=16), seed=19
+    )
+    manifest = json.loads((output / "build_manifest.json").read_text())
+    expected_train, expected_valid = _split_frame_stems(
+        [f"f{index}" for index in range(7)],
+        SplitConfig(),
+        19,
+    )
+    assert manifest["frame_split"] == {
+        "train": expected_train,
+        "valid": expected_valid,
+    }
+
+
 def test_negative_prompts_prefer_explicit_then_classes_then_curated():
     assert resolve_negative_prompts(
         _params(negative_prompts=["mite"]), ["ant", "beetle"], "ant"
@@ -119,3 +154,73 @@ def test_negative_prompts_prefer_explicit_then_classes_then_curated():
 def test_curated_negatives_drop_word_overlap_with_the_prompt():
     p = Sam3LoraParams(prompt="ant on a shadow")
     assert "shadow" not in resolve_negative_prompts(p, ["ant"], "ant")
+
+
+def test_tile_frame_is_lazy():
+    image = np.zeros((32, 32, 3), dtype=np.uint8)
+    tiles = _tile_frame(image, [], 16, 16, 0.0, True)
+    assert isinstance(tiles, Iterator)
+    assert len(list(tiles)) == 4
+
+
+def test_label_byte_cap_fails_before_output_promotion(tmp_path):
+    source = _source(tmp_path / "src", n_frames=2, size=32)
+    (source / "labels" / "f0.txt").write_text("0 " + "1 " * 200)
+    output = tmp_path / "out"
+    with pytest.raises(DatasetLimitError, match="Text input exceeds"):
+        build_sam3_coco_dataset(
+            source,
+            output,
+            _params(slice_width=16, slice_height=16),
+            io_limits=DatasetIOLimits(max_label_bytes=32),
+        )
+    assert not output.exists()
+    assert not list(tmp_path.glob(".out.staging-*"))
+
+
+def test_file_count_cap_fails_before_output_promotion(tmp_path):
+    source = _source(tmp_path / "src", n_frames=3, size=32)
+    output = tmp_path / "out"
+    with pytest.raises(DatasetLimitError, match="more than 2"):
+        build_sam3_coco_dataset(
+            source,
+            output,
+            _params(slice_width=16, slice_height=16),
+            io_limits=DatasetIOLimits(max_files=2),
+        )
+    assert not output.exists()
+
+
+def test_write_failure_preserves_previous_atomic_output(tmp_path, monkeypatch):
+    source = _source(tmp_path / "src", n_frames=2, size=32)
+    output = tmp_path / "out"
+    output.mkdir()
+    (output / "sentinel.txt").write_text("previous", encoding="utf-8")
+    real_write = cv2.imwrite
+    calls = 0
+
+    def fail_after_first(path, image):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            return False
+        return real_write(path, image)
+
+    monkeypatch.setattr(cv2, "imwrite", fail_after_first)
+    with pytest.raises(RuntimeError, match="Could not write tile"):
+        build_sam3_coco_dataset(
+            source,
+            output,
+            _params(slice_width=16, slice_height=16, keep_empty_tiles=True),
+        )
+    assert (output / "sentinel.txt").read_text(encoding="utf-8") == "previous"
+    assert not list(tmp_path.glob(".out.staging-*"))
+
+
+def test_prompt_limits_apply_before_source_discovery(tmp_path):
+    with pytest.raises(ValueError, match="per-prompt cap"):
+        build_sam3_coco_dataset(
+            tmp_path / "missing-source",
+            tmp_path / "out",
+            _params(prompt="x" * 257),
+        )

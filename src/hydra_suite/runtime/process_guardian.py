@@ -167,6 +167,7 @@ def run_guardian(
         os.write(ready_write_fd, b"R")
         os.close(ready_write_fd)
         guardian_ownership_uncertain = False
+        pending_external_identities: dict[int, GuardedIdentity] = {}
         supervisor_identity = GuardedIdentity(supervisor_pid, supervisor_create_time)
         while True:
             _, supervisor_gone = supervisor_identity.resolve()
@@ -185,6 +186,7 @@ def run_guardian(
                     containment_token,
                     identities,
                     external_identities=external_identities,
+                    pending_external_identities=pending_external_identities,
                     launch_started_at=launch_started_at,
                     max_identities=max_identities,
                 )
@@ -195,6 +197,7 @@ def run_guardian(
             containment_token=containment_token,
             identities=identities,
             external_identities=external_identities,
+            pending_external_identities=pending_external_identities,
             launch_started_at=launch_started_at,
             max_identities=max_identities,
             process_group_id=process_group_id,
@@ -400,6 +403,7 @@ def _scan_token_identities(
     identities: dict[int, GuardedIdentity],
     *,
     external_identities: dict[int, GuardedIdentity],
+    pending_external_identities: Optional[dict[int, GuardedIdentity]] = None,
     launch_started_at: float = 0.0,
     max_identities: int,
 ) -> tuple[bool, bool]:
@@ -407,6 +411,8 @@ def _scan_token_identities(
 
     _prune_gone_identities(identities)
     _prune_gone_identities(external_identities)
+    if pending_external_identities is not None:
+        _prune_gone_identities(pending_external_identities)
     overflowed = False
     try:
         processes = psutil.process_iter(["pid", "uids"])
@@ -435,8 +441,14 @@ def _scan_token_identities(
                     except (psutil.Error, OSError):
                         return False, overflowed
                 if identities.get(identity.pid) == identity:
-                    return False, overflowed
+                    # This exact PID/create-time identity was already proven
+                    # token-bearing. Retaining it is sufficient even when a
+                    # later environment probe is transiently denied: it still
+                    # prevents quiescence and remains an owned signal target.
+                    continue
                 if external_identities.get(identity.pid) == identity:
+                    if pending_external_identities is not None:
+                        pending_external_identities.pop(identity.pid, None)
                     continue
                 if identity.create_time < launch_started_at - 0.01:
                     continue
@@ -445,13 +457,33 @@ def _scan_token_identities(
                     identities=identities,
                     external_identities=external_identities,
                 ):
+                    if pending_external_identities is not None:
+                        pending_external_identities.pop(identity.pid, None)
                     continue
                 # A new inaccessible identity was not proven external while
-                # the child was gated. It may be an escaped descendant.
+                # the child was gated. It may be an escaped descendant. Keep
+                # its exact PID/create-time identity pending so a transient
+                # same-user process-table race can later be resolved as gone
+                # without either signalling an unproven external process or
+                # making ownership uncertainty permanent.
+                if pending_external_identities is not None:
+                    existing = pending_external_identities.get(identity.pid)
+                    if existing is not None and existing != identity:
+                        return False, overflowed
+                    if existing is None and len(pending_external_identities) >= (
+                        max_identities
+                    ):
+                        return False, True
+                    pending_external_identities[identity.pid] = identity
+                    continue
                 return False, overflowed
             if process_environment.get(_TOKEN_ENV) != token:
+                if pending_external_identities is not None:
+                    pending_external_identities.pop(identity.pid, None)
                 continue
             assert identity is not None
+            if pending_external_identities is not None:
+                pending_external_identities.pop(identity.pid, None)
             if identities.get(identity.pid) == identity:
                 continue
             if len(identities) > max_identities:
@@ -529,6 +561,7 @@ def _terminate_until_quiescent(
     containment_token: str,
     identities: dict[int, GuardedIdentity],
     external_identities: Optional[dict[int, GuardedIdentity]] = None,
+    pending_external_identities: Optional[dict[int, GuardedIdentity]] = None,
     launch_started_at: float = 0.0,
     max_identities: int,
     process_group_id: int,
@@ -542,12 +575,15 @@ def _terminate_until_quiescent(
     permanent_ownership_uncertain = initial_ownership_uncertain
     if external_identities is None:
         external_identities = {}
+    if pending_external_identities is None:
+        pending_external_identities = {}
     while stable_empty_scans < 2:
         if systemd_unit is None:
             scan_ok, _ = _scan_token_identities(
                 containment_token,
                 identities,
                 external_identities=external_identities,
+                pending_external_identities=pending_external_identities,
                 launch_started_at=launch_started_at,
                 max_identities=max_identities,
             )
@@ -594,6 +630,7 @@ def _terminate_until_quiescent(
             and authoritative_ok
             and direct_ok
             and not identities
+            and not pending_external_identities
             and not permanent_ownership_uncertain
         ):
             stable_empty_scans += 1

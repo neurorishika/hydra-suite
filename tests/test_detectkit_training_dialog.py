@@ -566,7 +566,7 @@ def test_dataset_preparation_worker_coalesces_noisy_logs_before_gui_drain(
             log(f"dataset line {index}:" + ("y" * 4_096))
         return object()
 
-    monkeypatch.setattr(td, "_prepare_role_datasets", noisy_preparation)
+    monkeypatch.setattr(td, "_prepare_role_datasets_contained", noisy_preparation)
     worker = td._DatasetPreparationWorker(object(), object())
     delivered: list[str] = []
     worker.log_signal.connect(delivered.append)
@@ -591,7 +591,7 @@ def test_dataset_preparation_worker_coalesces_noisy_logs_before_gui_drain(
     assert "log transport dropped" in delivered[0]
 
 
-def test_dataset_preparation_runs_builders_off_gui_thread(qapp):
+def test_dataset_preparation_supervises_sidecar_off_gui_thread(qapp, monkeypatch):
     from types import SimpleNamespace
 
     from PySide6.QtCore import QThread
@@ -605,17 +605,13 @@ def test_dataset_preparation_runs_builders_off_gui_thread(qapp):
 
     called_from = []
 
-    class _Orchestrator:
-        def build_merged_obb_dataset(self, *_args, **_kwargs):
-            called_from.append(QThread.currentThread())
-            return SimpleNamespace(
-                dataset_dir="/tmp/merged",
-                stats={"source_items": {"source": 1}},
-            )
+    def contained(*_args, **_kwargs):
+        called_from.append(QThread.currentThread())
+        return SimpleNamespace()
 
-        def build_role_dataset(self, *_args, **_kwargs):
-            called_from.append(QThread.currentThread())
-            return SimpleNamespace(dataset_dir="/tmp/role")
+    from hydra_suite.detectkit.gui.dialogs import training_dialog as td
+
+    monkeypatch.setattr(td, "_prepare_role_datasets_contained", contained)
 
     request = _DatasetPreparationRequest(
         sources=(SourceDataset(path="/tmp/source"),),
@@ -631,7 +627,7 @@ def test_dataset_preparation_runs_builders_off_gui_thread(qapp):
         slice_settings=SliceTrainingSettings(enabled=False),
     )
     errors = []
-    worker = _DatasetPreparationWorker(_Orchestrator(), request)
+    worker = _DatasetPreparationWorker(object(), request)
     worker.error.connect(errors.append)
 
     worker.start()
@@ -639,7 +635,7 @@ def test_dataset_preparation_runs_builders_off_gui_thread(qapp):
     qapp.processEvents()
 
     assert errors == []
-    assert len(called_from) == 2
+    assert len(called_from) == 1
     assert all(thread is not qapp.thread() for thread in called_from)
 
 
@@ -648,9 +644,9 @@ def test_dataset_preparation_preserves_merge_reuse_and_slice_routing(qapp):
 
     from hydra_suite.detectkit.gui.dialogs.training_dialog import (
         _DatasetPreparationRequest,
-        _prepare_role_datasets,
     )
     from hydra_suite.detectkit.gui.models import SliceTrainingSettings
+    from hydra_suite.detectkit.jobs.training import prepare_role_datasets
     from hydra_suite.training.contracts import SourceDataset, SplitConfig, TrainingRole
 
     calls = {"merge": [], "slice": [], "role": []}
@@ -688,7 +684,7 @@ def test_dataset_preparation_preserves_merge_reuse_and_slice_routing(qapp):
         slice_settings=SliceTrainingSettings(enabled=True),
     )
 
-    result = _prepare_role_datasets(
+    result = prepare_role_datasets(
         _Orchestrator(),
         request,
         log=lambda _message: None,
