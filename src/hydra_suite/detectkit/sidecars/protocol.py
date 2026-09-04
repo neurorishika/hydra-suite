@@ -23,6 +23,7 @@ MAX_IDENTIFIER_CHARS = 128
 
 
 class Operation(str, Enum):
+    ACTIVE_LEARNING = "active-learning"
     DATASET_INFERENCE = "dataset-inference"
     EVALUATION = "evaluation"
     SEMANTIC_ESCALATION = "semantic-escalation"

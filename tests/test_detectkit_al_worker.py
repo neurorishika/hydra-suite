@@ -16,6 +16,7 @@ closures covered.
 
 from __future__ import annotations
 
+import inspect
 import math
 from pathlib import Path
 
@@ -30,6 +31,55 @@ from hydra_suite.detectkit.jobs.al_worker import ALDetectorSpec
 from hydra_suite.utils.geometry import obb_corners_from_dims
 
 _SPEC = ALDetectorSpec(kind="obb_direct", model_path="/unused/model.pt")
+
+
+def test_gui_al_worker_is_a_thin_protected_sidecar_coordinator(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from hydra_suite.detectkit.gui.models import OBBSource
+    from hydra_suite.detectkit.jobs import al_worker as mod
+
+    source = OBBSource(path=str(tmp_path / "round"), name="round")
+
+    class FakeOperation:
+        def __init__(self, request, **kwargs):
+            self.request = request
+            self.kwargs = kwargs
+
+        def run(self, progress):
+            progress(50, "scoring")
+            return SimpleNamespace(
+                success=True,
+                canceled=False,
+                payload={
+                    "source_path": source.path,
+                    "n_picked": 1,
+                    "selected_frames": [7],
+                    "source": source.to_dict(),
+                },
+            )
+
+        def cancel(self):
+            pass
+
+    monkeypatch.setattr(mod, "ProtectedOperation", FakeOperation)
+    project = DetectKitProject(project_dir=tmp_path, sources=[])
+    worker = mod.ALWorker(
+        mod.ALRequest(
+            input_kind="project",
+            input_path=str(tmp_path),
+            project=project,
+            budget=1,
+            detector=_SPEC,
+        )
+    )
+    seen = []
+    worker.result_ready.connect(lambda *args: seen.append(args))
+    worker.execute()
+
+    assert seen == [(source.path, 1, [7])]
+    assert project.sources[0].path == source.path
+    assert "run_active_learning(" not in inspect.getsource(mod.ALWorker.execute)
 
 
 def _seed_image_folder(tmp_path: Path, n: int = 6) -> Path:

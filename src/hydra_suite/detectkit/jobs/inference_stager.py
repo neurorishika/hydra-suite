@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import shutil
+from collections.abc import Iterable, Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import Sequence
@@ -50,7 +51,7 @@ _LEVEL_BY_KIND = {
 def stage_predictions(
     source: OBBSource,
     project_dir: str | Path,
-    per_image: dict[str, list[dict]],
+    per_image: Mapping[str, list[dict]] | Iterable[tuple[str, list[dict]]],
     *,
     model_path: str,
     inference_kind: str,
@@ -103,7 +104,8 @@ def stage_predictions(
 
     images_dir = Path(source.path) / "images"
     staged_frames = 0
-    for image_path, detections in sorted(per_image.items()):
+    items = sorted(per_image.items()) if isinstance(per_image, Mapping) else per_image
+    for image_path, detections in items:
         if not detections:
             continue
         image = Path(image_path)

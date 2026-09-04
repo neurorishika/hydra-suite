@@ -7,7 +7,6 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from threading import Event
 from typing import Optional
 
 from PySide6.QtCore import Qt, QTimer, Signal
@@ -41,7 +40,15 @@ from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noq
 from hydra_suite.widgets.busy import BusyTaskError, run_blocking_with_busy_dialog
 from hydra_suite.widgets.workers import BaseWorker
 
+from ..jobs.dataset_inference import (
+    DatasetInferenceWorker as _DetectKitDatasetInferenceWorker,
+)
 from ..jobs.inference_stager import stage_predictions
+from ..jobs.prediction_cache import (
+    DatasetPredictionCache,
+    PredictionPathIndex,
+    remove_prediction_cache,
+)
 from ..jobs.staged_review import (
     accept_all,
     accept_frame,
@@ -57,24 +64,11 @@ from ..jobs.staged_review import (
 )
 from . import escalation_actions
 from .canvas import OBBCanvas
-from .models import (
-    INFERENCE_CONFIDENCE_FLOOR,
-    DetectKitProject,
-    InferenceRunSettings,
-    SliceTrainingSettings,
-)
+from .models import INFERENCE_CONFIDENCE_FLOOR, DetectKitProject, InferenceRunSettings
 from .overlays import PROVIDERS, FrameContext
 from .panels.dataset_panel import DatasetPanel
 from .panels.review_bar import ReviewBar
 from .panels.tools_panel import ToolsPanel
-from .prediction_preview import (
-    dicts_from_obb_result,
-    load_torch_model,
-    predict_obb_for_frame_sequential,
-    predict_preview_detections_for_image,
-    predict_sliced_obb_result,
-    preview_object_tile_fraction,
-)
 from .project import (
     create_project,
     default_project_parent_dir,
@@ -103,290 +97,6 @@ def _filter_detections_by_confidence(
         for detection in detections
         if float(detection.get("confidence", 0.0)) >= threshold
     ]
-
-
-class _DetectKitDatasetInferenceWorker(BaseWorker):
-    """Run PyTorch OBB inference across every image in the active source."""
-
-    success = Signal(dict)
-
-    def __init__(
-        self,
-        image_paths: list[str],
-        model_path: str,
-        device_preference: str,
-        confidence_threshold: float,
-        inference_kind: str = "obb_direct",
-        secondary_model_path: "str | None" = None,
-        crop_pad_ratio: float = 0.15,
-        stage2_image_size: int = 160,
-        slice_settings: "SliceTrainingSettings | None" = None,
-        imgsz_obb_direct: int = 640,
-    ) -> None:
-        super().__init__()
-        self._image_paths = list(image_paths)
-        self._model_path = str(model_path)
-        self._device_preference = str(device_preference or "auto")
-        self._confidence_threshold = float(confidence_threshold)
-        self._inference_kind = str(inference_kind or "obb_direct")
-        self._secondary_model_path = (
-            str(secondary_model_path).strip() if secondary_model_path else None
-        )
-        self._crop_pad_ratio = float(crop_pad_ratio)
-        self._stage2_image_size = int(stage2_image_size)
-        self._slice_settings = slice_settings
-        self._imgsz_obb_direct = int(imgsz_obb_direct)
-        self._cancel_event = Event()
-
-    def cancel(self) -> None:
-        """Request cooperative cancellation at the next safe inference boundary."""
-        self._cancel_event.set()
-
-    def is_cancelled(self) -> bool:
-        """Return whether cancellation has been requested for this run."""
-        return self._cancel_event.is_set()
-
-    def _stop_if_cancelled(self) -> bool:
-        if not self.is_cancelled():
-            return False
-        self.status.emit("Inference cancelled.")
-        return True
-
-    def execute(self) -> None:
-        if self._stop_if_cancelled():
-            return
-        total = len(self._image_paths)
-        if total == 0:
-            self.success.emit(
-                {
-                    "per_image": {},
-                    "image_count": 0,
-                    "detection_count": 0,
-                    "class_counts": {},
-                    "mean_confidence": 0.0,
-                }
-            )
-            return
-
-        per_image: dict[str, list[dict[str, object]]] = {}
-        class_counts: dict[int, int] = {}
-        confidence_sum = 0.0
-        detection_count = 0
-        confidence_threshold = self._confidence_threshold
-
-        if self._secondary_model_path and self._inference_kind == "sequential_segment":
-            # The shared runner already knows how to execute a detect ->
-            # crop-segment pipeline and preserves the native polygons that its
-            # stage-2 segmentation model produces.
-            from hydra_suite.core.inference.runner import InferenceRunner
-            from hydra_suite.data.al.inference_adapter import build_obb_config_for_al
-
-            self.status.emit("Loading sequential segment models…")
-            config = build_obb_config_for_al(
-                self._inference_kind,
-                self._model_path,
-                self._secondary_model_path,
-                crop_pad_ratio=self._crop_pad_ratio,
-                confidence_threshold=confidence_threshold,
-                iou_threshold=0.7,
-                max_targets=300,
-                stage2_image_size=self._stage2_image_size,
-            )
-            runner = InferenceRunner(config)
-            if self._stop_if_cancelled():
-                return
-
-            import cv2
-
-            for index, image_path in enumerate(self._image_paths, start=1):
-                if self._stop_if_cancelled():
-                    return
-                self.status.emit(
-                    f"Running inference on image {index}/{total}: {Path(image_path).name}"
-                )
-                try:
-                    frame = cv2.imread(str(image_path))
-                    if frame is None:
-                        raise RuntimeError(f"Could not read image: {image_path}")
-                    obb = runner.detect_batch_raw([frame], [index - 1])[0]
-                    detections = dicts_from_obb_result(obb)
-                except Exception:
-                    logger.warning(
-                        "Sequential segment dataset inference failed on %s",
-                        image_path,
-                        exc_info=True,
-                    )
-                    detections = []
-                if self._stop_if_cancelled():
-                    return
-                per_image[image_path] = detections
-                for det in detections:
-                    detection_count += 1
-                    class_id = int(det.get("class_id", 0))
-                    class_counts[class_id] = class_counts.get(class_id, 0) + 1
-                    confidence_sum += float(det.get("confidence", 0.0))
-                self.progress.emit(int(index / max(1, total) * 100))
-        elif self._secondary_model_path:
-            self.status.emit("Loading sequential models…")
-            detect_model, detect_device = load_torch_model(
-                self._model_path, self._device_preference
-            )
-            obb_model, obb_device = load_torch_model(
-                self._secondary_model_path, self._device_preference
-            )
-            if self._stop_if_cancelled():
-                return
-
-            import cv2
-
-            for index, image_path in enumerate(self._image_paths, start=1):
-                if self._stop_if_cancelled():
-                    return
-                self.status.emit(
-                    f"Running inference on image {index}/{total}: {Path(image_path).name}"
-                )
-                try:
-                    frame = cv2.imread(str(image_path))
-                    if frame is None:
-                        raise RuntimeError(f"Could not read image: {image_path}")
-                    tuples = predict_obb_for_frame_sequential(
-                        detect_model,
-                        obb_model,
-                        frame,
-                        detect_device=detect_device,
-                        obb_device=obb_device,
-                        conf=confidence_threshold,
-                        iou=0.7,
-                        should_stop=self.is_cancelled,
-                    )
-                    import numpy as np
-
-                    detections: list[dict[str, object]] = []
-                    for cx, cy, w, h, theta, conf in tuples:
-                        cos_t = float(np.cos(theta))
-                        sin_t = float(np.sin(theta))
-                        local = np.array(
-                            [
-                                [-w / 2, -h / 2],
-                                [w / 2, -h / 2],
-                                [w / 2, h / 2],
-                                [-w / 2, h / 2],
-                            ],
-                            dtype=np.float32,
-                        )
-                        rot = np.array(
-                            [[cos_t, -sin_t], [sin_t, cos_t]], dtype=np.float32
-                        )
-                        corners = local @ rot.T + np.array([cx, cy], dtype=np.float32)
-                        detections.append(
-                            {
-                                "class_id": 0,
-                                "polygon_px": [
-                                    (float(p[0]), float(p[1])) for p in corners
-                                ],
-                                "confidence": float(conf),
-                            }
-                        )
-                except Exception:
-                    logger.warning(
-                        "Sequential dataset inference failed on %s",
-                        image_path,
-                        exc_info=True,
-                    )
-                    detections = []
-                if self._stop_if_cancelled():
-                    return
-                per_image[image_path] = detections
-                for det in detections:
-                    detection_count += 1
-                    class_id = int(det.get("class_id", 0))
-                    class_counts[class_id] = class_counts.get(class_id, 0) + 1
-                    confidence_sum += float(det.get("confidence", 0.0))
-                self.progress.emit(int(index / max(1, total) * 100))
-        else:
-            self.status.emit("Loading model…")
-            task = {
-                "detect_direct": "detect",
-                "segment_direct": "segment",
-            }.get(self._inference_kind, "obb")
-            model, device = load_torch_model(
-                self._model_path, self._device_preference, task=task
-            )
-            if self._stop_if_cancelled():
-                return
-
-            slice_settings = self._slice_settings
-            sliced = bool(slice_settings is not None and slice_settings.enabled)
-            for index, image_path in enumerate(self._image_paths, start=1):
-                if self._stop_if_cancelled():
-                    return
-                self.status.emit(
-                    f"Running inference on image {index}/{total}: {Path(image_path).name}"
-                )
-                try:
-                    if sliced:
-                        import cv2
-
-                        frame = cv2.imread(str(image_path))
-                        if frame is None:
-                            raise RuntimeError(f"Could not read image: {image_path}")
-                        obb = predict_sliced_obb_result(
-                            model,
-                            frame,
-                            geometry_mode=slice_settings.geometry_mode,
-                            imgsz=self._imgsz_obb_direct,
-                            # 0.0 => tile_size_for_mode degrades auto_object to imgsz tiling (honest; no fabricated scale)
-                            reference_body_px=slice_settings.reference_body_px,
-                            object_tile_fraction=preview_object_tile_fraction(
-                                slice_settings.target_sizes_for(self._imgsz_obb_direct),
-                                slice_settings.object_tile_fraction,
-                                self._imgsz_obb_direct,
-                            ),
-                            slice_width=slice_settings.slice_width,
-                            slice_height=slice_settings.slice_height,
-                            overlap=slice_settings.overlap,
-                            merge_threshold=slice_settings.merge_threshold,
-                            confidence_threshold=confidence_threshold,
-                            task=task,
-                            should_stop=self.is_cancelled,
-                        )
-                        detections = (
-                            dicts_from_obb_result(obb) if obb is not None else []
-                        )
-                    else:
-                        detections = predict_preview_detections_for_image(
-                            model,
-                            image_path,
-                            device=device,
-                            confidence_threshold=confidence_threshold,
-                            task=task,
-                            should_stop=self.is_cancelled,
-                        )
-                except Exception:
-                    logger.warning(
-                        "Dataset inference failed on %s", image_path, exc_info=True
-                    )
-                    detections = []
-                if self._stop_if_cancelled():
-                    return
-                per_image[image_path] = detections
-                for det in detections:
-                    detection_count += 1
-                    class_id = int(det.get("class_id", 0))
-                    class_counts[class_id] = class_counts.get(class_id, 0) + 1
-                    confidence_sum += float(det.get("confidence", 0.0))
-                self.progress.emit(int(index / max(1, total) * 100))
-
-        mean_confidence = confidence_sum / detection_count if detection_count else 0.0
-        self.success.emit(
-            {
-                "per_image": per_image,
-                "image_count": total,
-                "detection_count": detection_count,
-                "class_counts": class_counts,
-                "mean_confidence": mean_confidence,
-            }
-        )
 
 
 class _DetectKitPortableWorker(BaseWorker):
@@ -726,7 +436,8 @@ class DetectKitMainWindow(QMainWindow):
         self._current_source_path = ""
         self._current_image_path = ""
         self._last_prediction_request: tuple[object, ...] | None = None
-        self._dataset_predictions: dict[str, list[dict[str, object]]] = {}
+        self._dataset_prediction_cache: DatasetPredictionCache | None = None
+        self._dataset_prediction_paths: PredictionPathIndex | None = None
         self._dataset_prediction_signature: tuple[object, ...] | None = None
         self._inference_settings_override: InferenceRunSettings | None = None
         self._inference_worker: Optional[_DetectKitDatasetInferenceWorker] = None
@@ -1642,7 +1353,7 @@ class DetectKitMainWindow(QMainWindow):
     def _cancel_al_round(self) -> None:
         worker = getattr(self, "_al_worker", None)
         if worker is not None:
-            worker.requestInterruption()
+            worker.cancel()
 
     def _resolve_active_detector_spec(self):
         """Return the `ALDetectorSpec` describing the project's active model.
@@ -1670,8 +1381,6 @@ class DetectKitMainWindow(QMainWindow):
                 "or train the matching sequential counterpart."
             )
 
-        from .prediction_preview import _resolve_compute_runtime
-
         kind, primary, secondary = detectkit_resolve_inference_models(
             self._project, model_path
         )
@@ -1688,7 +1397,7 @@ class DetectKitMainWindow(QMainWindow):
         # export, which AL scoring never did before.
         runtime_tier = (
             "cpu"
-            if _resolve_compute_runtime(self._project.device or "auto") == "cpu"
+            if str(self._project.device or "auto").strip().lower() == "cpu"
             else "gpu"
         )
 
@@ -1823,8 +1532,8 @@ class DetectKitMainWindow(QMainWindow):
     def _on_stage_predictions(self) -> None:
         """Turn the predictions currently on screen into a staged review.
 
-        ON SCREEN, not in memory. `_dataset_predictions` is deliberately
-        retained at INFERENCE_CONFIDENCE_FLOOR (0.01, models.py:12-14) so
+        ON SCREEN, not in memory. The indexed cache is deliberately written
+        at INFERENCE_CONFIDENCE_FLOOR (0.01, models.py:12-14) so
         that moving the slider is useful without re-running the model; the
         slider is applied at DISPLAY time by
         `_filter_detections_by_confidence`. Staging the raw dict would stage
@@ -1847,7 +1556,8 @@ class DetectKitMainWindow(QMainWindow):
         settings = self._tools_panel.get_overlay_settings()
         signature = self._dataset_signature(settings)
         if (
-            not self._dataset_predictions
+            self._dataset_prediction_cache is None
+            or self._dataset_prediction_paths is None
             or signature is None
             or signature != self._dataset_prediction_signature
         ):
@@ -1860,10 +1570,22 @@ class DetectKitMainWindow(QMainWindow):
             return
 
         threshold = float(settings.confidence_threshold)
-        visible = {
-            image_path: _filter_detections_by_confidence(dets, threshold)
-            for image_path, dets in self._dataset_predictions.items()
-        }
+        cache = self._dataset_prediction_cache
+        path_index = self._dataset_prediction_paths
+        if cache.statistics(threshold)["detection_count"] == 0:
+            QMessageBox.information(
+                self,
+                "Stage Predictions",
+                "There are no visible predictions to stage. Lower the confidence threshold or re-run inference.",
+            )
+            return
+
+        def visible_predictions():
+            for frame_idx, detections in cache.iter_frames():
+                yield (
+                    path_index.path_at(frame_idx),
+                    _filter_detections_by_confidence(detections, threshold),
+                )
 
         model_path = signature[1]
         try:
@@ -1879,7 +1601,7 @@ class DetectKitMainWindow(QMainWindow):
             stage_predictions(
                 source,
                 self._project.project_dir,
-                visible,
+                visible_predictions(),
                 model_path=str(model_path),
                 inference_kind=str(kind),
                 confidence=threshold,
@@ -1895,34 +1617,14 @@ class DetectKitMainWindow(QMainWindow):
 
     def _visible_inference_stats(self, confidence_threshold: float) -> dict:
         """Summarize cached candidates after applying the live display filter."""
-        per_image = {
-            image_path: _filter_detections_by_confidence(
-                detections, confidence_threshold
-            )
-            for image_path, detections in self._dataset_predictions.items()
-        }
-        detections = [
-            detection
-            for image_detections in per_image.values()
-            for detection in image_detections
-        ]
-        class_counts: dict[int, int] = {}
-        for detection in detections:
-            class_id = int(detection.get("class_id", 0))
-            class_counts[class_id] = class_counts.get(class_id, 0) + 1
-        count = len(detections)
-        return {
-            "per_image": per_image,
-            "image_count": len(per_image),
-            "detection_count": count,
-            "class_counts": class_counts,
-            "mean_confidence": (
-                sum(float(detection.get("confidence", 0.0)) for detection in detections)
-                / count
-                if count
-                else 0.0
-            ),
-        }
+        if self._dataset_prediction_cache is None:
+            return {
+                "image_count": 0,
+                "detection_count": 0,
+                "class_counts": {},
+                "mean_confidence": 0.0,
+            }
+        return self._dataset_prediction_cache.statistics(confidence_threshold)
 
     def _run_inference_overlay(self) -> None:
         """Run dataset-wide PyTorch inference for the active source."""
@@ -1993,10 +1695,11 @@ class DetectKitMainWindow(QMainWindow):
         inference_settings = self._effective_inference_settings(settings)
 
         worker = _DetectKitDatasetInferenceWorker(
-            image_paths,
-            primary,
-            inference_settings.device,
-            INFERENCE_CONFIDENCE_FLOOR,
+            project_dir=self._project.project_dir,
+            source_path=self._current_source_path,
+            model_path=primary,
+            device_preference=inference_settings.device,
+            confidence_threshold=INFERENCE_CONFIDENCE_FLOOR,
             inference_kind=kind,
             secondary_model_path=(
                 secondary if kind in {"sequential", "sequential_segment"} else None
@@ -2038,8 +1741,15 @@ class DetectKitMainWindow(QMainWindow):
                 self.statusBar().showMessage("Inference cancelled.", 5000)
 
         def _handle_success(result: dict) -> None:
-            self._dataset_predictions = dict(result.get("per_image", {}))
+            old_cache = self._dataset_prediction_cache
+            self._dataset_prediction_cache = result["cache"]
+            self._dataset_prediction_paths = result["path_index"]
             self._dataset_prediction_signature = signature
+            if (
+                old_cache is not None
+                and old_cache.path != self._dataset_prediction_cache.path
+            ):
+                remove_prediction_cache(old_cache.path)
             self._tools_panel.update_inference_stats(
                 self._visible_inference_stats(settings.confidence_threshold),
                 class_names=self._project.class_names,
@@ -2131,12 +1841,13 @@ class DetectKitMainWindow(QMainWindow):
             QMessageBox.warning(self, "Open Folder", f"Could not open folder:\n{exc}")
 
     def on_images_deleted(self, deleted_paths: list[str]) -> None:
-        """Drop cached predictions for *deleted_paths* and clear canvas if needed."""
+        """Invalidate indexed predictions after source membership changes."""
         deleted = set(deleted_paths or [])
         if not deleted:
             return
-        for path in deleted:
-            self._dataset_predictions.pop(path, None)
+        self._dataset_prediction_cache = None
+        self._dataset_prediction_paths = None
+        self._dataset_prediction_signature = None
         if self._current_image_path in deleted:
             self._current_image_path = ""
             self._last_prediction_request = None
@@ -2160,12 +1871,17 @@ class DetectKitMainWindow(QMainWindow):
             self._project is not None
             and signature is not None
             and signature == self._dataset_prediction_signature
-            and self._current_image_path in self._dataset_predictions
+            and self._dataset_prediction_cache is not None
+            and self._dataset_prediction_paths is not None
         ):
-            predictions = _filter_detections_by_confidence(
-                self._dataset_predictions.get(self._current_image_path, []),
-                settings.confidence_threshold,
+            frame_idx = self._dataset_prediction_paths.index_of(
+                self._current_image_path
             )
+            if frame_idx is not None:
+                predictions = _filter_detections_by_confidence(
+                    self._dataset_prediction_cache.read_frame(frame_idx) or [],
+                    settings.confidence_threshold,
+                )
         return FrameContext(
             project=self._project,
             source_path=self._current_source_path,
@@ -2206,7 +1922,8 @@ class DetectKitMainWindow(QMainWindow):
         """Load an image and overlay GT labels, predictions and staged masks."""
         new_source = str(source_path or "")
         if new_source != self._current_source_path:
-            self._dataset_predictions = {}
+            self._dataset_prediction_cache = None
+            self._dataset_prediction_paths = None
             self._dataset_prediction_signature = None
         self._current_source_path = new_source
         self._current_image_path = str(image_path or "")

@@ -774,6 +774,13 @@ class ChunkedArrayStore:
                 "centers",
                 "corners",
             },
+            "detectkit_prediction": {
+                "frame_indices",
+                "class_ids",
+                "confidences",
+                "polygon_offsets",
+                "polygon_points",
+            },
         }
         required = expected_payloads.get(self.kind)
         if required is None or set(arrays) != required | _CHUNK_META_FIELDS | {
@@ -811,6 +818,8 @@ class ChunkedArrayStore:
                 "corners": np.dtype(np.float32),
                 "detection_ids": np.dtype(np.int64),
                 "class_ids": np.dtype(np.int64),
+                "polygon_offsets": np.dtype(np.int64),
+                "polygon_points": np.dtype(np.float32),
                 "det_indices": np.dtype(np.int32),
                 "heading_hints": np.dtype(np.float32),
                 "heading_confidences": np.dtype(np.float32),
@@ -842,14 +851,19 @@ class ChunkedArrayStore:
         if position.size != 1 or int(position[0]) != sequence:
             raise ValueError("cache chunk position mismatch")
 
-        identifier_name = "detection_ids" if self.kind == "detection" else "det_indices"
-        identifiers = np.asarray(arrays[identifier_name])
-        for frame in written:
-            values = identifiers[frame_indices == frame]
-            if len(values) > 1 and np.any(np.diff(values.astype(np.int64)) <= 0):
-                raise ValueError(
-                    f"cache field {identifier_name!r} must be unique and ordered per frame"
-                )
+        identifier_name = (
+            "detection_ids"
+            if self.kind == "detection"
+            else (None if self.kind == "detectkit_prediction" else "det_indices")
+        )
+        if identifier_name is not None:
+            identifiers = np.asarray(arrays[identifier_name])
+            for frame in written:
+                values = identifiers[frame_indices == frame]
+                if len(values) > 1 and np.any(np.diff(values.astype(np.int64)) <= 0):
+                    raise ValueError(
+                        f"cache field {identifier_name!r} must be unique and ordered per frame"
+                    )
 
         rows = len(frame_indices)
         one_dimensional = {
@@ -907,6 +921,23 @@ class ChunkedArrayStore:
             )
             if len(keypoints) != rows:
                 raise ValueError("pose keypoints are not row-aligned")
+        elif self.kind == "detectkit_prediction":
+            offsets = self._require_array(
+                arrays, "polygon_offsets", rank=1, dtype_kinds="iu"
+            )
+            points = self._require_array(
+                arrays,
+                "polygon_points",
+                rank=2,
+                dtype_kinds="f",
+                trailing=(2,),
+            )
+            if len(offsets) != rows + 1 or int(offsets[0]) != 0:
+                raise ValueError("DetectKit polygon offsets are invalid")
+            if len(offsets) > 1 and np.any(np.diff(offsets) < 3):
+                raise ValueError("DetectKit polygons must contain at least 3 points")
+            if int(offsets[-1]) != len(points):
+                raise ValueError("DetectKit polygon offsets do not cover their points")
         elif self.kind == "cnn":
             probabilities = self._require_array(
                 arrays, "probabilities", rank=3, dtype_kinds="f"

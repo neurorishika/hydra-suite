@@ -313,7 +313,27 @@ def _wired_window(monkeypatch, tmp_path, predictions):
         sources=[source],
         class_names=["ant"],
     )
-    window._dataset_predictions = dict(predictions)
+    ordered = sorted(predictions.items())
+
+    class _Cache:
+        def iter_frames(self):
+            yield from enumerate(detections for _path, detections in ordered)
+
+        def statistics(self, threshold):
+            visible = [
+                detection
+                for _path, detections in ordered
+                for detection in detections
+                if detection["confidence"] >= threshold
+            ]
+            return {"detection_count": len(visible)}
+
+    class _Paths:
+        def path_at(self, frame_idx):
+            return ordered[frame_idx][0]
+
+    window._dataset_prediction_cache = _Cache() if ordered else None
+    window._dataset_prediction_paths = _Paths() if ordered else None
     window._dataset_prediction_signature = ("sig", "m.pt")
 
     monkeypatch.setattr(window, "_current_source_obj", lambda: source)
@@ -367,7 +387,7 @@ def test_staging_action_stages_only_what_is_visible_at_the_slider(
 ):
     """The floor-retained candidates the user never saw must not be staged.
 
-    _dataset_predictions is held at INFERENCE_CONFIDENCE_FLOOR (0.01) so the
+    The indexed cache is held at INFERENCE_CONFIDENCE_FLOOR (0.01) so the
     slider stays useful without re-running the model. Staging the raw dict
     would stage candidates the user never reviewed while run.json claimed
     the slider value.
@@ -380,7 +400,7 @@ def test_staging_action_stages_only_what_is_visible_at_the_slider(
         mw,
         "stage_predictions",
         lambda src, project_dir, per_image, **kw: seen.update(
-            per_image=per_image, kw=kw
+            per_image=dict(per_image), kw=kw
         ),
     )
 
