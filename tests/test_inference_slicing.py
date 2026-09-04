@@ -1,4 +1,6 @@
+import gc
 import types
+import weakref
 
 import numpy as np
 import pytest
@@ -1131,6 +1133,39 @@ def test_predict_is_chunked_to_a_bounded_tile_count():
     assert len(sizes) > 1  # actually chunked, not one giant call
     assert max(sizes) <= MAX_TILE_CHUNK
     assert max(sizes) <= 4  # bounded by tiles-per-frame (the TRT engine profile)
+
+
+def test_streaming_sliced_path_releases_previous_tile_chunk_before_predict():
+    """The generator and run_obb consumer together retain at most one tile chunk."""
+    tile_batch_size = 4
+    tile_refs: list[weakref.ReferenceType[np.ndarray]] = []
+    live_at_predict: list[int] = []
+
+    class _Model:
+        imgsz = 256
+        overrides = {"imgsz": 256}
+
+        def predict(self, source, **kwargs):
+            tile_refs.extend(weakref.ref(tile) for tile in source)
+            gc.collect()
+            live_at_predict.append(sum(ref() is not None for ref in tile_refs))
+            return [types.SimpleNamespace(obb=_FakeOBBN([])) for _ in source]
+
+    config = _direct_cfg(
+        True,
+        overlap_height_ratio=0.0,
+        overlap_width_ratio=0.0,
+        tile_batch_size=tile_batch_size,
+    )
+    result = run_direct_sliced(
+        [np.zeros((768, 768, 3), dtype=np.uint8)],
+        _Model(),
+        config,
+        _FakeRuntime(),
+    )
+
+    assert len(result) == 1
+    assert live_at_predict == [tile_batch_size, tile_batch_size, 1]
 
 
 # --- I3: cap applied before the merge on every path ---------------------------

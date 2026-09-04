@@ -51,6 +51,8 @@ from hydra_suite.core.canonicalization.geometry import ClippingStats
 from hydra_suite.utils import profiling_names as N
 from hydra_suite.utils.profiling import bind_target, span
 
+from .cancellation import InferenceCancelled
+from .config import MAX_PIPELINE_DEPTH
 from .result import FrameResult, OBBResult
 from .stages.apriltag import run_apriltag
 from .stages.bgsub import run_bgsub_batch
@@ -69,6 +71,11 @@ from .stages.obb import (
     run_obb,
 )
 from .stages.pose import run_pose_batch
+
+# Includes decoded frame windows held by the consumer, bounded handoff queue,
+# and producer-under-construction window. Model-specific tile/crop outputs have
+# their own admission budget in stages.slicing.
+MAX_PIPELINE_BUFFER_BYTES = 512 * 1024 * 1024
 
 
 @dataclass
@@ -99,6 +106,7 @@ class InferencePassResult:
 
     frames_processed: int = 0
     frame_results: list = field(default_factory=list)
+    cancelled: bool = False
 
 
 @dataclass
@@ -172,6 +180,10 @@ class Pipeline:
     ) -> None:
         if depth < 1:
             raise ValueError(f"pipeline depth must be >= 1, got {depth}")
+        if depth > MAX_PIPELINE_DEPTH:
+            raise ValueError(
+                f"pipeline depth must be <= {MAX_PIPELINE_DEPTH}, got {depth}"
+            )
         # F1 guard: run-scoped clipped-detection counter (see ClippingStats).
         # Owned by the caller (InferenceRunner) when given so the realtime and
         # batch passes share one running tally; a fresh instance otherwise so
@@ -198,6 +210,11 @@ class Pipeline:
         # ahead of the single consumer (depth=2 -> 1, the classic double buffer;
         # depth=4 -> 3). An explicit ``queue_bound`` overrides this.
         if queue_bound is not None:
+            if not 1 <= int(queue_bound) <= MAX_PIPELINE_DEPTH - 1:
+                raise ValueError(
+                    "pipeline queue_bound must be between 1 and "
+                    f"{MAX_PIPELINE_DEPTH - 1}, got {queue_bound}"
+                )
             self.queue_bound = queue_bound
         else:
             self.queue_bound = max(1, depth - 1)
@@ -622,10 +639,15 @@ class Pipeline:
 
         for window in self._stream_windows(frame_source, w):
             if should_stop is not None and should_stop():
+                result.cancelled = True
+                break
+            try:
+                with span(N.WINDOW, units=len(window)):
+                    window_results = self._process_window(window)
+            except InferenceCancelled:
+                result.cancelled = True
                 break
             result.frames_processed += len(window)
-            with span(N.WINDOW, units=len(window)):
-                window_results = self._process_window(window)
             self._deliver_results(
                 result, window_results, collect_results, result_consumer
             )
@@ -666,6 +688,7 @@ class Pipeline:
         stop = threading.Event()
         consumer_done = threading.Event()
         producer_error: list[BaseException] = []
+        producer_cancelled = threading.Event()
         # Frames read so far (written by producer, read for progress). Guarded by
         # being the producer's sole responsibility; the consumer only reads it
         # after the producer has put the corresponding window on the queue.
@@ -698,6 +721,7 @@ class Pipeline:
             try:
                 for window in self._stream_windows(frame_source, w):
                     if stop.is_set() or (should_stop is not None and should_stop()):
+                        producer_cancelled.set()
                         stop.set()
                         break
                     raw_list = self._run_detection_for_window(window)
@@ -706,6 +730,9 @@ class Pipeline:
                     # progress with the same cadence as the sync path.
                     if not cancellable_put((window, raw_list, read_counter["n"])):
                         break
+            except InferenceCancelled:
+                producer_cancelled.set()
+                stop.set()
             except BaseException as exc:  # noqa: BLE001,B036 supervisor
                 producer_error.append(exc)
                 stop.set()
@@ -729,9 +756,9 @@ class Pipeline:
                     consumer_done.set()
                     break
                 window, raw_list, read_n = item
-                result.frames_processed += len(window)
                 with span(N.WINDOW, units=len(window)):
                     window_results = self._process_obb_results(window, raw_list)
+                result.frames_processed += len(window)
                 self._deliver_results(
                     result, window_results, collect_results, result_consumer
                 )
@@ -771,6 +798,7 @@ class Pipeline:
             raise consumer_error
         if producer_error:
             raise producer_error[0]
+        result.cancelled = producer_cancelled.is_set()
 
         if progress_cb:
             progress_cb(result.frames_processed, range_total)
@@ -812,6 +840,17 @@ class Pipeline:
                         frame_idx, frame = next(it)
                     except StopIteration:
                         break
+                    frame_bytes = self._frame_payload_bytes(frame)
+                    retained_windows = self.queue_bound + 2 if self.depth >= 2 else 1
+                    estimated = frame_bytes * w * retained_windows
+                    if estimated > MAX_PIPELINE_BUFFER_BYTES:
+                        raise ValueError(
+                            "Inference pipeline frame buffer is not "
+                            f"resource-admissible: one frame={frame_bytes} bytes, "
+                            f"batch={w}, live_windows={retained_windows}, "
+                            f"estimated={estimated} bytes exceeds the "
+                            f"{MAX_PIPELINE_BUFFER_BYTES}-byte pipeline budget"
+                        )
                     frames_buf.append(frame)
                     indices_buf.append(int(frame_idx))
                 decode_span.add_units(len(frames_buf))
@@ -820,6 +859,18 @@ class Pipeline:
             yield BatchWindow(frames=list(frames_buf), frame_indices=list(indices_buf))
             if len(frames_buf) < w:
                 break
+
+    @staticmethod
+    def _frame_payload_bytes(frame: Any) -> int:
+        """Return known decoded-frame storage without copying its payload."""
+        try:
+            value = int(frame.nbytes)
+        except (AttributeError, TypeError, ValueError):
+            try:
+                value = int(frame.numel()) * int(frame.element_size())
+            except (AttributeError, TypeError, ValueError):
+                return 0
+        return max(0, value)
 
     @staticmethod
     def _deliver_results(

@@ -301,6 +301,7 @@ def _predict_direct(
         conf=raw_floor,
         iou=float(iou),
         verbose=False,
+        max_det=_PREVIEW_MAX_DET,
     )
     if should_stop is not None and should_stop():
         return None
@@ -368,7 +369,11 @@ def predict_sliced_obb_result(
             )
         if task == "segment":
             return _extract_obb_from_masks(
-                res, frame_idx=0, offset=offset, emit_native_geometry=True
+                res,
+                frame_idx=0,
+                raw_detection_cap=_PREVIEW_MAX_DET,
+                offset=offset,
+                emit_native_geometry=True,
             )
         return extract_obb_result(res, frame_idx=0, offset=offset)
 
@@ -377,11 +382,18 @@ def predict_sliced_obb_result(
         imgsz=imgsz,
         device_tiles=False,
         requested=_slice_prediction_batch_size(executor),
+        task=task,
+        max_detections=_PREVIEW_MAX_DET,
     )
     parts = []
-    for chunk in iter_tile_job_chunks(
-        [frame], plan, device_tiles=False, chunk_size=batch_size
-    ):
+    chunk_iter = iter(
+        iter_tile_job_chunks([frame], plan, device_tiles=False, chunk_size=batch_size)
+    )
+    while True:
+        try:
+            chunk = next(chunk_iter)
+        except StopIteration:
+            break
         if should_stop is not None and should_stop():
             return None
         tiles_img = [image for _job, image in chunk]
@@ -390,6 +402,7 @@ def predict_sliced_obb_result(
             conf=raw_floor,
             iou=float(iou),
             verbose=False,
+            max_det=_PREVIEW_MAX_DET,
         )
         for (job, _image), result in zip(chunk, results):
             x0, y0 = job.offset
@@ -397,6 +410,12 @@ def predict_sliced_obb_result(
         parts = _bound_compact_parts(parts, 0, _PREVIEW_MAX_DET)
         if should_stop is not None and should_stop():
             return None
+        # A ``for`` loop requests the next generator item before rebinding its
+        # target, which would overlap the prior tile/result batch with the
+        # next materialized chunk. Release all batch-local payloads first.
+        chunk.clear()
+        job = _image = result = None
+        del results, tiles_img, chunk
 
     # Route extraction + cross-tile merge through the SAME production seam the
     # ``Grid`` region source uses: ``extract_obb_result``'s native ``offset=``
@@ -442,6 +461,7 @@ def _sequential_obb_result(
         conf=raw_floor,
         iou=float(iou),
         verbose=False,
+        max_det=_PREVIEW_MAX_DET,
     )
     if should_stop is not None and should_stop():
         return None
@@ -475,13 +495,15 @@ def _sequential_obb_result(
             conf=raw_floor,
             iou=float(iou),
             verbose=False,
+            max_det=_PREVIEW_MAX_DET,
         )
         sub.extend(
             extract_obb_result(result, 0, offset=offset, scale=(1.0, 1.0))
             for result, offset in zip(results, pending_offsets)
         )
-        pending_crops = []
-        pending_offsets = []
+        pending_crops.clear()
+        pending_offsets.clear()
+        del results, crop, offset
     if pending_crops:
         if should_stop is not None and should_stop():
             return None
@@ -490,6 +512,7 @@ def _sequential_obb_result(
             conf=raw_floor,
             iou=float(iou),
             verbose=False,
+            max_det=_PREVIEW_MAX_DET,
         )
         sub.extend(
             extract_obb_result(result, 0, offset=offset, scale=(1.0, 1.0))

@@ -8,6 +8,7 @@ from hydra_suite.core.inference.runtime import RuntimeContext
 from hydra_suite.core.inference.stages.filtering import (
     MAX_DOWNSTREAM_CROPS_PER_FRAME,
     filter_detections,
+    filter_for_source,
     filter_from_tensors,
     filter_raw,
     filter_with_indices,
@@ -177,6 +178,22 @@ def test_unlimited_config_still_has_finite_downstream_crop_cap():
 
     assert result.num_detections == MAX_DOWNSTREAM_CROPS_PER_FRAME
     assert len(indices) == MAX_DOWNSTREAM_CROPS_PER_FRAME
+
+
+def test_bgsub_source_is_capped_before_downstream_crop_materialization():
+    n = MAX_DOWNSTREAM_CROPS_PER_FRAME + 9
+    raw = _make_obb(
+        [[i * 100.0, 0.0] for i in range(n)],
+        [float("nan")] * n,
+        sizes=[float(i + 1) for i in range(n)],
+    )
+    config = type("Config", (), {"detection_source": "bgsub"})()
+
+    result, indices = filter_for_source(config, raw)
+
+    assert result.num_detections == MAX_DOWNSTREAM_CROPS_PER_FRAME
+    assert len(indices) == MAX_DOWNSTREAM_CROPS_PER_FRAME
+    assert result.sizes.min() == n - MAX_DOWNSTREAM_CROPS_PER_FRAME + 1
 
 
 def test_filter_empty_input():

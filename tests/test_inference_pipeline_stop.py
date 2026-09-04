@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from hydra_suite.core.inference import pipeline as pipeline_module
+from hydra_suite.core.inference.cancellation import InferenceCancelled
 from hydra_suite.core.inference.pipeline import BatchWindow, Pipeline
 
 
@@ -28,6 +31,7 @@ def test_run_sync_stops_early_when_should_stop_returns_true():
     result = pipe.run(frame_source, range(10), range_total=10, should_stop=should_stop)
 
     assert result.frames_processed == 2
+    assert result.cancelled is True
 
 
 def test_run_sync_processes_everything_when_should_stop_is_none():
@@ -80,6 +84,44 @@ def test_run_double_buffer_stops_early_when_should_stop_returns_true():
     result = pipe.run(frame_source, range(20), range_total=20, should_stop=should_stop)
 
     assert result.frames_processed < 20
+    assert result.cancelled is True
+
+
+def test_final_only_window_cancel_does_not_count_or_report_complete_progress():
+    pipe = _fake_pipeline(window_size=4, depth=1)
+    progress: list[tuple[int, int]] = []
+
+    def cancel_during_detection(window):
+        raise InferenceCancelled("cancelled inside admitted tile chunk")
+
+    pipe._run_detection_for_window = cancel_during_detection
+    result = pipe.run(
+        [(0, object()), (1, object())],
+        range(2),
+        range_total=2,
+        progress_cb=lambda done, total: progress.append((done, total)),
+    )
+
+    assert result.cancelled is True
+    assert result.frames_processed == 0
+    assert progress == [(0, 2)]
+
+
+def test_frame_window_is_refused_before_pipeline_prefetch_exceeds_byte_budget():
+    from hydra_suite.core.inference.pipeline import MAX_PIPELINE_BUFFER_BYTES
+
+    pipe = _fake_pipeline(window_size=2, depth=2)
+    frame_bytes = MAX_PIPELINE_BUFFER_BYTES // 2
+
+    class _HugeLogicalFrame:
+        nbytes = frame_bytes
+
+    with pytest.raises(ValueError, match="pipeline frame buffer"):
+        pipe.run(
+            [(0, _HugeLogicalFrame())],
+            range(1),
+            range_total=1,
+        )
 
 
 def test_run_double_buffer_processes_everything_when_should_stop_is_none():

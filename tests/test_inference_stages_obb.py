@@ -327,6 +327,99 @@ def test_load_obb_models_direct_mode_uses_detection_batch_size(monkeypatch):
     assert captured["batch_size"] == 8
 
 
+def test_load_obb_models_caps_every_model_boundary_for_adversarial_targets(monkeypatch):
+    import hydra_suite.core.inference.stages.obb as obb_mod
+    from hydra_suite.core.inference.config import OBBConfig, OBBSequentialConfig
+    from hydra_suite.core.inference.runtime import RuntimeContext
+
+    calls = []
+
+    def fake_load_yolo(model_path, compute_runtime, **kwargs):
+        calls.append((model_path, kwargs["max_det"]))
+        return object()
+
+    monkeypatch.setattr(obb_mod, "_load_yolo", fake_load_yolo)
+    config = OBBConfig(
+        mode="sequential",
+        sequential=OBBSequentialConfig(
+            detect_model_path="/detect.pt", obb_model_path="/obb.pt"
+        ),
+        max_detections=16 * 200,
+        raw_detection_cap=0,
+    )
+    runtime = RuntimeContext(
+        cuda_mode=False,
+        device="cpu",
+        use_nvdec=False,
+        tensor_on_cuda=False,
+    )
+
+    obb_mod.load_obb_models(config, runtime)
+
+    assert calls == [
+        ("/detect.pt", obb_mod.MAX_RAW_CANDIDATES_PER_FRAME),
+        ("/obb.pt", obb_mod.MAX_RAW_CANDIDATES_PER_FRAME),
+    ]
+
+
+def test_incremental_equal_confidence_reservoir_matches_one_shot_cap():
+    import hydra_suite.core.inference.stages.obb as obb_mod
+
+    cap = 2
+    parts = [
+        OBBResult(
+            frame_idx=0,
+            centroids=np.zeros((1, 2), dtype=np.float32),
+            angles=np.zeros(1, dtype=np.float32),
+            sizes=np.ones(1, dtype=np.float32),
+            shapes=np.ones((1, 2), dtype=np.float32),
+            confidences=np.full(1, 0.5, dtype=np.float32),
+            corners=np.zeros((1, 4, 2), dtype=np.float32),
+            detection_ids=np.zeros(1, dtype=np.int64),
+        )
+        for _ in range(6)
+    ]
+    for index, part in enumerate(parts):
+        part.centroids[:, 0] = index
+        part.confidences[:] = 0.5
+
+    expected = obb_mod._apply_raw_detection_cap(
+        obb_mod.merge_obb_results(0, parts), cap
+    )
+    reservoir = []
+    for part in parts:
+        reservoir.append(part)
+        reservoir = obb_mod._bound_compact_parts(reservoir, 0, cap)
+    actual = obb_mod._apply_raw_detection_cap(
+        obb_mod.merge_obb_results(0, reservoir), cap
+    )
+
+    np.testing.assert_array_equal(actual.centroids, expected.centroids)
+
+
+def test_raw_reservoir_drops_invalid_rows_before_they_can_evict_valid_candidates():
+    import torch
+
+    import hydra_suite.core.inference.stages.obb as obb_mod
+
+    confidences = torch.tensor([0.9, 0.8, 0.7, float("nan"), float("nan"), 0.6])
+    xywhr = torch.tensor(
+        [[float(i), 1.0, 2.0, 2.0, 0.0] for i in range(len(confidences))]
+    )
+    raw = obb_mod._RawOBBTensors(
+        frame_idx=0,
+        xywhr=xywhr,
+        corners=torch.zeros((6, 4, 2)),
+        conf=confidences,
+        cls=torch.zeros(6),
+    )
+
+    bounded = obb_mod._bound_compact_parts([raw], 0, cap=2)
+    result = obb_mod.materialize_tensors(bounded[0], raw_detection_cap=2)
+
+    np.testing.assert_allclose(result.confidences, [0.9, 0.8])
+
+
 def test_load_obb_models_sequential_mode_uses_stage2_batch_size_for_obb_model(
     monkeypatch,
 ):
@@ -1142,6 +1235,43 @@ def test_extract_obb_from_masks_precaps_before_kernel(monkeypatch):
 
     assert calls == [cap]  # optimization fired: kernel processed only `cap`
     _assert_obb_equal(new_final, expected)
+
+
+def test_segment_precap_excludes_empty_and_invalid_high_confidence_rows(monkeypatch):
+    from hydra_suite.core.inference.stages.obb import (
+        _extract_obb_from_masks,
+        _extract_raw_tensors_from_masks,
+        materialize_tensors,
+    )
+
+    result = _make_segment_result([0.99, 0.95, 0.9, 0.8])
+    result.masks.data[0].zero_()
+    result.boxes.xyxy[1, 0] = float("inf")
+    calls = _spy_kernel(monkeypatch)
+
+    cpu = _extract_obb_from_masks(result, frame_idx=0, raw_detection_cap=2)
+    raw = _extract_raw_tensors_from_masks(
+        result, frame_idx=0, device="cpu", raw_detection_cap=2
+    )
+    device = materialize_tensors(raw, raw_detection_cap=2)
+
+    assert calls == [2, 2]
+    np.testing.assert_allclose(cpu.confidences, [0.9, 0.8])
+    _assert_obb_equal(device, cpu)
+
+
+def test_segment_precap_one_uses_contiguous_indices(monkeypatch):
+    from hydra_suite.core.inference.stages.obb import _extract_obb_from_masks
+
+    calls = _spy_kernel(monkeypatch)
+    result = _extract_obb_from_masks(
+        _make_segment_result([0.1, 0.9, 0.8]),
+        frame_idx=0,
+        raw_detection_cap=1,
+    )
+
+    assert calls == [1]
+    np.testing.assert_allclose(result.confidences, [0.9])
 
 
 def test_extract_obb_from_masks_cap_disabled_processes_all(monkeypatch):

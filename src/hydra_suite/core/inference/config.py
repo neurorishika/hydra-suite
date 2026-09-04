@@ -24,6 +24,12 @@ class InferenceConfigError(ValueError):
     pass
 
 
+# These are hard resource ceilings, not UI hints. A loaded or hand-built
+# config must not bypass the bounded-window assumptions used by Pipeline.
+MAX_DETECTION_BATCH_SIZE = 64
+MAX_PIPELINE_DEPTH = 4
+
+
 def migrate_runtime_to_tier(runtimes: set[str]) -> RuntimeTier:
     """Map legacy per-stage runtime strings to a single pipeline tier.
 
@@ -476,12 +482,27 @@ class InferenceConfig:
 
     def __post_init__(self) -> None:
         self._validate_pipeline_depth()
+        self._validate_detection_batch_size()
         self._validate_detection_source()
 
     def _validate_pipeline_depth(self) -> None:
-        if self.pipeline_depth < 1:
+        if (
+            type(self.pipeline_depth) is not int
+            or not 1 <= self.pipeline_depth <= MAX_PIPELINE_DEPTH
+        ):
             raise InferenceConfigError(
-                f"pipeline_depth must be >= 1, got {self.pipeline_depth}"
+                f"pipeline_depth must be between 1 and {MAX_PIPELINE_DEPTH}, "
+                f"got {self.pipeline_depth}"
+            )
+
+    def _validate_detection_batch_size(self) -> None:
+        if (
+            type(self.detection_batch_size) is not int
+            or not 1 <= self.detection_batch_size <= MAX_DETECTION_BATCH_SIZE
+        ):
+            raise InferenceConfigError(
+                "detection_batch_size must be between 1 and "
+                f"{MAX_DETECTION_BATCH_SIZE}, got {self.detection_batch_size}"
             )
 
     def _validate_detection_source(self) -> None:

@@ -1,3 +1,5 @@
+import gc
+import weakref
 from types import SimpleNamespace
 
 import numpy as np
@@ -5,6 +7,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
+from hydra_suite.core.inference.cancellation import InferenceCancelled
 from hydra_suite.core.inference.config import (
     OBBSequentialConfig,
     SliceConfig,
@@ -392,18 +395,72 @@ def test_grid_polls_cancellation_between_admitted_chunks():
             return [object() for _ in images]
 
     model = _Model()
+    with pytest.raises(InferenceCancelled):
+        list(
+            Grid().iter_region_results(
+                [frame],
+                SimpleNamespace(direct_model=model),
+                config,
+                SimpleNamespace(tensor_on_cuda=False, device="cpu"),
+                should_stop=lambda: cancelled["value"],
+            )
+        )
+
+    assert model.calls == 1
+
+
+def test_segment_tile_admission_accounts_for_dense_model_outputs():
+    from hydra_suite.core.inference.stages.slicing import (
+        MAX_TILE_BATCH_BYTES,
+        estimated_prediction_job_bytes,
+    )
+
+    frame = np.zeros((64, 192, 3), dtype=np.uint8)
+    max_det = 100
+    slice_cfg = SliceConfig(
+        enabled=True,
+        geometry_mode="custom",
+        slice_width=64,
+        slice_height=64,
+        overlap_width_ratio=0.0,
+        overlap_height_ratio=0.0,
+        tile_batch_size=16,
+    )
+    config = SimpleNamespace(
+        direct=SimpleNamespace(
+            slice=slice_cfg, confidence_floor=0.01, model_task="segment"
+        ),
+        target_classes=[],
+        raw_detection_cap=max_det,
+        max_detections=max_det,
+    )
+    call_sizes = []
+
+    class _Model:
+        imgsz = 640
+
+        def predict(self, images, **kwargs):
+            call_sizes.append(len(images))
+            return [object() for _ in images]
+
     chunks = list(
         Grid().iter_region_results(
             [frame],
-            SimpleNamespace(direct_model=model),
+            SimpleNamespace(direct_model=_Model()),
             config,
             SimpleNamespace(tensor_on_cuda=False, device="cpu"),
-            should_stop=lambda: cancelled["value"],
         )
     )
 
-    assert model.calls == 1
-    assert chunks == []
+    per_job = estimated_prediction_job_bytes(
+        imgsz=640,
+        task="segment",
+        max_detections=max_det,
+        source_bytes=64 * 64 * 3,
+    )
+    assert chunks
+    assert max(call_sizes) * per_job <= MAX_TILE_BATCH_BYTES
+    assert call_sizes == [1, 1, 1]
 
 
 class _FakeBoxesXY:
@@ -653,6 +710,63 @@ def test_stage1_proposals_unset_batch_is_finite_and_streams_all_crops(monkeypatc
 
     assert stage2.batch_sizes == [16, 16, 3]
     assert sum(len(chunk) for chunk in chunks) == n
+
+
+def test_stage1_proposal_generator_releases_previous_crop_chunk(monkeypatch):
+    """A suspended generator must not retain the prior stage-2 crop batch."""
+    batch_size = 4
+    candidate_count = batch_size * 2 + 1
+    boxes = [[float(i), 0.0, float(i + 1), 1.0] for i in range(candidate_count)]
+    crop_refs: list[weakref.ReferenceType[np.ndarray]] = []
+    live_at_predict: list[int] = []
+
+    class _Detect:
+        def predict(self, frames, **kwargs):
+            return [_FakeStage1Result(boxes)]
+
+    class _Stage2:
+        def predict(self, crops, **kwargs):
+            crop_refs.extend(weakref.ref(crop) for crop in crops)
+            gc.collect()
+            live_at_predict.append(sum(ref() is not None for ref in crop_refs))
+            return [object() for _ in crops]
+
+    def fake_iter_crops(*args, **kwargs):
+        for index in range(candidate_count):
+            yield np.full((4, 4, 3), index, dtype=np.uint8), (float(index), 0.0)
+
+    monkeypatch.setattr(m, "iter_crops", fake_iter_crops)
+    seq = SimpleNamespace(
+        detect_image_size=0,
+        detect_confidence_threshold=0.1,
+        stage2_image_size=0,
+        stage2_batch_size=batch_size,
+        stage2_task="obb",
+        obb_confidence_threshold=0.2,
+    )
+    config = SimpleNamespace(
+        sequential=seq,
+        target_classes=[],
+        raw_detection_cap=candidate_count,
+        max_detections=candidate_count,
+    )
+    chunks = Stage1Proposals().iter_region_results(
+        [np.zeros((4, 4, 3), dtype=np.uint8)],
+        SimpleNamespace(detect_model=_Detect(), obb_model=_Stage2()),
+        config,
+        SimpleNamespace(device="cpu"),
+    )
+
+    while True:
+        try:
+            chunk = next(chunks)
+        except StopIteration:
+            break
+        chunk.clear()
+        del chunk
+        gc.collect()
+
+    assert live_at_predict == [batch_size, batch_size, 1]
 
 
 def test_stage1_proposals_refuses_absurd_candidates_before_crop_materialization(

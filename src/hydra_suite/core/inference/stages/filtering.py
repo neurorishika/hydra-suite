@@ -353,7 +353,16 @@ def filter_for_source(
     detection on the confidence comparison.
     """
     if config.detection_source == "bgsub":
-        return raw, np.arange(raw.num_detections, dtype=np.int32)
+        indices = np.arange(raw.num_detections, dtype=np.int32)
+        if raw.num_detections > MAX_DOWNSTREAM_CROPS_PER_FRAME:
+            # Background subtraction has no confidence gate (its confidences
+            # are NaN), but its legacy count gate keeps the largest objects.
+            # Apply the same ordering before any downstream crop consumer so
+            # loaded/multi-arena configs cannot bypass the hard crop bound.
+            order = np.argsort(raw.sizes)[::-1][:MAX_DOWNSTREAM_CROPS_PER_FRAME]
+            indices = np.ascontiguousarray(order, dtype=np.int32)
+            raw = _select(raw, indices)
+        return raw, indices
     return filter_with_indices(raw, config.obb, roi_mask)
 
 

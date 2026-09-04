@@ -8,6 +8,8 @@ from typing import Any, Iterator
 import numpy as np
 import torch
 
+from ..cancellation import InferenceCancelled
+
 
 @dataclass(frozen=True)
 class Affine:
@@ -100,11 +102,11 @@ class RegionSource:
         """
 
         if should_stop is not None and should_stop():
-            return
+            raise InferenceCancelled("inference cancelled before region prediction")
         planned = self.plan(frames, models, config, runtime, roi_mask=roi_mask)
         predicted = self.execute(planned, models, config, runtime)
         if should_stop is not None and should_stop():
-            return
+            raise InferenceCancelled("inference cancelled during region prediction")
         for frame_idx, (regions, results) in enumerate(zip(planned, predicted)):
             if regions:
                 yield [
@@ -161,10 +163,12 @@ class WholeFrame(RegionSource):
             _gpu_letterbox_batch,
             _invert_letterbox_on_result,
             _resolve_imgsz,
+            effective_raw_detection_cap,
         )
 
         model = models.direct_model
         conf_floor = config.direct.confidence_floor if config.direct else 1e-3
+        candidate_cap = effective_raw_detection_cap(config)
         frames = [regions[0].image for regions in per_frame_regions]
 
         # See obb._run_direct's original dispatch comment (preserved there
@@ -184,6 +188,7 @@ class WholeFrame(RegionSource):
                 classes=config.target_classes or None,
                 verbose=False,
                 device=runtime.device,
+                max_det=candidate_cap,
             )
             for frame, result, (r, pad_left, pad_top) in zip(
                 frames, results, lb_params
@@ -203,6 +208,7 @@ class WholeFrame(RegionSource):
                 classes=config.target_classes or None,
                 verbose=False,
                 device=runtime.device,
+                max_det=candidate_cap,
             )
         return [[r] for r in results]
 
@@ -321,7 +327,12 @@ class Grid(RegionSource):
             self._plan = None
             return
 
-        from .obb import DirectExecutorAdapter, _frames_are_cuda_tensors, _resolve_imgsz
+        from .obb import (
+            DirectExecutorAdapter,
+            _frames_are_cuda_tensors,
+            _resolve_imgsz,
+            effective_raw_detection_cap,
+        )
         from .slicing import (
             MAX_TILE_CHUNK,
             _predict_tiles,
@@ -356,6 +367,8 @@ class Grid(RegionSource):
             device_tiles=device_frames,
             requested=requested,
             byte_budget=byte_budget,
+            task=self.task(config),
+            max_detections=effective_raw_detection_cap(config),
         )
         letterbox = device_frames and not isinstance(model, DirectExecutorAdapter)
 
@@ -366,7 +379,7 @@ class Grid(RegionSource):
             chunk_size=chunk_size,
         ):
             if should_stop is not None and should_stop():
-                return
+                raise InferenceCancelled("inference cancelled before tile prediction")
             images = [image for _, image in chunk]
             results = _predict_tiles(
                 images,
@@ -378,7 +391,7 @@ class Grid(RegionSource):
                 chunk_size=chunk_size,
             )
             if should_stop is not None and should_stop():
-                return
+                raise InferenceCancelled("inference cancelled during tile prediction")
             entries: list[tuple[int, Region, Any]] = []
             for (job, image), result in zip(chunk, results):
                 entries.append(
@@ -393,6 +406,12 @@ class Grid(RegionSource):
                     )
                 )
             yield entries
+            # Both sides of a generator suspension retain the yielded object.
+            # Drop our reference before the next crop/model call so only one
+            # chunk is live in streaming consumers. Do not mutate ``entries``:
+            # callers are allowed to retain a yielded batch explicitly.
+            chunk.clear()
+            del entries, results, images, chunk, job, image, result
 
     def merge_plan(self, frame_idx: int) -> Any:
         return self._plan
@@ -420,7 +439,11 @@ class Stage1Proposals(RegionSource):
     def plan(
         self, frames, models, config, runtime, roi_mask=None
     ) -> list[list[Region]]:
-        from .obb import build_crops, resize_crops_for_stage2
+        from .obb import (
+            build_crops,
+            effective_raw_detection_cap,
+            resize_crops_for_stage2,
+        )
 
         seq = config.sequential
         stage1_kwargs: dict[str, Any] = {}
@@ -433,6 +456,7 @@ class Stage1Proposals(RegionSource):
             classes=config.target_classes or None,
             verbose=False,
             device=runtime.device,
+            max_det=effective_raw_detection_cap(config),
             **stage1_kwargs,
         )
 
@@ -467,13 +491,15 @@ class Stage1Proposals(RegionSource):
         return per_frame
 
     def task(self, config) -> str:
-        return config.sequential.stage2_task
+        return str(getattr(config.sequential, "stage2_task", "obb"))
 
     def seg_source(self, config) -> Any:
         return config.sequential
 
     def execute(self, per_frame_regions, models, config, runtime) -> list[list[Any]]:
         """Verbatim stage-2 predict loop of the retired ``obb._run_sequential``."""
+        from .obb import effective_raw_detection_cap
+
         seq = config.sequential
         out: list[list[Any]] = []
         for regions in per_frame_regions:
@@ -492,6 +518,7 @@ class Stage1Proposals(RegionSource):
                     verbose=False,
                     device=runtime.device,
                     imgsz=seq.stage2_image_size,
+                    max_det=effective_raw_detection_cap(config),
                 )
                 frame_results.extend(s2)
             out.append(frame_results)
@@ -510,6 +537,7 @@ class Stage1Proposals(RegionSource):
         """Run stage 2 over crop chunks created just in time."""
 
         from .obb import MAX_RAW_CANDIDATES_PER_FRAME, effective_raw_detection_cap
+        from .slicing import admitted_prediction_chunk_size
 
         seq = config.sequential
         stage1_kwargs: dict[str, Any] = {}
@@ -522,12 +550,12 @@ class Stage1Proposals(RegionSource):
             classes=config.target_classes or None,
             verbose=False,
             device=runtime.device,
+            max_det=effective_raw_detection_cap(config),
             **stage1_kwargs,
         )
         if should_stop is not None and should_stop():
-            return
+            raise InferenceCancelled("inference cancelled during stage-1 prediction")
         candidate_cap = effective_raw_detection_cap(config)
-        batch_size = self._stage2_batch_size(seq)
         for frame_idx, (frame, stage1_result) in enumerate(zip(frames, stage1)):
             boxes = stage1_result.boxes
             if boxes is None or len(boxes) == 0:
@@ -539,6 +567,15 @@ class Stage1Proposals(RegionSource):
                     f"the hard {MAX_RAW_CANDIDATES_PER_FRAME}-candidate ceiling; "
                     "increase the confidence threshold"
                 )
+            stage2_side = int(seq.stage2_image_size or max(frame.shape[:2]))
+            batch_size = admitted_prediction_chunk_size(
+                imgsz=stage2_side,
+                task=self.task(config),
+                max_detections=candidate_cap,
+                requested=self._stage2_batch_size(seq),
+                source_bytes=stage2_side * stage2_side * 3,
+                description="Sequential stage-2 crop batch",
+            )
             yield from self._iter_stage2_for_boxes(
                 frame_idx,
                 frame,
@@ -604,19 +641,44 @@ class Stage1Proposals(RegionSource):
             )
             if len(pending) == batch_size:
                 if should_stop is not None and should_stop():
-                    return
-                yield self._predict_stage2_chunk(
-                    frame_idx, pending, models, seq, runtime
+                    raise InferenceCancelled(
+                        "inference cancelled before stage-2 prediction"
+                    )
+                entries = self._predict_stage2_chunk(
+                    frame_idx, pending, models, seq, runtime, candidate_cap
                 )
+                if should_stop is not None and should_stop():
+                    raise InferenceCancelled(
+                        "inference cancelled during stage-2 prediction"
+                    )
+                yield entries
+                pending.clear()
+                del entries, crop, resized
                 pending = []
         if pending:
             if should_stop is not None and should_stop():
-                return
-            yield self._predict_stage2_chunk(frame_idx, pending, models, seq, runtime)
+                raise InferenceCancelled(
+                    "inference cancelled before stage-2 prediction"
+                )
+            entries = self._predict_stage2_chunk(
+                frame_idx, pending, models, seq, runtime, candidate_cap
+            )
+            if should_stop is not None and should_stop():
+                raise InferenceCancelled(
+                    "inference cancelled during stage-2 prediction"
+                )
+            yield entries
+            pending.clear()
+            del entries
 
     @staticmethod
     def _predict_stage2_chunk(
-        frame_idx: int, regions: list[Region], models, seq, runtime
+        frame_idx: int,
+        regions: list[Region],
+        models,
+        seq,
+        runtime,
+        candidate_cap: int,
     ) -> list[tuple[int, Region, Any]]:
         results = models.obb_model.predict(
             [region.image for region in regions],
@@ -625,6 +687,7 @@ class Stage1Proposals(RegionSource):
             verbose=False,
             device=runtime.device,
             imgsz=seq.stage2_image_size,
+            max_det=candidate_cap,
         )
         return [(frame_idx, region, result) for region, result in zip(regions, results)]
 
@@ -733,6 +796,7 @@ class SlicedStage1Proposals(Stage1Proposals):
             _frames_are_cuda_tensors,
             _resolve_imgsz,
             build_crops,
+            effective_raw_detection_cap,
             resize_crops_for_stage2,
         )
         from .slicing import MAX_TILE_CHUNK, _build_tile_jobs, plan_slices
@@ -779,6 +843,7 @@ class SlicedStage1Proposals(Stage1Proposals):
                     classes=config.target_classes or None,
                     verbose=False,
                     device=runtime.device,
+                    max_det=effective_raw_detection_cap(config),
                     **stage1_kwargs,
                 )
             )
@@ -887,6 +952,7 @@ class SlicedStage1Proposals(Stage1Proposals):
             plan.jobs_per_frame,
             int(getattr(slice_cfg, "tile_batch_size", MAX_TILE_CHUNK)),
         )
+        candidate_cap = effective_raw_detection_cap(config)
         chunk_size = admitted_tile_chunk_size(
             plan,
             imgsz=imgsz,
@@ -895,8 +961,9 @@ class SlicedStage1Proposals(Stage1Proposals):
             byte_budget=int(
                 getattr(slice_cfg, "tile_memory_budget_bytes", 256 * 1024 * 1024)
             ),
+            task="detect",
+            max_detections=candidate_cap,
         )
-        candidate_cap = effective_raw_detection_cap(config)
         boxes_by_frame = [np.zeros((0, 4), dtype=np.float64) for _ in frames]
         scores_by_frame = [np.zeros(0, dtype=np.float64) for _ in frames]
 
@@ -910,7 +977,9 @@ class SlicedStage1Proposals(Stage1Proposals):
             chunk_size=chunk_size,
         ):
             if should_stop is not None and should_stop():
-                return
+                raise InferenceCancelled(
+                    "inference cancelled before sliced stage-1 prediction"
+                )
             results = model.predict(
                 [image for _, image in chunk],
                 conf=seq.detect_confidence_threshold,
@@ -918,10 +987,13 @@ class SlicedStage1Proposals(Stage1Proposals):
                 classes=config.target_classes or None,
                 verbose=False,
                 device=runtime.device,
+                max_det=candidate_cap,
                 **stage1_kwargs,
             )
             if should_stop is not None and should_stop():
-                return
+                raise InferenceCancelled(
+                    "inference cancelled during sliced stage-1 prediction"
+                )
             for (job, _image), result in zip(chunk, results):
                 boxes = getattr(result, "boxes", None)
                 if boxes is None or len(boxes) == 0:
@@ -957,7 +1029,13 @@ class SlicedStage1Proposals(Stage1Proposals):
                 boxes_by_frame[frame_idx] = combined_boxes[order]
                 scores_by_frame[frame_idx] = combined_scores[order]
 
-        batch_size = self._stage2_batch_size(seq)
+            # Do not retain the final stage-1 tile/result chunk while stage 2
+            # begins. The compact box reservoirs above are the only state that
+            # crosses this model boundary.
+            chunk.clear()
+            results.clear()
+            del chunk, results, job, _image, result
+
         for frame_idx, frame in enumerate(frames):
             boxes = boxes_by_frame[frame_idx]
             if boxes.shape[0] == 0:
@@ -972,6 +1050,17 @@ class SlicedStage1Proposals(Stage1Proposals):
             if merged.shape[0] == 0:
                 continue
             frame_boxes = _FrameSpaceBoxes(torch.as_tensor(merged, dtype=torch.float32))
+            from .slicing import admitted_prediction_chunk_size
+
+            stage2_side = int(seq.stage2_image_size or max(frame.shape[:2]))
+            batch_size = admitted_prediction_chunk_size(
+                imgsz=stage2_side,
+                task=self.task(config),
+                max_detections=candidate_cap,
+                requested=self._stage2_batch_size(seq),
+                source_bytes=stage2_side * stage2_side * 3,
+                description="Sequential stage-2 crop batch",
+            )
             yield from self._iter_stage2_for_boxes(
                 frame_idx,
                 frame,

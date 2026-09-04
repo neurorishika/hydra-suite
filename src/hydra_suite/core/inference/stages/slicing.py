@@ -31,6 +31,8 @@ MAX_TILE_CHUNK = 128
 # limit, but not a larger one, until the sidecar-level resource policy can
 # supply a stricter live budget.
 MAX_TILE_BATCH_BYTES = 256 * 1024 * 1024
+COMPACT_OUTPUT_BYTES_PER_DETECTION = 128
+DENSE_MASK_BYTES_PER_PIXEL = 4
 
 
 @dataclass(frozen=True)
@@ -47,7 +49,33 @@ class TileJob:
         return (float(self.box[0]), float(self.box[1]))
 
 
-def _tile_job_estimated_bytes(plan: SlicePlan, imgsz: int, device_tiles: bool) -> int:
+def estimated_prediction_job_bytes(
+    *,
+    imgsz: int,
+    task: str,
+    max_detections: int,
+    source_bytes: int = 0,
+) -> int:
+    """Conservative live input/output bytes for one model prediction item."""
+    side = max(1, int(imgsz))
+    candidates = max(1, int(max_detections))
+    model_input_bytes = side * side * 3 * 4
+    compact_output = candidates * COMPACT_OUTPUT_BYTES_PER_DETECTION
+    dense_output = (
+        candidates * side * side * DENSE_MASK_BYTES_PER_PIXEL
+        if task == "segment"
+        else 0
+    )
+    return max(0, int(source_bytes)) + model_input_bytes + compact_output + dense_output
+
+
+def _tile_job_estimated_bytes(
+    plan: SlicePlan,
+    imgsz: int,
+    device_tiles: bool,
+    task: str,
+    max_detections: int,
+) -> int:
     """Conservative peak bytes attributable to one live tile job."""
 
     tile_w, tile_h = plan.slice_wh
@@ -59,8 +87,38 @@ def _tile_job_estimated_bytes(plan: SlicePlan, imgsz: int, device_tiles: bool) -
     # Numpy tiles need a contiguous uint8 copy. CUDA tile views do not, but
     # both paths can materialize a float32 model-input tensor.
     source_bytes = 0 if device_tiles else source_pixels * 3
-    model_input_bytes = max(1, int(imgsz)) ** 2 * 3 * 4
-    return source_bytes + model_input_bytes
+    return estimated_prediction_job_bytes(
+        imgsz=imgsz,
+        task=task,
+        max_detections=max_detections,
+        source_bytes=source_bytes,
+    )
+
+
+def admitted_prediction_chunk_size(
+    *,
+    imgsz: int,
+    task: str,
+    max_detections: int,
+    requested: int,
+    source_bytes: int = 0,
+    byte_budget: int = MAX_TILE_BATCH_BYTES,
+    description: str = "prediction",
+) -> int:
+    """Admit a model batch against combined input and worst-case output bytes."""
+    effective_budget = min(MAX_TILE_BATCH_BYTES, max(1, int(byte_budget)))
+    per_job = estimated_prediction_job_bytes(
+        imgsz=imgsz,
+        task=task,
+        max_detections=max_detections,
+        source_bytes=source_bytes,
+    )
+    if per_job > effective_budget:
+        raise ValueError(
+            f"{description} is not resource-admissible: estimated peak={per_job} "
+            f"bytes for one item exceeds the {effective_budget}-byte model batch budget"
+        )
+    return max(1, min(int(requested), MAX_TILE_CHUNK, effective_budget // per_job))
 
 
 def admitted_tile_chunk_size(
@@ -70,6 +128,8 @@ def admitted_tile_chunk_size(
     device_tiles: bool,
     requested: int,
     byte_budget: int = MAX_TILE_BATCH_BYTES,
+    task: str = "obb",
+    max_detections: int = 20,
 ) -> int:
     """Return a finite tile chunk admitted by an explicit byte budget.
 
@@ -79,7 +139,7 @@ def admitted_tile_chunk_size(
     """
 
     effective_budget = min(MAX_TILE_BATCH_BYTES, max(1, int(byte_budget)))
-    per_job = _tile_job_estimated_bytes(plan, imgsz, device_tiles)
+    per_job = _tile_job_estimated_bytes(plan, imgsz, device_tiles, task, max_detections)
     if per_job > effective_budget:
         frame_w, frame_h = plan.frame_wh
         tile_w, tile_h = plan.slice_wh
@@ -128,6 +188,11 @@ def iter_tile_job_chunks(
                 image = crop if device_tiles else np.ascontiguousarray(crop)
             chunk.append((job, image))
         yield chunk
+        # On resume, discard the generator's own references before asking the
+        # job iterator for another batch. A caller that intentionally retains
+        # the yielded list still owns it; normal streaming callers do not pay
+        # a hidden two-chunk lifetime tax.
+        del chunk, provenance, frame, image, job
 
 
 # Emitted at most once per process: the ``gpu`` merge backend only exists on
@@ -250,10 +315,15 @@ def _predict_tiles(
     batch (a list of tensors is not a valid predict source) and the transform
     inverted on each result, exactly as ``obb._run_direct`` does.
     """
-    from .obb import _gpu_letterbox_batch, _invert_letterbox_on_result
+    from .obb import (
+        _gpu_letterbox_batch,
+        _invert_letterbox_on_result,
+        effective_raw_detection_cap,
+    )
 
     conf_floor = config.direct.confidence_floor
     classes = config.target_classes or None
+    candidate_cap = effective_raw_detection_cap(config)
     results: list = []
     for start in range(0, len(images), chunk_size):
         part = images[start : start + chunk_size]
@@ -266,6 +336,7 @@ def _predict_tiles(
                 classes=classes,
                 verbose=False,
                 device=runtime.device,
+                max_det=candidate_cap,
             )
             # Invert the letterbox so extract functions see tile-local
             # coordinates. When every tile is exactly imgsz x imgsz (the common
@@ -292,6 +363,7 @@ def _predict_tiles(
                 classes=classes,
                 verbose=False,
                 device=runtime.device,
+                max_det=candidate_cap,
             )
         results.extend(chunk_results)
     return results
