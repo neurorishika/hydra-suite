@@ -20,6 +20,7 @@ from hydra_suite.core.inference.cache.chunked import (
 )
 
 MAX_FRAME_PAYLOAD_BYTES = 16 * 1024 * 1024
+MAX_DETECTIONS_PER_FRAME = 1_000
 MAX_PATH_BYTES = 4096
 MAX_PATH_INDEX_BYTES = 16 * 1024 * 1024
 DEFAULT_LRU_FRAMES = 8
@@ -104,15 +105,20 @@ class DatasetPredictionWriter:
         normalized: list[dict] = []
         byte_count = 0
         for raw in detections:
+            if len(normalized) >= MAX_DETECTIONS_PER_FRAME:
+                raise ValueError("prediction count exceeds its per-frame cap")
             points = np.asarray(raw.get("polygon_px") or [], dtype=np.float32).reshape(
                 -1, 2
             )
             if len(points) < 3:
                 continue
+            confidence = float(raw.get("confidence", 0.0))
+            if not np.isfinite(points).all() or not np.isfinite(confidence):
+                raise ValueError("prediction frame contains non-finite values")
             normalized.append(
                 {
                     "class_id": int(raw.get("class_id", 0)),
-                    "confidence": float(raw.get("confidence", 0.0)),
+                    "confidence": confidence,
                     "polygon_px": points,
                 }
             )

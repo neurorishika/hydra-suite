@@ -101,3 +101,22 @@ def test_generic_training_cancellation_terminates_sidecar(monkeypatch, tmp_path)
 
     assert result["canceled"] is True
     assert result["failure_kind"] == ExitKind.CANCELED.value
+
+
+def test_generic_training_preserves_uncertain_ownership_recovery(monkeypatch, tmp_path):
+    import pytest
+
+    import hydra_suite.training.ultralytics_supervisor as mod
+    from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
+
+    owner = object()
+
+    def fail(*args, **kwargs):
+        raise WorkloadStillOwnedError("still owned", owner)
+
+    monkeypatch.setattr(mod, "evaluate_resource_request", lambda *a, **k: _budget())
+    monkeypatch.setattr(mod, "SupervisedSidecar", fail)
+
+    with pytest.raises(WorkloadStillOwnedError) as caught:
+        mod.run_ultralytics_supervised(["trainer"], _spec(tmp_path))
+    assert caught.value.sidecar is owner

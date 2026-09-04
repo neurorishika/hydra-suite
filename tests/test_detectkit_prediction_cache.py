@@ -93,3 +93,18 @@ def test_prediction_statistics_stream_chunks_without_retaining_all_frames(tmp_pa
     assert stats["detection_count"] == 6
     assert stats["class_counts"] == {2: 6}
     assert cache.retained_frame_count <= 2
+
+
+def test_prediction_writer_rejects_nonfinite_or_unbounded_frame_payload(tmp_path):
+    from hydra_suite.detectkit.jobs.prediction_cache import (
+        MAX_DETECTIONS_PER_FRAME,
+        DatasetPredictionWriter,
+    )
+
+    writer = DatasetPredictionWriter(tmp_path / "predictions.npz", _key())
+    with pytest.raises(ValueError, match="non-finite"):
+        writer.write_frame(0, [{**_detection(0.5), "confidence": float("nan")}])
+    with pytest.raises(ValueError, match="count exceeds"):
+        writer.write_frame(
+            1, (_detection(0.5) for _ in range(MAX_DETECTIONS_PER_FRAME + 1))
+        )

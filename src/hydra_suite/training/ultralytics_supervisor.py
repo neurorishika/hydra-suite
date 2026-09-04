@@ -13,6 +13,7 @@ from hydra_suite.runtime.process_supervisor import (
     ContainmentPlan,
     ExitKind,
     SupervisedSidecar,
+    WorkloadStillOwnedError,
 )
 from hydra_suite.runtime.resource_budget import (
     AcceleratorKind,
@@ -206,6 +207,8 @@ def run_ultralytics_supervised(
             output_max_lines=OUTPUT_MAX_LINES,
             output_max_chars=OUTPUT_MAX_CHARS,
         )
+    except WorkloadStillOwnedError:
+        raise
     except (ResourceBusyError, RuntimeError, OSError, ValueError) as exc:
         return {
             "success": False,
@@ -239,6 +242,8 @@ def run_ultralytics_supervised(
             if eof:
                 time.sleep(POLL_SECONDS)
         result = sidecar.wait()
+    except WorkloadStillOwnedError:
+        raise
     except BaseException:
         if sidecar.process is not None and sidecar.process.poll() is None:
             sidecar.cancel(2.0)
