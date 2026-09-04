@@ -612,3 +612,151 @@ def test_no_completed_run_disables_both_buttons_with_a_reason(
     assert training_dialog_no_run.btn_calibrate.isEnabled() is False
     assert training_dialog_no_run.btn_register.toolTip()
     assert training_dialog_no_run.btn_calibrate.toolTip()
+
+
+# ------------------------------------------------------------------
+# History dialog and Tools-menu entry points: cancel must be side-effect
+# free (open_direct_calibration owns the ONLY sidecar write, inside
+# DirectCalibrationResultsDialog.accept()).
+# ------------------------------------------------------------------
+
+
+def _history_dialog_with_calibratable_run(tmp_path):
+    import hydra_suite.detectkit.gui.dialogs.history_dialog as hd
+    from hydra_suite.detectkit.gui.models import DetectKitProject
+
+    model_path = tmp_path / "published" / "m.pt"
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+    model_path.write_bytes(b"weights")
+
+    fake_run = {
+        "run_id": "run_001",
+        "role": "obb_direct",
+        "status": "completed",
+        "started_at": "2026-04-01T10:00:00",
+        "spec": {"base_model": "yolo26s-obb.pt", "hyperparams": {"epochs": 50}},
+        "artifact_paths": [str(model_path)],
+        "published_model_path": str(model_path),
+    }
+
+    orig_load_runs = hd._load_runs
+    hd._load_runs = lambda proj: [fake_run]
+    proj = DetectKitProject(project_dir=tmp_path, class_names=["ant"])
+    dlg = hd.HistoryDialog(proj)
+    dlg.table.selectRow(0)
+    hd._load_runs = orig_load_runs
+    return dlg, model_path
+
+
+def test_history_calibrate_cancel_does_not_touch_the_sidecar(monkeypatch, tmp_path):
+    import hydra_suite.detectkit.gui.dialogs.history_dialog as hd
+    from hydra_suite.core.inference.slice_meta import sidecar_path
+
+    dlg, model_path = _history_dialog_with_calibratable_run(tmp_path)
+    sidecar = sidecar_path(model_path)
+    assert not sidecar.exists()
+
+    monkeypatch.setattr(hd, "open_direct_calibration", lambda *a, **k: [])
+    dlg._calibrate_selected()
+
+    assert not sidecar.exists()
+    dlg.close()
+
+
+def test_history_calibrate_with_saved_profiles_still_writes_nothing_itself(
+    monkeypatch, tmp_path
+):
+    import hydra_suite.detectkit.gui.dialogs.history_dialog as hd
+    from hydra_suite.core.inference.slice_meta import sidecar_path
+
+    dlg, model_path = _history_dialog_with_calibratable_run(tmp_path)
+    sidecar = sidecar_path(model_path)
+    assert not sidecar.exists()
+
+    monkeypatch.setattr(
+        hd,
+        "open_direct_calibration",
+        lambda *a, **k: [{"id": "balanced-1", "name": "Balanced"}],
+    )
+    dlg._calibrate_selected()
+
+    # The action itself never writes -- only the results dialog's accept()
+    # (already-mocked out here) does. No sidecar should appear from this
+    # call alone.
+    assert not sidecar.exists()
+    dlg.close()
+
+
+def _main_window_with_project(tmp_path):
+    from hydra_suite.detectkit.gui import main_window as mw
+    from hydra_suite.detectkit.gui.models import DetectKitProject
+
+    win = mw.DetectKitMainWindow()
+    win._project = DetectKitProject(project_dir=tmp_path, class_names=["ant"])
+    return win, mw
+
+
+def test_tools_menu_calibrate_cancel_does_not_touch_the_sidecar(monkeypatch, tmp_path):
+    from hydra_suite.core.inference.slice_meta import sidecar_path
+
+    model_path = tmp_path / "models" / "m.pt"
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+    model_path.write_bytes(b"weights")
+    sidecar = sidecar_path(model_path)
+    assert not sidecar.exists()
+
+    win, mw = _main_window_with_project(tmp_path)
+    monkeypatch.setattr(
+        mw.QFileDialog,
+        "getOpenFileName",
+        staticmethod(lambda *a, **k: (str(model_path), "")),
+    )
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.dialogs.direct_calibration_wizard.open_direct_calibration",
+        lambda *a, **k: [],
+    )
+
+    win.calibrate_registered_model()
+
+    assert not sidecar.exists()
+    win.deleteLater()
+
+
+def test_tools_menu_calibrate_with_saved_profiles_still_writes_nothing_itself(
+    monkeypatch, tmp_path
+):
+    from hydra_suite.core.inference.slice_meta import sidecar_path
+
+    model_path = tmp_path / "models" / "m.pt"
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+    model_path.write_bytes(b"weights")
+    sidecar = sidecar_path(model_path)
+    assert not sidecar.exists()
+
+    win, mw = _main_window_with_project(tmp_path)
+    monkeypatch.setattr(
+        mw.QFileDialog,
+        "getOpenFileName",
+        staticmethod(lambda *a, **k: (str(model_path), "")),
+    )
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.dialogs.direct_calibration_wizard.open_direct_calibration",
+        lambda *a, **k: [{"id": "balanced-1", "name": "Balanced"}],
+    )
+    # A real QMessageBox.information() is a blocking modal even under
+    # offscreen Qt -- it never returns without a click, which is exactly
+    # what the reported "assertion" reason for a hang would be. Confirm the
+    # summary is shown, without letting the test block forever.
+    info_calls = []
+    monkeypatch.setattr(
+        mw.QMessageBox,
+        "information",
+        staticmethod(lambda *a, **k: info_calls.append((a, k))),
+    )
+
+    win.calibrate_registered_model()
+
+    assert info_calls
+
+    assert not sidecar.exists()
+    win.deleteLater()

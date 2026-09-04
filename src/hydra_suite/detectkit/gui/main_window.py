@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from hydra_suite.core.inference.slice_meta import read_slice_meta, write_slice_meta
+from hydra_suite.core.inference.slice_meta import read_slice_meta
 from hydra_suite.data.al.merge import MergeMode
 from hydra_suite.data.project_bundle import (
     export_project_bundle_archive,
@@ -836,7 +836,12 @@ class DetectKitMainWindow(QMainWindow):
             if self._project is not None
             else models_dir / ".sahi_calibration"
         )
-        open_direct_calibration(
+        # open_direct_calibration owns the ONLY write: any staged profile is
+        # committed atomically inside DirectCalibrationResultsDialog.accept()
+        # via write_slice_meta. This action must not write the sidecar
+        # itself -- a cancelled wizard/results dialog returns [] and must
+        # leave the artifact untouched.
+        profiles = open_direct_calibration(
             self,
             model_path=model_path,
             task=task,
@@ -845,12 +850,13 @@ class DetectKitMainWindow(QMainWindow):
             training_geometry=training_geometry,
             evidence_dir=evidence_dir,
         )
-        # calibrate_then_register semantics: the same artifact gets its
-        # training geometry stamped exactly once, regardless of whether the
-        # user staged a profile in the results dialog.
-        meta = read_slice_meta(model_path) or {}
-        meta.setdefault("training_geometry", training_geometry)
-        write_slice_meta(model_path, meta)
+        if profiles:
+            QMessageBox.information(
+                self,
+                "Calibrate for TrackerKit",
+                f"Saved {len(profiles)} calibration profile(s) to "
+                f"{model_path.name}.",
+            )
 
     # ------------------------------------------------------------------
     # Project lifecycle

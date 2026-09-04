@@ -393,6 +393,18 @@ def open_direct_calibration(
     progress.activateWindow()
     worker.start()
     loop.exec()
+    # BaseWorker.run() (widgets/workers.py) wraps execute() and returns; Qt's
+    # own QThread::run() machinery is what emits `finished` right as the
+    # underlying OS thread is about to stop -- so by the time loop.quit()
+    # (connected to worker.finished) has fired, the thread has already run
+    # its course. wait() is still the only call that BLOCKS until the OS
+    # thread has actually joined, which is what Qt's own docs require before
+    # it is safe to let a QThread object be destroyed; it returns
+    # immediately here since the thread is already done or finishing. Without
+    # it, `worker` (a local variable) going out of scope at the end of this
+    # function could trigger "QThread: Destroyed while thread is still
+    # running" on a slow machine/loaded CI box.
+    worker.wait()
     progress.close()
 
     outcome = outcome_holder.get("outcome")

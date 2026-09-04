@@ -20,7 +20,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from hydra_suite.core.inference.slice_meta import read_slice_meta, write_slice_meta
 from hydra_suite.widgets.dialogs import BaseDialog
 
 from .direct_calibration_wizard import open_direct_calibration
@@ -301,7 +300,14 @@ class HistoryDialog(BaseDialog):
             if getattr(self._project, "project_dir", None)
             else Path(".sahi_calibration")
         )
-        open_direct_calibration(
+        # open_direct_calibration owns the ONLY write: any staged profile is
+        # committed atomically inside DirectCalibrationResultsDialog.accept()
+        # via write_slice_meta. Publication (including the training-geometry
+        # stamp) already happened during training via
+        # publish_trained_model -> normalized_slice_meta. This action must
+        # not write the sidecar itself -- a cancelled wizard/results dialog
+        # returns [] and must leave the artifact untouched.
+        profiles = open_direct_calibration(
             self,
             model_path=Path(model_path),
             task=task,
@@ -310,11 +316,11 @@ class HistoryDialog(BaseDialog):
             training_geometry=training_geometry,
             evidence_dir=evidence_dir,
         )
-        # calibrate_then_register semantics: register the SAME artifact once
-        # regardless of whether the user staged a profile.
-        meta = read_slice_meta(model_path) or {}
-        meta.setdefault("training_geometry", training_geometry)
-        write_slice_meta(model_path, meta)
+        if profiles:
+            self.detail_label.setText(
+                f"<span style='color:#4ec9b0'>Saved {len(profiles)} calibration "
+                f"profile(s) to:</span> {Path(model_path).name}"
+            )
 
     def _load_for_inference(self) -> None:
         entry = self._get_selected_entry()
