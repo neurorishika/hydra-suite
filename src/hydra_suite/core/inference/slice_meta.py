@@ -8,6 +8,7 @@ can consume it without importing each other.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -219,6 +220,31 @@ def primary_slice_profile(meta: dict[str, Any]) -> dict[str, Any] | None:
             if profile["id"] == primary_id
         ),
         None,
+    )
+
+
+def profile_evidence_state(
+    profile: dict[str, Any], *, checkpoint_path: str | Path
+) -> tuple[bool, str]:
+    """Is this profile's measured evidence still about THESE weights?
+
+    Missing or unreadable provenance is not fatal -- an imported or legacy
+    profile simply has nothing to contradict. A fingerprint that DISAGREES is:
+    applying settings measured on other weights silently misdescribes the
+    operating point.
+    """
+    recorded = str((profile.get("measurement") or {}).get("checkpoint_fingerprint", ""))
+    if not recorded:
+        return True, ""
+    try:
+        digest = hashlib.sha256(Path(checkpoint_path).read_bytes()).hexdigest()
+    except Exception:
+        return True, ""
+    if recorded.split(":")[-1] == digest:
+        return True, ""
+    return False, (
+        f"'{profile.get('name', 'profile')}' was measured before the model's "
+        "weights changed; its numbers no longer describe this checkpoint."
     )
 
 

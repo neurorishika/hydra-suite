@@ -779,6 +779,15 @@ class DetectionPanel(QWidget):
         f_yolo.addWidget(self.row_slice_profile, 7, 1)
         self._set_widget_visible(self.row_slice_profile, False)
 
+        self._slice_meta_model_path = None
+        self._slice_profile_requested_id = None
+        self._slice_profile_applied_id = None
+        self._slice_profile_applied_name = "Training geometry"
+        self.lbl_slice_profile_status = QLabel("")
+        self.lbl_slice_profile_status.setWordWrap(True)
+        self.lbl_slice_profile_status.setStyleSheet("color: #b58900;")
+        f_yolo.addWidget(self.lbl_slice_profile_status, 10, 0, 1, 2)
+
         self.combo_slice_geometry = QComboBox()
         self.combo_slice_geometry.addItems(["auto_model", "auto_object", "custom"])
         self.combo_slice_geometry.setFixedHeight(30)
@@ -2591,6 +2600,7 @@ class DetectionPanel(QWidget):
         self.combo_slice_profile.setCurrentIndex(custom_index)
         self.combo_slice_profile.blockSignals(False)
         self._main_window.advanced_config["slice_profile_id"] = "__custom__"
+        self._update_slice_profile_status_label()
 
     def _on_slice_profile_changed(self, _index: int) -> None:
         if self._applying_slice_profile or self._slice_meta is None:
@@ -2612,7 +2622,10 @@ class DetectionPanel(QWidget):
 
         if self._slice_meta is None:
             return
+        self._slice_profile_requested_id = profile_id
         values = slice_meta_to_panel_values(self._slice_meta, profile_id)
+        self._slice_profile_applied_id = values["profile_id"]
+        self._slice_profile_applied_name = values["profile_name"]
         self._applying_slice_profile = True
         try:
             self.chk_slice_enabled.setChecked(bool(values["enabled"]))
@@ -2658,6 +2671,7 @@ class DetectionPanel(QWidget):
         finally:
             self._applying_slice_profile = False
         self._notify_matched_geometry()
+        self._update_slice_profile_status_label()
 
     def apply_slice_meta_for_model(self, model_path: str) -> None:
         """Populate TrackerKit from training geometry and calibrated profiles."""
@@ -2666,11 +2680,13 @@ class DetectionPanel(QWidget):
             read_slice_meta,
         )
 
+        self._slice_meta_model_path = model_path
         meta = read_slice_meta(model_path)
         if meta is None:
             self._slice_meta = None
             self.combo_slice_profile.clear()
             self._set_widget_visible(self.row_slice_profile, False)
+            self._update_slice_profile_status_label()
             return
         self._slice_meta = meta
         profiles = available_slice_profiles(meta)
@@ -2683,6 +2699,57 @@ class DetectionPanel(QWidget):
         self._set_widget_visible(self.row_slice_profile, bool(profiles))
         requested = self._main_window.advanced_config.get("slice_profile_id")
         self._apply_slice_meta_values(str(requested) if requested else None)
+
+    def slice_profile_status_text(self) -> str:
+        """Explain which SAHI profile is active and whether to trust it.
+
+        Distinguishes three cases the combo box alone hides: a profile whose
+        measured evidence no longer matches the model's current weights, a
+        saved profile id that fell back silently because it is not in this
+        model's sidecar, and a manual edit that detached the panel from any
+        saved profile.
+        """
+        if self._slice_meta is None:
+            return ""
+        current_id = str(
+            self._main_window.advanced_config.get("slice_profile_id") or ""
+        )
+        applied_name = self._slice_profile_applied_name or "Training geometry"
+        if current_id == "__custom__":
+            return f"Custom (based on {applied_name})"
+
+        requested = self._slice_profile_requested_id
+        applied_id = self._slice_profile_applied_id
+        if (
+            requested
+            and requested not in ("__training__", "__custom__")
+            and applied_id != requested
+        ):
+            return (
+                "Training geometry: the saved profile is no longer in this "
+                "model's sidecar; using Training geometry."
+            )
+
+        if applied_id:
+            from hydra_suite.core.inference.slice_meta import (
+                profile_by_id,
+                profile_evidence_state,
+            )
+
+            profile = profile_by_id(self._slice_meta, applied_id)
+            model_path = self._slice_meta_model_path
+            if profile is not None and model_path:
+                fresh, reason = profile_evidence_state(
+                    profile, checkpoint_path=model_path
+                )
+                if not fresh:
+                    return reason
+
+        return applied_name
+
+    def _update_slice_profile_status_label(self) -> None:
+        if hasattr(self, "lbl_slice_profile_status"):
+            self.lbl_slice_profile_status.setText(self.slice_profile_status_text())
 
     def _notify_matched_geometry(self) -> None:
         """Show a dismissible "Matched trained SAHI geometry" banner.
