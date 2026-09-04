@@ -1,6 +1,6 @@
 # DetectKit OOM Hardening — Agent Execution Instructions
 
-Status: In progress — Sets 1–2 merged; dedicated Set 2B implementation active
+Status: In progress — Sets 1–2 merged; Set 2B implemented and awaiting merge
 
 ## Goal
 
@@ -344,7 +344,7 @@ inputs and do not represent the GUI prepare-and-train workflow as machine-safe.
 
 ## Agent brief 2B — Bounded, process-isolated dataset preparation
 
-Status: Implementation active on `codex/detectkit-oom-dataset-preparation`.
+Status: Implemented on `codex/detectkit-oom-dataset-preparation`; awaiting merge.
 
 ### Scope and sequencing
 
