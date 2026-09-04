@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import sys
+from types import SimpleNamespace
+
 from tests.helpers.module_loader import load_src_module, make_cv2_stub
 
 batch_mod = load_src_module(
@@ -64,3 +67,20 @@ def test_batch_optimizer_realtime_forces_frame_batch_one() -> None:
     batch = optimizer.estimate_batch_size(1280, 720, "yolo26s-obb.pt")
 
     assert batch == 1
+
+
+def test_mps_unified_memory_fraction_is_not_applied_during_detection(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(batch_mod, "TORCH_CUDA_AVAILABLE", False)
+    monkeypatch.setattr(batch_mod, "MPS_AVAILABLE", True)
+    monkeypatch.setattr(batch_mod, "torch", object())
+    fake_psutil = SimpleNamespace(
+        virtual_memory=lambda: SimpleNamespace(available=10 * 1024**3)
+    )
+    monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
+    optimizer = BatchOptimizer({"mps_memory_fraction": 0.3})
+
+    optimizer.detect_device()
+
+    assert optimizer.available_memory == 10 * 1024

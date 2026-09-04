@@ -1194,6 +1194,16 @@ def test_noisy_output_retains_only_a_fixed_tail():
     assert output.tail()[-1] == "line-09999\n"
 
 
+def test_bounded_output_records_its_retained_high_water_mark():
+    output = BoundedLineBuffer(max_lines=2, max_chars=8)
+    output.append("1234")
+    output.append("5678")
+    output.append("90")
+
+    assert output.high_water_chars == 8
+    assert output.retained_chars <= 8
+
+
 def test_newline_free_multi_megabyte_output_is_read_in_bounded_chunks(tmp_path):
     output_path = tmp_path / "newline-free.log"
     with output_path.open("wb") as target:

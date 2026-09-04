@@ -6,9 +6,18 @@ import os
 import re
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Sequence
 
+from hydra_suite.runtime.memory_profiles import (
+    AdaptiveAttemptResult,
+    AttemptTelemetry,
+    PressureField,
+    PressureSettings,
+    resource_telemetry,
+    run_with_bounded_oom_retries,
+)
 from hydra_suite.runtime.process_supervisor import (
     ContainmentPlan,
     ExitKind,
@@ -90,7 +99,7 @@ def _extract_progress(message: str) -> tuple[int, int] | None:
     return None
 
 
-def run_ultralytics_supervised(
+def _run_ultralytics_once(
     command: Sequence[str],
     spec,
     *,
@@ -138,6 +147,9 @@ def run_ultralytics_supervised(
             "success": False,
             "failure_kind": ExitKind.HOST_ADMISSION_REFUSAL.value,
             "error_message": "; ".join(budget.refusals),
+            "resource_telemetry": resource_telemetry(
+                budget, hard_host_bytes=0, soft_host_bytes=0
+            ),
         }
     hard = min(budget.usable_host_bytes, estimate)
     soft = max(1, int(hard * 0.9))
@@ -258,4 +270,119 @@ def run_ultralytics_supervised(
         "peak_tree_rss_bytes": result.peak_tree_rss_bytes,
         "peak_accelerator_bytes": result.peak_accelerator_bytes,
         "dropped_output_lines": result.dropped_output_lines,
+        "resource_telemetry": resource_telemetry(
+            budget,
+            hard_host_bytes=hard,
+            soft_host_bytes=soft,
+            result=result,
+            effective_parameters={
+                "imgsz": int(spec.hyperparams.imgsz),
+                "cache": bool(spec.hyperparams.cache),
+            },
+        ),
     }
+
+
+def _command_with_pressure(
+    command: Sequence[str], settings: PressureSettings
+) -> tuple[str, ...]:
+    replacements = {
+        "batch": settings.batch_size,
+        "workers": settings.workers,
+    }
+    output = []
+    seen = set()
+    for raw in command:
+        text = str(raw)
+        key, separator, _value = text.partition("=")
+        if separator and key in replacements:
+            output.append(f"{key}={replacements[key]}")
+            seen.add(key)
+        else:
+            output.append(text)
+    for key, value in replacements.items():
+        if key not in seen:
+            output.append(f"{key}={value}")
+    return tuple(output)
+
+
+def run_ultralytics_supervised(
+    command: Sequence[str],
+    spec,
+    *,
+    log_cb: Callable[[str], None] | None = None,
+    progress_cb: Callable[[int, int], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+) -> dict:
+    """Run training with finite, classified OOM retries in fresh sidecars."""
+
+    initial = PressureSettings(
+        input_width=max(1, int(spec.hyperparams.imgsz)),
+        input_height=max(1, int(spec.hyperparams.imgsz)),
+        batch_size=max(1, int(spec.hyperparams.batch)),
+        workers=max(0, int(spec.hyperparams.workers)),
+        prefetch_batches=2,
+    )
+    results: list[dict] = []
+
+    def launch_fresh(settings: PressureSettings, attempt: int) -> AdaptiveAttemptResult:
+        attempt_spec = replace(
+            spec,
+            hyperparams=replace(
+                spec.hyperparams,
+                batch=settings.batch_size,
+                workers=settings.workers,
+            ),
+        )
+        attempt_command = _command_with_pressure(command, settings)
+        if attempt and log_cb is not None:
+            log_cb(
+                "Retrying after a classified memory-pressure exit with "
+                f"batch={settings.batch_size}, workers={settings.workers}."
+            )
+        result = _run_ultralytics_once(
+            attempt_command,
+            attempt_spec,
+            log_cb=log_cb,
+            progress_cb=progress_cb,
+            should_cancel=should_cancel,
+        )
+        result["effective_command"] = list(attempt_command)
+        results.append(result)
+        try:
+            kind = ExitKind(str(result.get("failure_kind", "ordinary-failure")))
+        except ValueError:
+            kind = ExitKind.ORDINARY_FAILURE
+        telemetry = dict(result.get("resource_telemetry") or {})
+        observed = dict(telemetry.get("observed") or {})
+        return AdaptiveAttemptResult(
+            bool(result.get("success", False)),
+            kind,
+            AttemptTelemetry(
+                attempt,
+                kind,
+                settings,
+                hard_host_bytes=int(result.get("hard_host_bytes", 0)),
+                peak_tree_rss_bytes=int(observed.get("peak_tree_rss_bytes", 0) or 0),
+                minimum_system_available_bytes=observed.get(
+                    "minimum_system_available_bytes"
+                ),
+                peak_accelerator_bytes=observed.get("peak_accelerator_bytes"),
+                queue_high_water_bytes=int(
+                    observed.get("queue_high_water_bytes", 0) or 0
+                ),
+            ),
+        )
+
+    adaptive = run_with_bounded_oom_retries(
+        initial,
+        launch_fresh,
+        pressure_order=(PressureField.BATCH_SIZE, PressureField.WORKERS),
+    )
+    final = results[-1]
+    history = [dict(item) for item in adaptive.adjustments]
+    final["retry_history"] = history
+    telemetry = dict(final.get("resource_telemetry") or {})
+    telemetry["retry_history"] = history
+    final["resource_telemetry"] = telemetry
+    return final

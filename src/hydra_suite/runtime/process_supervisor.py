@@ -626,6 +626,7 @@ class BoundedLineBuffer:
         self.max_chars = max_chars
         self._lines: deque[tuple[int, str]] = deque()
         self._chars = 0
+        self._high_water_chars = 0
         self._next_sequence = 0
         self._drained_through = -1
         self._dropped_lines = 0
@@ -647,6 +648,13 @@ class BoundedLineBuffer:
         with self._condition:
             return self._chars
 
+    @property
+    def high_water_chars(self) -> int:
+        """Maximum bounded character payload retained at one time."""
+
+        with self._condition:
+            return self._high_water_chars
+
     def append(self, line: str) -> None:
         """Append one line while enforcing both configured bounds."""
 
@@ -663,6 +671,7 @@ class BoundedLineBuffer:
                 self._chars -= len(dropped)
                 if dropped_sequence > self._drained_through:
                     self._dropped_lines += 1
+            self._high_water_chars = max(self._high_water_chars, self._chars)
             self._condition.notify_all()
 
     def close(self, error: Optional[BaseException] = None) -> None:
@@ -809,6 +818,7 @@ class SupervisedResult:
     accelerator_observation_error: Optional[str] = None
     peak_tree_rss_bytes: int = 0
     minimum_system_available_bytes: Optional[int] = None
+    output_high_water_chars: int = 0
 
 
 class WorkloadStillOwnedError(RuntimeError):
@@ -1099,6 +1109,7 @@ class SupervisedSidecar:
                 minimum_system_available_bytes=(
                     self.watchdog.minimum_system_available_bytes
                 ),
+                output_high_water_chars=self.output.high_water_chars,
             )
             if post_exit_check is not None:
                 post_exit_check(result)

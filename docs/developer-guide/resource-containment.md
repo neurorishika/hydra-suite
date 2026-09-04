@@ -62,6 +62,22 @@ reporting success or releasing locks. A timed-out `wait()` performs teardown
 before raising; the exceptional `WorkloadStillOwnedError` explicitly returns
 the still-owning sidecar if the operating system cannot confirm exit.
 
+`hydra_suite.runtime.memory_profiles` provides the advisory layer above those
+hard boundaries. Profiles are versioned and separated by operation, model
+identity, backend, physical device identity, precision, task, tiling mode, and
+SAM3 adapter scope/rank. Measurements retain the input dimensions and every
+independently reducible pressure setting (batch, pipeline depth, workers,
+prefetch, tile/crop batch, and cache chunk). A stale schema or estimator version
+is ignored. CUDA measurements are never transferred to MPS, and MPS host and
+accelerator observations are treated as one unified peak rather than summed or
+safety-fractioned twice.
+
+Unknown workloads begin at batch one under the same contained sidecar boundary.
+Recommendations scale conservatively from measured peaks and are monotonic:
+more available memory cannot reduce a recommendation, and a larger input cannot
+increase it. Profiles remain admission evidence only; they cannot raise a hard
+limit or bypass a live reserve check.
+
 ## Platform enforcement
 
 ### Linux
@@ -156,17 +172,33 @@ For each high-memory operation:
    evidence before accepting any artifact.
 8. Release the lease set only after the process group, token-captured escaped
    descendants, and exact systemd scope (when used) are quiescent and the
-   guardian has acknowledged teardown.
+    guardian has acknowledged teardown.
+9. Record path-free structured telemetry: admission estimate, applied limits,
+   effective pressure settings, process-tree and accelerator peaks, minimum
+   system-available memory, queue/cache high-water marks, exit classification,
+   and bounded retry history.
+
+Automatic retry is intentionally narrow. Only a classified accelerator OOM or
+soft host-pressure exit may retry. The next attempt halves the responsible
+batch/worker/tile/crop/cache pressure, starts a fresh sidecar, preserves the
+seed, and records the adjustment. Hard host-limit kills, cancellation, data or
+shape errors, corrupt checkpoints, and ordinary exceptions never retry. The
+current maximum is two retries.
 
 Never apply these limits to the GUI process. Partial artifacts must remain under
 temporary names until a successful child result has been validated.
 
-## SAM3 rollout boundary
+## DetectKit coverage
 
-SAM3 training is admitted and executed inside the containment boundary above,
-but merged-checkpoint publishing is a separate Set 3 dependency. Until that set
-moves the merge/save/registry transaction into its own freshly admitted,
-leased, hard-capped sidecar, automatic SAM3 publishing still performs multi-GB
-CPU tensor work in the service process and is not production-safe. Do not
-declare the overall SAM3 workflow OOM-hardened, or ship the training integration
-by itself, before the protected atomic publisher lands.
+DetectKit dataset preparation, SAM3 training and validation, generic
+Ultralytics training, checkpoint publishing, dataset-wide inference, active
+learning, evaluation, semantic escalation, calibration, and semantic previews
+all cross a protected process boundary before loading model weights. Dataset
+and inference paths are disk-indexed; tiles, candidates, crops, cache writes,
+semantic previews, and GUI-visible prediction frames have explicit bounds.
+Checkpoint publication uses a prevalidated in-place merge and atomic promotion.
+
+The GUI may coordinate these jobs and retain small aggregate or LRU views, but
+must not construct their high-memory models. If teardown cannot prove a child
+tree is gone, the recovery-bearing exception retains the sidecar, leases,
+control files, and private outputs until cleanup is retried successfully.

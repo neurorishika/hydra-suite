@@ -135,5 +135,6 @@ class DatasetInferenceWorker(BaseWorker):
                 "path_index": path_index,
                 "failure_kind": outcome.failure_kind,
                 "peak_tree_rss_bytes": outcome.peak_tree_rss_bytes,
+                "resource_telemetry": outcome.telemetry,
             }
         )

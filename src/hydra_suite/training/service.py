@@ -112,7 +112,13 @@ def _failure_details(result: dict) -> dict[str, object]:
 
     return {
         key: result[key]
-        for key in ("failure_kind", "resource_preflight", "containment")
+        for key in (
+            "failure_kind",
+            "resource_preflight",
+            "containment",
+            "resource_telemetry",
+            "retry_history",
+        )
         if key in result and result[key] is not None
     }
 
@@ -120,7 +126,7 @@ def _failure_details(result: dict) -> dict[str, object]:
 def _failure_message(result: dict) -> str:
     if result.get("canceled"):
         return "canceled"
-    error_value = result.get("error", "") or ""
+    error_value = result.get("error", "") or result.get("error_message", "") or ""
     error = bounded_terminal_text(error_value).strip()
     if error:
         return error
@@ -687,6 +693,7 @@ class TrainingOrchestrator:
             artifact_paths=artifact_paths,
             published_model_path=published_path,
             published_registry_entry=published_key,
+            failure_details=_failure_details(result),
         )
 
         result["published_registry_key"] = published_key

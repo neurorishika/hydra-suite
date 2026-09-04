@@ -39,6 +39,20 @@ from hydra_suite.training.runner import build_ultralytics_command
 from hydra_suite.training.service import TrainingOrchestrator
 
 
+def test_training_failure_message_preserves_supervisor_diagnostic():
+    from hydra_suite.training.service import _failure_message
+
+    assert (
+        _failure_message(
+            {
+                "error_message": "Accelerator OOM after the bounded retry.",
+                "exit_code": -9,
+            }
+        )
+        == "Accelerator OOM after the bounded retry."
+    )
+
+
 def test_dataset_fingerprint_streams_large_listing_and_metadata(tmp_path, monkeypatch):
     import hydra_suite.training.registry as registry
 

@@ -53,19 +53,16 @@ class BatchOptimizer:
         elif MPS_AVAILABLE:
             self.device_type = "mps"
             self.device_name = "Apple Silicon (MPS)"
-            # MPS uses unified memory - estimate conservatively
-            # Get system memory as approximation
+            # MPS uses one unified host-memory pool. Retain the raw available
+            # amount here; `_auto_batch_size` applies the configured safety
+            # fraction exactly once.
             try:
                 import psutil
 
                 available_memory = psutil.virtual_memory().available / (1024**2)
-                # Use only a conservative fraction for MPS (30% default, configurable)
-                mps_fraction = self.advanced_config.get("mps_memory_fraction", 0.3)
-                self.available_memory = available_memory * mps_fraction
+                self.available_memory = available_memory
                 logger.info(f"MPS device detected: {self.device_name}")
-                logger.info(
-                    f"Available unified memory (conservative): {self.available_memory:.0f} MB ({mps_fraction * 100:.0f}% of {available_memory:.0f} MB)"
-                )
+                logger.info(f"Available unified memory: {self.available_memory:.0f} MB")
             except ImportError:
                 # Fallback if psutil not available
                 self.available_memory = 2048  # Conservative 2GB default

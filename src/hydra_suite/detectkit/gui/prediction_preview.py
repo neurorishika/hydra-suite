@@ -414,8 +414,7 @@ def predict_sliced_obb_result(
         # target, which would overlap the prior tile/result batch with the
         # next materialized chunk. Release all batch-local payloads first.
         chunk.clear()
-        job = _image = result = None
-        del results, tiles_img, chunk
+        del job, _image, result, results, tiles_img, chunk
 
     # Route extraction + cross-tile merge through the SAME production seam the
     # ``Grid`` region source uses: ``extract_obb_result``'s native ``offset=``

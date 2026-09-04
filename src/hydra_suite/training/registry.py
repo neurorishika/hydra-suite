@@ -364,7 +364,13 @@ def finalize_run_record(
     if error_message:
         patch["error_message"] = error_message
     if failure_details:
-        for key in ("failure_kind", "resource_preflight", "containment"):
+        for key in (
+            "failure_kind",
+            "resource_preflight",
+            "containment",
+            "resource_telemetry",
+            "retry_history",
+        ):
             if key in failure_details:
                 patch[key] = failure_details[key]
     return update_run_record(run_id, patch)

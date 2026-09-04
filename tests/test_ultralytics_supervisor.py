@@ -22,8 +22,14 @@ def _spec(tmp_path):
 def _budget():
     return SimpleNamespace(
         admitted=True,
+        estimator_version="test-v1",
+        host_peak_bytes=4 * 1024**3,
+        accelerator_peak_bytes=0,
         usable_host_bytes=8 * 1024**3,
+        usable_accelerator_bytes=None,
         reserved_host_bytes=1024**3,
+        dominant_phase="training",
+        limits=SimpleNamespace(batch_size=1, workers=0, prefetch_batches=2),
         refusals=(),
     )
 
@@ -68,6 +74,7 @@ def test_generic_training_uses_shared_bounded_supervisor(monkeypatch, tmp_path):
 
     assert result["success"] is True
     assert result["peak_tree_rss_bytes"] == 123
+    assert result["resource_telemetry"]["observed"]["peak_tree_rss_bytes"] == 123
     assert seen["kwargs"]["output_max_lines"] == mod.OUTPUT_MAX_LINES
     assert seen["kwargs"]["output_max_chars"] == mod.OUTPUT_MAX_CHARS
     assert seen["plan"].launch.limits.hard_host_bytes <= _budget().usable_host_bytes
@@ -120,3 +127,38 @@ def test_generic_training_preserves_uncertain_ownership_recovery(monkeypatch, tm
     with pytest.raises(WorkloadStillOwnedError) as caught:
         mod.run_ultralytics_supervised(["trainer"], _spec(tmp_path))
     assert caught.value.sidecar is owner
+
+
+def test_generic_training_retries_recognized_oom_in_a_fresh_reduced_child(
+    monkeypatch, tmp_path
+):
+    import hydra_suite.training.ultralytics_supervisor as mod
+
+    calls = []
+
+    def run_once(command, spec, **_kwargs):
+        calls.append((tuple(command), spec, spec.hyperparams))
+        success = len(calls) == 2
+        return {
+            "success": success,
+            "failure_kind": (
+                ExitKind.SUCCESS.value if success else ExitKind.ACCELERATOR_OOM.value
+            ),
+            "hard_host_bytes": 100,
+            "resource_telemetry": {"observed": {"peak_tree_rss_bytes": 90}},
+        }
+
+    monkeypatch.setattr(mod, "_run_ultralytics_once", run_once)
+    spec = _spec(tmp_path)
+    spec.hyperparams.batch = 8
+
+    result = mod.run_ultralytics_supervised(["trainer", "batch=8", "workers=0"], spec)
+
+    assert result["success"] is True
+    assert calls[0][0] != calls[1][0]
+    assert calls[0][1] is not calls[1][1]
+    assert calls[0][2] is not calls[1][2]
+    assert "batch=4" in calls[1][0]
+    assert result["retry_history"] == [
+        {"attempt": 1, "field": "batch_size", "from": 8, "to": 4}
+    ]

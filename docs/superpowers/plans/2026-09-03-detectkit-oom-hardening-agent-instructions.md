@@ -1,6 +1,17 @@
 # DetectKit OOM Hardening — Agent Execution Instructions
 
-Status: In progress — Sets 1–2 merged; Set 2B implemented and awaiting merge
+Status: Implementation complete — Sets 1–7 verified; awaiting final merge
+
+Implementation record (2026-09-04): Sets 1, 2, 2B, 3, 4, 5, and 6 were
+merged independently as required. Set 7 adds versioned device/model-specific
+profiles, monotonic recommendations, fresh-sidecar classified-OOM retries,
+structured peak/high-water telemetry, and durable retry history. The final
+focused safety matrix passed 572 tests with one platform skip. MPS equivalence
+was exact and non-empty for sequential (12,450 forward / 941 final rows, 1.12x)
+and direct fly inference (1,494 / 1,500 rows, 0.99x). CUDA passed 167 focused
+tests and exact non-empty fly equivalence (1,494 / 1,500 rows, 1.17x). The SAM3
+dataset-build soak measured 551,895,040 bytes at 100 frames and 553,271,296
+bytes at 2,000 frames (+0.25% for 20x the source length).
 
 ## Goal
 
@@ -903,24 +914,24 @@ when empirical profiles and containment tests prove the new range safe.
 
 The hardening program is complete only when all of the following are true:
 
-- [ ] SAM3 train and validation peak image/mask memory is independent of dataset
+- [x] SAM3 train and validation peak image/mask memory is independent of dataset
       size at fixed in-flight settings.
-- [ ] Positive and negative SAM3 queries share one tile transform without loss
+- [x] Positive and negative SAM3 queries share one tile transform without loss
       or target-semantic drift.
-- [ ] Host and accelerator admission reflects real parameters and preserves a
+- [x] Host and accelerator admission reflects real parameters and preserves a
       system reserve.
-- [ ] A test child that exceeds its limit is killed while its parent and the GUI
+- [x] A test child that exceeds its limit is killed while its parent and the GUI
       survive.
-- [ ] SAM3 publishing does not clone a complete checkpoint and is atomic.
-- [ ] Tile, proposal, and downstream crop memory is bounded end-to-end.
-- [ ] Full-video FrameResults are not retained unless explicitly requested.
-- [ ] Cache queues and storage are bounded; long-video cache close does not
+- [x] SAM3 publishing does not clone a complete checkpoint and is atomic.
+- [x] Tile, proposal, and downstream crop memory is bounded end-to-end.
+- [x] Full-video FrameResults are not retained unless explicitly requested.
+- [x] Cache queues and storage are bounded; long-video cache close does not
       concatenate the complete run.
-- [ ] Dataset inference, evaluation, semantic work, publishing, and training all
+- [x] Dataset inference, evaluation, semantic work, publishing, and training all
       execute outside the GUI process.
-- [ ] A global lease prevents conflicting heavy jobs from overcommitting the same
+- [x] A global lease prevents conflicting heavy jobs from overcommitting the same
       host/device.
-- [ ] MPS and CUDA tests, equivalence comparisons, and soak tests are complete
+- [x] MPS and CUDA tests, equivalence comparisons, and soak tests are complete
       with non-empty outputs and recorded peak metrics.
 - [ ] All completed implementation plans/designs are moved to their done/
       directories during final merge according to AGENTS.md.
