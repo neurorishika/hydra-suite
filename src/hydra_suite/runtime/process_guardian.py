@@ -294,6 +294,8 @@ def _baseline_guardian_identities(
                 continue
             try:
                 uids = process.info.get("uids")
+                if uids is not None and uids.real != os.getuid():
+                    continue
                 identity = GuardedIdentity(process.pid, float(process.create_time()))
                 if (
                     process.pid != workload_pid
@@ -306,8 +308,6 @@ def _baseline_guardian_identities(
                         max_identities=_MAX_EXTERNAL_IDENTITIES,
                     ):
                         return False
-                    continue
-                if uids is not None and uids.real != os.getuid():
                     continue
                 process_environment = process.environ()
                 if abs(float(process.create_time()) - identity.create_time) >= 0.01:

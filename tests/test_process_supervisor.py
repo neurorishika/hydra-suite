@@ -786,6 +786,47 @@ def test_guardian_baselines_inaccessible_unrelated_process_before_gate(monkeypat
     assert not overflowed
 
 
+def test_guardian_baseline_skips_other_users_before_identity_probe(monkeypatch):
+    class OtherUserProcess:
+        pid = 5
+        info = {"uids": type("Uids", (), {"real": 0})()}
+
+        def create_time(self):
+            pytest.fail("another user's protected process identity was probed")
+
+    class OwnedRoot:
+        pid = 10
+        info = {"uids": type("Uids", (), {"real": 501})()}
+
+        def create_time(self):
+            return 10.0
+
+        def environ(self):
+            return {"HYDRA_CONTAINMENT_TOKEN": "owned-token"}
+
+        def ppid(self):
+            return 1
+
+    monkeypatch.setattr(
+        guardian_module.psutil,
+        "process_iter",
+        lambda _attrs: iter((OtherUserProcess(), OwnedRoot())),
+    )
+    monkeypatch.setattr(guardian_module.os, "getpid", lambda: 999)
+    monkeypatch.setattr(guardian_module.os, "getuid", lambda: 501)
+
+    owned: dict[int, guardian_module.GuardedIdentity] = {}
+    assert guardian_module._baseline_guardian_identities(
+        workload_pid=10,
+        token="owned-token",
+        identities=owned,
+        external_identities={},
+        launch_started_at=10.0,
+        max_identities=8,
+    )
+    assert set(owned) == {10}
+
+
 def test_guardian_fails_closed_for_new_or_owned_inaccessible_identity(monkeypatch):
     class InaccessibleProcess:
         pid = 30
