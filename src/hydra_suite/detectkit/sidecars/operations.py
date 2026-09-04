@@ -350,7 +350,12 @@ def run_semantic_calibration(
         preview_sink=previews.extend,
     )
     project_dir = Path(_required_text(payload, "project_dir")).expanduser().resolve()
-    preview_artifact = save_calibration_previews(project_dir, previews)
+    requested_artifact = str(payload.get("preview_artifact", "") or "")
+    preview_artifact = save_calibration_previews(
+        project_dir,
+        previews,
+        relative_path=requested_artifact or None,
+    )
     return {
         "points": [asdict(point) for point in points],
         "sampled_frames": [str(path.resolve()) for path, _records in frames],

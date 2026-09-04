@@ -59,3 +59,22 @@ def test_progress_protocol_is_typed_and_bounded():
         }
     )
     assert _parse_progress(oversized) is None
+
+
+def test_auto_device_binds_visible_cuda_on_linux(monkeypatch):
+    from hydra_suite.detectkit.sidecars import supervisor
+    from hydra_suite.runtime.resource_budget import AcceleratorKind
+    from hydra_suite.training.sam3_lora import preflight
+
+    observed = SimpleNamespace(
+        uuid="GPU-exact", name="GPU", free_bytes=8, total_bytes=16
+    )
+    monkeypatch.setattr(supervisor.sys, "platform", "linux")
+    monkeypatch.setattr(preflight, "_probe_cuda_device", lambda value: observed)
+
+    kind, uuid, pci, device = supervisor._accelerator_for("auto")
+
+    assert kind is AcceleratorKind.CUDA
+    assert uuid == "GPU-exact"
+    assert pci is None
+    assert device is observed

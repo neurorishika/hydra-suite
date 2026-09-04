@@ -137,6 +137,9 @@ class CalibrationPreviewStore(Sequence[CalibrationPreviewFrame]):
         self._count = count
         self._lru: OrderedDict[int, CalibrationPreviewFrame] = OrderedDict()
 
+    def relative_path(self) -> str:
+        return self._artifact_dir.relative_to(self._project_dir).as_posix()
+
     def __len__(self) -> int:
         return self._count
 
@@ -164,14 +167,29 @@ class CalibrationPreviewStore(Sequence[CalibrationPreviewFrame]):
 
 
 def save_calibration_previews(
-    project_dir: Path, frames: Iterable[CalibrationPreviewFrame]
+    project_dir: Path,
+    frames: Iterable[CalibrationPreviewFrame],
+    *,
+    relative_path: str | None = None,
 ) -> str:
     """Write frames incrementally, then atomically publish a complete directory."""
     project_dir = Path(project_dir).expanduser().resolve()
+    if (
+        isinstance(frames, CalibrationPreviewStore)
+        and frames._project_dir == project_dir
+    ):
+        return frames.relative_path()
     parent = project_dir / PREVIEW_ARTIFACT_ROOT
     parent.mkdir(parents=True, exist_ok=True)
-    artifact_name = uuid.uuid4().hex
-    target = parent / artifact_name
+    if relative_path is None:
+        target = parent / uuid.uuid4().hex
+    else:
+        target = (project_dir / relative_path).resolve()
+        if parent not in target.parents or target.parent != parent:
+            raise ValueError("calibration preview target is outside its artifact root")
+    if target.exists():
+        raise FileExistsError(f"calibration preview target already exists: {target}")
+    artifact_name = target.name
     temporary = Path(tempfile.mkdtemp(prefix=f".{artifact_name}.", dir=parent))
     count = 0
     try:

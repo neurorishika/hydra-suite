@@ -116,7 +116,13 @@ def run_ultralytics_supervised(
     budget = evaluate_resource_request(
         ResourceRequest(
             job_name="Ultralytics training",
-            phases=(PhaseEstimate("training", host_peak_bytes=estimate),),
+            phases=(
+                PhaseEstimate(
+                    "training",
+                    host_peak_bytes=estimate,
+                    accelerator_peak_bytes=estimate if cuda is not None else 0,
+                ),
+            ),
             limits=WorkLimits(
                 batch_size=max(1, int(spec.hyperparams.batch)),
                 workers=max(0, int(spec.hyperparams.workers)),
@@ -187,6 +193,10 @@ def run_ultralytics_supervised(
             current = _probe_cuda_device(cuda_uuid)
             if current is None or current.uuid != cuda_uuid:
                 raise RuntimeError("the selected physical CUDA device changed")
+            if budget.accelerator_peak_bytes > int(
+                current.free_bytes * policy.accelerator_safety_fraction
+            ):
+                raise RuntimeError("available accelerator memory fell before launch")
 
     try:
         sidecar = SupervisedSidecar(

@@ -100,6 +100,8 @@ class CalibrationWorker(BaseWorker):
             if project_dir is not None
             else Path(sources[0].path).expanduser().resolve().parent
         )
+        request_id = uuid.uuid4().hex
+        preview_relative = "artifacts/detectkit/sam3_calibration_previews/" + request_id
         payload = {
             "sources": [source.to_dict() for source in sources],
             "prompt": str(prompt),
@@ -108,11 +110,13 @@ class CalibrationWorker(BaseWorker):
             "device": _device(params),
             "project_dir": str(project_root),
             "sample_budget": 12,
+            "preview_artifact": preview_relative,
         }
         self._project_dir = project_root
         self._operation = ProtectedOperation(
-            SidecarRequest(uuid.uuid4().hex, Operation.SEMANTIC_CALIBRATION, payload),
+            SidecarRequest(request_id, Operation.SEMANTIC_CALIBRATION, payload),
             device=_device(params),
+            cleanup_paths=(project_root / preview_relative,),
         )
 
     def cancel(self) -> None:

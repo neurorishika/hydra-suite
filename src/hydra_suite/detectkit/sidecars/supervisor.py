@@ -79,18 +79,19 @@ def _operation_estimate(operation: Operation, input_paths: Iterable[Path]) -> in
     return base + min(model_bytes * 6, 12 * GiB)
 
 
-def _accelerator_for(device: str) -> tuple[AcceleratorKind, str | None, str | None]:
+def _accelerator_for(device: str):
     value = str(device or "auto").strip().lower()
-    if value.startswith("cuda"):
+    if value.startswith("cuda") or (value == "auto" and sys.platform != "darwin"):
         from hydra_suite.training.sam3_lora.preflight import _probe_cuda_device
 
         observed = _probe_cuda_device(value)
-        if observed is None:
+        if observed is not None:
+            return AcceleratorKind.CUDA, observed.uuid, None, observed
+        if value.startswith("cuda"):
             raise RuntimeError("the requested CUDA device is unavailable")
-        return AcceleratorKind.CUDA, observed.uuid, None
     if value == "mps" or (value == "auto" and sys.platform == "darwin"):
-        return AcceleratorKind.MPS, None, None
-    return AcceleratorKind.CPU, None, None
+        return AcceleratorKind.MPS, None, None, None
+    return AcceleratorKind.CPU, None, None, None
 
 
 def _identities(paths: Iterable[Path]) -> tuple[tuple[str, int, int], ...]:
@@ -198,15 +199,29 @@ class ProtectedOperation:
         result_path = control_dir / "result.json"
         try:
             write_request(request_path, self.request)
-            accelerator, cuda_uuid, cuda_pci = _accelerator_for(self.device)
+            accelerator, cuda_uuid, cuda_pci, cuda = _accelerator_for(self.device)
             estimate = _operation_estimate(self.request.operation, self.input_paths)
-            observation = probe_resources(accelerator)
+            observation = probe_resources(
+                accelerator,
+                accelerator_name=getattr(cuda, "name", None),
+                accelerator_probe=(
+                    (lambda: (cuda.free_bytes, cuda.total_bytes))
+                    if cuda is not None
+                    else None
+                ),
+            )
             policy = ResourcePolicy()
             budget = evaluate_resource_request(
                 ResourceRequest(
                     job_name=f"DetectKit {self.request.operation.value}",
                     phases=(
-                        PhaseEstimate("model-operation", host_peak_bytes=estimate),
+                        PhaseEstimate(
+                            "model-operation",
+                            host_peak_bytes=estimate,
+                            accelerator_peak_bytes=(
+                                estimate if cuda is not None else 0
+                            ),
+                        ),
                     ),
                     limits=WorkLimits(batch_size=1, workers=0, prefetch_batches=0),
                 ),
@@ -272,10 +287,37 @@ class ProtectedOperation:
                     raise RuntimeError(
                         "available host memory fell before launch; the immutable cap would expose the reserve"
                     )
+                if cuda_uuid is not None:
+                    from hydra_suite.training.sam3_lora.preflight import (
+                        _probe_cuda_device,
+                    )
+
+                    current = _probe_cuda_device(cuda_uuid)
+                    if current is None or current.uuid != cuda_uuid:
+                        raise RuntimeError("the selected physical CUDA device changed")
+                    usable_vram = int(
+                        current.free_bytes * policy.accelerator_safety_fraction
+                    )
+                    if budget.accelerator_peak_bytes > usable_vram:
+                        raise RuntimeError(
+                            "available accelerator memory fell before launch"
+                        )
                 if _identities(self.input_paths) != initial_identities:
                     raise RuntimeError(
                         "a model or input artifact changed after admission"
                     )
+
+            def accelerator_probe() -> int:
+                if cuda_uuid is None:
+                    return 0
+                from hydra_suite.training.sam3_lora.preflight import _probe_cuda_device
+
+                current = _probe_cuda_device(cuda_uuid)
+                if current is None or current.uuid != cuda_uuid:
+                    raise RuntimeError(
+                        "selected CUDA device telemetry became unavailable"
+                    )
+                return max(0, current.total_bytes - current.free_bytes)
 
             if self.cancelled:
                 self._cleanup()
@@ -288,6 +330,9 @@ class ProtectedOperation:
             sidecar = SupervisedSidecar(
                 plan,
                 prelaunch_check=prelaunch_check,
+                accelerator_probe=(
+                    accelerator_probe if accelerator is AcceleratorKind.CUDA else None
+                ),
                 output_max_lines=OUTPUT_MAX_LINES,
                 output_max_chars=OUTPUT_MAX_CHARS,
             )
