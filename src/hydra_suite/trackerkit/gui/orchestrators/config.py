@@ -430,6 +430,11 @@ class ConfigOrchestrator:
             "merge_metric": advanced.get("slice_merge_metric"),
             "merge_threshold": advanced.get("slice_merge_threshold"),
             "merge_backend": advanced.get("slice_merge_backend"),
+            # What a mid-edit "Custom" state was based on, so restoring it can
+            # say "Custom (based on Balanced)" without claiming the profile.
+            "base_profile_name": str(
+                getattr(panel, "_slice_profile_applied_name", "") or ""
+            ),
         }
 
     def _load_config_yolo(self, cfg, get_cfg, preset_mode):

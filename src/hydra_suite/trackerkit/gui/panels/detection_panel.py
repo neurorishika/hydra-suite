@@ -34,6 +34,10 @@ from PySide6.QtWidgets import (
 
 from hydra_suite.core.inference.model_paths import get_models_root_directory
 from hydra_suite.trackerkit.config.schemas import TrackerConfig
+from hydra_suite.trackerkit.engine_params import (
+    SLICE_DEFAULT_CONFIDENCE,
+    SLICE_MERGE_DEFAULTS,
+)
 from hydra_suite.trackerkit.gui.panels.reference_scale_preview import (
     ReferenceScalePreviewWidget,
 )
@@ -2663,7 +2667,13 @@ class DetectionPanel(QWidget):
             return
         self._slice_profile_requested_id = profile_id
         known_ids = {p["id"] for p in available_slice_profiles(self._slice_meta)}
-        use_saved_settings = bool(
+        # A session saved mid-custom-edit has a complete effective-settings
+        # snapshot. Excluding "__custom__" here made the restore fall through
+        # to the PRIMARY profile, overwrite slice_profile_id with the
+        # primary's id and label the panel with the primary's name -- while
+        # the settings the user actually saved sat unused.
+        is_custom_restore = bool(profile_id == "__custom__" and saved_settings)
+        use_saved_settings = is_custom_restore or bool(
             profile_id
             and profile_id not in ("__training__", "__custom__")
             and profile_id not in known_ids
@@ -2675,6 +2685,13 @@ class DetectionPanel(QWidget):
             values = slice_meta_to_panel_values(self._slice_meta, profile_id)
         self._slice_profile_applied_id = values["profile_id"]
         self._slice_profile_applied_name = values["profile_name"]
+        if is_custom_restore:
+            # Never claim a profile the user was not on: the status line says
+            # "Custom (based on <name>)" only when the snapshot recorded what
+            # the edit started from, and plain "Custom" otherwise.
+            self._slice_profile_applied_name = str(
+                (saved_settings or {}).get("base_profile_name") or ""
+            )
         self._slice_profile_resolution = values.get("resolution", "training")
         self._applying_slice_profile = True
         try:
@@ -2695,6 +2712,17 @@ class DetectionPanel(QWidget):
                 if use_saved_settings
                 else str(values["profile_id"] or "__training__")
             )
+            # Apply UNCONDITIONALLY. Writing only non-None values left the
+            # previous profile's (or the previous MODEL's) merge settings and
+            # confidence in advanced_config while the panel claimed to be on
+            # a different profile -- and those values feed the detection
+            # cache key. A profile that does not claim a key means the
+            # DEFAULT for that key, not "whatever was there before".
+            #
+            # Skipped during a config/preset restore: the loader has already
+            # written the session's own values and there is no previous
+            # model's state to leak, so resetting here would clobber them.
+            resetting = not getattr(self._main_window, "_restoring_config", False)
             for key in (
                 "merge_policy",
                 "merge_metric",
@@ -2703,10 +2731,14 @@ class DetectionPanel(QWidget):
             ):
                 if values[key] is not None:
                     advanced[f"slice_{key}"] = values[key]
+                elif resetting:
+                    advanced[f"slice_{key}"] = SLICE_MERGE_DEFAULTS[key]
             if values["confidence_threshold"] is not None:
                 self.spin_yolo_confidence.setValue(
                     float(values["confidence_threshold"])
                 )
+            elif resetting:
+                self.spin_yolo_confidence.setValue(SLICE_DEFAULT_CONFIDENCE)
             for spin, value in (
                 (self.spin_slice_overlap, values["overlap"]),
                 (self.spin_slice_object_fraction, values["object_tile_fraction"]),
@@ -2806,7 +2838,8 @@ class DetectionPanel(QWidget):
         )
         applied_name = self._slice_profile_applied_name or "Training geometry"
         if current_id == "__custom__":
-            return f"Custom (based on {applied_name})"
+            base = self._slice_profile_applied_name
+            return f"Custom (based on {base})" if base else "Custom"
 
         requested = self._slice_profile_requested_id
         applied_id = self._slice_profile_applied_id

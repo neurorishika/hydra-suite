@@ -260,3 +260,162 @@ def test_unknown_saved_profile_with_primary_names_the_applied_profile(monkeypatc
     assert "Balanced" in status
     assert "Training geometry" not in status
     window.close()
+
+
+# ---------------------------------------------------------------------------
+# Important 4 -- settings must not leak across profile or model switches.
+# ---------------------------------------------------------------------------
+
+
+def _meta_with_merge_profile():
+    from hydra_suite.core.inference.slice_meta import upsert_slice_profile
+
+    return upsert_slice_profile(
+        {"geometry_mode": "auto_object", "imgsz": 640},
+        name="Loose merge",
+        settings={
+            "enabled": True,
+            "geometry_mode": "auto_object",
+            "overlap": 0.2,
+            "object_tile_fraction": 0.4,
+            "confidence_threshold": 0.65,
+            "merge_policy": "nmm",
+            "merge_metric": "iou",
+            "merge_threshold": 0.7,
+            "merge_backend": "cv2",
+        },
+        primary=True,
+    )
+
+
+def test_switching_to_training_geometry_resets_profile_merge_settings(monkeypatch):
+    from hydra_suite.trackerkit.engine_params import (
+        SLICE_DEFAULT_CONFIDENCE,
+        SLICE_MERGE_DEFAULTS,
+    )
+    from tests.test_main_window_config_persistence import _make_main_window
+
+    meta = _meta_with_merge_profile()
+    profile_id = meta["profiles"][0]["id"]
+    window = _make_main_window(monkeypatch)
+    panel = window._detection_panel
+    panel._slice_meta = meta
+
+    panel._apply_slice_meta_values(profile_id)
+    assert window.advanced_config["slice_merge_threshold"] == 0.7
+    assert window.advanced_config["slice_merge_policy"] == "nmm"
+    assert panel.spin_yolo_confidence.value() == 0.65
+
+    panel._apply_slice_meta_values("__training__")
+    assert (
+        window.advanced_config["slice_merge_threshold"]
+        == SLICE_MERGE_DEFAULTS["merge_threshold"]
+    )
+    assert (
+        window.advanced_config["slice_merge_policy"]
+        == SLICE_MERGE_DEFAULTS["merge_policy"]
+    )
+    assert (
+        window.advanced_config["slice_merge_metric"]
+        == SLICE_MERGE_DEFAULTS["merge_metric"]
+    )
+    assert panel.spin_yolo_confidence.value() == SLICE_DEFAULT_CONFIDENCE
+    window.close()
+
+
+def test_switching_models_resets_the_previous_models_merge_settings(
+    monkeypatch, tmp_path
+):
+    from hydra_suite.core.inference.slice_meta import write_slice_meta
+    from hydra_suite.trackerkit.engine_params import SLICE_MERGE_DEFAULTS
+    from tests.test_main_window_config_persistence import _make_main_window
+
+    model_a = tmp_path / "a.pt"
+    model_a.write_bytes(b"a")
+    write_slice_meta(model_a, _meta_with_merge_profile())
+    model_b = tmp_path / "b.pt"
+    model_b.write_bytes(b"b")
+    write_slice_meta(model_b, {"geometry_mode": "auto_object", "imgsz": 640})
+
+    window = _make_main_window(monkeypatch)
+    panel = window._detection_panel
+    panel.apply_slice_meta_for_model(str(model_a))
+    profile_id = _meta_with_merge_profile()["profiles"][0]["id"]
+    panel._apply_slice_meta_values(next(p["id"] for p in panel._slice_meta["profiles"]))
+    assert window.advanced_config["slice_merge_threshold"] == 0.7
+
+    panel.apply_slice_meta_for_model(str(model_b))
+    assert (
+        window.advanced_config["slice_merge_threshold"]
+        == SLICE_MERGE_DEFAULTS["merge_threshold"]
+    )
+    assert window.advanced_config["slice_merge_policy"] == "greedy_nmm"
+    assert profile_id  # the id is model_a's alone and must not follow along
+    window.close()
+
+
+# ---------------------------------------------------------------------------
+# Promoted -- a session saved mid-custom-edit restores the CUSTOM state.
+# ---------------------------------------------------------------------------
+
+
+def test_custom_session_restores_saved_settings_not_the_primary(monkeypatch):
+    from tests.test_main_window_config_persistence import _make_main_window
+
+    meta = _meta_with_merge_profile()
+    window = _make_main_window(monkeypatch)
+    panel = window._detection_panel
+    panel._slice_meta = meta
+    saved = {
+        "enabled": True,
+        "geometry_mode": "auto_object",
+        "overlap": 0.05,
+        "object_tile_fraction": 0.11,
+        "confidence_threshold": 0.42,
+        "merge_policy": "greedy_nmm",
+        "merge_metric": "ios",
+        "merge_threshold": 0.31,
+        "merge_backend": "cv2",
+        "base_profile_name": "Loose merge",
+    }
+    window.advanced_config["slice_profile_id"] = "__custom__"
+    panel._apply_slice_meta_values("__custom__", saved_settings=saved)
+
+    assert window.advanced_config["slice_profile_id"] == "__custom__"
+    assert window.advanced_config["slice_object_tile_fraction"] == 0.11
+    assert window.advanced_config["slice_merge_threshold"] == 0.31
+    assert panel.spin_yolo_confidence.value() == 0.42
+    assert panel.slice_profile_status_text() == "Custom (based on Loose merge)"
+    window.close()
+
+
+def test_custom_session_without_a_base_name_says_plain_custom(monkeypatch):
+    from tests.test_main_window_config_persistence import _make_main_window
+
+    window = _make_main_window(monkeypatch)
+    panel = window._detection_panel
+    panel._slice_meta = _meta_with_merge_profile()
+    window.advanced_config["slice_profile_id"] = "__custom__"
+    panel._apply_slice_meta_values(
+        "__custom__",
+        saved_settings={
+            "enabled": True,
+            "geometry_mode": "auto_object",
+            "overlap": 0.05,
+            "object_tile_fraction": 0.11,
+        },
+    )
+    assert panel.slice_profile_status_text() == "Custom"
+    window.close()
+
+
+def test_config_snapshot_records_what_a_custom_edit_was_based_on(monkeypatch):
+    from tests.test_main_window_config_persistence import _make_main_window
+
+    window = _make_main_window(monkeypatch)
+    panel = window._detection_panel
+    panel._slice_meta = _meta_with_merge_profile()
+    panel._apply_slice_meta_values(panel._slice_meta["profiles"][0]["id"])
+    snapshot = window._config_orch._slice_profile_settings_snapshot()
+    assert snapshot["base_profile_name"] == "Loose merge"
+    window.close()
