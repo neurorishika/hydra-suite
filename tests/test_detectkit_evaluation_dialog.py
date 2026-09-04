@@ -185,11 +185,28 @@ def test_evaluation_worker_executes_evaluation_off_gui_thread(
         available=True,
     )
 
-    def _evaluate(candidate, **_kwargs):
-        called_from.append(QThread.currentThread())
-        return EvaluationResult.failed(candidate, "eval-1", "test result")
+    class _Operation:
+        def __init__(self, *_args, **_kwargs):
+            pass
 
-    monkeypatch.setattr(evaluation_job, "evaluate_candidate", _evaluate)
+        def run(self, **_kwargs):
+            from dataclasses import asdict
+            from types import SimpleNamespace
+
+            called_from.append(QThread.currentThread())
+            result = EvaluationResult.failed(candidate, "eval-1", "test result")
+            return SimpleNamespace(
+                success=True,
+                canceled=False,
+                payload={"evaluation_result": asdict(result)},
+                message="",
+                failure_kind="success",
+            )
+
+        def cancel(self):
+            pass
+
+    monkeypatch.setattr(evaluation_job, "ProtectedOperation", _Operation)
     worker = evaluation_job.EvaluationWorker(
         [candidate],
         output_root=tmp_path,
