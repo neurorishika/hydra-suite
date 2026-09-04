@@ -417,8 +417,10 @@ class DirectCalibrationResultsDialog(BaseDialog):
         return (
             f"Overlay depicts: {point.label} · confidence >= "
             f"{point.confidence:g} · merge {point.merge_policy}/"
-            f"{point.merge_metric}@{point.merge_threshold:g} · max "
-            f"{point.max_detections} detections/frame."
+            f"{point.merge_metric}@{point.merge_threshold:g} · measured at "
+            f"max {point.max_detections} detections/frame (a measurement "
+            "condition, not a profile setting -- tracking uses your own "
+            "MAX_TARGETS)."
         )
 
     def _on_row_changed(self, *_unused) -> None:
@@ -493,7 +495,14 @@ class DirectCalibrationResultsDialog(BaseDialog):
             "merge_metric": point.merge_metric,
             "merge_threshold": float(point.merge_threshold),
             "merge_backend": point.merge_backend,
-            "max_detections": int(point.max_detections),
+            # NOT a profile setting. In TrackerKit, MAX_TARGETS is the
+            # tracking SLOT COUNT -- a derived value
+            # (n_arenas * animals_per_arena, engine_params.py:481-484) owned
+            # by the user's experiment, not by a detection profile. Restoring
+            # the wizard's cap from a profile would silently resize the
+            # tracker's slot budget. It is therefore recorded under
+            # `measurement` (this row was measured AT that cap) and stated in
+            # the results caption + user guide, never applied.
         }
 
     def measurement_for_row(self, row: int) -> dict[str, Any]:
@@ -511,12 +520,14 @@ class DirectCalibrationResultsDialog(BaseDialog):
             # portable guarantees.
             "runtime": self._runtime_tier,
             "merge_backend": str(point.merge_backend or ""),
+            # The per-frame detection cap this row was MEASURED at. Not
+            # restored on load: see settings_for_row.
+            "max_detections": int(point.max_detections),
             "seconds_per_frame": float(point.seconds_per_frame),
             "precision": float(point.score.precision),
             "recall": float(point.score.recall),
             "f1": float(point.score.f1),
             "localization_quality": float(point.score.mean_iou),
-            "max_detections": int(point.max_detections),
         }
 
     # ------------------------------------------------------------------

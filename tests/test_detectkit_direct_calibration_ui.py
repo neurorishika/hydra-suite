@@ -355,9 +355,13 @@ def test_settings_payload_is_complete_and_omits_reference_body_size(results_dial
         "merge_metric",
         "merge_threshold",
         "merge_backend",
-        "max_detections",
     ):
         assert key in settings
+    # Important 2: the cap is NOT a profile setting. Nothing under
+    # trackerkit/ reads it, and TrackerKit's MAX_TARGETS is the derived
+    # tracking slot count -- stamping it here promised a restore that never
+    # happened. It lives in `measurement` instead.
+    assert "max_detections" not in settings
 
 
 def test_measurement_records_provenance(results_dialog):
@@ -377,6 +381,7 @@ def test_measurement_records_provenance(results_dialog):
         "max_detections",
     ):
         assert key in measurement
+    assert measurement["max_detections"] == 64
     assert measurement["checkpoint_fingerprint"].startswith("sha256:")
 
 
@@ -927,6 +932,25 @@ def test_each_confidence_row_has_its_own_overlay(tmp_path):
         assert len(dialog._row_predictions(p_high, high, 0)) == 2
         dialog.table_rows.selectRow(1)
         assert "0.65" in dialog.lbl_overlay_caption.text()
+    finally:
+        dialog.close()
+
+
+def test_caption_states_the_cap_is_a_measurement_condition(tmp_path):
+    """Important 2: the cap is stamped under `measurement` and never applied,
+    so the overlay must say so rather than imply a restored setting."""
+    point = _overlay_point(
+        confidence=0.3, merge_threshold=0.5, candidate_index=0, label="T", cap=37
+    )
+    preview = _overlay_preview(
+        tmp_path, candidate_index=0, merge_threshold=0.5, confidence=0.3
+    )
+    dialog = _overlay_dialog(tmp_path, [point], [preview])
+    try:
+        caption = dialog._overlay_caption(point)
+        assert "measured at max 37 detections/frame" in caption
+        assert "not a profile setting" in caption
+        assert "MAX_TARGETS" in caption
     finally:
         dialog.close()
 

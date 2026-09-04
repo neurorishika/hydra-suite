@@ -96,6 +96,16 @@ factor. The wizard prefills the cap from the busiest frame in your
 evidence set, but if your animals are more crowded in the field than in
 your labelled sample, raise it.
 
+**The cap is a measurement condition, not a profile setting.** A saved
+profile records the cap its row was measured at (under `measurement`), but
+it does not restore it. In TrackerKit the equivalent knob, `MAX_TARGETS`,
+is the tracking slot count -- derived from your arena count and animals
+per arena -- and belongs to your experiment, not to a detection profile.
+So a profile reproduces the tiling, confidence and merge settings it was
+measured with, and its scores are valid *for the cap named in the results
+table*. If your TrackerKit `MAX_TARGETS` is far below that cap, expect
+fewer detections per frame than the frontier reported.
+
 ## How to read the frontier columns
 
 Calibration reports one row per measured operating point (one tiling
