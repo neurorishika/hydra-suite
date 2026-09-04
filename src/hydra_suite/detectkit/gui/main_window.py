@@ -82,7 +82,7 @@ from .project import (
     project_exists,
     save_project,
 )
-from .utils import list_images_in_source
+from .utils import source_has_images
 
 logger = logging.getLogger(__name__)
 
@@ -1670,8 +1670,7 @@ class DetectKitMainWindow(QMainWindow):
             QMessageBox.information(self, "Run Inference", str(exc))
             return
 
-        image_paths = [str(p) for p in list_images_in_source(self._current_source_path)]
-        if not image_paths:
+        if not source_has_images(self._current_source_path):
             QMessageBox.information(
                 self,
                 "Run Inference",
@@ -1680,7 +1679,7 @@ class DetectKitMainWindow(QMainWindow):
             return
 
         progress = QProgressDialog(
-            f"Running inference on {len(image_paths)} image(s)…",
+            "Starting protected dataset inference…",
             "Cancel",
             0,
             100,

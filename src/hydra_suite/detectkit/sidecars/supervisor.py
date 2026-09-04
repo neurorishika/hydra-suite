@@ -197,6 +197,22 @@ class ProtectedOperation:
         control_dir = Path(tempfile.mkdtemp(prefix="hydra-detectkit-sidecar-"))
         request_path = control_dir / "request.json"
         result_path = control_dir / "result.json"
+        control_dir_owned = True
+
+        def retain_recovery(error: WorkloadStillOwnedError) -> None:
+            """Keep child inputs and private outputs until teardown is proven."""
+
+            nonlocal control_dir_owned
+            control_dir_owned = False
+
+            def cleanup_after_recovery() -> None:
+                with self._lock:
+                    self._sidecar = None
+                self._cleanup()
+                shutil.rmtree(control_dir, ignore_errors=True)
+
+            error.recovery_cleanup = cleanup_after_recovery
+
         try:
             write_request(request_path, self.request)
             accelerator, cuda_uuid, cuda_pci, cuda = _accelerator_for(self.device)
@@ -389,7 +405,8 @@ class ProtectedOperation:
                 peak_accelerator_bytes=supervised.peak_accelerator_bytes,
                 dropped_output_lines=supervised.dropped_output_lines,
             )
-        except WorkloadStillOwnedError:
+        except WorkloadStillOwnedError as exc:
+            retain_recovery(exc)
             raise
         except Exception as exc:
             with self._lock:
@@ -397,7 +414,8 @@ class ProtectedOperation:
             if sidecar is not None:
                 try:
                     sidecar.cancel(2.0)
-                except WorkloadStillOwnedError:
+                except WorkloadStillOwnedError as exc:
+                    retain_recovery(exc)
                     raise
             self._cleanup()
             return ProtectedOutcome(
@@ -411,4 +429,5 @@ class ProtectedOperation:
                 bounded_terminal_text(exc),
             )
         finally:
-            shutil.rmtree(control_dir, ignore_errors=True)
+            if control_dir_owned:
+                shutil.rmtree(control_dir, ignore_errors=True)

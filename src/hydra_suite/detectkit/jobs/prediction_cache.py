@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import shutil
+import struct
 import tempfile
 from collections import OrderedDict
 from pathlib import Path
@@ -21,6 +22,7 @@ from hydra_suite.core.inference.cache.chunked import (
 
 MAX_FRAME_PAYLOAD_BYTES = 16 * 1024 * 1024
 MAX_DETECTIONS_PER_FRAME = 1_000
+MAX_PREDICTION_CLASSES = 4_096
 MAX_PATH_BYTES = 4096
 MAX_PATH_INDEX_BYTES = 16 * 1024 * 1024
 DEFAULT_LRU_FRAMES = 8
@@ -115,9 +117,12 @@ class DatasetPredictionWriter:
             confidence = float(raw.get("confidence", 0.0))
             if not np.isfinite(points).all() or not np.isfinite(confidence):
                 raise ValueError("prediction frame contains non-finite values")
+            class_id = int(raw.get("class_id", 0))
+            if class_id < 0 or class_id >= MAX_PREDICTION_CLASSES:
+                raise ValueError("prediction class id exceeds its bounded range")
             normalized.append(
                 {
-                    "class_id": int(raw.get("class_id", 0)),
+                    "class_id": class_id,
                     "confidence": confidence,
                     "polygon_px": points,
                 }
@@ -271,20 +276,26 @@ class DatasetPredictionCache:
         }
 
 
-def write_path_index(path: str | Path, paths: Sequence[str | Path]) -> None:
-    """Write sorted UTF-8 paths and int64 offsets through atomic files."""
+def write_path_index(path: str | Path, paths: Iterable[str | Path]) -> None:
+    """Stream sorted UTF-8 paths and int64 offsets through atomic files."""
     cache_path = Path(path)
     strings_path = cache_path.with_suffix(cache_path.suffix + ".paths")
     index_path = cache_path.with_suffix(cache_path.suffix + ".paths.idx")
     strings_path.parent.mkdir(parents=True, exist_ok=True)
-    offsets = [0]
-    descriptor, temporary = tempfile.mkstemp(
+    strings_descriptor, temporary = tempfile.mkstemp(
         prefix=f".{strings_path.name}.", suffix=".tmp", dir=strings_path.parent
     )
-    npz_temporary: str | None = None
+    index_descriptor, index_temporary = tempfile.mkstemp(
+        prefix=f".{index_path.name}.", suffix=".tmp", dir=index_path.parent
+    )
     try:
-        with os.fdopen(descriptor, "wb") as stream:
+        with (
+            os.fdopen(strings_descriptor, "wb") as stream,
+            os.fdopen(index_descriptor, "wb") as index_stream,
+        ):
             previous = ""
+            offset = 0
+            index_stream.write(struct.pack("<q", offset))
             for raw in paths:
                 value = str(Path(raw).expanduser().resolve())
                 if previous and value <= previous:
@@ -293,21 +304,19 @@ def write_path_index(path: str | Path, paths: Sequence[str | Path]) -> None:
                 if len(encoded) > MAX_PATH_BYTES or b"\n" in encoded:
                     raise ValueError("prediction path exceeds safe index limits")
                 stream.write(encoded + b"\n")
-                offsets.append(offsets[-1] + len(encoded) + 1)
+                offset += len(encoded) + 1
+                if index_stream.tell() + 8 > MAX_PATH_INDEX_BYTES:
+                    raise ValueError("prediction path index exceeds safe size")
+                index_stream.write(struct.pack("<q", offset))
                 previous = value
             stream.flush()
             os.fsync(stream.fileno())
+            index_stream.flush()
+            os.fsync(index_stream.fileno())
         os.replace(temporary, strings_path)
-        descriptor, npz_temporary = tempfile.mkstemp(
-            prefix=f".{index_path.name}.", suffix=".tmp", dir=index_path.parent
-        )
-        with os.fdopen(descriptor, "wb") as stream:
-            stream.write(np.asarray(offsets, dtype="<i8").tobytes())
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(npz_temporary, index_path)
+        os.replace(index_temporary, index_path)
     except BaseException:
-        for candidate in (temporary, npz_temporary):
+        for candidate in (temporary, index_temporary):
             if candidate:
                 try:
                     os.unlink(candidate)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -71,26 +72,27 @@ def run_dataset_inference(
         preview_object_tile_fraction,
     )
     from hydra_suite.detectkit.jobs.prediction_cache import (
+        MAX_PATH_BYTES,
+        MAX_PATH_INDEX_BYTES,
         DatasetPredictionWriter,
         write_path_index,
+    )
+    from hydra_suite.training.dataset_io import (
+        DEFAULT_DATASET_IO_LIMITS,
+        iter_indexed_paths,
+        sorted_file_index,
     )
 
     source_path = Path(_required_text(payload, "source_path")).expanduser().resolve()
     images_dir = source_path / "images"
-    image_paths = sorted(
-        path.resolve()
-        for path in images_dir.rglob("*")
-        if path.suffix.lower() in IMG_EXTS
+    path_limits = replace(
+        DEFAULT_DATASET_IO_LIMITS,
+        max_files=MAX_PATH_INDEX_BYTES // 8 - 1,
+        max_path_bytes=MAX_PATH_BYTES,
+        max_path_index_bytes=MAX_PATH_INDEX_BYTES,
     )
     cache_path = Path(_required_text(payload, "cache_path")).expanduser().resolve()
     key = _cache_key(payload)
-    write_path_index(cache_path, image_paths)
-    writer = DatasetPredictionWriter(
-        cache_path,
-        key,
-        chunk_size=max(1, min(int(payload.get("chunk_frames", 8)), 64)),
-        write_mode="fresh",
-    )
     inference_kind = str(payload.get("inference_kind", "obb_direct"))
     model_path = _required_text(payload, "model_path")
     secondary_path = str(payload.get("secondary_model_path", "") or "").strip()
@@ -101,7 +103,6 @@ def run_dataset_inference(
     slice_settings = SliceTrainingSettings.from_dict(
         payload.get("slice_settings") or {}
     )
-    total = len(image_paths)
     count = 0
     confidence_sum = 0.0
     class_counts: dict[int, int] = {}
@@ -136,80 +137,93 @@ def run_dataset_inference(
 
     import cv2
 
-    for frame_idx, image_path in enumerate(image_paths):
-        detections: list[dict]
-        if runner is not None:
-            frame = cv2.imread(str(image_path))
-            if frame is None:
-                raise RuntimeError(f"Could not read image: {image_path}")
-            detections = dicts_from_obb_result(
-                runner.detect_batch_raw([frame], [frame_idx])[0]
-            )
-        elif secondary is not None:
-            frame = cv2.imread(str(image_path))
-            if frame is None:
-                raise RuntimeError(f"Could not read image: {image_path}")
-            detections = _sequential_dicts(
-                predict_obb_for_frame_sequential(
-                    primary,
-                    secondary,
-                    frame,
-                    detect_device=primary_device,
-                    obb_device=secondary_device,
-                    conf=threshold,
-                    iou=0.7,
-                    crop_pad_ratio=float(payload.get("crop_pad_ratio", 0.15)),
-                )
-            )
-        elif slice_settings.enabled:
-            frame = cv2.imread(str(image_path))
-            if frame is None:
-                raise RuntimeError(f"Could not read image: {image_path}")
-            imgsz = max(1, int(payload.get("imgsz_obb_direct", 640)))
-            task = {"detect_direct": "detect", "segment_direct": "segment"}.get(
-                inference_kind, "obb"
-            )
-            obb = predict_sliced_obb_result(
-                primary,
-                frame,
-                geometry_mode=slice_settings.geometry_mode,
-                imgsz=imgsz,
-                reference_body_px=slice_settings.reference_body_px,
-                object_tile_fraction=preview_object_tile_fraction(
-                    slice_settings.target_sizes_for(imgsz),
-                    slice_settings.object_tile_fraction,
-                    imgsz,
-                ),
-                slice_width=slice_settings.slice_width,
-                slice_height=slice_settings.slice_height,
-                overlap=slice_settings.overlap,
-                merge_threshold=slice_settings.merge_threshold,
-                confidence_threshold=threshold,
-                task=task,
-            )
-            detections = dicts_from_obb_result(obb) if obb is not None else []
-        else:
-            task = {"detect_direct": "detect", "segment_direct": "segment"}.get(
-                inference_kind, "obb"
-            )
-            detections = predict_preview_detections_for_image(
-                primary,
-                str(image_path),
-                device=primary_device,
-                confidence_threshold=threshold,
-                task=task,
-            )
-        writer.write_frame(frame_idx, detections)
-        for detection in detections:
-            count += 1
-            confidence_sum += float(detection.get("confidence", 0.0))
-            class_id = int(detection.get("class_id", 0))
-            class_counts[class_id] = class_counts.get(class_id, 0) + 1
-        progress(
-            int((frame_idx + 1) * 100 / max(1, total)),
-            f"Processed {frame_idx + 1}/{total}: {image_path.name}",
+    with sorted_file_index(
+        images_dir, suffixes=frozenset(IMG_EXTS), limits=path_limits
+    ) as path_index:
+        total = int(path_index.execute("SELECT COUNT(*) FROM files").fetchone()[0])
+        write_path_index(cache_path, iter_indexed_paths(path_index, images_dir))
+        writer = DatasetPredictionWriter(
+            cache_path,
+            key,
+            chunk_size=max(1, min(int(payload.get("chunk_frames", 8)), 64)),
+            write_mode="fresh",
         )
-    writer.close()
+        for frame_idx, image_path in enumerate(
+            iter_indexed_paths(path_index, images_dir)
+        ):
+            detections: list[dict]
+            if runner is not None:
+                frame = cv2.imread(str(image_path))
+                if frame is None:
+                    raise RuntimeError(f"Could not read image: {image_path}")
+                detections = dicts_from_obb_result(
+                    runner.detect_batch_raw([frame], [frame_idx])[0]
+                )
+            elif secondary is not None:
+                frame = cv2.imread(str(image_path))
+                if frame is None:
+                    raise RuntimeError(f"Could not read image: {image_path}")
+                detections = _sequential_dicts(
+                    predict_obb_for_frame_sequential(
+                        primary,
+                        secondary,
+                        frame,
+                        detect_device=primary_device,
+                        obb_device=secondary_device,
+                        conf=threshold,
+                        iou=0.7,
+                        crop_pad_ratio=float(payload.get("crop_pad_ratio", 0.15)),
+                    )
+                )
+            elif slice_settings.enabled:
+                frame = cv2.imread(str(image_path))
+                if frame is None:
+                    raise RuntimeError(f"Could not read image: {image_path}")
+                imgsz = max(1, int(payload.get("imgsz_obb_direct", 640)))
+                task = {"detect_direct": "detect", "segment_direct": "segment"}.get(
+                    inference_kind, "obb"
+                )
+                obb = predict_sliced_obb_result(
+                    primary,
+                    frame,
+                    geometry_mode=slice_settings.geometry_mode,
+                    imgsz=imgsz,
+                    reference_body_px=slice_settings.reference_body_px,
+                    object_tile_fraction=preview_object_tile_fraction(
+                        slice_settings.target_sizes_for(imgsz),
+                        slice_settings.object_tile_fraction,
+                        imgsz,
+                    ),
+                    slice_width=slice_settings.slice_width,
+                    slice_height=slice_settings.slice_height,
+                    overlap=slice_settings.overlap,
+                    merge_threshold=slice_settings.merge_threshold,
+                    confidence_threshold=threshold,
+                    task=task,
+                )
+                detections = dicts_from_obb_result(obb) if obb is not None else []
+            else:
+                task = {"detect_direct": "detect", "segment_direct": "segment"}.get(
+                    inference_kind, "obb"
+                )
+                detections = predict_preview_detections_for_image(
+                    primary,
+                    str(image_path),
+                    device=primary_device,
+                    confidence_threshold=threshold,
+                    task=task,
+                )
+            writer.write_frame(frame_idx, detections)
+            for detection in detections:
+                count += 1
+                confidence_sum += float(detection.get("confidence", 0.0))
+                class_id = int(detection.get("class_id", 0))
+                class_counts[class_id] = class_counts.get(class_id, 0) + 1
+            progress(
+                int((frame_idx + 1) * 100 / max(1, total)),
+                f"Processed {frame_idx + 1}/{total}: {image_path.name}",
+            )
+        writer.close()
     return {
         "cache_path": str(cache_path),
         "image_count": total,

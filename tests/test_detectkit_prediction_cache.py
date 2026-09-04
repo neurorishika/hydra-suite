@@ -76,6 +76,26 @@ def test_prediction_path_index_uses_bounded_random_reads(tmp_path):
     assert index.index_of(tmp_path / "missing.jpg") is None
 
 
+def test_prediction_path_index_consumes_a_single_pass_iterator(tmp_path):
+    from hydra_suite.detectkit.jobs.prediction_cache import (
+        PredictionPathIndex,
+        write_path_index,
+    )
+
+    cache_path = tmp_path / "predictions.npz"
+    consumed = []
+
+    def paths():
+        for index in range(25):
+            consumed.append(index)
+            yield tmp_path / f"images/frame-{index:05d}.jpg"
+
+    write_path_index(cache_path, paths())
+
+    assert consumed == list(range(25))
+    assert len(PredictionPathIndex(cache_path)) == 25
+
+
 def test_prediction_statistics_stream_chunks_without_retaining_all_frames(tmp_path):
     from hydra_suite.detectkit.jobs.prediction_cache import (
         DatasetPredictionCache,
@@ -98,6 +118,7 @@ def test_prediction_statistics_stream_chunks_without_retaining_all_frames(tmp_pa
 def test_prediction_writer_rejects_nonfinite_or_unbounded_frame_payload(tmp_path):
     from hydra_suite.detectkit.jobs.prediction_cache import (
         MAX_DETECTIONS_PER_FRAME,
+        MAX_PREDICTION_CLASSES,
         DatasetPredictionWriter,
     )
 
@@ -108,3 +129,5 @@ def test_prediction_writer_rejects_nonfinite_or_unbounded_frame_payload(tmp_path
         writer.write_frame(
             1, (_detection(0.5) for _ in range(MAX_DETECTIONS_PER_FRAME + 1))
         )
+    with pytest.raises(ValueError, match="class id"):
+        writer.write_frame(2, [{**_detection(0.5), "class_id": MAX_PREDICTION_CLASSES}])

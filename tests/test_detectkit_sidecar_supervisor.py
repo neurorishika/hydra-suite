@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -78,3 +79,64 @@ def test_auto_device_binds_visible_cuda_on_linux(monkeypatch):
     assert uuid == "GPU-exact"
     assert pci is None
     assert device is observed
+
+
+def test_uncertain_sidecar_retains_control_and_outputs_until_recovery(
+    monkeypatch, tmp_path
+):
+    from hydra_suite.detectkit.sidecars import supervisor
+    from hydra_suite.detectkit.sidecars.protocol import Operation, SidecarRequest
+    from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
+    from hydra_suite.runtime.resource_budget import AcceleratorKind
+
+    output = tmp_path / "private-output.npz"
+    output.write_bytes(b"partial")
+    owner = SimpleNamespace(cancel=lambda *_args, **_kwargs: None)
+    captured_control_dirs: list[Path] = []
+
+    def fail_after_launch(plan, **_kwargs):
+        request_path = Path(plan.launch.command[-3])
+        captured_control_dirs.append(request_path.parent)
+        assert request_path.is_file()
+        raise WorkloadStillOwnedError("ownership uncertain", owner)
+
+    observation = SimpleNamespace(
+        total_host_bytes=64 * supervisor.GiB,
+        available_host_bytes=48 * supervisor.GiB,
+    )
+    budget = SimpleNamespace(
+        admitted=True,
+        refusals=(),
+        usable_host_bytes=32 * supervisor.GiB,
+        reserved_host_bytes=8 * supervisor.GiB,
+        accelerator_peak_bytes=0,
+    )
+    monkeypatch.setattr(
+        supervisor,
+        "_accelerator_for",
+        lambda _device: (AcceleratorKind.CPU, None, None, None),
+    )
+    monkeypatch.setattr(supervisor, "probe_resources", lambda *_a, **_k: observation)
+    monkeypatch.setattr(
+        supervisor, "evaluate_resource_request", lambda *_a, **_k: budget
+    )
+    monkeypatch.setattr(supervisor, "SupervisedSidecar", fail_after_launch)
+
+    operation = supervisor.ProtectedOperation(
+        SidecarRequest("request", Operation.DATASET_INFERENCE, {}),
+        device="cpu",
+        cleanup_paths=(output,),
+    )
+    with pytest.raises(WorkloadStillOwnedError) as caught:
+        operation.run()
+
+    control_dir = captured_control_dirs[0]
+    assert control_dir.is_dir()
+    assert output.is_file()
+    assert caught.value.sidecar is owner
+    assert caught.value.recovery_cleanup is not None
+
+    caught.value.recovery_cleanup()
+
+    assert not control_dir.exists()
+    assert not output.exists()
