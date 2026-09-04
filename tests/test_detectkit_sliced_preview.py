@@ -1,3 +1,7 @@
+import gc
+import weakref
+from types import SimpleNamespace
+
 import numpy as np
 
 from hydra_suite.core.inference.result import OBBResult
@@ -213,3 +217,132 @@ def test_predict_sliced_offsets_detection_into_frame_space(monkeypatch):
     # last tile starts at (256,256); local (44,44) -> frame ~ (300,300).
     assert abs(out.centroids[0][0] - 300.0) < 2.0
     assert abs(out.centroids[0][1] - 300.0) < 2.0
+
+
+def test_segment_preview_passes_candidate_cap_before_dense_mask_expansion(monkeypatch):
+    seen_caps = []
+
+    def fake_extract(result, frame_idx, raw_detection_cap=0, **kwargs):
+        seen_caps.append(raw_detection_cap)
+        return OBBResult(
+            frame_idx=frame_idx,
+            centroids=np.zeros((0, 2), np.float32),
+            angles=np.zeros(0, np.float32),
+            sizes=np.zeros(0, np.float32),
+            shapes=np.zeros((0, 2), np.float32),
+            confidences=np.zeros(0, np.float32),
+            corners=np.zeros((0, 4, 2), np.float32),
+            detection_ids=np.zeros(0, np.int64),
+        )
+
+    monkeypatch.setattr(pp, "_extract_obb_from_masks", fake_extract)
+    pp.predict_sliced_obb_result(
+        _FakeExecutor(),
+        np.zeros((32, 64, 3), np.uint8),
+        geometry_mode="custom",
+        imgsz=32,
+        reference_body_px=0.0,
+        object_tile_fraction=0.15,
+        slice_width=32,
+        slice_height=32,
+        overlap=0.0,
+        merge_threshold=0.5,
+        confidence_threshold=0.25,
+        task="segment",
+    )
+
+    assert seen_caps and set(seen_caps) == {pp._PREVIEW_MAX_DET}
+
+
+def test_sliced_preview_releases_previous_tile_batch_before_predict(monkeypatch):
+    tile_refs = []
+    live_at_predict = []
+
+    monkeypatch.setattr(
+        pp,
+        "extract_obb_result",
+        lambda _result, frame_idx=0, **_kwargs: OBBResult(
+            frame_idx=frame_idx,
+            centroids=np.zeros((0, 2), np.float32),
+            angles=np.zeros(0, np.float32),
+            sizes=np.zeros(0, np.float32),
+            shapes=np.zeros((0, 2), np.float32),
+            confidences=np.zeros(0, np.float32),
+            corners=np.zeros((0, 4, 2), np.float32),
+            detection_ids=np.zeros(0, np.int64),
+        ),
+    )
+
+    class _TrackingExecutor:
+        def predict(self, images, **_kwargs):
+            tile_refs.extend(weakref.ref(image) for image in images)
+            gc.collect()
+            live_at_predict.append(sum(ref() is not None for ref in tile_refs))
+            return [_FakeResult() for _ in images]
+
+    pp.predict_sliced_obb_result(
+        _TrackingExecutor(),
+        np.zeros((160, 160, 3), np.uint8),
+        geometry_mode="custom",
+        imgsz=32,
+        reference_body_px=0.0,
+        object_tile_fraction=0.15,
+        slice_width=32,
+        slice_height=32,
+        overlap=0.0,
+        merge_threshold=0.5,
+        confidence_threshold=0.25,
+    )
+
+    assert live_at_predict == [pp._DEFAULT_SLICE_BATCH_SIZE, 9]
+
+
+def test_sequential_preview_releases_previous_crop_batch_before_predict(monkeypatch):
+    crop_refs = []
+    live_at_predict = []
+
+    class _Boxes:
+        def __len__(self):
+            return 25
+
+    class _DetectExecutor:
+        def predict(self, _frames, **_kwargs):
+            return [SimpleNamespace(boxes=_Boxes())]
+
+    class _OBBExecutor:
+        def predict(self, crops, **_kwargs):
+            crop_refs.extend(weakref.ref(crop) for crop in crops)
+            gc.collect()
+            live_at_predict.append(sum(ref() is not None for ref in crop_refs))
+            return [object() for _ in crops]
+
+    def fake_iter_crops(*_args, **_kwargs):
+        for index in range(25):
+            yield np.full((8, 8, 3), index, np.uint8), (float(index), 0.0)
+
+    monkeypatch.setattr(pp, "iter_crops", fake_iter_crops)
+    monkeypatch.setattr(
+        pp,
+        "extract_obb_result",
+        lambda _result, frame_idx=0, **_kwargs: OBBResult(
+            frame_idx=frame_idx,
+            centroids=np.zeros((0, 2), np.float32),
+            angles=np.zeros(0, np.float32),
+            sizes=np.zeros(0, np.float32),
+            shapes=np.zeros((0, 2), np.float32),
+            confidences=np.zeros(0, np.float32),
+            corners=np.zeros((0, 4, 2), np.float32),
+            detection_ids=np.zeros(0, np.int64),
+        ),
+    )
+
+    pp._sequential_obb_result(
+        _DetectExecutor(),
+        _OBBExecutor(),
+        np.zeros((16, 16, 3), np.uint8),
+        conf=0.25,
+        iou=0.5,
+        crop_pad_ratio=0.0,
+    )
+
+    assert live_at_predict == [pp._DEFAULT_SLICE_BATCH_SIZE, 9]

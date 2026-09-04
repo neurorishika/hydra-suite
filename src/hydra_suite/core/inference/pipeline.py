@@ -51,6 +51,8 @@ from hydra_suite.core.canonicalization.geometry import ClippingStats
 from hydra_suite.utils import profiling_names as N
 from hydra_suite.utils.profiling import bind_target, span
 
+from .cancellation import InferenceCancelled
+from .config import MAX_PIPELINE_DEPTH
 from .result import FrameResult, OBBResult
 from .stages.apriltag import run_apriltag
 from .stages.bgsub import run_bgsub_batch
@@ -62,8 +64,18 @@ from .stages.crops import (
 )
 from .stages.filtering import filter_for_source
 from .stages.headtail import run_headtail_batch
-from .stages.obb import _RawOBBTensors, materialize_tensors, run_obb
+from .stages.obb import (
+    _RawOBBTensors,
+    effective_raw_detection_cap,
+    materialize_tensors,
+    run_obb,
+)
 from .stages.pose import run_pose_batch
+
+# Includes decoded frame windows held by the consumer, bounded handoff queue,
+# and producer-under-construction window. Model-specific tile/crop outputs have
+# their own admission budget in stages.slicing.
+MAX_PIPELINE_BUFFER_BYTES = 512 * 1024 * 1024
 
 
 @dataclass
@@ -86,14 +98,15 @@ class BatchWindow:
 class InferencePassResult:
     """Outcome of a full pipeline pass.
 
-    ``frames_processed`` counts frames fed through windows. ``frame_results`` is
-    the in-memory list of per-frame :class:`FrameResult`s (assembled via
-    ``scatter``); cache writes are a separate, raw-result side effect performed
-    inside ``_process_window`` to preserve exact legacy cache parity.
+    ``frames_processed`` counts frames fed through windows. ``frame_results``
+    stays empty by default so full-video memory does not grow with duration. It
+    contains assembled results only when the caller explicitly enables
+    collection; streaming consumers can instead use ``result_consumer``.
     """
 
     frames_processed: int = 0
     frame_results: list = field(default_factory=list)
+    cancelled: bool = False
 
 
 @dataclass
@@ -163,9 +176,14 @@ class Pipeline:
         depth: int = 1,
         queue_bound: int | None = None,
         clipping_stats: "ClippingStats | None" = None,
+        collect_results: bool = False,
     ) -> None:
         if depth < 1:
             raise ValueError(f"pipeline depth must be >= 1, got {depth}")
+        if depth > MAX_PIPELINE_DEPTH:
+            raise ValueError(
+                f"pipeline depth must be <= {MAX_PIPELINE_DEPTH}, got {depth}"
+            )
         # F1 guard: run-scoped clipped-detection counter (see ClippingStats).
         # Owned by the caller (InferenceRunner) when given so the realtime and
         # batch passes share one running tally; a fresh instance otherwise so
@@ -192,12 +210,22 @@ class Pipeline:
         # ahead of the single consumer (depth=2 -> 1, the classic double buffer;
         # depth=4 -> 3). An explicit ``queue_bound`` overrides this.
         if queue_bound is not None:
+            if not 1 <= int(queue_bound) <= MAX_PIPELINE_DEPTH - 1:
+                raise ValueError(
+                    "pipeline queue_bound must be between 1 and "
+                    f"{MAX_PIPELINE_DEPTH - 1}, got {queue_bound}"
+                )
             self.queue_bound = queue_bound
         else:
             self.queue_bound = max(1, depth - 1)
         self._window_size = (
             int(stages.config.detection_batch_size) if stages is not None else 1
         )
+        self.collect_results = bool(collect_results)
+        # Bound detection-stage cancellation latency below one frame window.
+        # This callback is only live for the duration of ``run`` and is polled
+        # between admitted tile/crop chunks by the region sources.
+        self._active_should_stop: Callable[[], bool] | None = None
         # Test-only per-window stage callable (set by ``for_test``); when present,
         # ``run_frames`` uses it instead of the production ``_process_window``.
         self._test_stage: Callable[[BatchWindow], list] | None = None
@@ -256,12 +284,16 @@ class Pipeline:
             with span(N.RUN_OBB, units=len(window.frames)):
                 # DECODE is spanned in `_stream_windows`, the producer-side
                 # frame source that feeds this window.
+                kwargs = {"roi_mask": self.stages.roi_mask}
+                should_stop = getattr(self, "_active_should_stop", None)
+                if should_stop is not None:
+                    kwargs["should_stop"] = should_stop
                 raw_list = run_obb(
                     window.frames,
                     self.stages.obb_models,
                     cfg.obb,
                     self.runtime,
-                    roi_mask=self.stages.roi_mask,
+                    **kwargs,
                 )
                 for raw in raw_list:
                     if isinstance(raw, _RawOBBTensors):
@@ -293,8 +325,6 @@ class Pipeline:
         in-memory assembled view via ``scatter``; the runner discards them
         (parity is in the caches).
         """
-        from .stages.assemble import scatter
-
         cfg = self.stages.config
         frames = window.frames
         frame_indices = window.frame_indices
@@ -319,7 +349,7 @@ class Pipeline:
         with span(N.MATERIALIZE, units=len(frames)):
             for frame, frame_idx, raw in zip(frames, frame_indices, raw_list):
                 obb_result = (
-                    materialize_tensors(raw, cfg.obb.raw_detection_cap)
+                    materialize_tensors(raw, effective_raw_detection_cap(cfg.obb))
                     if isinstance(raw, _RawOBBTensors)
                     else raw
                 )
@@ -376,25 +406,57 @@ class Pipeline:
                 for _corners in _obb.corners:
                     self.clipping_stats.record(_corners, geometry)
 
-        # --- downstream batch stages over the non-empty frames -------------
+        # Downstream crops are processed one frame at a time. Detection stays
+        # frame-batched above, but crop pixels can no longer scale with the
+        # detection window size. ``filter_for_source`` enforces the independent
+        # finite per-frame crop cap before reaching this boundary.
+        assembled: list[FrameResult] = []
+        for frame, obb in zip(nonempty_frames, nonempty_obbs):
+            assembled.extend(
+                self._process_downstream_frame(
+                    frame,
+                    obb,
+                    det_indices_by_frame[obb.frame_idx],
+                    geometry,
+                )
+            )
+        return assembled
+
+    def _process_downstream_frame(
+        self,
+        frame: Any,
+        obb: OBBResult,
+        det_indices: np.ndarray,
+        geometry: Any,
+    ) -> list[FrameResult]:
+        """Run crop consumers for one candidate-capped frame."""
+
+        from .stages.assemble import scatter
+
+        cfg = self.stages.config
+        frames = [frame]
+        obbs = [obb]
+        frame_idx = obb.frame_idx
+        filtered_by_frame = {frame_idx: obb}
+
         # Head-tail and pose consume the same undirected Layer-1 canonical
         # geometry. When both are enabled, build that expensive warp once;
         # each stage retains its own exact quantisation/masking boundary.
         shared_canonical_batch = None
         headtail: dict[int, Any] | None = None
         if self.stages.headtail_model is not None:
-            with span(N.HEADTAIL, units=sum(o.num_detections for o in nonempty_obbs)):
+            with span(N.HEADTAIL, units=obb.num_detections):
                 if self.stages.pose_model is not None:
                     with span(N.CROP_EXTRACT):
                         shared_canonical_batch = extract_canonical_crops_batch(
-                            nonempty_frames,
-                            nonempty_obbs,
+                            frames,
+                            obbs,
                             geometry,
                             self.runtime,
                         )
                 headtail = run_headtail_batch(
-                    nonempty_frames,
-                    nonempty_obbs,
+                    frames,
+                    obbs,
                     self.stages.headtail_model,
                     cfg.headtail,
                     self.runtime,
@@ -402,13 +464,13 @@ class Pipeline:
                     canonical_batch=shared_canonical_batch,
                 )
 
-        cnns_by_frame: dict[int, list] = {idx: [] for idx in filtered_by_frame}
+        cnns_by_frame: dict[int, list] = {frame_idx: []}
         cnn_per_phase: list[dict[int, Any]] = []
-        with span(N.CNN, units=sum(o.num_detections for o in nonempty_obbs)):
+        with span(N.CNN, units=obb.num_detections):
             for cfg_cnn, mdl in zip(cfg.cnn_phases, self.stages.cnn_models):
                 phase = run_cnn_batch(
-                    nonempty_frames,
-                    nonempty_obbs,
+                    frames,
+                    obbs,
                     mdl,
                     cfg_cnn,
                     self.runtime,
@@ -421,7 +483,7 @@ class Pipeline:
 
         pose: dict[int, Any] | None = None
         if self.stages.pose_model is not None:
-            with span(N.POSE, units=sum(o.num_detections for o in nonempty_obbs)):
+            with span(N.POSE, units=obb.num_detections):
                 suppress_foreign = (
                     cfg.pose.suppress_foreign_regions if cfg.pose is not None else False
                 )
@@ -433,8 +495,8 @@ class Pipeline:
                 with span(N.CROP_EXTRACT):
                     if shared_canonical_batch is None:
                         crop_batch = extract_canonical_crops_batch(
-                            nonempty_frames,
-                            nonempty_obbs,
+                            frames,
+                            obbs,
                             geometry,
                             self.runtime,
                             suppress_foreign=suppress_foreign,
@@ -460,34 +522,31 @@ class Pipeline:
         if self.stages.apriltag_model is not None:
             apriltag = {}
             with span(N.APRILTAG):
-                for frame, obb in zip(nonempty_frames, nonempty_obbs):
-                    aabb_crops = extract_aabb_crops(
-                        frame, obb, padding=cfg.apriltag.crop_padding
-                    )
-                    apriltag[obb.frame_idx] = run_apriltag(
-                        aabb_crops, obb, self.stages.apriltag_model, cfg.apriltag
-                    )
+                aabb_crops = extract_aabb_crops(
+                    frame, obb, padding=cfg.apriltag.crop_padding
+                )
+                apriltag[frame_idx] = run_apriltag(
+                    aabb_crops, obb, self.stages.apriltag_model, cfg.apriltag
+                )
 
         # --- write RAW per-frame results to the per-type caches ------------
         # Mirrors _run_batch: writes raw stage outputs (no foreign suppression),
         # only for non-empty frames, keyed by that frame's det_indices.
         with span(N.CACHE_WRITE):
-            for frame_idx in sorted(filtered_by_frame):
-                det_indices = det_indices_by_frame[frame_idx]
-                ht = headtail.get(frame_idx) if headtail is not None else None
-                cnn_results = [
-                    phase[frame_idx] for phase in cnn_per_phase if frame_idx in phase
-                ]
-                pose_result = pose.get(frame_idx) if pose is not None else None
-                at_result = apriltag.get(frame_idx) if apriltag is not None else None
-                self.cache_writer.write_downstream(
-                    frame_idx,
-                    det_indices=det_indices,
-                    headtail=ht,
-                    cnn_results=cnn_results,
-                    pose=pose_result,
-                    apriltag=at_result,
-                )
+            ht = headtail.get(frame_idx) if headtail is not None else None
+            cnn_results = [
+                phase[frame_idx] for phase in cnn_per_phase if frame_idx in phase
+            ]
+            pose_result = pose.get(frame_idx) if pose is not None else None
+            at_result = apriltag.get(frame_idx) if apriltag is not None else None
+            self.cache_writer.write_downstream(
+                frame_idx,
+                det_indices=det_indices,
+                headtail=ht,
+                cnn_results=cnn_results,
+                pose=pose_result,
+                apriltag=at_result,
+            )
 
         # In-memory assembled view (foreign suppression applied here, per config).
         with span(N.ASSEMBLE_SCATTER):
@@ -512,6 +571,9 @@ class Pipeline:
         progress_cb: Callable[[int, int], None] | None = None,
         range_total: int = 0,
         should_stop: Callable[[], bool] | None = None,
+        *,
+        collect_results: bool | None = None,
+        result_consumer: Callable[[FrameResult], None] | None = None,
     ) -> InferencePassResult:
         """Drive the full pass over ``frame_source`` for ``frame_range``.
 
@@ -527,15 +589,38 @@ class Pipeline:
         ahead (bounded queue) while this single in-order consumer thread runs the
         downstream stages + cache writes.
 
-        ``should_stop``, if given, is polled at window boundaries; when it
-        returns ``True`` the pass returns early with whatever frames were
-        already processed (a partial ``InferencePassResult``).
+        ``should_stop``, if given, is polled at window and admitted tile/crop
+        chunk boundaries; when it returns ``True`` the pass returns early with
+        whatever frames were already processed (a partial
+        ``InferencePassResult``).
         """
-        if self.depth == 1:
-            return self._run_sync(frame_source, progress_cb, range_total, should_stop)
-        return self._run_double_buffer(
-            frame_source, progress_cb, range_total, should_stop
+        retain = (
+            bool(getattr(self, "collect_results", False))
+            if collect_results is None
+            else bool(collect_results)
         )
+        previous_should_stop = getattr(self, "_active_should_stop", None)
+        self._active_should_stop = should_stop
+        try:
+            if self.depth == 1:
+                return self._run_sync(
+                    frame_source,
+                    progress_cb,
+                    range_total,
+                    should_stop,
+                    retain,
+                    result_consumer,
+                )
+            return self._run_double_buffer(
+                frame_source,
+                progress_cb,
+                range_total,
+                should_stop,
+                retain,
+                result_consumer,
+            )
+        finally:
+            self._active_should_stop = previous_should_stop
 
     # --- depth=1: synchronous --------------------------------------------
 
@@ -545,6 +630,8 @@ class Pipeline:
         progress_cb: Callable[[int, int], None] | None,
         range_total: int,
         should_stop: Callable[[], bool] | None = None,
+        collect_results: bool = False,
+        result_consumer: Callable[[FrameResult], None] | None = None,
     ) -> InferencePassResult:
         result = InferencePassResult()
         w = self.window_size
@@ -552,10 +639,18 @@ class Pipeline:
 
         for window in self._stream_windows(frame_source, w):
             if should_stop is not None and should_stop():
+                result.cancelled = True
+                break
+            try:
+                with span(N.WINDOW, units=len(window)):
+                    window_results = self._process_window(window)
+            except InferenceCancelled:
+                result.cancelled = True
                 break
             result.frames_processed += len(window)
-            with span(N.WINDOW, units=len(window)):
-                result.frame_results.extend(self._process_window(window))
+            self._deliver_results(
+                result, window_results, collect_results, result_consumer
+            )
             if progress_cb and range_total > 0:
                 # Mirror the legacy per-frame cadence: emit at each multiple of
                 # ``step`` crossed within this window.
@@ -579,6 +674,8 @@ class Pipeline:
         progress_cb: Callable[[int, int], None] | None,
         range_total: int,
         should_stop: Callable[[], bool] | None = None,
+        collect_results: bool = False,
+        result_consumer: Callable[[FrameResult], None] | None = None,
     ) -> InferencePassResult:
         result = InferencePassResult()
         w = self.window_size
@@ -591,6 +688,7 @@ class Pipeline:
         stop = threading.Event()
         consumer_done = threading.Event()
         producer_error: list[BaseException] = []
+        producer_cancelled = threading.Event()
         # Frames read so far (written by producer, read for progress). Guarded by
         # being the producer's sole responsibility; the consumer only reads it
         # after the producer has put the corresponding window on the queue.
@@ -623,6 +721,7 @@ class Pipeline:
             try:
                 for window in self._stream_windows(frame_source, w):
                     if stop.is_set() or (should_stop is not None and should_stop()):
+                        producer_cancelled.set()
                         stop.set()
                         break
                     raw_list = self._run_detection_for_window(window)
@@ -631,6 +730,9 @@ class Pipeline:
                     # progress with the same cadence as the sync path.
                     if not cancellable_put((window, raw_list, read_counter["n"])):
                         break
+            except InferenceCancelled:
+                producer_cancelled.set()
+                stop.set()
             except BaseException as exc:  # noqa: BLE001,B036 supervisor
                 producer_error.append(exc)
                 stop.set()
@@ -654,11 +756,12 @@ class Pipeline:
                     consumer_done.set()
                     break
                 window, raw_list, read_n = item
-                result.frames_processed += len(window)
                 with span(N.WINDOW, units=len(window)):
-                    result.frame_results.extend(
-                        self._process_obb_results(window, raw_list)
-                    )
+                    window_results = self._process_obb_results(window, raw_list)
+                result.frames_processed += len(window)
+                self._deliver_results(
+                    result, window_results, collect_results, result_consumer
+                )
                 if progress_cb and range_total > 0:
                     self._emit_progress(
                         progress_cb,
@@ -695,6 +798,7 @@ class Pipeline:
             raise consumer_error
         if producer_error:
             raise producer_error[0]
+        result.cancelled = producer_cancelled.is_set()
 
         if progress_cb:
             progress_cb(result.frames_processed, range_total)
@@ -736,6 +840,17 @@ class Pipeline:
                         frame_idx, frame = next(it)
                     except StopIteration:
                         break
+                    frame_bytes = self._frame_payload_bytes(frame)
+                    retained_windows = self.queue_bound + 2 if self.depth >= 2 else 1
+                    estimated = frame_bytes * w * retained_windows
+                    if estimated > MAX_PIPELINE_BUFFER_BYTES:
+                        raise ValueError(
+                            "Inference pipeline frame buffer is not "
+                            f"resource-admissible: one frame={frame_bytes} bytes, "
+                            f"batch={w}, live_windows={retained_windows}, "
+                            f"estimated={estimated} bytes exceeds the "
+                            f"{MAX_PIPELINE_BUFFER_BYTES}-byte pipeline budget"
+                        )
                     frames_buf.append(frame)
                     indices_buf.append(int(frame_idx))
                 decode_span.add_units(len(frames_buf))
@@ -744,6 +859,31 @@ class Pipeline:
             yield BatchWindow(frames=list(frames_buf), frame_indices=list(indices_buf))
             if len(frames_buf) < w:
                 break
+
+    @staticmethod
+    def _frame_payload_bytes(frame: Any) -> int:
+        """Return known decoded-frame storage without copying its payload."""
+        try:
+            value = int(frame.nbytes)
+        except (AttributeError, TypeError, ValueError):
+            try:
+                value = int(frame.numel()) * int(frame.element_size())
+            except (AttributeError, TypeError, ValueError):
+                return 0
+        return max(0, value)
+
+    @staticmethod
+    def _deliver_results(
+        pass_result: InferencePassResult,
+        window_results: list[FrameResult],
+        collect_results: bool,
+        result_consumer: Callable[[FrameResult], None] | None,
+    ) -> None:
+        if result_consumer is not None:
+            for frame_result in window_results:
+                result_consumer(frame_result)
+        if collect_results:
+            pass_result.frame_results.extend(window_results)
 
     @staticmethod
     def _emit_progress(
@@ -800,6 +940,7 @@ class Pipeline:
         pipe.depth = depth
         pipe.queue_bound = max(1, depth - 1)
         pipe._window_size = int(window_size)
+        pipe.collect_results = False
         pipe._test_stage = stage
         return pipe
 

@@ -1,3 +1,5 @@
+import gc
+import weakref
 from types import SimpleNamespace
 
 import numpy as np
@@ -5,6 +7,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
+from hydra_suite.core.inference.cancellation import InferenceCancelled
 from hydra_suite.core.inference.config import (
     OBBSequentialConfig,
     SliceConfig,
@@ -280,6 +283,186 @@ def test_grid_plan_full_frame_appended():
     assert regions[-1].image.shape == (64, 64, 3)
 
 
+def test_grid_streams_tile_pixels_in_configured_chunks():
+    frame = np.zeros((64, 64, 3), dtype=np.uint8)
+    slice_cfg = SliceConfig(
+        enabled=True,
+        geometry_mode="custom",
+        slice_width=16,
+        slice_height=16,
+        overlap_width_ratio=0.0,
+        overlap_height_ratio=0.0,
+        tile_batch_size=3,
+    )
+    config = SimpleNamespace(
+        direct=SimpleNamespace(
+            slice=slice_cfg, confidence_floor=0.01, model_task="obb"
+        ),
+        target_classes=[],
+    )
+
+    class _Model:
+        imgsz = 16
+
+        def __init__(self):
+            self.batch_sizes = []
+
+        def predict(self, images, **kwargs):
+            self.batch_sizes.append(len(images))
+            return [object() for _ in images]
+
+    model = _Model()
+    source = Grid()
+    chunk_sizes = []
+    for chunk in source.iter_region_results(
+        [frame],
+        SimpleNamespace(direct_model=model),
+        config,
+        SimpleNamespace(tensor_on_cuda=False, device="cpu"),
+    ):
+        chunk_sizes.append(len(chunk))
+
+    assert model.batch_sizes == [3, 3, 3, 3, 3, 1]
+    assert sum(chunk_sizes) == 16
+    assert all(size <= 3 for size in chunk_sizes)
+
+
+def test_grid_refuses_unadmitted_tile_before_predict():
+    frame = np.zeros((64, 64, 3), dtype=np.uint8)
+    slice_cfg = SliceConfig(
+        enabled=True,
+        geometry_mode="custom",
+        slice_width=64,
+        slice_height=64,
+        tile_batch_size=1,
+        tile_memory_budget_bytes=1024,
+    )
+    config = SimpleNamespace(
+        direct=SimpleNamespace(
+            slice=slice_cfg, confidence_floor=0.01, model_task="obb"
+        ),
+        target_classes=[],
+    )
+
+    class _Model:
+        imgsz = 64
+
+        def predict(self, images, **kwargs):
+            raise AssertionError("predict must not run before geometry admission")
+
+    with pytest.raises(
+        ValueError,
+        match=r"frame=64x64, tile=64x64, tiles=1, estimated peak=",
+    ):
+        list(
+            Grid().iter_region_results(
+                [frame],
+                SimpleNamespace(direct_model=_Model()),
+                config,
+                SimpleNamespace(tensor_on_cuda=False, device="cpu"),
+            )
+        )
+
+
+def test_grid_polls_cancellation_between_admitted_chunks():
+    frame = np.zeros((64, 64, 3), dtype=np.uint8)
+    slice_cfg = SliceConfig(
+        enabled=True,
+        geometry_mode="custom",
+        slice_width=16,
+        slice_height=16,
+        overlap_width_ratio=0.0,
+        overlap_height_ratio=0.0,
+        tile_batch_size=2,
+    )
+    config = SimpleNamespace(
+        direct=SimpleNamespace(
+            slice=slice_cfg, confidence_floor=0.01, model_task="obb"
+        ),
+        target_classes=[],
+    )
+    cancelled = {"value": False}
+
+    class _Model:
+        imgsz = 16
+
+        def __init__(self):
+            self.calls = 0
+
+        def predict(self, images, **kwargs):
+            self.calls += 1
+            cancelled["value"] = True
+            return [object() for _ in images]
+
+    model = _Model()
+    with pytest.raises(InferenceCancelled):
+        list(
+            Grid().iter_region_results(
+                [frame],
+                SimpleNamespace(direct_model=model),
+                config,
+                SimpleNamespace(tensor_on_cuda=False, device="cpu"),
+                should_stop=lambda: cancelled["value"],
+            )
+        )
+
+    assert model.calls == 1
+
+
+def test_segment_tile_admission_accounts_for_dense_model_outputs():
+    from hydra_suite.core.inference.stages.slicing import (
+        MAX_TILE_BATCH_BYTES,
+        estimated_prediction_job_bytes,
+    )
+
+    frame = np.zeros((64, 192, 3), dtype=np.uint8)
+    max_det = 100
+    slice_cfg = SliceConfig(
+        enabled=True,
+        geometry_mode="custom",
+        slice_width=64,
+        slice_height=64,
+        overlap_width_ratio=0.0,
+        overlap_height_ratio=0.0,
+        tile_batch_size=16,
+    )
+    config = SimpleNamespace(
+        direct=SimpleNamespace(
+            slice=slice_cfg, confidence_floor=0.01, model_task="segment"
+        ),
+        target_classes=[],
+        raw_detection_cap=max_det,
+        max_detections=max_det,
+    )
+    call_sizes = []
+
+    class _Model:
+        imgsz = 640
+
+        def predict(self, images, **kwargs):
+            call_sizes.append(len(images))
+            return [object() for _ in images]
+
+    chunks = list(
+        Grid().iter_region_results(
+            [frame],
+            SimpleNamespace(direct_model=_Model()),
+            config,
+            SimpleNamespace(tensor_on_cuda=False, device="cpu"),
+        )
+    )
+
+    per_job = estimated_prediction_job_bytes(
+        imgsz=640,
+        task="segment",
+        max_detections=max_det,
+        source_bytes=64 * 64 * 3,
+    )
+    assert chunks
+    assert max(call_sizes) * per_job <= MAX_TILE_BATCH_BYTES
+    assert call_sizes == [1, 1, 1]
+
+
 class _FakeBoxesXY:
     def __init__(self, xyxy):
         self.xyxy = torch.tensor(xyxy, dtype=torch.float32)
@@ -481,6 +664,149 @@ def test_stage1_proposals_execute_zero_regions_returns_empty_list():
     config = SimpleNamespace(sequential=SimpleNamespace(stage2_batch_size=0))
     out = src.execute([[]], models=None, config=config, runtime=None)
     assert out == [[]]
+
+
+def test_stage1_proposals_unset_batch_is_finite_and_streams_all_crops(monkeypatch):
+    n = Stage1Proposals.DEFAULT_STAGE2_BATCH_SIZE * 2 + 3
+    boxes = [[float(i), 0.0, float(i + 1), 1.0] for i in range(n)]
+
+    class _Detect:
+        def predict(self, frames, **kwargs):
+            return [_FakeStage1Result(boxes)]
+
+    class _Stage2:
+        def __init__(self):
+            self.batch_sizes = []
+
+        def predict(self, crops, **kwargs):
+            self.batch_sizes.append(len(crops))
+            return [object() for _ in crops]
+
+    seq = SimpleNamespace(
+        detect_image_size=0,
+        detect_confidence_threshold=0.1,
+        crop_pad_ratio=0.0,
+        min_crop_size_px=0.0,
+        enforce_square_crop=False,
+        stage2_image_size=0,
+        stage2_batch_size=None,
+        obb_confidence_threshold=0.2,
+    )
+    config = SimpleNamespace(
+        sequential=seq,
+        target_classes=[],
+        raw_detection_cap=n,
+        max_detections=n,
+    )
+    stage2 = _Stage2()
+    chunks = list(
+        Stage1Proposals().iter_region_results(
+            [np.zeros((4, n + 1, 3), dtype=np.uint8)],
+            SimpleNamespace(detect_model=_Detect(), obb_model=stage2),
+            config,
+            SimpleNamespace(device="cpu"),
+        )
+    )
+
+    assert stage2.batch_sizes == [16, 16, 3]
+    assert sum(len(chunk) for chunk in chunks) == n
+
+
+def test_stage1_proposal_generator_releases_previous_crop_chunk(monkeypatch):
+    """A suspended generator must not retain the prior stage-2 crop batch."""
+    batch_size = 4
+    candidate_count = batch_size * 2 + 1
+    boxes = [[float(i), 0.0, float(i + 1), 1.0] for i in range(candidate_count)]
+    crop_refs: list[weakref.ReferenceType[np.ndarray]] = []
+    live_at_predict: list[int] = []
+
+    class _Detect:
+        def predict(self, frames, **kwargs):
+            return [_FakeStage1Result(boxes)]
+
+    class _Stage2:
+        def predict(self, crops, **kwargs):
+            crop_refs.extend(weakref.ref(crop) for crop in crops)
+            gc.collect()
+            live_at_predict.append(sum(ref() is not None for ref in crop_refs))
+            return [object() for _ in crops]
+
+    def fake_iter_crops(*args, **kwargs):
+        for index in range(candidate_count):
+            yield np.full((4, 4, 3), index, dtype=np.uint8), (float(index), 0.0)
+
+    monkeypatch.setattr(m, "iter_crops", fake_iter_crops)
+    seq = SimpleNamespace(
+        detect_image_size=0,
+        detect_confidence_threshold=0.1,
+        stage2_image_size=0,
+        stage2_batch_size=batch_size,
+        stage2_task="obb",
+        obb_confidence_threshold=0.2,
+    )
+    config = SimpleNamespace(
+        sequential=seq,
+        target_classes=[],
+        raw_detection_cap=candidate_count,
+        max_detections=candidate_count,
+    )
+    chunks = Stage1Proposals().iter_region_results(
+        [np.zeros((4, 4, 3), dtype=np.uint8)],
+        SimpleNamespace(detect_model=_Detect(), obb_model=_Stage2()),
+        config,
+        SimpleNamespace(device="cpu"),
+    )
+
+    while True:
+        try:
+            chunk = next(chunks)
+        except StopIteration:
+            break
+        chunk.clear()
+        del chunk
+        gc.collect()
+
+    assert live_at_predict == [batch_size, batch_size, 1]
+
+
+def test_stage1_proposals_refuses_absurd_candidates_before_crop_materialization(
+    monkeypatch,
+):
+    n = m.MAX_RAW_CANDIDATES_PER_FRAME + 1
+    boxes = [[float(i), 0.0, float(i + 1), 1.0] for i in range(n)]
+
+    class _Detect:
+        def predict(self, frames, **kwargs):
+            return [_FakeStage1Result(boxes)]
+
+    monkeypatch.setattr(
+        m,
+        "iter_crops",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("crop pixels must not be materialized before refusal")
+        ),
+    )
+    seq = SimpleNamespace(
+        detect_image_size=0,
+        detect_confidence_threshold=0.1,
+        stage2_batch_size=None,
+    )
+    config = SimpleNamespace(
+        sequential=seq,
+        target_classes=[],
+        raw_detection_cap=0,
+        max_detections=20,
+    )
+
+    with pytest.raises(ValueError, match="1025 candidates"):
+        list(
+            Stage1Proposals().iter_region_results(
+                [np.zeros((4, 4, 3), dtype=np.uint8)],
+                SimpleNamespace(detect_model=_Detect(), obb_model=object()),
+                config,
+                SimpleNamespace(device="cpu"),
+            )
+        )
 
 
 # --- Task 8: merge_per_frame (numpy/raw x plain/overlap_band_nms) -----------
@@ -798,35 +1124,36 @@ def test_run_obb_grid_mode_routes_plan_execute_extract_merge(monkeypatch):
     runtime = SimpleNamespace()
     roi_mask = np.ones((64, 64), dtype=bool)
 
-    calls = {"plan": [], "execute": [], "extract": [], "merge": []}
+    calls = {"iterate": [], "extract": [], "merge": []}
     fake_plan = object()
 
-    def _plan(self, fr, mo, cfg, rt, roi_mask=None):
-        calls["plan"].append((fr, mo, cfg, rt, roi_mask))
+    def _iterate(self, fr, mo, cfg, rt, roi_mask=None):
+        calls["iterate"].append((fr, mo, cfg, rt, roi_mask))
         self._plan = fake_plan
-        return [
-            [
+        yield [
+            (
+                0,
                 regions.Region(
                     image="tile0", affine=Affine(offset=(0.0, 0.0)), frame_idx=0
                 ),
+                "res-t0",
+            ),
+            (
+                0,
                 regions.Region(
                     image="tile1", affine=Affine(offset=(32.0, 0.0)), frame_idx=0
                 ),
-            ]
+                "res-t1",
+            ),
         ]
 
-    def _execute(self, per_frame_regions, mo, cfg, rt):
-        calls["execute"].append((per_frame_regions, mo, cfg, rt))
-        return [["res-t0", "res-t1"]]
-
-    monkeypatch.setattr(regions.Grid, "plan", _plan)
-    monkeypatch.setattr(regions.Grid, "execute", _execute)
+    monkeypatch.setattr(regions.Grid, "iter_region_results", _iterate)
     _spy_extract_and_merge(monkeypatch, calls)
 
     out = m.run_obb(frames, models, config, runtime, roi_mask=roi_mask)
 
-    # roi_mask is threaded straight through to Grid.plan.
-    assert calls["plan"][0][-1] is roi_mask
+    # roi_mask is threaded straight through to Grid's bounded iterator.
+    assert calls["iterate"][0][-1] is roi_mask
     assert len(calls["extract"]) == 2
     for call, expected_affine in zip(
         calls["extract"], [Affine(offset=(0.0, 0.0)), Affine(offset=(32.0, 0.0))]
@@ -850,26 +1177,23 @@ def test_run_obb_sequential_mode_routes_plan_execute_extract_merge(monkeypatch):
     models = SimpleNamespace(mode="sequential")
     runtime = SimpleNamespace()
 
-    calls = {"plan": [], "execute": [], "extract": [], "merge": []}
+    calls = {"iterate": [], "extract": [], "merge": []}
 
-    def _plan(self, fr, mo, cfg, rt, roi_mask=None):
-        calls["plan"].append((fr, mo, cfg, rt, roi_mask))
-        return [
-            [
+    def _iterate(self, fr, mo, cfg, rt, roi_mask=None):
+        calls["iterate"].append((fr, mo, cfg, rt, roi_mask))
+        yield [
+            (
+                0,
                 regions.Region(
                     image="crop0",
                     affine=Affine(offset=(5.0, 6.0), scale=(2.0, 2.0)),
                     frame_idx=0,
-                )
-            ]
+                ),
+                "res-crop0",
+            )
         ]
 
-    def _execute(self, per_frame_regions, mo, cfg, rt):
-        calls["execute"].append((per_frame_regions, mo, cfg, rt))
-        return [["res-crop0"]]
-
-    monkeypatch.setattr(regions.Stage1Proposals, "plan", _plan)
-    monkeypatch.setattr(regions.Stage1Proposals, "execute", _execute)
+    monkeypatch.setattr(regions.Stage1Proposals, "iter_region_results", _iterate)
     _spy_extract_and_merge(monkeypatch, calls)
 
     out = m.run_obb(frames, models, config, runtime)
@@ -902,8 +1226,11 @@ def test_run_obb_short_circuits_zero_region_frames_without_extract_or_merge(
     calls = {"extract": [], "merge": []}
     _spy_extract_and_merge(monkeypatch, calls)
 
-    monkeypatch.setattr(regions.Stage1Proposals, "plan", lambda self, *a, **kw: [[]])
-    monkeypatch.setattr(regions.Stage1Proposals, "execute", lambda self, *a, **kw: [[]])
+    monkeypatch.setattr(
+        regions.Stage1Proposals,
+        "iter_region_results",
+        lambda self, *a, **kw: iter(()),
+    )
 
     out = m.run_obb(frames, models, config, runtime)
 
