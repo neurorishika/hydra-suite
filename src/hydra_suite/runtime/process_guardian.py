@@ -298,14 +298,15 @@ def _baseline_guardian_identities(
                     process.pid != workload_pid
                     and identity.create_time < launch_started_at - 0.01
                 ):
-                    if len(external_identities) >= max_identities:
+                    if not _remember_external_ancestry(
+                        process,
+                        identity,
+                        external_identities=external_identities,
+                        max_identities=max_identities,
+                    ):
                         return False
-                    external_identities[identity.pid] = identity
                     continue
                 if uids is not None and uids.real != os.getuid():
-                    if len(external_identities) >= max_identities:
-                        return False
-                    external_identities[identity.pid] = identity
                     continue
                 process_environment = process.environ()
                 if abs(float(process.create_time()) - identity.create_time) >= 0.01:
@@ -329,14 +330,22 @@ def _baseline_guardian_identities(
                 if identity.create_time < launch_started_at - 0.01:
                     # It predates the launch, so it cannot be an escaped child.
                     continue
-                if len(external_identities) >= max_identities:
+                if not _remember_external_ancestry(
+                    process,
+                    identity,
+                    external_identities=external_identities,
+                    max_identities=max_identities,
+                ):
                     return False
-                external_identities[identity.pid] = identity
                 continue
             if process_environment.get(_TOKEN_ENV) != token:
-                if len(external_identities) >= max_identities:
+                if not _remember_external_ancestry(
+                    process,
+                    identity,
+                    external_identities=external_identities,
+                    max_identities=max_identities,
+                ):
                     return False
-                external_identities[identity.pid] = identity
                 continue
             if len(identities) >= max_identities:
                 return False
@@ -344,6 +353,45 @@ def _baseline_guardian_identities(
         return workload_pid in identities
     except (psutil.Error, OSError, RuntimeError):
         return False
+
+
+def _remember_external_ancestry(
+    process: psutil.Process,
+    identity: GuardedIdentity,
+    *,
+    external_identities: dict[int, GuardedIdentity],
+    max_identities: int,
+) -> bool:
+    """Boundedly retain a known-external process and its exact parent chain."""
+
+    current = process
+    current_identity = identity
+    visited: set[int] = set()
+    for _ in range(64):
+        existing = external_identities.get(current_identity.pid)
+        if existing is None:
+            if len(external_identities) >= max_identities:
+                return False
+            external_identities[current_identity.pid] = current_identity
+        elif existing != current_identity:
+            return False
+        try:
+            parent_pid = int(current.ppid())
+        except (psutil.NoSuchProcess, psutil.ZombieProcess):
+            return True
+        except (psutil.AccessDenied, OSError):
+            return False
+        if parent_pid <= 1 or parent_pid in visited:
+            return True
+        visited.add(parent_pid)
+        try:
+            current = psutil.Process(parent_pid)
+            current_identity = GuardedIdentity(parent_pid, float(current.create_time()))
+        except (psutil.NoSuchProcess, psutil.ZombieProcess):
+            return True
+        except (psutil.AccessDenied, OSError):
+            return False
+    return False
 
 
 def _scan_token_identities(
