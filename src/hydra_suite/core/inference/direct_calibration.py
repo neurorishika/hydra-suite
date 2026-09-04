@@ -143,3 +143,102 @@ def score_frames(
             float(np.mean([score.mean_iou for score in scores])) if scores else 0.0
         ),
     )
+
+
+MIN_MATCHED_INSTANCES = 60
+F1_TOLERANCE = 0.01
+MIN_LOCALIZATION = 0.5
+RECOMMENDATION_RULE = (
+    "Balanced rule: drop failed and undersampled points, keep the Pareto "
+    "frontier of misses, extras and time, then take the fastest point whose F1 "
+    "is within 0.01 of the best and whose localization quality is at least 0.5."
+)
+
+
+@dataclass(frozen=True)
+class DirectCalibrationPoint:
+    """One fully measured SAHI operating point, with its evidence attached."""
+
+    label: str
+    enabled: bool
+    geometry_mode: str
+    tile_width: int
+    tile_height: int
+    overlap: float
+    object_tile_fraction: float
+    max_detections: int
+    tiles_per_frame: int
+    seconds_per_frame: float
+    confidence: float
+    merge_policy: str
+    merge_metric: str
+    merge_threshold: float
+    merge_backend: str
+    score: CalibrationScore
+    failed_reason: str = ""
+
+
+def _pareto(points: Sequence[DirectCalibrationPoint]) -> list[DirectCalibrationPoint]:
+    """Keep points not dominated on (misses, extras, seconds) simultaneously."""
+
+    def cost(point: DirectCalibrationPoint) -> tuple[float, float, float]:
+        return (
+            float(point.score.missed),
+            float(point.score.extra),
+            float(point.seconds_per_frame),
+        )
+
+    keep: list[DirectCalibrationPoint] = []
+    for candidate in points:
+        this = cost(candidate)
+        dominated = any(
+            all(o <= t for o, t in zip(cost(other), this))
+            and any(o < t for o, t in zip(cost(other), this))
+            for other in points
+            if other is not candidate
+        )
+        if not dominated:
+            keep.append(candidate)
+    return keep
+
+
+def recommend_balanced(
+    points: Sequence[DirectCalibrationPoint],
+    *,
+    min_matched: int = MIN_MATCHED_INSTANCES,
+    f1_tolerance: float = F1_TOLERANCE,
+    min_iou: float = MIN_LOCALIZATION,
+) -> tuple[DirectCalibrationPoint | None, str]:
+    """Explain a suggestion, or refuse. It is never applied automatically.
+
+    The floors are ELIGIBILITY filters, not vetoes on the winner: a
+    configuration that finds almost nothing would otherwise post a perfect F1
+    on a handful of matches and win.
+    """
+    eligible = [
+        point
+        for point in points
+        if not point.failed_reason
+        and point.score.matched >= min_matched
+        and point.score.mean_iou >= min_iou
+    ]
+    if not eligible:
+        return None, (
+            f"No point cleared the floors: at least {min_matched} matched "
+            f"instances and {min_iou:g} localization quality. Label a few more "
+            "frames or widen the sweep. " + RECOMMENDATION_RULE
+        )
+    best_f1 = max(point.score.f1 for point in eligible)
+    frontier = _pareto(eligible)
+    near_best = [p for p in frontier if p.score.f1 >= best_f1 - f1_tolerance]
+    if not near_best:
+        # The best-F1 point is always within tolerance of itself, so an empty
+        # set here means it was dominated on every cost axis; fall back to it
+        # explicitly rather than to an arbitrary frontier member.
+        near_best = [p for p in eligible if p.score.f1 >= best_f1 - f1_tolerance]
+    chosen = min(near_best, key=lambda p: p.seconds_per_frame)
+    return chosen, (
+        f"{chosen.label}: F1 {chosen.score.f1:.3f} (best {best_f1:.3f}), "
+        f"{chosen.seconds_per_frame:.2f}s/frame on this machine and data. "
+        + RECOMMENDATION_RULE
+    )
