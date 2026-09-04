@@ -7,10 +7,11 @@ import cv2
 import numpy as np
 import pytest
 
-from hydra_suite.training.contracts import Sam3LoraParams
+from hydra_suite.training.contracts import Sam3LoraParams, SplitConfig
 from hydra_suite.training.dataset_io import DatasetIOLimits, DatasetLimitError
 from hydra_suite.training.sam3_lora.dataset_build import (
     CURATED_NEGATIVES,
+    _split_frame_stems,
     _tile_frame,
     build_sam3_coco_dataset,
     resolve_negative_prompts,
@@ -110,6 +111,24 @@ def test_split_is_deterministic_under_seed(tmp_path):
     }
 
 
+def test_disk_backed_split_preserves_legacy_exact_order(tmp_path):
+    output = tmp_path / "out"
+    source = _source(tmp_path / "src", n_frames=7, size=32)
+    build_sam3_coco_dataset(
+        source, output, _params(slice_width=16, slice_height=16), seed=19
+    )
+    manifest = json.loads((output / "build_manifest.json").read_text())
+    expected_train, expected_valid = _split_frame_stems(
+        [f"f{index}" for index in range(7)],
+        SplitConfig(),
+        19,
+    )
+    assert manifest["frame_split"] == {
+        "train": expected_train,
+        "valid": expected_valid,
+    }
+
+
 def test_negative_prompts_prefer_explicit_then_classes_then_curated():
     assert resolve_negative_prompts(
         _params(negative_prompts=["mite"]), ["ant", "beetle"], "ant"
@@ -158,3 +177,38 @@ def test_file_count_cap_fails_before_output_promotion(tmp_path):
             io_limits=DatasetIOLimits(max_files=2),
         )
     assert not output.exists()
+
+
+def test_write_failure_preserves_previous_atomic_output(tmp_path, monkeypatch):
+    source = _source(tmp_path / "src", n_frames=2, size=32)
+    output = tmp_path / "out"
+    output.mkdir()
+    (output / "sentinel.txt").write_text("previous", encoding="utf-8")
+    real_write = cv2.imwrite
+    calls = 0
+
+    def fail_after_first(path, image):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            return False
+        return real_write(path, image)
+
+    monkeypatch.setattr(cv2, "imwrite", fail_after_first)
+    with pytest.raises(RuntimeError, match="Could not write tile"):
+        build_sam3_coco_dataset(
+            source,
+            output,
+            _params(slice_width=16, slice_height=16, keep_empty_tiles=True),
+        )
+    assert (output / "sentinel.txt").read_text(encoding="utf-8") == "previous"
+    assert not list(tmp_path.glob(".out.staging-*"))
+
+
+def test_prompt_limits_apply_before_source_discovery(tmp_path):
+    with pytest.raises(ValueError, match="per-prompt cap"):
+        build_sam3_coco_dataset(
+            tmp_path / "missing-source",
+            tmp_path / "out",
+            _params(prompt="x" * 257),
+        )

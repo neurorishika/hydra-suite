@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import cv2
 import numpy as np
 import pytest
@@ -14,7 +16,12 @@ from hydra_suite.detectkit.jobs.dataset_preparation_sidecar import (
     _write_request,
     decode_request,
 )
-from hydra_suite.detectkit.jobs.training import DatasetPreparationRequest
+from hydra_suite.detectkit.jobs.training import (
+    DatasetPreparationCancelled,
+    DatasetPreparationRequest,
+)
+from hydra_suite.runtime.process_supervisor import ExitKind
+from hydra_suite.training import TrainingOrchestrator
 from hydra_suite.training.contracts import SourceDataset, SplitConfig, TrainingRole
 from hydra_suite.training.dataset_io import DatasetLimitError
 
@@ -98,3 +105,110 @@ def test_child_promotes_only_completed_workspace(tmp_path):
     assert "/prepared/dataset-preparation-" in dataset
     assert result.preflight is not None and result.preflight.valid
     assert not staging.exists()
+
+
+def test_child_failure_leaves_no_partial_dataset(tmp_path):
+    from hydra_suite.detectkit.jobs.dataset_preparation_child import main
+
+    source = _source(tmp_path / "source")
+    # Deduplication collapses these to one item, making the final validation
+    # fail after files have already been copied into the private workspace.
+    image = np.zeros((16, 16, 3), dtype=np.uint8)
+    for path in (source / "images").glob("*.jpg"):
+        cv2.imwrite(str(path), image)
+    request_path = tmp_path / "request.json"
+    result_path = tmp_path / "result.json"
+    staging = tmp_path / "workspace" / ".dataset-preparation-fail.staging"
+    final = tmp_path / "workspace" / "prepared" / "dataset-preparation-fail"
+    _write_request(request_path, _bounded_request_payload(_request(source)))
+    code = main(
+        [
+            "--request",
+            str(request_path),
+            "--result",
+            str(result_path),
+            "--staging-root",
+            str(staging),
+            "--final-root",
+            str(final),
+            "--disk-required-bytes",
+            "1",
+        ]
+    )
+    assert code == 1
+    assert not staging.exists()
+    assert not final.exists()
+
+
+def test_parent_cancellation_terminates_sidecar_and_cleans_private_paths(
+    tmp_path, monkeypatch
+):
+    from hydra_suite.detectkit.jobs import dataset_preparation_sidecar as module
+
+    source = _source(tmp_path / "source")
+    monkeypatch.setenv("HYDRA_DATA_DIR", str(tmp_path / "hydra-data"))
+    canceled = []
+
+    class Output:
+        def drain(self, timeout=0.0):
+            return [], False, None
+
+    class Sidecar:
+        def __init__(self, *_args, **_kwargs):
+            self.output = Output()
+            self.process = SimpleNamespace(poll=lambda: None)
+
+        def cancel(self, grace):
+            canceled.append(grace)
+
+    monkeypatch.setattr(module, "SupervisedSidecar", Sidecar)
+    with pytest.raises(DatasetPreparationCancelled):
+        module.prepare_role_datasets_contained(
+            TrainingOrchestrator(tmp_path / "workspace"),
+            _request(source),
+            log=lambda _message: None,
+            status=lambda _message: None,
+            should_cancel=lambda: True,
+        )
+    assert canceled
+    assert not list((tmp_path / "workspace").glob(".dataset-preparation-*.staging"))
+
+
+def test_hard_limit_classification_is_preserved_and_output_removed(
+    tmp_path, monkeypatch
+):
+    from hydra_suite.detectkit.jobs import dataset_preparation_sidecar as module
+
+    source = _source(tmp_path / "source")
+    monkeypatch.setenv("HYDRA_DATA_DIR", str(tmp_path / "hydra-data"))
+
+    class Output:
+        def drain(self, timeout=0.0):
+            return [], True, None
+
+    class Sidecar:
+        def __init__(self, *_args, **_kwargs):
+            self.output = Output()
+            self.process = SimpleNamespace(poll=lambda: 137)
+
+        def wait(self, **_kwargs):
+            return SimpleNamespace(
+                classified_exit=SimpleNamespace(
+                    kind=ExitKind.HOST_HARD_LIMIT,
+                    message="host hard memory limit reached",
+                )
+            )
+
+        def cancel(self, _grace):
+            return None
+
+    monkeypatch.setattr(module, "SupervisedSidecar", Sidecar)
+    with pytest.raises(RuntimeError, match="host hard memory limit"):
+        module.prepare_role_datasets_contained(
+            TrainingOrchestrator(tmp_path / "workspace"),
+            _request(source),
+            log=lambda _message: None,
+            status=lambda _message: None,
+            should_cancel=lambda: False,
+        )
+    assert not list((tmp_path / "workspace").glob(".dataset-preparation-*.staging"))

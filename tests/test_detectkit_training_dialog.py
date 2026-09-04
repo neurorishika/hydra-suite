@@ -644,9 +644,9 @@ def test_dataset_preparation_preserves_merge_reuse_and_slice_routing(qapp):
 
     from hydra_suite.detectkit.gui.dialogs.training_dialog import (
         _DatasetPreparationRequest,
-        _prepare_role_datasets,
     )
     from hydra_suite.detectkit.gui.models import SliceTrainingSettings
+    from hydra_suite.detectkit.jobs.training import prepare_role_datasets
     from hydra_suite.training.contracts import SourceDataset, SplitConfig, TrainingRole
 
     calls = {"merge": [], "slice": [], "role": []}
@@ -684,7 +684,7 @@ def test_dataset_preparation_preserves_merge_reuse_and_slice_routing(qapp):
         slice_settings=SliceTrainingSettings(enabled=True),
     )
 
-    result = _prepare_role_datasets(
+    result = prepare_role_datasets(
         _Orchestrator(),
         request,
         log=lambda _message: None,

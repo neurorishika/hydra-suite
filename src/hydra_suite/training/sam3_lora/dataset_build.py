@@ -32,7 +32,7 @@ from hydra_suite.utils.slice_geometry import (
 )
 
 from ..class_mapping import resolve_dataset_class_names
-from ..contracts import Sam3LoraParams, SplitConfig
+from ..contracts import Sam3LoraParams, SplitConfig, sam3_prompt_pool_error
 from ..dataset_builders import IMAGE_EXTS, _find_label_for_obb_image
 from ..dataset_io import (
     DEFAULT_DATASET_IO_LIMITS,
@@ -282,6 +282,10 @@ def build_sam3_coco_dataset(
     out_root = Path(out_dir).expanduser().resolve()
     split_cfg = split or SplitConfig()
 
+    prompt_error = sam3_prompt_pool_error(params.prompt, params.negative_prompts)
+    if prompt_error is not None:
+        raise ValueError(f"Invalid SAM3 prompt configuration: {prompt_error}")
+
     class_names = resolve_dataset_class_names(source)
     selected_class = class_name if class_name in class_names else class_names[0]
     selected_idx = class_names.index(selected_class)
@@ -375,6 +379,7 @@ def build_sam3_coco_dataset(
             database.execute(
                 "UPDATE frames SET position=? WHERE stem=?", (position, stem)
             )
+        database.execute("CREATE UNIQUE INDEX frames_position ON frames(position)")
         rng = random.Random(seed)
         for index in range(frame_count - 1, 0, -1):
             other = rng.randrange(index + 1)

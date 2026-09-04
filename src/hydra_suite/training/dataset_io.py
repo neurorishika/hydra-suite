@@ -28,6 +28,7 @@ class DatasetIOLimits:
     max_label_lines: int = 1_000_000
     max_line_bytes: int = 1024 * 1024
     max_points_per_object: int = 100_000
+    max_classes: int = 4096
     max_metadata_bytes: int = 16 * 1024 * 1024
     max_image_pixels: int = 250_000_000
 
@@ -70,9 +71,9 @@ def sorted_file_index(
             "CREATE TABLE files (ordinal INTEGER PRIMARY KEY, rel TEXT NOT NULL UNIQUE)"
         )
         count = 0
-        stack: list[tuple[Path, int]] = [(root, 0)]
-        while stack:
-            directory, depth = stack.pop()
+
+        def visit(directory: Path, depth: int) -> None:
+            nonlocal count
             if depth > limits.max_depth:
                 raise DatasetLimitError(
                     f"Dataset directory depth exceeds cap {limits.max_depth}: {directory}"
@@ -92,7 +93,7 @@ def sorted_file_index(
                             f"Dataset path exceeds {limits.max_path_bytes} bytes: {path}"
                         )
                     if entry.is_dir(follow_symlinks=False):
-                        stack.append((path, depth + 1))
+                        visit(path, depth + 1)
                         continue
                     if not entry.is_file(follow_symlinks=False):
                         continue
@@ -108,6 +109,8 @@ def sorted_file_index(
                     )
             if count % 4096 == 0:
                 connection.commit()
+
+        visit(root, 0)
         connection.commit()
         connection.execute("CREATE INDEX files_rel ON files(rel)")
         yield connection

@@ -7,6 +7,7 @@ happens after the child memory boundary is active.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -68,6 +69,7 @@ class DatasetPreparationBudget:
     disk_available_bytes: int
     source_files: int
     source_bytes: int
+    source_fingerprint: str
 
     def __post_init__(self) -> None:
         if self.soft_host_bytes <= 0 or self.hard_host_bytes <= 0:
@@ -151,9 +153,12 @@ def decode_request(payload: object) -> DatasetPreparationRequest:
     )
 
 
-def _scan_source_footprint(sources: tuple[SourceDataset, ...]) -> tuple[int, int]:
+def _scan_source_footprint(
+    sources: tuple[SourceDataset, ...],
+) -> tuple[int, int, str]:
     count = 0
     total = 0
+    fingerprint = 0
 
     def visit(directory: Path, root: Path, depth: int):
         if depth > 32:
@@ -179,16 +184,24 @@ def _scan_source_footprint(sources: tuple[SourceDataset, ...]) -> tuple[int, int
                     f"Dataset sources exceed {MAX_SOURCE_FILES} files"
                 )
             try:
-                total += path.stat().st_size
+                metadata = path.stat()
             except OSError as exc:
                 raise RuntimeError(
                     f"Could not inspect source file {path}: {exc}"
                 ) from exc
+            total += metadata.st_size
+            record = (
+                f"{root}\0{path.relative_to(root).as_posix()}\0"
+                f"{metadata.st_size}\0{metadata.st_mtime_ns}"
+            ).encode("utf-8")
+            fingerprint ^= int.from_bytes(
+                hashlib.blake2b(record, digest_size=16).digest(), "big"
+            )
             if total > MAX_SOURCE_BYTES:
                 raise DatasetLimitError(
                     f"Dataset sources exceed {MAX_SOURCE_BYTES} bytes"
                 )
-    return count, total
+    return count, total, f"{fingerprint:032x}"
 
 
 def assess_preparation_budget(
@@ -196,7 +209,9 @@ def assess_preparation_budget(
 ) -> DatasetPreparationBudget:
     """Perform streaming file/disk admission without retaining source paths."""
 
-    source_files, source_bytes = _scan_source_footprint(request.sources)
+    source_files, source_bytes, source_fingerprint = _scan_source_footprint(
+        request.sources
+    )
     memory = psutil.virtual_memory()
     reserve = max(4 * GiB, int(memory.total * 0.15))
     usable = int(memory.available) - reserve
@@ -221,6 +236,7 @@ def assess_preparation_budget(
         disk_available_bytes=disk_available,
         source_files=source_files,
         source_bytes=source_bytes,
+        source_fingerprint=source_fingerprint,
     )
 
 
@@ -317,11 +333,17 @@ def prepare_role_datasets_contained(
                 "Available host memory changed before dataset preparation; "
                 "the immutable hard limit no longer preserves the host reserve."
             )
-        live_files, live_bytes = _scan_source_footprint(request.sources)
-        if live_files > budget.source_files or live_bytes > budget.source_bytes:
+        live_files, live_bytes, live_fingerprint = _scan_source_footprint(
+            request.sources
+        )
+        if (
+            live_files != budget.source_files
+            or live_bytes != budget.source_bytes
+            or live_fingerprint != budget.source_fingerprint
+        ):
             raise DatasetLimitError(
-                "A dataset source grew after initial admission; refusing to widen "
-                "the immutable preparation budget."
+                "A dataset source changed after initial admission; refusing to "
+                "widen or alter the immutable preparation budget."
             )
         if shutil.disk_usage(workspace).free < budget.disk_required_bytes:
             raise DatasetLimitError(
