@@ -211,6 +211,30 @@ def test_merge_obb_results_concatenates():
     assert merged.detection_ids.shape == (5,)
 
 
+def test_merge_obb_results_preserves_native_polygons():
+    """Sliced segment results must keep their contours during concat."""
+    polygon_a = np.array([[0, 0], [3, 0], [4, 2], [2, 4], [0, 3]], np.float32)
+    polygon_b = np.array([[10, 0], [14, 0], [14, 4], [10, 4]], np.float32)
+    base = dict(
+        frame_idx=0,
+        centroids=np.array([[2, 2]], np.float32),
+        angles=np.zeros(1, np.float32),
+        sizes=np.ones(1, np.float32),
+        shapes=np.ones((1, 2), np.float32),
+        confidences=np.array([0.9], np.float32),
+        corners=np.zeros((1, 4, 2), np.float32),
+        detection_ids=OBBResult.make_detection_ids(0, 1),
+    )
+    r1 = OBBResult(**base, polygons=[polygon_a])
+    r2 = OBBResult(**{**base, "polygons": [polygon_b]})
+
+    merged = merge_obb_results(0, [r1, r2])
+
+    assert merged.polygons is not None
+    assert [len(polygon) for polygon in merged.polygons] == [5, 4]
+    np.testing.assert_array_equal(merged.polygons[0], polygon_a)
+
+
 def test_run_obb_cpu_returns_obb_result():
     config = OBBConfig(
         mode="direct",

@@ -254,6 +254,57 @@ def test_segment_preview_passes_candidate_cap_before_dense_mask_expansion(monkey
     assert seen_caps and set(seen_caps) == {pp._PREVIEW_MAX_DET}
 
 
+def test_sliced_segment_preview_retains_native_mask_polygon(monkeypatch):
+    """The display/cache path must retain a segment contour after tile merge."""
+    native_polygon = np.array(
+        [[8, 8], [24, 8], [28, 16], [20, 28], [8, 24]], np.float32
+    )
+
+    def fake_mask_extract(_result, frame_idx, offset=(0.0, 0.0), **_kwargs):
+        if offset != (0.0, 0.0):
+            return OBBResult(
+                frame_idx=frame_idx,
+                centroids=np.zeros((0, 2), np.float32),
+                angles=np.zeros(0, np.float32),
+                sizes=np.zeros(0, np.float32),
+                shapes=np.zeros((0, 2), np.float32),
+                confidences=np.zeros(0, np.float32),
+                corners=np.zeros((0, 4, 2), np.float32),
+                detection_ids=np.zeros(0, np.int64),
+            )
+        return OBBResult(
+            frame_idx=frame_idx,
+            centroids=np.array([[18.0, 18.0]], np.float32),
+            angles=np.zeros(1, np.float32),
+            sizes=np.array([400.0], np.float32),
+            shapes=np.array([[400.0, 1.0]], np.float32),
+            confidences=np.array([0.9], np.float32),
+            corners=np.array([[[8, 8], [28, 8], [28, 28], [8, 28]]], np.float32),
+            detection_ids=OBBResult.make_detection_ids(frame_idx, 1),
+            polygons=[native_polygon],
+        )
+
+    monkeypatch.setattr(pp, "_extract_obb_from_masks", fake_mask_extract)
+    out = pp.predict_sliced_obb_result(
+        _FakeExecutor(),
+        np.zeros((512, 512, 3), np.uint8),
+        geometry_mode="custom",
+        imgsz=640,
+        reference_body_px=0.0,
+        object_tile_fraction=0.15,
+        slice_width=256,
+        slice_height=256,
+        overlap=0.2,
+        merge_threshold=0.5,
+        confidence_threshold=0.25,
+        task="segment",
+    )
+
+    assert out is not None and out.polygons is not None
+    assert len(out.polygons[0]) == 5
+    np.testing.assert_array_equal(out.polygons[0], native_polygon)
+
+
 def test_sliced_preview_releases_previous_tile_batch_before_predict(monkeypatch):
     tile_refs = []
     live_at_predict = []

@@ -52,6 +52,31 @@ def test_nms_suppresses_duplicate_keeps_one():
     assert out.confidences[0] == 0.9  # higher-conf survivor
 
 
+def test_merge_preserves_native_polygon_for_nms_survivor():
+    """A sliced segment prediction must not become a four-corner OBB at NMS."""
+    survivor = _obb(100, 100, 40, 40, conf=0.9)
+    duplicate = _obb(102, 101, 40, 40, conf=0.5)
+    survivor.polygons = [
+        np.array([[80, 80], [120, 80], [118, 95], [120, 120], [80, 120]], np.float32)
+    ]
+    duplicate.polygons = [
+        np.array([[82, 81], [122, 81], [122, 121], [82, 121]], np.float32)
+    ]
+
+    out = merge_obb_detections(
+        _concat(survivor, duplicate),
+        policy="nms",
+        metric="iou",
+        threshold=0.5,
+        backend="cv2",
+    )
+
+    assert out.polygons is not None
+    assert len(out.polygons) == 1
+    assert len(out.polygons[0]) == 5
+    np.testing.assert_array_equal(out.polygons[0], survivor.polygons[0])
+
+
 def test_nmm_unions_truncated_pair_into_one_larger_box():
     # Realistic straddling case: one tile catches the whole animal, the
     # neighbouring tile catches only a clipped sliver of it.
@@ -74,6 +99,53 @@ def test_nmm_unions_truncated_pair_into_one_larger_box():
     # semantics, not mere suppression.
     assert out.sizes[0] > big.sizes[0]
     assert out.confidences[0] == 0.8  # max conf
+
+
+def test_nmm_preserves_highest_confidence_native_polygon():
+    """A merged tile duplicate retains a mask contour, never a box contour."""
+    big = _obb(100, 100, 60, 40, conf=0.8)
+    small = _obb(72, 100, 20, 40, conf=0.7)
+    polygon = np.array(
+        [[70, 80], [130, 80], [127, 96], [130, 120], [70, 120]], np.float32
+    )
+    big.polygons = [polygon]
+    small.polygons = [np.array([[62, 80], [82, 80], [82, 120], [62, 120]], np.float32)]
+
+    out = merge_obb_detections(
+        _concat(big, small),
+        policy="greedy_nmm",
+        metric="ios",
+        threshold=0.5,
+        backend="cv2",
+    )
+
+    assert out.polygons is not None
+    assert len(out.polygons) == 1
+    np.testing.assert_array_equal(out.polygons[0], polygon)
+
+
+def test_native_polygons_route_gpu_merge_through_contour_safe_oracle():
+    """The tensor-only backend must not drop segment contours."""
+    first = _obb(100, 100, 40, 40, conf=0.9)
+    second = _obb(102, 101, 40, 40, conf=0.5)
+    polygon = np.array(
+        [[80, 80], [120, 80], [118, 96], [120, 120], [80, 120]], np.float32
+    )
+    first.polygons = [polygon]
+    second.polygons = [
+        np.array([[82, 81], [122, 81], [122, 121], [82, 121]], np.float32)
+    ]
+
+    out = merge_obb_detections(
+        _concat(first, second),
+        policy="nms",
+        metric="iou",
+        threshold=0.5,
+        backend="gpu",
+    )
+
+    assert out.polygons is not None
+    np.testing.assert_array_equal(out.polygons[0], polygon)
 
 
 def test_cv2_union_corners_match_expected_rotated_rectangle():

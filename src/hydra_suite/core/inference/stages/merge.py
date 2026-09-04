@@ -79,7 +79,8 @@ def band_membership(
 def _union_obb(members: OBBResult, idxs: list[int], frame_idx: int) -> tuple:
     """Union the member corners into one OBB via cv2.minAreaRect.
 
-    Returns the RAW, self-consistent ``(cx, cy, w, h, angle_rad, conf, cls)``
+    Returns the RAW, self-consistent ``(cx, cy, w, h, angle_rad, conf, cls,
+    native_polygon_index)``
     straight off ``cv2.minAreaRect`` -- ``w`` is the extent along the
     ``angle_rad`` axis and ``h`` the extent perpendicular to it, the same
     convention ``_union_via_kernel`` (the gpu backend) returns.
@@ -106,6 +107,7 @@ def _union_obb(members: OBBResult, idxs: list[int], frame_idx: int) -> tuple:
         float(np.deg2rad(angle_deg)),
         conf,
         cls,
+        top,
     )
 
 
@@ -146,17 +148,28 @@ def merge_obb_detections(
         return result
 
     if backend == "gpu":
-        from .merge_gpu import merge_obb_detections_gpu  # lazy; Task 5
+        if result.polygons is not None:
+            # The GPU merge kernel reduces OBB tensors only, so it has no
+            # source-row mapping with which to carry a native mask contour.
+            # Native geometry is an export/display opt-in, where correctness
+            # matters more than the acceleration; use the cv2 oracle instead
+            # of quietly degrading a segment result to rectangles.
+            logger.info(
+                "Using cv2 cross-tile merge to preserve native segmentation contours"
+            )
+            backend = "cv2"
+        else:
+            from .merge_gpu import merge_obb_detections_gpu  # lazy; Task 5
 
-        return merge_obb_detections_gpu(
-            result,
-            policy=policy,
-            metric=metric,
-            threshold=threshold,
-            runtime=runtime,
-            band_idx=band_idx,
-            passthrough_idx=passthrough_idx,
-        )
+            return merge_obb_detections_gpu(
+                result,
+                policy=policy,
+                metric=metric,
+                threshold=threshold,
+                runtime=runtime,
+                band_idx=band_idx,
+                passthrough_idx=passthrough_idx,
+            )
 
     # confidence-descending order over band members.
     order = band_idx[np.argsort(result.confidences[band_idx])[::-1]]
@@ -223,6 +236,7 @@ def _assemble(
     confidences = src.confidences[keep]
     corners = src.corners[keep]
     class_ids = src.class_ids_or_zeros[keep]
+    polygons = [src.polygons[i] for i in keep] if src.polygons is not None else None
 
     if merged_rows:
         cx = np.asarray([r[0] for r in merged_rows], np.float32)
@@ -242,6 +256,12 @@ def _assemble(
         confidences = np.concatenate([confidences, m_confs], axis=0)
         corners = np.concatenate([corners, m_corners], axis=0)
         class_ids = np.concatenate([class_ids, m_cls], axis=0)
+        if polygons is not None:
+            # A NMM union changes the derived OBB, but a segmentation contour
+            # should remain an actual model mask.  Keep the highest-confidence
+            # member's contour, which is the same source selected for class
+            # and confidence, rather than replacing it with a rectangular hull.
+            polygons.extend(src.polygons[int(r[7])] for r in merged_rows)
 
     m = n_keep + n_merged
     return OBBResult(
@@ -254,4 +274,5 @@ def _assemble(
         corners=corners.astype(np.float32, copy=False),
         detection_ids=OBBResult.make_detection_ids(src.frame_idx, m),
         class_ids=class_ids.astype(np.int64, copy=False),
+        polygons=polygons,
     )
