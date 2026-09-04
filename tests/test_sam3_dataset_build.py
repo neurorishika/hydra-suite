@@ -1,13 +1,17 @@
 """Tiling, iscrowd boundary, frame-level split, negative-prompt resolution."""
 
 import json
+from collections.abc import Iterator
 
 import cv2
 import numpy as np
+import pytest
 
 from hydra_suite.training.contracts import Sam3LoraParams
+from hydra_suite.training.dataset_io import DatasetIOLimits, DatasetLimitError
 from hydra_suite.training.sam3_lora.dataset_build import (
     CURATED_NEGATIVES,
+    _tile_frame,
     build_sam3_coco_dataset,
     resolve_negative_prompts,
 )
@@ -119,3 +123,38 @@ def test_negative_prompts_prefer_explicit_then_classes_then_curated():
 def test_curated_negatives_drop_word_overlap_with_the_prompt():
     p = Sam3LoraParams(prompt="ant on a shadow")
     assert "shadow" not in resolve_negative_prompts(p, ["ant"], "ant")
+
+
+def test_tile_frame_is_lazy():
+    image = np.zeros((32, 32, 3), dtype=np.uint8)
+    tiles = _tile_frame(image, [], 16, 16, 0.0, True)
+    assert isinstance(tiles, Iterator)
+    assert len(list(tiles)) == 4
+
+
+def test_label_byte_cap_fails_before_output_promotion(tmp_path):
+    source = _source(tmp_path / "src", n_frames=2, size=32)
+    (source / "labels" / "f0.txt").write_text("0 " + "1 " * 200)
+    output = tmp_path / "out"
+    with pytest.raises(DatasetLimitError, match="Text input exceeds"):
+        build_sam3_coco_dataset(
+            source,
+            output,
+            _params(slice_width=16, slice_height=16),
+            io_limits=DatasetIOLimits(max_label_bytes=32),
+        )
+    assert not output.exists()
+    assert not list(tmp_path.glob(".out.staging-*"))
+
+
+def test_file_count_cap_fails_before_output_promotion(tmp_path):
+    source = _source(tmp_path / "src", n_frames=3, size=32)
+    output = tmp_path / "out"
+    with pytest.raises(DatasetLimitError, match="more than 2"):
+        build_sam3_coco_dataset(
+            source,
+            output,
+            _params(slice_width=16, slice_height=16),
+            io_limits=DatasetIOLimits(max_files=2),
+        )
+    assert not output.exists()

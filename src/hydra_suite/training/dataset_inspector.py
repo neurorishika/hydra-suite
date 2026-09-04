@@ -4,7 +4,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Iterable, Literal
+
+from .dataset_io import (
+    DEFAULT_DATASET_IO_LIMITS,
+    DatasetIOLimits,
+    iter_bounded_text_lines,
+    iter_indexed_paths,
+    read_bounded_text,
+    sorted_file_index,
+)
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
@@ -28,13 +37,17 @@ class DatasetInspection:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-def _read_yaml(path: Path) -> dict[str, Any]:
+def _read_yaml(
+    path: Path, *, limits: DatasetIOLimits = DEFAULT_DATASET_IO_LIMITS
+) -> dict[str, Any]:
     try:
         import yaml  # type: ignore
     except Exception as exc:  # pragma: no cover - optional dep branch
         raise RuntimeError("PyYAML is required to parse dataset.yaml") from exc
-    with path.open("r", encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
+    data = (
+        yaml.safe_load(read_bounded_text(path, max_bytes=limits.max_metadata_bytes))
+        or {}
+    )
     if not isinstance(data, dict):
         raise RuntimeError(f"Invalid dataset.yaml structure: {path}")
     return data
@@ -64,34 +77,38 @@ def _find_label_for_image(image_path: Path, labels_root: Path) -> Path:
 
     # Fallback: same basename under labels root (recursive search).
     stem = image_path.stem
-    matches = list(labels_root.rglob(f"{stem}.txt"))
-    if len(matches) == 1:
-        return matches[0]
-    if len(matches) > 1:
-        # Deterministic tie-break
-        return sorted(matches)[0]
+    # Do not build an unbounded list merely to choose a deterministic fallback.
+    chosen = None
+    for match in labels_root.rglob(f"{stem}.txt"):
+        if chosen is None or match.as_posix() < chosen.as_posix():
+            chosen = match
+    if chosen is not None:
+        return chosen
 
     # Final fallback: sibling txt
     return image_path.with_suffix(".txt")
 
 
 def _collect_dir_split(
-    images_dir: Path, labels_dir: Path, split: str
+    images_dir: Path,
+    labels_dir: Path,
+    split: str,
+    *,
+    limits: DatasetIOLimits = DEFAULT_DATASET_IO_LIMITS,
 ) -> list[DatasetItem]:
     items: list[DatasetItem] = []
     if not images_dir.exists():
         return items
-    for image_path in sorted(images_dir.rglob("*")):
-        if image_path.suffix.lower() not in IMAGE_EXTS:
-            continue
-        label_path = _find_label_for_image(image_path, labels_dir)
-        items.append(
-            DatasetItem(
-                image_path=str(image_path.resolve()),
-                label_path=str(label_path.resolve()),
-                split=split,
+    with sorted_file_index(images_dir, suffixes=IMAGE_EXTS, limits=limits) as index:
+        for image_path in iter_indexed_paths(index, images_dir):
+            label_path = _find_label_for_image(image_path, labels_dir)
+            items.append(
+                DatasetItem(
+                    image_path=str(image_path.resolve()),
+                    label_path=str(label_path.resolve()),
+                    split=split,
+                )
             )
-        )
     return items
 
 
@@ -110,13 +127,18 @@ def _infer_label_path_from_image(
 
 
 def _collect_list_split(
-    root: Path, list_path: Path, split: str, labels_root: Path | None = None
+    root: Path,
+    list_path: Path,
+    split: str,
+    labels_root: Path | None = None,
+    *,
+    limits: DatasetIOLimits = DEFAULT_DATASET_IO_LIMITS,
 ) -> list[DatasetItem]:
     items: list[DatasetItem] = []
     if not list_path.exists():
         return items
-    lines = [ln.strip() for ln in list_path.read_text(encoding="utf-8").splitlines()]
-    for ln in lines:
+    for raw in iter_bounded_text_lines(list_path, limits=limits):
+        ln = raw.strip()
         if not ln:
             continue
         p = Path(ln)
@@ -311,6 +333,9 @@ def _analyze_obb_item(
     pad_ratio: float,
     min_crop_size_px: int,
     enforce_square: bool,
+    *,
+    limits: DatasetIOLimits = DEFAULT_DATASET_IO_LIMITS,
+    max_objects: int = 100_000,
 ) -> None:
     """Accumulate size statistics from one dataset item."""
     lbl_path = Path(item.label_path)
@@ -330,11 +355,13 @@ def _analyze_obb_item(
     stats.img_heights.append(h)
 
     try:
-        lines = lbl_path.read_text(encoding="utf-8").splitlines()
+        lines: Iterable[str] = iter_bounded_text_lines(lbl_path, limits=limits)
     except Exception:
         return
 
     for ln in lines:
+        if stats.n_objects >= max_objects:
+            return
         result = _parse_obb_object_from_line(ln, w, h)
         if result is None:
             continue
@@ -362,17 +389,23 @@ def analyze_obb_sizes(
     import random
 
     stats = OBBSizeStats()
-    all_items: list[DatasetItem] = []
+    # Fixed-size reservoir sampling avoids first collecting every source path.
+    reservoir: list[DatasetItem] = []
+    seen = 0
+    rng = random.Random(0)
     for split_items in inspection.splits.values():
-        all_items.extend(split_items)
-    if not all_items:
+        for item in split_items:
+            seen += 1
+            if len(reservoir) < max_images:
+                reservoir.append(item)
+            else:
+                replacement = rng.randrange(seen)
+                if replacement < max_images:
+                    reservoir[replacement] = item
+    if not reservoir:
         return stats
 
-    rng = random.Random(0)
-    if len(all_items) > max_images:
-        all_items = rng.sample(all_items, max_images)
-
-    for item in all_items:
+    for item in reservoir:
         _analyze_obb_item(
             item,
             stats,

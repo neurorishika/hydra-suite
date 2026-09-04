@@ -8,6 +8,7 @@ from typing import Any
 
 from .contracts import TrainingRole, ValidationIssue, ValidationReport
 from .dataset_inspector import DatasetInspection, inspect_obb_or_detect_dataset
+from .dataset_io import iter_bounded_text_lines
 
 
 def validate_coco_dataset(
@@ -48,8 +49,7 @@ def validate_coco_dataset(
 
 def _parse_label_lines(path: Path) -> list[list[str]]:
     lines = []
-    txt = path.read_text(encoding="utf-8").splitlines()
-    for ln in txt:
+    for ln in iter_bounded_text_lines(path):
         ln = ln.strip()
         if not ln:
             continue

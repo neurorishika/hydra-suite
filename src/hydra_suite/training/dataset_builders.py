@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import random
 import shutil
 from collections import defaultdict
@@ -28,6 +29,11 @@ from .dataset_inspector import (
     inspect_obb_or_detect_dataset,
     split_items_for_training,
     stratified_split_items,
+)
+from .dataset_io import (
+    DEFAULT_DATASET_IO_LIMITS,
+    iter_bounded_text_lines,
+    read_bounded_text,
 )
 from .geometry_levels import GeometryLevel
 
@@ -131,7 +137,12 @@ def _write_dataset_yaml(
 
 
 def _write_manifest(path: Path, data: dict) -> None:
-    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with temporary.open("w", encoding="utf-8") as stream:
+        json.dump(data, stream, indent=2)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, path)
 
 
 def _safe_name(text: str) -> str:
@@ -158,7 +169,12 @@ def resolve_source_path_for_target(
     if not manifest_path.is_file():
         return root
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest = json.loads(
+            read_bounded_text(
+                manifest_path,
+                max_bytes=DEFAULT_DATASET_IO_LIMITS.max_metadata_bytes,
+            )
+        )
         entries = manifest.get("roots", [])
     except (OSError, ValueError, TypeError):
         return root
@@ -179,7 +195,7 @@ def resolve_source_path_for_target(
 
 def _parse_obb_label_lines(lbl_path: Path) -> list[tuple[int, np.ndarray]]:
     out: list[tuple[int, np.ndarray]] = []
-    for ln in lbl_path.read_text(encoding="utf-8").splitlines():
+    for ln in iter_bounded_text_lines(lbl_path):
         ln = ln.strip()
         if not ln:
             continue
@@ -200,7 +216,7 @@ def _parse_geometry_label_lines(lbl_path: Path) -> list[tuple[int, np.ndarray]]:
     Raises on malformed lines.
     """
     out: list[tuple[int, np.ndarray]] = []
-    for raw in lbl_path.read_text(encoding="utf-8").splitlines():
+    for raw in iter_bounded_text_lines(lbl_path):
         ln = raw.strip()
         if not ln:
             continue
@@ -496,7 +512,12 @@ def _unique_dst_pair(out_dir: Path, split: str, img_path: Path) -> tuple[Path, P
 def _source_slice_geometry(dataset_dir: Path) -> dict | None:
     """Return valid SAHI training geometry stamped on an input dataset, if any."""
     try:
-        manifest = json.loads((dataset_dir / "manifest.json").read_text("utf-8"))
+        manifest = json.loads(
+            read_bounded_text(
+                dataset_dir / "manifest.json",
+                max_bytes=DEFAULT_DATASET_IO_LIMITS.max_metadata_bytes,
+            )
+        )
         geometry = manifest.get("slice_geometry")
         return dict(geometry) if isinstance(geometry, dict) and geometry else None
     except (OSError, ValueError, TypeError):
