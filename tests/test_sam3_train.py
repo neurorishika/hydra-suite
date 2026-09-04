@@ -43,7 +43,15 @@ def _spec(tmp_path, **overrides):
 
 
 class _Decision:
-    def __init__(self, *, admitted=True, refusals=(), uuid="GPU-physical-0"):
+    def __init__(
+        self,
+        *,
+        admitted=True,
+        refusals=(),
+        uuid="GPU-physical-0",
+        hard_host_bytes=12 << 30,
+        usable_host_bytes=40 << 30,
+    ):
         self.admitted = admitted
         self.refusals = tuple(refusals)
         self.warnings = ()
@@ -56,9 +64,10 @@ class _Decision:
         self.budget = SimpleNamespace(
             host_peak_bytes=10 << 30,
             reserved_host_bytes=8 << 30,
+            usable_host_bytes=usable_host_bytes,
         )
         self.containment_soft_host_bytes = 11 << 30
-        self.containment_hard_host_bytes = 12 << 30
+        self.containment_hard_host_bytes = hard_host_bytes
 
     def to_dict(self):
         return {
@@ -270,6 +279,64 @@ def test_final_live_probe_runs_inside_constructor_before_launch(tmp_path, monkey
     assert "VRAM changed" in result["error_message"]
     assert len(calls) == 1
     assert not (tmp_path / "run" / "adapters.pt").exists()
+
+
+def test_live_shrink_refuses_when_initial_limit_would_expose_reserve(
+    tmp_path, monkeypatch
+):
+    calls = _install(
+        monkeypatch,
+        tmp_path,
+        decisions=[
+            _Decision(hard_host_bytes=12 << 30, usable_host_bytes=40 << 30),
+            _Decision(hard_host_bytes=10 << 30, usable_host_bytes=11 << 30),
+        ],
+    )
+
+    result = tr.train_sam3_lora(_spec(tmp_path), str(tmp_path / "run"))
+
+    assert not result["success"]
+    assert "immutable containment limit" in result["error_message"]
+    assert len(calls) == 1
+    assert not (tmp_path / "run" / "adapters.pt").exists()
+
+
+def test_live_growth_refuses_when_profile_exceeds_immutable_limit(
+    tmp_path, monkeypatch
+):
+    calls = _install(
+        monkeypatch,
+        tmp_path,
+        decisions=[
+            _Decision(hard_host_bytes=12 << 30),
+            _Decision(hard_host_bytes=13 << 30),
+        ],
+    )
+
+    result = tr.train_sam3_lora(_spec(tmp_path), str(tmp_path / "run"))
+
+    assert not result["success"]
+    assert "profile grew" in result["error_message"]
+    assert len(calls) == 1
+    assert not (tmp_path / "run" / "adapters.pt").exists()
+
+
+def test_quiescent_constructor_failure_removes_private_staging(tmp_path, monkeypatch):
+    _install(monkeypatch, tmp_path, write_artifact=False)
+    staging = tmp_path / "run" / ".adapters.pt.123.validated.tmp"
+
+    class FailedSidecar:
+        def __init__(self, *_args, **_kwargs):
+            staging.write_bytes(b"partial")
+            raise RuntimeError("reader setup failed after reaping child")
+
+    monkeypatch.setattr(tr, "SupervisedSidecar", FailedSidecar)
+
+    result = tr.train_sam3_lora(_spec(tmp_path), str(tmp_path / "run"))
+
+    assert not result["success"]
+    assert "reader setup failed" in result["error_message"]
+    assert not staging.exists()
 
 
 def test_progress_plain_logs_and_bounded_diagnostics_are_propagated(

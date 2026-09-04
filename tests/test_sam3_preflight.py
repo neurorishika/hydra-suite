@@ -237,6 +237,16 @@ def test_zero_configured_reserve_cannot_disable_machine_survival_floor(tmp_path)
     )
 
 
+def test_cuda_safety_fraction_cannot_expose_last_ten_percent(tmp_path):
+    _write_coco(tmp_path)
+
+    decision = _decision(_spec(tmp_path, cuda_safety_fraction=1.0))
+
+    assert decision.policy.accelerator_safety_fraction == pytest.approx(
+        pf._MAXIMUM_CUDA_SAFETY_FRACTION
+    )
+
+
 def test_crowded_tile_increases_dense_mask_peak(tmp_path):
     _write_coco(tmp_path, instances_per_tile=1)
     sparse = _decision(_spec(tmp_path))
@@ -481,7 +491,23 @@ def test_configured_prompt_bytes_are_capped_even_when_manifest_takes_precedence(
     decision = _decision(spec)
 
     assert not decision.admitted
-    assert any("configured prompt" in reason.lower() for reason in decision.refusals)
+    assert any("per-prompt cap" in reason.lower() for reason in decision.refusals)
+
+
+def test_resolved_manifest_prompt_obeys_per_prompt_cap(tmp_path):
+    from hydra_suite.training.contracts import SAM3_MAX_PROMPT_CODEPOINTS
+
+    _write_coco(tmp_path)
+    manifest = tmp_path / "dataset" / "build_manifest.json"
+    manifest.write_text(
+        json.dumps({"negative_prompts": ["x" * (SAM3_MAX_PROMPT_CODEPOINTS + 1)]}),
+        encoding="utf-8",
+    )
+
+    decision = _decision(_spec(tmp_path, num_negatives=1))
+
+    assert not decision.admitted
+    assert any("per-prompt cap" in reason.lower() for reason in decision.refusals)
 
 
 def test_non_utf8_encodable_prompt_is_refused(tmp_path):

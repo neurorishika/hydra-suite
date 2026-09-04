@@ -206,24 +206,51 @@ def test_plan_read_and_json_materialization_are_bounded(tmp_path):
 
 def test_plan_rejects_oversized_or_non_utf8_sam3_prompt_text(tmp_path):
     from hydra_suite.detectkit.config import training as config
-    from hydra_suite.training.contracts import SAM3_MAX_CONFIGURED_PROMPT_BYTES
+    from hydra_suite.training.contracts import SAM3_MAX_PROMPT_CODEPOINTS
 
     payload = _plan_payload(tmp_path)
     payload["roles"] = [{"role": "semantic_sam3", "imgsz": 1008}]
     payload["sam3"] = {
         "prompt": "ant",
-        "negative_prompts": ["x" * SAM3_MAX_CONFIGURED_PROMPT_BYTES],
+        "negative_prompts": ["x" * (SAM3_MAX_PROMPT_CODEPOINTS + 1)],
         "label_quality_acknowledged": True,
     }
     path = tmp_path / "large-prompt.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
-    with pytest.raises(config.TrainingPlanError, match="serialized text cap"):
+    with pytest.raises(config.TrainingPlanError, match="per-prompt cap"):
         config.load_training_plan(path)
 
     payload["sam3"]["negative_prompts"] = []
     payload["sam3"]["prompt"] = "\ud800"
     path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(config.TrainingPlanError, match="valid UTF-8"):
+        config.load_training_plan(path)
+
+
+def test_plan_accepts_prompt_limit_but_keeps_aggregate_cap(tmp_path):
+    from hydra_suite.detectkit.config import training as config
+    from hydra_suite.training.contracts import (
+        SAM3_MAX_CONFIGURED_PROMPT_BYTES,
+        SAM3_MAX_PROMPT_CODEPOINTS,
+    )
+
+    payload = _plan_payload(tmp_path)
+    payload["roles"] = [{"role": "semantic_sam3", "imgsz": 1008}]
+    payload["sam3"] = {
+        "prompt": "x" * SAM3_MAX_PROMPT_CODEPOINTS,
+        "negative_prompts": [],
+        "label_quality_acknowledged": True,
+    }
+    path = tmp_path / "prompt-boundary.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    assert config.load_training_plan(path).sam3_params is not None
+
+    payload["sam3"]["negative_prompts"] = [
+        "x" * SAM3_MAX_PROMPT_CODEPOINTS
+        for _ in range(SAM3_MAX_CONFIGURED_PROMPT_BYTES // SAM3_MAX_PROMPT_CODEPOINTS)
+    ]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(config.TrainingPlanError, match="serialized text cap"):
         config.load_training_plan(path)
 
 
@@ -397,6 +424,22 @@ def test_cli_retries_and_finalizes_retained_workload(monkeypatch):
     }
 
 
+def test_cli_reports_post_recovery_artifact_cleanup_failure(monkeypatch, capsys):
+    from hydra_suite.detectkit import cli
+    from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
+
+    sidecar = type("Sidecar", (), {"cancel": lambda self: None})()
+    owned = WorkloadStillOwnedError("ownership retained", sidecar)
+    owned.recovery_cleanup = lambda: (_ for _ in ()).throw(
+        OSError("staging cleanup failed")
+    )
+    monkeypatch.setattr(cli, "run", lambda _args: (_ for _ in ()).throw(owned))
+
+    assert cli.main(["--config", "unused.json"]) == 1
+    assert "temporary artifact cleanup failed" in capsys.readouterr().err
+    assert owned.recovery_error == "staging cleanup failed"
+
+
 def test_cli_never_flattens_a_still_owned_recovery_handle(monkeypatch):
     from hydra_suite.detectkit import cli
     from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
@@ -416,6 +459,71 @@ def test_cli_never_flattens_a_still_owned_recovery_handle(monkeypatch):
     assert raised.value is retry
     assert raised.value.sidecar is original.sidecar
     assert raised.value.run_id == "run-owned"
+
+
+def test_run_summary_write_cannot_replace_owned_workload_handle(tmp_path, monkeypatch):
+    from hydra_suite.detectkit import cli
+    from hydra_suite.detectkit.jobs.training import DatasetPreparationResult
+    from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
+    from hydra_suite.training import TrainingRole, ValidationReport
+
+    payload = _plan_payload(tmp_path)
+    payload["roles"] = payload["roles"][:1]
+    config_path = tmp_path / "training.json"
+    config_path.write_text(json.dumps(payload), encoding="utf-8")
+    owned = WorkloadStillOwnedError("ownership retained", object())
+    monkeypatch.setattr(cli, "TrainingOrchestrator", lambda _workspace: object())
+    monkeypatch.setattr(
+        cli, "preflight_sources", lambda _sources: ValidationReport(valid=True)
+    )
+    monkeypatch.setattr(
+        cli,
+        "prepare_role_datasets",
+        lambda *_args, **_kwargs: DatasetPreparationResult(
+            role_dataset_dirs={"detect_direct": "/tmp/detect"},
+            roles=(TrainingRole.DETECT_DIRECT,),
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_role_entries",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(owned),
+    )
+    real_write = cli._write_session_file
+    result_write_attempted = False
+
+    def fail_result_write(session_dir, name, data):
+        nonlocal result_write_attempted
+        if name == "training_result.json":
+            result_write_attempted = True
+            raise OSError("session filesystem unavailable")
+        return real_write(session_dir, name, data)
+
+    monkeypatch.setattr(cli, "_write_session_file", fail_result_write)
+    monkeypatch.setattr(
+        cli,
+        "_restore_signal_handlers",
+        lambda _previous: (_ for _ in ()).throw(OSError("signal restore failed")),
+    )
+
+    def flock(_fd, operation):
+        if operation == 4:
+            raise OSError("workspace unlock failed")
+
+    monkeypatch.setattr(
+        cli,
+        "fcntl",
+        SimpleNamespace(LOCK_EX=1, LOCK_NB=2, LOCK_UN=4, flock=flock),
+    )
+    args = cli.build_parser().parse_args(["--config", str(config_path)])
+
+    with pytest.raises(WorkloadStillOwnedError) as raised:
+        cli.run(args)
+
+    assert raised.value is owned
+    assert not result_write_attempted
+    assert "signal-handler restoration failed" in owned.recovery_error
+    assert "workspace unlock failed" in owned.recovery_error
 
 
 def test_detectkit_app_dispatches_train_without_importing_qt(monkeypatch):

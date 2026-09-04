@@ -134,6 +134,31 @@ SAM3_MAX_NEGATIVE_QUERIES_PER_TILE = 100
 SAM3_MAX_NEGATIVE_PROMPT_COUNT = 4096
 SAM3_MAX_NEGATIVE_PROMPT_BYTES = 256 * 1024
 SAM3_MAX_CONFIGURED_PROMPT_BYTES = 256 * 1024
+# SAM3's text encoder has a short context.  Keep a separate per-prompt cap so
+# one entry cannot turn the otherwise bounded prompt pool into an enormous
+# tokenization request.  Code points and encoded bytes are both bounded: the
+# former protects Qt/runtime string handling, while the latter handles dense
+# Unicode input.
+SAM3_MAX_PROMPT_CODEPOINTS = 256
+SAM3_MAX_PROMPT_UTF8_BYTES = 1024
+
+
+def sam3_prompt_text_error(value: object) -> str | None:
+    """Return a stable admission error for one SAM3 prompt, if unsafe."""
+
+    if not isinstance(value, str):
+        return "must be a string"
+    if len(value) > SAM3_MAX_PROMPT_CODEPOINTS:
+        return f"exceeds the per-prompt cap of {SAM3_MAX_PROMPT_CODEPOINTS} characters"
+    try:
+        encoded_size = len(value.encode("utf-8"))
+    except UnicodeEncodeError:
+        return "must be valid UTF-8 text"
+    if encoded_size > SAM3_MAX_PROMPT_UTF8_BYTES:
+        return (
+            "exceeds the per-prompt cap of " f"{SAM3_MAX_PROMPT_UTF8_BYTES} UTF-8 bytes"
+        )
+    return None
 
 
 @dataclass(slots=True)

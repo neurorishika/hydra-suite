@@ -167,7 +167,7 @@ def train_sam3_lora(
     _write_json(spec_path, spec.to_dict())
 
     artifact_path = run_dir_path / "adapters.pt"
-    remove_artifact(artifact_path)
+    remove_artifact(artifact_path, remove_staging=True)
     params = spec.sam3_params
     env_name = resolve_sam3_env(params.env_name)
     command = sam3_env_command(
@@ -223,6 +223,17 @@ def train_sam3_lora(
                 "The selected physical CUDA device changed between admission "
                 "and launch; refusing to use a different GPU."
             )
+        immutable_hard_limit = initial.containment_hard_host_bytes
+        if immutable_hard_limit > live.budget.usable_host_bytes:
+            raise _AdmissionRefused(
+                "Available host memory changed before launch: the immutable "
+                "containment limit would expose the reserved host-memory floor."
+            )
+        if live.containment_hard_host_bytes > immutable_hard_limit:
+            raise _AdmissionRefused(
+                "The SAM3 workload profile grew after initial admission and "
+                "no longer fits the immutable containment limit."
+            )
         if not live.admitted:
             raise _AdmissionRefused("; ".join(live.refusals))
 
@@ -251,6 +262,10 @@ def train_sam3_lora(
         FileNotFoundError,
         RuntimeError,
     ) as exc:
+        # These paths either refused before Popen or completed constructor
+        # cleanup and proved quiescence. Any exact private-run staging file is
+        # now stale and safe to remove.
+        remove_artifact(artifact_path, remove_staging=True)
         return _result(
             success=False,
             message=f"SAM3 sidecar launch refused: {exc}",

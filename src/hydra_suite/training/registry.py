@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import struct
 import threading
 from contextlib import contextmanager
 from datetime import datetime
@@ -20,6 +21,40 @@ except ImportError:  # pragma: no cover - Windows does not provide fcntl.
 from .contracts import TrainingRunSpec
 
 _PROCESS_REGISTRY_LOCK = threading.RLock()
+_MAX_REGISTRY_BYTES = 8 * 1024 * 1024
+_MAX_REGISTRY_RECORDS = 10_000
+_MAX_REGISTRY_JSON_DEPTH = 64
+_MAX_REGISTRY_JSON_VALUES = 100_000
+
+
+def _validate_registry_json_shape(encoded: bytes) -> None:
+    """Reject compact structures that amplify beyond the bounded raw file."""
+
+    depth = 0
+    separators = 0
+    in_string = False
+    escaped = False
+    for byte in encoded:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif byte == ord("\\"):
+                escaped = True
+            elif byte == ord('"'):
+                in_string = False
+            continue
+        if byte == ord('"'):
+            in_string = True
+        elif byte in (ord("["), ord("{")):
+            depth += 1
+            if depth > _MAX_REGISTRY_JSON_DEPTH:
+                raise RuntimeError("Training registry exceeds its safe nesting cap")
+        elif byte in (ord("]"), ord("}")):
+            depth = max(0, depth - 1)
+        elif byte == ord(","):
+            separators += 1
+            if separators >= _MAX_REGISTRY_JSON_VALUES:
+                raise RuntimeError("Training registry exceeds its safe value cap")
 
 
 def _project_root() -> Path:
@@ -68,7 +103,17 @@ def _load_registry_unlocked() -> dict[str, Any]:
     if not path.exists():
         return {"runs": []}
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        with path.open("rb") as handle:
+            encoded = handle.read(_MAX_REGISTRY_BYTES + 1)
+        if len(encoded) > _MAX_REGISTRY_BYTES:
+            raise RuntimeError(
+                "Training registry exceeds its safe size cap; archive old runs "
+                "before starting another training job"
+            )
+        _validate_registry_json_shape(encoded)
+        data = json.loads(encoded)
+    except RuntimeError:
+        raise
     except Exception:
         return {"runs": []}
     if not isinstance(data, dict):
@@ -76,12 +121,19 @@ def _load_registry_unlocked() -> dict[str, Any]:
     runs = data.get("runs")
     if not isinstance(runs, list):
         data["runs"] = []
+    elif len(runs) > _MAX_REGISTRY_RECORDS:
+        raise RuntimeError(
+            "Training registry exceeds its safe run-record cap; archive old runs "
+            "before starting another training job"
+        )
     return data
 
 
 def _save_registry_unlocked(registry: dict[str, Any]) -> None:
     path = get_registry_path()
-    encoded = json.dumps(registry, indent=2)
+    runs = registry.get("runs")
+    if isinstance(runs, list) and len(runs) > _MAX_REGISTRY_RECORDS:
+        raise RuntimeError("Training registry exceeds its safe run-record cap")
     temp_path: Path | None = None
     try:
         with NamedTemporaryFile(
@@ -93,7 +145,12 @@ def _save_registry_unlocked(registry: dict[str, Any]) -> None:
             delete=False,
         ) as handle:
             temp_path = Path(handle.name)
-            handle.write(encoded)
+            encoded_bytes = 0
+            for chunk in json.JSONEncoder(indent=2).iterencode(registry):
+                encoded_bytes += len(chunk.encode("utf-8"))
+                if encoded_bytes > _MAX_REGISTRY_BYTES:
+                    raise RuntimeError("Training registry exceeds its safe size cap")
+                handle.write(chunk)
             handle.flush()
             os.fsync(handle.fileno())
         temp_path.replace(path)
@@ -116,30 +173,73 @@ def save_registry(registry: dict[str, Any]) -> None:
         _save_registry_unlocked(registry)
 
 
+def _update_hash_from_file(digest: Any, path: Path) -> None:
+    """Hash a metadata file with fixed-size reads."""
+
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+
+
+def _iter_dataset_files(directory: Path, *, depth: int = 0):
+    """Yield files with streaming scandir and bounded recursion depth."""
+
+    if depth > 128:
+        raise ValueError(f"Dataset directory nesting exceeds safe depth: {directory}")
+    with os.scandir(directory) as entries:
+        for entry in entries:
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    yield from _iter_dataset_files(Path(entry.path), depth=depth + 1)
+                elif entry.is_file(follow_symlinks=True):
+                    yield entry
+            except FileNotFoundError:
+                # A concurrently removed entry is absent from this observed
+                # snapshot; never turn churn into an unbounded retry.
+                continue
+
+
 def dataset_fingerprint(dataset_dir: str | Path) -> str:
-    """Compute stable dataset fingerprint from metadata and file listing."""
+    """Compute a stable fingerprint without materializing the dataset tree."""
 
     root = Path(dataset_dir).expanduser().resolve()
     h = hashlib.sha256()
+    h.update(b"hydra-dataset-fingerprint-v2\0")
     h.update(str(root).encode("utf-8"))
 
     manifest = root / "manifest.json"
     if manifest.exists():
-        h.update(manifest.read_bytes())
+        _update_hash_from_file(h, manifest)
 
     yaml_path = root / "dataset.yaml"
     if yaml_path.exists():
-        h.update(yaml_path.read_bytes())
+        _update_hash_from_file(h, yaml_path)
 
-    # Include deterministic listing with file sizes and mtime_ns.
-    for p in sorted(root.rglob("*")):
-        if not p.is_file():
+    # Directory order is filesystem-dependent. Combine independent entry
+    # digests using commutative fixed-width accumulators, preserving stable
+    # output without retaining and sorting every path.
+    modulus = 1 << 256
+    digest_sum = 0
+    digest_xor = 0
+    file_count = 0
+    for entry in _iter_dataset_files(root):
+        try:
+            st = entry.stat(follow_symlinks=True)
+        except FileNotFoundError:
             continue
-        rel = p.relative_to(root).as_posix()
-        st = p.stat()
-        h.update(rel.encode("utf-8"))
-        h.update(str(st.st_size).encode("utf-8"))
-        h.update(str(st.st_mtime_ns).encode("utf-8"))
+        rel = Path(entry.path).relative_to(root).as_posix()
+        entry_hash = hashlib.sha256()
+        entry_hash.update(rel.encode("utf-8"))
+        entry_hash.update(b"\0")
+        # File size is unsigned; POSIX mtimes may validly predate the epoch.
+        entry_hash.update(struct.pack(">Qq", st.st_size, st.st_mtime_ns))
+        value = int.from_bytes(entry_hash.digest(), "big")
+        digest_sum = (digest_sum + value) % modulus
+        digest_xor ^= value
+        file_count += 1
+    h.update(struct.pack(">Q", file_count))
+    h.update(digest_sum.to_bytes(32, "big"))
+    h.update(digest_xor.to_bytes(32, "big"))
 
     return h.hexdigest()
 

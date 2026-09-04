@@ -93,6 +93,15 @@ def _write_session_file(session_dir: Path, name: str, payload: object) -> Path:
     return path
 
 
+def _attach_owned_cleanup_error(
+    owned_error: WorkloadStillOwnedError, context: str, cleanup_error: Exception
+) -> None:
+    diagnostic = f"{context}: {cleanup_error}"
+    if owned_error.recovery_error:
+        diagnostic = f"{owned_error.recovery_error}; {diagnostic}"
+    owned_error.recovery_error = diagnostic
+
+
 @contextmanager
 def _workspace_session(workspace: Path) -> Iterator[Path]:
     """Create an isolated session directory while exclusively owning a workspace."""
@@ -115,9 +124,23 @@ def _workspace_session(workspace: Path) -> Iterator[Path]:
         session_dir.mkdir(parents=True, exist_ok=False)
         yield session_dir
     finally:
+        active_error = sys.exception()
+        cleanup_errors: list[tuple[str, Exception]] = []
         if fcntl is not None:
-            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
-        lock_handle.close()
+            try:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+            except Exception as exc:  # cleanup must not replace live ownership
+                cleanup_errors.append(("workspace unlock failed", exc))
+        try:
+            lock_handle.close()
+        except Exception as exc:  # cleanup must not replace live ownership
+            cleanup_errors.append(("workspace lock close failed", exc))
+        if cleanup_errors:
+            if isinstance(active_error, WorkloadStillOwnedError):
+                for context, exc in cleanup_errors:
+                    _attach_owned_cleanup_error(active_error, context, exc)
+            else:
+                raise cleanup_errors[0][1]
 
 
 def _install_cancel_handlers(cancel_event: threading.Event):
@@ -284,6 +307,12 @@ def run(args: argparse.Namespace) -> int:
             )
             print("Dataset preparation canceled.", file=sys.stderr)
             return 130
+        except WorkloadStillOwnedError:
+            # Any session-summary write failure here would replace the exact
+            # exception that owns the live sidecar and leases. The training
+            # registry already records recovery-required best-effort; preserve
+            # this handle unchanged for main()/GUI cleanup.
+            raise
         except Exception as exc:
             _write_session_file(
                 session_dir,
@@ -297,7 +326,16 @@ def run(args: argparse.Namespace) -> int:
             )
             raise
         finally:
-            _restore_signal_handlers(previous_handlers)
+            active_error = sys.exception()
+            try:
+                _restore_signal_handlers(previous_handlers)
+            except Exception as exc:
+                if isinstance(active_error, WorkloadStillOwnedError):
+                    _attach_owned_cleanup_error(
+                        active_error, "signal-handler restoration failed", exc
+                    )
+                else:
+                    raise
 
 
 def main(argv: list[str] | None = None) -> int:

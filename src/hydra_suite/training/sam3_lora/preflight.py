@@ -34,6 +34,7 @@ from hydra_suite.training.contracts import (
     SAM3_MAX_NEGATIVE_PROMPT_BYTES,
     SAM3_MAX_NEGATIVE_PROMPT_COUNT,
     SAM3_MAX_NEGATIVE_QUERIES_PER_TILE,
+    sam3_prompt_text_error,
 )
 from hydra_suite.utils.sam3_constants import PREDICTOR_IMGSZ
 
@@ -74,6 +75,7 @@ _DEFAULT_HOST_RESERVE_FRACTION = 0.15
 _MINIMUM_HOST_RESERVE_BYTES = int(_DEFAULT_HOST_RESERVE_GB * GiB)
 _MINIMUM_HOST_RESERVE_FRACTION = _DEFAULT_HOST_RESERVE_FRACTION
 _DEFAULT_CUDA_SAFETY_FRACTION = 0.85
+_MAXIMUM_CUDA_SAFETY_FRACTION = 0.90
 _PROBE_TIMEOUT_SECONDS = 5.0
 _UNSET = object()
 
@@ -521,8 +523,11 @@ def _resource_policy(params: Any) -> ResourcePolicy:
                 )
             ),
         ),
-        accelerator_safety_fraction=float(
-            getattr(params, "cuda_safety_fraction", _DEFAULT_CUDA_SAFETY_FRACTION)
+        accelerator_safety_fraction=min(
+            _MAXIMUM_CUDA_SAFETY_FRACTION,
+            float(
+                getattr(params, "cuda_safety_fraction", _DEFAULT_CUDA_SAFETY_FRACTION)
+            ),
         ),
         warning_fraction=0.80,
     )
@@ -877,7 +882,15 @@ def assess_preflight(
         refusals.append(
             "Prompt is empty; SAM3 requires a text prompt to train against."
         )
+    prompt_error = sam3_prompt_text_error(prompt)
+    if prompt_error is not None:
+        refusals.append(f"Prompt {prompt_error}.")
     configured_negatives = getattr(params, "negative_prompts", ()) or ()
+    if isinstance(configured_negatives, (list, tuple)):
+        for index, negative_prompt in enumerate(configured_negatives):
+            prompt_error = sam3_prompt_text_error(negative_prompt)
+            if prompt_error is not None:
+                refusals.append(f"Configured negative prompt {index} {prompt_error}.")
     configured_prompt_bytes = _utf8_size(prompt)
     if isinstance(configured_negatives, (list, tuple)):
         configured_prompt_bytes += sum(
@@ -914,6 +927,10 @@ def assess_preflight(
         )
     if len(valid_negative_prompts) != len(resolved_negative_prompts):
         refusals.append("Every resolved negative prompt must be a non-empty string.")
+    for index, negative_prompt in enumerate(valid_negative_prompts):
+        prompt_error = sam3_prompt_text_error(negative_prompt)
+        if prompt_error is not None:
+            refusals.append(f"Resolved negative prompt {index} {prompt_error}.")
     if len(valid_negative_prompts) > _MAX_NEGATIVE_PROMPT_COUNT:
         refusals.append(
             "Resolved negative prompts exceed the safe metadata cap of "

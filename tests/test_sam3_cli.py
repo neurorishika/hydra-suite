@@ -48,6 +48,20 @@ def test_load_spec_reconstructs_sam3_params(tmp_path):
     assert spec.sam3_params.prompt == "ant"
 
 
+def test_child_runtime_refuses_oversized_prompt_before_sam3_import():
+    from hydra_suite.training.contracts import SAM3_MAX_PROMPT_CODEPOINTS
+
+    params = Sam3LoraParams(
+        prompt="x" * (SAM3_MAX_PROMPT_CODEPOINTS + 1), mixed_precision="bf16"
+    )
+    torch_module = SimpleNamespace(cuda=SimpleNamespace())
+
+    refusal = cli._runtime_admission_refusal(torch_module, params)
+
+    assert refusal is not None
+    assert "per-prompt cap" in refusal
+
+
 def test_run_training_zero_datapoints_returns_false_without_importing_sam3(
     tmp_path, monkeypatch
 ):

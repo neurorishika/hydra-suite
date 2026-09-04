@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+from collections import deque
 from dataclasses import asdict, fields
 from pathlib import Path
+from threading import Lock
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt, Signal
@@ -65,6 +67,9 @@ MAX_VISIBLE_LOG_BLOCKS = 2_000
 MAX_PERSISTED_ROLE_LOG_LINES = 2_000
 MAX_PERSISTED_ROLE_LOG_CHARS = 512 * 1024
 MAX_PERSISTED_LOG_LINE_CHARS = 32 * 1024
+MAX_PENDING_WORKER_LOG_LINES = 256
+MAX_PENDING_WORKER_LOG_BYTES = 512 * 1024
+MAX_PENDING_WORKER_LOG_LINE_BYTES = 32 * 1024
 
 
 def merged_level_and_blocker(sources):
@@ -114,10 +119,150 @@ _SELECTION_DESCRIPTIONS: dict[tuple[str, str], str] = {
 # ---------------------------------------------------------------------------
 
 
-class _DatasetPreparationWorker(BaseWorker):
-    """Build role datasets in a background thread before training starts."""
+class _BoundedLogWorker(BaseWorker):
+    """Base worker that coalesces child logs through one bounded queue."""
 
     log_signal = Signal(str)
+    _log_ready_signal = Signal()
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._pending_logs: deque[tuple[str, str, int]] = deque()
+        self._pending_log_bytes = 0
+        self._log_lock = Lock()
+        self._log_ready_scheduled = False
+        self._log_ready_emissions = 0
+        self._dropped_log_lines = 0
+        self._dropped_log_bytes = 0
+        self._undelivered_drops_by_role: dict[str, list[int]] = {}
+        self._producer_role = ""
+        self._delivering_log_role = ""
+        self._log_ready_signal.connect(
+            self._drain_pending_logs,
+            Qt.ConnectionType.QueuedConnection,
+        )
+
+    @property
+    def pending_log_lines(self) -> int:
+        """Number of retained child lines waiting for the GUI thread."""
+        with self._log_lock:
+            return len(self._pending_logs)
+
+    @property
+    def pending_log_bytes(self) -> int:
+        """UTF-8 bytes retained while waiting for the GUI thread."""
+        with self._log_lock:
+            return self._pending_log_bytes
+
+    @property
+    def dropped_log_lines(self) -> int:
+        """Complete child lines evicted from the bounded transport queue."""
+        with self._log_lock:
+            return self._dropped_log_lines
+
+    @property
+    def dropped_log_bytes(self) -> int:
+        """UTF-8 bytes discarded by queue eviction or per-line truncation."""
+        with self._log_lock:
+            return self._dropped_log_bytes
+
+    @property
+    def log_ready_emissions(self) -> int:
+        """Number of cross-thread wakeups scheduled for pending child logs."""
+        with self._log_lock:
+            return self._log_ready_emissions
+
+    @property
+    def delivering_log_role(self) -> str:
+        """Role associated with the log signal currently being delivered."""
+        return self._delivering_log_role
+
+    def _record_undelivered_drop(
+        self, role: str, *, lines: int = 0, bytes_: int = 0
+    ) -> None:
+        drop_counts = self._undelivered_drops_by_role.setdefault(role, [0, 0])
+        drop_counts[0] += lines
+        drop_counts[1] += bytes_
+
+    def _queue_log(self, text: str) -> None:
+        """Retain one child line and schedule at most one GUI-thread drain."""
+        raw_text = str(text)
+        original_bytes = 0
+        # Count in small pieces so byte accounting cannot turn one pathological
+        # in-process message into a second, equally large encoded allocation.
+        for offset in range(0, len(raw_text), 4_096):
+            original_bytes += len(
+                raw_text[offset : offset + 4_096].encode("utf-8", errors="replace")
+            )
+        bounded_tail = raw_text[-MAX_PENDING_WORKER_LOG_LINE_BYTES:]
+        encoded = bounded_tail.encode("utf-8", errors="replace")
+        if len(encoded) > MAX_PENDING_WORKER_LOG_LINE_BYTES:
+            encoded = encoded[-MAX_PENDING_WORKER_LOG_LINE_BYTES:]
+            # The byte boundary can split a multi-byte codepoint. Dropping that
+            # partial codepoint keeps the retained payload valid and bounded.
+            log_text = encoded.decode("utf-8", errors="ignore")
+            encoded = log_text.encode("utf-8")
+        else:
+            log_text = encoded.decode("utf-8")
+        retained_bytes = len(encoded)
+        truncated_bytes = original_bytes - retained_bytes
+
+        should_wake = False
+        with self._log_lock:
+            role = self._producer_role
+            if truncated_bytes:
+                self._dropped_log_bytes += truncated_bytes
+                self._record_undelivered_drop(role, bytes_=truncated_bytes)
+            while self._pending_logs and (
+                len(self._pending_logs) >= MAX_PENDING_WORKER_LOG_LINES
+                or self._pending_log_bytes + retained_bytes
+                > MAX_PENDING_WORKER_LOG_BYTES
+            ):
+                dropped_role, _dropped_text, dropped_bytes = (
+                    self._pending_logs.popleft()
+                )
+                self._pending_log_bytes -= dropped_bytes
+                self._dropped_log_lines += 1
+                self._dropped_log_bytes += dropped_bytes
+                self._record_undelivered_drop(
+                    dropped_role, lines=1, bytes_=dropped_bytes
+                )
+            self._pending_logs.append((role, log_text, retained_bytes))
+            self._pending_log_bytes += retained_bytes
+            if not self._log_ready_scheduled:
+                self._log_ready_scheduled = True
+                self._log_ready_emissions += 1
+                should_wake = True
+        if should_wake:
+            self._log_ready_signal.emit()
+
+    def _drain_pending_logs(self) -> None:
+        """Move one bounded batch from the transport queue into GUI signals."""
+        with self._log_lock:
+            pending = list(self._pending_logs)
+            self._pending_logs.clear()
+            self._pending_log_bytes = 0
+            dropped_by_role = self._undelivered_drops_by_role
+            self._undelivered_drops_by_role = {}
+            self._log_ready_scheduled = False
+        try:
+            for role, (dropped_lines, dropped_bytes) in dropped_by_role.items():
+                self._delivering_log_role = role
+                self.log_signal.emit(
+                    "[DetectKit log transport dropped "
+                    f"{dropped_lines} complete line(s) and {dropped_bytes} UTF-8 "
+                    "byte(s) while the GUI was busy.]"
+                )
+            for role, log_text, _retained_bytes in pending:
+                self._delivering_log_role = role
+                self.log_signal.emit(log_text)
+        finally:
+            self._delivering_log_role = ""
+
+
+class _DatasetPreparationWorker(_BoundedLogWorker):
+    """Build role datasets in a background thread before training starts."""
+
     result_ready = Signal(object)
 
     def __init__(self, orchestrator, request: _DatasetPreparationRequest) -> None:
@@ -137,7 +282,7 @@ class _DatasetPreparationWorker(BaseWorker):
             result = _prepare_role_datasets(
                 self._orchestrator,
                 self._request,
-                log=self.log_signal.emit,
+                log=self._queue_log,
                 status=self.status.emit,
                 should_cancel=self.is_cancelled,
             )
@@ -148,13 +293,13 @@ class _DatasetPreparationWorker(BaseWorker):
             self.result_ready.emit(result)
 
 
-class _TrainingWorker(BaseWorker):
+class _TrainingWorker(_BoundedLogWorker):
     """Run selected role trainings sequentially in a background thread."""
 
-    log_signal = Signal(str)
     role_started = Signal(str)
     role_finished = Signal(str, bool, str)
     progress_signal = Signal(str, int, int)
+    _progress_ready_signal = Signal()
     done_signal = Signal(list)
 
     def __init__(self, orchestrator, role_entries) -> None:
@@ -164,6 +309,48 @@ class _TrainingWorker(BaseWorker):
         self._cancel = False
         self.recovery_registry_error = ""
         self.recovery_cleanup_error = ""
+        self._progress_lock = Lock()
+        self._pending_progress: tuple[str, int, int] | None = None
+        self._progress_ready_scheduled = False
+        self._progress_ready_emissions = 0
+        self._progress_ready_signal.connect(
+            self._drain_pending_progress,
+            Qt.ConnectionType.QueuedConnection,
+        )
+
+    @property
+    def progress_ready_emissions(self) -> int:
+        """Number of cross-thread wakeups scheduled for progress updates."""
+        with self._progress_lock:
+            return self._progress_ready_emissions
+
+    def _queue_role_started(self, role: str) -> None:
+        self._producer_role = str(role)
+        self.role_started.emit(role)
+
+    def _queue_role_finished(self, role: str, ok: bool, message: str) -> None:
+        self.role_finished.emit(role, ok, message)
+        if self._producer_role == role:
+            self._producer_role = ""
+
+    def _queue_progress(self, role: str, current: int, total: int) -> None:
+        should_wake = False
+        with self._progress_lock:
+            self._pending_progress = (str(role), int(current), int(total))
+            if not self._progress_ready_scheduled:
+                self._progress_ready_scheduled = True
+                self._progress_ready_emissions += 1
+                should_wake = True
+        if should_wake:
+            self._progress_ready_signal.emit()
+
+    def _drain_pending_progress(self) -> None:
+        with self._progress_lock:
+            pending = self._pending_progress
+            self._pending_progress = None
+            self._progress_ready_scheduled = False
+        if pending is not None:
+            self.progress_signal.emit(*pending)
 
     def cancel(self) -> None:
         """Request cancellation or retry cleanup of a retained workload."""
@@ -227,11 +414,11 @@ class _TrainingWorker(BaseWorker):
         results = run_role_entries(
             self.orchestrator,
             self.role_entries,
-            log=self.log_signal.emit,
-            progress=self.progress_signal.emit,
+            log=self._queue_log,
+            progress=self._queue_progress,
             should_cancel=self._should_cancel,
-            role_started=self.role_started.emit,
-            role_finished=self.role_finished.emit,
+            role_started=self._queue_role_started,
+            role_finished=self._queue_role_finished,
         )
         self.done_signal.emit(results)
 
@@ -2267,8 +2454,10 @@ QTabBar::tab:selected {
             cursor.insertText("\n")
         cursor.insertText(log_text)
         self.log_view.setTextCursor(cursor)
-        if self._current_role:
-            role = self._current_role
+        sender = self.sender()
+        delivered_role = str(getattr(sender, "delivering_log_role", "") or "")
+        role = delivered_role or self._current_role
+        if role:
             retained = self._role_logs.setdefault(role, [])
             retained_chars = self._role_log_chars.setdefault(role, 0)
             if line_was_truncated:
@@ -3027,15 +3216,15 @@ QTabBar::tab:selected {
             QMessageBox.critical(self, "Save Failed", str(exc))
 
     def _load_training_config(self) -> None:
-        import json
-
         path, _ = QFileDialog.getOpenFileName(
             self, "Load Training Config", "", "JSON (*.json)"
         )
         if not path:
             return
         try:
-            data = json.loads(Path(path).read_text(encoding="utf-8"))
+            from ..utils import load_bounded_json_mapping
+
+            data = load_bounded_json_mapping(path)
         except Exception as exc:
             QMessageBox.critical(self, "Load Failed", str(exc))
             return

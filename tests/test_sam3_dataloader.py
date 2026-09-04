@@ -158,6 +158,19 @@ def test_negative_prompts_prefers_manifest(tmp_path):
     assert dl._negative_prompts_for(tmp_path, params) == ["background"]
 
 
+def test_negative_prompts_reject_oversized_manifest_entry_in_child(tmp_path):
+    from hydra_suite.training.contracts import SAM3_MAX_PROMPT_CODEPOINTS
+
+    (tmp_path / "build_manifest.json").write_text(
+        json.dumps({"negative_prompts": ["x" * (SAM3_MAX_PROMPT_CODEPOINTS + 1)]}),
+        encoding="utf-8",
+    )
+    params = Sam3LoraParams(prompt="ant", num_negatives=1)
+
+    with pytest.raises(RuntimeError, match="per-prompt cap"):
+        dl._negative_prompts_for(tmp_path, params)
+
+
 def test_try_build_datapoints_returns_none_when_split_absent(tmp_path):
     (tmp_path / "valid").mkdir(parents=True)
 

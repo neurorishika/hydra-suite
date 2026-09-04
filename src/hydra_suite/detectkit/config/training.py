@@ -19,6 +19,7 @@ from hydra_suite.training.contracts import (
     SplitConfig,
     TrainingHyperParams,
     TrainingRole,
+    sam3_prompt_text_error,
 )
 
 _MAX_TRAINING_PLAN_BYTES = 1024 * 1024
@@ -665,6 +666,16 @@ class DetectTrainingPlan:
                     "sam3.negative_prompts exceeds the safe cap of "
                     f"{SAM3_MAX_NEGATIVE_PROMPT_COUNT} entries"
                 )
+            for label, prompt in (
+                ("prompt", self.sam3_params.prompt),
+                *(
+                    (f"negative_prompts[{index}]", value)
+                    for index, value in enumerate(self.sam3_params.negative_prompts)
+                ),
+            ):
+                prompt_error = sam3_prompt_text_error(prompt)
+                if prompt_error is not None:
+                    raise TrainingPlanError(f"sam3.{label} {prompt_error}")
             try:
                 configured_prompt_bytes = len(self.sam3_params.prompt.encode("utf-8"))
                 configured_prompt_bytes += sum(

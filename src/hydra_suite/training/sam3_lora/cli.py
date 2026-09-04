@@ -42,7 +42,7 @@ from typing import Any
 
 import numpy as np
 
-from hydra_suite.training.contracts import Sam3LoraParams
+from hydra_suite.training.contracts import Sam3LoraParams, sam3_prompt_text_error
 
 from .artifacts import write_completion_marker
 from .dataloader import (
@@ -257,6 +257,15 @@ def _build_dataloader(spec: Any, params: Any, *, split: str) -> list:
 
 def _runtime_admission_refusal(torch_module: Any, params: Any) -> str | None:
     """Repeat the parent precision/hardware gate before importing SAM3."""
+    prompt_error = sam3_prompt_text_error(getattr(params, "prompt", None))
+    if prompt_error is not None:
+        return f"SAM3 prompt {prompt_error}."
+    for index, negative_prompt in enumerate(
+        getattr(params, "negative_prompts", ()) or ()
+    ):
+        prompt_error = sam3_prompt_text_error(negative_prompt)
+        if prompt_error is not None:
+            return f"SAM3 negative prompt {index} {prompt_error}."
     if getattr(params, "mixed_precision", None) != "bf16":
         return (
             "SAM3 training supports only CUDA BF16; fp16/fp32 modes fail "

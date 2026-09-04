@@ -12,7 +12,8 @@ training dependency must never raise at click time.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QMimeData, Qt, Signal
+from PySide6.QtGui import QInputMethodEvent, QKeyEvent, QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -30,7 +31,9 @@ from PySide6.QtWidgets import (
 )
 
 from hydra_suite.training.contracts import (
+    SAM3_MAX_CONFIGURED_PROMPT_BYTES,
     SAM3_MAX_NEGATIVE_QUERIES_PER_TILE,
+    SAM3_MAX_PROMPT_CODEPOINTS,
     Sam3LoraParams,
 )
 from hydra_suite.training.sam3_lora.availability import (
@@ -48,6 +51,77 @@ _PRECISIONS = ("bf16",)
 # construction/show. Users pointed at a genuinely slow/hanging env can still
 # hit "Check" and wait -- the button has no shortened timeout.
 _AUTO_PROBE_TIMEOUT_S = 5.0
+
+
+class _BoundedPromptListEdit(QPlainTextEdit):
+    """Plain-text editor that caps content before it enters the Qt document."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setAcceptDrops(False)
+
+    @staticmethod
+    def _bounded_text(value: object) -> str:
+        remaining = SAM3_MAX_CONFIGURED_PROMPT_BYTES
+        output: list[str] = []
+        # Bound before splitlines so an oversized external paste cannot create
+        # an unbounded list merely to be rejected.
+        text = str(value)[:remaining]
+        for line in text.splitlines(keepends=True):
+            newline = "\n" if line.endswith(("\n", "\r")) else ""
+            content = line.rstrip("\r\n")[:SAM3_MAX_PROMPT_CODEPOINTS]
+            fragment = (content + newline)[:remaining]
+            output.append(fragment)
+            remaining -= len(fragment)
+            if remaining <= 0:
+                break
+        return "".join(output)
+
+    def setPlainText(self, text: str) -> None:  # noqa: N802 - Qt override
+        super().setPlainText(self._bounded_text(text))
+
+    def _replace_selection(self, text: str) -> None:
+        cursor = self.textCursor()
+        current = self.toPlainText()
+        start, end = cursor.selectionStart(), cursor.selectionEnd()
+        # Truncate the incoming fragment before concatenation. The current
+        # document is already bounded, so the temporary candidate is bounded.
+        incoming = str(text)[:SAM3_MAX_CONFIGURED_PROMPT_BYTES]
+        candidate = current[:start] + incoming + current[end:]
+        bounded = self._bounded_text(candidate)
+        super().setPlainText(bounded)
+        cursor = self.textCursor()
+        cursor.setPosition(min(start + len(incoming), len(bounded)))
+        self.setTextCursor(cursor)
+
+    def insertPlainText(self, text: str) -> None:  # noqa: N802 - Qt override
+        self._replace_selection(text)
+
+    def insertFromMimeData(self, source: QMimeData) -> None:  # noqa: N802
+        self._replace_selection(source.text())
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
+        if event.matches(QKeySequence.StandardKey.Paste):
+            self.paste()
+            event.accept()
+            return
+        modifiers = event.modifiers()
+        if event.text() and not modifiers & (
+            Qt.KeyboardModifier.ControlModifier
+            | Qt.KeyboardModifier.AltModifier
+            | Qt.KeyboardModifier.MetaModifier
+        ):
+            self._replace_selection(event.text())
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def inputMethodEvent(self, event: QInputMethodEvent) -> None:  # noqa: N802
+        if event.commitString():
+            self._replace_selection(event.commitString())
+            event.accept()
+            return
+        super().inputMethodEvent(event)
 
 
 class _AvailabilityProbeWorker(BaseWorker):
@@ -235,8 +309,9 @@ class Sam3TrainingPanel(QWidget):
         prompt_group = QGroupBox("Concept")
         prompt_form = QFormLayout(prompt_group)
         self.prompt_edit = QLineEdit()
+        self.prompt_edit.setMaxLength(SAM3_MAX_PROMPT_CODEPOINTS)
         prompt_form.addRow("Prompt", self.prompt_edit)
-        self.negative_prompts_edit = QPlainTextEdit()
+        self.negative_prompts_edit = _BoundedPromptListEdit()
         self.negative_prompts_edit.setPlaceholderText("One negative prompt per line")
         self.negative_prompts_edit.setMaximumHeight(60)
         prompt_form.addRow("Negative prompts", self.negative_prompts_edit)
