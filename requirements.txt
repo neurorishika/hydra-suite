@@ -11,4 +11,4 @@ torch
 torchvision
 
 # Install this package in editable mode (pulls all pyproject.toml dependencies)
--e .
+-e .[sam3]

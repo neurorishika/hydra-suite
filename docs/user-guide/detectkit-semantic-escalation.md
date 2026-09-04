@@ -280,8 +280,14 @@ when the tab is first shown and whenever you click "Check".
 
 #### Building the `hydra-sam3` env
 
-This recipe is verified on macOS and mirrors the CUDA-box setup (swap the
-`torch`/`torchvision` install line for a CUDA wheel there):
+`make setup-sam3-train` automates the recipe below (auto-detects
+cpu/mps/cuda12; override with `make setup-sam3-train
+SAM3_TRAIN_PLATFORM=cuda13`, or run `tools/setup_sam3_train_env.sh
+[cpu|mps|cuda12|cuda13]` directly). It's idempotent — safe to re-run, and
+reuses the env if it already exists.
+
+The manual recipe it runs (verified on macOS; swap the `torch`/`torchvision`
+install line for a CUDA wheel on a GPU box):
 
 ```bash
 conda create -n hydra-sam3 python=3.12 'numpy<2'
