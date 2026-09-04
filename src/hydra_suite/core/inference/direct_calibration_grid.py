@@ -237,7 +237,8 @@ def label_set_fingerprint(frames) -> str:
     """Stable identity of the evidence set: file names plus label geometry."""
     digest = hashlib.sha256()
     for path, labels in sorted(frames, key=lambda item: str(item[0])):
-        digest.update(str(Path(path).name).encode("utf-8"))
+        recording_key = f"{Path(path).parent.name}/{Path(path).name}"
+        digest.update(recording_key.encode("utf-8"))
         for label in labels:
             points = np.asarray(label.points, dtype=np.float32).reshape(-1, 2)
             digest.update(

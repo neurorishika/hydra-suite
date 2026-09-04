@@ -158,3 +158,39 @@ def test_checkpoint_fingerprint_is_prefixed_and_stable(tmp_path):
     digest = checkpoint_fingerprint(checkpoint)
     assert digest.startswith("sha256:") and len(digest) == 71
     assert digest == checkpoint_fingerprint(checkpoint)
+
+
+def test_fingerprint_distinguishes_same_filename_in_different_recordings(tmp_path):
+    import numpy as np
+
+    from hydra_suite.core.inference.direct_calibration_grid import label_set_fingerprint
+    from hydra_suite.data.al.escalation import LabelRecord
+    from hydra_suite.utils.geometry_levels import GeometryLevel
+
+    label = LabelRecord(
+        class_id=0,
+        confidence=1.0,
+        points=np.array(
+            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], dtype=np.float32
+        ),
+        level=GeometryLevel.POLYGON,
+    )
+    frames_a = [(tmp_path / "rec1" / "frame_001.png", [label])]
+    frames_b = [(tmp_path / "rec2" / "frame_001.png", [label])]
+    assert label_set_fingerprint(frames_a) != label_set_fingerprint(frames_b)
+
+    # order-independence still holds within one recording set
+    label2 = LabelRecord(
+        class_id=1,
+        confidence=1.0,
+        points=np.array(
+            [[2.0, 2.0], [3.0, 2.0], [3.0, 3.0], [2.0, 3.0]], dtype=np.float32
+        ),
+        level=GeometryLevel.POLYGON,
+    )
+    forward = [
+        (tmp_path / "rec1" / "frame_001.png", [label]),
+        (tmp_path / "rec1" / "frame_002.png", [label2]),
+    ]
+    backward = list(reversed(forward))
+    assert label_set_fingerprint(forward) == label_set_fingerprint(backward)
