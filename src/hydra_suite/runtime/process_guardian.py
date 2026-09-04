@@ -20,6 +20,7 @@ from .resource_limits import (
 from .resource_limits import systemd_scope_is_quiescent, systemd_scope_member_pids
 
 _TOKEN_ENV = "HYDRA_CONTAINMENT_TOKEN"
+_MAX_EXTERNAL_IDENTITIES = 4096
 
 
 @dataclass(frozen=True)
@@ -302,7 +303,7 @@ def _baseline_guardian_identities(
                         process,
                         identity,
                         external_identities=external_identities,
-                        max_identities=max_identities,
+                        max_identities=_MAX_EXTERNAL_IDENTITIES,
                     ):
                         return False
                     continue
@@ -334,7 +335,7 @@ def _baseline_guardian_identities(
                     process,
                     identity,
                     external_identities=external_identities,
-                    max_identities=max_identities,
+                    max_identities=_MAX_EXTERNAL_IDENTITIES,
                 ):
                     return False
                 continue
@@ -343,7 +344,7 @@ def _baseline_guardian_identities(
                     process,
                     identity,
                     external_identities=external_identities,
-                    max_identities=max_identities,
+                    max_identities=_MAX_EXTERNAL_IDENTITIES,
                 ):
                     return False
                 continue
