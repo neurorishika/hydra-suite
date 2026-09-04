@@ -219,6 +219,11 @@ class _FakeRuntime:
     tensor_on_cuda = False
 
 
+class _FakeMPSRuntime:
+    device = "mps"
+    tensor_on_cuda = False
+
+
 class _FakeOBB:
     def __init__(self, cx, cy, w, h):
         self._xywhr = np.array([[cx, cy, w, h, 0.0]], np.float32)
@@ -496,6 +501,31 @@ def test_sliced_cpu_obb_merges_cross_tile_duplicate_at_zero_configured_overlap()
     assert res.num_detections == 1
     assert res.centroids[0, 0] == pytest.approx(global_point[0], abs=1.0)
     assert res.centroids[0, 1] == pytest.approx(global_point[1], abs=1.0)
+
+
+def test_sliced_numpy_input_has_cpu_mps_runtime_parity():
+    """MPS uses the same numpy tile transport as CPU and preserves ordering."""
+    frame = np.zeros((300, 300, 3), np.uint8)
+    cfg = _direct_cfg(True, overlap_height_ratio=0.0, overlap_width_ratio=0.0)
+    tiles = get_slice_bboxes(300, 300, 256, 256, 0.0, 0.0)
+    global_point = (250.0, 20.0)
+
+    cpu = run_direct_sliced(
+        [frame],
+        _FakeYOLOGlobalPoint(tiles, global_point),
+        cfg,
+        _FakeRuntime(),
+    )[0]
+    mps = run_direct_sliced(
+        [frame],
+        _FakeYOLOGlobalPoint(tiles, global_point),
+        cfg,
+        _FakeMPSRuntime(),
+    )[0]
+
+    np.testing.assert_array_equal(mps.centroids, cpu.centroids)
+    np.testing.assert_array_equal(mps.corners, cpu.corners)
+    np.testing.assert_array_equal(mps.confidences, cpu.confidences)
 
 
 def test_sliced_cpu_obb_one_tile_empty_others_not():
