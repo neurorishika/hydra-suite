@@ -19,6 +19,7 @@ from hydra_suite.training.class_mapping import (
     resolve_dataset_class_names,
 )
 from hydra_suite.training.dataset_inspector import inspect_obb_or_detect_dataset
+from hydra_suite.training.dataset_io import iter_bounded_text_lines
 from hydra_suite.training.geometry_levels import (
     GeometryLevel,
     classify_label_line,
@@ -76,26 +77,22 @@ def _count_nonempty_lines(path: Path) -> int:
     if not path.exists():
         return 0
     try:
-        return sum(
-            1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip()
-        )
-    except Exception:
+        return sum(1 for line in iter_bounded_text_lines(path) if line.strip())
+    except OSError:
         return 0
 
 
-def _flatten_inspection_items(inspection) -> list:
-    items = []
+def _iter_inspection_items(inspection):
     for split_items in inspection.splits.values():
-        items.extend(split_items)
-    return items
+        yield from split_items
 
 
 def _infer_yolo_source_kind(inspection) -> str:
-    for item in _flatten_inspection_items(inspection):
+    for item in _iter_inspection_items(inspection):
         label_path = Path(item.label_path)
         if not label_path.exists():
             continue
-        for raw_line in label_path.read_text(encoding="utf-8").splitlines():
+        for raw_line in iter_bounded_text_lines(label_path):
             line = raw_line.strip()
             if not line:
                 continue
@@ -109,10 +106,10 @@ def _infer_yolo_source_kind(inspection) -> str:
 
 def _inspect_yolo_like_source(root: Path) -> DetectKitSourceInspection:
     inspection = inspect_obb_or_detect_dataset(root)
-    items = _flatten_inspection_items(inspection)
     class_names = resolve_dataset_class_names(root, inspection.class_names)
     annotation_count = sum(
-        _count_nonempty_lines(Path(item.label_path)) for item in items
+        _count_nonempty_lines(Path(item.label_path))
+        for item in _iter_inspection_items(inspection)
     )
     source_kind = (
         "detectkit"
@@ -122,7 +119,7 @@ def _inspect_yolo_like_source(root: Path) -> DetectKitSourceInspection:
     return DetectKitSourceInspection(
         dataset_root=root,
         source_kind=source_kind,
-        images_count=len(items),
+        images_count=sum(len(items) for items in inspection.splits.values()),
         annotation_count=annotation_count,
         discovered_labels=list(class_names),
         requires_import=not _is_detectkit_source_root(root),
@@ -438,7 +435,7 @@ def _materialize_yolo_source(source_root: Path, dest_root: Path) -> list[str]:
     class_names = resolve_dataset_class_names(source_root, inspection.class_names)
     _write_classes_txt(dest_root, class_names)
 
-    for item in _flatten_inspection_items(inspection):
+    for item in _iter_inspection_items(inspection):
         image_path = Path(item.image_path).resolve()
         label_path = Path(item.label_path).resolve()
         relative_path = _relative_target_path(source_root, image_path)

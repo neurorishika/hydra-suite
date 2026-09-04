@@ -1910,6 +1910,7 @@ QTabBar::tab:selected {
             )
             from hydra_suite.training.dataset_inspector import (
                 DatasetInspection,
+                DatasetItemStore,
                 analyze_obb_sizes,
                 format_size_analysis,
                 inspect_obb_or_detect_dataset,
@@ -1960,9 +1961,18 @@ QTabBar::tab:selected {
                 )
                 continue
             for split_name, items in inspection.splits.items():
-                merged.splits.setdefault(split_name, []).extend(items)
+                merged_items = merged.splits.get(split_name)
+                if merged_items is None:
+                    merged_items = DatasetItemStore()
+                    merged.splits[split_name] = merged_items
+                assert isinstance(merged_items, DatasetItemStore)
+                merged_items.extend(items)
                 valid_items += len(items)
             merged.class_names.update(inspection.class_names)
+
+        for items in merged.splits.values():
+            assert isinstance(items, DatasetItemStore)
+            items.commit()
 
         if valid_items <= 0:
             self.dataset_fit_status.setText(
@@ -2173,6 +2183,10 @@ QTabBar::tab:selected {
                             "split": split_name if split_name != "all" else "dataset",
                         }
                     )
+                    if len(records) >= max_items:
+                        break
+                if len(records) >= max_items:
+                    break
             if records:
                 buckets[source_name] = records
 

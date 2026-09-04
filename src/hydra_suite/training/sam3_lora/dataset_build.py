@@ -16,7 +16,6 @@ import logging
 import os
 import random
 import sqlite3
-import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Iterator
@@ -41,6 +40,7 @@ from ..dataset_io import (
     atomic_output_directory,
     iter_bounded_text_lines,
     iter_indexed_paths,
+    make_dataset_index_path,
     sorted_file_index,
 )
 from ..sliced_dataset import measure_reference_body_px
@@ -272,9 +272,7 @@ def build_sam3_coco_dataset(
     if not images_dir.is_dir():
         raise RuntimeError(f"Missing images/ directory in SAM3 source {source}")
 
-    db_fd, db_name = tempfile.mkstemp(prefix="hydra-sam3-frames-", suffix=".sqlite3")
-    os.close(db_fd)
-    database_path = Path(db_name)
+    database_path = make_dataset_index_path("hydra-sam3-frames-")
     database = sqlite3.connect(database_path)
     try:
         database.execute(

@@ -55,6 +55,7 @@ MAX_CLASSES = 4096
 MAX_ROLES = 32
 MAX_SOURCE_FILES = 1_000_000
 MAX_SOURCE_BYTES = 2 * 1024**4
+MAX_SOURCE_PATH_BYTES = 1024**3
 OUTPUT_MAX_LINES = 512
 OUTPUT_MAX_CHARS = 256 * 1024
 DISK_RESERVE_BYTES = 2 * GiB
@@ -79,6 +80,7 @@ class DatasetPreparationBudget:
     disk_available_bytes: int
     source_files: int
     source_bytes: int
+    source_path_bytes: int
     source_fingerprint: str
 
     def __post_init__(self) -> None:
@@ -210,9 +212,10 @@ def decode_request(payload: object) -> DatasetPreparationRequest:
 
 def _scan_source_footprint(
     sources: tuple[SourceDataset, ...],
-) -> tuple[int, int, str]:
+) -> tuple[int, int, int, str]:
     count = 0
     total = 0
+    path_bytes = 0
     fingerprint = 0
 
     def visit(directory: Path, root: Path, depth: int):
@@ -245,6 +248,11 @@ def _scan_source_footprint(
                     f"Could not inspect source file {path}: {exc}"
                 ) from exc
             total += metadata.st_size
+            path_bytes += len(os.fsencode(path.relative_to(root).as_posix()))
+            if path_bytes > MAX_SOURCE_PATH_BYTES:
+                raise DatasetLimitError(
+                    f"Dataset source path index exceeds {MAX_SOURCE_PATH_BYTES} bytes"
+                )
             record = (
                 f"{root}\0{path.relative_to(root).as_posix()}\0"
                 f"{metadata.st_size}\0{metadata.st_mtime_ns}"
@@ -256,7 +264,7 @@ def _scan_source_footprint(
                 raise DatasetLimitError(
                     f"Dataset sources exceed {MAX_SOURCE_BYTES} bytes"
                 )
-    return count, total, f"{fingerprint:032x}"
+    return count, total, path_bytes, f"{fingerprint:032x}"
 
 
 def assess_preparation_budget(
@@ -264,8 +272,8 @@ def assess_preparation_budget(
 ) -> DatasetPreparationBudget:
     """Perform streaming file/disk admission without retaining source paths."""
 
-    source_files, source_bytes, source_fingerprint = _scan_source_footprint(
-        request.sources
+    source_files, source_bytes, source_path_bytes, source_fingerprint = (
+        _scan_source_footprint(request.sources)
     )
     memory = psutil.virtual_memory()
     reserve = max(4 * GiB, int(memory.total * 0.15))
@@ -285,7 +293,7 @@ def assess_preparation_budget(
     # Tiling/cropping may duplicate decoded content substantially relative to
     # compressed source bytes. Keep a separate filesystem survival reserve in
     # addition to an intentionally conservative expansion allowance.
-    disk_required = source_bytes * 8 + DISK_RESERVE_BYTES
+    disk_required = source_bytes * 8 + source_path_bytes * 4 + DISK_RESERVE_BYTES
     return DatasetPreparationBudget(
         soft_host_bytes=soft,
         hard_host_bytes=hard,
@@ -294,6 +302,7 @@ def assess_preparation_budget(
         disk_available_bytes=disk_available,
         source_files=source_files,
         source_bytes=source_bytes,
+        source_path_bytes=source_path_bytes,
         source_fingerprint=source_fingerprint,
     )
 
@@ -351,6 +360,7 @@ def prepare_role_datasets_contained(
     request_path = control / "request.json"
     result_path = control / "result.json"
     staging_root = workspace / f".dataset-preparation-{job_id}.staging"
+    index_root = workspace / f".dataset-preparation-{job_id}.indexes"
     final_root = workspace / "prepared" / f"dataset-preparation-{job_id}"
     _write_request(request_path, payload)
     command = (
@@ -373,7 +383,14 @@ def prepare_role_datasets_contained(
         hard_host_bytes=budget.hard_host_bytes,
         max_processes=64,
     )
-    launch = build_limited_launch(command, limits, accelerator_kind=AcceleratorKind.CPU)
+    child_environment = dict(os.environ)
+    child_environment["HYDRA_DATASET_INDEX_DIR"] = str(index_root)
+    launch = build_limited_launch(
+        command,
+        limits,
+        accelerator_kind=AcceleratorKind.CPU,
+        environment=child_environment,
+    )
     plan = ContainmentPlan(
         launch=launch,
         job_name="DetectKit dataset preparation",
@@ -391,12 +408,13 @@ def prepare_role_datasets_contained(
                 "Available host memory changed before dataset preparation; "
                 "the immutable hard limit no longer preserves the host reserve."
             )
-        live_files, live_bytes, live_fingerprint = _scan_source_footprint(
-            request.sources
+        live_files, live_bytes, live_path_bytes, live_fingerprint = (
+            _scan_source_footprint(request.sources)
         )
         if (
             live_files != budget.source_files
             or live_bytes != budget.source_bytes
+            or live_path_bytes != budget.source_path_bytes
             or live_fingerprint != budget.source_fingerprint
         ):
             raise DatasetLimitError(
@@ -411,6 +429,7 @@ def prepare_role_datasets_contained(
 
     def cleanup(*, remove_final: bool = False) -> None:
         shutil.rmtree(staging_root, ignore_errors=True)
+        shutil.rmtree(index_root, ignore_errors=True)
         shutil.rmtree(control, ignore_errors=True)
         if remove_final:
             shutil.rmtree(final_root, ignore_errors=True)

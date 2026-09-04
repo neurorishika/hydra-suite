@@ -27,6 +27,7 @@ from .contracts import (
 from .dataset_inspector import (
     DatasetInspection,
     inspect_obb_or_detect_dataset,
+    shuffled_item_store,
     split_items_for_training,
     stratified_split_items,
 )
@@ -393,14 +394,13 @@ def merge_obb_sources(
                 raise
         if "all" in inspection.splits:
             split_items = stratified_split_items(
-                list(inspection.splits["all"]), split_tuple, seed=seed
+                inspection.splits["all"], split_tuple, seed=seed
             )
         else:
             split_items = split_items_for_training(inspection, split_tuple, seed=seed)
 
         for split in ("train", "val", "test"):
-            items = list(split_items.get(split, []))
-            rng.shuffle(items)
+            items = shuffled_item_store(split_items.get(split, ()), rng)
             for idx, item in enumerate(items):
                 img = Path(item.image_path)
                 lbl = Path(item.label_path)

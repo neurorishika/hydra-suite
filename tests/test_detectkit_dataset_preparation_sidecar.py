@@ -192,15 +192,17 @@ def test_parent_cancellation_terminates_sidecar_and_cleans_private_paths(
     source = _source(tmp_path / "source")
     monkeypatch.setenv("HYDRA_DATA_DIR", str(tmp_path / "hydra-data"))
     canceled = []
+    index_roots = []
 
     class Output:
         def drain(self, timeout=0.0):
             return [], False, None
 
     class Sidecar:
-        def __init__(self, *_args, **_kwargs):
+        def __init__(self, plan, **_kwargs):
             self.output = Output()
             self.process = SimpleNamespace(poll=lambda: None)
+            index_roots.append(Path(plan.launch.environment["HYDRA_DATASET_INDEX_DIR"]))
 
         def cancel(self, grace):
             canceled.append(grace)
@@ -215,7 +217,10 @@ def test_parent_cancellation_terminates_sidecar_and_cleans_private_paths(
             should_cancel=lambda: True,
         )
     assert canceled
+    assert len(index_roots) == 1
+    assert index_roots[0].parent == (tmp_path / "workspace").resolve()
     assert not list((tmp_path / "workspace").glob(".dataset-preparation-*.staging"))
+    assert not list((tmp_path / "workspace").glob(".dataset-preparation-*.indexes"))
 
 
 def test_hard_limit_classification_is_preserved_and_output_removed(

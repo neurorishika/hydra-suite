@@ -24,6 +24,7 @@ class DatasetIOLimits:
     max_files: int = 1_000_000
     max_depth: int = 32
     max_path_bytes: int = 16 * 1024
+    max_path_index_bytes: int = 1024 * 1024 * 1024
     max_label_bytes: int = 16 * 1024 * 1024
     max_label_lines: int = 1_000_000
     max_line_bytes: int = 1024 * 1024
@@ -45,6 +46,26 @@ class DatasetLimitError(RuntimeError):
     """An input exceeded an explicit preparation cardinality/size limit."""
 
 
+def make_dataset_index_path(prefix: str) -> Path:
+    """Create an index file on the configured preparation filesystem.
+
+    The contained preparation sidecar points ``HYDRA_DATASET_INDEX_DIR`` at
+    its admitted workspace filesystem. Direct library callers retain the
+    normal system-temporary-directory fallback.
+    """
+
+    configured = os.environ.get("HYDRA_DATASET_INDEX_DIR", "").strip()
+    directory = None
+    if configured:
+        directory = Path(configured).expanduser().resolve()
+        directory.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(
+        prefix=prefix, suffix=".sqlite3", dir=str(directory) if directory else None
+    )
+    os.close(fd)
+    return Path(name)
+
+
 @contextmanager
 def sorted_file_index(
     root: Path,
@@ -62,18 +83,17 @@ def sorted_file_index(
     root = root.expanduser().resolve()
     if not root.is_dir():
         raise RuntimeError(f"Dataset directory not found: {root}")
-    fd, db_name = tempfile.mkstemp(prefix="hydra-dataset-index-", suffix=".sqlite3")
-    os.close(fd)
-    db_path = Path(db_name)
+    db_path = make_dataset_index_path("hydra-dataset-index-")
     connection = sqlite3.connect(db_path)
     try:
         connection.execute(
             "CREATE TABLE files (ordinal INTEGER PRIMARY KEY, rel TEXT NOT NULL UNIQUE)"
         )
         count = 0
+        path_index_bytes = 0
 
         def visit(directory: Path, depth: int) -> None:
-            nonlocal count
+            nonlocal count, path_index_bytes
             if depth > limits.max_depth:
                 raise DatasetLimitError(
                     f"Dataset directory depth exceeds cap {limits.max_depth}: {directory}"
@@ -88,7 +108,8 @@ def sorted_file_index(
                 for entry in entries:
                     path = Path(entry.path)
                     rel = path.relative_to(root).as_posix()
-                    if len(os.fsencode(rel)) > limits.max_path_bytes:
+                    relative_bytes = len(os.fsencode(rel))
+                    if relative_bytes > limits.max_path_bytes:
                         raise DatasetLimitError(
                             f"Dataset path exceeds {limits.max_path_bytes} bytes: {path}"
                         )
@@ -99,6 +120,12 @@ def sorted_file_index(
                         continue
                     if path.suffix.lower() not in suffixes:
                         continue
+                    path_index_bytes += relative_bytes
+                    if path_index_bytes > limits.max_path_index_bytes:
+                        raise DatasetLimitError(
+                            "Dataset pathname index exceeds "
+                            f"{limits.max_path_index_bytes} bytes"
+                        )
                     count += 1
                     if count > limits.max_files:
                         raise DatasetLimitError(
