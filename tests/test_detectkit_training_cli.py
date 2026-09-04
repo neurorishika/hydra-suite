@@ -495,7 +495,7 @@ def test_run_summary_write_cannot_replace_owned_workload_handle(tmp_path, monkey
     from hydra_suite.detectkit import cli
     from hydra_suite.detectkit.jobs.training import DatasetPreparationResult
     from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
-    from hydra_suite.training import TrainingRole, ValidationReport
+    from hydra_suite.training import TrainingRole
 
     payload = _plan_payload(tmp_path)
     payload["roles"] = payload["roles"][:1]
@@ -503,9 +503,6 @@ def test_run_summary_write_cannot_replace_owned_workload_handle(tmp_path, monkey
     config_path.write_text(json.dumps(payload), encoding="utf-8")
     owned = WorkloadStillOwnedError("ownership retained", object())
     monkeypatch.setattr(cli, "TrainingOrchestrator", lambda _workspace: object())
-    monkeypatch.setattr(
-        cli, "preflight_sources", lambda _sources: ValidationReport(valid=True)
-    )
     monkeypatch.setattr(
         cli,
         "prepare_role_datasets",
@@ -687,7 +684,7 @@ def test_workspace_session_is_unique_and_refuses_concurrent_use(tmp_path):
 def test_cli_writes_durable_success_summary(tmp_path, monkeypatch):
     from hydra_suite.detectkit import cli
     from hydra_suite.detectkit.jobs.training import DatasetPreparationResult
-    from hydra_suite.training import TrainingRole, ValidationReport
+    from hydra_suite.training import TrainingRole
 
     payload = _plan_payload(tmp_path)
     payload["roles"] = payload["roles"][:1]
@@ -695,11 +692,6 @@ def test_cli_writes_durable_success_summary(tmp_path, monkeypatch):
     config_path.write_text(json.dumps(payload), encoding="utf-8")
 
     monkeypatch.setattr(cli, "TrainingOrchestrator", lambda _workspace: object())
-    monkeypatch.setattr(
-        cli,
-        "preflight_sources",
-        lambda _sources: ValidationReport(valid=True),
-    )
     monkeypatch.setattr(
         cli,
         "prepare_role_datasets",

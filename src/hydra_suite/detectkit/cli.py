@@ -21,10 +21,11 @@ except ImportError:  # pragma: no cover - Windows does not provide fcntl.
 
 from hydra_suite.data.project_bundle import write_json_atomic
 from hydra_suite.detectkit.config.training import TrainingPlanError, load_training_plan
+from hydra_suite.detectkit.jobs.dataset_preparation_sidecar import (
+    prepare_role_datasets_contained as prepare_role_datasets,
+)
 from hydra_suite.detectkit.jobs.training import (
     DatasetPreparationCancelled,
-    preflight_sources,
-    prepare_role_datasets,
     run_role_entries,
 )
 from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
@@ -232,25 +233,6 @@ def run(args: argparse.Namespace) -> int:
         previous_handlers = _install_cancel_handlers(cancel_event)
         try:
             orchestrator = TrainingOrchestrator(workspace)
-            try:
-                report = preflight_sources(plan.sources)
-            except (OSError, RuntimeError, ValueError) as exc:
-                raise TrainingPlanError(f"Source preflight failed: {exc}") from exc
-            _write_session_file(session_dir, "preflight.json", report.to_dict())
-            if not report.valid:
-                _print_validation_errors(report)
-                _write_session_file(
-                    session_dir,
-                    "training_result.json",
-                    {
-                        "success": False,
-                        "canceled": False,
-                        "stage": "preflight",
-                        "results": [],
-                    },
-                )
-                return 2
-
             prepared = prepare_role_datasets(
                 orchestrator,
                 plan.preparation_request(),
@@ -258,6 +240,10 @@ def run(args: argparse.Namespace) -> int:
                 status=lambda message: print(message, flush=True),
                 should_cancel=cancel_event.is_set,
             )
+            if prepared.preflight is not None:
+                _write_session_file(
+                    session_dir, "preflight.json", prepared.preflight.to_dict()
+                )
             preparation_summary = {
                 "role_dataset_dirs": prepared.role_dataset_dirs,
                 "roles": [role.value for role in prepared.roles],

@@ -53,12 +53,13 @@ from hydra_suite.training.registry import finalize_run_record
 from hydra_suite.widgets.dialogs import BaseDialog
 from hydra_suite.widgets.workers import BaseWorker, bounded_worker_message
 
+from ...jobs.dataset_preparation_sidecar import (
+    prepare_role_datasets_contained as _prepare_role_datasets_contained,
+)
 from ...jobs.training import DatasetPreparationCancelled as _DatasetPreparationCancelled
 from ...jobs.training import DatasetPreparationRequest as _DatasetPreparationRequest
 from ...jobs.training import DatasetPreparationResult as _DatasetPreparationResult
-from ...jobs.training import RoleTrainingEntry
-from ...jobs.training import prepare_role_datasets as _prepare_role_datasets
-from ...jobs.training import run_role_entries
+from ...jobs.training import RoleTrainingEntry, run_role_entries
 from ..models import SliceTrainingSettings
 from ..panels.sam3_training_panel import Sam3TrainingPanel
 
@@ -265,7 +266,7 @@ class _BoundedLogWorker(BaseWorker):
 
 
 class _DatasetPreparationWorker(_BoundedLogWorker):
-    """Build role datasets in a background thread before training starts."""
+    """Supervise a memory-limited preparation process outside the GUI."""
 
     result_ready = Signal(object)
 
@@ -283,7 +284,7 @@ class _DatasetPreparationWorker(_BoundedLogWorker):
 
     def execute(self) -> None:
         try:
-            result = _prepare_role_datasets(
+            result = _prepare_role_datasets_contained(
                 self._orchestrator,
                 self._request,
                 log=self._queue_log,
@@ -2552,8 +2553,8 @@ QTabBar::tab:selected {
         self.progress.setRange(0, 0)
         self.progress.setFormat("Preparing datasets…")
         self._set_run_status(
-            "Preparing role datasets in the background. You can stop at the next "
-            "safe dataset boundary."
+            "Preparing role datasets in a protected process. You can stop safely "
+            "at any time."
         )
         worker.start()
 
