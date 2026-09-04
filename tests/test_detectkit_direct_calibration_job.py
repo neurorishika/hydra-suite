@@ -117,3 +117,141 @@ def test_sources_fallback_reports_split_as_sources(tmp_path, monkeypatch):
     )
     assert evidence.split == "sources"
     assert evidence.frames == [fake_frame]
+
+
+class _FakeSource:
+    """Mimics a RegionSource. merge_policy here is the REGION policy vocabulary."""
+
+    merge_policy = "plain"
+
+    def merge_plan(self, _frame_idx):
+        return None
+
+
+def _fake_models(request, candidate):
+    """4-tuple matching load_calibration_models: (models, runtime, config, imgsz)."""
+    from hydra_suite.core.inference.direct_calibration_sweep import config_for_point
+
+    config = config_for_point(
+        str(request.model_path),
+        slice_params=candidate.slice_params(),
+        merge=request.merge_settings[0],
+        confidence=request.confidences[0],
+        max_targets=request.max_targets,
+        runtime_tier="cpu",
+        model_task="obb",
+    )
+    return object(), object(), config, 640
+
+
+def _request(tmp_path, confidences=(0.35,), merges=None):
+    from hydra_suite.core.inference.direct_calibration_grid import build_candidate_grid
+    from hydra_suite.core.inference.direct_calibration_sweep import MergeSettings
+    from hydra_suite.detectkit.jobs.direct_calibration import (
+        DirectCalibrationRequest,
+        EvidenceSet,
+    )
+
+    model = tmp_path / "m.pt"
+    model.write_bytes(b"weights")
+    evidence = EvidenceSet(
+        frames=[],
+        split="val",
+        instances=0,
+        size_range=((720, 1280), (720, 1280)),
+        sampled_from=0,
+        fingerprint="deadbeef",
+    )
+    return DirectCalibrationRequest(
+        model_path=model,
+        task="obb",
+        evidence=evidence,
+        candidates=build_candidate_grid(
+            {
+                "geometry_mode": "auto_object",
+                "imgsz": 640,
+                "object_tile_fraction": 0.4,
+                "overlap": 0.2,
+            }
+        )[:2],
+        confidences=confidences,
+        merge_settings=merges or (MergeSettings("greedy_nmm", "ios", 0.5),),
+        runtime_tier="cpu",
+        max_targets=64,
+        evidence_dir=tmp_path / "evidence",
+    )
+
+
+def test_one_inference_pass_per_geometry_regardless_of_sweep_size(
+    monkeypatch, tmp_path
+):
+    from hydra_suite.core.inference.direct_calibration_sweep import MergeSettings
+    from hydra_suite.detectkit.jobs import direct_calibration as job
+
+    calls = []
+    monkeypatch.setattr(job, "load_calibration_models", _fake_models)
+    monkeypatch.setattr(
+        job,
+        "collect_obb_parts_by_frame",
+        lambda frames, *a, **k: (
+            calls.append(1) or ([[] for _ in frames], _FakeSource())
+        ),
+    )
+    request = _request(
+        tmp_path,
+        confidences=(0.1, 0.2, 0.3, 0.4),
+        merges=(
+            MergeSettings("greedy_nmm", "ios", 0.5),
+            MergeSettings("nmm", "iou", 0.6),
+        ),
+    )
+    outcome = job.run_direct_calibration(request)
+    assert len(calls) == len(request.candidates), "one model pass per geometry"
+    assert len(outcome.points) == len(request.candidates) * 4 * 2
+
+
+def test_cancellation_returns_partial_and_never_claims_completeness(
+    monkeypatch, tmp_path
+):
+    from hydra_suite.detectkit.jobs import direct_calibration as job
+
+    monkeypatch.setattr(job, "load_calibration_models", _fake_models)
+    monkeypatch.setattr(
+        job,
+        "collect_obb_parts_by_frame",
+        lambda frames, *a, **k: ([[] for _ in frames], _FakeSource()),
+    )
+    outcome = job.run_direct_calibration(_request(tmp_path), should_stop=lambda: True)
+    assert outcome.partial is True and outcome.points == []
+
+
+def test_failed_candidate_becomes_a_failed_row_not_a_silent_omission(
+    monkeypatch, tmp_path
+):
+    from hydra_suite.detectkit.jobs import direct_calibration as job
+
+    monkeypatch.setattr(job, "load_calibration_models", _fake_models)
+
+    def boom(*_a, **_k):
+        raise ValueError("tile budget exceeded")
+
+    monkeypatch.setattr(job, "collect_obb_parts_by_frame", boom)
+    outcome = job.run_direct_calibration(_request(tmp_path))
+    assert len(outcome.points) == len(_request(tmp_path).candidates)
+    assert all(point.failed_reason for point in outcome.points)
+    assert "tile budget exceeded" in outcome.points[0].failed_reason
+
+
+def test_points_record_the_detection_cap_they_were_measured_under(
+    monkeypatch, tmp_path
+):
+    from hydra_suite.detectkit.jobs import direct_calibration as job
+
+    monkeypatch.setattr(job, "load_calibration_models", _fake_models)
+    monkeypatch.setattr(
+        job,
+        "collect_obb_parts_by_frame",
+        lambda frames, *a, **k: ([[] for _ in frames], _FakeSource()),
+    )
+    outcome = job.run_direct_calibration(_request(tmp_path))
+    assert all(point.max_detections == 64 for point in outcome.points)
