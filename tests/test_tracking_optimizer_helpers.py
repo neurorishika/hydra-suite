@@ -270,6 +270,39 @@ def test_optimizer_replay_uses_directed_heading_for_assignment_and_kf() -> None:
     assert corrected[2] == np.float32(1.25)
 
 
+def test_optimizer_opens_detection_cache_read_only() -> None:
+    mod = _load_optimizer_module()
+    calls = []
+
+    class _ReadableCache:
+        def is_valid(self):
+            return True
+
+        def covers_frame_range(self, start_frame, end_frame):
+            return (start_frame, end_frame) == (2, 4)
+
+    def _open_caches(*args, **kwargs):
+        calls.append((args, kwargs))
+        return types.SimpleNamespace(
+            detection=_ReadableCache(), set_manifest_valid=True
+        )
+
+    mod._open_caches = _open_caches
+    mod.build_inference_config_from_params = lambda _params: object()
+    mod.video_signature = lambda _path: "video-signature"
+    optimizer = mod.TrackingOptimizerCore(
+        video_path="dummy.mp4",
+        detection_cache_path="cache-dir",
+        start_frame=2,
+        end_frame=4,
+        base_params={},
+        tuning_config={},
+    )
+
+    assert optimizer._open_and_validate_cache()
+    assert calls[0][1]["read_only"] is True
+
+
 def test_optimizer_replay_skips_directed_pose_heading_when_pose_is_weak() -> None:
     mod = _load_optimizer_module()
 

@@ -97,8 +97,9 @@ class _FakeDetectionHandle:
 
 
 class _FakeCaches:
-    def __init__(self, detection_handle):
+    def __init__(self, detection_handle, *, set_manifest_valid=True):
         self.detection = detection_handle
+        self.set_manifest_valid = set_manifest_valid
 
 
 class _FakeCap:
@@ -126,10 +127,14 @@ class _FakeCap:
 
 
 def _patch_cache_open(monkeypatch, fake_handle):
+    def _open_read_only(cfg, cache_dir, video_sig, roi_mask=None, *, read_only=False):
+        assert read_only is True
+        return _FakeCaches(fake_handle)
+
     monkeypatch.setattr(
         ow,
         "_open_caches",
-        lambda cfg, cache_dir, video_sig, roi_mask=None: _FakeCaches(fake_handle),
+        _open_read_only,
         raising=False,
     )
     monkeypatch.setattr(
@@ -193,12 +198,12 @@ def test_run_tracking_preview_stops_after_n_frames(monkeypatch, tmp_path):
 def test_run_tracking_preview_handles_missing_cache_gracefully(monkeypatch, tmp_path):
     """If the cache is None (open failed), the function must log and return
     rather than raising."""
-    monkeypatch.setattr(
-        ow,
-        "_open_caches",
-        lambda cfg, cache_dir, video_sig, roi_mask=None: _FakeCaches(None),
-        raising=False,
-    )
+
+    def _open_read_only(cfg, cache_dir, video_sig, roi_mask=None, *, read_only=False):
+        assert read_only is True
+        return _FakeCaches(None)
+
+    monkeypatch.setattr(ow, "_open_caches", _open_read_only, raising=False)
     monkeypatch.setattr(
         ow, "video_signature", lambda video_path: ("sig", video_path), raising=False
     )
