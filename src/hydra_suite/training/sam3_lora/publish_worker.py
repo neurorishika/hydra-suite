@@ -3,12 +3,17 @@
 This module is imported only inside the protected publish sidecar (or focused
 unit tests). The parent launcher lives in :mod:`.publish` and remains free of
 Torch/SAM3 imports.
+
+PyTorch's monolithic ``torch.save`` checkpoint format has no supported
+state-dict streaming writer. This implementation therefore keeps one base
+state plus one active merge tensor and relies on Torch's incremental zip-file
+serialization; a future true streaming design requires a versioned sharded or
+safetensors checkpoint contract and a coordinated consumer migration.
 """
 
 from __future__ import annotations
 
 import gc
-import hashlib
 import json
 import logging
 import os
@@ -19,7 +24,10 @@ from typing import Any
 
 import torch
 
-from hydra_suite.core.inference.semantic.sam3 import assert_checkpoint_loaded
+from hydra_suite.runtime.sam3_checkpoint_guard import (
+    assert_sam3_checkpoint_loaded,
+    tensor_sha256,
+)
 from hydra_suite.utils.sam3_constants import PREDICTOR_IMGSZ
 
 from .lora import (
@@ -32,7 +40,7 @@ from .lora import (
 logger = logging.getLogger(__name__)
 
 _RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
-_HASH_CHUNK_ELEMENTS = 1_048_576
+_ATTEMPT_ID = re.compile(r"[0-9a-f]{32}\Z")
 
 
 def stripped_keys(state_dict: dict[str, Any]) -> list[str]:
@@ -41,21 +49,6 @@ def stripped_keys(state_dict: dict[str, Any]) -> list[str]:
     return sorted(
         key.replace("detector.", "") for key in state_dict if "detector" in key
     )
-
-
-def _tensor_sha256(tensor: torch.Tensor) -> str:
-    """Hash the consumer-normalized float32 bytes with bounded temporaries."""
-
-    source = tensor.detach().cpu()
-    if not source.is_contiguous():
-        source = source.contiguous()
-    flat = source.view(-1)
-    digest = hashlib.sha256()
-    for start in range(0, flat.numel(), _HASH_CHUNK_ELEMENTS):
-        chunk = flat[start : start + _HASH_CHUNK_ELEMENTS].float().contiguous()
-        digest.update(chunk.view(torch.uint8).numpy().tobytes())
-        del chunk
-    return digest.hexdigest()
 
 
 def _load_base_checkpoint(base_checkpoint: Path) -> dict[str, torch.Tensor]:
@@ -130,7 +123,7 @@ def _validate_staged_artifact(
         for key, value in reloaded.items()
         if "detector" in key
     }
-    assert_checkpoint_loaded(live_state, metadata, imgsz=PREDICTOR_IMGSZ)
+    assert_sam3_checkpoint_loaded(live_state, metadata, imgsz=PREDICTOR_IMGSZ)
 
 
 def _fsync_directory(directory: Path) -> None:
@@ -141,7 +134,14 @@ def _fsync_directory(directory: Path) -> None:
         os.close(descriptor)
 
 
-_atomic_replace = os.replace
+def _promote_without_overwrite(source: Path, target: Path) -> None:
+    """Atomically expose *source* while refusing a raced existing target."""
+
+    os.link(source, target)
+    source.unlink()
+
+
+_atomic_replace = _promote_without_overwrite
 
 
 def _promote_staged_pair(
@@ -187,6 +187,7 @@ def publish_sam3_artifact(
     params: Any,
     source_fingerprint: str,
     models_root: str | Path,
+    publish_attempt_id: str | None = None,
 ) -> tuple[Path, Path]:
     """Build, validate, fsync, and atomically expose one merged checkpoint."""
 
@@ -197,9 +198,15 @@ def publish_sam3_artifact(
             "to overwrite a previously published artifact"
         )
     artifact_path.parent.mkdir(parents=True, exist_ok=True)
-    nonce = f"{os.getpid()}.{uuid.uuid4().hex}"
-    staged_artifact = artifact_path.with_name(f".{artifact_path.name}.{nonce}.tmp")
-    staged_sidecar = sidecar_path.with_name(f".{sidecar_path.name}.{nonce}.tmp")
+    publish_attempt_id = publish_attempt_id or uuid.uuid4().hex
+    if not _ATTEMPT_ID.fullmatch(publish_attempt_id):
+        raise ValueError("SAM3 publish attempt identity is invalid")
+    staged_artifact = artifact_path.with_name(
+        f".{artifact_path.name}.{publish_attempt_id}.tmp"
+    )
+    staged_sidecar = sidecar_path.with_name(
+        f".{sidecar_path.name}.{publish_attempt_id}.tmp"
+    )
 
     try:
         base = _load_base_checkpoint(Path(base_checkpoint))
@@ -218,7 +225,7 @@ def publish_sam3_artifact(
         _validated_adapter_pairs(base, adapters, cfg, prefix="detector.")
         touched_keys = adapter_touched_keys(adapters)
         original_fingerprints = {
-            key: _tensor_sha256(base[key]) for key in sorted(touched_keys)
+            key: tensor_sha256(base[key]) for key in sorted(touched_keys)
         }
         expected_keys = tuple(base)
         expected_dtypes = {key: value.dtype for key, value in base.items()}
@@ -226,7 +233,7 @@ def publish_sam3_artifact(
         merged = merge_adapters(base, adapters, cfg)
         tuned_fingerprints: dict[str, str] = {}
         for key in sorted(touched_keys):
-            tuned = _tensor_sha256(merged[key])
+            tuned = tensor_sha256(merged[key])
             if tuned != original_fingerprints[key] and len(tuned_fingerprints) < 3:
                 tuned_fingerprints[key.replace("detector.", "")] = tuned
         if not tuned_fingerprints:
@@ -248,6 +255,9 @@ def publish_sam3_artifact(
             "label_quality_acknowledged": getattr(
                 params, "label_quality_acknowledged", False
             ),
+            # Lets the parent clean up after a hard-killed child without ever
+            # deleting an artifact that raced into the same final pathname.
+            "publish_attempt_id": publish_attempt_id,
         }
         logger.info(
             "sam3 publish: merged %d adapter targets into %d base keys "

@@ -155,6 +155,8 @@ def _publish_training_artifacts(
     publish_metadata: dict[str, object],
     run_id: str,
     dataset_fingerprint_value: str,
+    log_cb: Callable[[str], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> tuple[str, str]:
     if not artifact_paths:
         return "", ""
@@ -180,6 +182,8 @@ def _publish_training_artifacts(
             build_manifest=manifest,
             params=spec.sam3_params,
             source_fingerprint=dataset_fingerprint_value,
+            log_cb=log_cb,
+            should_cancel=should_cancel,
         )
 
     raw_recommended_threshold = publish_metadata.get(
@@ -622,18 +626,45 @@ class TrainingOrchestrator:
                     publish_metadata=publish_metadata or {},
                     run_id=run_id,
                     dataset_fingerprint_value=ds_fp,
+                    log_cb=log_cb,
+                    should_cancel=should_cancel,
                 )
+            except WorkloadStillOwnedError as exc:
+                try:
+                    update_run_record(
+                        run_id,
+                        {
+                            "status": "recovery-required",
+                            "error_message": bounded_terminal_text(
+                                exc, include_exception_type=False
+                            ),
+                            "failure_kind": "workload-still-owned",
+                            "containment": {"ownership": "retained"},
+                        },
+                    )
+                except Exception as registry_exc:  # noqa: BLE001 - preserve owner
+                    exc.registry_update_error = bounded_terminal_text(
+                        registry_exc, include_exception_type=False
+                    )
+                exc.run_id = run_id
+                raise
             except Exception as exc:
                 result["success"] = False
                 result["error"] = bounded_terminal_text(
                     exc, include_exception_type=False
                 )
-                result["failure_kind"] = "publish-exception"
+                result["failure_kind"] = getattr(
+                    exc, "failure_kind", "publish-exception"
+                )
+                result["canceled"] = bool(getattr(exc, "canceled", False))
+                containment = getattr(exc, "containment", None)
+                if isinstance(containment, dict):
+                    result["containment"] = containment
                 result["published_registry_key"] = ""
                 result["published_model_path"] = ""
                 finalize_run_record(
                     run_id,
-                    status="failed",
+                    status="canceled" if result["canceled"] else "failed",
                     command=result.get("command", []),
                     metrics_paths=(
                         [result.get("metrics_path", "")]

@@ -95,6 +95,77 @@ def test_builder_geometry_reaches_the_sidecar(monkeypatch, tmp_path):
     assert seen["source_fingerprint"] == "fp1"
 
 
+def test_publish_sidecar_classification_reaches_result_and_registry(
+    monkeypatch, tmp_path
+):
+    import hydra_suite.training.registry as registry
+    from hydra_suite.training.sam3_lora.publish import Sam3PublishError
+
+    monkeypatch.setattr(registry, "_project_root", lambda: tmp_path)
+    spec = _registered_spec(tmp_path, auto_import=True)
+    monkeypatch.setattr(
+        svc,
+        "run_training",
+        lambda *_args, **_kwargs: {
+            "success": True,
+            "artifact_path": str(tmp_path / "adapters.pt"),
+        },
+    )
+    monkeypatch.setattr(
+        svc,
+        "_publish_training_artifacts",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            Sam3PublishError(
+                "publish worker hit its hard cap",
+                failure_kind="host-hard-limit",
+                containment={"peak_observed_tree_rss_bytes": 1234},
+            )
+        ),
+    )
+
+    result = svc.TrainingOrchestrator(tmp_path / "workspace").run_role_training(spec)
+
+    assert result["success"] is False
+    assert result["failure_kind"] == "host-hard-limit"
+    assert result["containment"]["peak_observed_tree_rss_bytes"] == 1234
+    record = load_registry()["runs"][0]
+    assert record["status"] == "failed"
+    assert record["failure_kind"] == "host-hard-limit"
+
+
+def test_publish_uncertain_ownership_is_not_collapsed_into_a_failed_result(
+    monkeypatch, tmp_path
+):
+    import hydra_suite.training.registry as registry
+    from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
+
+    monkeypatch.setattr(registry, "_project_root", lambda: tmp_path)
+    spec = _registered_spec(tmp_path, auto_import=True)
+    monkeypatch.setattr(
+        svc,
+        "run_training",
+        lambda *_args, **_kwargs: {
+            "success": True,
+            "artifact_path": str(tmp_path / "adapters.pt"),
+        },
+    )
+    owner = object.__new__(type("Owner", (), {}))
+    error = WorkloadStillOwnedError("publish ownership retained", owner)
+    monkeypatch.setattr(
+        svc,
+        "_publish_training_artifacts",
+        lambda **_kwargs: (_ for _ in ()).throw(error),
+    )
+
+    with pytest.raises(WorkloadStillOwnedError) as raised:
+        svc.TrainingOrchestrator(tmp_path / "workspace").run_role_training(spec)
+
+    assert raised.value is error
+    assert raised.value.run_id
+    record = load_registry()["runs"][0]
+    assert record["status"] == "recovery-required"
+
+
 def _registered_spec(tmp_path, *, auto_import=False):
     derived = tmp_path / "derived"
     derived.mkdir(exist_ok=True)

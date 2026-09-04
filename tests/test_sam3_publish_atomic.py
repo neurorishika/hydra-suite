@@ -232,3 +232,34 @@ def test_existing_published_pair_is_never_overwritten(tmp_path):
     assert artifact.read_bytes() == b"old-checkpoint"
     assert sidecar.read_bytes() == b"old-sidecar"
     assert _staging_paths(tmp_path / "models") == []
+
+
+def test_raced_publish_target_is_not_overwritten_during_promotion(
+    monkeypatch, tmp_path
+):
+    _base, _adapters, base_path, adapters_path = _inputs(tmp_path)
+    real_validate = publish_worker._validate_staged_artifact
+    out_dir = tmp_path / "models" / "sam3_finetuned"
+    artifact = out_dir / "run-1.pt"
+    sidecar = out_dir / "run-1.pt.sam3_meta.json"
+
+    def validate_then_race(*args, **kwargs):
+        real_validate(*args, **kwargs)
+        artifact.write_bytes(b"concurrent-checkpoint")
+        sidecar.write_bytes(b"concurrent-sidecar")
+
+    monkeypatch.setattr(publish_worker, "_validate_staged_artifact", validate_then_race)
+    with pytest.raises(FileExistsError):
+        publish_worker.publish_sam3_artifact(
+            run_id="run-1",
+            adapters_path=adapters_path,
+            base_checkpoint=base_path,
+            build_manifest={},
+            params=Sam3LoraParams(prompt="ant", rank=2, alpha=4),
+            source_fingerprint="fp1",
+            models_root=tmp_path / "models",
+        )
+
+    assert artifact.read_bytes() == b"concurrent-checkpoint"
+    assert sidecar.read_bytes() == b"concurrent-sidecar"
+    assert _staging_paths(tmp_path / "models") == []

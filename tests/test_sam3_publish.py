@@ -6,7 +6,27 @@ import pytest
 import torch
 
 from hydra_suite.training.contracts import Sam3LoraParams
-from hydra_suite.training.sam3_lora.publish import publish_sam3_model, stripped_keys
+from hydra_suite.training.sam3_lora.publish import _register, stripped_keys
+from hydra_suite.training.sam3_lora.publish_worker import publish_sam3_artifact
+
+
+def publish_sam3_model(**kwargs):
+    """Exercise the child writer and parent registry transaction synchronously."""
+
+    models_root = kwargs["models_root"]
+    registry_path = kwargs.pop("registry_path", None) or (
+        models_root / "model_registry.json"
+    )
+    artifact, sidecar = publish_sam3_artifact(**kwargs)
+    _register(
+        registry_path=registry_path,
+        artifact_path=artifact,
+        sidecar_path=sidecar,
+        run_id=kwargs["run_id"],
+        prompt=kwargs["params"].prompt,
+        source_fingerprint=kwargs["source_fingerprint"],
+    )
+    return f"sam3_finetuned/{artifact.name}", str(artifact)
 
 
 def test_stripped_keys_reproduce_ultralytics_transform():
@@ -36,7 +56,7 @@ def test_artifact_is_not_written_into_the_stock_cache(tmp_path):
         adapters_path=tmp_path / "adapters.pt",
         base_checkpoint=tmp_path / "base.pt",
         build_manifest={"tile_px": 1007, "reference_body_px": 55.4},
-        params=Sam3LoraParams(prompt="ant"),
+        params=Sam3LoraParams(prompt="ant", rank=2, alpha=4),
         source_fingerprint="fp1",
         models_root=tmp_path / "models",
     )
@@ -60,7 +80,7 @@ def test_sidecar_records_the_guard_fields(tmp_path):
         adapters_path=tmp_path / "adapters.pt",
         base_checkpoint=tmp_path / "base.pt",
         build_manifest={"tile_px": 1007, "reference_body_px": 55.4},
-        params=Sam3LoraParams(prompt="ant"),
+        params=Sam3LoraParams(prompt="ant", rank=2, alpha=4),
         source_fingerprint="fp1",
         models_root=tmp_path / "models",
     )
@@ -96,7 +116,7 @@ def test_bf16_base_checkpoint_does_not_crash_fingerprinting(tmp_path):
         adapters_path=tmp_path / "adapters.pt",
         base_checkpoint=tmp_path / "base.pt",
         build_manifest={"tile_px": 1007, "reference_body_px": 55.4},
-        params=Sam3LoraParams(prompt="ant"),
+        params=Sam3LoraParams(prompt="ant", rank=2, alpha=4),
         source_fingerprint="fp1",
         models_root=tmp_path / "models",
     )
@@ -113,7 +133,7 @@ def test_empty_adapters_refuses_to_publish(tmp_path):
             adapters_path=tmp_path / "adapters.pt",
             base_checkpoint=tmp_path / "base.pt",
             build_manifest={"tile_px": 1007, "reference_body_px": 55.4},
-            params=Sam3LoraParams(prompt="ant"),
+            params=Sam3LoraParams(prompt="ant", rank=2, alpha=4),
             source_fingerprint="fp1",
             models_root=tmp_path / "models",
         )
@@ -138,7 +158,7 @@ def test_all_zero_lora_b_refuses_to_publish(tmp_path):
             adapters_path=tmp_path / "adapters.pt",
             base_checkpoint=tmp_path / "base.pt",
             build_manifest={"tile_px": 1007, "reference_body_px": 55.4},
-            params=Sam3LoraParams(prompt="ant"),
+            params=Sam3LoraParams(prompt="ant", rank=2, alpha=4),
             source_fingerprint="fp1",
             models_root=tmp_path / "models",
         )
@@ -167,7 +187,7 @@ def test_stock_only_keys_survive_untouched_into_the_artifact(tmp_path):
         adapters_path=tmp_path / "adapters.pt",
         base_checkpoint=tmp_path / "base.pt",
         build_manifest={"tile_px": 1007, "reference_body_px": 55.4},
-        params=Sam3LoraParams(prompt="ant"),
+        params=Sam3LoraParams(prompt="ant", rank=2, alpha=4),
         source_fingerprint="fp1",
         models_root=tmp_path / "models",
     )
