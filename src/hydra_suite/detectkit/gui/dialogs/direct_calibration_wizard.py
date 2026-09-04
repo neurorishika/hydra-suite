@@ -12,13 +12,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from PySide6.QtCore import QEventLoop, Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDialog,
     QDialogButtonBox,
     QGroupBox,
     QHeaderView,
     QLabel,
+    QMessageBox,
+    QProgressDialog,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
@@ -36,8 +40,10 @@ from hydra_suite.core.inference.direct_calibration_sweep import MergeSettings
 from hydra_suite.detectkit.jobs.direct_calibration import (
     EXHAUSTIVE_LABEL_WARNING,
     DirectCalibrationRequest,
+    DirectCalibrationWorker,
     EvidenceSet,
     collect_evidence,
+    save_direct_calibration,
 )
 from hydra_suite.widgets.dialogs import BaseDialog
 
@@ -320,3 +326,106 @@ class DirectCalibrationWizard(BaseDialog):
             max_targets=int(self.spin_max_targets.value()),
             evidence_dir=self._evidence_dir,
         )
+
+
+def open_direct_calibration(
+    parent,
+    *,
+    model_path,
+    task: str,
+    dataset_yaml,
+    sources: list,
+    training_geometry: dict,
+    evidence_dir,
+    runtime_tier: str = "gpu",
+) -> list[dict]:
+    """The single launcher every entry point calls: wizard -> worker -> results.
+
+    Returns the profiles the user chose to save (``staged_profiles()`` from
+    ``DirectCalibrationResultsDialog``), or ``[]`` if the user cancelled at
+    any stage (the wizard's gate, the sweep itself, or the results dialog).
+    A partial (cancelled-mid-sweep) outcome is still shown for inspection in
+    the results dialog, but ``save_direct_calibration`` -- called before the
+    dialog opens, exactly as it is everywhere else in this feature -- never
+    lets a partial run overwrite previously saved complete evidence.
+    """
+    # Local import: avoids a training_dialog.py <-> direct_calibration_results
+    # cycle at module load time (results dialog is only needed once the
+    # sweep has actually produced an outcome to show).
+    from .direct_calibration_results import DirectCalibrationResultsDialog
+
+    wizard = DirectCalibrationWizard(
+        parent,
+        model_path=model_path,
+        task=task,
+        dataset_yaml=dataset_yaml,
+        sources=sources,
+        training_geometry=training_geometry,
+        evidence_dir=evidence_dir,
+        runtime_tier=runtime_tier,
+    )
+    if wizard.exec() != QDialog.DialogCode.Accepted:
+        return []
+
+    request = wizard.request()
+
+    progress = QProgressDialog("Measuring SAHI candidates…", "Cancel", 0, 100, parent)
+    progress.setWindowTitle("SAHI calibration")
+    progress.setMinimumDuration(0)
+    progress.setWindowModality(Qt.WindowModality.WindowModal)
+    progress.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+    progress.setMinimumWidth(420)
+
+    worker = DirectCalibrationWorker(request)
+    progress.canceled.connect(worker.cancel)
+    worker.progress.connect(progress.setValue)
+    worker.status.connect(progress.setLabelText)
+
+    loop = QEventLoop()
+    outcome_holder: dict = {}
+    worker.result_ready.connect(
+        lambda outcome: outcome_holder.__setitem__("outcome", outcome)
+    )
+    worker.finished.connect(loop.quit)
+
+    progress.show()
+    progress.raise_()
+    progress.activateWindow()
+    worker.start()
+    loop.exec()
+    progress.close()
+
+    outcome = outcome_holder.get("outcome")
+    if outcome is None:
+        return []
+    if not outcome.points:
+        QMessageBox.information(
+            parent,
+            "SAHI calibration",
+            "Calibration produced nothing: it was cancelled before the "
+            "first candidate finished measuring.",
+        )
+        return []
+
+    # Persist BEFORE showing results: a partial run never overwrites complete
+    # evidence -- save_direct_calibration enforces that half; this call is
+    # what makes the enforcement reachable from the GUI at all.
+    save_direct_calibration(Path(evidence_dir), outcome, request)
+
+    results = DirectCalibrationResultsDialog(
+        parent,
+        model_path=model_path,
+        outcome=outcome,
+        training_geometry=training_geometry,
+        previews=outcome.previews,
+        task=task,
+    )
+    if outcome.partial:
+        # Shown for inspection only -- clearly marked, never silently
+        # treated as a complete measurement.
+        results.setWindowTitle(
+            "SAHI calibration results — PARTIAL (cancelled before completion)"
+        )
+    if results.exec() != QDialog.DialogCode.Accepted:
+        return []
+    return results.staged_profiles()

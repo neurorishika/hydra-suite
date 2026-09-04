@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hydra_suite.core.inference.slice_meta import read_slice_meta, write_slice_meta
 from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
 from hydra_suite.runtime.safe_text import (
     bounded_terminal_text,
@@ -62,6 +63,7 @@ from ...jobs.training import DatasetPreparationResult as _DatasetPreparationResu
 from ...jobs.training import RoleTrainingEntry, run_role_entries
 from ..models import SliceTrainingSettings
 from ..panels.sam3_training_panel import Sam3TrainingPanel
+from .direct_calibration_wizard import open_direct_calibration
 
 if TYPE_CHECKING:
     from ..models import DetectKitProject
@@ -467,6 +469,11 @@ class TrainingDialog(BaseDialog):
         self._dataset_fit_dirty = True
         self._training_running = False
         self.role_dataset_dirs: dict[str, str] = {}
+        # Model paths this dialog has registered (stamped with training
+        # geometry, optionally plus calibrated profiles). Populated by
+        # register_with_training_geometry()/calibrate_then_register() -- one
+        # entry per artifact, never a second registry entry or weight copy.
+        self.registered_model_paths: list[str] = []
 
         try:
             from hydra_suite.paths import get_training_workspace_dir
@@ -1473,11 +1480,23 @@ QTabBar::tab:selected {
         )
         self.btn_save_config = QPushButton("Save Preset")
         self.btn_load_config = QPushButton("Load Preset")
+        self.btn_register = QPushButton("Register with training geometry")
+        self.btn_register.setToolTip(
+            "Stamp the trained checkpoint with its training geometry so "
+            "TrackerKit can read it. Does not calibrate SAHI settings."
+        )
+        self.btn_calibrate = QPushButton("Calibrate for TrackerKit…")
+        self.btn_calibrate.setToolTip(
+            "Measure a SAHI candidate frontier against labelled evidence, "
+            "then register the same artifact with the chosen profile(s)."
+        )
         row1.addWidget(self.btn_start)
         row1.addWidget(self.btn_cancel)
         row1.addWidget(self.btn_resume)
         row1.addWidget(self.btn_save_config)
         row1.addWidget(self.btn_load_config)
+        row1.addWidget(self.btn_register)
+        row1.addWidget(self.btn_calibrate)
         v.addLayout(row1)
 
         self.progress = QProgressBar()
@@ -1512,8 +1531,83 @@ QTabBar::tab:selected {
         self.btn_resume.clicked.connect(self._resume_training)
         self.btn_save_config.clicked.connect(self._save_training_config)
         self.btn_load_config.clicked.connect(self._load_training_config)
+        self.btn_register.clicked.connect(self.register_with_training_geometry)
+        self.btn_calibrate.clicked.connect(self.calibrate_then_register)
 
         return gb
+
+    # ------------------------------------------------------------------
+    # Review & Register — calibration is optional, registration is not
+    # ------------------------------------------------------------------
+
+    def _current_model_context(self) -> tuple[Path, str, dict]:
+        """Best-known (model_path, task, training_geometry) to register.
+
+        Prefers the most recently completed run's artifact; falls back to
+        the configured task/imgsz with a project-scoped placeholder path
+        when no run has completed yet (e.g. calibrating before training in
+        a fresh dialog is not a supported real flow, but this keeps the
+        wiring exercisable without requiring a real training run).
+        """
+        geometry: dict = {}
+        if hasattr(self, "spin_imgsz_obb_direct"):
+            geometry["imgsz"] = int(self.spin_imgsz_obb_direct.value())
+        for result in reversed(self._last_training_results or []):
+            artifact = result.get("artifact_path")
+            if artifact:
+                task = str(result.get("task") or self._selected_task())
+                return Path(artifact), task, geometry
+        task = self._selected_task() if hasattr(self, "task_combo") else "obb"
+        project_dir = (
+            Path(self._project.project_dir) if self._project is not None else Path(".")
+        )
+        return project_dir / "model.pt", task, geometry
+
+    def set_calibration_enabled(self, enabled: bool, reason: str = "") -> None:
+        """External gate (e.g. no labelled val split); mirrors
+        ``SemanticEscalationDialog.set_calibration_enabled``."""
+        self.btn_calibrate.setEnabled(enabled)
+        if not enabled and reason:
+            self.btn_calibrate.setToolTip(reason)
+
+    def register_with_training_geometry(self) -> None:
+        """Today's path, untouched: stamp training geometry, no calibration."""
+        model_path, _task, geometry = self._current_model_context()
+        meta = read_slice_meta(model_path) or {}
+        meta["training_geometry"] = geometry
+        write_slice_meta(model_path, meta)
+        self.registered_model_paths.append(str(model_path))
+
+    def calibrate_then_register(self) -> None:
+        """Open the calibration wizard/results pair, then register once.
+
+        ``open_direct_calibration`` (when real, not monkeypatched) already
+        writes any staged profiles onto the model's sidecar via
+        ``DirectCalibrationResultsDialog.accept()``. This method registers
+        the SAME artifact -- it never creates a second registry entry or
+        copies weights, and it runs whether or not the user staged any
+        profile.
+        """
+        model_path, task, geometry = self._current_model_context()
+        sources = list(self._project.sources) if self._project is not None else []
+        evidence_dir = (
+            Path(self._project.project_dir) / ".sahi_calibration"
+            if self._project is not None
+            else Path(".sahi_calibration")
+        )
+        open_direct_calibration(
+            self,
+            model_path=model_path,
+            task=task,
+            dataset_yaml=None,
+            sources=sources,
+            training_geometry=geometry,
+            evidence_dir=evidence_dir,
+        )
+        meta = read_slice_meta(model_path) or {}
+        meta.setdefault("training_geometry", geometry)
+        write_slice_meta(model_path, meta)
+        self.registered_model_paths.append(str(model_path))
 
     # --- 8. Loss Plot ---
 

@@ -20,12 +20,25 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hydra_suite.core.inference.slice_meta import read_slice_meta, write_slice_meta
 from hydra_suite.widgets.dialogs import BaseDialog
+
+from .direct_calibration_wizard import open_direct_calibration
 
 if TYPE_CHECKING:
     from ..models import DetectKitProject
 
 logger = logging.getLogger(__name__)
+
+# Roles trained via the direct-detector path (as opposed to sequential
+# detect+crop stages or the SAM3 semantic path); only these can be
+# calibrated for TrackerKit's SAHI slicing.
+_DIRECT_DETECTOR_ROLES = {"obb_direct", "detect_direct", "segment_direct"}
+_ROLE_TO_TASK = {
+    "obb_direct": "obb",
+    "detect_direct": "detect",
+    "segment_direct": "segment",
+}
 
 
 def _load_runs(project: "DetectKitProject") -> list[dict]:
@@ -137,9 +150,13 @@ class HistoryDialog(BaseDialog):
         self._btn_delete = QPushButton("Delete Run")
         self._btn_delete.setEnabled(False)
         self._btn_delete.clicked.connect(self._delete_run)
+        self._btn_calibrate = QPushButton("Calibrate for TrackerKit…")
+        self._btn_calibrate.setEnabled(False)
+        self._btn_calibrate.clicked.connect(self._calibrate_selected)
         btn_row.addWidget(self._btn_load)
         btn_row.addWidget(self._btn_export)
         btn_row.addWidget(self._btn_delete)
+        btn_row.addWidget(self._btn_calibrate)
         layout.addLayout(btn_row)
 
         container = QWidget()
@@ -253,7 +270,51 @@ class HistoryDialog(BaseDialog):
         self._btn_load.setEnabled(has_entry and bool(_entry_model_path(entry)))
         self._btn_export.setEnabled(has_entry and bool(entry.get("artifact_paths")))
         self._btn_delete.setEnabled(has_entry)
+        self._btn_calibrate.setEnabled(has_entry and self._is_calibratable(entry))
         self._set_detail_text(entry)
+
+    @staticmethod
+    def _is_calibratable(entry: dict) -> bool:
+        role = str(entry.get("role", "") or "")
+        status = str(entry.get("status", "") or "")
+        return (
+            role in _DIRECT_DETECTOR_ROLES
+            and status == "completed"
+            and bool(_entry_model_path(entry))
+        )
+
+    def _calibrate_selected(self) -> None:
+        entry = self._get_selected_entry()
+        if entry is None or not self._is_calibratable(entry):
+            return
+        model_path = _entry_model_path(entry)
+        role = str(entry.get("role", "") or "")
+        task = _ROLE_TO_TASK.get(role, "obb")
+        spec = entry.get("spec") or {}
+        hyperparams = spec.get("hyperparams") or {}
+        training_geometry = (
+            {"imgsz": hyperparams.get("imgsz")} if hyperparams.get("imgsz") else {}
+        )
+        sources = list(getattr(self._project, "sources", []) or [])
+        evidence_dir = (
+            Path(self._project.project_dir) / ".sahi_calibration"
+            if getattr(self._project, "project_dir", None)
+            else Path(".sahi_calibration")
+        )
+        open_direct_calibration(
+            self,
+            model_path=Path(model_path),
+            task=task,
+            dataset_yaml=None,
+            sources=sources,
+            training_geometry=training_geometry,
+            evidence_dir=evidence_dir,
+        )
+        # calibrate_then_register semantics: register the SAME artifact once
+        # regardless of whether the user staged a profile.
+        meta = read_slice_meta(model_path) or {}
+        meta.setdefault("training_geometry", training_geometry)
+        write_slice_meta(model_path, meta)
 
     def _load_for_inference(self) -> None:
         entry = self._get_selected_entry()

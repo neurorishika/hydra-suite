@@ -502,3 +502,43 @@ def test_accept_with_nothing_staged_does_not_create_the_sidecar(
 
     results_dialog.accept()
     assert not sidecar_path(tmp_path / "m.pt").exists()
+
+
+@pytest.fixture
+def training_dialog(tmp_path):
+    from hydra_suite.detectkit.gui.dialogs.training_dialog import TrainingDialog
+    from hydra_suite.detectkit.gui.models import DetectKitProject, OBBSource
+
+    proj = DetectKitProject(project_dir=tmp_path, class_names=["ant"])
+    proj.sources = [OBBSource(path=str(tmp_path / "ds1"), name="ds1")]
+    dlg = TrainingDialog(proj)
+    yield dlg
+    dlg.close()
+
+
+def test_register_with_training_geometry_skips_calibration(
+    monkeypatch, training_dialog
+):
+    calls = []
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.dialogs.training_dialog.open_direct_calibration",
+        lambda *a, **k: (calls.append(k), [])[1],
+    )
+    training_dialog.register_with_training_geometry()
+    assert calls == []
+    assert len(training_dialog.registered_model_paths) == 1
+
+
+def test_calibrate_then_register_produces_one_artifact(monkeypatch, training_dialog):
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.dialogs.training_dialog.open_direct_calibration",
+        lambda *a, **k: [{"id": "balanced-1", "name": "Balanced"}],
+    )
+    training_dialog.calibrate_then_register()
+    assert len(training_dialog.registered_model_paths) == 1
+
+
+def test_calibration_is_disabled_with_a_reason_when_labels_are_missing(training_dialog):
+    training_dialog.set_calibration_enabled(False, "no labelled val split")
+    assert training_dialog.btn_calibrate.isEnabled() is False
+    assert "no labelled val split" in training_dialog.btn_calibrate.toolTip()

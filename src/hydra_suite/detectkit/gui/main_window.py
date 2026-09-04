@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hydra_suite.core.inference.slice_meta import read_slice_meta, write_slice_meta
 from hydra_suite.data.al.merge import MergeMode
 from hydra_suite.data.project_bundle import (
     export_project_bundle_archive,
@@ -36,6 +37,7 @@ from hydra_suite.data.project_bundle import (
     load_project_bundle_archive_manifest,
 )
 from hydra_suite.detectkit.config.schemas import DetectKitConfig
+from hydra_suite.paths import get_models_dir
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
 from hydra_suite.widgets.busy import BusyTaskError, run_blocking_with_busy_dialog
 from hydra_suite.widgets.workers import BaseWorker
@@ -774,6 +776,11 @@ class DetectKitMainWindow(QMainWindow):
         act_quit.triggered.connect(self.close)
         file_menu.addAction(act_quit)
 
+        tools_menu = menu_bar.addMenu("&Tools")
+        act_calibrate = QAction("Calibrate a model for TrackerKit…", self)
+        act_calibrate.triggered.connect(self.calibrate_registered_model)
+        tools_menu.addAction(act_calibrate)
+
     def _refresh_recent_menu(self) -> None:
         self._recent_menu.clear()
         if hasattr(self, "_recents_store"):
@@ -796,6 +803,54 @@ class DetectKitMainWindow(QMainWindow):
                 QMessageBox.warning(
                     self, "Open Failed", f"Could not open project at:\n{path_str}"
                 )
+
+    # ------------------------------------------------------------------
+    # Tools menu
+    # ------------------------------------------------------------------
+
+    def calibrate_registered_model(self) -> None:
+        """Menu action: calibrate an already-registered ``.pt`` for TrackerKit.
+
+        DetectKit has no registered-model list page (models.py is a data
+        module, not UI), so this picks a checkpoint under get_models_dir()
+        directly rather than offering a row action on some list.
+        """
+        from .dialogs.direct_calibration_wizard import open_direct_calibration
+
+        models_dir = get_models_dir()
+        model_path_str, _filter = QFileDialog.getOpenFileName(
+            self,
+            "Choose a model to calibrate",
+            str(models_dir),
+            "PyTorch checkpoints (*.pt)",
+        )
+        if not model_path_str:
+            return
+        model_path = Path(model_path_str)
+        sidecar = read_slice_meta(model_path) or {}
+        training_geometry = sidecar.get("training_geometry") or {}
+        task = str(training_geometry.get("task") or "obb")
+        sources = list(self._project.sources) if self._project is not None else []
+        evidence_dir = (
+            self._project.project_dir / ".sahi_calibration"
+            if self._project is not None
+            else models_dir / ".sahi_calibration"
+        )
+        open_direct_calibration(
+            self,
+            model_path=model_path,
+            task=task,
+            dataset_yaml=None,
+            sources=sources,
+            training_geometry=training_geometry,
+            evidence_dir=evidence_dir,
+        )
+        # calibrate_then_register semantics: the same artifact gets its
+        # training geometry stamped exactly once, regardless of whether the
+        # user staged a profile in the results dialog.
+        meta = read_slice_meta(model_path) or {}
+        meta.setdefault("training_geometry", training_geometry)
+        write_slice_meta(model_path, meta)
 
     # ------------------------------------------------------------------
     # Project lifecycle
