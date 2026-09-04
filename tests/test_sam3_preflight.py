@@ -647,6 +647,24 @@ def test_rank_and_scope_scale_cpu_state_reload_and_serialization_copies(tmp_path
         )
 
 
+def test_publish_phase_budgets_one_base_and_one_active_tensor_not_a_full_clone(
+    tmp_path,
+):
+    _write_coco(tmp_path)
+
+    publish = next(
+        phase
+        for phase in _decision(_spec(tmp_path)).request.phases
+        if phase.name == "publish"
+    )
+    allocations = dict(publish.dominant_allocations)
+
+    assert allocations["base checkpoint"] == pf._CHECKPOINT_BYTES
+    assert allocations["largest possible active tensor"] == pf._CHECKPOINT_BYTES
+    assert "merged checkpoint" not in allocations
+    assert "serialization temporary" not in allocations
+
+
 @pytest.mark.parametrize("rank", [-1, 0, pf._MAX_LORA_RANK + 1])
 def test_unsafe_lora_ranks_are_refused_with_bounded_estimates(tmp_path, rank):
     _write_coco(tmp_path)
