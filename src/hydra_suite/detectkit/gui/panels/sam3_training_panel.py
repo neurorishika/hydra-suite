@@ -32,8 +32,10 @@ from PySide6.QtWidgets import (
 
 from hydra_suite.training.contracts import (
     SAM3_MAX_CONFIGURED_PROMPT_BYTES,
+    SAM3_MAX_NEGATIVE_PROMPT_COUNT,
     SAM3_MAX_NEGATIVE_QUERIES_PER_TILE,
     SAM3_MAX_PROMPT_CODEPOINTS,
+    SAM3_MAX_PROMPT_UTF8_BYTES,
     Sam3LoraParams,
 )
 from hydra_suite.training.sam3_lora.availability import (
@@ -62,19 +64,59 @@ class _BoundedPromptListEdit(QPlainTextEdit):
 
     @staticmethod
     def _bounded_text(value: object) -> str:
-        remaining = SAM3_MAX_CONFIGURED_PROMPT_BYTES
+        if type(value) is not str:
+            return ""
+        text = value[
+            : SAM3_MAX_CONFIGURED_PROMPT_BYTES + SAM3_MAX_NEGATIVE_PROMPT_COUNT
+        ]
+        if not text:
+            return ""
         output: list[str] = []
-        # Bound before splitlines so an oversized external paste cannot create
-        # an unbounded list merely to be rejected.
-        text = str(value)[:remaining]
-        for line in text.splitlines(keepends=True):
-            newline = "\n" if line.endswith(("\n", "\r")) else ""
-            content = line.rstrip("\r\n")[:SAM3_MAX_PROMPT_CODEPOINTS]
-            fragment = (content + newline)[:remaining]
-            output.append(fragment)
-            remaining -= len(fragment)
-            if remaining <= 0:
+        total_bytes = 0
+        line_bytes = 0
+        line_codepoints = 0
+        line_count = 1
+        previous_was_cr = False
+        for original_char in text:
+            if original_char == "\n" and previous_was_cr:
+                previous_was_cr = False
+                continue
+            if original_char in ("\r", "\n"):
+                previous_was_cr = original_char == "\r"
+                if line_count >= SAM3_MAX_NEGATIVE_PROMPT_COUNT:
+                    break
+                if total_bytes + 1 > SAM3_MAX_CONFIGURED_PROMPT_BYTES:
+                    break
+                output.append("\n")
+                total_bytes += 1
+                line_bytes = 0
+                line_codepoints = 0
+                line_count += 1
+                continue
+            previous_was_cr = False
+            codepoint = ord(original_char)
+            if 0xD800 <= codepoint <= 0xDFFF:
+                char = "\N{REPLACEMENT CHARACTER}"
+                char_bytes = 3
+            else:
+                char = original_char
+                char_bytes = (
+                    1
+                    + (codepoint >= 0x80)
+                    + (codepoint >= 0x800)
+                    + (codepoint >= 0x10000)
+                )
+            if (
+                line_codepoints >= SAM3_MAX_PROMPT_CODEPOINTS
+                or line_bytes + char_bytes > SAM3_MAX_PROMPT_UTF8_BYTES
+            ):
+                continue
+            if total_bytes + char_bytes > SAM3_MAX_CONFIGURED_PROMPT_BYTES:
                 break
+            output.append(char)
+            total_bytes += char_bytes
+            line_bytes += char_bytes
+            line_codepoints += 1
         return "".join(output)
 
     def setPlainText(self, text: str) -> None:  # noqa: N802 - Qt override

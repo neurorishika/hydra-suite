@@ -25,6 +25,7 @@ _MAX_REGISTRY_BYTES = 8 * 1024 * 1024
 _MAX_REGISTRY_RECORDS = 10_000
 _MAX_REGISTRY_JSON_DEPTH = 64
 _MAX_REGISTRY_JSON_VALUES = 100_000
+_MAX_REGISTRY_STRING_CODEPOINTS = (_MAX_REGISTRY_BYTES - 16) // 12
 
 
 def _validate_registry_json_shape(encoded: bytes) -> None:
@@ -55,6 +56,45 @@ def _validate_registry_json_shape(encoded: bytes) -> None:
             separators += 1
             if separators >= _MAX_REGISTRY_JSON_VALUES:
                 raise RuntimeError("Training registry exceeds its safe value cap")
+
+
+def _validate_registry_value_shape(
+    value: object, *, depth: int = 0, separators: list[int] | None = None
+) -> None:
+    """Apply the decoder's shape caps before JSON encoding can allocate."""
+
+    if separators is None:
+        separators = [0]
+    if isinstance(value, str):
+        # JSON may expand one non-BMP code point to a 12-byte surrogate pair.
+        # This bound ensures one encoder chunk cannot exceed the file cap.
+        if len(value) > _MAX_REGISTRY_STRING_CODEPOINTS:
+            raise RuntimeError("Training registry string exceeds its safe size cap")
+        return
+    if isinstance(value, dict):
+        next_depth = depth + 1
+        if next_depth > _MAX_REGISTRY_JSON_DEPTH:
+            raise RuntimeError("Training registry exceeds its safe nesting cap")
+        separators[0] += max(0, len(value) - 1)
+        if separators[0] >= _MAX_REGISTRY_JSON_VALUES:
+            raise RuntimeError("Training registry exceeds its safe value cap")
+        for key, item in value.items():
+            _validate_registry_value_shape(key, depth=next_depth, separators=separators)
+            _validate_registry_value_shape(
+                item, depth=next_depth, separators=separators
+            )
+        return
+    if isinstance(value, (list, tuple)):
+        next_depth = depth + 1
+        if next_depth > _MAX_REGISTRY_JSON_DEPTH:
+            raise RuntimeError("Training registry exceeds its safe nesting cap")
+        separators[0] += max(0, len(value) - 1)
+        if separators[0] >= _MAX_REGISTRY_JSON_VALUES:
+            raise RuntimeError("Training registry exceeds its safe value cap")
+        for item in value:
+            _validate_registry_value_shape(
+                item, depth=next_depth, separators=separators
+            )
 
 
 def _project_root() -> Path:
@@ -118,6 +158,7 @@ def _load_registry_unlocked() -> dict[str, Any]:
         return {"runs": []}
     if not isinstance(data, dict):
         return {"runs": []}
+    _validate_registry_value_shape(data)
     runs = data.get("runs")
     if not isinstance(runs, list):
         data["runs"] = []
@@ -134,6 +175,7 @@ def _save_registry_unlocked(registry: dict[str, Any]) -> None:
     runs = registry.get("runs")
     if isinstance(runs, list) and len(runs) > _MAX_REGISTRY_RECORDS:
         raise RuntimeError("Training registry exceeds its safe run-record cap")
+    _validate_registry_value_shape(registry)
     temp_path: Path | None = None
     try:
         with NamedTemporaryFile(

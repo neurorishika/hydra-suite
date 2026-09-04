@@ -494,6 +494,29 @@ def test_configured_prompt_bytes_are_capped_even_when_manifest_takes_precedence(
     assert any("per-prompt cap" in reason.lower() for reason in decision.refusals)
 
 
+def test_over_cardinality_configured_pool_is_not_iterated_even_with_manifest(
+    tmp_path,
+):
+    class BombList(list):
+        def __iter__(self):
+            pytest.fail("unsafe configured prompt pool must not be iterated")
+
+    _write_coco(tmp_path)
+    manifest = tmp_path / "dataset" / "build_manifest.json"
+    manifest.write_text(json.dumps({"negative_prompts": ["small"]}), encoding="utf-8")
+    spec = _spec(tmp_path, num_negatives=1)
+    spec.sam3_params.negative_prompts = BombList(
+        ["x"] * (pf._MAX_NEGATIVE_PROMPT_COUNT + 1)
+    )
+
+    decision = _decision(spec)
+
+    assert not decision.admitted
+    assert any(
+        "configured negative prompts" in reason.lower() for reason in decision.refusals
+    )
+
+
 def test_resolved_manifest_prompt_obeys_per_prompt_cap(tmp_path):
     from hydra_suite.training.contracts import SAM3_MAX_PROMPT_CODEPOINTS
 

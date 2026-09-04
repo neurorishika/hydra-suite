@@ -109,6 +109,58 @@ def _registered_spec(tmp_path, *, auto_import=False):
     )
 
 
+def test_direct_orchestrator_rejects_oversized_prompt_pool_before_registry_work(
+    monkeypatch, tmp_path
+):
+    from hydra_suite.training.contracts import SAM3_MAX_NEGATIVE_PROMPT_COUNT
+
+    class BombList(list):
+        def __iter__(self):
+            pytest.fail("over-cardinality prompt list must not be iterated")
+
+    spec = _registered_spec(tmp_path)
+    spec.sam3_params.negative_prompts = BombList(
+        ["x"] * (SAM3_MAX_NEGATIVE_PROMPT_COUNT + 1)
+    )
+    monkeypatch.setattr(
+        svc,
+        "dataset_fingerprint",
+        lambda *_args: pytest.fail("fingerprint must follow SAM3 text admission"),
+    )
+    monkeypatch.setattr(
+        svc,
+        "create_run_record",
+        lambda *_args, **_kwargs: pytest.fail("registry must follow text admission"),
+    )
+
+    with pytest.raises(ValueError, match="4096 entries"):
+        svc.TrainingOrchestrator(tmp_path / "workspace").run_role_training(spec)
+
+
+@pytest.mark.parametrize(
+    "prompt,negative_prompts,match",
+    [
+        (123, [], "prompt must be a string"),
+        ("ant", "background", "must be a list or tuple"),
+        ("ant", ["x" * 256] * 1025, "serialized text cap"),
+    ],
+)
+def test_direct_orchestrator_validates_prompt_shape_before_fingerprint(
+    monkeypatch, tmp_path, prompt, negative_prompts, match
+):
+    spec = _registered_spec(tmp_path)
+    spec.sam3_params.prompt = prompt
+    spec.sam3_params.negative_prompts = negative_prompts
+    monkeypatch.setattr(
+        svc,
+        "dataset_fingerprint",
+        lambda *_args: pytest.fail("fingerprint must follow SAM3 text admission"),
+    )
+
+    with pytest.raises(ValueError, match=match):
+        svc.TrainingOrchestrator(tmp_path / "workspace").run_role_training(spec)
+
+
 def test_training_exception_finalizes_registry_and_preserves_run_identity(
     monkeypatch, tmp_path
 ):

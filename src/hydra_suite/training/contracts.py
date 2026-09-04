@@ -146,7 +146,7 @@ SAM3_MAX_PROMPT_UTF8_BYTES = 1024
 def sam3_prompt_text_error(value: object) -> str | None:
     """Return a stable admission error for one SAM3 prompt, if unsafe."""
 
-    if not isinstance(value, str):
+    if type(value) is not str:
         return "must be a string"
     if len(value) > SAM3_MAX_PROMPT_CODEPOINTS:
         return f"exceeds the per-prompt cap of {SAM3_MAX_PROMPT_CODEPOINTS} characters"
@@ -158,6 +158,41 @@ def sam3_prompt_text_error(value: object) -> str | None:
         return (
             "exceeds the per-prompt cap of " f"{SAM3_MAX_PROMPT_UTF8_BYTES} UTF-8 bytes"
         )
+    return None
+
+
+def sam3_prompt_pool_error(prompt: object, negative_prompts: object) -> str | None:
+    """Validate configured SAM3 text with work bounded by public caps."""
+
+    prompt_error = sam3_prompt_text_error(prompt)
+    if prompt_error is not None:
+        return f"prompt {prompt_error}"
+    assert type(prompt) is str
+    if not prompt.strip():
+        return "prompt must be non-empty"
+    if not isinstance(negative_prompts, (list, tuple)):
+        return "negative_prompts must be a list or tuple of strings"
+    # Check cardinality before inspecting any element. This makes adversarial
+    # caller work independent of an unbounded supplied collection.
+    if len(negative_prompts) > SAM3_MAX_NEGATIVE_PROMPT_COUNT:
+        return (
+            "negative_prompts exceeds the safe cap of "
+            f"{SAM3_MAX_NEGATIVE_PROMPT_COUNT} entries"
+        )
+
+    aggregate_bytes = len(prompt.encode("utf-8"))
+    for index, value in enumerate(negative_prompts):
+        prompt_error = sam3_prompt_text_error(value)
+        if prompt_error is not None:
+            return f"negative_prompts[{index}] {prompt_error}"
+        # Each value was capped before encoding, so this allocation is bounded.
+        assert type(value) is str
+        aggregate_bytes += len(value.encode("utf-8"))
+        if aggregate_bytes > SAM3_MAX_CONFIGURED_PROMPT_BYTES:
+            return (
+                "prompt and negative_prompts exceed the safe serialized text "
+                f"cap of {SAM3_MAX_CONFIGURED_PROMPT_BYTES} UTF-8 bytes"
+            )
     return None
 
 

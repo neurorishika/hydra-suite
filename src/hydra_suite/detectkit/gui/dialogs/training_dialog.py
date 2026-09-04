@@ -47,7 +47,7 @@ from hydra_suite.training.contracts import (
 from hydra_suite.training.geometry_levels import GeometryLevel
 from hydra_suite.training.registry import finalize_run_record
 from hydra_suite.widgets.dialogs import BaseDialog
-from hydra_suite.widgets.workers import BaseWorker
+from hydra_suite.widgets.workers import BaseWorker, bounded_worker_message
 
 from ...jobs.training import DatasetPreparationCancelled as _DatasetPreparationCancelled
 from ...jobs.training import DatasetPreparationRequest as _DatasetPreparationRequest
@@ -329,7 +329,7 @@ class _TrainingWorker(_BoundedLogWorker):
         self.role_started.emit(role)
 
     def _queue_role_finished(self, role: str, ok: bool, message: str) -> None:
-        self.role_finished.emit(role, ok, message)
+        self.role_finished.emit(role, ok, bounded_worker_message(message))
         if self._producer_role == role:
             self._producer_role = ""
 

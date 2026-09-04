@@ -297,6 +297,25 @@ def test_training_dialog_persists_coalesced_logs_under_their_producer_role(
     assert dialog._role_logs["semantic_sam3"] == ["second role output"]
 
 
+def test_training_worker_bounds_role_finished_signal_message(qapp):
+    from hydra_suite.detectkit.gui.dialogs import training_dialog as td
+    from hydra_suite.widgets.workers import MAX_WORKER_TERMINAL_MESSAGE_BYTES
+
+    worker = td._TrainingWorker(object(), [])
+    delivered = []
+    worker.role_finished.connect(
+        lambda role, ok, message: delivered.append((role, ok, message))
+    )
+
+    worker._queue_role_finished(
+        "semantic_sam3", False, "x" * (MAX_WORKER_TERMINAL_MESSAGE_BYTES * 8)
+    )
+
+    assert len(delivered) == 1
+    assert len(delivered[0][2].encode("utf-8")) <= MAX_WORKER_TERMINAL_MESSAGE_BYTES
+    assert delivered[0][2].endswith("[message truncated]")
+
+
 def test_training_worker_retains_owned_sidecar_until_recovery(qapp, monkeypatch):
     from types import SimpleNamespace
 

@@ -97,6 +97,51 @@ def test_base_worker_retains_exact_recovery_bearing_exception(qapp):
     assert worker.failure_exception is owned
 
 
+def test_base_worker_bounds_terminal_error_signal_but_retains_exact_exception(qapp):
+    from hydra_suite.widgets.workers import (
+        MAX_WORKER_TERMINAL_MESSAGE_BYTES,
+        BaseWorker,
+    )
+
+    owned = RuntimeError("x" * (MAX_WORKER_TERMINAL_MESSAGE_BYTES * 8))
+
+    class _NoisyFailureWorker(BaseWorker):
+        def execute(self):
+            raise owned
+
+    worker = _NoisyFailureWorker()
+    errors = []
+    worker.error.connect(errors.append)
+    worker.run()
+
+    assert worker.failure_exception is owned
+    assert len(errors) == 1
+    assert len(errors[0].encode("utf-8")) <= MAX_WORKER_TERMINAL_MESSAGE_BYTES
+    assert errors[0].endswith("[message truncated]")
+
+
+def test_base_worker_never_calls_arbitrary_exception_str(qapp):
+    from hydra_suite.widgets.workers import BaseWorker
+
+    class _ExplosiveError(RuntimeError):
+        def __str__(self):
+            pytest.fail("terminal signal formatting must not call exception __str__")
+
+    owned = _ExplosiveError("safe diagnostic")
+
+    class _ExplosiveWorker(BaseWorker):
+        def execute(self):
+            raise owned
+
+    worker = _ExplosiveWorker()
+    errors = []
+    worker.error.connect(errors.append)
+    worker.run()
+
+    assert worker.failure_exception is owned
+    assert errors == ["_ExplosiveError: safe diagnostic"]
+
+
 def test_base_worker_no_error_on_success(qapp):
     """error signal is not emitted when execute succeeds, but finished is."""
     from PySide6.QtCore import QCoreApplication

@@ -50,6 +50,7 @@ def test_prompt_editors_bound_programmatic_and_pasted_input(qapp):
     from hydra_suite.detectkit.gui.panels.sam3_training_panel import Sam3TrainingPanel
     from hydra_suite.training.contracts import (
         SAM3_MAX_CONFIGURED_PROMPT_BYTES,
+        SAM3_MAX_NEGATIVE_PROMPT_COUNT,
         SAM3_MAX_PROMPT_CODEPOINTS,
     )
 
@@ -66,6 +67,19 @@ def test_prompt_editors_bound_programmatic_and_pasted_input(qapp):
 
     panel.negative_prompts_edit.setPlainText("z" * (SAM3_MAX_PROMPT_CODEPOINTS + 50))
     assert len(panel.negative_prompts_edit.toPlainText()) == SAM3_MAX_PROMPT_CODEPOINTS
+
+    panel.negative_prompts_edit.setPlainText(
+        "\n".join("line" for _ in range(SAM3_MAX_NEGATIVE_PROMPT_COUNT + 100))
+    )
+    stored = panel.negative_prompts_edit.toPlainText()
+    assert len(stored.splitlines()) == SAM3_MAX_NEGATIVE_PROMPT_COUNT
+
+    panel.negative_prompts_edit.setPlainText(
+        "\n".join("😀" * SAM3_MAX_PROMPT_CODEPOINTS for _ in range(400))
+    )
+    stored = panel.negative_prompts_edit.toPlainText()
+    assert len(stored.encode("utf-8")) <= SAM3_MAX_CONFIGURED_PROMPT_BYTES
+    assert len(stored.splitlines()) <= SAM3_MAX_NEGATIVE_PROMPT_COUNT
 
 
 def test_gui_exposes_only_verified_bf16_mode(qapp):

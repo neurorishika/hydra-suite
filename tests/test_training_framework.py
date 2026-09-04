@@ -102,6 +102,36 @@ def test_registry_read_write_caps_prevent_unbounded_materialization(
         registry.save_registry({"runs": [{"run_id": "one"}, {"run_id": "two"}]})
 
 
+def test_registry_write_applies_reader_shape_policy_before_encoding(
+    tmp_path, monkeypatch
+):
+    import hydra_suite.training.registry as registry
+
+    monkeypatch.setattr(registry, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(registry, "_MAX_REGISTRY_JSON_VALUES", 3)
+    payload = {"runs": [{"a": 1, "b": 2}, {"a": 1, "b": 2}]}
+
+    with pytest.raises(RuntimeError, match="safe value cap"):
+        registry.save_registry(payload)
+
+    path = registry.get_registry_path()
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="safe value cap"):
+        registry.load_registry()
+
+
+def test_registry_rejects_huge_scalar_before_json_encoder(tmp_path, monkeypatch):
+    import hydra_suite.training.registry as registry
+
+    monkeypatch.setattr(registry, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(registry, "_MAX_REGISTRY_STRING_CODEPOINTS", 16)
+
+    with pytest.raises(RuntimeError, match="string exceeds"):
+        registry.save_registry({"runs": [], "error": "x" * 17})
+
+    assert not list(registry.get_runs_root().glob(".registry.*.tmp"))
+
+
 def _write_image(path: Path, value: int = 120):
     path.parent.mkdir(parents=True, exist_ok=True)
     img = np.full((80, 120, 3), value, dtype=np.uint8)

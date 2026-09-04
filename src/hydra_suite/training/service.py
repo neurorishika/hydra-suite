@@ -18,6 +18,7 @@ from .contracts import (
     TrainingRole,
     TrainingRunSpec,
     ValidationReport,
+    sam3_prompt_pool_error,
 )
 from .dataset_builders import merge_obb_sources, prepare_role_dataset
 from .dataset_inspector import inspect_obb_or_detect_dataset
@@ -527,6 +528,15 @@ class TrainingOrchestrator:
         should_cancel: Callable[[], bool] | None = None,
     ) -> dict:
         """Execute a training run: register in the run registry, train, and optionally publish the model."""
+        if spec.role is TrainingRole.SEMANTIC_SAM3:
+            params = spec.sam3_params
+            if params is None:
+                raise ValueError("SAM3 training requires sam3_params")
+            prompt_error = sam3_prompt_pool_error(
+                params.prompt, params.negative_prompts
+            )
+            if prompt_error is not None:
+                raise ValueError(f"Invalid SAM3 prompt configuration: {prompt_error}")
         run_id = new_run_id(spec.role.value)
         run_dir = self.workspace_root / "runs" / run_id
         run_dir.mkdir(parents=True, exist_ok=True)

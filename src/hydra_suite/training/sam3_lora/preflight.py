@@ -66,6 +66,9 @@ _MAX_ESTIMATED_PARSED_BYTES = 96 * MiB
 _MAX_NEGATIVE_QUERIES_PER_TILE = SAM3_MAX_NEGATIVE_QUERIES_PER_TILE
 _MAX_NEGATIVE_PROMPT_COUNT = SAM3_MAX_NEGATIVE_PROMPT_COUNT
 _MAX_NEGATIVE_PROMPT_BYTES = SAM3_MAX_NEGATIVE_PROMPT_BYTES
+_OVER_LIMIT_NEGATIVE_PROMPTS: tuple[None, ...] = (None,) * (
+    _MAX_NEGATIVE_PROMPT_COUNT + 1
+)
 # Optimizer admission budgets 16 bytes/parameter (weight, grad, Adam m/v).
 _LORA_CPU_TRAINING_BYTES_PER_PARAM = 16
 _LORA_RELOAD_BYTES_PER_PARAM = 4
@@ -355,7 +358,15 @@ def _instance_count(dataset_dir: str) -> int:
 def _resolved_negative_prompts(dataset_dir: str, params: Any) -> tuple[object, ...]:
     """Mirror dataloader manifest-first negative-prompt resolution safely."""
 
-    configured = getattr(params, "negative_prompts", None) or []
+    configured = getattr(params, "negative_prompts", None)
+    if configured is None:
+        configured = []
+    if isinstance(configured, (list, tuple)) and len(configured) > (
+        _MAX_NEGATIVE_PROMPT_COUNT
+    ):
+        # Preserve an over-limit cardinality signal without traversing or
+        # copying the adversarial collection.
+        return _OVER_LIMIT_NEGATIVE_PROMPTS
     if int(getattr(params, "num_negatives", 0)) <= 0:
         # These prompts are not queried, but they are still serialized into
         # spec.json by the parent and therefore remain subject to metadata caps.
@@ -369,6 +380,8 @@ def _resolved_negative_prompts(dataset_dir: str, params: Any) -> tuple[object, .
         manifest, _size = _load_coco(manifest_path)
         negatives = manifest.get("negative_prompts") or []
         if isinstance(negatives, list) and negatives:
+            if len(negatives) > _MAX_NEGATIVE_PROMPT_COUNT:
+                return _OVER_LIMIT_NEGATIVE_PROMPTS
             return tuple(negatives)
         if negatives:
             return (negatives,)
@@ -622,9 +635,17 @@ def build_resource_request(
         _MAX_NEGATIVE_QUERIES_PER_TILE,
     )
     prompt_pool_bytes = sum(_utf8_size(prompt) for prompt in negative_prompts)
-    configured_prompt_bytes = _utf8_size(str(getattr(params, "prompt", "") or ""))
-    configured_negatives = getattr(params, "negative_prompts", ()) or ()
-    if isinstance(configured_negatives, (list, tuple)):
+    configured_prompt = getattr(params, "prompt", "")
+    configured_prompt_bytes = _utf8_size(
+        configured_prompt if isinstance(configured_prompt, str) else ""
+    )
+    configured_negatives = getattr(params, "negative_prompts", ())
+    if configured_negatives is None:
+        configured_negatives = ()
+    if (
+        isinstance(configured_negatives, (list, tuple))
+        and len(configured_negatives) <= _MAX_NEGATIVE_PROMPT_COUNT
+    ):
         configured_prompt_bytes += sum(
             _utf8_size(prompt)
             for prompt in configured_negatives
@@ -789,6 +810,17 @@ def assess_preflight(
         params = type(
             "MissingParams", (), {"batch": 1, "num_negatives": 0, "rank": 1}
         )()
+    # Resolve type and cardinality in O(1) before metadata profiling or prompt
+    # traversal. Direct callers need the same bounded admission behavior as the
+    # orchestrator even when a manifest would otherwise take precedence.
+    configured_negatives_at_entry = getattr(params, "negative_prompts", ())
+    configured_pool_shape_error = not isinstance(
+        configured_negatives_at_entry, (list, tuple)
+    )
+    configured_pool_over_limit = (
+        not configured_pool_shape_error
+        and len(configured_negatives_at_entry) > _MAX_NEGATIVE_PROMPT_COUNT
+    )
     dataset = dataset or _dataset_profile(spec.derived_dataset_dir)
     resolved_negative_prompts = _resolved_negative_prompts(
         spec.derived_dataset_dir, params
@@ -877,27 +909,40 @@ def assess_preflight(
             f"{requested_rank * params_per_rank:,} parameters, above the "
             f"safe cap of {_MAX_LORA_TRAINABLE_PARAMS:,}."
         )
-    prompt = str(getattr(params, "prompt", "") or "")
+    raw_prompt = getattr(params, "prompt", "")
+    prompt = raw_prompt if isinstance(raw_prompt, str) else ""
     if not prompt.strip():
         refusals.append(
             "Prompt is empty; SAM3 requires a text prompt to train against."
         )
-    prompt_error = sam3_prompt_text_error(prompt)
+    prompt_error = sam3_prompt_text_error(raw_prompt)
     if prompt_error is not None:
         refusals.append(f"Prompt {prompt_error}.")
-    configured_negatives = getattr(params, "negative_prompts", ()) or ()
-    if isinstance(configured_negatives, (list, tuple)):
+    configured_negatives = configured_negatives_at_entry
+    configured_pool_is_safe = (
+        not configured_pool_shape_error and not configured_pool_over_limit
+    )
+    if configured_pool_shape_error:
+        refusals.append("Configured negative_prompts must be a list or tuple.")
+    elif configured_pool_over_limit:
+        refusals.append(
+            "Configured negative prompts exceed the safe metadata cap of "
+            f"{_MAX_NEGATIVE_PROMPT_COUNT} entries."
+        )
+    if configured_pool_is_safe:
         for index, negative_prompt in enumerate(configured_negatives):
             prompt_error = sam3_prompt_text_error(negative_prompt)
             if prompt_error is not None:
                 refusals.append(f"Configured negative prompt {index} {prompt_error}.")
     configured_prompt_bytes = _utf8_size(prompt)
-    if isinstance(configured_negatives, (list, tuple)):
+    if configured_pool_is_safe:
         configured_prompt_bytes += sum(
             _utf8_size(value)
             for value in configured_negatives
             if isinstance(value, str)
         )
+    else:
+        configured_prompt_bytes = SAM3_MAX_CONFIGURED_PROMPT_BYTES + 1
     if configured_prompt_bytes > SAM3_MAX_CONFIGURED_PROMPT_BYTES:
         refusals.append(
             "Configured prompt text exceeds the safe serialized metadata cap of "

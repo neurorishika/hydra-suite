@@ -2,6 +2,50 @@
 
 from PySide6.QtCore import QThread, Signal
 
+MAX_WORKER_TERMINAL_MESSAGE_BYTES = 32 * 1024
+_TRUNCATED_MESSAGE_SUFFIX = b"\n[message truncated]"
+
+
+def _safe_exception_text(error: BaseException) -> str:
+    """Describe an exception without invoking arbitrary ``__str__`` code."""
+
+    pieces = [type(error).__name__]
+    safe_args: list[str] = []
+    for arg in error.args[:8]:
+        if type(arg) is str:
+            safe_args.append(arg[:MAX_WORKER_TERMINAL_MESSAGE_BYTES])
+        elif type(arg) is int:
+            safe_args.append(repr(arg) if arg.bit_length() <= 8192 else "<large int>")
+        elif type(arg) in (float, bool, type(None)):
+            safe_args.append(repr(arg))
+        else:
+            safe_args.append(f"<{type(arg).__name__}>")
+    if safe_args:
+        pieces.extend((": ", ", ".join(safe_args)))
+    return "".join(pieces)
+
+
+def bounded_worker_message(value: object) -> str:
+    """Return a UTF-8-safe, fixed-size Qt signal payload."""
+
+    if isinstance(value, BaseException):
+        text = _safe_exception_text(value)
+    elif type(value) is str:
+        text = value
+    else:
+        text = f"<{type(value).__name__}>"
+    candidate = text[:MAX_WORKER_TERMINAL_MESSAGE_BYTES]
+    encoded = candidate.encode("utf-8", errors="replace")
+    truncated = (
+        len(text) > len(candidate) or len(encoded) > MAX_WORKER_TERMINAL_MESSAGE_BYTES
+    )
+    if not truncated:
+        return candidate
+    retained = encoded[
+        : MAX_WORKER_TERMINAL_MESSAGE_BYTES - len(_TRUNCATED_MESSAGE_SUFFIX)
+    ].decode("utf-8", errors="ignore")
+    return retained + _TRUNCATED_MESSAGE_SUFFIX.decode("ascii")
+
 
 class BaseWorker(QThread):
     """Base class for all background task workers.
@@ -42,7 +86,7 @@ class BaseWorker(QThread):
             self.execute()
         except Exception as exc:  # noqa: BLE001
             self.failure_exception = exc
-            self.error.emit(str(exc))
+            self.error.emit(bounded_worker_message(exc))
 
     def execute(self) -> None:
         """Override in subclasses with the actual work."""
