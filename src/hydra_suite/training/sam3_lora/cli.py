@@ -387,6 +387,19 @@ def _assert_finite_loss(loss: Any, *, epoch: int, step: int, loss_dict: Any) -> 
     )
 
 
+def _peak_vram_gib(device: Any) -> float:
+    """Peak CUDA memory RESERVED by the allocator, in GiB.
+
+    Reserved rather than allocated: reserved is what the device must actually
+    have free for the run to survive, since the caching allocator does not
+    return blocks to the driver between steps. This is the number a hardware
+    requirement has to be written against.
+    """
+    import torch
+
+    return torch.cuda.max_memory_reserved(device) / (1024**3)
+
+
 class _LossWindow:
     """Mean core loss and per-term losses across one accumulation window.
 
@@ -573,6 +586,12 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
     # output for the first several minutes is silence, and there is no way to
     # tell a slow run from a wedged one -- or to sanity-check the step budget
     # against the epochs actually requested.
+    # Peak-memory telemetry is the empirical basis for this role's hardware
+    # requirement. The admission gate's device estimate is an inherited
+    # envelope constant, not a measurement of THIS configuration, so every run
+    # reports what it actually used -- otherwise the requirement can never be
+    # revised except by guesswork.
+    torch.cuda.reset_peak_memory_stats(device)
     emit_log(
         f"training shape: {len(train_descriptors)} tiles, "
         f"{query_count(train_descriptors)} datapoints, "
@@ -653,6 +672,7 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
                         f"epoch {epoch} step {global_step} "
                         f"{loss_window.summary()}"
                         + (f"  skipped={skipped_steps}" if skipped_steps else "")
+                        + f"  vram_peak={_peak_vram_gib(device):.2f}GiB"
                     )
                 loss_window.reset()
             del batch, model_input, targets, outputs, loss_dict, loss
