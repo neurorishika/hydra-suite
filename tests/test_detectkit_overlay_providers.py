@@ -102,15 +102,34 @@ def test_ground_truth_provider_returns_none_when_the_frame_has_no_label(source_t
     assert GroundTruthProvider().build(_ctx(_project(source_tree), source_tree)) is None
 
 
-def test_prediction_provider_labels_with_confidence_and_never_derives(source_tree):
+@pytest.mark.parametrize(
+    ("inference_kind", "expected_level"),
+    [
+        ("segment_direct", GeometryLevel.POLYGON),
+        ("sequential_segment", GeometryLevel.POLYGON),
+        ("obb_direct", GeometryLevel.OBB),
+        ("sequential", GeometryLevel.OBB),
+        ("detect_direct", GeometryLevel.AABB),
+        ("unknown", GeometryLevel.OBB),
+    ],
+)
+def test_prediction_provider_uses_the_model_native_level_and_derives_lower_levels(
+    source_tree, inference_kind, expected_level
+):
     preds = [{"class_id": 0, "polygon_px": [(1, 1), (5, 1), (5, 5)], "confidence": 0.5}]
     layer = PredictionProvider().build(
-        _ctx(_project(source_tree), source_tree, predictions=preds)
+        _ctx(
+            _project(source_tree),
+            source_tree,
+            predictions=preds,
+            prediction_inference_kind=inference_kind,
+        )
     )
     assert layer.key == "pred"
     assert layer.label_mode is LabelMode.NAME_AND_CONFIDENCE
-    assert layer.derive_levels is False
-    assert layer.style is not None
+    assert layer.native_level is expected_level
+    assert layer.derive_levels is True
+    assert layer.style is None
     assert layer.z == 20
 
 

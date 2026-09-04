@@ -439,6 +439,7 @@ class DetectKitMainWindow(QMainWindow):
         self._dataset_prediction_cache: DatasetPredictionCache | None = None
         self._dataset_prediction_paths: PredictionPathIndex | None = None
         self._dataset_prediction_signature: tuple[object, ...] | None = None
+        self._dataset_prediction_inference_kind: str | None = None
         self._inference_settings_override: InferenceRunSettings | None = None
         self._inference_worker: Optional[_DetectKitDatasetInferenceWorker] = None
         self._inference_progress_dialog: Optional[QProgressDialog] = None
@@ -1744,6 +1745,7 @@ class DetectKitMainWindow(QMainWindow):
             self._dataset_prediction_cache = result["cache"]
             self._dataset_prediction_paths = result["path_index"]
             self._dataset_prediction_signature = signature
+            self._dataset_prediction_inference_kind = kind
             if (
                 old_cache is not None
                 and old_cache.path != self._dataset_prediction_cache.path
@@ -1847,6 +1849,7 @@ class DetectKitMainWindow(QMainWindow):
         self._dataset_prediction_cache = None
         self._dataset_prediction_paths = None
         self._dataset_prediction_signature = None
+        self._dataset_prediction_inference_kind = None
         if self._current_image_path in deleted:
             self._current_image_path = ""
             self._last_prediction_request = None
@@ -1865,6 +1868,7 @@ class DetectKitMainWindow(QMainWindow):
             return None
         settings = self._tools_panel.get_overlay_settings()
         predictions: list[dict] = []
+        prediction_inference_kind = "obb_direct"
         signature = self._dataset_signature(settings)
         if (
             self._project is not None
@@ -1881,12 +1885,16 @@ class DetectKitMainWindow(QMainWindow):
                     self._dataset_prediction_cache.read_frame(frame_idx) or [],
                     settings.confidence_threshold,
                 )
+            prediction_inference_kind = (
+                self._dataset_prediction_inference_kind or "obb_direct"
+            )
         return FrameContext(
             project=self._project,
             source_path=self._current_source_path,
             image_path=self._current_image_path,
             size=size,
             predictions=predictions,
+            prediction_inference_kind=prediction_inference_kind,
         )
 
     def _refresh_overlays(self, keys: "tuple[str, ...] | None" = None) -> None:
@@ -1924,6 +1932,7 @@ class DetectKitMainWindow(QMainWindow):
             self._dataset_prediction_cache = None
             self._dataset_prediction_paths = None
             self._dataset_prediction_signature = None
+            self._dataset_prediction_inference_kind = None
         self._current_source_path = new_source
         self._current_image_path = str(image_path or "")
         self._last_prediction_request = None

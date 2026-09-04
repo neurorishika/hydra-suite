@@ -91,6 +91,45 @@ def test_canvas_pred_items_populated(qapp):
     assert len(_labels(canvas, "pred")) == 1
 
 
+def test_segment_prediction_draws_native_polygon_and_toggleable_derived_levels(qapp):
+    """Prediction geometry must follow the same level contract as GT.
+
+    A segmentation model emits the highest available level (the native
+    contour), while the shared derived-level toggle controls its OBB and AABB
+    aids just as it does for source labels.
+    """
+    from hydra_suite.detectkit.gui.canvas import OBBCanvas
+    from hydra_suite.detectkit.gui.overlays import FrameContext, PredictionProvider
+
+    contour = [(0, 0), (12, 0), (12, 4), (6, 9), (0, 4)]
+    ctx = FrameContext(
+        project=None,
+        source_path="",
+        image_path="",
+        size=(20, 20),
+        predictions=[{"class_id": 0, "polygon_px": contour, "confidence": 0.8}],
+        prediction_inference_kind="segment_direct",
+    )
+    layer = PredictionProvider().build(ctx)
+    assert layer is not None
+
+    canvas = OBBCanvas()
+    canvas.set_layer(layer)
+    assert set(canvas.layer_items("pred")) == {
+        GeometryLevel.POLYGON,
+        GeometryLevel.OBB,
+        GeometryLevel.AABB,
+    }
+    assert len(canvas.layer_items("pred")[GeometryLevel.POLYGON].label_items) == 1
+    assert canvas.layer_items("pred")[GeometryLevel.OBB].label_items == [None]
+    assert canvas.layer_items("pred")[GeometryLevel.AABB].label_items == [None]
+
+    canvas.set_derived_levels_visible(False)
+    assert canvas.layer_items("pred")[GeometryLevel.POLYGON].obb_items[0].isVisible()
+    assert not canvas.layer_items("pred")[GeometryLevel.OBB].obb_items[0].isVisible()
+    assert not canvas.layer_items("pred")[GeometryLevel.AABB].obb_items[0].isVisible()
+
+
 def test_canvas_gt_and_pred_independent(qapp):
     from hydra_suite.detectkit.gui.canvas import OBBCanvas
 

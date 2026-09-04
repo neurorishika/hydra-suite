@@ -14,8 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional, Protocol
 
-from PySide6.QtCore import Qt
-
+from hydra_suite.detectkit.inference_geometry import native_prediction_level
 from hydra_suite.utils.geometry_levels import GeometryLevel
 
 from ..colors import ESCALATION_COLOUR
@@ -26,7 +25,7 @@ from ..utils import (
     source_class_id_map,
     staged_class_names,
 )
-from .layer import ColourPolicy, Emphasis, LabelMode, LayerStyle, OverlayLayer
+from .layer import ColourPolicy, Emphasis, LabelMode, OverlayLayer
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +41,7 @@ class FrameContext:
     # the file per provider cost ~100 ms per keypress on 4512^2 frames.
     size: tuple[int, int]
     predictions: list[dict] = field(default_factory=list)
+    prediction_inference_kind: str = "obb_direct"
 
     def source(self):
         if self.project is None:
@@ -154,11 +154,9 @@ class PredictionProvider:
         return OverlayLayer(
             key=self.key,
             detections=list(ctx.predictions),
-            native_level=GeometryLevel.AABB,
+            native_level=native_prediction_level(ctx.prediction_inference_kind),
             class_names=class_names,
             colour_policy=ColourPolicy.PER_CLASS,
-            derive_levels=False,
-            style=LayerStyle(Qt.PenStyle.DashLine, Qt.BrushStyle.NoBrush, 0),
             label_mode=LabelMode.NAME_AND_CONFIDENCE,
             z=20,
         )

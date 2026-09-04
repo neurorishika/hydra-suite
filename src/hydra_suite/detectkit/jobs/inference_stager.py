@@ -28,24 +28,11 @@ from hydra_suite.data.al.escalation import LabelRecord
 from hydra_suite.data.al.labels import write_label_file
 from hydra_suite.data.project_bundle import ensure_bundle_subdirectory
 from hydra_suite.detectkit.gui.models import OBBSource, StagedReview
-from hydra_suite.utils.geometry_levels import GeometryLevel
+from hydra_suite.detectkit.inference_geometry import native_prediction_level
 
 from .sam2_escalation import PENDING_ESCALATIONS_RELDIR
 
 logger = logging.getLogger(__name__)
-
-# The geometry a kind natively produces. All five kinds
-# `detectkit_resolve_inference_models` can return are listed: the segment
-# kinds emit real contours, detect_direct emits axis-aligned boxes, the OBB
-# kinds emit quads. Omitting a kind would silently stage its labels at the
-# wrong declared level, which `read_label_file` would then disagree with.
-_LEVEL_BY_KIND = {
-    "obb_direct": GeometryLevel.OBB,
-    "sequential": GeometryLevel.OBB,
-    "detect_direct": GeometryLevel.AABB,
-    "segment_direct": GeometryLevel.POLYGON,
-    "sequential_segment": GeometryLevel.POLYGON,
-}
 
 
 def stage_predictions(
@@ -92,7 +79,7 @@ def stage_predictions(
             "revert it before staging predictions."
         )
 
-    level = _LEVEL_BY_KIND.get(str(inference_kind), GeometryLevel.OBB)
+    level = native_prediction_level(inference_kind)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     staged_root = Path(
         ensure_bundle_subdirectory(
