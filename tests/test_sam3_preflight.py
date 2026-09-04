@@ -121,14 +121,36 @@ def test_healthy_bf16_ampere_spec_is_admitted_without_heavy_imports(tmp_path):
     assert "ultralytics" not in sys.modules
 
 
-@pytest.mark.parametrize("precision", ["fp16", "fp32"])
+@pytest.mark.parametrize("precision", ["fp16", "int8", "tf32"])
 def test_unimplemented_precision_modes_fail_closed(tmp_path, precision):
+    """FP16 stays refused: its range overflows SAM3's loss scales and there
+    is no GradScaler anywhere in this path."""
     _write_coco(tmp_path)
 
     decision = _decision(_spec(tmp_path, mixed_precision=precision))
 
     assert not decision.admitted
-    assert any("bf16" in reason.lower() for reason in decision.refusals)
+    assert any(precision in reason for reason in decision.refusals)
+
+
+def test_fp32_is_admitted_with_a_doubled_device_estimate(tmp_path):
+    """FP32 was refused for depending on "SAM3's BF16 activation path" --
+    `perflib.fused.addmm_act`, which `perflib_compat` now replaces with a
+    dtype-neutral eager equivalent. Nothing in the training path needs bf16.
+
+    The device estimate must scale, or the gate admits a run that OOMs the
+    card after minutes of setup.
+    """
+    _write_coco(tmp_path)
+
+    bf16 = _decision(_spec(tmp_path, mixed_precision="bf16"))
+    fp32 = _decision(_spec(tmp_path, mixed_precision="fp32"))
+
+    # No longer refused on PRECISION grounds...
+    assert not any("not available" in reason for reason in fp32.refusals)
+    # ...but the device estimate must scale, so a card that cannot hold the
+    # fp32 envelope is still refused -- on honest capacity grounds.
+    assert fp32.budget.accelerator_peak_bytes > bf16.budget.accelerator_peak_bytes
 
 
 def test_pre_ampere_bf16_is_refused_instead_of_falling_back(tmp_path):

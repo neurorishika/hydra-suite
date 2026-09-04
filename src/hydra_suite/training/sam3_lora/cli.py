@@ -570,10 +570,20 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
         )
         n_epoch_batches = n_batches
         for micro_idx, batch in enumerate(epoch_batches):
+            # Only the MODEL forward runs under autocast. The loss -- and with
+            # it SAM3's Hungarian matcher -- is computed outside, in fp32.
+            # `linear_sum_assignment` rejects any non-finite cost entry, and a
+            # bf16 cost matrix built from bf16 logits reaches inf/NaN far more
+            # readily than an fp32 one; a 10-epoch run died at epoch 5 with
+            # "matrix contains invalid numeric entries". The spike this design
+            # derives from matched in fp32 throughout (it used no autocast at
+            # all), so this restores its matcher numerics without paying fp32
+            # memory for the whole model -- a full fp32 run estimates ~58 GiB
+            # and does not fit this class of card.
             with torch.autocast(device_type="cuda", dtype=autocast_dtype, enabled=True):
                 model_input, targets, outputs = _forward_batch(batch, model, device)
-                loss_dict = loss_fn(outputs, targets)
-                loss = _core_loss(loss_dict)
+            loss_dict = loss_fn(outputs, targets)
+            loss = _core_loss(loss_dict)
 
             _assert_finite_loss(
                 loss, epoch=epoch, step=global_step, loss_dict=loss_dict
@@ -649,13 +659,14 @@ def _evaluate_and_write(
     total_loss = 0.0
     with torch.no_grad():
         for batch in val_batches:
+            # Same split as training: matcher and loss in fp32, forward in bf16.
             with torch.autocast(
                 device_type="cuda", dtype=autocast_dtype, enabled=use_bf16
             ):
                 model_input, targets, outputs = _forward_batch(batch, model, device)
-                _attach_matcher_indices(outputs, targets, matcher)
-                loss_dict = loss_fn(outputs, targets)
-                loss = _core_loss(loss_dict)
+            _attach_matcher_indices(outputs, targets, matcher)
+            loss_dict = loss_fn(outputs, targets)
+            loss = _core_loss(loss_dict)
             total_loss += float(loss)
             del batch, model_input, targets, outputs, loss_dict, loss
 
