@@ -56,10 +56,12 @@ from hydra_suite.utils.geometry_levels import GeometryLevel
 from hydra_suite.utils.sam3_constants import PREDICTOR_IMGSZ
 
 from .sam2_escalation import remove_staged_escalation_dir
-from .semantic_workers import CalibrationWorker as CalibrationWorker
-from .semantic_workers import FramePreviewWorker as FramePreviewWorker
-from .semantic_workers import SemanticEscalationWorker as SemanticEscalationWorker
-from .semantic_workers import TilePreviewWorker as TilePreviewWorker
+from .semantic_workers import CalibrationWorker as CalibrationWorker  # noqa: F401
+from .semantic_workers import FramePreviewWorker as FramePreviewWorker  # noqa: F401
+from .semantic_workers import (  # noqa: F401
+    SemanticEscalationWorker as SemanticEscalationWorker,
+)
+from .semantic_workers import TilePreviewWorker as TilePreviewWorker  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
