@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import logging
+import os
+import shutil
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -28,6 +31,12 @@ from .cache.keys import (
     pose_cache_key,
     video_signature,
     with_video_signature,
+)
+from .cache.set_manifest import (
+    CACHE_SET_FILENAME,
+    load_cache_set,
+    publish_cache_set,
+    publish_compatibility_links,
 )
 from .cache.store import (
     AprilTagCacheHandle,
@@ -62,6 +71,23 @@ from .stages.pose import PoseModel, run_pose
 logger = logging.getLogger(__name__)
 
 
+def _clone_cache_revision(source: Path, destination: Path) -> None:
+    """Hard-link one revision using O(directory-depth) Python memory."""
+    destination.mkdir(parents=True, exist_ok=False)
+    with os.scandir(source) as entries:
+        for entry in entries:
+            source_entry = Path(entry.path)
+            destination_entry = destination / entry.name
+            if entry.is_symlink():
+                raise ValueError("cache revision must not contain symbolic links")
+            if entry.is_dir(follow_symlinks=False):
+                _clone_cache_revision(source_entry, destination_entry)
+            elif entry.is_file(follow_symlinks=False):
+                os.link(source_entry, destination_entry)
+            else:
+                raise ValueError("cache revision contains an unsupported entry")
+
+
 @dataclass
 class _AllModels:
     # Exactly one of obb/bgsub is set, mirroring InferenceConfig.detection_source
@@ -81,6 +107,14 @@ class _CacheSet:
     cnn: list[CNNCacheHandle] = field(default_factory=list)
     pose: PoseCacheHandle | None = None
     apriltag: AprilTagCacheHandle | None = None
+    cache_dir: Path | None = None
+    generation_id: str | None = None
+    revision_id: str | None = None
+    member_names: list[str] = field(default_factory=list)
+    pending_promotion: bool = False
+    discard_if_unchanged: bool = False
+    staging_root: Path | None = None
+    set_manifest_valid: bool = True
 
     def all_handles(self) -> list[CacheHandle]:
         handles: list[CacheHandle] = []
@@ -94,6 +128,44 @@ class _CacheSet:
         if self.apriltag is not None:
             handles.append(self.apriltag)
         return handles
+
+    def close(self, *, complete: bool = True) -> None:
+        """Close members, then expose a prepared generation with one rename."""
+        handles = self.all_handles()
+        for handle in handles:
+            handle.close(commit_generation=complete)
+        if not complete or not self.pending_promotion:
+            return
+        if self.discard_if_unchanged and not any(
+            getattr(handle, "_write_started", False) for handle in handles
+        ):
+            if self.staging_root is not None:
+                shutil.rmtree(self.staging_root)
+            self.pending_promotion = False
+            return
+        if (
+            self.cache_dir is None
+            or self.generation_id is None
+            or self.revision_id is None
+        ):
+            raise RuntimeError(
+                "cache set cannot be promoted without generation metadata"
+            )
+        if not handles or not all(handle.is_reusable() for handle in handles):
+            raise RuntimeError("refusing to promote an incomplete cache generation")
+        reference = handles[0].coverage_ranges()
+        if any(handle.coverage_ranges() != reference for handle in handles):
+            raise RuntimeError("refusing to promote a mixed-coverage cache generation")
+        if any(handle._store.generation_id != self.generation_id for handle in handles):
+            raise RuntimeError("refusing to promote mixed cache generations")
+        manifest = publish_cache_set(
+            self.cache_dir,
+            self.generation_id,
+            self.revision_id,
+            self.member_names,
+        )
+        publish_compatibility_links(self.cache_dir, manifest)
+        self.pending_promotion = False
 
 
 def _sliced_tile_batch(
@@ -303,6 +375,9 @@ def _open_caches(
     cache_dir: Path,
     video_sig: str = "",
     roi_mask: "np.ndarray | None" = None,
+    *,
+    read_only: bool = False,
+    write_mode: str = "auto",
 ) -> _CacheSet:
     # Bind every per-video cache to the exact source file so a changed video
     # (e.g. a clip regenerated under the same name with a different frame count)
@@ -318,44 +393,113 @@ def _open_caches(
         else bgsub_detection_cache_key(config.bgsub)
     )
 
-    return _CacheSet(
+    member_names = ["detection.npz"]
+    if config.headtail is not None:
+        member_names.append("headtail.npz")
+    member_names.extend(f"cnn_{c.label}.npz" for c in config.cnn_phases)
+    if config.pose is not None:
+        member_names.append("pose.npz")
+    if config.apriltag.enabled:
+        member_names.append("apriltag.npz")
+
+    active = load_cache_set(cache_dir)
+    active_matches = active is not None and set(active.members) == set(member_names)
+    if read_only:
+        generation_id = active.generation_id if active_matches else None
+        revision_id = active.revision_id if active_matches else None
+        root = (
+            (cache_dir / next(iter(active.members.values()))).parent
+            if active_matches
+            else cache_dir
+        )
+        pending_promotion = False
+        discard_if_unchanged = False
+        set_manifest_valid = (
+            active_matches or not (cache_dir / CACHE_SET_FILENAME).exists()
+        )
+    elif write_mode == "resume" and active_matches:
+        generation_id = active.generation_id
+        revision_id = uuid.uuid4().hex
+        source_root = (cache_dir / next(iter(active.members.values()))).parent
+        root = cache_dir / ".cache-generations" / generation_id / revision_id
+        try:
+            _clone_cache_revision(source_root, root)
+        except BaseException:
+            shutil.rmtree(root, ignore_errors=True)
+            raise
+        pending_promotion = True
+        discard_if_unchanged = True
+        set_manifest_valid = True
+    else:
+        generation_id = uuid.uuid4().hex
+        revision_id = uuid.uuid4().hex
+        root = cache_dir / ".cache-generations" / generation_id / revision_id
+        pending_promotion = True
+        discard_if_unchanged = False
+        set_manifest_valid = True
+
+    caches = _CacheSet(
         detection=DetectionCacheHandle(
-            path=cache_dir / "detection.npz",
+            path=root / "detection.npz",
             key=_k(detection_key),
+            read_only=read_only,
+            write_mode=write_mode,
+            generation_id=generation_id,
         ),
         headtail=(
             HeadTailCacheHandle(
-                path=cache_dir / "headtail.npz",
+                path=root / "headtail.npz",
                 key=_k(headtail_cache_key(config.headtail, config.canonical)),
+                read_only=read_only,
+                write_mode=write_mode,
+                generation_id=generation_id,
             )
             if config.headtail is not None
             else None
         ),
         cnn=[
             CNNCacheHandle(
-                path=cache_dir / f"cnn_{c.label}.npz",
+                path=root / f"cnn_{c.label}.npz",
                 key=_k(cnn_cache_key(c, config.canonical)),
                 label=c.label,
+                read_only=read_only,
+                write_mode=write_mode,
+                generation_id=generation_id,
             )
             for c in config.cnn_phases
         ],
         pose=(
             PoseCacheHandle(
-                path=cache_dir / "pose.npz",
+                path=root / "pose.npz",
                 key=_k(pose_cache_key(config.pose, config.canonical)),
+                read_only=read_only,
+                write_mode=write_mode,
+                generation_id=generation_id,
             )
             if config.pose is not None
             else None
         ),
         apriltag=(
             AprilTagCacheHandle(
-                path=cache_dir / "apriltag.npz",
+                path=root / "apriltag.npz",
                 key=_k(apriltag_cache_key(config.apriltag)),
+                read_only=read_only,
+                write_mode=write_mode,
+                generation_id=generation_id,
             )
             if config.apriltag.enabled
             else None
         ),
+        cache_dir=cache_dir,
+        generation_id=generation_id,
+        revision_id=revision_id,
+        member_names=member_names,
+        pending_promotion=pending_promotion,
+        discard_if_unchanged=discard_if_unchanged,
+        staging_root=root if pending_promotion else None,
+        set_manifest_valid=set_manifest_valid,
     )
+    return caches
 
 
 def _build_identity_evidence_stage(
@@ -723,9 +867,28 @@ class InferenceRunner:
         if self.cache_dir is None:
             return False
         caches = _open_caches(
-            self.config, self.cache_dir, self._video_sig, self._roi_mask
+            self.config,
+            self.cache_dir,
+            self._video_sig,
+            self._roi_mask,
+            read_only=True,
         )
-        return all(h.is_valid() for h in caches.all_handles())
+        handles = caches.all_handles()
+        if (
+            not caches.set_manifest_valid
+            or not handles
+            or not all(h.is_reusable() for h in handles)
+        ):
+            return False
+        if caches.generation_id is not None and any(
+            h._store.generation_id != caches.generation_id for h in handles
+        ):
+            return False
+        # A child crash can publish detection chunks before a downstream stage
+        # finishes. Matching keys alone must not turn that honest partial cache
+        # into a reusable complete pass.
+        reference = caches.detection.coverage_ranges() if caches.detection else ()
+        return all(h.coverage_ranges() == reference for h in handles)
 
     def detection_cache_covers_range(self, start_frame: int, end_frame: int) -> bool:
         """Return True iff the detection cache spans every frame in the range.
@@ -738,9 +901,13 @@ class InferenceRunner:
         if self.cache_dir is None:
             return False
         caches = _open_caches(
-            self.config, self.cache_dir, self._video_sig, self._roi_mask
+            self.config,
+            self.cache_dir,
+            self._video_sig,
+            self._roi_mask,
+            read_only=True,
         )
-        if caches.detection is None:
+        if not caches.set_manifest_valid or caches.detection is None:
             return False
         return caches.detection.covers_frame_range(start_frame, end_frame)
 
@@ -751,9 +918,13 @@ class InferenceRunner:
         if self.cache_dir is None:
             return []
         caches = _open_caches(
-            self.config, self.cache_dir, self._video_sig, self._roi_mask
+            self.config,
+            self.cache_dir,
+            self._video_sig,
+            self._roi_mask,
+            read_only=True,
         )
-        if caches.detection is None:
+        if not caches.set_manifest_valid or caches.detection is None:
             return []
         return caches.detection.get_missing_frames(start_frame, end_frame, max_report)
 
@@ -770,7 +941,11 @@ class InferenceRunner:
             # load_frame; without this, realtime + backward gets an empty backward pass.
             if self._caches is None and self.cache_dir is not None:
                 self._caches = _open_caches(
-                    self.config, self.cache_dir, self._video_sig, self._roi_mask
+                    self.config,
+                    self.cache_dir,
+                    self._video_sig,
+                    self._roi_mask,
+                    write_mode="resume",
                 )
                 self._caches_writable = True
             caches = self._caches if self._caches_writable else None
@@ -839,6 +1014,35 @@ class InferenceRunner:
                 )
 
             if filtered_obb.num_detections == 0:
+                if caches is not None:
+                    empty_det_indices = np.zeros(0, np.int32)
+                    if caches.headtail is not None:
+                        caches.headtail.write_frame(
+                            frame_idx,
+                            det_indices=empty_det_indices,
+                            heading_hints=np.zeros(0, np.float32),
+                            heading_confidences=np.zeros(0, np.float32),
+                            directed_mask=np.zeros(0, np.uint8),
+                        )
+                    for cache in caches.cnn:
+                        cache.write_frame(frame_idx, predictions=[])
+                    if caches.pose is not None:
+                        caches.pose.write_frame(
+                            frame_idx,
+                            det_indices=empty_det_indices,
+                            keypoints=np.zeros((0, 0, 3), np.float32),
+                            valid_mask=np.zeros(0, bool),
+                        )
+                    if caches.apriltag is not None:
+                        caches.apriltag.write_frame(
+                            frame_idx,
+                            result=AprilTagResult(
+                                tag_ids=[],
+                                det_indices=[],
+                                centers=np.zeros((0, 2), np.float32),
+                                corners=np.zeros((0, 4, 2), np.float32),
+                            ),
+                        )
                 empty_result = _build_frame_result(
                     frame_idx, filtered_obb, np.zeros(0, np.int32), None, [], None, None
                 )
@@ -1142,7 +1346,11 @@ class InferenceRunner:
         if self._identity_evidence is None or self.cache_dir is None:
             return
         read_caches = _open_caches(
-            self.config, self.cache_dir, self._video_sig, self._roi_mask
+            self.config,
+            self.cache_dir,
+            self._video_sig,
+            self._roi_mask,
+            read_only=True,
         )
         out_path = self._identity_evidence_sidecar_path("batch")
         write_identity_evidence_sidecar(
@@ -1340,7 +1548,11 @@ class InferenceRunner:
 
             with span(N.OPEN_CACHES):
                 caches = _open_caches(
-                    self.config, self.cache_dir, self._video_sig, self._roi_mask
+                    self.config,
+                    self.cache_dir,
+                    self._video_sig,
+                    self._roi_mask,
+                    write_mode="fresh" if start_frame == 0 else "resume",
                 )
             self._caches = caches
 
@@ -1361,25 +1573,28 @@ class InferenceRunner:
             pipeline = self._build_pipeline(
                 caches, roi_mask=self._frame_space_roi_mask(video_path)
             )
+            complete_pass = False
             try:
-                pipeline.run(
+                pass_result = pipeline.run(
                     frame_source,
                     range(start_frame, end_frame + 1),
                     progress_cb=progress_cb,
                     range_total=range_total,
                     should_stop=should_stop,
                 )
+                complete_pass = pass_result is None or (
+                    pass_result.frames_processed == range_total
+                )
             finally:
                 frame_source.close()
                 # depth>=2 uses an async CacheWriter; flush/close it before closing the
                 # handles so all queued writes land (Pipeline.run already does this on
                 # its own teardown path, but a pre-run failure may skip it).
-                try:
-                    pipeline.cache_writer.close()
-                except Exception:
-                    pass
-                for h in caches.all_handles():
-                    h.close()
+                pipeline.cache_writer.close()
+                # Never close a handle while a timed-out writer can still be
+                # inside it. CacheWriter.close raises before this point when
+                # its worker fails to stop by the deadline.
+                caches.close(complete=complete_pass)
 
             # Identity Phase 3, Task 4 (batch seam): write the evidence sidecar
             # AFTER the raw caches above are flushed to disk -- and only on a
@@ -1421,8 +1636,14 @@ class InferenceRunner:
             raise RuntimeError("cache_dir not set — cannot load cached frames")
         if self._caches is None:
             self._caches = _open_caches(
-                self.config, self.cache_dir, self._video_sig, self._roi_mask
+                self.config,
+                self.cache_dir,
+                self._video_sig,
+                self._roi_mask,
+                read_only=True,
             )
+        if not self._caches.set_manifest_valid:
+            raise RuntimeError("inference cache set manifest is invalid or incomplete")
 
         raw_obb = (
             self._caches.detection.read_frame(frame_idx)
@@ -1473,8 +1694,7 @@ class InferenceRunner:
         # replay them. Only when writable: a read-only (load_frame/backward)
         # handle has an empty buffer and close() would overwrite the cache.
         if self._caches is not None and self._caches_writable:
-            for h in self._caches.all_handles():
-                h.close()
+            self._caches.close()
             self._caches = None
             self._caches_writable = False
         # Flush the realtime identity-evidence sidecar (Task 4), if any frame

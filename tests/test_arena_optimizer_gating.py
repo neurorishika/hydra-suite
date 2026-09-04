@@ -247,7 +247,11 @@ def _run_preview(monkeypatch, tmp_path, *, single_arena):
             return True
 
     monkeypatch.setattr(
-        ow, "_open_caches", lambda *_a, **_k: types.SimpleNamespace(detection=_Handle())
+        ow,
+        "_open_caches",
+        lambda *_a, **_k: types.SimpleNamespace(
+            detection=_Handle(), set_manifest_valid=True
+        ),
     )
     monkeypatch.setattr(ow, "video_signature", lambda *_a, **_k: "sig")
     monkeypatch.setattr(
