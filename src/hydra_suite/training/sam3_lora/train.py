@@ -29,6 +29,7 @@ from hydra_suite.runtime.resource_limits import (
     build_limited_launch,
 )
 
+from ..model_publish import get_models_root
 from . import preflight as preflight_module
 from .artifacts import remove_artifact, validate_completion
 from .env import resolve_sam3_env, sam3_env_command, sam3_env_environ
@@ -142,9 +143,15 @@ def train_sam3_lora(
     log_cb = log_cb or (lambda _message: None)
     progress_cb = progress_cb or (lambda _epoch, _total: None)
     should_cancel = should_cancel or (lambda: False)
+    run_dir_path = Path(run_dir).expanduser().resolve()
 
     try:
-        initial = preflight_module.assess_preflight(spec)
+        models_root = get_models_root()
+        initial = preflight_module.assess_preflight(
+            spec,
+            run_dir=run_dir_path,
+            models_root=models_root,
+        )
     except (OSError, ValueError) as exc:
         return _result(
             success=False,
@@ -160,7 +167,6 @@ def train_sam3_lora(
     initial_cuda_device = initial.cuda_device
     assert initial_cuda_device is not None
 
-    run_dir_path = Path(run_dir).expanduser().resolve()
     run_dir_path.mkdir(parents=True, exist_ok=True)
     spec_path = run_dir_path / "spec.json"
     diagnostics_path = run_dir_path / "resource_preflight.json"
@@ -209,7 +215,12 @@ def train_sam3_lora(
     _write_json(diagnostics_path, diagnostic)
 
     def final_live_check() -> None:
-        live = preflight_module.assess_preflight(spec, dataset=initial.dataset)
+        live = preflight_module.assess_preflight(
+            spec,
+            dataset=initial.dataset,
+            run_dir=run_dir_path,
+            models_root=models_root,
+        )
         diagnostic["live"] = live.to_dict()
         _write_json(diagnostics_path, diagnostic)
         if live.cuda_device is None:

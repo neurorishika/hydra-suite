@@ -24,6 +24,11 @@ from hydra_suite.training.contracts import (
 from hydra_suite.training.sam3_lora import train as tr
 
 
+@pytest.fixture(autouse=True)
+def _isolate_models_root(tmp_path, monkeypatch):
+    monkeypatch.setattr(tr, "get_models_root", lambda: tmp_path / "models")
+
+
 def _spec(tmp_path, **overrides):
     params = Sam3LoraParams(prompt="ant", label_quality_acknowledged=True, **overrides)
     return TrainingRunSpec(
@@ -152,10 +157,16 @@ def _install(
 
 
 def test_preflight_refuses_before_sidecar_or_run_directory(tmp_path, monkeypatch):
+    observed = []
+
+    def refuse(_spec, **kwargs):
+        observed.append(kwargs)
+        return _Decision(admitted=False, refusals=("host memory unsafe",))
+
     monkeypatch.setattr(
         tr.preflight_module,
         "assess_preflight",
-        lambda _spec: _Decision(admitted=False, refusals=("host memory unsafe",)),
+        refuse,
     )
     monkeypatch.setattr(
         tr,
@@ -168,6 +179,62 @@ def test_preflight_refuses_before_sidecar_or_run_directory(tmp_path, monkeypatch
     assert not result["success"]
     assert result["failure_kind"] == "host-admission-refusal"
     assert not (tmp_path / "run").exists()
+    assert observed == [
+        {
+            "run_dir": (tmp_path / "run").resolve(),
+            "models_root": tmp_path / "models",
+        }
+    ]
+
+
+def test_publish_filesystem_probe_failure_is_structured_before_launch(
+    tmp_path, monkeypatch
+):
+    def fail_models_root():
+        raise OSError("publish filesystem unavailable")
+
+    monkeypatch.setattr(tr, "get_models_root", fail_models_root)
+    monkeypatch.setattr(
+        tr,
+        "SupervisedSidecar",
+        lambda *args, **kwargs: pytest.fail("must not launch"),
+    )
+
+    result = tr.train_sam3_lora(_spec(tmp_path), str(tmp_path / "run"))
+
+    assert not result["success"]
+    assert result["failure_kind"] == "host-admission-refusal"
+    assert "publish filesystem unavailable" in result["error_message"]
+    assert not (tmp_path / "run").exists()
+
+
+def test_initial_and_live_preflight_probe_actual_output_filesystems(
+    tmp_path, monkeypatch
+):
+    observed = []
+    decision = _Decision()
+
+    def assess(_spec, **kwargs):
+        observed.append(kwargs)
+        return decision
+
+    _install(monkeypatch, tmp_path, decisions=[decision, decision])
+    monkeypatch.setattr(tr.preflight_module, "assess_preflight", assess)
+
+    result = tr.train_sam3_lora(_spec(tmp_path), str(tmp_path / "run"))
+
+    assert result["success"]
+    assert observed == [
+        {
+            "run_dir": (tmp_path / "run").resolve(),
+            "models_root": tmp_path / "models",
+        },
+        {
+            "dataset": decision.dataset,
+            "run_dir": (tmp_path / "run").resolve(),
+            "models_root": tmp_path / "models",
+        },
+    ]
 
 
 def test_final_live_probe_runs_inside_constructor_before_launch(tmp_path, monkeypatch):
