@@ -344,3 +344,146 @@ def test_lora_trainable_validation_rejects_estimator_shape_drift():
 
     with pytest.raises(RuntimeError, match="expected_parameters=13"):
         cli._validated_lora_trainables(model, adapted_modules=1, expected_parameters=13)
+
+
+def test_loss_term_summary_renders_headline_terms():
+    torch = pytest.importorskip("torch")
+    from hydra_suite.training.sam3_lora.cli import _loss_term_summary
+
+    summary = _loss_term_summary(
+        {
+            "loss_ce": torch.tensor(0.45),
+            "loss_mask": torch.tensor(0.0),
+            "loss_ce_aux_0": torch.tensor(9.9),  # not a headline term
+            "indices": [1, 2, 3],  # not a scalar tensor
+        }
+    )
+    assert "loss_ce=0.4500" in summary
+    assert "loss_mask=0.0000" in summary
+    assert "aux" not in summary
+
+
+def test_loss_term_summary_tolerates_a_non_dict():
+    torch = pytest.importorskip("torch")
+    from hydra_suite.training.sam3_lora.cli import _loss_term_summary
+
+    assert _loss_term_summary(torch.tensor(1.0)) == ""
+
+
+def test_finite_loss_passes_and_non_finite_aborts():
+    """A NaN loss must stop the run where it happens, not 700 steps later.
+
+    SAM3's Hungarian matcher only reports the damage downstream, as
+    "matrix contains invalid numeric entries", long after the adapter has
+    become worthless.
+    """
+    torch = pytest.importorskip("torch")
+    from hydra_suite.training.sam3_lora.cli import _assert_finite_loss
+
+    terms = {"loss_ce": torch.tensor(0.5)}
+    _assert_finite_loss(torch.tensor(1.5), epoch=0, step=1, loss_dict=terms)
+
+    for bad in (float("nan"), float("inf")):
+        with pytest.raises(RuntimeError, match="non-finite"):
+            _assert_finite_loss(torch.tensor(bad), epoch=2, step=30, loss_dict=terms)
+
+
+def test_non_finite_abort_names_the_step_and_terms():
+    torch = pytest.importorskip("torch")
+    from hydra_suite.training.sam3_lora.cli import _assert_finite_loss
+
+    with pytest.raises(RuntimeError) as excinfo:
+        _assert_finite_loss(
+            torch.tensor(float("nan")),
+            epoch=4,
+            step=730,
+            loss_dict={"loss_mask": torch.tensor(0.0)},
+        )
+    message = str(excinfo.value)
+    assert "epoch 4" in message and "step 730" in message
+    assert "loss_mask=0.0000" in message
+
+
+def test_loss_window_averages_positives_and_negatives_together():
+    """The bug this replaces: the logged micro-batch was always a negative.
+
+    The accumulation boundary lands on a fixed micro_idx, so with one
+    negative interleaved per tile every logged line had zero matched loss
+    and the run looked collapsed while training normally.
+    """
+    torch = pytest.importorskip("torch")
+    from hydra_suite.training.sam3_lora.cli import _LossWindow
+
+    window = _LossWindow()
+    positive = {"loss_ce": torch.tensor(0.40), "presence_loss": torch.tensor(0.10)}
+    negative = {"loss_ce": torch.tensor(0.00), "presence_loss": torch.tensor(0.02)}
+    window.add(torch.tensor(300.0), positive)
+    window.add(torch.tensor(20.0), negative)
+
+    summary = window.summary()
+    assert "loss 160.0000" in summary
+    assert "loss_ce=0.2000" in summary, "a positive batch must not be averaged away"
+    assert "presence_loss=0.0600" in summary
+
+
+def test_loss_window_reset_clears_the_previous_window():
+    torch = pytest.importorskip("torch")
+    from hydra_suite.training.sam3_lora.cli import _LossWindow
+
+    window = _LossWindow()
+    window.add(torch.tensor(9.0), {"loss_ce": torch.tensor(9.0)})
+    window.reset()
+    assert window.summary() == "loss n/a"
+    window.add(torch.tensor(2.0), {"loss_ce": torch.tensor(1.0)})
+    assert "loss 2.0000" in window.summary()
+
+
+def test_training_loop_feeds_every_micro_batch_into_the_loss_window():
+    """Regression: the accumulate call was silently missing.
+
+    `_LossWindow` was created and logged, but nothing ever called `.add()`,
+    so every line in a 2000-step run read "loss n/a" and the run produced no
+    usable loss trace at all. Source-level because the loop needs CUDA.
+    """
+    import inspect
+
+    from hydra_suite.training.sam3_lora import cli
+
+    source = inspect.getsource(cli.run_training)
+    add_at = source.index("loss_window.add(")
+    backward_at = source.index("grad_accum).backward()")
+    reset_at = source.index("loss_window.reset()")
+
+    assert add_at < backward_at, "the window must see the loss before backward"
+    assert add_at < reset_at, "accumulate must precede the window reset"
+    assert source.count("loss_window.add(") == 1
+
+
+def test_optimizer_step_is_skipped_on_non_finite_gradients():
+    """clip_grad_norm_ propagates inf/NaN into the weights rather than
+    blocking it, so the step must be gated on the returned norm.
+
+    Once adapter weights go NaN the model emits NaN logits forever; the
+    failure then surfaces far downstream (a NaN loss, or the Hungarian
+    matcher rejecting the cost matrix hundreds of steps later).
+    """
+    import inspect
+
+    from hydra_suite.training.sam3_lora import cli
+
+    source = inspect.getsource(cli.run_training)
+    assert "total_norm = torch.nn.utils.clip_grad_norm_(" in source
+    guard_at = source.index("if torch.isfinite(total_norm):")
+    step_at = source.index("optimizer.step()")
+    assert guard_at < step_at, "optimizer.step() must sit behind the finite check"
+    # The schedule must advance regardless, or a skipped step stalls the LR.
+    assert source.index("scheduler.step()") > source.index("consecutive_skipped += 1")
+
+
+def test_a_long_run_of_skipped_steps_aborts():
+    from hydra_suite.training.sam3_lora import cli
+
+    assert cli.MAX_CONSECUTIVE_SKIPPED_STEPS > 0
+    source = __import__("inspect").getsource(cli.run_training)
+    assert "MAX_CONSECUTIVE_SKIPPED_STEPS" in source
+    assert "no longer learning" in source

@@ -6,13 +6,29 @@ from collections import Counter
 from pathlib import Path
 from typing import Iterable
 
+from .dataset_io import (
+    DEFAULT_DATASET_IO_LIMITS,
+    DatasetLimitError,
+    iter_bounded_text_lines,
+)
+
 
 def _dedupe_and_validate_class_names(
     class_names: Iterable[str],
     *,
     source_label: str,
 ) -> list[str]:
-    names = [str(name).strip() for name in class_names if str(name).strip()]
+    names: list[str] = []
+    for name in class_names:
+        normalized = str(name).strip()
+        if not normalized:
+            continue
+        names.append(normalized)
+        if len(names) > DEFAULT_DATASET_IO_LIMITS.max_classes:
+            raise DatasetLimitError(
+                "Class declarations exceed the safe cap of "
+                f"{DEFAULT_DATASET_IO_LIMITS.max_classes} names"
+            )
     if not names:
         raise RuntimeError(f"{source_label} does not declare any class names.")
 
@@ -66,7 +82,7 @@ def read_classes_txt(dataset_root: str | Path) -> list[str]:
     if not classes_path.exists():
         raise RuntimeError(f"Missing required classes.txt in {root}.")
     return normalize_declared_class_names(
-        classes_path.read_text(encoding="utf-8").splitlines(),
+        iter_bounded_text_lines(classes_path),
         source_label=str(classes_path),
     )
 

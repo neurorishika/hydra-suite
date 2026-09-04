@@ -41,6 +41,7 @@ def test_sam3_env_command_builds_conda_run_python_module():
         "run",
         "-n",
         "hydra-sam3",
+        "--no-capture-output",
         "python",
         "-u",
         "-m",
@@ -225,3 +226,19 @@ def test_no_cuda_and_pre_ampere_are_unavailable(monkeypatch):
         got = av.probe_sam3_training_availability()
         assert not got.usable
         assert expected in got.reason
+
+
+def test_sam3_env_command_disables_conda_output_capture():
+    """Without --no-capture-output, conda run buffers the child's stdout and
+    stderr in full and releases them only at exit.
+
+    A 6-hour training run printed not one progress line, and a run killed
+    before exiting loses its diagnostics entirely. `-u` does not help: it
+    unbuffers Python, while the capture happens one level above it.
+    """
+    got = sam3_env.sam3_env_command("hydra-sam3", ["pkg.module"])
+    assert "--no-capture-output" in got
+    assert got.index("--no-capture-output") < got.index(
+        "python"
+    ), "the flag is a conda run option and must precede the child command"
+    assert "-u" in got

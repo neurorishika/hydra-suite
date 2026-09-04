@@ -19,6 +19,16 @@ from hydra_suite.utils.geometry_levels import (  # noqa: F401  (re-exported)
     classify_label_line,
 )
 
+from .dataset_io import (
+    DEFAULT_DATASET_IO_LIMITS,
+    DatasetIOLimits,
+    iter_bounded_text_lines,
+    iter_indexed_paths,
+    sorted_file_index,
+)
+
+_MAX_CONFLICT_EXAMPLES = 256
+
 
 @dataclass(frozen=True)
 class SourceLevelScan:
@@ -31,7 +41,9 @@ class SourceLevelScan:
     reason: str = ""
 
 
-def _classify_file(path: Path) -> str:
+def _classify_file(
+    path: Path, *, limits: DatasetIOLimits = DEFAULT_DATASET_IO_LIMITS
+) -> str:
     """Return the strongest evidence in a single label file.
 
     One of: "polygon", "four_point", "aabb", "empty", "invalid".
@@ -41,7 +53,7 @@ def _classify_file(path: Path) -> str:
     polygon-evidence line makes the file "polygon".
     """
     seen: set[str] = set()
-    for raw in path.read_text(encoding="utf-8").splitlines():
+    for raw in iter_bounded_text_lines(path, limits=limits):
         line = raw.strip()
         if not line:
             continue
@@ -65,24 +77,33 @@ def scan_source_levels(
     intended_level: GeometryLevel = GeometryLevel.OBB,
     *,
     confirm_quads_are_polygons: bool = False,
+    limits: DatasetIOLimits = DEFAULT_DATASET_IO_LIMITS,
 ) -> SourceLevelScan:
     """Scan a source's labels/ and resolve its single geometry level."""
     root = Path(labels_dir)
-    poly_files: list[str] = []
+    has_poly = False
+    has_fourpt = False
+    has_aabb = False
     fourpt_files: list[str] = []
     aabb_files: list[str] = []
     invalid_files: list[str] = []
 
-    for path in sorted(root.rglob("*.txt")):
-        kind = _classify_file(path)
-        if kind == "polygon":
-            poly_files.append(path.name)
-        elif kind == "four_point":
-            fourpt_files.append(path.name)
-        elif kind == "aabb":
-            aabb_files.append(path.name)
-        elif kind == "invalid":
-            invalid_files.append(path.name)
+    if root.is_dir():
+        with sorted_file_index(root, suffixes={".txt"}, limits=limits) as index:
+            for path in iter_indexed_paths(index, root):
+                kind = _classify_file(path, limits=limits)
+                if kind == "polygon":
+                    has_poly = True
+                elif kind == "four_point":
+                    has_fourpt = True
+                    if len(fourpt_files) < _MAX_CONFLICT_EXAMPLES:
+                        fourpt_files.append(path.name)
+                elif kind == "aabb":
+                    has_aabb = True
+                    if len(aabb_files) < _MAX_CONFLICT_EXAMPLES:
+                        aabb_files.append(path.name)
+                elif kind == "invalid" and len(invalid_files) < _MAX_CONFLICT_EXAMPLES:
+                    invalid_files.append(path.name)
 
     if invalid_files:
         return SourceLevelScan(
@@ -92,10 +113,6 @@ def scan_source_levels(
             needs_confirmation=False,
             reason="Some label files contain malformed or internally mixed lines.",
         )
-
-    has_poly = bool(poly_files)
-    has_fourpt = bool(fourpt_files)
-    has_aabb = bool(aabb_files)
 
     # aabb never coexists with obb/polygon evidence: you cannot mix axis-aligned
     # boxes with oriented/contour geometry in one homogeneous source.

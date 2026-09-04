@@ -61,6 +61,7 @@ class DatasetPreparationResult:
     role_dataset_dirs: dict[str, str]
     roles: tuple[TrainingRole, ...]
     measured_reference_body_px: float = 0.0
+    preflight: ValidationReport | None = None
 
 
 @dataclass(frozen=True, slots=True)

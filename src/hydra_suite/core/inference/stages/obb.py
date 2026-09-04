@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
-from typing import Any, NamedTuple
+from typing import Any, Iterator, NamedTuple
 
 import cv2
 import numpy as np
@@ -28,6 +28,22 @@ from ..runtime_artifacts import DirectExecutorAdapter, load_obb_executor  # noqa
 logger = logging.getLogger(__name__)
 
 _FALLBACK_IMGSZ = 1024
+
+# Production inference must retain only a finite compact candidate set before
+# downstream crop or mask expansion. Normal configs use ``2 * MAX_TARGETS``;
+# this ceiling also protects legacy/hand-built configs where zero meant
+# "unlimited".
+MAX_RAW_CANDIDATES_PER_FRAME = 1024
+
+
+def effective_raw_detection_cap(config: Any) -> int:
+    """Resolve a finite per-frame compact-candidate cap."""
+
+    requested = int(getattr(config, "raw_detection_cap", 0) or 0)
+    if requested <= 0:
+        final_cap = max(1, int(getattr(config, "max_detections", 20) or 20))
+        requested = 2 * final_cap
+    return min(requested, MAX_RAW_CANDIDATES_PER_FRAME)
 
 
 def _resolve_imgsz(model: Any) -> int:
@@ -399,6 +415,7 @@ def load_obb_models(
             "gpu_fast (%s) requested — artifact availability governs actual backend.",
             compute_runtime,
         )
+    model_candidate_cap = effective_raw_detection_cap(config)
     if config.mode == "direct":
         assert config.direct is not None
         auto_export = config.direct.auto_export
@@ -406,7 +423,7 @@ def load_obb_models(
             config.direct.model_path,
             compute_runtime,
             auto_export=auto_export,
-            max_det=config.max_detections,
+            max_det=model_candidate_cap,
             batch_size=batch_size,
             task=config.direct.model_task,
         )
@@ -438,7 +455,7 @@ def load_obb_models(
         config.sequential.detect_model_path,
         compute_runtime,
         auto_export=auto_export,
-        max_det=config.max_detections,
+        max_det=model_candidate_cap,
         imgsz_override=detect_imgsz if detect_imgsz > 0 else None,
         # Stage-1 is a plain detector (no angle head) -- must be parsed as
         # Results(boxes=...), not Results(obb=...), under tensorrt/onnx.
@@ -456,7 +473,7 @@ def load_obb_models(
         config.sequential.obb_model_path,
         compute_runtime,
         auto_export=auto_export,
-        max_det=config.max_detections,
+        max_det=model_candidate_cap,
         imgsz_override=config.sequential.stage2_image_size,
         batch_size=config.sequential.stage2_batch_size or batch_size,
     )
@@ -472,6 +489,7 @@ def run_obb(
     config: OBBConfig,
     runtime: RuntimeContext,
     roi_mask: np.ndarray | None = None,
+    should_stop: Any = None,
 ) -> list[OBBResult | _RawOBBTensors]:
     """Run OBB detection on a batch of frames.
 
@@ -486,48 +504,114 @@ def run_obb(
     and the disabled-slicing behaviour stays byte-identical to before this
     feature).
 
-    Phase C (region-source unification): every mode is now
-    ``plan -> execute -> extract -> merge`` through a single ``RegionSource``
-    (``regions.py``) -- the standalone ``_run_direct``/``_run_sequential``/
-    ``run_direct_sliced`` orchestrators are retired; their predict routines
-    now live verbatim in each source's ``execute``.
+    Every mode uses a ``RegionSource`` from ``regions.py``. Tile/proposal modes
+    iterate bounded regions through predict and extraction before advancing;
+    whole-frame mode keeps its existing one-window behavior.
     """
     from .regions import select_region_source
 
     source = select_region_source(config)
-    per_frame_regions = source.plan(frames, models, config, runtime, roi_mask=roi_mask)
-    with span(N.MODEL_EXECUTE, gpu=True):
-        per_frame_results = source.execute(per_frame_regions, models, config, runtime)
     task = source.task(config)
     seg_source = source.seg_source(config)
 
+    # Tile/proposal sources yield one bounded image/result chunk at a time.
+    # Extraction happens before requesting the next chunk, so vendor result
+    # objects and tile pixels cannot accumulate across the full grid.
+    parts_by_frame: list[list[OBBResult | _RawOBBTensors]] = [[] for _ in frames]
+    with span(N.MODEL_EXECUTE, gpu=True):
+        iterator_kwargs = {"roi_mask": roi_mask}
+        if should_stop is not None:
+            iterator_kwargs["should_stop"] = should_stop
+        chunks = source.iter_region_results(
+            frames,
+            models,
+            config,
+            runtime,
+            **iterator_kwargs,
+        )
+        for chunk in chunks:
+            with span(N.EXTRACT_RAW):
+                for fi, region, result in chunk:
+                    part = extract_with_transform(
+                        result,
+                        fi,
+                        task,
+                        region.affine,
+                        config,
+                        runtime,
+                        seg_source=seg_source,
+                        force_numpy=source.force_numpy,
+                    )
+                    if not isinstance(part, (OBBResult, _RawOBBTensors)) or (
+                        int(part.xywhr.shape[0])
+                        if isinstance(part, _RawOBBTensors)
+                        else part.num_detections
+                    ):
+                        parts_by_frame[fi].append(part)
+                    parts_by_frame[fi] = _bound_compact_parts(
+                        parts_by_frame[fi], fi, effective_raw_detection_cap(config)
+                    )
+            # Do not let this consumer retain a yielded Region/image/vendor
+            # result while the suspended producer starts the next model call.
+            chunk.clear()
+            del chunk, fi, region, result, part
+
     out: list[OBBResult | _RawOBBTensors] = []
     with span(N.EXTRACT_RAW):
-        for fi, (regions, results) in enumerate(
-            zip(per_frame_regions, per_frame_results)
-        ):
-            if not regions:
+        for fi, parts in enumerate(parts_by_frame):
+            if not parts:
                 out.append(_empty_obb_result(fi))
-                continue
-            parts = [
-                extract_with_transform(
-                    res,
-                    fi,
-                    task,
-                    region.affine,
-                    config,
-                    runtime,
-                    seg_source=seg_source,
-                    force_numpy=source.force_numpy,
+            else:
+                out.append(
+                    merge_per_frame(
+                        parts,
+                        source.merge_policy,
+                        source.merge_plan(fi),
+                        config,
+                        runtime,
+                    )
                 )
-                for region, res in zip(regions, results)
-            ]
-            out.append(
-                merge_per_frame(
-                    parts, source.merge_policy, source.merge_plan(fi), config, runtime
-                )
-            )
     return out
+
+
+def _bound_compact_parts(
+    parts: list[OBBResult | _RawOBBTensors], frame_idx: int, cap: int
+) -> list[OBBResult | _RawOBBTensors]:
+    """Keep an incrementally bounded top-confidence candidate reservoir."""
+
+    # A few seam tests replace extraction with opaque sentinels. Production
+    # extraction returns only these two concrete compact result types.
+    if any(not isinstance(part, (OBBResult, _RawOBBTensors)) for part in parts):
+        return parts
+    total = sum(
+        (
+            int(part.xywhr.shape[0])
+            if isinstance(part, _RawOBBTensors)
+            else part.num_detections
+        )
+        for part in parts
+    )
+    if total <= 2 * cap:
+        return parts
+    if isinstance(parts[0], _RawOBBTensors):
+        from .slicing_cuda import _concat_raw
+
+        merged = _filter_valid_raw_rows(_concat_raw(parts, frame_idx))
+        if int(merged.conf.shape[0]) <= cap:
+            return [merged]
+        keep = _torch_reservoir_indices(merged.conf, cap)
+        return [
+            _RawOBBTensors(
+                frame_idx=frame_idx,
+                xywhr=merged.xywhr[keep],
+                corners=merged.corners[keep],
+                conf=merged.conf[keep],
+                cls=merged.cls[keep] if merged.cls is not None else None,
+            )
+        ]
+    merged = merge_obb_results(frame_idx, parts)
+    keep = _numpy_reservoir_indices(merged.confidences, cap)
+    return [_select_obb_rows(merged, keep)]
 
 
 def resize_crops_for_stage2(
@@ -557,6 +641,24 @@ def build_crops(
     seq: Any,
     runtime: RuntimeContext,
 ) -> tuple[list[np.ndarray], list[tuple[float, float]]]:
+    crops: list[np.ndarray] = []
+    offsets: list[tuple[float, float]] = []
+    for crop, offset in iter_crops(frame, boxes, seq, runtime):
+        crops.append(crop)
+        offsets.append(offset)
+    return crops, offsets
+
+
+def iter_crops(
+    frame: np.ndarray | torch.Tensor,
+    boxes: Any,
+    seq: Any,
+    runtime: RuntimeContext,
+    *,
+    max_candidates: int | None = None,
+) -> Iterator[tuple[np.ndarray, tuple[float, float]]]:
+    """Yield sequential crops without retaining the complete crop set."""
+
     if isinstance(frame, torch.Tensor):
         arr = frame.cpu().numpy()
         if arr.ndim == 3 and arr.shape[0] == 3:
@@ -564,9 +666,10 @@ def build_crops(
     else:
         arr = frame
     h, w = arr.shape[:2]
-    crops: list[np.ndarray] = []
-    offsets: list[tuple[float, float]] = []
-    for x1, y1, x2, y2 in boxes.xyxy.cpu().numpy():
+    coordinates = boxes.xyxy.cpu().numpy()
+    if max_candidates is not None:
+        coordinates = coordinates[: max(0, int(max_candidates))]
+    for x1, y1, x2, y2 in coordinates:
         # Mirrors legacy yolo_detector._build_sequential_crop exactly (padded
         # square box centered on the stage-1 bbox, floor/ceil-clipped to the
         # frame) so stage-2 sees byte-identical crop content to legacy.
@@ -584,9 +687,7 @@ def build_crops(
         crop = arr[oy1:oy2, ox1:ox2]
         if crop.size == 0:
             continue
-        crops.append(crop)
-        offsets.append((float(ox1), float(oy1)))
-    return crops, offsets
+        yield crop, (float(ox1), float(oy1))
 
 
 def _extract_raw_tensors(result: Any, frame_idx: int, device: str) -> _RawOBBTensors:
@@ -700,6 +801,7 @@ def extract_with_transform(
     ox, oy = affine.offset
     sx, sy = affine.scale
     seg = seg_source if seg_source is not None else config.direct
+    raw_cap = effective_raw_detection_cap(config)
     if runtime.tensor_on_cuda and affine.is_translate_only and not force_numpy:
         # Guaranteed translate-only by the `if` above; defensive check only.
         assert (
@@ -718,7 +820,7 @@ def extract_with_transform(
                 result,
                 frame_idx,
                 runtime.device,
-                config.raw_detection_cap,
+                raw_cap,
                 num_angles=seg.seg_num_angles,
                 crop_size=seg.seg_crop_size,
                 pad_ratio=seg.seg_pad_ratio,
@@ -741,7 +843,7 @@ def extract_with_transform(
         return _extract_obb_from_masks(
             result,
             frame_idx,
-            config.raw_detection_cap,
+            raw_cap,
             num_angles=seg.seg_num_angles,
             crop_size=seg.seg_crop_size,
             pad_ratio=seg.seg_pad_ratio,
@@ -897,6 +999,34 @@ def _extract_obb_from_boxes(
     return out
 
 
+def _valid_segment_source_indices(
+    mask_tensor: torch.Tensor,
+    boxes_orig: torch.Tensor,
+    confidences: torch.Tensor,
+    mask_threshold: float,
+) -> torch.Tensor:
+    """Return finite, positive-geometry, non-empty segment rows on device.
+
+    Reducing each dense mask to its min/max avoids allocating another dense
+    boolean tensor while still rejecting NaN/Inf masks and below-threshold
+    empty masks before candidate selection and the rotated-rectangle kernel.
+    """
+
+    flat = mask_tensor.flatten(1)
+    mask_min = torch.amin(flat, dim=1)
+    mask_max = torch.amax(flat, dim=1)
+    valid = (
+        torch.isfinite(confidences)
+        & torch.isfinite(boxes_orig).all(dim=1)
+        & (boxes_orig[:, 2] > boxes_orig[:, 0])
+        & (boxes_orig[:, 3] > boxes_orig[:, 1])
+        & torch.isfinite(mask_min)
+        & torch.isfinite(mask_max)
+        & (mask_max >= float(mask_threshold))
+    )
+    return torch.nonzero(valid, as_tuple=False).flatten()
+
+
 def _extract_obb_from_masks(
     result: Any,
     frame_idx: int,
@@ -924,6 +1054,7 @@ def _extract_obb_from_masks(
     masks = result.masks
     if masks is None or masks.data is None or masks.data.shape[0] == 0:
         return _empty_obb_result(frame_idx)
+    original_mask_count = int(masks.data.shape[0])
     mask_tensor = masks.data
     boxes = result.boxes
     conf_all = boxes.conf if boxes is not None else None
@@ -931,15 +1062,25 @@ def _extract_obb_from_masks(
         return _empty_obb_result(frame_idx)
     boxes_orig = boxes.xyxy
 
-    # Export-only: native per-detection mask contours, in the SAME frame
-    # pixel space as `corners` (ultralytics' Masks.xy already scales its
-    # cv2.findContours output from mask space back to result.orig_shape via
-    # the identical gain/pad formula used below). Computed in original
-    # (pre-cap, pre-valid-filter) detection order; re-indexed alongside
-    # every subselection below so it stays aligned with cx/cy/... at return.
+    # Preserve old kernel->validity->cap results while making the expensive
+    # path bounded: remove rows that the kernel/materializer must reject before
+    # they can occupy the top-k or expand to polygons.
+    valid_keep = _valid_segment_source_indices(
+        mask_tensor, boxes_orig, conf_all, mask_threshold
+    )
+    source_order = valid_keep.detach().cpu().numpy().astype(np.int64, copy=False)
+    mask_tensor = mask_tensor[valid_keep]
+    boxes_orig = boxes_orig[valid_keep]
+    conf_all = conf_all[valid_keep]
+    if int(conf_all.shape[0]) == 0:
+        return _empty_obb_result(frame_idx)
+
+    # Export-only contours are deliberately deferred until after the compact
+    # candidate cap below. ``Masks.xy`` expands every retained dense mask into
+    # host polygons, so reading it here would bypass the same memory boundary
+    # that protects the rotated-rectangle kernel.
+    native_masks = masks
     polygons_native: list[np.ndarray] | None = None
-    if emit_native_geometry:
-        polygons_native = list(masks.xy)
 
     # Optimization: the downstream cap keeps only the top-`raw_detection_cap`
     # detections by confidence (see _apply_raw_detection_cap). Select that same
@@ -949,17 +1090,38 @@ def _extract_obb_from_masks(
     # (confidence descending) and the caller re-applies the cap afterwards, so
     # the final result is unchanged.
     if raw_detection_cap > 0 and int(conf_all.shape[0]) > raw_detection_cap:
-        order = np.argsort(conf_all.detach().cpu().numpy())[::-1][:raw_detection_cap]
+        order = _numpy_descending_indices(conf_all.detach().cpu().numpy())[
+            :raw_detection_cap
+        ].copy()
         keep = torch.as_tensor(
-            np.ascontiguousarray(order),
+            order,
             device=mask_tensor.device,
             dtype=torch.long,
         )
         mask_tensor = mask_tensor[keep]
         boxes_orig = boxes_orig[keep]
         conf_all = conf_all[keep]
-        if polygons_native is not None:
-            polygons_native = [polygons_native[i] for i in order]
+        source_order = source_order[order]
+
+    if emit_native_geometry:
+        identity_order = np.array_equal(
+            source_order, np.arange(original_mask_count, dtype=np.int64)
+        )
+        if identity_order:
+            # Preserve compatibility with light-weight Masks-like adapters
+            # that expose ``data``/``xy`` but are not subscriptable. No rows
+            # were removed, so using the original object is still bounded by
+            # the already admitted model-boundary candidate cap.
+            native_masks = masks
+        else:
+            try:
+                native_masks = masks[source_order.copy()]
+            except (AttributeError, IndexError, TypeError) as exc:
+                raise ValueError(
+                    "Segment masks cannot be safely subset before native polygon expansion"
+                ) from exc
+
+        polygons_native = list(native_masks.xy)
 
     gain, pad_x, pad_y = letterbox_gain_pad(
         tuple(mask_tensor.shape[-2:]), tuple(result.orig_shape)
@@ -1095,14 +1257,27 @@ def _extract_raw_tensors_from_masks(
         )
     mask_tensor = masks.data
     boxes_orig = boxes.xyxy
+    valid_keep = _valid_segment_source_indices(
+        mask_tensor, boxes_orig, conf_all, mask_threshold
+    )
+    mask_tensor = mask_tensor[valid_keep]
+    boxes_orig = boxes_orig[valid_keep]
+    conf_all = conf_all[valid_keep]
+    if int(conf_all.shape[0]) == 0:
+        dev = mask_tensor.device
+        return _RawOBBTensors(
+            frame_idx=frame_idx,
+            xywhr=torch.zeros((0, 5), dtype=torch.float32, device=dev),
+            corners=torch.zeros((0, 4, 2), dtype=torch.float32, device=dev),
+            conf=torch.zeros(0, dtype=torch.float32, device=dev),
+        )
     # Optimization mirroring _extract_obb_from_masks: pre-cap to the top-k
     # detections by confidence BEFORE the O(N . num_angles . crop^2) kernel, so
     # it never processes rows materialize_tensors()'s own cap would discard.
-    # torch.topk keeps the selection fully on-device (no .cpu()/.item()) --
-    # required by this raw fast path's zero-host-sync contract -- and returns
-    # indices in descending-confidence order, matching _apply_raw_detection_cap.
+    # Selection stays fully on-device (no .cpu()/.item()) and shares the
+    # deterministic confidence/tie ordering used by the NumPy path.
     if raw_detection_cap > 0 and int(conf_all.shape[0]) > raw_detection_cap:
-        keep = torch.topk(conf_all, raw_detection_cap).indices
+        keep = _torch_descending_indices(conf_all)[:raw_detection_cap]
         mask_tensor = mask_tensor[keep]
         boxes_orig = boxes_orig[keep]
         conf_all = conf_all[keep]
@@ -1174,6 +1349,76 @@ def _extract_raw_tensors_from_boxes(
     )
 
 
+def _numpy_descending_indices(confidences: np.ndarray) -> np.ndarray:
+    """Rank by confidence, breaking ties by later source position.
+
+    The tie rule makes the previous ``np.argsort(...)[::-1]`` behavior
+    explicit and portable. It is also shared by incremental reservoirs so
+    chunk boundaries cannot change the final candidate set.
+    """
+
+    indices = np.arange(len(confidences), dtype=np.int64)
+    return np.lexsort((-indices, -np.asarray(confidences)))
+
+
+def _numpy_reservoir_indices(confidences: np.ndarray, cap: int) -> np.ndarray:
+    """Select the globally ranked set while retaining source order."""
+
+    selected = _numpy_descending_indices(confidences)[:cap]
+    return np.sort(selected)
+
+
+def _torch_descending_indices(confidences: torch.Tensor) -> torch.Tensor:
+    """Device-only equivalent of :func:`_numpy_descending_indices`."""
+
+    count = int(confidences.shape[0])
+    reversed_order = torch.argsort(
+        torch.flip(confidences, dims=(0,)), descending=True, stable=True
+    )
+    return (count - 1) - reversed_order
+
+
+def _torch_reservoir_indices(confidences: torch.Tensor, cap: int) -> torch.Tensor:
+    selected = _torch_descending_indices(confidences)[:cap]
+    return torch.sort(selected).values
+
+
+def _filter_valid_raw_rows(raw: _RawOBBTensors) -> _RawOBBTensors:
+    """Drop invalid device rows before they can occupy a bounded reservoir."""
+
+    valid = (
+        torch.isfinite(raw.xywhr).all(dim=1)
+        & torch.isfinite(raw.conf)
+        & (raw.xywhr[:, 2] > 0)
+        & (raw.xywhr[:, 3] > 0)
+    )
+    keep = torch.nonzero(valid, as_tuple=False).flatten()
+    return _RawOBBTensors(
+        frame_idx=raw.frame_idx,
+        xywhr=raw.xywhr[keep],
+        corners=raw.corners[keep],
+        conf=raw.conf[keep],
+        cls=raw.cls[keep] if raw.cls is not None else None,
+    )
+
+
+def _select_obb_rows(r: OBBResult, order: np.ndarray) -> OBBResult:
+    order = np.asarray(order, dtype=np.int64)
+    n = int(len(order))
+    return OBBResult(
+        frame_idx=r.frame_idx,
+        centroids=np.ascontiguousarray(r.centroids[order]),
+        angles=np.ascontiguousarray(r.angles[order]),
+        sizes=np.ascontiguousarray(r.sizes[order]),
+        shapes=np.ascontiguousarray(r.shapes[order]),
+        confidences=np.ascontiguousarray(r.confidences[order]),
+        corners=np.ascontiguousarray(r.corners[order]),
+        detection_ids=OBBResult.make_detection_ids(r.frame_idx, n),
+        class_ids=np.ascontiguousarray(r.class_ids_or_zeros[order]),
+        polygons=([r.polygons[i] for i in order] if r.polygons is not None else None),
+    )
+
+
 def _apply_raw_detection_cap(r: OBBResult, cap: int) -> OBBResult:
     """Sort detections by confidence descending and keep the top ``cap``.
 
@@ -1186,26 +1431,10 @@ def _apply_raw_detection_cap(r: OBBResult, cap: int) -> OBBResult:
     """
     if cap <= 0 or r.num_detections == 0:
         return r
-    order = np.argsort(r.confidences)[::-1]
+    order = _numpy_descending_indices(r.confidences)
     if len(order) > cap:
         order = order[:cap]
-    n = int(len(order))
-    return OBBResult(
-        frame_idx=r.frame_idx,
-        centroids=np.ascontiguousarray(r.centroids[order]),
-        angles=np.ascontiguousarray(r.angles[order]),
-        sizes=np.ascontiguousarray(r.sizes[order]),
-        shapes=np.ascontiguousarray(r.shapes[order]),
-        confidences=np.ascontiguousarray(r.confidences[order]),
-        corners=np.ascontiguousarray(r.corners[order]),
-        detection_ids=OBBResult.make_detection_ids(r.frame_idx, n),
-        class_ids=np.ascontiguousarray(r.class_ids_or_zeros[order]),
-        # Re-index alongside every other per-detection field so an
-        # emit_native_geometry=True result survives the raw-detection cap
-        # instead of silently losing its polygons. None when the caller never
-        # requested native geometry (the byte-identical hot path).
-        polygons=([r.polygons[i] for i in order] if r.polygons is not None else None),
-    )
+    return _select_obb_rows(r, order)
 
 
 def _empty_obb_result(frame_idx: int) -> OBBResult:
@@ -1293,6 +1522,7 @@ def merge_per_frame(
 
     fi = parts[0].frame_idx
     is_raw = isinstance(parts[0], _RawOBBTensors)
+    raw_cap = effective_raw_detection_cap(config)
 
     if merge_policy == "plain":
         if is_raw:
@@ -1306,9 +1536,7 @@ def merge_per_frame(
             # exactly once, wherever the raw tensors are eventually
             # materialized (`materialize_tensors` always caps at the end).
             return _concat_raw(parts, fi)
-        return _apply_raw_detection_cap(
-            merge_obb_results(fi, parts), config.raw_detection_cap
-        )
+        return _apply_raw_detection_cap(merge_obb_results(fi, parts), raw_cap)
 
     # merge_policy == "overlap_band_nms"
     if is_raw:
@@ -1332,7 +1560,8 @@ def _merge_numpy_overlap_band_nms(
     # path selecting the SAME detections as the device-tensor path (which
     # caps inside `materialize_tensors`). Cap again after merging so a nmm
     # union that reduces the count still yields cap-ordered ids.
-    concat = _apply_raw_detection_cap(concat, config.raw_detection_cap)
+    raw_cap = effective_raw_detection_cap(config)
+    concat = _apply_raw_detection_cap(concat, raw_cap)
     if concat.num_detections <= 1:
         return concat
     slice_cfg = config.direct.slice
@@ -1353,7 +1582,7 @@ def _merge_numpy_overlap_band_nms(
         overlap_bands=bands,
         runtime=runtime,
     )
-    return _apply_raw_detection_cap(merged, config.raw_detection_cap)
+    return _apply_raw_detection_cap(merged, raw_cap)
 
 
 def _merge_raw_overlap_band_nms(
@@ -1388,7 +1617,8 @@ def _merge_raw_overlap_band_nms(
     # Overlap possible: materialize for the cross-tile merge (this is the
     # only sync point). materialize_tensors applies the raw detection cap,
     # so the O(n^2) merge input is bounded exactly as on the host path.
-    materialized = materialize_tensors(concat, config.raw_detection_cap)
+    raw_cap = effective_raw_detection_cap(config)
+    materialized = materialize_tensors(concat, raw_cap)
     bands = band_membership(materialized.corners, plan.tiles)
     slice_cfg = config.direct.slice
     merged = merge_obb_detections(
@@ -1400,7 +1630,7 @@ def _merge_raw_overlap_band_nms(
         overlap_bands=bands,
         runtime=runtime,
     )
-    return _apply_raw_detection_cap(merged, config.raw_detection_cap)
+    return _apply_raw_detection_cap(merged, raw_cap)
 
 
 def _load_yolo(

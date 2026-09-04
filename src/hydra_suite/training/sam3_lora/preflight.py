@@ -61,6 +61,13 @@ _PUBLISH_HOST_BYTES = (
     _CHECKPOINT_BYTES + _PUBLISH_ACTIVE_TENSOR_BYTES + _RUNTIME_HOST_ALLOWANCE_BYTES
 )
 _MEASURED_BF16_DEVICE_PEAK_BYTES = 29 * GiB
+# FP32 keeps the same parameters resident but doubles every activation and
+# autograd-saved tensor. Applied to the measured BF16 envelope this is a
+# deliberate OVER-estimate (parameters do not double), which is the safe
+# direction for an admission gate: it refuses a marginal run rather than
+# admitting one that OOMs the device after minutes of setup.
+_FP32_DEVICE_PEAK_MULTIPLIER = 2.0
+SUPPORTED_PRECISIONS = ("bf16", "fp32")
 _EXTRA_BATCH_DEVICE_BYTES = 18 * GiB
 _DEVICE_STEADY_BYTES = 8 * GiB
 _MASK_DEVICE_BYTES_PER_PIXEL = 16
@@ -668,12 +675,18 @@ def build_resource_request(
         + lora_cpu_training_state
     )
     training_host_peak = _TRAIN_HOST_FIXED_BYTES + training_host_dynamic
+    precision_multiplier = (
+        _FP32_DEVICE_PEAK_MULTIPLIER
+        if getattr(params, "mixed_precision", "bf16") == "fp32"
+        else 1.0
+    )
     training_device_peak = (
-        _MEASURED_BF16_DEVICE_PEAK_BYTES
-        + max(0, batch_size - 1) * _EXTRA_BATCH_DEVICE_BYTES
+        _MEASURED_BF16_DEVICE_PEAK_BYTES * precision_multiplier
+        + max(0, batch_size - 1) * _EXTRA_BATCH_DEVICE_BYTES * precision_multiplier
         + max(0, lora_training_state - default_lora_training_state)
         + dense_masks_device
     )
+    training_device_peak = int(training_device_peak)
     validation_device_peak = training_device_peak
     common_allocations = (
         ("descriptor metadata", metadata),
@@ -883,10 +896,18 @@ def assess_preflight(
             "SAM3 LoRA training requires CUDA BF16 on compute capability >= 8.0; "
             f"the selected GPU reports {major}.{minor}. FP32 fallback is unsafe and disabled."
         )
-    if getattr(params, "mixed_precision", None) != "bf16":
+    if getattr(params, "mixed_precision", None) not in SUPPORTED_PRECISIONS:
+        # FP32 is supported again. The original refusal blamed "SAM3's BF16
+        # activation path", which was `perflib.fused.addmm_act` -- a kernel
+        # that hard-casts to bfloat16 AND refuses to run with grad enabled.
+        # `perflib_compat` now replaces it with an eager, dtype-neutral
+        # equivalent before the model is built, so nothing in the training
+        # path requires bf16. FP16 stays out: its narrow range genuinely does
+        # overflow SAM3's loss scales, and nothing here provides a GradScaler.
         refusals.append(
-            "SAM3 LoRA training currently supports only CUDA BF16; fp16/fp32 "
-            "modes fail against SAM3's BF16 activation path and are disabled."
+            "SAM3 LoRA training supports "
+            f"{' or '.join(SUPPORTED_PRECISIONS)}; "
+            f"{getattr(params, 'mixed_precision', None)!r} is not available."
         )
     params_per_rank = sum(
         count

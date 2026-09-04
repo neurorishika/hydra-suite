@@ -1,4 +1,6 @@
+import gc
 import types
+import weakref
 
 import numpy as np
 import pytest
@@ -216,6 +218,11 @@ def test_asymmetric_frame_and_overlap():
 
 class _FakeRuntime:
     device = "cpu"
+    tensor_on_cuda = False
+
+
+class _FakeMPSRuntime:
+    device = "mps"
     tensor_on_cuda = False
 
 
@@ -496,6 +503,31 @@ def test_sliced_cpu_obb_merges_cross_tile_duplicate_at_zero_configured_overlap()
     assert res.num_detections == 1
     assert res.centroids[0, 0] == pytest.approx(global_point[0], abs=1.0)
     assert res.centroids[0, 1] == pytest.approx(global_point[1], abs=1.0)
+
+
+def test_sliced_numpy_input_has_cpu_mps_runtime_parity():
+    """MPS uses the same numpy tile transport as CPU and preserves ordering."""
+    frame = np.zeros((300, 300, 3), np.uint8)
+    cfg = _direct_cfg(True, overlap_height_ratio=0.0, overlap_width_ratio=0.0)
+    tiles = get_slice_bboxes(300, 300, 256, 256, 0.0, 0.0)
+    global_point = (250.0, 20.0)
+
+    cpu = run_direct_sliced(
+        [frame],
+        _FakeYOLOGlobalPoint(tiles, global_point),
+        cfg,
+        _FakeRuntime(),
+    )[0]
+    mps = run_direct_sliced(
+        [frame],
+        _FakeYOLOGlobalPoint(tiles, global_point),
+        cfg,
+        _FakeMPSRuntime(),
+    )[0]
+
+    np.testing.assert_array_equal(mps.centroids, cpu.centroids)
+    np.testing.assert_array_equal(mps.corners, cpu.corners)
+    np.testing.assert_array_equal(mps.confidences, cpu.confidences)
 
 
 def test_sliced_cpu_obb_one_tile_empty_others_not():
@@ -1103,6 +1135,39 @@ def test_predict_is_chunked_to_a_bounded_tile_count():
     assert max(sizes) <= 4  # bounded by tiles-per-frame (the TRT engine profile)
 
 
+def test_streaming_sliced_path_releases_previous_tile_chunk_before_predict():
+    """The generator and run_obb consumer together retain at most one tile chunk."""
+    tile_batch_size = 4
+    tile_refs: list[weakref.ReferenceType[np.ndarray]] = []
+    live_at_predict: list[int] = []
+
+    class _Model:
+        imgsz = 256
+        overrides = {"imgsz": 256}
+
+        def predict(self, source, **kwargs):
+            tile_refs.extend(weakref.ref(tile) for tile in source)
+            gc.collect()
+            live_at_predict.append(sum(ref() is not None for ref in tile_refs))
+            return [types.SimpleNamespace(obb=_FakeOBBN([])) for _ in source]
+
+    config = _direct_cfg(
+        True,
+        overlap_height_ratio=0.0,
+        overlap_width_ratio=0.0,
+        tile_batch_size=tile_batch_size,
+    )
+    result = run_direct_sliced(
+        [np.zeros((768, 768, 3), dtype=np.uint8)],
+        _Model(),
+        config,
+        _FakeRuntime(),
+    )
+
+    assert len(result) == 1
+    assert live_at_predict == [tile_batch_size, tile_batch_size, 1]
+
+
 # --- I3: cap applied before the merge on every path ---------------------------
 
 
@@ -1213,6 +1278,24 @@ def test_pathological_tile_count_raises_instead_of_hanging():
         roi_mask=None,
     )
     assert 0 < len(ok.tiles) <= MAX_TILES_PER_FRAME
+
+
+def test_pathological_tile_count_refuses_before_axis_materialization(monkeypatch):
+    """The cardinality gate must run before building either axis list."""
+    from hydra_suite.utils import slice_geometry
+
+    def _must_not_materialize(*_args):
+        raise AssertionError("axis offsets were materialized before admission")
+
+    monkeypatch.setattr(slice_geometry, "_axis_starts", _must_not_materialize)
+    with pytest.raises(ValueError, match="tile ceiling"):
+        slice_geometry.plan_tiles(
+            (1_000_000, 1_000_000),
+            slice_w=1,
+            slice_h=1,
+            overlap_w=0.0,
+            overlap_h=0.0,
+        )
 
 
 # ---- ROI tile-gating wired end-to-end through run_direct_sliced ----

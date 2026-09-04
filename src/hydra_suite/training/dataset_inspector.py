@@ -2,9 +2,22 @@
 
 from __future__ import annotations
 
+import sqlite3
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
+
+from .dataset_io import (
+    DEFAULT_DATASET_IO_LIMITS,
+    DatasetIOLimits,
+    DatasetLimitError,
+    iter_bounded_text_lines,
+    iter_indexed_paths,
+    make_dataset_index_path,
+    read_bounded_text,
+    sorted_file_index,
+)
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
@@ -18,23 +31,125 @@ class DatasetItem:
     split: str
 
 
+class DatasetItemStore(Sequence[DatasetItem]):
+    """Disk-backed ordered item sequence with constant Python heap use."""
+
+    def __init__(self) -> None:
+        self._path = make_dataset_index_path("hydra-dataset-items-")
+        # Inspections may be handed from a GUI coordinator to an analysis
+        # worker. The store is immutable once published, so cross-thread reads
+        # are safe and avoid re-materializing its rows merely for transfer.
+        self._db = sqlite3.connect(self._path, check_same_thread=False)
+        self._db.execute(
+            "CREATE TABLE items (position INTEGER PRIMARY KEY, image TEXT NOT NULL, "
+            "label TEXT NOT NULL, split TEXT NOT NULL)"
+        )
+        self._count = 0
+
+    def append(self, item: DatasetItem, *, split: str | None = None) -> None:
+        self._db.execute(
+            "INSERT INTO items(position,image,label,split) VALUES (?,?,?,?)",
+            (
+                self._count,
+                item.image_path,
+                item.label_path,
+                item.split if split is None else split,
+            ),
+        )
+        self._count += 1
+        if self._count % 4096 == 0:
+            self._db.commit()
+
+    def extend(self, items: Iterable[DatasetItem], *, split: str | None = None) -> None:
+        for item in items:
+            self.append(item, split=split)
+
+    def commit(self) -> "DatasetItemStore":
+        self._db.commit()
+        return self
+
+    def __len__(self) -> int:
+        return self._count
+
+    def __iter__(self) -> Iterator[DatasetItem]:
+        self._db.commit()
+        for image, label, split in self._db.execute(
+            "SELECT image,label,split FROM items ORDER BY position"
+        ):
+            yield DatasetItem(str(image), str(label), str(split))
+
+    def __getitem__(self, index: int | slice) -> DatasetItem | list[DatasetItem]:
+        if isinstance(index, slice):
+            return [self[position] for position in range(*index.indices(self._count))]
+        position = int(index)
+        if position < 0:
+            position += self._count
+        if position < 0 or position >= self._count:
+            raise IndexError(index)
+        row = self._db.execute(
+            "SELECT image,label,split FROM items WHERE position=?", (position,)
+        ).fetchone()
+        if row is None:
+            raise IndexError(index)
+        return DatasetItem(str(row[0]), str(row[1]), str(row[2]))
+
+    def close(self) -> None:
+        database = getattr(self, "_db", None)
+        if database is not None:
+            database.close()
+            self._db = None
+        path = getattr(self, "_path", None)
+        if path is not None:
+            path.unlink(missing_ok=True)
+
+    def __del__(self) -> None:  # pragma: no cover - defensive interpreter cleanup
+        try:
+            self.close()
+        except Exception:
+            pass
+
+
+def shuffled_item_store(items: Iterable[DatasetItem], rng) -> DatasetItemStore:
+    """Return the exact ``random.shuffle`` permutation using SQLite swaps."""
+
+    store = DatasetItemStore()
+    for item in items:
+        store.append(item)
+    store.commit()
+    for position in range(len(store) - 1, 0, -1):
+        other = rng.randrange(position + 1)
+        if other == position:
+            continue
+        store._db.execute("UPDATE items SET position=-1 WHERE position=?", (position,))
+        store._db.execute(
+            "UPDATE items SET position=? WHERE position=?", (position, other)
+        )
+        store._db.execute("UPDATE items SET position=? WHERE position=-1", (other,))
+    store.commit()
+    return store
+
+
 @dataclass(slots=True)
 class DatasetInspection:
     """Inspection result for OBB/detect-style datasets."""
 
     root_dir: str
-    splits: dict[str, list[DatasetItem]] = field(default_factory=dict)
+    splits: dict[str, Sequence[DatasetItem]] = field(default_factory=dict)
     class_names: dict[int, str] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-def _read_yaml(path: Path) -> dict[str, Any]:
+def _read_yaml(
+    path: Path, *, limits: DatasetIOLimits = DEFAULT_DATASET_IO_LIMITS
+) -> dict[str, Any]:
     try:
         import yaml  # type: ignore
     except Exception as exc:  # pragma: no cover - optional dep branch
         raise RuntimeError("PyYAML is required to parse dataset.yaml") from exc
-    with path.open("r", encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
+    data = (
+        yaml.safe_load(read_bounded_text(path, max_bytes=limits.max_metadata_bytes))
+        or {}
+    )
     if not isinstance(data, dict):
         raise RuntimeError(f"Invalid dataset.yaml structure: {path}")
     return data
@@ -64,35 +179,39 @@ def _find_label_for_image(image_path: Path, labels_root: Path) -> Path:
 
     # Fallback: same basename under labels root (recursive search).
     stem = image_path.stem
-    matches = list(labels_root.rglob(f"{stem}.txt"))
-    if len(matches) == 1:
-        return matches[0]
-    if len(matches) > 1:
-        # Deterministic tie-break
-        return sorted(matches)[0]
+    # Do not build an unbounded list merely to choose a deterministic fallback.
+    chosen = None
+    for match in labels_root.rglob(f"{stem}.txt"):
+        if chosen is None or match.as_posix() < chosen.as_posix():
+            chosen = match
+    if chosen is not None:
+        return chosen
 
     # Final fallback: sibling txt
     return image_path.with_suffix(".txt")
 
 
 def _collect_dir_split(
-    images_dir: Path, labels_dir: Path, split: str
-) -> list[DatasetItem]:
-    items: list[DatasetItem] = []
+    images_dir: Path,
+    labels_dir: Path,
+    split: str,
+    *,
+    limits: DatasetIOLimits = DEFAULT_DATASET_IO_LIMITS,
+) -> DatasetItemStore:
+    items = DatasetItemStore()
     if not images_dir.exists():
         return items
-    for image_path in sorted(images_dir.rglob("*")):
-        if image_path.suffix.lower() not in IMAGE_EXTS:
-            continue
-        label_path = _find_label_for_image(image_path, labels_dir)
-        items.append(
-            DatasetItem(
-                image_path=str(image_path.resolve()),
-                label_path=str(label_path.resolve()),
-                split=split,
+    with sorted_file_index(images_dir, suffixes=IMAGE_EXTS, limits=limits) as index:
+        for image_path in iter_indexed_paths(index, images_dir):
+            label_path = _find_label_for_image(image_path, labels_dir)
+            items.append(
+                DatasetItem(
+                    image_path=str(image_path.resolve()),
+                    label_path=str(label_path.resolve()),
+                    split=split,
+                )
             )
-        )
-    return items
+    return items.commit()
 
 
 def _infer_label_path_from_image(
@@ -110,13 +229,18 @@ def _infer_label_path_from_image(
 
 
 def _collect_list_split(
-    root: Path, list_path: Path, split: str, labels_root: Path | None = None
-) -> list[DatasetItem]:
-    items: list[DatasetItem] = []
+    root: Path,
+    list_path: Path,
+    split: str,
+    labels_root: Path | None = None,
+    *,
+    limits: DatasetIOLimits = DEFAULT_DATASET_IO_LIMITS,
+) -> DatasetItemStore:
+    items = DatasetItemStore()
     if not list_path.exists():
         return items
-    lines = [ln.strip() for ln in list_path.read_text(encoding="utf-8").splitlines()]
-    for ln in lines:
+    for raw in iter_bounded_text_lines(list_path, limits=limits):
+        ln = raw.strip()
         if not ln:
             continue
         p = Path(ln)
@@ -128,7 +252,7 @@ def _collect_list_split(
         if not lbl.is_absolute():
             lbl = (root / lbl).resolve()
         items.append(DatasetItem(image_path=str(p), label_path=str(lbl), split=split))
-    return items
+    return items.commit()
 
 
 def _extract_class_names(data: dict[str, Any]) -> dict[int, str]:
@@ -164,15 +288,15 @@ def _collect_yaml_split_items(
     root: Path,
     data: dict[str, Any],
     split: str,
-) -> list[DatasetItem]:
+) -> Sequence[DatasetItem]:
     """Collect items for one split declared in dataset.yaml."""
     split_ref = data.get(split)
     if split_ref is None:
-        return []
+        return ()
 
     split_path = _resolve_data_path(root, split_ref)
     if split_path is None:
-        return []
+        return ()
 
     labels_dir = _resolve_yaml_labels_dir(root, data, split_path)
     if split_path.suffix.lower() == ".txt":
@@ -209,7 +333,7 @@ def _inspect_from_directory_layout(root: Path, inspection: DatasetInspection) ->
     if not (images_root.exists() and labels_root.exists()):
         return False
 
-    split_items: dict[str, list[DatasetItem]] = {}
+    split_items: dict[str, Sequence[DatasetItem]] = {}
     split_found = False
     for split in ("train", "val", "test"):
         img_dir = images_root / split
@@ -311,6 +435,9 @@ def _analyze_obb_item(
     pad_ratio: float,
     min_crop_size_px: int,
     enforce_square: bool,
+    *,
+    limits: DatasetIOLimits = DEFAULT_DATASET_IO_LIMITS,
+    max_objects: int = 100_000,
 ) -> None:
     """Accumulate size statistics from one dataset item."""
     lbl_path = Path(item.label_path)
@@ -330,11 +457,13 @@ def _analyze_obb_item(
     stats.img_heights.append(h)
 
     try:
-        lines = lbl_path.read_text(encoding="utf-8").splitlines()
+        lines: Iterable[str] = iter_bounded_text_lines(lbl_path, limits=limits)
     except Exception:
         return
 
     for ln in lines:
+        if stats.n_objects >= max_objects:
+            return
         result = _parse_obb_object_from_line(ln, w, h)
         if result is None:
             continue
@@ -362,17 +491,23 @@ def analyze_obb_sizes(
     import random
 
     stats = OBBSizeStats()
-    all_items: list[DatasetItem] = []
+    # Fixed-size reservoir sampling avoids first collecting every source path.
+    reservoir: list[DatasetItem] = []
+    seen = 0
+    rng = random.Random(0)
     for split_items in inspection.splits.values():
-        all_items.extend(split_items)
-    if not all_items:
+        for item in split_items:
+            seen += 1
+            if len(reservoir) < max_images:
+                reservoir.append(item)
+            else:
+                replacement = rng.randrange(seen)
+                if replacement < max_images:
+                    reservoir[replacement] = item
+    if not reservoir:
         return stats
 
-    rng = random.Random(0)
-    if len(all_items) > max_images:
-        all_items = rng.sample(all_items, max_images)
-
-    for item in all_items:
+    for item in reservoir:
         _analyze_obb_item(
             item,
             stats,
@@ -546,22 +681,20 @@ def format_size_analysis(
 
 def split_items_for_training(
     inspection: DatasetInspection, split_cfg: tuple[float, float, float], seed: int
-) -> dict[str, list[DatasetItem]]:
+) -> dict[str, Sequence[DatasetItem]]:
     """Normalize to train/val/test using provided ratios when source is unsplit."""
 
     import random
 
     if "all" not in inspection.splits:
-        out = {
-            "train": list(inspection.splits.get("train", [])),
-            "val": list(inspection.splits.get("val", [])),
-            "test": list(inspection.splits.get("test", [])),
+        return {
+            "train": inspection.splits.get("train", ()),
+            "val": inspection.splits.get("val", ()),
+            "test": inspection.splits.get("test", ()),
         }
-        return out
 
-    items = list(inspection.splits.get("all", []))
     rng = random.Random(int(seed))
-    rng.shuffle(items)
+    items = shuffled_item_store(inspection.splits.get("all", ()), rng)
 
     train_r, val_r, test_r = split_cfg
     total = max(1e-8, float(train_r) + float(val_r) + float(test_r))
@@ -576,18 +709,15 @@ def split_items_for_training(
         n_train = max(1, min(n - 1, n_train))
         n_val = max(1, min(n - n_train, n_val))
 
-    train = items[:n_train]
-    val = items[n_train : n_train + n_val]
-    test = items[n_train + n_val :]
-
-    for it in train:
-        it.split = "train"
-    for it in val:
-        it.split = "val"
-    for it in test:
-        it.split = "test"
-
-    return {"train": train, "val": val, "test": test}
+    stores = {name: DatasetItemStore() for name in ("train", "val", "test")}
+    for position, item in enumerate(items):
+        target = (
+            "train"
+            if position < n_train
+            else "val" if position < n_train + n_val else "test"
+        )
+        stores[target].append(item, split=target)
+    return {name: store.commit() for name, store in stores.items()}
 
 
 def _read_class_ids_from_label(label_path: str) -> set[int]:
@@ -597,54 +727,50 @@ def _read_class_ids_from_label(label_path: str) -> set[int]:
     Returns the set of integer class IDs found.
     """
     try:
-        text = Path(label_path).read_text(encoding="utf-8").strip()
-        if not text:
-            return set()
         ids: set[int] = set()
-        for line in text.splitlines():
+        for line in iter_bounded_text_lines(Path(label_path)):
             parts = line.split()
             if parts:
                 ids.add(int(float(parts[0])))
+                if len(ids) > DEFAULT_DATASET_IO_LIMITS.max_classes:
+                    raise DatasetLimitError(
+                        "Label exceeds the distinct-class cardinality cap"
+                    )
         return ids
+    except DatasetLimitError:
+        raise
     except Exception:
         return set()
 
 
-def _split_by_ratio(
-    items: list[DatasetItem],
-    train_r: float,
-    val_r: float,
-) -> tuple[list[DatasetItem], list[DatasetItem], list[DatasetItem]]:
-    """Split items list into (train, val, test) by ratio with guardrails."""
-    n = len(items)
+def _split_lengths(n: int, train_r: float, val_r: float) -> tuple[int, int]:
     n_train = int(round(n * train_r))
     n_val = int(round(n * val_r))
     if n >= 2:
         n_train = max(1, min(n - 1, n_train))
         n_val = max(1, min(n - n_train, n_val))
-    return items[:n_train], items[n_train : n_train + n_val], items[n_train + n_val :]
+    return n_train, n_val
 
 
-def _label_splits(
-    train: list[DatasetItem],
-    val: list[DatasetItem],
-    test: list[DatasetItem],
-) -> dict[str, list[DatasetItem]]:
-    """Assign split labels and return the standard split dict."""
-    for it in train:
-        it.split = "train"
-    for it in val:
-        it.split = "val"
-    for it in test:
-        it.split = "test"
-    return {"train": train, "val": val, "test": test}
+def _partition_items(
+    items: Iterable[DatasetItem], n_train: int, n_val: int
+) -> dict[str, DatasetItemStore]:
+    stores = {name: DatasetItemStore() for name in ("train", "val", "test")}
+    for position, item in enumerate(items):
+        split = (
+            "train"
+            if position < n_train
+            else "val" if position < n_train + n_val else "test"
+        )
+        stores[split].append(item, split=split)
+    return {name: store.commit() for name, store in stores.items()}
 
 
 def stratified_split_items(
-    items: list[DatasetItem],
+    items: Sequence[DatasetItem],
     split_cfg: tuple[float, float, float],
     seed: int,
-) -> dict[str, list[DatasetItem]]:
+) -> dict[str, Sequence[DatasetItem]]:
     """Split items with stratified class balance.
 
     Groups items by their dominant (most frequent) class ID, then splits each
@@ -653,7 +779,6 @@ def stratified_split_items(
     share one class.
     """
     import random
-    from collections import Counter, defaultdict
 
     rng = random.Random(int(seed))
 
@@ -661,44 +786,80 @@ def stratified_split_items(
     total = max(1e-8, float(train_r) + float(val_r) + float(test_r))
     train_r, val_r, test_r = train_r / total, val_r / total, test_r / total
 
-    # Determine dominant class per item
-    buckets: dict[int, list[DatasetItem]] = defaultdict(list)
-    fallback_items: list[DatasetItem] = []
+    db_path = make_dataset_index_path("hydra-dataset-buckets-")
+    database = sqlite3.connect(db_path)
+    bucket_counts: dict[int, int] = {}
+    fallback_count = 0
+    fallback_bucket = -(2**63)
+    try:
+        database.execute(
+            "CREATE TABLE bucket_items (bucket INTEGER NOT NULL, position INTEGER "
+            "NOT NULL, image TEXT NOT NULL, label TEXT NOT NULL, "
+            "PRIMARY KEY(bucket, position))"
+        )
+        for item in items:
+            class_ids = _read_class_ids_from_label(item.label_path)
+            if class_ids:
+                # _read_class_ids returns a set, so the legacy Counter tie-break
+                # always selected the numerically smallest present class.
+                bucket = min(class_ids)
+                position = bucket_counts.get(bucket, 0)
+                bucket_counts[bucket] = position + 1
+            else:
+                bucket = fallback_bucket
+                position = fallback_count
+                fallback_count += 1
+            database.execute(
+                "INSERT INTO bucket_items(bucket,position,image,label) VALUES (?,?,?,?)",
+                (bucket, position, item.image_path, item.label_path),
+            )
+        database.commit()
 
-    for item in items:
-        cls_ids = _read_class_ids_from_label(item.label_path)
-        if not cls_ids:
-            fallback_items.append(item)
-        else:
-            counter = Counter(cls_ids)
-            dominant = min(counter, key=lambda c: (-counter[c], c))
-            buckets[dominant].append(item)
+        # Match the legacy behavior: fallback records do not create a second
+        # stratum when all readable labels share one class.
+        if len(bucket_counts) <= 1:
+            shuffled = shuffled_item_store(items, rng)
+            n_train, n_val = _split_lengths(len(shuffled), train_r, val_r)
+            return _partition_items(shuffled, n_train, n_val)
 
-    # If only one class (or no readable labels), fall back to simple shuffle
-    if len(buckets) <= 1:
-        all_items = list(items)
-        rng.shuffle(all_items)
-        train, val, test = _split_by_ratio(all_items, train_r, val_r)
-        return _label_splits(train, val, test)
-
-    # Put fallback items into an artificial bucket
-    if fallback_items:
-        buckets[-1] = fallback_items
-
-    train_out: list[DatasetItem] = []
-    val_out: list[DatasetItem] = []
-    test_out: list[DatasetItem] = []
-
-    for _cls_id, bucket in sorted(buckets.items()):
-        rng.shuffle(bucket)
-        tr, va, te = _split_by_ratio(bucket, train_r, val_r)
-        train_out.extend(tr)
-        val_out.extend(va)
-        test_out.extend(te)
-
-    # Shuffle within each split to avoid class clustering
-    rng.shuffle(train_out)
-    rng.shuffle(val_out)
-    rng.shuffle(test_out)
-
-    return _label_splits(train_out, val_out, test_out)
+        if fallback_count:
+            bucket_counts[fallback_bucket] = fallback_count
+        outputs = {name: DatasetItemStore() for name in ("train", "val", "test")}
+        for bucket, count in sorted(bucket_counts.items()):
+            for position in range(count - 1, 0, -1):
+                other = rng.randrange(position + 1)
+                if other == position:
+                    continue
+                database.execute(
+                    "UPDATE bucket_items SET position=-1 WHERE bucket=? AND position=?",
+                    (bucket, position),
+                )
+                database.execute(
+                    "UPDATE bucket_items SET position=? WHERE bucket=? AND position=?",
+                    (position, bucket, other),
+                )
+                database.execute(
+                    "UPDATE bucket_items SET position=? WHERE bucket=? AND position=-1",
+                    (other, bucket),
+                )
+            n_train, n_val = _split_lengths(count, train_r, val_r)
+            for position, image, label in database.execute(
+                "SELECT position,image,label FROM bucket_items WHERE bucket=? "
+                "ORDER BY position",
+                (bucket,),
+            ):
+                split = (
+                    "train"
+                    if position < n_train
+                    else "val" if position < n_train + n_val else "test"
+                )
+                outputs[split].append(
+                    DatasetItem(str(image), str(label), split), split=split
+                )
+        return {
+            name: shuffled_item_store(store.commit(), rng)
+            for name, store in outputs.items()
+        }
+    finally:
+        database.close()
+        db_path.unlink(missing_ok=True)

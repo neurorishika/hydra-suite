@@ -337,6 +337,102 @@ def _validated_lora_trainables(
     return [parameter for _name, parameter in trainable_named], actual_parameters
 
 
+# Terms worth logging individually: a collapse shows up as one of these
+# going to zero while the others stay put, which a single core scalar hides.
+# A handful of skipped steps is normal on an overflow; a long run of them
+# means the model is not recovering and the run should stop, not grind on.
+MAX_CONSECUTIVE_SKIPPED_STEPS = 25
+
+LOGGED_LOSS_TERMS = (
+    "loss_ce",
+    "loss_bbox",
+    "loss_giou",
+    "loss_mask",
+    "loss_dice",
+    "presence_loss",
+)
+
+
+def _loss_term_summary(loss_dict: Any) -> str:
+    """Render the headline loss terms, or '' when they are unavailable."""
+    if not isinstance(loss_dict, dict):
+        return ""
+    parts = []
+    for term in LOGGED_LOSS_TERMS:
+        value = loss_dict.get(term)
+        if value is not None and getattr(value, "numel", lambda: 0)() == 1:
+            parts.append(f"{term}={float(value):.4f}")
+    return "  " + " ".join(parts) if parts else ""
+
+
+def _assert_finite_loss(loss: Any, *, epoch: int, step: int, loss_dict: Any) -> None:
+    """Abort the run the moment the loss stops being a number.
+
+    A non-finite loss poisons every subsequent gradient, and SAM3's Hungarian
+    matcher only notices much later -- it raised
+    ``ValueError: matrix contains invalid numeric entries`` some 700 steps
+    after the loss had already gone bad, by which point the run had burned
+    GPU hours producing an unusable adapter. Failing here names the epoch,
+    the step, and the per-term breakdown that led to it.
+    """
+    import torch
+
+    if torch.isfinite(loss).all():
+        return
+    raise RuntimeError(
+        f"SAM3 loss became non-finite at epoch {epoch}, step {step} "
+        f"(value={float(loss)}).{_loss_term_summary(loss_dict)}  Training "
+        "cannot recover from this -- refusing to keep stepping into a "
+        "checkpoint that would be silently worthless."
+    )
+
+
+class _LossWindow:
+    """Mean core loss and per-term losses across one accumulation window.
+
+    Logging the LAST micro-batch of a window is structurally misleading: the
+    boundary lands on ``micro_idx = grad_accum - 1``, and with negatives
+    interleaved one per tile that index always holds the same query TYPE.
+    With ``num_negatives=1`` every logged line was a negative -- which
+    legitimately has zero matched loss -- so loss_ce/bbox/giou/mask/dice read
+    as 0.0000 forever and a normally-training run looked like a total
+    collapse. Averaging the window reports what the optimizer stepped on.
+    """
+
+    def __init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        self._core = 0.0
+        self._terms: dict[str, float] = {}
+        self._n = 0
+
+    def add(self, loss: Any, loss_dict: Any) -> None:
+        self._n += 1
+        # detach(): `float()` on a graph-attached tensor warns, and keeping a
+        # reference to the graph across the whole window would pin every
+        # micro-batch's activations in memory until the window is reset.
+        self._core += float(loss.detach() if hasattr(loss, "detach") else loss)
+        if not isinstance(loss_dict, dict):
+            return
+        for term in LOGGED_LOSS_TERMS:
+            value = loss_dict.get(term)
+            if value is not None and getattr(value, "numel", lambda: 0)() == 1:
+                if hasattr(value, "detach"):
+                    value = value.detach()
+                self._terms[term] = self._terms.get(term, 0.0) + float(value)
+
+    def summary(self) -> str:
+        if not self._n:
+            return "loss n/a"
+        terms = " ".join(
+            f"{term}={self._terms[term] / self._n:.4f}"
+            for term in LOGGED_LOSS_TERMS
+            if term in self._terms
+        )
+        return f"loss {self._core / self._n:.4f}" + (f"  {terms}" if terms else "")
+
+
 def run_training(spec: Any, run_dir_path: Path) -> bool:
     """Run the SAM3 LoRA training loop and write `adapters.pt`.
 
@@ -470,6 +566,20 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
 
     global_step = 0
     logging_steps = 10
+    loss_window = _LossWindow()
+    skipped_steps = 0
+    consecutive_skipped = 0
+    # Announce the run's shape before the first step. Without this the only
+    # output for the first several minutes is silence, and there is no way to
+    # tell a slow run from a wedged one -- or to sanity-check the step budget
+    # against the epochs actually requested.
+    emit_log(
+        f"training shape: {len(train_descriptors)} tiles, "
+        f"{query_count(train_descriptors)} datapoints, "
+        f"batch={batch_size} grad_accum={grad_accum}, "
+        f"{n_batches} micro-batches/epoch, "
+        f"~{max(1, n_batches // grad_accum)} steps/epoch x {params.epochs} epochs"
+    )
     optimizer.zero_grad()
 
     for epoch in range(params.epochs):
@@ -482,23 +592,69 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
         )
         n_epoch_batches = n_batches
         for micro_idx, batch in enumerate(epoch_batches):
+            # Only the MODEL forward runs under autocast. The loss -- and with
+            # it SAM3's Hungarian matcher -- is computed outside, in fp32.
+            # `linear_sum_assignment` rejects any non-finite cost entry, and a
+            # bf16 cost matrix built from bf16 logits reaches inf/NaN far more
+            # readily than an fp32 one; a 10-epoch run died at epoch 5 with
+            # "matrix contains invalid numeric entries". The spike this design
+            # derives from matched in fp32 throughout (it used no autocast at
+            # all), so this restores its matcher numerics without paying fp32
+            # memory for the whole model -- a full fp32 run estimates ~58 GiB
+            # and does not fit this class of card.
             with torch.autocast(device_type="cuda", dtype=autocast_dtype, enabled=True):
                 model_input, targets, outputs = _forward_batch(batch, model, device)
-                loss_dict = loss_fn(outputs, targets)
-                loss = _core_loss(loss_dict)
+            loss_dict = loss_fn(outputs, targets)
+            loss = _core_loss(loss_dict)
 
+            _assert_finite_loss(
+                loss, epoch=epoch, step=global_step, loss_dict=loss_dict
+            )
+            loss_window.add(loss, loss_dict)
             (loss / grad_accum).backward()
 
             is_boundary = (micro_idx + 1) % grad_accum == 0
             is_final_micro_batch = (micro_idx + 1) == n_epoch_batches
             if is_boundary or is_final_micro_batch:
-                torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
-                optimizer.step()
+                # clip_grad_norm_ does NOT sanitise non-finite gradients -- it
+                # scales by a norm that is itself inf/NaN, writing NaN straight
+                # into every adapter weight. From then on the model emits NaN
+                # logits, and the failure only surfaces later as a NaN loss (or,
+                # before the loss guard existed, as the Hungarian matcher
+                # rejecting the cost matrix hundreds of steps downstream).
+                # Skipping the step is what torch's own GradScaler does on
+                # overflow: drop the batch, keep the weights finite, continue.
+                total_norm = torch.nn.utils.clip_grad_norm_(
+                    trainable_params, max_norm=1.0
+                )
+                if torch.isfinite(total_norm):
+                    optimizer.step()
+                    consecutive_skipped = 0
+                else:
+                    consecutive_skipped += 1
+                    skipped_steps += 1
+                    if consecutive_skipped >= MAX_CONSECUTIVE_SKIPPED_STEPS:
+                        raise RuntimeError(
+                            f"SAM3 training skipped {consecutive_skipped} "
+                            "consecutive optimizer steps on non-finite "
+                            f"gradients (epoch {epoch}, step {global_step}). "
+                            "The run is no longer learning -- refusing to "
+                            "continue into a worthless checkpoint."
+                        )
+                # The schedule advances either way: it tracks intended
+                # progress through the run, not the number of accepted steps.
                 scheduler.step()
                 optimizer.zero_grad()
                 global_step += 1
-                if global_step % logging_steps == 0:
-                    emit_log(f"epoch {epoch} step {global_step} loss {float(loss):.4f}")
+                # Early steps log every time: waiting for step 10 hides both a
+                # fast crash and a pathologically slow first epoch.
+                if global_step <= 3 or global_step % logging_steps == 0:
+                    emit_log(
+                        f"epoch {epoch} step {global_step} "
+                        f"{loss_window.summary()}"
+                        + (f"  skipped={skipped_steps}" if skipped_steps else "")
+                    )
+                loss_window.reset()
             del batch, model_input, targets, outputs, loss_dict, loss
 
         emit_progress(epoch + 1, params.epochs)
@@ -555,13 +711,14 @@ def _evaluate_and_write(
     total_loss = 0.0
     with torch.no_grad():
         for batch in val_batches:
+            # Same split as training: matcher and loss in fp32, forward in bf16.
             with torch.autocast(
                 device_type="cuda", dtype=autocast_dtype, enabled=use_bf16
             ):
                 model_input, targets, outputs = _forward_batch(batch, model, device)
-                _attach_matcher_indices(outputs, targets, matcher)
-                loss_dict = loss_fn(outputs, targets)
-                loss = _core_loss(loss_dict)
+            _attach_matcher_indices(outputs, targets, matcher)
+            loss_dict = loss_fn(outputs, targets)
+            loss = _core_loss(loss_dict)
             total_loss += float(loss)
             del batch, model_input, targets, outputs, loss_dict, loss
 

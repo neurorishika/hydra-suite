@@ -47,6 +47,7 @@ from .cache.store import (
     PoseCacheHandle,
 )
 from .cache.writer import CacheWriter
+from .cancellation import InferenceCancelled
 from .config import InferenceConfig
 from .pipeline import Pipeline, PipelineStages
 from .result import (
@@ -1582,6 +1583,10 @@ class InferenceRunner:
                     range_total=range_total,
                     should_stop=should_stop,
                 )
+                if pass_result is not None and pass_result.cancelled:
+                    raise InferenceCancelled(
+                        "inference cancelled before the active frame window completed"
+                    )
                 complete_pass = pass_result is None or (
                     pass_result.frames_processed == range_total
                 )

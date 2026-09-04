@@ -23,6 +23,7 @@ def build_dataset_analysis_report(project: "DetectKitProject") -> tuple[str, lis
     try:
         from hydra_suite.training.dataset_inspector import (
             DatasetInspection,
+            DatasetItemStore,
             analyze_obb_sizes,
             format_size_analysis,
             inspect_obb_or_detect_dataset,
@@ -43,8 +44,17 @@ def build_dataset_analysis_report(project: "DetectKitProject") -> tuple[str, lis
             logger.warning("Failed to inspect %s: %s", src.path, exc)
             continue
         for split_name, items in inspection.splits.items():
-            merged.splits.setdefault(split_name, []).extend(items)
+            merged_items = merged.splits.get(split_name)
+            if merged_items is None:
+                merged_items = DatasetItemStore()
+                merged.splits[split_name] = merged_items
+            assert isinstance(merged_items, DatasetItemStore)
+            merged_items.extend(items)
         merged.class_names.update(inspection.class_names)
+
+    for items in merged.splits.values():
+        assert isinstance(items, DatasetItemStore)
+        items.commit()
 
     if not any(merged.splits.values()):
         return "No valid dataset items found in the configured sources.", []

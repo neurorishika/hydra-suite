@@ -284,6 +284,77 @@ def test_run_batch_pass_calls_progress_callback(tmp_path):
     assert progress_calls[-1][1] == 5
 
 
+def test_cancelled_only_window_never_promotes_and_preserves_active_cache(
+    tmp_path, monkeypatch
+):
+    from hydra_suite.core.inference.cancellation import InferenceCancelled
+    from hydra_suite.core.inference.runner import InferenceRunner, _open_caches
+    from hydra_suite.core.inference.stages.obb import OBBModels
+
+    cfg = _cfg()
+    cfg.obb.direct.slice.enabled = True
+    cfg.obb.direct.slice.geometry_mode = "custom"
+    cfg.obb.direct.slice.slice_width = 16
+    cfg.obb.direct.slice.slice_height = 16
+    cfg.obb.direct.slice.tile_batch_size = 2
+    old = _open_caches(cfg, tmp_path, write_mode="fresh")
+    old.detection.write_frame(0, result=_make_obb(1, 0))
+    old.close()
+    old_generation = old.generation_id
+
+    cancelled = {"value": False}
+
+    class _Model:
+        imgsz = 16
+        overrides = {"imgsz": 16}
+
+        def predict(self, images, **kwargs):
+            cancelled["value"] = True
+            return [object() for _ in images]
+
+    class _FrameSource:
+        start_frame = 1
+        end_frame = 1
+        frame_count = 1
+
+        def __iter__(self):
+            yield 1, np.zeros((32, 32, 3), dtype=np.uint8)
+
+        def close(self):
+            pass
+
+    models = MagicMock(
+        obb=OBBModels(mode="direct", direct_model=_Model()),
+        headtail=None,
+        cnn=[],
+        pose=None,
+        apriltag=None,
+    )
+    progress: list[tuple[int, int]] = []
+    monkeypatch.setattr(
+        "hydra_suite.core.inference.sources.make_frame_source",
+        lambda *args, **kwargs: _FrameSource(),
+    )
+    with patch(
+        "hydra_suite.core.inference.runner._load_all_models", return_value=models
+    ):
+        runner = InferenceRunner(cfg, cache_dir=tmp_path)
+        with pytest.raises(InferenceCancelled):
+            runner.run_batch_pass(
+                Path("video.mp4"),
+                start_frame=1,
+                end_frame=1,
+                progress_cb=lambda done, total: progress.append((done, total)),
+                should_stop=lambda: cancelled["value"],
+            )
+
+    active = _open_caches(cfg, tmp_path, read_only=True)
+    assert active.generation_id == old_generation
+    assert active.detection.read_frame(0).num_detections == 1
+    assert active.detection.read_frame(1) is None
+    assert progress == [(0, 1)]
+
+
 def test_load_frame_raises_without_cache_dir():
     from hydra_suite.core.inference.runner import InferenceRunner
 
