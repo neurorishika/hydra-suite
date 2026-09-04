@@ -34,10 +34,7 @@ from PySide6.QtWidgets import (
 
 from hydra_suite.core.inference.model_paths import get_models_root_directory
 from hydra_suite.trackerkit.config.schemas import TrackerConfig
-from hydra_suite.trackerkit.engine_params import (
-    SLICE_DEFAULT_CONFIDENCE,
-    SLICE_MERGE_DEFAULTS,
-)
+from hydra_suite.trackerkit.engine_params import SLICE_MERGE_DEFAULTS
 from hydra_suite.trackerkit.gui.panels.reference_scale_preview import (
     ReferenceScalePreviewWidget,
 )
@@ -2733,12 +2730,17 @@ class DetectionPanel(QWidget):
                     advanced[f"slice_{key}"] = values[key]
                 elif resetting:
                     advanced[f"slice_{key}"] = SLICE_MERGE_DEFAULTS[key]
+            # Confidence is restored ONLY when a profile explicitly claims
+            # one. Unlike the merge keys above, it is not profile-owned: it
+            # is the user's global YOLO threshold, used on the non-sliced
+            # path too. Resetting it to SLICE_DEFAULT_CONFIDENCE when no
+            # profile claims one silently overwrote the user's operating
+            # point -- on every "Training geometry" selection and on every
+            # switch to a sidecar-bearing model -- with no status message.
             if values["confidence_threshold"] is not None:
                 self.spin_yolo_confidence.setValue(
                     float(values["confidence_threshold"])
                 )
-            elif resetting:
-                self.spin_yolo_confidence.setValue(SLICE_DEFAULT_CONFIDENCE)
             for spin, value in (
                 (self.spin_slice_overlap, values["overlap"]),
                 (self.spin_slice_object_fraction, values["object_tile_fraction"]),

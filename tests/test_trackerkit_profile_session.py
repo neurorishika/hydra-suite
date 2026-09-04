@@ -289,10 +289,11 @@ def _meta_with_merge_profile():
 
 
 def test_switching_to_training_geometry_resets_profile_merge_settings(monkeypatch):
-    from hydra_suite.trackerkit.engine_params import (
-        SLICE_DEFAULT_CONFIDENCE,
-        SLICE_MERGE_DEFAULTS,
-    )
+    """The merge keys belong to the profile and MUST reset. Confidence does
+    NOT: it is the user's global YOLO threshold, used on the non-sliced path
+    too, so an unclaimed selection must leave it exactly where the user put
+    it (Important 3 -- this previously reset 0.65 -> 0.25 silently)."""
+    from hydra_suite.trackerkit.engine_params import SLICE_MERGE_DEFAULTS
     from tests.test_main_window_config_persistence import _make_main_window
 
     meta = _meta_with_merge_profile()
@@ -319,7 +320,7 @@ def test_switching_to_training_geometry_resets_profile_merge_settings(monkeypatc
         window.advanced_config["slice_merge_metric"]
         == SLICE_MERGE_DEFAULTS["merge_metric"]
     )
-    assert panel.spin_yolo_confidence.value() == SLICE_DEFAULT_CONFIDENCE
+    assert panel.spin_yolo_confidence.value() == 0.65
     window.close()
 
 
@@ -351,6 +352,9 @@ def test_switching_models_resets_the_previous_models_merge_settings(
     )
     assert window.advanced_config["slice_merge_policy"] == "greedy_nmm"
     assert profile_id  # the id is model_a's alone and must not follow along
+    # Important 3: model_b's sidecar claims no confidence, so the user's
+    # global YOLO threshold must survive the switch untouched.
+    assert panel.spin_yolo_confidence.value() == 0.65
     window.close()
 
 
