@@ -111,9 +111,7 @@ class _PublishDecision:
 def stripped_keys(state_dict: dict[str, Any]) -> list[str]:
     """Reproduce ultralytics' substring filter and replacement exactly."""
 
-    return sorted(
-        key.replace("detector.", "") for key in state_dict if "detector" in key
-    )
+    return [key.replace("detector.", "") for key in state_dict if "detector" in key]
 
 
 def _file_identity(path: Path) -> tuple[int, int]:

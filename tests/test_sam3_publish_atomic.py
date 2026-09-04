@@ -89,6 +89,44 @@ def test_atomic_publish_preserves_layout_dtype_stock_keys_and_numerics(tmp_path)
     assert meta["train_tile_px"] == 1007
     assert meta["source_fingerprint"] == "fp1"
     assert meta["label_quality_acknowledged"] is True
+    assert meta["stripped_keys"] == [
+        "qkv.weight",
+        "vision_backbone.sam2_convs.0.weight",
+    ]
+
+
+def test_publish_preserves_first_three_touched_fingerprint_contract(tmp_path):
+    base = {
+        "detector.a.weight": torch.randn(4, 4),
+        "detector.b.weight": torch.randn(4, 4),
+    }
+    base_path = tmp_path / "base.pt"
+    torch.save(base, base_path)
+    adapters_path = tmp_path / "adapters.pt"
+    torch.save(
+        {
+            "a.lora_A": torch.ones(2, 4),
+            "a.lora_B": torch.ones(4, 2),
+            "b.lora_A": torch.ones(2, 4),
+            # Existing metadata records each of the first three touched keys,
+            # including a no-op key when another recorded adapter did change.
+            "b.lora_B": torch.zeros(4, 2),
+        },
+        adapters_path,
+    )
+
+    _artifact, sidecar = publish_worker.publish_sam3_artifact(
+        run_id="run-1",
+        adapters_path=adapters_path,
+        base_checkpoint=base_path,
+        build_manifest={},
+        params=Sam3LoraParams(prompt="ant", rank=2, alpha=4),
+        source_fingerprint="fp1",
+        models_root=tmp_path / "models",
+    )
+
+    metadata = json.loads(sidecar.read_text(encoding="utf-8"))
+    assert list(metadata["tuned_fingerprints"]) == ["a.weight", "b.weight"]
 
 
 def test_missing_mapping_fails_before_any_artifact_or_staging_is_visible(tmp_path):

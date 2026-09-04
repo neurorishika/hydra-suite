@@ -46,9 +46,7 @@ _ATTEMPT_ID = re.compile(r"[0-9a-f]{32}\Z")
 def stripped_keys(state_dict: dict[str, Any]) -> list[str]:
     """Reproduce ultralytics' substring filter and replacement exactly."""
 
-    return sorted(
-        key.replace("detector.", "") for key in state_dict if "detector" in key
-    )
+    return [key.replace("detector.", "") for key in state_dict if "detector" in key]
 
 
 def _load_base_checkpoint(base_checkpoint: Path) -> dict[str, torch.Tensor]:
@@ -224,19 +222,23 @@ def publish_sam3_artifact(
         # must describe a wholly unmodified checkpoint.
         _validated_adapter_pairs(base, adapters, cfg, prefix="detector.")
         touched_keys = adapter_touched_keys(adapters)
+        fingerprint_keys = sorted(touched_keys)[:3]
         original_fingerprints = {
-            key: tensor_sha256(base[key]) for key in sorted(touched_keys)
+            key: tensor_sha256(base[key]) for key in fingerprint_keys
         }
         expected_keys = tuple(base)
         expected_dtypes = {key: value.dtype for key, value in base.items()}
 
         merged = merge_adapters(base, adapters, cfg)
-        tuned_fingerprints: dict[str, str] = {}
-        for key in sorted(touched_keys):
-            tuned = tensor_sha256(merged[key])
-            if tuned != original_fingerprints[key] and len(tuned_fingerprints) < 3:
-                tuned_fingerprints[key.replace("detector.", "")] = tuned
-        if not tuned_fingerprints:
+        tuned_fingerprints = {
+            key.replace("detector.", ""): tensor_sha256(merged[key])
+            for key in fingerprint_keys
+        }
+        if not any(
+            tuned_fingerprints[key.replace("detector.", "")]
+            != original_fingerprints[key]
+            for key in fingerprint_keys
+        ):
             raise RuntimeError(
                 "Merge produced a checkpoint indistinguishable from stock SAM3: "
                 "no adapter-touched tensor changed after consumer-normalized hashing."

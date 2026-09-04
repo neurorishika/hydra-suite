@@ -36,10 +36,7 @@ def test_stripped_keys_reproduce_ultralytics_transform():
         "x.detector.c": torch.zeros(1),
     }
     # build_sam3.py:357 filters on the SUBSTRING "detector", not a prefix.
-    got = set(stripped_keys(sd))
-    assert "a.weight" in got
-    assert "other.b.weight" not in got
-    assert "x.c" in got
+    assert stripped_keys(sd) == ["a.weight", "x.c"]
 
 
 def test_artifact_is_not_written_into_the_stock_cache(tmp_path):
