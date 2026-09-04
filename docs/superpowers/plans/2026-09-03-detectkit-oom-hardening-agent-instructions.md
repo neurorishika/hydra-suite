@@ -329,6 +329,16 @@ test a cap by consuming a dangerous amount of physical RAM.
 - A second conflicting heavy job is refused before allocating its model.
 - All focused tests and a real CUDA smoke run are green.
 
+### Set 2 safety boundary
+
+Set 2 contains the SAM3 training subprocess, but it is not an end-to-end OOM
+guarantee. SAM3 checkpoint merge/publish remains a Set 3 dependency and must not
+be described as production-safe until Sets 1–3 are complete. Dataset preparation
+and inspection also still run in GUI worker threads and retain large frame/path
+and COCO structures; their streaming/process-isolation root fix is a separate
+follow-up set. Until that lands, prepare datasets separately with conservative
+inputs and do not represent the GUI prepare-and-train workflow as machine-safe.
+
 ---
 
 ## Agent brief 3 — Memory-safe SAM3 publishing

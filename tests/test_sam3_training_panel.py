@@ -11,6 +11,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
+from PySide6.QtCore import QMimeData  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 
@@ -28,9 +29,70 @@ def test_params_round_trip(qapp):
     got = panel.params()
     assert got.epochs == 10 and got.rank == 16
 
-    panel.set_params(Sam3LoraParams(prompt="beetle", epochs=3, rank=8))
+    panel.set_params(
+        Sam3LoraParams(
+            prompt="beetle",
+            epochs=3,
+            rank=8,
+            host_reserve_gb=12.0,
+            host_reserve_fraction=0.2,
+            cuda_safety_fraction=0.8,
+        )
+    )
     back = panel.params()
     assert back.prompt == "beetle" and back.epochs == 3 and back.rank == 8
+    assert back.host_reserve_gb == 12.0
+    assert back.host_reserve_fraction == pytest.approx(0.2)
+    assert back.cuda_safety_fraction == pytest.approx(0.8)
+
+
+def test_prompt_editors_bound_programmatic_and_pasted_input(qapp):
+    from hydra_suite.detectkit.gui.panels.sam3_training_panel import Sam3TrainingPanel
+    from hydra_suite.training.contracts import (
+        SAM3_MAX_CONFIGURED_PROMPT_BYTES,
+        SAM3_MAX_NEGATIVE_PROMPT_COUNT,
+        SAM3_MAX_PROMPT_CODEPOINTS,
+    )
+
+    panel = Sam3TrainingPanel()
+    panel.prompt_edit.setText("x" * (SAM3_MAX_PROMPT_CODEPOINTS + 100))
+    assert len(panel.prompt_edit.text()) == SAM3_MAX_PROMPT_CODEPOINTS
+
+    mime = QMimeData()
+    mime.setText("y" * (SAM3_MAX_CONFIGURED_PROMPT_BYTES * 4))
+    panel.negative_prompts_edit.insertFromMimeData(mime)
+    stored = panel.negative_prompts_edit.toPlainText()
+    assert len(stored) <= SAM3_MAX_CONFIGURED_PROMPT_BYTES
+    assert max(map(len, stored.splitlines() or [""])) <= SAM3_MAX_PROMPT_CODEPOINTS
+
+    panel.negative_prompts_edit.setPlainText("z" * (SAM3_MAX_PROMPT_CODEPOINTS + 50))
+    assert len(panel.negative_prompts_edit.toPlainText()) == SAM3_MAX_PROMPT_CODEPOINTS
+
+    panel.negative_prompts_edit.setPlainText(
+        "\n".join("line" for _ in range(SAM3_MAX_NEGATIVE_PROMPT_COUNT + 100))
+    )
+    stored = panel.negative_prompts_edit.toPlainText()
+    assert len(stored.splitlines()) == SAM3_MAX_NEGATIVE_PROMPT_COUNT
+
+    panel.negative_prompts_edit.setPlainText(
+        "\n".join("😀" * SAM3_MAX_PROMPT_CODEPOINTS for _ in range(400))
+    )
+    stored = panel.negative_prompts_edit.toPlainText()
+    assert len(stored.encode("utf-8")) <= SAM3_MAX_CONFIGURED_PROMPT_BYTES
+    assert len(stored.splitlines()) <= SAM3_MAX_NEGATIVE_PROMPT_COUNT
+
+    panel.negative_prompts_edit.setPlainText("valid\x00\x01\ttext")
+    assert panel.negative_prompts_edit.toPlainText() == "validtext"
+
+
+def test_gui_exposes_only_verified_bf16_mode(qapp):
+    from hydra_suite.detectkit.gui.panels.sam3_training_panel import Sam3TrainingPanel
+
+    panel = Sam3TrainingPanel()
+
+    assert [
+        panel.precision_combo.itemText(i) for i in range(panel.precision_combo.count())
+    ] == ["bf16"]
 
 
 def test_training_is_blocked_until_labels_are_acknowledged(qapp):

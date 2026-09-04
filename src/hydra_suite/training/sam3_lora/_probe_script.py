@@ -38,15 +38,26 @@ TRAINING_PACKAGES = (
 
 
 def _probe() -> dict:
+    imported = {}
     for package in TRAINING_PACKAGES:
         try:
-            importlib.import_module(package)
+            imported[package] = importlib.import_module(package)
         except Exception as exc:  # noqa: BLE001 - report, never crash the probe
             return {
                 "ok": False,
                 "missing": [{"package": package, "error": str(exc)}],
             }
-    return {"ok": True, "missing": []}
+    torch = imported["torch"]
+    cuda_available = bool(torch.cuda.is_available())
+    capability = list(torch.cuda.get_device_capability()) if cuda_available else None
+    bf16_supported = bool(torch.cuda.is_bf16_supported()) if cuda_available else False
+    return {
+        "ok": True,
+        "missing": [],
+        "cuda_available": cuda_available,
+        "cuda_compute_capability": capability,
+        "cuda_bf16_supported": bf16_supported,
+    }
 
 
 def main() -> int:

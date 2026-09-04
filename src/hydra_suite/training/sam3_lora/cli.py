@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import random
 import sys
 from pathlib import Path
@@ -41,8 +42,9 @@ from typing import Any
 
 import numpy as np
 
-from hydra_suite.training.contracts import Sam3LoraParams
+from hydra_suite.training.contracts import Sam3LoraParams, sam3_prompt_text_error
 
+from .artifacts import write_completion_marker
 from .dataloader import (
     batch_count,
     build_descriptors,
@@ -54,6 +56,7 @@ from .dataloader import (
 from .lora import adapter_state_dict, inject_adapters, lora_config_from_params
 from .perflib_compat import install_grad_safe_addmm_act
 from .protocol import emit_log, emit_progress
+from .sizing import expected_lora_trainable_params
 
 
 class _SidecarSpec:
@@ -69,6 +72,7 @@ class _SidecarSpec:
     def __init__(self, data: dict[str, Any]) -> None:
         self.seed: int = int(data.get("seed", 42))
         self.derived_dataset_dir: str = data["derived_dataset_dir"]
+        self.device: str = str(data.get("device", "cuda"))
         sam3_data = data.get("sam3_params")
         self.sam3_params = Sam3LoraParams(**sam3_data) if sam3_data else None
 
@@ -164,6 +168,84 @@ def _core_loss(loss_result: Any) -> Any:
     return loss_result["core_loss"] if isinstance(loss_result, dict) else loss_result
 
 
+def _validate_adapter_state(adapters: Any, torch_module: Any) -> None:
+    """Reject corrupt, incomplete, non-finite, and mathematical no-op adapters."""
+
+    if not isinstance(adapters, dict) or not adapters:
+        raise ValueError("SAM3 adapter state must be a non-empty mapping")
+    paths: dict[str, set[str]] = {}
+    tensors: dict[str, Any] = {}
+    for key, tensor in adapters.items():
+        if not isinstance(key, str) or not torch_module.is_tensor(tensor):
+            raise ValueError("SAM3 adapter state contains a non-tensor entry")
+        path, separator, suffix = key.rpartition(".")
+        if not separator or suffix not in {"lora_A", "lora_B"}:
+            raise ValueError(f"unexpected SAM3 adapter key {key!r}")
+        if tensor.ndim != 2 or tensor.numel() == 0:
+            raise ValueError(f"SAM3 adapter tensor {key!r} must be non-empty 2-D")
+        if not bool(torch_module.isfinite(tensor).all().item()):
+            raise ValueError(f"SAM3 adapter tensor {key!r} contains non-finite values")
+        paths.setdefault(path, set()).add(suffix)
+        tensors[key] = tensor
+    if any(suffixes != {"lora_A", "lora_B"} for suffixes in paths.values()):
+        raise ValueError("SAM3 adapter state has an incomplete LoRA A/B pair")
+    for path in paths:
+        matrix_a = tensors[f"{path}.lora_A"]
+        matrix_b = tensors[f"{path}.lora_B"]
+        if matrix_a.shape[0] != matrix_b.shape[1]:
+            raise ValueError(f"SAM3 adapter pair {path!r} has incompatible rank")
+    has_nonzero_delta = False
+    max_delta_elements = 1_048_576
+    for path in paths:
+        matrix_a = tensors[f"{path}.lora_A"].float()
+        matrix_b = tensors[f"{path}.lora_B"]
+        if not bool(torch_module.count_nonzero(matrix_a).item()) or not bool(
+            torch_module.count_nonzero(matrix_b).item()
+        ):
+            continue
+        rows_per_chunk = max(1, max_delta_elements // max(1, matrix_a.shape[1]))
+        for start in range(0, matrix_b.shape[0], rows_per_chunk):
+            delta = torch_module.matmul(
+                matrix_b[start : start + rows_per_chunk].float(), matrix_a
+            )
+            if bool(torch_module.count_nonzero(delta).item()):
+                has_nonzero_delta = True
+                break
+        if has_nonzero_delta:
+            break
+    if not has_nonzero_delta:
+        raise ValueError(
+            "SAM3 adapter is a mathematical no-op (all LoRA deltas are zero)"
+        )
+
+
+def _write_validated_adapter_artifact(
+    adapters: Any, artifact_path: Path, torch_module: Any
+) -> None:
+    """Serialize, reload, validate, and atomically promote one adapter state."""
+
+    _validate_adapter_state(adapters, torch_module)
+    temporary = artifact_path.with_name(
+        f".{artifact_path.name}.{os.getpid()}.validated.tmp"
+    )
+    try:
+        with temporary.open("wb") as artifact_file:
+            torch_module.save(adapters, artifact_file)
+            artifact_file.flush()
+            os.fsync(artifact_file.fileno())
+        reloaded = torch_module.load(temporary, map_location="cpu", weights_only=True)
+        _validate_adapter_state(reloaded, torch_module)
+        os.replace(temporary, artifact_path)
+        directory_fd = os.open(artifact_path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+        write_completion_marker(artifact_path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def _build_dataloader(spec: Any, params: Any, *, split: str) -> list:
     """Read the built COCO split into lightweight tile descriptors.
 
@@ -171,6 +253,88 @@ def _build_dataloader(spec: Any, params: Any, *, split: str) -> list:
     reaches the corresponding batch.
     """
     return build_descriptors(spec.derived_dataset_dir, params, split, seed=spec.seed)
+
+
+def _runtime_admission_refusal(torch_module: Any, params: Any) -> str | None:
+    """Repeat the parent precision/hardware gate before importing SAM3."""
+    prompt_error = sam3_prompt_text_error(getattr(params, "prompt", None))
+    if prompt_error is not None:
+        return f"SAM3 prompt {prompt_error}."
+    for index, negative_prompt in enumerate(
+        getattr(params, "negative_prompts", ()) or ()
+    ):
+        prompt_error = sam3_prompt_text_error(negative_prompt)
+        if prompt_error is not None:
+            return f"SAM3 negative prompt {index} {prompt_error}."
+    if getattr(params, "mixed_precision", None) != "bf16":
+        return (
+            "SAM3 training supports only CUDA BF16; fp16/fp32 modes fail "
+            "against SAM3's BF16 activation path and are disabled."
+        )
+    if not torch_module.cuda.is_available():
+        return "SAM3 training requires a CUDA device; CPU and MPS are disabled."
+    major, minor = torch_module.cuda.get_device_capability()
+    if major < 8:
+        return (
+            "SAM3 training requires CUDA BF16 on compute capability >= 8.0; "
+            f"the selected GPU reports {major}.{minor}. FP32 fallback is disabled."
+        )
+    if not bool(torch_module.cuda.is_bf16_supported()):
+        return (
+            "The selected CUDA runtime reports that BF16 operations are not "
+            "supported; SAM3 training has no safe FP32 fallback."
+        )
+    if not any(
+        bool(getattr(params, flag, False))
+        for flag in (
+            "adapt_vision_encoder",
+            "adapt_text_encoder",
+            "adapt_geometry_encoder",
+            "adapt_detr_encoder",
+            "adapt_detr_decoder",
+            "adapt_mask_decoder",
+        )
+    ):
+        return (
+            "SAM3 training requires at least one enabled adapter scope; all "
+            "adapt_* flags are disabled."
+        )
+    return None
+
+
+def _validated_lora_trainables(
+    model: Any, *, adapted_modules: int, expected_parameters: int
+) -> tuple[list[Any], int]:
+    """Return LoRA-only tensors or refuse estimator/runtime shape drift."""
+
+    trainable_named = [
+        (name, parameter)
+        for name, parameter in model.named_parameters()
+        if parameter.requires_grad
+    ]
+    unexpected_trainable = [
+        name
+        for name, _parameter in trainable_named
+        if not name.endswith((".lora_A", ".lora_B"))
+    ]
+    actual_parameters = sum(
+        int(parameter.numel()) for _name, parameter in trainable_named
+    )
+    if (
+        adapted_modules < 1
+        or len(trainable_named) != 2 * adapted_modules
+        or unexpected_trainable
+        or actual_parameters != expected_parameters
+    ):
+        unexpected = ", ".join(unexpected_trainable[:5]) or "none"
+        raise RuntimeError(
+            "SAM3 LoRA trainable-parameter invariant failed: "
+            f"adapters={adapted_modules}, trainable={len(trainable_named)}, "
+            f"parameters={actual_parameters}, "
+            f"expected_parameters={expected_parameters}, "
+            f"unexpected={unexpected}"
+        )
+    return [parameter for _name, parameter in trainable_named], actual_parameters
 
 
 def run_training(spec: Any, run_dir_path: Path) -> bool:
@@ -182,7 +346,6 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
     uncaught exception is `main()`'s cue to exit nonzero).
     """
     params = spec.sam3_params
-    _seed_everything(spec.seed)
 
     train_descriptors = _build_dataloader(spec, params, split="train")
     if not train_descriptors:
@@ -194,6 +357,12 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
 
     # --- Lazy, training-only imports -----------------------------------
     import torch
+
+    refusal = _runtime_admission_refusal(torch, params)
+    if refusal:
+        emit_log(refusal)
+        return False
+    _seed_everything(spec.seed)
 
     # NOTE: verified against the real Meta sam3 source on the CUDA box
     # (2026-08-31): sam3/build_sam.py does not exist. The builder lives in
@@ -213,17 +382,27 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
     model = build_sam3_image_model(eval_mode=False)
 
     lora_cfg = lora_config_from_params(params)
+    # The preflight estimate intentionally budgets optimizer and gradient
+    # state for LoRA parameters only.  SAM3 builders do not promise frozen
+    # defaults, so establish that invariant here before adapters are created.
+    model.requires_grad_(False)
     n_adapted = inject_adapters(model, lora_cfg)
     emit_log(f"Injected LoRA adapters into {n_adapted} Linear modules.")
-    # `.to(device)` AFTER injection, not before: `inject_adapters` creates
-    # fresh lora_A/lora_B Parameters on whatever device the module it wraps
-    # was built on, and it does not inherit an earlier `.to()`. Moving the
-    # model first left every adapter on CPU while the frozen base sat on
-    # CUDA, so the first forward died with "Expected all tensors to be on
-    # the same device ... mat2 is on cpu".
+    expected_trainable_params = expected_lora_trainable_params(params)
+    trainable_params, actual_trainable_params = _validated_lora_trainables(
+        model,
+        adapted_modules=n_adapted,
+        expected_parameters=expected_trainable_params,
+    )
+    # Validate exact estimator parity before moving any unexpectedly large
+    # upstream model drift onto VRAM. `.to(device)` remains after injection so
+    # the newly created adapter tensors move with the frozen base.
     model.to(device)
-
-    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    emit_log(
+        "Verified LoRA-only optimizer scope: "
+        f"{actual_trainable_params:,} parameters in {len(trainable_params)} "
+        f"tensors across {n_adapted} adapters."
+    )
 
     # Verified against the real Meta sam3 source on the CUDA box (2026-08-31,
     # sam3-lora env): `inspect.signature` on `Sam3LossWrapper.__init__`,
@@ -287,14 +466,7 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
         optimizer, lr_lambda=_cosine_with_warmup(warmup_steps, total_steps)
     )
 
-    major, _minor = torch.cuda.get_device_capability()
-    use_bf16 = major >= 8 and params.mixed_precision == "bf16"
-    if params.mixed_precision == "bf16" and not use_bf16:
-        emit_log(
-            "GPU compute capability < 8.0; falling back to fp32 "
-            "(bf16 autocast is not supported)."
-        )
-    autocast_dtype = torch.bfloat16 if use_bf16 else torch.float32
+    autocast_dtype = torch.bfloat16
 
     global_step = 0
     logging_steps = 10
@@ -310,9 +482,7 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
         )
         n_epoch_batches = n_batches
         for micro_idx, batch in enumerate(epoch_batches):
-            with torch.autocast(
-                device_type="cuda", dtype=autocast_dtype, enabled=use_bf16
-            ):
+            with torch.autocast(device_type="cuda", dtype=autocast_dtype, enabled=True):
                 model_input, targets, outputs = _forward_batch(batch, model, device)
                 loss_dict = loss_fn(outputs, targets)
                 loss = _core_loss(loss_dict)
@@ -333,10 +503,9 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
 
         emit_progress(epoch + 1, params.epochs)
 
-    # --- Persist artifacts (LAST checkpoint, never best-on-val-loss) -----
-    artifact_path = run_dir_path / "adapters.pt"
-    torch.save(adapter_state_dict(model), artifact_path)
-
+    # Keep adapters in memory until validation completes. A failed evaluation,
+    # kill, or parent death must not expose a seemingly completed artifact.
+    adapters = adapter_state_dict(model)
     _evaluate_and_write(
         model,
         spec,
@@ -345,9 +514,11 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
         loss_fn,
         device,
         autocast_dtype,
-        use_bf16,
+        True,
         run_dir_path,
     )
+    artifact_path = run_dir_path / "adapters.pt"
+    _write_validated_adapter_artifact(adapters, artifact_path, torch)
     return True
 
 

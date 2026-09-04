@@ -147,6 +147,47 @@ def test_lora_config_from_params_maps_the_flags():
         assert pref in cfg.include_prefixes
 
 
+def test_lora_config_all_scopes_uses_explicit_budgeted_prefixes():
+    from types import SimpleNamespace
+
+    from hydra_suite.training.sam3_lora.lora import (
+        SUBMODULE_PREFIXES,
+        lora_config_from_params,
+    )
+
+    params = SimpleNamespace(
+        rank=8,
+        alpha=16,
+        dropout=0.0,
+        **{flag: True for flag in SUBMODULE_PREFIXES},
+    )
+    config = lora_config_from_params(params)
+
+    assert set(config.include_prefixes) == {
+        prefix for prefixes in SUBMODULE_PREFIXES.values() for prefix in prefixes
+    }
+    assert "dot_prod_scoring" not in config.include_prefixes
+
+
+def test_lora_config_rejects_no_enabled_scope():
+    from types import SimpleNamespace
+
+    from hydra_suite.training.sam3_lora.lora import (
+        SUBMODULE_PREFIXES,
+        lora_config_from_params,
+    )
+
+    params = SimpleNamespace(
+        rank=8,
+        alpha=16,
+        dropout=0.0,
+        **{flag: False for flag in SUBMODULE_PREFIXES},
+    )
+
+    with pytest.raises(ValueError, match="scope"):
+        lora_config_from_params(params)
+
+
 def test_non_targeted_base_keys_pass_through_untouched():
     m = Toy()
     inject_adapters(m, _cfg())

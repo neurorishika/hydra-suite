@@ -79,14 +79,14 @@ TARGET_SUFFIXES: tuple[str, ...] = (
 def lora_config_from_params(params) -> "LoraConfig":
     """Turn the six adapt_* booleans into an include-prefix list.
 
-    An empty include list means "everything", so a params object with all six
-    flags True yields () rather than the union -- same behaviour, fewer
-    string comparisons per module.
+    Always return the explicit declared-prefix union. The empty-prefix sentinel
+    means "everything" to the generic injector and would include unbudgeted
+    modules such as ``dot_prod_scoring``.
     """
     enabled = [f for f in SUBMODULE_PREFIXES if getattr(params, f)]
-    include: tuple[str, ...] = ()
-    if len(enabled) < len(SUBMODULE_PREFIXES):
-        include = tuple(pref for flag in enabled for pref in SUBMODULE_PREFIXES[flag])
+    if not enabled:
+        raise ValueError("at least one SAM3 LoRA adapter scope must be enabled")
+    include = tuple(pref for flag in enabled for pref in SUBMODULE_PREFIXES[flag])
     return LoraConfig(
         rank=params.rank,
         alpha=params.alpha,

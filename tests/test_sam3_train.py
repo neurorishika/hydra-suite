@@ -1,22 +1,20 @@
-"""SAM3 LoRA launcher tests (train.py) -- the sidecar-subprocess boundary.
-
-Training now runs in a dedicated `hydra-sam3` conda env, launched as a
-subprocess via `popen_conda` (see
-`docs/superpowers/specs/2026-09-01-sam3-training-sidecar-env-design.md`,
-section 3). These tests fake `popen_conda` entirely -- no real subprocess,
-no conda, no sam3, no GPU -- and assert the launcher's streaming, exit-code,
-and artifact-verification discipline.
-
-THE CRITICAL RULE under test throughout: a child that exits 0 without having
-written `adapters.pt` must still report `success: False`. Earlier in this
-branch an in-process version returned success after training zero batches,
-which would have published a checkpoint identical to stock -- see the
-original of this file, task-8 fix round 1, finding 2. That discipline now
-has to hold across a process boundary instead of inside one function.
-"""
+"""SAM3 launcher integration with the bounded resource supervisor."""
 
 from __future__ import annotations
 
+import hashlib
+import json
+from types import SimpleNamespace
+
+import pytest
+
+from hydra_suite.runtime.process_supervisor import (
+    ClassifiedExit,
+    ExitKind,
+    SupervisedResult,
+    WorkloadStillOwnedError,
+)
+from hydra_suite.runtime.resource_lease import ResourceBusyError
 from hydra_suite.training.contracts import (
     Sam3LoraParams,
     SourceDataset,
@@ -24,387 +22,567 @@ from hydra_suite.training.contracts import (
     TrainingRole,
     TrainingRunSpec,
 )
-from hydra_suite.training.sam3_lora import preflight as pf
 from hydra_suite.training.sam3_lora import train as tr
 
 
-def _healthy_spec(tmp_path):
-    p = Sam3LoraParams(prompt="ant", label_quality_acknowledged=True)
+@pytest.fixture(autouse=True)
+def _isolate_models_root(tmp_path, monkeypatch):
+    monkeypatch.setattr(tr, "get_models_root", lambda: tmp_path / "models")
+
+
+def _spec(tmp_path, **overrides):
+    params = Sam3LoraParams(prompt="ant", label_quality_acknowledged=True, **overrides)
     return TrainingRunSpec(
         role=TrainingRole.SEMANTIC_SAM3,
         source_datasets=[SourceDataset(path="/tmp/x", level="polygon")],
         derived_dataset_dir=str(tmp_path / "dataset"),
         base_model="sam3",
         hyperparams=TrainingHyperParams(),
-        sam3_params=p,
+        sam3_params=params,
     )
 
 
-def _pass_preflight(monkeypatch):
-    monkeypatch.setattr(pf, "_cuda_free_gb", lambda: 48.0)
-    monkeypatch.setattr(pf, "_instance_count", lambda d: 100)
-    monkeypatch.setattr(pf, "_free_disk_gb", lambda p: 100.0)
+class _Decision:
+    def __init__(
+        self,
+        *,
+        admitted=True,
+        refusals=(),
+        uuid="GPU-physical-0",
+        hard_host_bytes=12 << 30,
+        usable_host_bytes=40 << 30,
+    ):
+        self.admitted = admitted
+        self.refusals = tuple(refusals)
+        self.warnings = ()
+        self.cuda_device = (
+            SimpleNamespace(uuid=uuid, total_bytes=48 << 30, free_bytes=47 << 30)
+            if uuid
+            else None
+        )
+        self.dataset = SimpleNamespace(marker="metadata-only")
+        self.budget = SimpleNamespace(
+            host_peak_bytes=10 << 30,
+            reserved_host_bytes=8 << 30,
+            usable_host_bytes=usable_host_bytes,
+        )
+        self.containment_soft_host_bytes = 11 << 30
+        self.containment_hard_host_bytes = hard_host_bytes
+
+    def to_dict(self):
+        return {
+            "admitted": self.admitted,
+            "refusals": list(self.refusals),
+            "cuda_device": (
+                {"uuid": self.cuda_device.uuid} if self.cuda_device else None
+            ),
+        }
 
 
-class _FakeProcess:
-    """Stands in for `subprocess.Popen` as returned by `popen_conda`.
+class _Output:
+    def __init__(self, lines=(), *, eof=True):
+        self.lines = list(lines)
+        self.eof = eof
 
-    `pid` is deliberately bogus (not a real process): `_send_signal`'s
-    `os.killpg(os.getpgid(pid), ...)` must raise on it and fall back to the
-    plain `.terminate()`/`.kill()` below, which is what these tests assert
-    on -- this is also what happens for real against a process this test
-    process does not own.
-    """
-
-    pid = -1
-
-    def __init__(self, lines, returncode=0, terminate_hangs=False):
-        self._lines = list(lines)
-        self.returncode = returncode
-        self.stdout = iter(self._lines)
-        self.terminated = False
-        self.killed = False
-        self._terminate_hangs = terminate_hangs
-        self._waited = False
-
-    def terminate(self):
-        self.terminated = True
-
-    def kill(self):
-        self.killed = True
-
-    def wait(self, timeout=None):
-        if self._terminate_hangs and self.terminated and not self.killed and timeout:
-            import subprocess
-
-            raise subprocess.TimeoutExpired(cmd="fake", timeout=timeout)
-        self._waited = True
-        return self.returncode
+    def drain(self, timeout=0):
+        lines, self.lines = self.lines, []
+        return lines, self.eof, None
 
 
-def _fake_popen_conda(calls, process):
-    def _fake(*args, **kwargs):
-        calls.append((args, kwargs))
-        return process
+def _supervised(kind=ExitKind.SUCCESS, *, returncode=0, tail=()):
+    return SupervisedResult(
+        returncode=returncode,
+        classified_exit=ClassifiedExit(kind, f"classified {kind.value}"),
+        output_tail=tuple(tail),
+        dropped_output_lines=0,
+        watchdog=None,
+        cgroup=None,
+        output_error=None,
+        peak_accelerator_bytes=2 << 30,
+        accelerator_observation_error=None,
+        peak_tree_rss_bytes=3 << 30,
+        minimum_system_available_bytes=40 << 30,
+    )
 
-    return _fake
 
+def _install(
+    monkeypatch,
+    tmp_path,
+    *,
+    result=None,
+    lines=(),
+    write_artifact=True,
+    artifact_bytes=b"adapter",
+    poll_returncode=0,
+    output_eof=True,
+    decisions=None,
+):
+    decisions = list(decisions or [_Decision(), _Decision()])
 
-def test_preflight_refuses_before_any_subprocess(tmp_path, monkeypatch):
-    """A spec missing label_quality_acknowledged must never launch a child."""
+    def assess(_spec, **_kwargs):
+        return decisions.pop(0) if len(decisions) > 1 else decisions[0]
+
+    monkeypatch.setattr(tr.preflight_module, "assess_preflight", assess)
+    monkeypatch.setattr(
+        tr.preflight_module,
+        "_probe_cuda_device",
+        lambda _device: SimpleNamespace(
+            uuid="GPU-physical-0", total_bytes=48 << 30, free_bytes=46 << 30
+        ),
+    )
     calls = []
-    monkeypatch.setattr(tr, "popen_conda", _fake_popen_conda(calls, None))
+    supervised = result or _supervised()
 
-    p = Sam3LoraParams(prompt="ant", label_quality_acknowledged=False)
-    spec = TrainingRunSpec(
-        role=TrainingRole.SEMANTIC_SAM3,
-        source_datasets=[SourceDataset(path="/tmp/x", level="polygon")],
-        derived_dataset_dir=str(tmp_path / "dataset"),
-        base_model="sam3",
-        hyperparams=TrainingHyperParams(),
-        sam3_params=p,
+    class FakeSidecar:
+        def __init__(self, plan, *, prelaunch_check, **kwargs):
+            self.plan = plan
+            self.output = _Output(lines, eof=output_eof)
+            self.process = SimpleNamespace(poll=lambda: poll_returncode)
+            self.canceled = False
+            calls.append(self)
+            prelaunch_check()
+            if write_artifact:
+                artifact = tmp_path / "run" / "adapters.pt"
+                artifact.parent.mkdir(parents=True, exist_ok=True)
+                artifact.write_bytes(artifact_bytes)
+                (tmp_path / "run" / "adapters.pt.complete.json").write_text(
+                    json.dumps(
+                        {
+                            "version": 1,
+                            "size_bytes": len(artifact_bytes),
+                            "sha256": hashlib.sha256(artifact_bytes).hexdigest(),
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+        def wait(self, *, post_exit_check=None, **_kwargs):
+            if post_exit_check is not None:
+                post_exit_check(supervised)
+            return supervised
+
+        def cancel(self, _grace):
+            self.canceled = True
+
+    monkeypatch.setattr(tr, "SupervisedSidecar", FakeSidecar)
+    return calls
+
+
+def test_preflight_refuses_before_sidecar_or_run_directory(tmp_path, monkeypatch):
+    observed = []
+
+    def refuse(_spec, **kwargs):
+        observed.append(kwargs)
+        return _Decision(admitted=False, refusals=("host memory unsafe",))
+
+    monkeypatch.setattr(
+        tr.preflight_module,
+        "assess_preflight",
+        refuse,
+    )
+    monkeypatch.setattr(
+        tr,
+        "SupervisedSidecar",
+        lambda *args, **kwargs: pytest.fail("must not launch"),
+    )
+
+    result = tr.train_sam3_lora(_spec(tmp_path), str(tmp_path / "run"))
+
+    assert not result["success"]
+    assert result["failure_kind"] == "host-admission-refusal"
+    assert not (tmp_path / "run").exists()
+    assert observed == [
+        {
+            "run_dir": (tmp_path / "run").resolve(),
+            "models_root": tmp_path / "models",
+        }
+    ]
+
+
+def test_publish_filesystem_probe_failure_is_structured_before_launch(
+    tmp_path, monkeypatch
+):
+    def fail_models_root():
+        raise OSError("publish filesystem unavailable")
+
+    monkeypatch.setattr(tr, "get_models_root", fail_models_root)
+    monkeypatch.setattr(
+        tr,
+        "SupervisedSidecar",
+        lambda *args, **kwargs: pytest.fail("must not launch"),
+    )
+
+    result = tr.train_sam3_lora(_spec(tmp_path), str(tmp_path / "run"))
+
+    assert not result["success"]
+    assert result["failure_kind"] == "host-admission-refusal"
+    assert "publish filesystem unavailable" in result["error_message"]
+    assert not (tmp_path / "run").exists()
+
+
+def test_disabled_publish_does_not_probe_or_require_models_root(tmp_path, monkeypatch):
+    spec = _spec(tmp_path)
+    spec.publish_policy.auto_import = False
+    _install(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        tr,
+        "get_models_root",
+        lambda: pytest.fail("disabled publishing must not probe models_root"),
     )
 
     result = tr.train_sam3_lora(spec, str(tmp_path / "run"))
 
-    assert result["success"] is False
-    assert calls == []
+    assert result["success"]
 
 
-def test_progress_and_log_records_forwarded(tmp_path, monkeypatch):
-    _pass_preflight(monkeypatch)
-    run_dir = tmp_path / "run"
+def test_initial_and_live_preflight_probe_actual_output_filesystems(
+    tmp_path, monkeypatch
+):
+    observed = []
+    decision = _Decision()
 
-    def _write_artifact_and_lines(*a, **k):
-        run_dir.mkdir(parents=True, exist_ok=True)
-        (run_dir / "adapters.pt").write_bytes(b"fake")
-        lines = [
-            "plain startup line\n",
-            '@@HYDRA_SAM3_PROGRESS@@{"type": "log", "message": "epoch 0 step 10 loss 1.0"}\n',
-            '@@HYDRA_SAM3_PROGRESS@@{"type": "progress", "epoch": 1, "total": 2}\n',
-        ]
-        return _FakeProcess(lines, returncode=0)
+    def assess(_spec, **kwargs):
+        observed.append(kwargs)
+        return decision
 
-    calls = []
+    _install(monkeypatch, tmp_path, decisions=[decision, decision])
+    monkeypatch.setattr(tr.preflight_module, "assess_preflight", assess)
 
-    def _fake_popen(*args, **kwargs):
-        calls.append((args, kwargs))
-        return _write_artifact_and_lines()
+    result = tr.train_sam3_lora(_spec(tmp_path), str(tmp_path / "run"))
 
-    monkeypatch.setattr(tr, "popen_conda", _fake_popen)
+    assert result["success"]
+    assert observed == [
+        {
+            "run_dir": (tmp_path / "run").resolve(),
+            "models_root": tmp_path / "models",
+        },
+        {
+            "run_dir": (tmp_path / "run").resolve(),
+            "models_root": tmp_path / "models",
+        },
+    ]
 
-    logs = []
-    progresses = []
-    result = tr.train_sam3_lora(
-        _healthy_spec(tmp_path),
-        str(run_dir),
-        log_cb=logs.append,
-        progress_cb=lambda e, t: progresses.append((e, t)),
+
+def test_final_live_probe_runs_inside_constructor_before_launch(tmp_path, monkeypatch):
+    calls = _install(
+        monkeypatch,
+        tmp_path,
+        decisions=[
+            _Decision(),
+            _Decision(admitted=False, refusals=("VRAM changed",)),
+        ],
     )
 
-    assert result["success"] is True
-    assert result["artifact_path"] == str(run_dir / "adapters.pt")
-    assert "plain startup line" in logs
-    assert "epoch 0 step 10 loss 1.0" in logs
-    assert progresses == [(1, 2)]
+    result = tr.train_sam3_lora(_spec(tmp_path), str(tmp_path / "run"))
+
+    assert not result["success"]
+    assert "VRAM changed" in result["error_message"]
     assert len(calls) == 1
+    assert not (tmp_path / "run" / "adapters.pt").exists()
 
 
-def test_malformed_json_record_treated_as_plain_text(tmp_path, monkeypatch):
-    _pass_preflight(monkeypatch)
-    run_dir = tmp_path / "run"
-
-    bad_line = "@@HYDRA_SAM3_PROGRESS@@{not valid json\n"
-
-    def _fake_popen(*a, **k):
-        run_dir.mkdir(parents=True, exist_ok=True)
-        (run_dir / "adapters.pt").write_bytes(b"fake")
-        return _FakeProcess([bad_line], returncode=0)
-
-    monkeypatch.setattr(tr, "popen_conda", _fake_popen)
-
-    logs = []
-    result = tr.train_sam3_lora(
-        _healthy_spec(tmp_path), str(run_dir), log_cb=logs.append
+def test_live_shrink_refuses_when_initial_limit_would_expose_reserve(
+    tmp_path, monkeypatch
+):
+    calls = _install(
+        monkeypatch,
+        tmp_path,
+        decisions=[
+            _Decision(hard_host_bytes=12 << 30, usable_host_bytes=40 << 30),
+            _Decision(hard_host_bytes=10 << 30, usable_host_bytes=11 << 30),
+        ],
     )
 
-    assert result["success"] is True
-    assert any("not valid json" in line for line in logs)
+    result = tr.train_sam3_lora(_spec(tmp_path), str(tmp_path / "run"))
+
+    assert not result["success"]
+    assert "immutable containment limit" in result["error_message"]
+    assert len(calls) == 1
+    assert not (tmp_path / "run" / "adapters.pt").exists()
 
 
-def test_nonzero_exit_reports_failure(tmp_path, monkeypatch):
-    _pass_preflight(monkeypatch)
-    run_dir = tmp_path / "run"
-    process = _FakeProcess(["something went wrong\n"], returncode=1)
-    monkeypatch.setattr(tr, "popen_conda", lambda *a, **k: process)
+def test_live_growth_refuses_when_profile_exceeds_immutable_limit(
+    tmp_path, monkeypatch
+):
+    calls = _install(
+        monkeypatch,
+        tmp_path,
+        decisions=[
+            _Decision(hard_host_bytes=12 << 30),
+            _Decision(hard_host_bytes=13 << 30),
+        ],
+    )
 
-    result = tr.train_sam3_lora(_healthy_spec(tmp_path), str(run_dir))
+    result = tr.train_sam3_lora(_spec(tmp_path), str(tmp_path / "run"))
 
-    assert result["success"] is False
-    assert "code 1" in result["error_message"]
-    assert "something went wrong" in result["error_message"]
-    assert not (run_dir / "adapters.pt").exists()
+    assert not result["success"]
+    assert "profile grew" in result["error_message"]
+    assert len(calls) == 1
+    assert not (tmp_path / "run" / "adapters.pt").exists()
 
 
-def test_exit_zero_without_artifact_reports_failure(tmp_path, monkeypatch):
-    """THE critical rule: exit 0 with no adapters.pt written is still failure."""
-    _pass_preflight(monkeypatch)
-    run_dir = tmp_path / "run"
-    process = _FakeProcess(["trained nothing but exited clean\n"], returncode=0)
-    monkeypatch.setattr(tr, "popen_conda", lambda *a, **k: process)
+def test_quiescent_constructor_failure_removes_private_staging(tmp_path, monkeypatch):
+    _install(monkeypatch, tmp_path, write_artifact=False)
+    staging = tmp_path / "run" / ".adapters.pt.123.validated.tmp"
 
-    result = tr.train_sam3_lora(_healthy_spec(tmp_path), str(run_dir))
+    class FailedSidecar:
+        def __init__(self, *_args, **_kwargs):
+            staging.write_bytes(b"partial")
+            raise RuntimeError("reader setup failed after reaping child")
 
-    assert result["success"] is False
-    assert not (run_dir / "adapters.pt").exists()
+    monkeypatch.setattr(tr, "SupervisedSidecar", FailedSidecar)
+
+    result = tr.train_sam3_lora(_spec(tmp_path), str(tmp_path / "run"))
+
+    assert not result["success"]
+    assert "reader setup failed" in result["error_message"]
+    assert not staging.exists()
+
+
+def test_failed_run_cleans_staging_before_fallible_final_diagnostics(
+    tmp_path, monkeypatch
+):
+    _install(
+        monkeypatch,
+        tmp_path,
+        result=_supervised(ExitKind.ORDINARY_FAILURE, returncode=2),
+        write_artifact=False,
+    )
+    staging = tmp_path / "run" / ".adapters.pt.123.validated.tmp"
+    installed_sidecar = tr.SupervisedSidecar
+
+    class StagingSidecar(installed_sidecar):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            staging.write_bytes(b"partial")
+
+    monkeypatch.setattr(tr, "SupervisedSidecar", StagingSidecar)
+    real_write_json = tr._write_json
+
+    def fail_final_diagnostics(path, payload):
+        containment = payload.get("containment", {})
+        if path.name == "resource_preflight.json" and (
+            "peak_observed_tree_rss_bytes" in containment
+        ):
+            raise OSError("diagnostics disk full")
+        real_write_json(path, payload)
+
+    monkeypatch.setattr(tr, "_write_json", fail_final_diagnostics)
+
+    with pytest.raises(OSError, match="diagnostics disk full"):
+        tr.train_sam3_lora(_spec(tmp_path), str(tmp_path / "run"))
+
+    assert not staging.exists()
+
+
+def test_progress_plain_logs_and_bounded_diagnostics_are_propagated(
+    tmp_path, monkeypatch
+):
+    lines = [
+        "plain startup\n",
+        '@@HYDRA_SAM3_PROGRESS@@{"type":"log","message":"loss 1.0"}\n',
+        '@@HYDRA_SAM3_PROGRESS@@{"type":"progress","epoch":1,"total":2}\n',
+    ]
+    _install(monkeypatch, tmp_path, lines=lines)
+    logs, progress = [], []
+
+    result = tr.train_sam3_lora(
+        _spec(tmp_path),
+        str(tmp_path / "run"),
+        log_cb=logs.append,
+        progress_cb=lambda epoch, total: progress.append((epoch, total)),
+    )
+
+    assert result["success"]
+    assert logs == ["plain startup", "loss 1.0"]
+    assert progress == [(1, 2)]
+    assert result["containment"]["peak_observed_device_used_bytes"] == 2 << 30
+    assert result["containment"]["peak_observed_tree_rss_bytes"] == 3 << 30
+    assert "not kernel-capped" in result["containment"]["cuda_vram_enforcement"]
+
+
+def test_silent_nonzero_and_cuda_oom_exits_are_structured(tmp_path, monkeypatch):
+    _install(
+        monkeypatch,
+        tmp_path,
+        result=_supervised(
+            ExitKind.ACCELERATOR_OOM,
+            returncode=1,
+            tail=("torch.cuda.OutOfMemoryError: CUDA out of memory\n",),
+        ),
+        lines=(),
+        write_artifact=False,
+    )
+
+    result = tr.train_sam3_lora(_spec(tmp_path), str(tmp_path / "run"))
+
+    assert not result["success"]
+    assert result["exit_code"] == 1
+    assert result["failure_kind"] == "accelerator-oom"
+    assert "CUDA out of memory" in result["error_message"]
+
+
+def test_exit_zero_without_nonempty_artifact_is_failure(tmp_path, monkeypatch):
+    _install(monkeypatch, tmp_path, write_artifact=False)
+
+    result = tr.train_sam3_lora(_spec(tmp_path), str(tmp_path / "run"))
+
+    assert not result["success"]
     assert "did not write" in result["error_message"]
 
 
-def test_cancellation_terminates_child(tmp_path, monkeypatch):
-    _pass_preflight(monkeypatch)
-    run_dir = tmp_path / "run"
+def test_corrupt_artifact_is_rejected_and_removed(tmp_path, monkeypatch):
+    _install(monkeypatch, tmp_path, artifact_bytes=b"valid-before-corruption")
+    real_sidecar = tr.SupervisedSidecar
 
-    # Enough lines that should_cancel() can fire before the generator is
-    # exhausted.
-    process = _FakeProcess(["line one\n", "line two\n", "line three\n"], returncode=0)
-    monkeypatch.setattr(tr, "popen_conda", lambda *a, **k: process)
+    class CorruptingSidecar(real_sidecar):
+        def wait(self, *, post_exit_check=None, **kwargs):
+            (tmp_path / "run" / "adapters.pt").write_bytes(b"truncated")
+            return super().wait(post_exit_check=post_exit_check, **kwargs)
 
-    calls = {"n": 0}
+    monkeypatch.setattr(tr, "SupervisedSidecar", CorruptingSidecar)
 
-    def _should_cancel():
-        calls["n"] += 1
-        return calls["n"] >= 2
+    result = tr.train_sam3_lora(_spec(tmp_path), str(tmp_path / "run"))
 
-    result = tr.train_sam3_lora(
-        _healthy_spec(tmp_path), str(run_dir), should_cancel=_should_cancel
-    )
-
-    assert result["canceled"] is True
-    assert result["success"] is False
-    assert process.terminated is True
+    assert not result["success"]
+    assert "validation" in result["error_message"].lower()
+    assert not (tmp_path / "run" / "adapters.pt").exists()
+    assert not (tmp_path / "run" / "adapters.pt.complete.json").exists()
 
 
-class _NeverEndingStdout:
-    """An iterator whose `__next__` blocks forever (like a real pipe with a
-    silent/hung child on the other end) until `stop` is set, at which point
-    it raises StopIteration -- simulating the pipe closing once the process
-    is killed."""
-
-    def __init__(self):
-        import threading as _threading
-
-        self._stop = _threading.Event()
-
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        # Block like a real blocking read on an open, silent pipe.
-        self._stop.wait()
-        raise StopIteration
-
-    def close_pipe(self):
-        self._stop.set()
-
-
-def test_cancellation_fires_promptly_with_no_child_output(tmp_path, monkeypatch):
-    """The case that was broken: should_cancel() must be polled on a timer,
-    not sampled once per line of child stdout -- a silent (or hung) child
-    that never writes anything must still be cancellable promptly."""
-    import time
-
-    _pass_preflight(monkeypatch)
-    run_dir = tmp_path / "run"
-
-    # No output at all, ever -- a pipe that blocks like a real silent child.
-    process = _FakeProcess([], returncode=0)
-    never_ending = _NeverEndingStdout()
-    process.stdout = never_ending
-
-    real_terminate = process.terminate
-
-    def _terminate_and_close_pipe():
-        real_terminate()
-        never_ending.close_pipe()
-
-    process.terminate = _terminate_and_close_pipe
-    monkeypatch.setattr(tr, "popen_conda", lambda *a, **k: process)
-
-    calls = {"n": 0}
-
-    def _should_cancel():
-        calls["n"] += 1
-        # Cancel on the second poll rather than the first, to prove this is
-        # actually being re-checked on a timer, not just short-circuiting
-        # once at the top.
-        return calls["n"] >= 2
-
-    start = time.monotonic()
-    result = tr.train_sam3_lora(
-        _healthy_spec(tmp_path), str(run_dir), should_cancel=_should_cancel
-    )
-    elapsed = time.monotonic() - start
-
-    assert result["canceled"] is True
-    assert result["success"] is False
-    assert process.terminated is True
-    assert calls["n"] >= 2
-    # Bounded by a handful of poll intervals, not minutes.
-    assert elapsed < 5.0
-
-
-def test_cancellation_kills_child_if_terminate_hangs(tmp_path, monkeypatch):
-    _pass_preflight(monkeypatch)
-    run_dir = tmp_path / "run"
-    process = _FakeProcess(["line one\n"], returncode=0, terminate_hangs=True)
-    monkeypatch.setattr(tr, "popen_conda", lambda *a, **k: process)
+def test_post_exit_cancel_does_not_overwrite_completed_success(tmp_path, monkeypatch):
+    calls = _install(monkeypatch, tmp_path, lines=(), write_artifact=True)
 
     result = tr.train_sam3_lora(
-        _healthy_spec(tmp_path), str(run_dir), should_cancel=lambda: True
+        _spec(tmp_path), str(tmp_path / "run"), should_cancel=lambda: True
     )
 
-    assert result["canceled"] is True
-    assert process.terminated is True
-    assert process.killed is True
+    assert result["success"]
+    assert not result["canceled"]
+    assert not calls[0].canceled
+    assert (tmp_path / "run" / "adapters.pt").exists()
 
 
-def test_spec_serialised_to_run_dir(tmp_path, monkeypatch):
-    _pass_preflight(monkeypatch)
-    run_dir = tmp_path / "run"
+def test_live_cancel_is_step_and_output_independent(tmp_path, monkeypatch):
+    calls = _install(
+        monkeypatch,
+        tmp_path,
+        lines=(),
+        write_artifact=False,
+        poll_returncode=None,
+    )
 
-    def _fake_popen(*args, **kwargs):
-        run_dir.mkdir(parents=True, exist_ok=True)
-        (run_dir / "adapters.pt").write_bytes(b"fake")
-        return _FakeProcess([], returncode=0)
+    result = tr.train_sam3_lora(
+        _spec(tmp_path), str(tmp_path / "run"), should_cancel=lambda: True
+    )
 
-    monkeypatch.setattr(tr, "popen_conda", _fake_popen)
-
-    tr.train_sam3_lora(_healthy_spec(tmp_path), str(run_dir))
-
-    spec_path = run_dir / "spec.json"
-    assert spec_path.exists()
-    import json
-
-    payload = json.loads(spec_path.read_text(encoding="utf-8"))
-    assert payload["sam3_params"]["prompt"] == "ant"
+    assert result["canceled"]
+    assert result["failure_kind"] == "canceled"
+    assert calls[0].canceled
 
 
-def test_log_cb_raising_mid_stream_still_terminates_child(tmp_path, monkeypatch):
-    """C1: a raising callback (or a decode error) must not orphan the child."""
-    _pass_preflight(monkeypatch)
-    run_dir = tmp_path / "run"
-    process = _FakeProcess(["line one\n", "line two\n"], returncode=0)
-    monkeypatch.setattr(tr, "popen_conda", lambda *a, **k: process)
+def test_root_exit_transitions_to_wait_when_descendant_holds_stdout(
+    tmp_path, monkeypatch
+):
+    calls = _install(monkeypatch, tmp_path, output_eof=False, poll_returncode=0)
 
-    def _raising_log_cb(_line):
-        raise ValueError("boom from log_cb")
+    result = tr.train_sam3_lora(_spec(tmp_path), str(tmp_path / "run"))
 
-    try:
+    assert result["success"]
+    assert not calls[0].canceled
+
+
+def test_conflicting_canonical_lease_is_reported(tmp_path, monkeypatch):
+    decisions = [_Decision(), _Decision()]
+    monkeypatch.setattr(
+        tr.preflight_module,
+        "assess_preflight",
+        lambda _spec, **_kwargs: decisions.pop(0),
+    )
+
+    class BusySidecar:
+        def __init__(self, *_args, **_kwargs):
+            raise ResourceBusyError("real-host:host-memory", None)
+
+    monkeypatch.setattr(tr, "SupervisedSidecar", BusySidecar)
+
+    result = tr.train_sam3_lora(_spec(tmp_path), str(tmp_path / "run"))
+
+    assert not result["success"]
+    assert "already leased" in result["error_message"]
+
+
+def test_uncertain_launch_retains_staging_until_post_quiescence_recovery(
+    tmp_path, monkeypatch
+):
+    _install(monkeypatch, tmp_path, write_artifact=False)
+    canceled = []
+    recovery_sidecar = SimpleNamespace(cancel=lambda: canceled.append(True))
+    owned = WorkloadStillOwnedError("ownership retained", recovery_sidecar)
+    staging = tmp_path / "run" / ".adapters.pt.123.validated.tmp"
+
+    class UncertainSidecar:
+        def __init__(self, *_args, **_kwargs):
+            staging.write_bytes(b"partial")
+            raise owned
+
+    monkeypatch.setattr(tr, "SupervisedSidecar", UncertainSidecar)
+
+    with pytest.raises(WorkloadStillOwnedError) as raised:
+        tr.train_sam3_lora(_spec(tmp_path), str(tmp_path / "run"))
+
+    assert raised.value is owned
+    assert staging.exists()
+    assert owned.recovery_cleanup is not None
+    owned.sidecar.cancel()
+    owned.recovery_cleanup()
+    assert canceled == [True]
+    assert not staging.exists()
+
+
+def test_plan_uses_physical_cuda_and_one_immutable_limit_source(tmp_path, monkeypatch):
+    calls = _install(monkeypatch, tmp_path)
+
+    result = tr.train_sam3_lora(_spec(tmp_path), str(tmp_path / "run"))
+
+    assert result["success"]
+    plan = calls[0].plan
+    assert plan.launch.accelerator_device_uuid == "GPU-physical-0"
+    assert plan.launch.limits is plan.launch.limits
+    assert (
+        plan.watchdog_policy.soft_tree_rss_bytes == plan.launch.limits.soft_host_bytes
+    )
+    assert plan.launch.limits.soft_host_bytes == 11 << 30
+    assert plan.launch.limits.hard_host_bytes == 12 << 30
+    assert len(plan.expected_resource_keys) == 2
+    assert plan.launch.environment["CUDA_VISIBLE_DEVICES"] == "GPU-physical-0"
+
+
+def test_missing_sam3_params_returns_typed_refusal(tmp_path, monkeypatch):
+    spec = _spec(tmp_path)
+    spec.sam3_params = None
+    monkeypatch.setattr(
+        tr,
+        "SupervisedSidecar",
+        lambda *_args, **_kwargs: pytest.fail("must not launch"),
+    )
+
+    result = tr.train_sam3_lora(spec, str(tmp_path / "run"))
+
+    assert not result["success"]
+    assert result["failure_kind"] == "host-admission-refusal"
+    assert "sam3" in result["error_message"].lower()
+
+
+def test_callback_failure_cancels_and_reaps_sidecar(tmp_path, monkeypatch):
+    calls = _install(monkeypatch, tmp_path, lines=("plain\n",))
+
+    with pytest.raises(ValueError, match="callback failed"):
         tr.train_sam3_lora(
-            _healthy_spec(tmp_path), str(run_dir), log_cb=_raising_log_cb
+            _spec(tmp_path),
+            str(tmp_path / "run"),
+            log_cb=lambda _line: (_ for _ in ()).throw(ValueError("callback failed")),
         )
-        raised = False
-    except ValueError:
-        raised = True
 
-    assert raised is True
-    assert process.terminated is True
-    assert not (run_dir / "adapters.pt").exists()
-
-
-def test_stale_artifact_is_cleared_before_launch(tmp_path, monkeypatch):
-    """I2: a pre-existing adapters.pt plus a child that writes nothing must
-    still fail, never silently publish the PREVIOUS run's artifact."""
-    _pass_preflight(monkeypatch)
-    run_dir = tmp_path / "run"
-    run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "adapters.pt").write_bytes(b"stale-from-a-previous-run")
-
-    process = _FakeProcess(["trained nothing, exited clean\n"], returncode=0)
-    monkeypatch.setattr(tr, "popen_conda", lambda *a, **k: process)
-
-    result = tr.train_sam3_lora(_healthy_spec(tmp_path), str(run_dir))
-
-    assert result["success"] is False
-    assert not (run_dir / "adapters.pt").exists()
-    assert "did not write" in result["error_message"]
-
-
-def test_empty_artifact_is_treated_as_missing(tmp_path, monkeypatch):
-    """I2: a zero-byte adapters.pt (e.g. a truncated write) must not pass."""
-    _pass_preflight(monkeypatch)
-    run_dir = tmp_path / "run"
-
-    def _fake_popen(*args, **kwargs):
-        run_dir.mkdir(parents=True, exist_ok=True)
-        (run_dir / "adapters.pt").write_bytes(b"")  # zero bytes
-        return _FakeProcess([], returncode=0)
-
-    monkeypatch.setattr(tr, "popen_conda", _fake_popen)
-
-    result = tr.train_sam3_lora(_healthy_spec(tmp_path), str(run_dir))
-
-    assert result["success"] is False
-    assert "did not write" in result["error_message"]
-
-
-def test_command_and_environ_wired_from_env_module(tmp_path, monkeypatch):
-    """Sanity check that the launcher still uses env.py's helpers (unbuffered
-    `-u`, KMP_DUPLICATE_LIB_OK) rather than re-deriving them."""
-    _pass_preflight(monkeypatch)
-    run_dir = tmp_path / "run"
-    captured = {}
-
-    def _fake_popen(command, **kwargs):
-        captured["command"] = command
-        captured["env"] = kwargs.get("env")
-        run_dir.mkdir(parents=True, exist_ok=True)
-        (run_dir / "adapters.pt").write_bytes(b"fake")
-        return _FakeProcess([], returncode=0)
-
-    monkeypatch.setattr(tr, "popen_conda", _fake_popen)
-
-    tr.train_sam3_lora(_healthy_spec(tmp_path), str(run_dir))
-
-    assert "-u" in captured["command"]
-    assert captured["env"]["KMP_DUPLICATE_LIB_OK"] == "TRUE"
+    assert calls[0].canceled
+    assert not (tmp_path / "run" / "adapters.pt").exists()

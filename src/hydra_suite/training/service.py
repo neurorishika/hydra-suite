@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Callable
 
 from hydra_suite.core.inference.semantic.checkpoints import ensure_checkpoint
+from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
+from hydra_suite.runtime.safe_text import bounded_terminal_text
 
 from .contracts import (
     DatasetBuildResult,
@@ -17,6 +19,7 @@ from .contracts import (
     TrainingRole,
     TrainingRunSpec,
     ValidationReport,
+    sam3_prompt_pool_error,
 )
 from .dataset_builders import merge_obb_sources, prepare_role_dataset
 from .dataset_inspector import inspect_obb_or_detect_dataset
@@ -31,6 +34,7 @@ from .registry import (
     dataset_fingerprint,
     finalize_run_record,
     new_run_id,
+    update_run_record,
 )
 from .runner import run_training
 from .sam3_lora.publish import publish_sam3_model
@@ -101,6 +105,26 @@ def _result_artifact_paths(result: dict) -> list[str]:
         return [str(path) for path in artifact_paths if str(path).strip()]
     artifact_path = str(result.get("artifact_path", "") or "").strip()
     return [artifact_path] if artifact_path else []
+
+
+def _failure_details(result: dict) -> dict[str, object]:
+    """Return durable structured diagnostics from a failed runner result."""
+
+    return {
+        key: result[key]
+        for key in ("failure_kind", "resource_preflight", "containment")
+        if key in result and result[key] is not None
+    }
+
+
+def _failure_message(result: dict) -> str:
+    if result.get("canceled"):
+        return "canceled"
+    error_value = result.get("error", "") or ""
+    error = bounded_terminal_text(error_value).strip()
+    if error:
+        return error
+    return f"exit_code={bounded_terminal_text(result.get('exit_code', 'unknown'))}"
 
 
 def _slice_geometry_for_publish(spec: TrainingRunSpec) -> dict | None:
@@ -506,6 +530,15 @@ class TrainingOrchestrator:
         should_cancel: Callable[[], bool] | None = None,
     ) -> dict:
         """Execute a training run: register in the run registry, train, and optionally publish the model."""
+        if spec.role is TrainingRole.SEMANTIC_SAM3:
+            params = spec.sam3_params
+            if params is None:
+                raise ValueError("SAM3 training requires sam3_params")
+            prompt_error = sam3_prompt_pool_error(
+                params.prompt, params.negative_prompts
+            )
+            if prompt_error is not None:
+                raise ValueError(f"Invalid SAM3 prompt configuration: {prompt_error}")
         run_id = new_run_id(spec.role.value)
         run_dir = self.workspace_root / "runs" / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -519,15 +552,48 @@ class TrainingOrchestrator:
             parent_run_id=parent_run_id,
         )
 
-        result = run_training(
-            spec,
-            run_dir,
-            log_cb=log_cb,
-            progress_cb=progress_cb,
-            should_cancel=should_cancel,
-        )
+        try:
+            result = run_training(
+                spec,
+                run_dir,
+                log_cb=log_cb,
+                progress_cb=progress_cb,
+                should_cancel=should_cancel,
+            )
+        except WorkloadStillOwnedError as exc:
+            # The exception owns the still-live sidecar and canonical leases.
+            # Preserve that recovery handle for the caller; collapsing it into
+            # a dict would orphan the workload and falsely imply finalization.
+            try:
+                update_run_record(
+                    run_id,
+                    {
+                        "status": "recovery-required",
+                        "error_message": bounded_terminal_text(
+                            exc, include_exception_type=False
+                        ),
+                        "failure_kind": "workload-still-owned",
+                        "containment": {"ownership": "retained"},
+                    },
+                )
+            except Exception as registry_exc:  # noqa: BLE001 - preserve owner
+                exc.registry_update_error = bounded_terminal_text(
+                    registry_exc, include_exception_type=False
+                )
+            # The GUI recovery owner needs the registry identity so a later
+            # successful cleanup can turn this nonterminal record into an
+            # explicit failed terminal run.
+            exc.run_id = run_id
+            raise
+        except Exception as exc:
+            result = {
+                "success": False,
+                "error": bounded_terminal_text(exc, include_exception_type=False),
+                "failure_kind": "training-exception",
+            }
         result["run_id"] = run_id
         result["derived_dataset_dir"] = spec.derived_dataset_dir
+        result["dataset_fingerprint"] = ds_fp
         artifact_paths = _result_artifact_paths(result)
 
         if not result.get("success", False):
@@ -541,24 +607,44 @@ class TrainingOrchestrator:
                     else []
                 ),
                 artifact_paths=artifact_paths,
-                error_message=(
-                    "canceled"
-                    if result.get("canceled")
-                    else f"exit_code={result.get('exit_code', 'unknown')}"
-                ),
+                error_message=_failure_message(result),
+                failure_details=_failure_details(result),
             )
             return result
 
         published_key = ""
         published_path = ""
         if spec.publish_policy.auto_import and artifact_paths:
-            published_key, published_path = _publish_training_artifacts(
-                spec=spec,
-                artifact_paths=artifact_paths,
-                publish_metadata=publish_metadata or {},
-                run_id=run_id,
-                dataset_fingerprint_value=ds_fp,
-            )
+            try:
+                published_key, published_path = _publish_training_artifacts(
+                    spec=spec,
+                    artifact_paths=artifact_paths,
+                    publish_metadata=publish_metadata or {},
+                    run_id=run_id,
+                    dataset_fingerprint_value=ds_fp,
+                )
+            except Exception as exc:
+                result["success"] = False
+                result["error"] = bounded_terminal_text(
+                    exc, include_exception_type=False
+                )
+                result["failure_kind"] = "publish-exception"
+                result["published_registry_key"] = ""
+                result["published_model_path"] = ""
+                finalize_run_record(
+                    run_id,
+                    status="failed",
+                    command=result.get("command", []),
+                    metrics_paths=(
+                        [result.get("metrics_path", "")]
+                        if result.get("metrics_path")
+                        else []
+                    ),
+                    artifact_paths=artifact_paths,
+                    error_message=_failure_message(result),
+                    failure_details=_failure_details(result),
+                )
+                return result
 
         finalize_run_record(
             run_id,
@@ -574,5 +660,4 @@ class TrainingOrchestrator:
 
         result["published_registry_key"] = published_key
         result["published_model_path"] = published_path
-        result["dataset_fingerprint"] = ds_fp
         return result

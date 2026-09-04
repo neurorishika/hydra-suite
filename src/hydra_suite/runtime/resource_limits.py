@@ -1,0 +1,553 @@
+"""Operating-system containment adapters for high-memory child processes.
+
+Linux cgroup v2/systemd enforcement is preferred because it constrains resident
+memory for a complete process tree.  ``RLIMIT_AS`` is a POSIX fallback: it
+limits virtual address space, can conflict with CUDA's large virtual mappings,
+and does not constrain discrete GPU VRAM.  A parent watchdog remains required
+for diagnostics, graceful cancellation, and system-reserve enforcement.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import platform
+import shutil
+import subprocess
+import sys
+import uuid
+from dataclasses import dataclass
+from enum import Enum
+from pathlib import Path
+from types import MappingProxyType
+from typing import Mapping, Optional, Sequence
+
+from .resource_budget import AcceleratorKind
+
+_DEFAULT_CGROUP_ROOT = Path("/sys/fs/cgroup")
+
+
+class LimitBackend(str, Enum):
+    """Host-memory enforcement mechanism applied to a protected launch."""
+
+    SYSTEMD_CGROUP = "systemd-cgroup-v2"
+    RLIMIT_AS = "rlimit-as"
+    WATCHDOG_ONLY = "watchdog-only"
+
+
+@dataclass(frozen=True)
+class ProcessMemoryLimits:
+    """Soft/hard host limits plus an optional MPS allocator guard."""
+
+    soft_host_bytes: int
+    hard_host_bytes: int
+    mps_high_watermark_ratio: Optional[float] = None
+    max_processes: int = 512
+
+    def __post_init__(self) -> None:
+        if self.soft_host_bytes <= 0 or self.hard_host_bytes <= 0:
+            raise ValueError("host memory limits must be positive")
+        if self.soft_host_bytes > self.hard_host_bytes:
+            raise ValueError("soft host limit cannot exceed hard host limit")
+        if self.max_processes < 1:
+            raise ValueError("maximum process count must be positive")
+        if self.mps_high_watermark_ratio is not None and not (
+            0.0 < self.mps_high_watermark_ratio <= 2.0
+        ):
+            raise ValueError("MPS high-watermark ratio must be in (0, 2]")
+
+
+@dataclass(frozen=True)
+class LimitedLaunch:
+    """Immutable child command, environment, and authoritative memory limits."""
+
+    command: tuple[str, ...]
+    environment: Mapping[str, str]
+    backend: LimitBackend
+    limits: ProcessMemoryLimits
+    accelerator_kind: AcceleratorKind
+    accelerator_device_uuid: Optional[str] = None
+    accelerator_pci_bus_id: Optional[str] = None
+    systemd_unit: Optional[str] = None
+    limitations: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class CgroupEvidence:
+    """Bounded post-exit observations from a transient systemd scope."""
+
+    unit: str
+    available: bool = True
+    result: Optional[str] = None
+    oom_killed: bool = False
+    memory_peak_bytes: Optional[int] = None
+    raw_properties: Mapping[str, str] | None = None
+    error: Optional[str] = None
+
+
+def systemd_user_scope_available(
+    *,
+    system: Optional[str] = None,
+    environ: Optional[Mapping[str, str]] = None,
+) -> bool:
+    """Conservatively detect whether a user cgroup-v2 scope may be launched.
+
+    This is intentionally side-effect free.  A launch can still fail if the
+    user manager rejects delegation; callers must report that launch failure
+    rather than silently running the workload without its requested cap.
+    """
+    system = system or platform.system()
+    environ = os.environ if environ is None else environ
+    return bool(
+        system == "Linux"
+        and Path("/sys/fs/cgroup/cgroup.controllers").exists()
+        and shutil.which("systemd-run")
+        and (environ.get("DBUS_SESSION_BUS_ADDRESS") or environ.get("XDG_RUNTIME_DIR"))
+    )
+
+
+def select_limit_backend(
+    *,
+    system: Optional[str] = None,
+    systemd_available: Optional[bool] = None,
+) -> LimitBackend:
+    """Choose the strongest supported host-memory boundary for this platform."""
+
+    system = system or platform.system()
+    if system == "Linux" and (
+        systemd_user_scope_available(system=system)
+        if systemd_available is None
+        else systemd_available
+    ):
+        return LimitBackend.SYSTEMD_CGROUP
+    # Darwin exposes RLIMIT_AS constants but rejects setrlimit(RLIMIT_AS, ...)
+    # with EINVAL.  Claiming it as a hard boundary there would be dangerous.
+    if system == "Linux":
+        return LimitBackend.RLIMIT_AS
+    return LimitBackend.WATCHDOG_ONLY
+
+
+def build_limited_launch(
+    command: Sequence[str],
+    limits: ProcessMemoryLimits,
+    *,
+    backend: Optional[LimitBackend] = None,
+    environment: Optional[Mapping[str, str]] = None,
+    python_executable: Optional[str] = None,
+    systemd_unit: Optional[str] = None,
+    accelerator_kind: AcceleratorKind | str = AcceleratorKind.CPU,
+    accelerator_device_uuid: Optional[str] = None,
+    accelerator_pci_bus_id: Optional[str] = None,
+) -> LimitedLaunch:
+    """Wrap ``command`` so limits are applied before accelerator imports."""
+    if not command:
+        raise ValueError("child command must not be empty")
+    if systemd_unit is not None:
+        raise ValueError("systemd scope names are generated internally per launch")
+    accelerator_kind = AcceleratorKind(accelerator_kind)
+    accelerator_device_uuid = (accelerator_device_uuid or "").strip() or None
+    accelerator_pci_bus_id = (accelerator_pci_bus_id or "").strip() or None
+    if accelerator_kind is AcceleratorKind.CUDA:
+        if bool(accelerator_device_uuid) == bool(accelerator_pci_bus_id):
+            raise ValueError(
+                "CUDA launches require exactly one resolver-supplied physical "
+                "UUID or PCI identity"
+            )
+    elif accelerator_device_uuid is not None or accelerator_pci_bus_id is not None:
+        raise ValueError("physical device identities are valid only for CUDA")
+    if (
+        accelerator_kind is AcceleratorKind.MPS
+        and limits.mps_high_watermark_ratio is None
+    ):
+        raise ValueError("MPS jobs require an explicit allocator high-watermark ratio")
+    selected = backend or select_limit_backend()
+    child_env = dict(os.environ if environment is None else environment)
+    bootstrap = [
+        python_executable or sys.executable,
+        "-m",
+        "hydra_suite.runtime.child_bootstrap",
+    ]
+    if selected is LimitBackend.RLIMIT_AS:
+        bootstrap.extend(["--address-space-bytes", str(limits.hard_host_bytes)])
+    if limits.mps_high_watermark_ratio is not None:
+        bootstrap.extend(
+            [
+                "--mps-high-watermark-ratio",
+                str(limits.mps_high_watermark_ratio),
+            ]
+        )
+    bootstrap.extend(["--", *map(str, command)])
+
+    limitations: list[str] = []
+    unit = None
+    if selected is LimitBackend.SYSTEMD_CGROUP:
+        unit = f"hydra-job-{uuid.uuid4().hex}.scope"
+        wrapped = [
+            "systemd-run",
+            "--user",
+            "--scope",
+            "--quiet",
+            "--unit",
+            unit,
+            f"--property=MemoryHigh={limits.soft_host_bytes}",
+            f"--property=MemoryMax={limits.hard_host_bytes}",
+            "--property=MemorySwapMax=0",
+            f"--property=TasksMax={limits.max_processes}",
+            "--",
+            *bootstrap,
+        ]
+    else:
+        wrapped = bootstrap
+        if selected is LimitBackend.RLIMIT_AS:
+            limitations.append(
+                "RLIMIT_AS constrains virtual address space, may conflict with CUDA "
+                "reservations, and does not cap discrete GPU VRAM"
+            )
+        else:
+            limitations.append(
+                "No kernel memory controller is available; only the parent RSS and "
+                "system-pressure watchdog enforces host limits"
+            )
+    return LimitedLaunch(
+        command=tuple(wrapped),
+        environment=MappingProxyType(child_env),
+        backend=selected,
+        limits=limits,
+        accelerator_kind=accelerator_kind,
+        accelerator_device_uuid=accelerator_device_uuid,
+        accelerator_pci_bus_id=accelerator_pci_bus_id,
+        systemd_unit=unit,
+        limitations=tuple(limitations),
+    )
+
+
+def apply_child_limits(
+    *,
+    address_space_bytes: Optional[int],
+    mps_high_watermark_ratio: Optional[float],
+) -> None:
+    """Apply limits in a minimal child before replacing it with the workload."""
+    if address_space_bytes is not None:
+        if address_space_bytes <= 0:
+            raise ValueError("address-space limit must be positive")
+        if os.name != "posix":
+            raise RuntimeError("RLIMIT_AS is unavailable on this platform")
+        import resource
+
+        current_soft, current_hard = resource.getrlimit(resource.RLIMIT_AS)
+        requested = address_space_bytes
+        if current_hard != resource.RLIM_INFINITY:
+            requested = min(requested, current_hard)
+        try:
+            resource.setrlimit(resource.RLIMIT_AS, (requested, requested))
+        except (OSError, ValueError) as exc:
+            raise RuntimeError(
+                "RLIMIT_AS was selected but this operating system does not enforce it"
+            ) from exc
+    if mps_high_watermark_ratio is not None:
+        if not 0.0 < mps_high_watermark_ratio <= 2.0:
+            raise ValueError("MPS high-watermark ratio must be in (0, 2]")
+        os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = str(mps_high_watermark_ratio)
+
+
+def probe_systemd_cgroup_evidence(
+    unit: str, *, timeout_seconds: float = 3.0
+) -> CgroupEvidence:
+    """Read transient-unit evidence used to distinguish cgroup OOM kills."""
+    if timeout_seconds <= 0:
+        raise ValueError("systemd evidence timeout must be positive")
+    try:
+        completed = subprocess.run(
+            [
+                "systemctl",
+                "--user",
+                "show",
+                unit,
+                "--property=Result",
+                "--property=ExecMainStatus",
+                "--property=MemoryPeak",
+                "--property=OOMKilled",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired:
+        return CgroupEvidence(
+            unit=unit,
+            available=False,
+            error=f"systemd evidence query timed out after {timeout_seconds:g}s",
+        )
+    except OSError as exc:
+        return CgroupEvidence(unit=unit, available=False, error=str(exc))
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or f"systemctl exited {completed.returncode}"
+        return CgroupEvidence(unit=unit, available=False, error=detail)
+    properties: dict[str, str] = {}
+    for line in completed.stdout.splitlines():
+        key, separator, value = line.partition("=")
+        if separator:
+            properties[key] = value
+    result = properties.get("Result")
+    oom_killed = properties.get("OOMKilled", "").lower() in {"yes", "true", "1"}
+    oom_killed = oom_killed or result in {"oom-kill", "oom-killed"}
+    memory_peak = _optional_int(properties.get("MemoryPeak"))
+    return CgroupEvidence(
+        unit=unit,
+        result=result,
+        oom_killed=oom_killed,
+        memory_peak_bytes=memory_peak,
+        raw_properties=properties,
+    )
+
+
+def signal_systemd_scope(
+    unit: str, signum: int, *, timeout_seconds: float = 3.0
+) -> bool:
+    """Ask systemd to signal every process still owned by one transient scope."""
+    if timeout_seconds <= 0:
+        raise ValueError("systemd signal timeout must be positive")
+    try:
+        completed = subprocess.run(
+            [
+                "systemctl",
+                "--user",
+                "kill",
+                f"--signal={int(signum)}",
+                "--kill-whom=all",
+                unit,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return completed.returncode == 0
+
+
+def systemd_scope_is_quiescent(
+    unit: str,
+    *,
+    timeout_seconds: float = 3.0,
+    cgroup_root: Path = _DEFAULT_CGROUP_ROOT,
+) -> Optional[bool]:
+    """Prove the unit inactive and its recursive cgroup population empty."""
+
+    properties, absent = _query_systemd_scope_properties(unit, timeout_seconds)
+    if absent:
+        return True
+    if properties is None:
+        return None
+    active_state = properties.get("ActiveState")
+    control_group = properties.get("ControlGroup")
+    if active_state not in {"inactive", "failed"}:
+        return False
+    if not control_group:
+        # A still-loaded unit without a cgroup path has insufficient recursive
+        # population evidence. An unloaded unit was handled above.
+        return None
+    events_path = cgroup_root / control_group.lstrip("/") / "cgroup.events"
+    try:
+        events = _parse_key_value_lines(events_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        # Only an unloaded unit is clear without recursive population evidence.
+        return None
+    except OSError:
+        return None
+    populated = events.get("populated")
+    if populated not in {"0", "1"}:
+        return None
+    return populated == "0"
+
+
+def systemd_scope_member_pids(
+    unit: str,
+    *,
+    timeout_seconds: float = 3.0,
+    cgroup_root: Path = _DEFAULT_CGROUP_ROOT,
+) -> Optional[tuple[int, ...]]:
+    """Return exact scope members, empty for an unloaded unit, or unknown."""
+
+    properties, absent = _query_systemd_scope_properties(unit, timeout_seconds)
+    if absent:
+        return ()
+    if properties is None:
+        return None
+    active_state = properties.get("ActiveState")
+    if active_state is None or "ControlGroup" not in properties:
+        return None
+    control_group = properties["ControlGroup"]
+    if not control_group:
+        return None
+    cgroup_path = cgroup_root / control_group.lstrip("/")
+    if not cgroup_path.exists():
+        return None
+    pending = [cgroup_path]
+    visited = 0
+    member_pids: set[int] = set()
+    try:
+        while pending:
+            current = pending.pop()
+            visited += 1
+            if visited > 4096:
+                return None
+            try:
+                raw_pids = (
+                    (current / "cgroup.procs").read_text(encoding="utf-8").split()
+                )
+            except FileNotFoundError:
+                if current == cgroup_path:
+                    return () if active_state in {"inactive", "failed"} else None
+                continue
+            member_pids.update(int(pid) for pid in raw_pids)
+            if len(member_pids) > 4096:
+                return None
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    if entry.is_dir(follow_symlinks=False):
+                        if len(pending) + visited >= 4096:
+                            return None
+                        pending.append(Path(entry.path))
+        return tuple(sorted(member_pids))
+    except (OSError, ValueError):
+        return None
+
+
+def _query_systemd_scope_properties(
+    unit: str, timeout_seconds: float
+) -> tuple[Optional[dict[str, str]], bool]:
+    """Return exact unit properties and whether the unit is unloaded."""
+
+    if timeout_seconds <= 0:
+        raise ValueError("systemd state timeout must be positive")
+    try:
+        completed = subprocess.run(
+            [
+                "systemctl",
+                "--user",
+                "show",
+                unit,
+                "--property=LoadState",
+                "--property=ActiveState",
+                "--property=ControlGroup",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None, False
+    if completed.returncode != 0:
+        detail = completed.stderr.lower()
+        absent = any(
+            marker in detail
+            for marker in (
+                "could not be found",
+                "not found",
+                "not loaded",
+                "does not exist",
+            )
+        )
+        return None, absent
+    properties = _parse_key_value_lines(completed.stdout)
+    if properties.get("LoadState") in {"not-found", "unloaded"}:
+        return None, True
+    return properties, False
+
+
+def _parse_key_value_lines(text: str) -> dict[str, str]:
+    properties: dict[str, str] = {}
+    for line in text.splitlines():
+        key, separator, value = line.partition("=")
+        if separator:
+            properties[key] = value
+            continue
+        key, separator, value = line.partition(" ")
+        if separator:
+            properties[key] = value
+    return properties
+
+
+def systemd_scope_invocation_id(
+    unit: str, *, timeout_seconds: float = 3.0
+) -> Optional[str]:
+    """Return the exact transient-unit invocation ID, empty when unloaded."""
+
+    if timeout_seconds <= 0:
+        raise ValueError("systemd state timeout must be positive")
+    try:
+        completed = subprocess.run(
+            [
+                "systemctl",
+                "--user",
+                "show",
+                unit,
+                "--property=InvocationID",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode != 0:
+        detail = completed.stderr.lower()
+        if any(
+            marker in detail
+            for marker in (
+                "could not be found",
+                "not found",
+                "not loaded",
+                "does not exist",
+            )
+        ):
+            return ""
+        return None
+    for line in completed.stdout.splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key == "InvocationID":
+            return value.strip() or None
+    return None
+
+
+def cgroup_path_contains_unit(cgroup_text: str, unit: str) -> bool:
+    """Match a systemd unit as one exact cgroup path component."""
+
+    for line in cgroup_text.splitlines():
+        _, separator, path = line.partition("/")
+        if separator and unit in path.split("/"):
+            return True
+    return False
+
+
+def serialize_limit_diagnostic(launch: LimitedLaunch) -> str:
+    """Return stable JSON suitable for a run manifest or support report."""
+    return json.dumps(
+        {
+            "backend": launch.backend.value,
+            "systemd_unit": launch.systemd_unit,
+            "limitations": list(launch.limitations),
+            "soft_host_bytes": launch.limits.soft_host_bytes,
+            "hard_host_bytes": launch.limits.hard_host_bytes,
+            "mps_high_watermark_ratio": launch.limits.mps_high_watermark_ratio,
+            "max_processes": launch.limits.max_processes,
+            "accelerator_kind": launch.accelerator_kind.value,
+            "accelerator_device_uuid": launch.accelerator_device_uuid,
+            "accelerator_pci_bus_id": launch.accelerator_pci_bus_id,
+        },
+        sort_keys=True,
+    )
+
+
+def _optional_int(value: Optional[str]) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None

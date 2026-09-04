@@ -224,6 +224,279 @@ def test_training_worker_is_base_worker(qapp):
     assert issubclass(_TrainingWorker, BaseWorker)
 
 
+def test_training_worker_coalesces_noisy_child_logs_before_gui_drain(qapp, monkeypatch):
+    """A stalled GUI loop must not become an unbounded Qt-event queue."""
+    import threading
+
+    from hydra_suite.detectkit.gui.dialogs import training_dialog as td
+
+    line_count = td.MAX_PENDING_WORKER_LOG_LINES * 20
+
+    def noisy_training(*_args, log, progress, role_started, role_finished, **_kwargs):
+        role_started("semantic_sam3")
+        for index in range(line_count):
+            log(f"child line {index}:" + ("x" * 4_096))
+            progress("semantic_sam3", index + 1, line_count)
+        role_finished("semantic_sam3", True, "done")
+        return []
+
+    monkeypatch.setattr(td, "run_role_entries", noisy_training)
+    worker = td._TrainingWorker(object(), [])
+    delivered: list[tuple[str, str]] = []
+    worker.log_signal.connect(
+        lambda text: delivered.append((worker.delivering_log_role, text))
+    )
+    delivered_progress: list[tuple[str, int, int]] = []
+    worker.progress_signal.connect(
+        lambda role, current, total: delivered_progress.append((role, current, total))
+    )
+
+    producer = threading.Thread(target=worker.execute)
+    producer.start()
+    producer.join(timeout=10.0)
+
+    assert not producer.is_alive()
+    assert worker.pending_log_lines <= td.MAX_PENDING_WORKER_LOG_LINES
+    assert worker.pending_log_bytes <= td.MAX_PENDING_WORKER_LOG_BYTES
+    assert worker.dropped_log_lines > 0
+    assert worker.dropped_log_bytes > 0
+    assert worker.log_ready_emissions == 1
+    assert worker.progress_ready_emissions == 1
+    assert delivered == []
+    assert delivered_progress == []
+
+    qapp.processEvents()
+
+    assert worker.pending_log_lines == 0
+    assert worker.pending_log_bytes == 0
+    assert len(delivered) <= td.MAX_PENDING_WORKER_LOG_LINES + 1
+    assert "log transport dropped" in delivered[0][1]
+    assert {role for role, _text in delivered} == {"semantic_sam3"}
+    assert delivered_progress == [("semantic_sam3", line_count, line_count)]
+
+
+def test_training_dialog_persists_coalesced_logs_under_their_producer_role(
+    qapp, tmp_path
+):
+    from hydra_suite.detectkit.gui.dialogs import training_dialog as td
+
+    dialog = td.TrainingDialog(_make_proj(tmp_path))
+    worker = td._TrainingWorker(object(), [])
+    worker.log_signal.connect(dialog._append_log)
+
+    worker._queue_role_started("obb_direct")
+    worker._queue_log("first role output")
+    worker._queue_role_finished("obb_direct", True, "done")
+    worker._queue_role_started("semantic_sam3")
+    worker._queue_log("second role output")
+    worker._queue_role_finished("semantic_sam3", True, "done")
+
+    qapp.processEvents()
+
+    assert dialog._role_logs["obb_direct"] == ["first role output"]
+    assert dialog._role_logs["semantic_sam3"] == ["second role output"]
+
+
+def test_training_worker_bounds_role_finished_signal_message(qapp):
+    from hydra_suite.detectkit.gui.dialogs import training_dialog as td
+    from hydra_suite.widgets.workers import MAX_WORKER_TERMINAL_MESSAGE_BYTES
+
+    worker = td._TrainingWorker(object(), [])
+    delivered = []
+    worker.role_finished.connect(
+        lambda role, ok, message: delivered.append((role, ok, message))
+    )
+
+    worker._queue_role_finished(
+        "semantic_sam3", False, "x" * (MAX_WORKER_TERMINAL_MESSAGE_BYTES * 8)
+    )
+
+    assert len(delivered) == 1
+    assert len(delivered[0][2].encode("utf-8")) <= MAX_WORKER_TERMINAL_MESSAGE_BYTES
+    assert delivered[0][2].endswith("[message truncated]")
+
+
+def test_training_worker_bounds_all_result_text_without_calling_exception_str(qapp):
+    from types import SimpleNamespace
+
+    from hydra_suite.detectkit.gui.dialogs import training_dialog as td
+    from hydra_suite.runtime.safe_text import MAX_TERMINAL_TEXT_BYTES
+    from hydra_suite.training.contracts import TrainingRole
+
+    class _HugeStringError(RuntimeError):
+        str_calls = 0
+
+        def __str__(self):
+            type(self).str_calls += 1
+            return "z" * (MAX_TERMINAL_TEXT_BYTES * 32)
+
+    class _Orchestrator:
+        def run_role_training(self, _spec, **_kwargs):
+            raise _HugeStringError("safe diagnostic")
+
+    entry = SimpleNamespace(
+        role=TrainingRole.SEMANTIC_SAM3,
+        spec=SimpleNamespace(role=TrainingRole.SEMANTIC_SAM3),
+        publish_metadata={},
+    )
+    worker = td._TrainingWorker(_Orchestrator(), [entry])
+    completed = []
+    worker.done_signal.connect(completed.append)
+
+    worker.run()
+
+    assert worker.failure_exception is None
+    assert _HugeStringError.str_calls == 0
+    assert len(completed) == 1
+    error = completed[0][0]["error"]
+    assert error == "safe diagnostic"
+    assert len(error.encode("utf-8")) <= MAX_TERMINAL_TEXT_BYTES
+
+
+def test_training_worker_caps_nested_terminal_result_strings(qapp):
+    from types import SimpleNamespace
+
+    from hydra_suite.detectkit.gui.dialogs import training_dialog as td
+    from hydra_suite.runtime.safe_text import MAX_TERMINAL_TEXT_BYTES
+    from hydra_suite.training.contracts import TrainingRole
+
+    huge = "x" * (MAX_TERMINAL_TEXT_BYTES * 8)
+
+    class _Orchestrator:
+        def run_role_training(self, _spec, **_kwargs):
+            return {
+                "success": False,
+                "error": huge,
+                "command": [huge],
+                "containment": {"diagnostic": huge},
+            }
+
+    entry = SimpleNamespace(
+        role=TrainingRole.SEMANTIC_SAM3,
+        spec=SimpleNamespace(role=TrainingRole.SEMANTIC_SAM3),
+        publish_metadata={},
+    )
+    worker = td._TrainingWorker(_Orchestrator(), [entry])
+    completed = []
+    worker.done_signal.connect(completed.append)
+
+    worker.run()
+
+    result = completed[0][0]
+    assert len(result["error"].encode("utf-8")) <= MAX_TERMINAL_TEXT_BYTES
+    assert len(result["command"][0].encode("utf-8")) <= MAX_TERMINAL_TEXT_BYTES
+    assert (
+        len(result["containment"]["diagnostic"].encode("utf-8"))
+        <= MAX_TERMINAL_TEXT_BYTES
+    )
+
+
+def test_training_worker_retains_owned_sidecar_until_recovery(qapp, monkeypatch):
+    from types import SimpleNamespace
+
+    from hydra_suite.detectkit.gui.dialogs import training_dialog as td
+    from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
+    from hydra_suite.training.contracts import TrainingRole
+
+    class _Sidecar:
+        def __init__(self):
+            self.fail_cleanup = True
+            self.generic_failure = False
+
+        def cancel(self):
+            if self.generic_failure:
+                raise OSError("signal transport failed")
+            if self.fail_cleanup:
+                raise WorkloadStillOwnedError("still owned", self)
+
+    sidecar = _Sidecar()
+    owned = WorkloadStillOwnedError("ownership retained", sidecar)
+    owned.run_id = "run-owned"
+    recovered_artifacts = []
+    owned.recovery_cleanup = lambda: recovered_artifacts.append(True)
+    calls = []
+    finalized = []
+    monkeypatch.setattr(
+        td,
+        "finalize_run_record",
+        lambda run_id, **kwargs: finalized.append((run_id, kwargs)),
+    )
+
+    class _Orchestrator:
+        def run_role_training(self, spec, **_kwargs):
+            calls.append(spec.role)
+            raise owned
+
+    entries = [
+        SimpleNamespace(
+            role=TrainingRole.SEMANTIC_SAM3,
+            spec=SimpleNamespace(role=TrainingRole.SEMANTIC_SAM3),
+            publish_metadata={},
+        ),
+        SimpleNamespace(
+            role=TrainingRole.DETECT_DIRECT,
+            spec=SimpleNamespace(role=TrainingRole.DETECT_DIRECT),
+            publish_metadata={},
+        ),
+    ]
+    worker = td._TrainingWorker(_Orchestrator(), entries)
+    completed = []
+    worker.done_signal.connect(completed.append)
+
+    worker.run()
+
+    assert worker.failure_exception is owned
+    assert worker.containment_recovery_required
+    assert completed == []
+    assert calls == [TrainingRole.SEMANTIC_SAM3]
+    assert not worker.retry_containment_cleanup()
+    assert worker.containment_recovery_required
+    assert worker.failure_exception.sidecar is sidecar
+    assert recovered_artifacts == []
+
+    sidecar.fail_cleanup = False
+    sidecar.generic_failure = True
+    retained = worker.failure_exception
+    assert not worker.retry_containment_cleanup()
+    assert worker.failure_exception is retained
+    assert worker.failure_exception.recovery_error == "signal transport failed"
+    assert recovered_artifacts == []
+
+    sidecar.generic_failure = False
+    assert worker.retry_containment_cleanup()
+    assert worker.failure_exception is None
+    assert recovered_artifacts == [True]
+    assert finalized[0][0] == "run-owned"
+    assert finalized[0][1]["status"] == "failed"
+    assert finalized[0][1]["failure_details"]["containment"]["ownership"] == (
+        "recovered"
+    )
+
+
+def test_training_worker_reports_registry_failure_after_safe_cleanup(qapp, monkeypatch):
+    from hydra_suite.detectkit.gui.dialogs import training_dialog as td
+    from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
+
+    sidecar = type("Sidecar", (), {"cancel": lambda self: None})()
+    owned = WorkloadStillOwnedError("ownership retained", sidecar)
+    owned.run_id = "run-owned"
+    owned.recovery_cleanup = lambda: (_ for _ in ()).throw(
+        OSError("staging cleanup failed")
+    )
+    worker = td._TrainingWorker(object(), [])
+    worker.failure_exception = owned
+    monkeypatch.setattr(
+        td,
+        "finalize_run_record",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("registry offline")),
+    )
+
+    assert worker.retry_containment_cleanup()
+    assert worker.failure_exception is None
+    assert worker.recovery_registry_error == "registry offline"
+    assert worker.recovery_cleanup_error == "staging cleanup failed"
+
+
 def test_resume_builds_shared_role_entry(qapp, tmp_path, monkeypatch):
     from hydra_suite.detectkit.gui.dialogs import training_dialog as td
     from hydra_suite.detectkit.jobs.training import RoleTrainingEntry
@@ -277,6 +550,45 @@ def test_dataset_preparation_worker_is_base_worker(qapp):
     from hydra_suite.widgets.workers import BaseWorker
 
     assert issubclass(_DatasetPreparationWorker, BaseWorker)
+
+
+def test_dataset_preparation_worker_coalesces_noisy_logs_before_gui_drain(
+    qapp, monkeypatch
+):
+    import threading
+
+    from hydra_suite.detectkit.gui.dialogs import training_dialog as td
+
+    line_count = td.MAX_PENDING_WORKER_LOG_LINES * 20
+
+    def noisy_preparation(*_args, log, **_kwargs):
+        for index in range(line_count):
+            log(f"dataset line {index}:" + ("y" * 4_096))
+        return object()
+
+    monkeypatch.setattr(td, "_prepare_role_datasets", noisy_preparation)
+    worker = td._DatasetPreparationWorker(object(), object())
+    delivered: list[str] = []
+    worker.log_signal.connect(delivered.append)
+
+    producer = threading.Thread(target=worker.execute)
+    producer.start()
+    producer.join(timeout=10.0)
+
+    assert not producer.is_alive()
+    assert worker.pending_log_lines <= td.MAX_PENDING_WORKER_LOG_LINES
+    assert worker.pending_log_bytes <= td.MAX_PENDING_WORKER_LOG_BYTES
+    assert worker.dropped_log_lines > 0
+    assert worker.dropped_log_bytes > 0
+    assert worker.log_ready_emissions == 1
+    assert delivered == []
+
+    qapp.processEvents()
+
+    assert worker.pending_log_lines == 0
+    assert worker.pending_log_bytes == 0
+    assert len(delivered) <= td.MAX_PENDING_WORKER_LOG_LINES + 1
+    assert "log transport dropped" in delivered[0]
 
 
 def test_dataset_preparation_runs_builders_off_gui_thread(qapp):
@@ -767,3 +1079,93 @@ def test_training_dialog_on_done_persists_project_history(qapp, tmp_path, monkey
 
     assert captured["project"] is dlg._project
     assert captured["results"][0]["training_log"] == "line 1\nline 2"
+
+
+def test_training_dialog_bounds_active_and_persisted_noisy_child_logs(
+    qapp, tmp_path, monkeypatch
+):
+    from hydra_suite.detectkit.gui.dialogs import training_dialog as td
+
+    dlg = td.TrainingDialog(_make_proj(tmp_path))
+    dlg._current_role = "semantic_sam3"
+    total = td.MAX_PERSISTED_ROLE_LOG_LINES + 250
+    for index in range(total):
+        dlg._append_log(f"noisy child record {index}:" + ("x" * 512))
+
+    retained = dlg._role_logs["semantic_sam3"]
+    assert len(retained) <= td.MAX_PERSISTED_ROLE_LOG_LINES
+    assert sum(map(len, retained)) <= td.MAX_PERSISTED_ROLE_LOG_CHARS
+    assert dlg._role_log_dropped["semantic_sam3"] > 0
+    assert dlg.log_view.document().blockCount() <= td.MAX_VISIBLE_LOG_BLOCKS
+
+    captured = {}
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.project.record_training_results",
+        lambda _project, results: captured.setdefault("results", results),
+    )
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.dialogs.training_dialog.QMessageBox.warning",
+        lambda *_args, **_kwargs: None,
+    )
+    dlg._on_done([{"role": "semantic_sam3", "success": False}])
+
+    persisted = captured["results"][0]["training_log"]
+    assert "log retention dropped" in persisted
+    assert len(persisted) <= td.MAX_PERSISTED_ROLE_LOG_CHARS + 128
+
+
+def test_training_dialog_refuses_oversized_preset_before_applying(
+    qapp, tmp_path, monkeypatch
+):
+    from hydra_suite.detectkit.gui import utils as gui_utils
+    from hydra_suite.detectkit.gui.dialogs import training_dialog as td
+
+    preset = tmp_path / "oversized-preset.json"
+    preset.write_bytes(b"{" + (b" " * gui_utils.MAX_UI_JSON_BYTES) + b"}")
+    dlg = td.TrainingDialog(_make_proj(tmp_path))
+    applied = []
+    errors = []
+    monkeypatch.setattr(
+        td.QFileDialog,
+        "getOpenFileName",
+        lambda *_args, **_kwargs: (str(preset), "JSON (*.json)"),
+    )
+    monkeypatch.setattr(dlg, "_apply_training_state", applied.append)
+    monkeypatch.setattr(
+        td.QMessageBox,
+        "critical",
+        lambda _parent, title, message: errors.append((title, message)),
+    )
+
+    dlg._load_training_config()
+
+    assert applied == []
+    assert errors
+    assert "safe input cap" in errors[0][1]
+
+
+def test_training_dialog_state_cannot_expand_control_text_past_loader_cap(
+    qapp, tmp_path, monkeypatch
+):
+    from hydra_suite.detectkit.gui import utils as gui_utils
+    from hydra_suite.detectkit.gui.dialogs import training_dialog as td
+    from hydra_suite.training.contracts import SAM3_MAX_NEGATIVE_PROMPT_COUNT
+
+    dlg = td.TrainingDialog(_make_proj(tmp_path))
+    preset = tmp_path / "control-heavy-preset.json"
+    dlg.sam3_panel.negative_prompts_edit.setPlainText(
+        "\n".join("\x00" * 256 for _ in range(SAM3_MAX_NEGATIVE_PROMPT_COUNT))
+    )
+    monkeypatch.setattr(
+        td.QFileDialog,
+        "getSaveFileName",
+        lambda *_args, **_kwargs: (str(preset), "JSON (*.json)"),
+    )
+    monkeypatch.setattr(td.QMessageBox, "information", lambda *_args, **_kwargs: None)
+
+    dlg._save_training_config()
+
+    encoded = preset.read_bytes()
+    assert b"\\u0000" not in encoded
+    assert len(encoded) <= gui_utils.MAX_UI_JSON_BYTES
+    assert gui_utils.load_bounded_json_mapping(preset)

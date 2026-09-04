@@ -13,6 +13,52 @@ from .constants import IMG_EXTS
 
 logger = logging.getLogger(__name__)
 
+MAX_UI_JSON_BYTES = 1024 * 1024
+_MAX_UI_JSON_DEPTH = 64
+_MAX_UI_JSON_VALUES = 100_000
+
+
+def load_bounded_json_mapping(
+    path: str | Path, *, max_bytes: int = MAX_UI_JSON_BYTES
+) -> dict:
+    """Load a GUI JSON mapping without unbounded read/decoder amplification."""
+
+    with Path(path).open("rb") as handle:
+        encoded = handle.read(max_bytes + 1)
+    if len(encoded) > max_bytes:
+        raise ValueError(f"JSON file exceeds the safe input cap of {max_bytes} bytes")
+
+    depth = 0
+    separators = 0
+    in_string = False
+    escaped = False
+    for byte in encoded:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif byte == ord("\\"):
+                escaped = True
+            elif byte == ord('"'):
+                in_string = False
+            continue
+        if byte == ord('"'):
+            in_string = True
+        elif byte in (ord("["), ord("{")):
+            depth += 1
+            if depth > _MAX_UI_JSON_DEPTH:
+                raise ValueError("JSON nesting exceeds the safe input cap")
+        elif byte in (ord("]"), ord("}")):
+            depth = max(0, depth - 1)
+        elif byte == ord(","):
+            separators += 1
+            if separators >= _MAX_UI_JSON_VALUES:
+                raise ValueError("JSON value count exceeds the safe input cap")
+
+    data = json.loads(encoded)
+    if not isinstance(data, dict):
+        raise ValueError("JSON root must be an object")
+    return data
+
 
 # ---------------------------------------------------------------------------
 # UI settings persistence
@@ -35,9 +81,7 @@ def load_ui_settings() -> dict:
     if not sp.exists():
         return {}
     try:
-        data = json.loads(sp.read_text(encoding="utf-8"))
-        if isinstance(data, dict):
-            return data
+        return load_bounded_json_mapping(sp)
     except Exception:
         logger.debug("Failed to read UI settings", exc_info=True)
     return {}

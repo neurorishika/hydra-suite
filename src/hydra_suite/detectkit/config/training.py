@@ -9,6 +9,9 @@ from pathlib import Path
 from typing import Any
 
 from hydra_suite.training.contracts import (
+    SAM3_MAX_CONFIGURED_PROMPT_BYTES,
+    SAM3_MAX_NEGATIVE_PROMPT_COUNT,
+    SAM3_MAX_NEGATIVE_QUERIES_PER_TILE,
     AugmentationProfile,
     PublishPolicy,
     Sam3LoraParams,
@@ -16,7 +19,46 @@ from hydra_suite.training.contracts import (
     SplitConfig,
     TrainingHyperParams,
     TrainingRole,
+    sam3_prompt_text_error,
 )
+
+_MAX_TRAINING_PLAN_BYTES = 1024 * 1024
+_MAX_TRAINING_PLAN_DEPTH = 64
+_MAX_TRAINING_PLAN_VALUES = 100_000
+
+
+def _validate_training_plan_json_shape(encoded: bytes) -> None:
+    """Reject compact JSON shapes with unsafe decoder amplification."""
+
+    depth = 0
+    value_separators = 0
+    in_string = False
+    escaped = False
+    for byte in encoded:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif byte == ord("\\"):
+                escaped = True
+            elif byte == ord('"'):
+                in_string = False
+            continue
+        if byte == ord('"'):
+            in_string = True
+        elif byte in (ord("["), ord("{")):
+            depth += 1
+            if depth > _MAX_TRAINING_PLAN_DEPTH:
+                raise TrainingPlanError(
+                    "Invalid JSON in training config: nesting exceeds the safe cap"
+                )
+        elif byte in (ord("]"), ord("}")):
+            depth = max(0, depth - 1)
+        elif byte == ord(","):
+            value_separators += 1
+            if value_separators >= _MAX_TRAINING_PLAN_VALUES:
+                raise TrainingPlanError(
+                    "Invalid JSON in training config: value count exceeds the safe cap"
+                )
 
 
 class TrainingPlanError(ValueError):
@@ -477,7 +519,17 @@ class DetectTrainingPlan:
             ):
                 if name in sam3_values:
                     sam3_values[name] = _require_int(sam3_values[name], f"sam3.{name}")
-            for name in ("dropout", "lr", "object_tile_fraction", "tile_overlap"):
+            for name in (
+                "dropout",
+                "lr",
+                "object_tile_fraction",
+                "tile_overlap",
+                "host_reserve_gb",
+                "host_reserve_fraction",
+                "cuda_safety_fraction",
+                "host_limit_headroom_fraction",
+                "watchdog_poll_seconds",
+            ):
                 if name in sam3_values:
                     sam3_values[name] = _require_number(
                         sam3_values[name], f"sam3.{name}"
@@ -600,6 +652,60 @@ class DetectTrainingPlan:
                 raise TrainingPlanError("sam3.batch must be positive")
             if self.sam3_params.grad_accum <= 0:
                 raise TrainingPlanError("sam3.grad_accum must be positive")
+            if not (
+                0
+                <= self.sam3_params.num_negatives
+                <= SAM3_MAX_NEGATIVE_QUERIES_PER_TILE
+            ):
+                raise TrainingPlanError(
+                    "sam3.num_negatives must be between 0 and "
+                    f"{SAM3_MAX_NEGATIVE_QUERIES_PER_TILE}"
+                )
+            if len(self.sam3_params.negative_prompts) > SAM3_MAX_NEGATIVE_PROMPT_COUNT:
+                raise TrainingPlanError(
+                    "sam3.negative_prompts exceeds the safe cap of "
+                    f"{SAM3_MAX_NEGATIVE_PROMPT_COUNT} entries"
+                )
+            for label, prompt in (
+                ("prompt", self.sam3_params.prompt),
+                *(
+                    (f"negative_prompts[{index}]", value)
+                    for index, value in enumerate(self.sam3_params.negative_prompts)
+                ),
+            ):
+                prompt_error = sam3_prompt_text_error(prompt)
+                if prompt_error is not None:
+                    raise TrainingPlanError(f"sam3.{label} {prompt_error}")
+            try:
+                configured_prompt_bytes = len(self.sam3_params.prompt.encode("utf-8"))
+                configured_prompt_bytes += sum(
+                    len(prompt.encode("utf-8"))
+                    for prompt in self.sam3_params.negative_prompts
+                )
+            except UnicodeEncodeError as exc:
+                raise TrainingPlanError(
+                    "sam3 prompts must be valid UTF-8 text"
+                ) from exc
+            if configured_prompt_bytes > SAM3_MAX_CONFIGURED_PROMPT_BYTES:
+                raise TrainingPlanError(
+                    "sam3 prompt and negative_prompts exceed the safe serialized "
+                    f"text cap of {SAM3_MAX_CONFIGURED_PROMPT_BYTES} UTF-8 bytes"
+                )
+            # Legacy plans may contain fp16/fp32. Preserve their ability to
+            # load so users can inspect/edit them; execution preflight and the
+            # sidecar runtime both refuse every mode except CUDA BF16.
+            if self.sam3_params.host_reserve_gb < 0.0:
+                raise TrainingPlanError("sam3.host_reserve_gb must not be negative")
+            if not 0.0 <= self.sam3_params.host_reserve_fraction <= 1.0:
+                raise TrainingPlanError("sam3.host_reserve_fraction must be in [0, 1]")
+            if not 0.0 < self.sam3_params.cuda_safety_fraction <= 1.0:
+                raise TrainingPlanError("sam3.cuda_safety_fraction must be in (0, 1]")
+            if self.sam3_params.host_limit_headroom_fraction < 1.0:
+                raise TrainingPlanError(
+                    "sam3.host_limit_headroom_fraction must be at least 1"
+                )
+            if self.sam3_params.watchdog_poll_seconds <= 0.0:
+                raise TrainingPlanError("sam3.watchdog_poll_seconds must be positive")
             if not 0.0 <= self.sam3_params.tile_overlap < 1.0:
                 raise TrainingPlanError("sam3.tile_overlap must be in [0, 1)")
             if self.sam3_params.object_tile_fraction <= 0.0:
@@ -678,13 +784,23 @@ def load_training_plan(path: str | Path) -> DetectTrainingPlan:
 
     config_path = Path(path).expanduser().resolve()
     try:
-        raw = json.loads(config_path.read_text(encoding="utf-8"))
+        with config_path.open("rb") as config_file:
+            encoded = config_file.read(_MAX_TRAINING_PLAN_BYTES + 1)
+        if len(encoded) > _MAX_TRAINING_PLAN_BYTES:
+            raise TrainingPlanError(
+                "Training config exceeds the safe input cap of "
+                f"{_MAX_TRAINING_PLAN_BYTES} bytes"
+            )
+        _validate_training_plan_json_shape(encoded)
+        raw = json.loads(encoded)
     except FileNotFoundError as exc:
         raise TrainingPlanError(f"Training config not found: {config_path}") from exc
     except json.JSONDecodeError as exc:
         raise TrainingPlanError(
             f"Invalid JSON in {config_path}: line {exc.lineno}, column {exc.colno}"
         ) from exc
+    except (UnicodeDecodeError, RecursionError) as exc:
+        raise TrainingPlanError(f"Invalid JSON in {config_path}: {exc}") from exc
     except OSError as exc:
         raise TrainingPlanError(f"Could not read training config: {exc}") from exc
     try:

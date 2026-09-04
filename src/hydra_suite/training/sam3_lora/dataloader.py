@@ -21,7 +21,10 @@ from typing import Any, Iterator, Sequence
 import cv2
 import numpy as np
 
+from hydra_suite.training.contracts import sam3_prompt_text_error
+
 from .datapoints import build_shared_query_datapoints, collate_datapoints
+from .polygons import validated_segmentation_polygons
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,14 +89,28 @@ def _negative_prompts_for(dataset_dir: Path, params: Any) -> list[str]:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         negatives = manifest.get("negative_prompts") or []
         if negatives:
-            return list(negatives)
+            resolved = list(negatives)
+            _validate_negative_prompts(resolved)
+            return resolved
     if params.negative_prompts:
-        return list(params.negative_prompts)
+        resolved = list(params.negative_prompts)
+        _validate_negative_prompts(resolved)
+        return resolved
     raise RuntimeError(
         f"No negative prompts available for {dataset_dir}: build_manifest.json "
         "has none and params.negative_prompts is empty, but "
         f"params.num_negatives={params.num_negatives} wants some."
     )
+
+
+def _validate_negative_prompts(prompts: Sequence[object]) -> None:
+    """Apply the same per-prompt bound inside the training child."""
+
+    for index, prompt in enumerate(prompts):
+        error = sam3_prompt_text_error(prompt)
+        if error is not None or not str(prompt).strip():
+            detail = error or "must be non-empty"
+            raise RuntimeError(f"negative prompt {index} {detail}")
 
 
 def _segmentation_to_polygons(annotations: list[dict]) -> list[tuple[np.ndarray, bool]]:
@@ -119,10 +136,8 @@ def _segmentation_to_polygons(annotations: list[dict]) -> list[tuple[np.ndarray,
     polygons: list[tuple[np.ndarray, bool]] = []
     for ann in annotations:
         is_crowd = bool(ann.get("iscrowd"))
-        for seg in ann.get("segmentation") or []:
-            pts = np.asarray(seg, dtype=np.float32).reshape(-1, 2)
-            if len(pts) >= 3:
-                polygons.append((pts, is_crowd))
+        for polygon in validated_segmentation_polygons(ann.get("segmentation")):
+            polygons.append((np.asarray(polygon, dtype=np.float32), is_crowd))
     return polygons
 
 

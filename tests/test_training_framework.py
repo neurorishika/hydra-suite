@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 import sys
+import tracemalloc
 from pathlib import Path
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
+import pytest
 
 from hydra_suite.training.contracts import (
     SourceDataset,
@@ -34,6 +37,99 @@ from hydra_suite.training.registry import (
 )
 from hydra_suite.training.runner import build_ultralytics_command
 from hydra_suite.training.service import TrainingOrchestrator
+
+
+def test_dataset_fingerprint_streams_large_listing_and_metadata(tmp_path, monkeypatch):
+    import hydra_suite.training.registry as registry
+
+    root = tmp_path / "large-dataset"
+    root.mkdir()
+    (root / "manifest.json").write_bytes(b"m" * (2 * 1024 * 1024))
+    (root / "dataset.yaml").write_text("train: images", encoding="utf-8")
+
+    class Entry:
+        def __init__(self, index):
+            self.path = str(root / f"file-{index:08d}.jpg")
+
+        def stat(self, *, follow_symlinks=False):
+            assert follow_symlinks is True
+            return SimpleNamespace(st_size=1234, st_mtime_ns=-5678)
+
+    count = 100_000
+    monkeypatch.setattr(
+        registry,
+        "_iter_dataset_files",
+        lambda _root: (Entry(index) for index in range(count)),
+    )
+    monkeypatch.setattr(
+        Path,
+        "read_bytes",
+        lambda _path: pytest.fail("fingerprinting must use bounded reads"),
+    )
+
+    tracemalloc.start()
+    first = registry.dataset_fingerprint(root)
+    _, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+
+    monkeypatch.setattr(
+        registry,
+        "_iter_dataset_files",
+        lambda _root: (Entry(index) for index in reversed(range(count))),
+    )
+    second = registry.dataset_fingerprint(root)
+
+    assert first == second
+    assert peak < 20 * 1024 * 1024
+
+
+def test_registry_read_write_caps_prevent_unbounded_materialization(
+    tmp_path, monkeypatch
+):
+    import hydra_suite.training.registry as registry
+
+    monkeypatch.setattr(registry, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(registry, "_MAX_REGISTRY_BYTES", 64)
+    path = registry.get_registry_path()
+    path.write_bytes(b" " * 65)
+
+    with pytest.raises(RuntimeError, match="safe size cap"):
+        registry.load_registry()
+
+    path.write_text('{"runs": []}', encoding="utf-8")
+    monkeypatch.setattr(registry, "_MAX_REGISTRY_RECORDS", 1)
+    with pytest.raises(RuntimeError, match="run-record cap"):
+        registry.save_registry({"runs": [{"run_id": "one"}, {"run_id": "two"}]})
+
+
+def test_registry_write_applies_reader_shape_policy_before_encoding(
+    tmp_path, monkeypatch
+):
+    import hydra_suite.training.registry as registry
+
+    monkeypatch.setattr(registry, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(registry, "_MAX_REGISTRY_JSON_VALUES", 3)
+    payload = {"runs": [{"a": 1, "b": 2}, {"a": 1, "b": 2}]}
+
+    with pytest.raises(RuntimeError, match="safe value cap"):
+        registry.save_registry(payload)
+
+    path = registry.get_registry_path()
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="safe value cap"):
+        registry.load_registry()
+
+
+def test_registry_rejects_huge_scalar_before_json_encoder(tmp_path, monkeypatch):
+    import hydra_suite.training.registry as registry
+
+    monkeypatch.setattr(registry, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(registry, "_MAX_REGISTRY_STRING_CODEPOINTS", 16)
+
+    with pytest.raises(RuntimeError, match="string exceeds"):
+        registry.save_registry({"runs": [], "error": "x" * 17})
+
+    assert not list(registry.get_runs_root().glob(".registry.*.tmp"))
 
 
 def _write_image(path: Path, value: int = 120):
