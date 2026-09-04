@@ -515,3 +515,138 @@ def test_preview_round_trip_keeps_row_identity(tmp_path):
     assert restored.candidate_index == 3
     assert restored.merge_threshold == 0.7
     assert restored.confidence == 0.42
+
+
+def _dense_polygons(n, seed):
+    rng = np.random.RandomState(seed)
+    out = []
+    for _ in range(n):
+        cx, cy = rng.uniform(0, 3000, 2)
+        w, h = rng.uniform(10, 60, 2)
+        pts = np.array(
+            [[-w / 2, -h / 2], [w / 2, -h / 2], [w / 2, h / 2], [-w / 2, h / 2]],
+            dtype=np.float32,
+        )
+        out.append((pts + [cx, cy]).astype(np.float32))
+    return out
+
+
+def _worst_case_outcome(image_paths, n_rows, objects_per_frame):
+    """~11 candidates x 57 rows x 8 frames at realistic-ant object density.
+
+    This is the reviewer's measured worst case: one preview per measured row
+    duplicating every frame's ground truth. It pins the v4 evidence file
+    size well below the v3 payload (159 MB at 100 objects/frame).
+    """
+    from hydra_suite.detectkit.jobs import direct_calibration as job
+
+    gt_by_frame = {
+        i: _dense_polygons(objects_per_frame, seed=1000 + i)
+        for i in range(len(image_paths))
+    }
+    previews = []
+    for row in range(n_rows):
+        frames = [
+            (
+                image_paths[i],
+                gt_by_frame[i],
+                _dense_polygons(objects_per_frame, seed=row * 1000 + i),
+            )
+            for i in range(len(image_paths))
+        ]
+        previews.append(
+            job.CalibrationPreview(
+                candidate_label=f"cand{row % 11}",
+                frames=frames,
+                candidate_index=row % 11,
+                merge_threshold=0.3 + 0.01 * (row % 20),
+                confidence=0.05 + 0.001 * (row % 50),
+            )
+        )
+    return job.DirectCalibrationOutcome(points=[], previews=previews)
+
+
+def test_evidence_file_size_bounded_for_dense_worst_case(tmp_path, monkeypatch):
+    """Pins the v4 fix: previous format hit 159 MB at 100 objects/frame.
+
+    The shared frame table (GT stored once, not once per preview) plus
+    1-decimal rounding plus gzip must keep a realistic worst case (627
+    previews x 8 frames x 100 objects/frame) well under that -- this asserts
+    an explicit ceiling so a regression back toward per-preview GT
+    duplication, or dropping the rounding/gzip step, is caught immediately.
+    """
+    from hydra_suite.detectkit.jobs import direct_calibration as job
+
+    monkeypatch.setattr(job, "checkpoint_fingerprint", lambda p: "fp")
+    image_dir = tmp_path / "frames"
+    image_dir.mkdir()
+    image_paths = []
+    for i in range(8):
+        path = image_dir / f"f{i}.png"
+        cv2.imwrite(str(path), np.zeros((32, 32, 3), np.uint8))
+        image_paths.append(path)
+
+    outcome = _worst_case_outcome(image_paths, n_rows=627, objects_per_frame=100)
+    request = _request(tmp_path)
+    evidence_dir = tmp_path / "evidence"
+    target = job.save_direct_calibration(evidence_dir, outcome, request)
+
+    size_mb = target.stat().st_size / 1e6
+    assert size_mb < 20.0, (
+        f"evidence file is {size_mb:.1f} MB; the v3 equivalent was ~159 MB "
+        "for this worst case"
+    )
+
+    loaded = job.load_direct_calibration(evidence_dir)
+    assert loaded is not None
+    assert len(loaded.previews) == len(outcome.previews)
+    for orig, restored in zip(outcome.previews[:5], loaded.previews[:5]):
+        assert orig.candidate_index == restored.candidate_index
+        assert abs(orig.merge_threshold - restored.merge_threshold) < 1e-9
+        assert abs(orig.confidence - restored.confidence) < 1e-9
+        for (_op, ogt, opred), (_rp, rgt, rpred) in zip(orig.frames, restored.frames):
+            assert len(ogt) == len(rgt)
+            assert len(opred) == len(rpred)
+            for a, b in zip(ogt, rgt):
+                assert np.allclose(job._polygon_to_list(a), b.tolist(), atol=1e-6)
+            for a, b in zip(opred, rpred):
+                assert np.allclose(job._polygon_to_list(a), b.tolist(), atol=1e-6)
+
+
+def test_v3_evidence_file_degrades_cleanly(tmp_path, monkeypatch):
+    """A pre-v4 file (no shared frame table) must load with zero previews,
+    never raise -- same contract v3 gave v1/v2 files."""
+    from hydra_suite.detectkit.jobs import direct_calibration as job
+
+    image_path = tmp_path / "f.png"
+    cv2.imwrite(str(image_path), np.zeros((16, 16, 3), np.uint8))
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir(parents=True)
+    old_payload = {
+        "version": 3,
+        "partial": False,
+        "message": "",
+        "provenance": {},
+        "points": [],
+        "previews": [
+            {
+                "candidate_label": "c",
+                "candidate_index": 0,
+                "merge_threshold": 0.5,
+                "confidence": 0.3,
+                "frames": [
+                    {
+                        "image_path": {"absolute": str(image_path)},
+                        "ground_truth": [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]],
+                        "predictions": [],
+                    }
+                ],
+            }
+        ],
+    }
+    import json as _json
+
+    (evidence_dir / "direct_calibration.json").write_text(_json.dumps(old_payload))
+    loaded = job.load_direct_calibration(evidence_dir)
+    assert loaded is not None
+    assert loaded.previews == []

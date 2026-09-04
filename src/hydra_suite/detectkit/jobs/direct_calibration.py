@@ -6,6 +6,7 @@ frames, drives the production runner, and persists project-local evidence.
 
 from __future__ import annotations
 
+import gzip
 import json
 import logging
 import os
@@ -301,6 +302,7 @@ class CalibrationPreview:
 
 
 EVIDENCE_FILENAME = "direct_calibration.json"
+EVIDENCE_FILENAME_GZ = "direct_calibration.json.gz"
 # v3: one preview per MEASURED ROW -- keyed by (candidate_index,
 # merge_threshold, confidence) and collected at that row's own max_targets,
 # so the stored polygons are the row's output verbatim. v1 and v2 previews
@@ -309,11 +311,22 @@ EVIDENCE_FILENAME = "direct_calibration.json"
 # are DROPPED on load rather than shown as if they described a row (the
 # points are still read -- the record's only other job is the
 # partial-overwrite guard).
-EVIDENCE_VERSION = 3
+#
+# v4: frame identity (path + ground truth) is stored ONCE in a shared
+# ``frames`` table and each preview references frames by index -- v3 stored
+# the ground truth once PER PREVIEW, and one preview per measured row means
+# the same handful of frames' ground truth was duplicated ~600x. Coordinates
+# are also rounded to 1 decimal place (a sub-pixel value is meaningless for
+# an on-screen overlay) and the payload is gzip-compressed on disk. v3 and
+# older previews are DROPPED on load for the same reason v1/v2 previews were
+# dropped when v3 shipped -- they lack the frame table v4 depends on.
+EVIDENCE_VERSION = 4
+_ROUND_NDIGITS = 1
 
 
 def _polygon_to_list(points) -> list[list[float]]:
-    return np.asarray(points, dtype=np.float32).reshape(-1, 2).astype(float).tolist()
+    array = np.asarray(points, dtype=np.float32).reshape(-1, 2).astype(float)
+    return np.round(array, _ROUND_NDIGITS).tolist()
 
 
 def _point_to_dict(point: DirectCalibrationPoint) -> dict:
@@ -386,18 +399,60 @@ def _point_from_dict(raw: dict) -> DirectCalibrationPoint:
     )
 
 
-def _preview_to_dict(evidence_dir: Path, preview: CalibrationPreview) -> dict:
+def _stored_image_path(evidence_dir: Path, image_path: Path) -> dict:
+    try:
+        return {"relative": os.path.relpath(image_path, evidence_dir)}
+    except ValueError:
+        return {"absolute": str(image_path)}
+
+
+def _load_image_path(evidence_dir: Path, stored) -> Path:
+    if isinstance(stored, dict) and stored.get("relative") is not None:
+        return (evidence_dir / str(stored["relative"])).resolve()
+    if isinstance(stored, dict):
+        return Path(str(stored.get("absolute", "")))
+    return Path(str(stored))
+
+
+class _FrameTable:
+    """De-duplicates (path, ground truth) across every preview in one save.
+
+    Ground truth is identical across every preview of the same frame -- it
+    is the dominant source of duplication in the v3 evidence file, which
+    stored it once per PREVIEW rather than once per frame. This assigns each
+    distinct frame (keyed by resolved image path) a stable index the first
+    time it is seen, so ``_preview_to_dict`` can reference frames instead of
+    re-embedding them.
+    """
+
+    def __init__(self, evidence_dir: Path) -> None:
+        self._evidence_dir = evidence_dir
+        self._index_by_key: dict[str, int] = {}
+        self.entries: list[dict] = []
+
+    def index_for(self, image_path: Path, gt_polygons) -> int:
+        key = str(Path(image_path))
+        index = self._index_by_key.get(key)
+        if index is not None:
+            return index
+        index = len(self.entries)
+        self._index_by_key[key] = index
+        self.entries.append(
+            {
+                "image_path": _stored_image_path(self._evidence_dir, Path(image_path)),
+                "ground_truth": [_polygon_to_list(p) for p in gt_polygons],
+            }
+        )
+        return index
+
+
+def _preview_to_dict(frame_table: _FrameTable, preview: CalibrationPreview) -> dict:
     frames = []
     for image_path, gt_polygons, pred_polygons in preview.frames:
-        image_path = Path(image_path)
-        try:
-            stored_path = {"relative": os.path.relpath(image_path, evidence_dir)}
-        except ValueError:
-            stored_path = {"absolute": str(image_path)}
+        frame_index = frame_table.index_for(Path(image_path), gt_polygons)
         frames.append(
             {
-                "image_path": stored_path,
-                "ground_truth": [_polygon_to_list(p) for p in gt_polygons],
+                "frame_index": frame_index,
                 "predictions": [_polygon_to_list(p) for p in pred_polygons],
             }
         )
@@ -410,19 +465,16 @@ def _preview_to_dict(evidence_dir: Path, preview: CalibrationPreview) -> dict:
     }
 
 
-def _preview_from_dict(evidence_dir: Path, raw: dict) -> CalibrationPreview:
+def _preview_from_dict(
+    evidence_dir: Path, frame_entries: list, raw: dict
+) -> CalibrationPreview:
     frames = []
     for raw_frame in raw.get("frames", []):
-        stored = raw_frame["image_path"]
-        if isinstance(stored, dict) and stored.get("relative") is not None:
-            image_path = (evidence_dir / str(stored["relative"])).resolve()
-        elif isinstance(stored, dict):
-            image_path = Path(str(stored.get("absolute", "")))
-        else:
-            image_path = Path(str(stored))
+        frame_entry = frame_entries[int(raw_frame["frame_index"])]
+        image_path = _load_image_path(evidence_dir, frame_entry["image_path"])
         gt_polygons = [
             np.asarray(p, dtype=np.float32).reshape(-1, 2)
-            for p in raw_frame.get("ground_truth", [])
+            for p in frame_entry.get("ground_truth", [])
         ]
         pred_polygons = [
             np.asarray(p, dtype=np.float32).reshape(-1, 2)
@@ -451,10 +503,13 @@ def save_direct_calibration(
     """
     evidence_dir = Path(evidence_dir)
     evidence_dir.mkdir(parents=True, exist_ok=True)
-    target = evidence_dir / EVIDENCE_FILENAME
+    target = evidence_dir / EVIDENCE_FILENAME_GZ
+    legacy_target = evidence_dir / EVIDENCE_FILENAME
     existing = load_direct_calibration(evidence_dir)
     if outcome.partial and existing is not None and not existing.partial:
         return target
+    frame_table = _FrameTable(evidence_dir)
+    previews = [_preview_to_dict(frame_table, preview) for preview in outcome.previews]
     payload = {
         "version": EVIDENCE_VERSION,
         "partial": bool(outcome.partial),
@@ -467,42 +522,59 @@ def save_direct_calibration(
             "max_targets": request.max_targets,
         },
         "points": [_point_to_dict(point) for point in outcome.points],
-        "previews": [
-            _preview_to_dict(evidence_dir, preview) for preview in outcome.previews
-        ],
+        "frames": frame_table.entries,
+        "previews": previews,
     }
     fd, tmp_name = tempfile.mkstemp(
-        dir=str(evidence_dir), prefix=f".{EVIDENCE_FILENAME}.", suffix=".tmp"
+        dir=str(evidence_dir), prefix=f".{EVIDENCE_FILENAME_GZ}.", suffix=".tmp"
     )
     tmp_path = Path(tmp_name)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            json.dump(payload, stream)
-            stream.flush()
-            os.fsync(stream.fileno())
+        with os.fdopen(fd, "wb") as raw_stream:
+            with gzip.GzipFile(fileobj=raw_stream, mode="wb", mtime=0) as gz_stream:
+                gz_stream.write(json.dumps(payload).encode("utf-8"))
+            raw_stream.flush()
+            os.fsync(raw_stream.fileno())
         os.replace(tmp_path, target)
     except BaseException:
         tmp_path.unlink(missing_ok=True)
         raise
+    # A stale uncompressed v3-or-earlier file next to a fresh v4 one would
+    # otherwise be preferred by a loader that checks the legacy name first;
+    # remove it so there is exactly one evidence file per directory.
+    legacy_target.unlink(missing_ok=True)
     return target
 
 
 def load_direct_calibration(evidence_dir: Path) -> DirectCalibrationOutcome | None:
-    """Load a persisted frontier, or ``None`` if absent, missing, or corrupt."""
-    target = Path(evidence_dir) / EVIDENCE_FILENAME
-    if not target.is_file():
-        return None
+    """Load a persisted frontier, or ``None`` if absent, missing, or corrupt.
+
+    Handles both the current gzip-compressed file and a plain-JSON file left
+    by a previous (pre-v4) format -- an older file must degrade cleanly
+    (zero previews, since it lacks the v4 frame table) rather than raise.
+    """
+    evidence_dir = Path(evidence_dir)
+    target = evidence_dir / EVIDENCE_FILENAME_GZ
+    legacy_target = evidence_dir / EVIDENCE_FILENAME
     try:
-        payload = json.loads(target.read_text(encoding="utf-8"))
+        if target.is_file():
+            with gzip.open(target, "rt", encoding="utf-8") as stream:
+                payload = json.loads(stream.read())
+        elif legacy_target.is_file():
+            payload = json.loads(legacy_target.read_text(encoding="utf-8"))
+        else:
+            return None
         if not isinstance(payload, dict):
             return None
         points = [_point_from_dict(raw) for raw in payload.get("points", [])]
+        version = int(payload.get("version", 0) or 0)
+        frame_entries = payload.get("frames", [])
         previews = (
             [
-                _preview_from_dict(Path(evidence_dir), raw)
+                _preview_from_dict(evidence_dir, frame_entries, raw)
                 for raw in payload.get("previews", [])
             ]
-            if int(payload.get("version", 0) or 0) >= EVIDENCE_VERSION
+            if version >= EVIDENCE_VERSION
             else []
         )
         return DirectCalibrationOutcome(
@@ -511,7 +583,15 @@ def load_direct_calibration(evidence_dir: Path) -> DirectCalibrationOutcome | No
             partial=bool(payload.get("partial", False)),
             message=str(payload.get("message", "")),
         )
-    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+    except (
+        OSError,
+        ValueError,
+        TypeError,
+        KeyError,
+        IndexError,
+        json.JSONDecodeError,
+        gzip.BadGzipFile,
+    ):
         return None
 
 
