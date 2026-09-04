@@ -293,14 +293,21 @@ install line for a CUDA wheel on a GPU box):
 conda create -n hydra-sam3 python=3.12 'numpy<2'
 conda run -n hydra-sam3 pip install torch torchvision
 conda run -n hydra-sam3 pip install 'setuptools<81'
-conda run -n hydra-sam3 pip install einops torchmetrics scipy decord iopath \
-    opencv-python-headless pillow platformdirs pandas numba
+conda run -n hydra-sam3 pip install einops torchmetrics 'scipy<1.14' decord iopath \
+    opencv-python-headless pillow platformdirs pandas numba pycocotools psutil
 conda run -n hydra-sam3 pip install git+https://github.com/facebookresearch/sam3.git
-conda run -n hydra-sam3 pip install -e /path/to/hydra-suite
+conda run -n hydra-sam3 pip install --no-deps -e /path/to/hydra-suite
 ```
 
-Three of these pins are not obvious, and were found the hard way:
+Four of these pins are not obvious, and were found the hard way:
 
+- **`--no-deps` on the editable install** — `pyproject.toml`'s core
+  dependency is an unpinned `numpy>=1.24`, which pip resolves to the latest
+  numpy 2.x. Installing `hydra-suite` without `--no-deps` silently upgrades
+  the env's numpy past 2, breaking `sam3`'s `numpy<2` pin that this whole
+  sidecar env exists to satisfy. Every runtime dependency the training CLI
+  actually imports (torch, sam3, pandas, numba, opencv, ...) is already
+  installed explicitly by the steps above, so `--no-deps` costs nothing.
 - **`setuptools<81`** — setuptools 81 removed `pkg_resources`, which
   `sam3/model_builder.py:8` imports at module scope. Without this pin,
   `import sam3` fails immediately with `ModuleNotFoundError:
@@ -308,6 +315,15 @@ Three of these pins are not obvious, and were found the hard way:
 - **`einops`** — imported by `sam3/sam/rope.py` at module scope but absent
   from sam3's declared dependencies, so a bare `pip install sam3` leaves it
   missing until the first LoRA-adapted forward pass fails.
+- **`pycocotools`** and **`psutil`** — imported by
+  `sam3/train/data/coco_json_loaders.py` and
+  `sam3/model/sam3_video_predictor.py` respectively, both at module scope
+  (reached via `sam3/model_builder.py`) and both absent from sam3's declared
+  dependencies. Without either, `import sam3` fails.
+- **`scipy<1.14`** — scipy 1.14+ requires `numpy>=2.0`, so a bare
+  `pip install scipy` (pulled in by `torchmetrics`) silently drags numpy back
+  above the `numpy<2` pin `sam3` needs. Pin it explicitly in the same
+  `pip install` as `torchmetrics` so they resolve together.
 - **`pandas`/`numba`** — training's in-env CLI runs as
   `python -m hydra_suite.training.sam3_lora.cli`, and importing
   `hydra_suite` this way eagerly imports `hydra_suite.training.service`,
