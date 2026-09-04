@@ -62,6 +62,22 @@ def test_progress_protocol_is_typed_and_bounded():
     assert _parse_progress(oversized) is None
 
 
+def test_model_operation_containment_uses_admitted_capacity_not_estimate():
+    from hydra_suite.detectkit.sidecars.supervisor import _containment_limits
+    from hydra_suite.runtime.resource_budget import AcceleratorKind
+
+    budget = SimpleNamespace(usable_host_bytes=32 * 1024**3)
+    observation = SimpleNamespace(total_host_bytes=64 * 1024**3)
+
+    soft, hard, mps_ratio = _containment_limits(
+        budget, observation, AcceleratorKind.MPS
+    )
+
+    assert hard == 32 * 1024**3
+    assert soft == int(32 * 1024**3 * 0.9)
+    assert mps_ratio == 0.5
+
+
 def test_protected_operation_surfaces_a_valid_child_failure_report(
     monkeypatch, tmp_path
 ):

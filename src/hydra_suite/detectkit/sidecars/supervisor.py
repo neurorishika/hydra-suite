@@ -81,6 +81,24 @@ def _operation_estimate(operation: Operation, input_paths: Iterable[Path]) -> in
     return base + min(model_bytes * 6, 12 * GiB)
 
 
+def _containment_limits(budget, observation, accelerator: AcceleratorKind):
+    """Derive the child boundary from admitted capacity, not its estimate.
+
+    ``budget.host_peak_bytes`` is deliberately conservative so admission can
+    refuse workloads that would consume the protected system reserve.  It is
+    not a safe containment boundary: using it as one turns a small model's
+    estimate into an arbitrary cap even on a machine with abundant memory.
+    """
+    hard = int(budget.usable_host_bytes)
+    soft = max(1, int(hard * 0.9))
+    mps_ratio = (
+        min(0.9, hard / max(1, observation.total_host_bytes))
+        if accelerator is AcceleratorKind.MPS
+        else None
+    )
+    return soft, hard, mps_ratio
+
+
 def _accelerator_for(device: str):
     value = str(device or "auto").strip().lower()
     if value.startswith("cuda") or (value == "auto" and sys.platform != "darwin"):
@@ -289,12 +307,8 @@ class ProtectedOperation:
                         budget, hard_host_bytes=0, soft_host_bytes=0
                     ),
                 )
-            hard = min(budget.usable_host_bytes, max(estimate, 2 * GiB))
-            soft = max(1, int(hard * 0.9))
-            mps_ratio = (
-                min(0.9, hard / max(1, observation.total_host_bytes))
-                if accelerator is AcceleratorKind.MPS
-                else None
+            soft, hard, mps_ratio = _containment_limits(
+                budget, observation, accelerator
             )
             environment = dict(os.environ)
             if cuda_uuid:
