@@ -30,6 +30,35 @@ def test_project_load_missing_active_model_path_defaults(tmp_path):
     assert proj.active_model_path == ""
 
 
+def test_project_load_falls_back_from_unavailable_cuda_to_mps(tmp_path, monkeypatch):
+    """Projects moved to Apple Silicon must not retain an unusable CUDA setting."""
+    import json
+
+    from hydra_suite.core.inference import torch_device
+    from hydra_suite.detectkit.gui.models import DetectKitProject
+
+    monkeypatch.setattr(torch_device, "TORCH_CUDA_AVAILABLE", False)
+    monkeypatch.setattr(torch_device, "MPS_AVAILABLE", True)
+    save_path = tmp_path / "project.json"
+    save_path.write_text(json.dumps({"version": 1, "device": "cuda"}), encoding="utf-8")
+
+    assert DetectKitProject.load(save_path).device == "mps"
+
+
+def test_project_load_preserves_explicit_cpu_device(tmp_path, monkeypatch):
+    import json
+
+    from hydra_suite.core.inference import torch_device
+    from hydra_suite.detectkit.gui.models import DetectKitProject
+
+    monkeypatch.setattr(torch_device, "TORCH_CUDA_AVAILABLE", True)
+    monkeypatch.setattr(torch_device, "MPS_AVAILABLE", True)
+    save_path = tmp_path / "project.json"
+    save_path.write_text(json.dumps({"version": 1, "device": "cpu"}), encoding="utf-8")
+
+    assert DetectKitProject.load(save_path).device == "cpu"
+
+
 def test_project_to_dict_includes_active_model_path():
     from hydra_suite.detectkit.gui.models import DetectKitProject
 

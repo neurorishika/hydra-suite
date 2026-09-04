@@ -144,6 +144,15 @@ def test_load_torch_model_returns_executor_and_runtime(tmp_path, monkeypatch):
     assert runtime == "cpu"
 
 
+def test_preview_falls_back_when_saved_mps_is_unavailable(monkeypatch):
+    from hydra_suite.core.inference import torch_device
+
+    monkeypatch.setattr(torch_device, "TORCH_CUDA_AVAILABLE", True)
+    monkeypatch.setattr(torch_device, "MPS_AVAILABLE", False)
+
+    assert pp._resolve_compute_runtime("mps") == "cuda"
+
+
 def test_sequential_preview_resolves_real_class_id(tmp_path, monkeypatch):
     """Sequential preview must surface the merged OBBResult's real class id."""
     pp._get_torch_model.cache_clear()

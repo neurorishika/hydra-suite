@@ -67,20 +67,9 @@ def training_device_to_compute_runtime(device: str) -> str:
     so it is resolved here via the same centralized availability flags
     instead of regressing to a hardcoded CPU runtime.
     """
-    dev = str(device or "").strip().lower()
-    if dev.startswith("cuda"):
-        return "cuda"
-    if dev == "mps":
-        return "mps"
-    if dev == "auto" or not dev:
-        from hydra_suite.utils.gpu_utils import MPS_AVAILABLE, TORCH_CUDA_AVAILABLE
+    from hydra_suite.core.inference.torch_device import resolve_torch_device
 
-        if TORCH_CUDA_AVAILABLE:
-            return "cuda"
-        if MPS_AVAILABLE:
-            return "mps"
-        return "cpu"
-    return "cpu"
+    return resolve_torch_device(device)
 
 
 def build_test_params(

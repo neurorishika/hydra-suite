@@ -481,4 +481,13 @@ class DetectKitProject:
         else:
             proj.class_names = normalize_class_names(proj.class_names)
 
+        # A DetectKit project can be moved between CUDA and Apple Silicon
+        # machines.  Keep an explicit CPU choice, but replace an unavailable
+        # accelerator preference with the best device this environment exposes
+        # before either inference or the training dialog consumes it.
+        from hydra_suite.core.inference.torch_device import resolve_torch_device
+
+        if str(proj.device or "").strip().lower() != "cpu":
+            proj.device = resolve_torch_device(proj.device)
+
         return proj
