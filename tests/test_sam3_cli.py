@@ -155,6 +155,24 @@ def test_atomic_adapter_writer_rejects_noop_and_promotes_valid_pairs(tmp_path):
 
 
 @pytest.mark.parametrize(
+    "matrix_a,matrix_b",
+    [
+        ([[0.0, 0.0], [0.0, 0.0]], [[1.0, 1.0]]),
+        ([[1.0, 0.0], [0.0, 0.0]], [[0.0, 1.0]]),
+    ],
+)
+def test_atomic_adapter_writer_rejects_zero_product_pairs(tmp_path, matrix_a, matrix_b):
+    torch = pytest.importorskip("torch")
+    adapters = {
+        "block.lora_A": torch.tensor(matrix_a),
+        "block.lora_B": torch.tensor(matrix_b),
+    }
+
+    with pytest.raises(ValueError, match="no-op"):
+        cli._write_validated_adapter_artifact(adapters, tmp_path / "adapters.pt", torch)
+
+
+@pytest.mark.parametrize(
     "payload",
     [
         {},

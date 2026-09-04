@@ -193,11 +193,29 @@ def _validate_adapter_state(adapters: Any, torch_module: Any) -> None:
         matrix_b = tensors[f"{path}.lora_B"]
         if matrix_a.shape[0] != matrix_b.shape[1]:
             raise ValueError(f"SAM3 adapter pair {path!r} has incompatible rank")
-    if not any(
-        bool(torch_module.count_nonzero(tensors[f"{path}.lora_B"]).item())
-        for path in paths
-    ):
-        raise ValueError("SAM3 adapter is a mathematical no-op (all LoRA B are zero)")
+    has_nonzero_delta = False
+    max_delta_elements = 1_048_576
+    for path in paths:
+        matrix_a = tensors[f"{path}.lora_A"].float()
+        matrix_b = tensors[f"{path}.lora_B"]
+        if not bool(torch_module.count_nonzero(matrix_a).item()) or not bool(
+            torch_module.count_nonzero(matrix_b).item()
+        ):
+            continue
+        rows_per_chunk = max(1, max_delta_elements // max(1, matrix_a.shape[1]))
+        for start in range(0, matrix_b.shape[0], rows_per_chunk):
+            delta = torch_module.matmul(
+                matrix_b[start : start + rows_per_chunk].float(), matrix_a
+            )
+            if bool(torch_module.count_nonzero(delta).item()):
+                has_nonzero_delta = True
+                break
+        if has_nonzero_delta:
+            break
+    if not has_nonzero_delta:
+        raise ValueError(
+            "SAM3 adapter is a mathematical no-op (all LoRA deltas are zero)"
+        )
 
 
 def _write_validated_adapter_artifact(
