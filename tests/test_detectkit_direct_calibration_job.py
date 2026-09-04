@@ -144,6 +144,29 @@ def _fake_models(request, candidate):
     return object(), object(), config, 640
 
 
+def _evidence_frames(tmp_path):
+    """Two tiny real frames with one polygon label each.
+
+    Real files matter here: the sweep loop decodes each frame with
+    ``cv2.imread`` one at a time, and this is exactly the loop under test.
+    """
+    from hydra_suite.data.al.escalation import LabelRecord
+    from hydra_suite.utils.geometry_levels import GeometryLevel
+
+    frames = []
+    for name in ("f0", "f1"):
+        path = tmp_path / f"{name}.png"
+        cv2.imwrite(str(path), np.zeros((64, 64, 3), np.uint8))
+        label = LabelRecord(
+            class_id=0,
+            confidence=1.0,
+            points=np.array([[4, 4], [20, 4], [20, 20], [4, 20]], dtype=np.float32),
+            level=GeometryLevel.POLYGON,
+        )
+        frames.append((path, [label]))
+    return frames
+
+
 def _request(tmp_path, confidences=(0.35,), merges=None):
     from hydra_suite.core.inference.direct_calibration_grid import build_candidate_grid
     from hydra_suite.core.inference.direct_calibration_sweep import MergeSettings
@@ -155,11 +178,11 @@ def _request(tmp_path, confidences=(0.35,), merges=None):
     model = tmp_path / "m.pt"
     model.write_bytes(b"weights")
     evidence = EvidenceSet(
-        frames=[],
+        frames=_evidence_frames(tmp_path),
         split="val",
-        instances=0,
-        size_range=((720, 1280), (720, 1280)),
-        sampled_from=0,
+        instances=2,
+        size_range=((64, 64), (64, 64)),
+        sampled_from=2,
         fingerprint="deadbeef",
     )
     return DirectCalibrationRequest(
@@ -206,8 +229,23 @@ def test_one_inference_pass_per_geometry_regardless_of_sweep_size(
         ),
     )
     outcome = job.run_direct_calibration(request)
-    assert len(calls) == len(request.candidates), "one model pass per geometry"
-    assert len(outcome.points) == len(request.candidates) * 4 * 2
+    n_frames = len(request.evidence.frames)
+    assert (
+        len(calls) == len(request.candidates) * n_frames
+    ), "one model call per frame per geometry, independent of the sweep size"
+    assert len(outcome.points) == len(request.candidates) * 4 * 2, (
+        "the confidence x merge sweep must add ZERO model calls but must still "
+        "emit one point per (candidate, confidence, merge) combination"
+    )
+    for preview in outcome.previews:
+        for _path, gt_polygons, pred_polygons in preview.frames:
+            for polygon in (*gt_polygons, *pred_polygons):
+                assert isinstance(polygon, np.ndarray) and polygon.ndim == 2
+    assert not any(
+        isinstance(value, np.ndarray) and value.ndim == 3
+        for point in outcome.points
+        for value in vars(point).values()
+    ), "no decoded image array may be retained on a point"
 
 
 def test_cancellation_returns_partial_and_never_claims_completeness(

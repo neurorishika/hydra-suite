@@ -420,7 +420,13 @@ def run_direct_calibration(request, *, progress=None, should_stop=None):
         source = None
         elapsed = 0.0
         failure = ""
-        images: list = []
+        parts_per_frame: list = []
+        # ONE model call per FRAME (not one call over the whole evidence
+        # list): evidence frames are full-resolution acquisition images, so
+        # holding every decoded frame in memory at once -- on top of the
+        # pre-merge parts already retained for the whole confidence x merge
+        # sweep -- would multiply peak memory by the frame count. The
+        # decoded ``image`` goes out of scope at the end of each iteration.
         for image_path, _labels in frames:
             if should_stop is not None and should_stop():
                 outcome.partial = True
@@ -430,21 +436,16 @@ def run_direct_calibration(request, *, progress=None, should_stop=None):
             if image is None:
                 failure = f"could not read {Path(image_path).name}"
                 break
-            images.append(image)
-        parts_per_frame: list = []
-        if not failure:
-            # ONE model pass per geometry, over the whole frame list: the
-            # region-source iterator already chunks tiles internally to stay
-            # memory-bounded, so this is a single call, not a per-frame loop.
             started = time.perf_counter()
             try:
-                parts_per_frame, source = collect_obb_parts_by_frame(
-                    images, models, base_config.obb, runtime
+                parts, source = collect_obb_parts_by_frame(
+                    [image], models, base_config.obb, runtime
                 )
             except Exception as exc:
                 failure = str(exc)
-            else:
-                elapsed = time.perf_counter() - started
+                break
+            elapsed += time.perf_counter() - started
+            parts_per_frame.append(parts[0])
         if failure or source is None:
             for merge in request.merge_settings:
                 for confidence in request.confidences:
