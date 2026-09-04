@@ -1,6 +1,6 @@
 # DetectKit OOM Hardening — Agent Execution Instructions
 
-Status: Planned — not yet implemented
+Status: In progress — Sets 1–2 merged; dedicated Set 2B implementation active
 
 ## Goal
 
@@ -20,6 +20,7 @@ evidence after the bounded algorithms and containment mechanisms exist.
 |---|---|---|---|
 | 1 | Bounded SAM3 data path | Current main | Required before SAM3 training is declared production-safe |
 | 2 | Resource admission and process containment | Set 1 merged | Required before SAM3 training is declared production-safe |
+| 2B | Bounded, process-isolated dataset preparation | Set 2 merged | Required before GUI/CLI prepare-and-train is machine-safe |
 | 3 | Memory-safe SAM3 publishing | Sets 1–2 merged | Required before SAM3 training is declared production-safe |
 | 4 | Bounded tile, proposal, crop, and result inference | Set 2 merged | Required for inference OOM guarantee |
 | 5 | Chunked inference caches and bounded writer | Prefer Set 4 merged | Required for long-video OOM guarantee |
@@ -338,6 +339,64 @@ and inspection also still run in GUI worker threads and retain large frame/path
 and COCO structures; their streaming/process-isolation root fix is a separate
 follow-up set. Until that lands, prepare datasets separately with conservative
 inputs and do not represent the GUI prepare-and-train workflow as machine-safe.
+
+---
+
+## Agent brief 2B — Bounded, process-isolated dataset preparation
+
+Status: Implementation active on `codex/detectkit-oom-dataset-preparation`.
+
+### Scope and sequencing
+
+Set 2B branches from the merged Set 2 containment foundation and lands before
+the GUI/CLI prepare-and-train workflow is described as machine-safe. It is
+independent of Set 3 checkpoint publishing and must not broaden into inference,
+active learning, or model execution. The implementation sequence is:
+
+1. Add shared bounded filesystem/text primitives and explicit file, byte,
+   directory-depth, pathname, line, point, metadata, and image-pixel caps.
+2. Convert SAM3 COCO preparation to disk-backed ordering/splitting and
+   one-frame-at-a-time decode/label/tile processing. Preserve the existing
+   seeded split and output schema exactly.
+3. Incrementally spool COCO arrays and manifests, fsync them, validate them,
+   and atomically promote a private build directory.
+4. Bound common DetectKit inspection and label/YAML/manifest reads, use fixed
+   reservoir sampling for size inspection, and remove temporary eager recursive
+   discovery collections in sibling builders where the shared primitive fits.
+5. Run inspection plus all role derivation in a Set 2 CPU sidecar. Attach an
+   immutable typed host/disk budget, canonical host lease, parent-death
+   guardian, process-tree watchdog, bounded log/result protocol, and whole-tree
+   cancellation. Repeat host, disk, and source-footprint checks while the lease
+   is held immediately before launch.
+6. Build the complete multi-role result under one private staging workspace and
+   promote it only after successful validation. Cleanup may remove a private
+   staging/final path only after quiescence is proved; retained-owner errors
+   carry the exact recovery callback.
+7. Route both the CLI and GUI worker through the sidecar. The GUI QThread may
+   supervise and relay bounded events but must never inspect, decode, or derive
+   the dataset itself.
+
+### Acceptance gates
+
+- Python heap growth is independent of source frame count for the SAM3 path;
+  global deterministic order and reference-size median use SQLite rather than
+  source-sized Python collections.
+- No builder retains more than one decoded source image or one frame's parsed
+  polygons at once; tile generation is lazy.
+- File/count/depth/path/JSON/YAML/label/line/point/image-pixel caps reject
+  adversarial inputs with a bounded diagnostic.
+- COCO IDs, tile names, seeded frame membership/order, split semantics,
+  reference size, categories, and manifest schema match pre-Set-2B fixtures.
+- Disk/transient-space admission occurs before output construction and is
+  repeated immediately before the child begins.
+- Injection at discovery, decode, write, validation, promotion, cancellation,
+  soft-limit, and hard-limit boundaries leaves no partially visible final
+  dataset.
+- GUI and CLI use only the contained entry point; cancellation remains
+  responsive even when the child emits no progress.
+- Focused preparation/SAM3/GUI/CLI tests, nearest training suites, formatting,
+  lint, docs checks, a child-process RSS scaling probe, and full branch review
+  are green before merge.
 
 ---
 
