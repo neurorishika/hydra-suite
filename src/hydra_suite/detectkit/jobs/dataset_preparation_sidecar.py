@@ -57,6 +57,7 @@ MAX_SOURCE_FILES = 1_000_000
 MAX_SOURCE_BYTES = 2 * 1024**4
 OUTPUT_MAX_LINES = 512
 OUTPUT_MAX_CHARS = 256 * 1024
+DISK_RESERVE_BYTES = 2 * GiB
 
 
 class DatasetPreparationSidecarError(RuntimeError):
@@ -281,7 +282,10 @@ def assess_preparation_budget(
     # Copy-based builders can coexist with their staging tree.  Polygon COCO
     # JSON and JPEG re-encoding add headroom; the estimate is an admission aid
     # while the filesystem check in the child remains authoritative.
-    disk_required = source_bytes * 3 + 512 * 1024**2
+    # Tiling/cropping may duplicate decoded content substantially relative to
+    # compressed source bytes. Keep a separate filesystem survival reserve in
+    # addition to an intentionally conservative expansion allowance.
+    disk_required = source_bytes * 8 + DISK_RESERVE_BYTES
     return DatasetPreparationBudget(
         soft_host_bytes=soft,
         hard_host_bytes=hard,
@@ -445,6 +449,14 @@ def prepare_role_datasets_contained(
                 requested_cancel = True
                 sidecar.cancel(plan.terminate_grace_seconds)
                 raise DatasetPreparationCancelled("Dataset preparation cancelled.")
+            if shutil.disk_usage(workspace).free < DISK_RESERVE_BYTES:
+                sidecar.cancel(plan.terminate_grace_seconds)
+                cleanup(remove_final=True)
+                raise DatasetPreparationSidecarError(
+                    ExitKind.ORDINARY_FAILURE,
+                    "Dataset preparation stopped before exhausting the filesystem "
+                    f"reserve of {DISK_RESERVE_BYTES / GiB:.1f} GiB.",
+                )
             if (
                 eof
                 and sidecar.process is not None
@@ -457,6 +469,8 @@ def prepare_role_datasets_contained(
         raise
     except DatasetPreparationCancelled:
         cleanup(remove_final=True)
+        raise
+    except DatasetPreparationSidecarError:
         raise
     except Exception:
         try:

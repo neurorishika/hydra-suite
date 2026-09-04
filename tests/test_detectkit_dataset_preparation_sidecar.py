@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from types import SimpleNamespace
 
 import cv2
@@ -15,6 +17,7 @@ from hydra_suite.detectkit.jobs.dataset_preparation_sidecar import (
     _decode_result,
     _write_request,
     decode_request,
+    prepare_role_datasets_contained,
 )
 from hydra_suite.detectkit.jobs.training import (
     DatasetPreparationCancelled,
@@ -124,6 +127,25 @@ def test_child_promotes_only_completed_workspace(tmp_path):
     assert "/prepared/dataset-preparation-" in dataset
     assert result.preflight is not None and result.preflight.valid
     assert not staging.exists()
+
+
+@pytest.mark.skipif(
+    os.environ.get("HYDRA_RUN_CONTAINMENT_SMOKE") != "1",
+    reason="requires an unrestricted POSIX guardian launch boundary",
+)
+def test_real_supervised_preparation_sidecar_smoke(tmp_path, monkeypatch):
+    source = _source(tmp_path / "source")
+    workspace = tmp_path / "workspace"
+    monkeypatch.setenv("HYDRA_DATA_DIR", str(tmp_path / "hydra-data"))
+    result = prepare_role_datasets_contained(
+        TrainingOrchestrator(workspace),
+        _request(source),
+        log=lambda _message: None,
+        status=lambda _message: None,
+        should_cancel=lambda: False,
+    )
+    assert result.preflight is not None and result.preflight.valid
+    assert Path(result.role_dataset_dirs["detect_direct"]).is_dir()
 
 
 def test_child_failure_leaves_no_partial_dataset(tmp_path):
