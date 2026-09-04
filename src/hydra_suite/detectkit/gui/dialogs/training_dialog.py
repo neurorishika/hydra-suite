@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
 from hydra_suite.training.contracts import (
     Sam3LoraParams,
     SourceDataset,
@@ -42,6 +43,7 @@ from hydra_suite.training.contracts import (
     TrainingRole,
 )
 from hydra_suite.training.geometry_levels import GeometryLevel
+from hydra_suite.training.registry import finalize_run_record
 from hydra_suite.widgets.dialogs import BaseDialog
 from hydra_suite.widgets.workers import BaseWorker
 
@@ -157,8 +159,44 @@ class _TrainingWorker(BaseWorker):
         self._cancel = False
 
     def cancel(self) -> None:
-        """Request cancellation; the running role loop checks this flag before each role."""
+        """Request cancellation or retry cleanup of a retained workload."""
+        if self.containment_recovery_required:
+            self.retry_containment_cleanup()
+            return
         self._cancel = True
+
+    @property
+    def containment_recovery_required(self) -> bool:
+        return isinstance(self.failure_exception, WorkloadStillOwnedError)
+
+    def retry_containment_cleanup(self) -> bool:
+        """Retry tree teardown without ever discarding an uncertain owner."""
+
+        error = self.failure_exception
+        if not isinstance(error, WorkloadStillOwnedError):
+            return True
+        try:
+            error.sidecar.cancel()
+        except WorkloadStillOwnedError as retry_error:
+            retry_error.run_id = error.run_id
+            self.failure_exception = retry_error
+            return False
+        run_id = str(error.run_id or "")
+        if run_id:
+            finalize_run_record(
+                run_id,
+                status="failed",
+                error_message=(
+                    "Containment recovery completed after process ownership "
+                    "was temporarily uncertain."
+                ),
+                failure_details={
+                    "failure_kind": "workload-still-owned",
+                    "containment": {"ownership": "recovered"},
+                },
+            )
+        self.failure_exception = None
+        return True
 
     def _should_cancel(self) -> bool:
         return bool(self._cancel)
@@ -2551,6 +2589,25 @@ QTabBar::tab:selected {
                 "the next safe dataset boundary."
             )
             return
+        if self._worker and self._worker.containment_recovery_required:
+            if self._worker.retry_containment_cleanup():
+                self._append_log(
+                    "Containment recovery succeeded; the workload is stopped "
+                    "and its resource leases are released."
+                )
+                self._set_run_status("Containment recovery completed safely.")
+                self._set_training_running(False)
+                self.progress.setFormat("Recovery complete")
+            else:
+                self._append_log(
+                    "Containment still cannot prove the workload stopped; "
+                    "ownership and leases remain retained."
+                )
+                self._set_run_status(
+                    "Containment recovery is still required. Stop Run retries "
+                    "safe teardown without releasing ownership."
+                )
+            return
         if self._worker:
             self._worker.cancel()
         self._append_log("Cancellation requested…")
@@ -2632,6 +2689,19 @@ QTabBar::tab:selected {
 
     def _on_worker_finished(self) -> None:
         self._current_role = ""
+        if self._worker and self._worker.containment_recovery_required:
+            self._set_training_running(True)
+            self.progress.setFormat("Recovery required")
+            self._append_log(
+                "CRITICAL: Training stopped reporting, but containment could "
+                "not prove that its process tree exited. Ownership and resource "
+                "leases remain retained. Use Stop Run to retry safe teardown."
+            )
+            self._set_run_status(
+                "Containment recovery required. Stop Run retries teardown; "
+                "do not start another training job."
+            )
+            return
         self._set_training_running(False)
         self.progress.setFormat("Done")
         self.progress.setValue(100)

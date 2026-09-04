@@ -32,6 +32,7 @@ from .registry import (
     dataset_fingerprint,
     finalize_run_record,
     new_run_id,
+    update_run_record,
 )
 from .runner import run_training
 from .sam3_lora.publish import publish_sam3_model
@@ -547,10 +548,23 @@ class TrainingOrchestrator:
                 progress_cb=progress_cb,
                 should_cancel=should_cancel,
             )
-        except WorkloadStillOwnedError:
+        except WorkloadStillOwnedError as exc:
             # The exception owns the still-live sidecar and canonical leases.
             # Preserve that recovery handle for the caller; collapsing it into
             # a dict would orphan the workload and falsely imply finalization.
+            update_run_record(
+                run_id,
+                {
+                    "status": "recovery-required",
+                    "error_message": str(exc),
+                    "failure_kind": "workload-still-owned",
+                    "containment": {"ownership": "retained"},
+                },
+            )
+            # The GUI recovery owner needs the registry identity so a later
+            # successful cleanup can turn this nonterminal record into an
+            # explicit failed terminal run.
+            exc.run_id = run_id
             raise
         except Exception as exc:
             result = {

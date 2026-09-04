@@ -78,6 +78,23 @@ def test_base_worker_error_emitted_on_exception(qapp):
 
     assert len(errors) == 1
     assert "bad value" in errors[0]
+    assert worker.failure_exception is not None
+    assert isinstance(worker.failure_exception, ValueError)
+
+
+def test_base_worker_retains_exact_recovery_bearing_exception(qapp):
+    from hydra_suite.widgets.workers import BaseWorker
+
+    owned = RuntimeError("exact recovery object")
+
+    class _OwnedWorker(BaseWorker):
+        def execute(self):
+            raise owned
+
+    worker = _OwnedWorker()
+    worker.run()
+
+    assert worker.failure_exception is owned
 
 
 def test_base_worker_no_error_on_success(qapp):

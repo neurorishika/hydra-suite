@@ -224,6 +224,73 @@ def test_training_worker_is_base_worker(qapp):
     assert issubclass(_TrainingWorker, BaseWorker)
 
 
+def test_training_worker_retains_owned_sidecar_until_recovery(qapp, monkeypatch):
+    from types import SimpleNamespace
+
+    from hydra_suite.detectkit.gui.dialogs import training_dialog as td
+    from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
+    from hydra_suite.training.contracts import TrainingRole
+
+    class _Sidecar:
+        def __init__(self):
+            self.fail_cleanup = True
+
+        def cancel(self):
+            if self.fail_cleanup:
+                raise WorkloadStillOwnedError("still owned", self)
+
+    sidecar = _Sidecar()
+    owned = WorkloadStillOwnedError("ownership retained", sidecar)
+    owned.run_id = "run-owned"
+    calls = []
+    finalized = []
+    monkeypatch.setattr(
+        td,
+        "finalize_run_record",
+        lambda run_id, **kwargs: finalized.append((run_id, kwargs)),
+    )
+
+    class _Orchestrator:
+        def run_role_training(self, spec, **_kwargs):
+            calls.append(spec.role)
+            raise owned
+
+    entries = [
+        SimpleNamespace(
+            role=TrainingRole.SEMANTIC_SAM3,
+            spec=SimpleNamespace(role=TrainingRole.SEMANTIC_SAM3),
+            publish_metadata={},
+        ),
+        SimpleNamespace(
+            role=TrainingRole.DETECT_DIRECT,
+            spec=SimpleNamespace(role=TrainingRole.DETECT_DIRECT),
+            publish_metadata={},
+        ),
+    ]
+    worker = td._TrainingWorker(_Orchestrator(), entries)
+    completed = []
+    worker.done_signal.connect(completed.append)
+
+    worker.run()
+
+    assert worker.failure_exception is owned
+    assert worker.containment_recovery_required
+    assert completed == []
+    assert calls == [TrainingRole.SEMANTIC_SAM3]
+    assert not worker.retry_containment_cleanup()
+    assert worker.containment_recovery_required
+    assert worker.failure_exception.sidecar is sidecar
+
+    sidecar.fail_cleanup = False
+    assert worker.retry_containment_cleanup()
+    assert worker.failure_exception is None
+    assert finalized[0][0] == "run-owned"
+    assert finalized[0][1]["status"] == "failed"
+    assert finalized[0][1]["failure_details"]["containment"]["ownership"] == (
+        "recovered"
+    )
+
+
 def test_resume_builds_shared_role_entry(qapp, tmp_path, monkeypatch):
     from hydra_suite.detectkit.gui.dialogs import training_dialog as td
     from hydra_suite.detectkit.jobs.training import RoleTrainingEntry

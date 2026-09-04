@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
+from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
 from hydra_suite.training.contracts import (
     Sam3LoraParams,
     SourceDataset,
@@ -365,6 +366,11 @@ def run_role_entries(
                 progress_cb=role_progress,
                 should_cancel=should_cancel,
             )
+        except WorkloadStillOwnedError:
+            # This exception owns the live sidecar and its leases. Stop the
+            # role sequence and preserve the exact recovery handle for the
+            # worker/UI owner.
+            raise
         except Exception as exc:
             result = {
                 "run_id": "",

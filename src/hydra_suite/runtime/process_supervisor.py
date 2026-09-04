@@ -816,6 +816,9 @@ class WorkloadStillOwnedError(RuntimeError):
 
     def __init__(self, message: str, sidecar: "SupervisedSidecar") -> None:
         self.sidecar = sidecar
+        # Higher-level orchestration may attach the durable run identity while
+        # preserving this same recovery-bearing exception object.
+        self.run_id = ""
         super().__init__(message)
 
 

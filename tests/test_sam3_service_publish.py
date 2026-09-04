@@ -159,8 +159,12 @@ def test_owned_workload_error_is_reraised_with_recovery_handle(monkeypatch, tmp_
 
     assert raised.value is owned_error
     assert raised.value.sidecar is recovery_handle
+    assert raised.value.run_id
     record = load_registry()["runs"][0]
-    assert record["status"] == "running"
+    assert record["status"] == "recovery-required"
+    assert not record["finished_at"]
+    assert record["failure_kind"] == "workload-still-owned"
+    assert record["containment"]["ownership"] == "retained"
 
 
 def test_auto_publish_exception_finalizes_registry_with_training_diagnostics(

@@ -10,6 +10,8 @@ import threading
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 
 def _plan_payload(tmp_path: Path) -> dict:
     return {
@@ -163,6 +165,26 @@ def test_plan_rejects_nonfinite_numbers_and_empty_sam3_prompt(tmp_path):
         load_training_plan(path)
 
 
+def test_plan_rejects_negative_query_counts_outside_ui_bound(tmp_path):
+    from hydra_suite.detectkit.config.training import (
+        TrainingPlanError,
+        load_training_plan,
+    )
+
+    payload = _plan_payload(tmp_path)
+    payload["roles"] = [{"role": "semantic_sam3", "imgsz": 1008}]
+    payload["sam3"] = {
+        "prompt": "ant",
+        "label_quality_acknowledged": True,
+        "num_negatives": 101,
+    }
+    path = tmp_path / "too-many-negatives.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(TrainingPlanError, match="num_negatives.*between 0 and 100"):
+        load_training_plan(path)
+
+
 def test_headless_plan_defaults_to_no_server_local_publish(tmp_path):
     from hydra_suite.detectkit.config.training import DetectTrainingPlan
 
@@ -240,6 +262,41 @@ def test_shared_workflow_prepares_and_runs_roles_with_parent_lineage(tmp_path):
         "detect_direct",
         "seq_detect",
     ]
+
+
+def test_role_workflow_preserves_owned_workload_and_stops_later_roles(tmp_path):
+    from hydra_suite.detectkit.config.training import DetectTrainingPlan
+    from hydra_suite.detectkit.jobs.training import run_role_entries
+    from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
+
+    plan = DetectTrainingPlan.from_dict(_plan_payload(tmp_path), base_dir=tmp_path)
+    entries = plan.role_entries(
+        {
+            "detect_direct": "/tmp/detect",
+            "seq_detect": "/tmp/seq",
+        }
+    )
+    sidecar = object()
+    owned = WorkloadStillOwnedError("ownership retained", sidecar)
+    calls = []
+
+    class _Orchestrator:
+        def run_role_training(self, spec, **_kwargs):
+            calls.append(spec.role)
+            raise owned
+
+    with pytest.raises(WorkloadStillOwnedError) as raised:
+        run_role_entries(
+            _Orchestrator(),
+            entries,
+            log=lambda _message: None,
+            progress=lambda _role, _current, _total: None,
+            should_cancel=lambda: False,
+        )
+
+    assert raised.value is owned
+    assert raised.value.sidecar is sidecar
+    assert calls == [entries[0].role]
 
 
 def test_preflight_uses_native_polygon_geometry(tmp_path):
