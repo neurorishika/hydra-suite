@@ -60,7 +60,18 @@ _PUBLISH_ACTIVE_TENSOR_BYTES = _CHECKPOINT_BYTES
 _PUBLISH_HOST_BYTES = (
     _CHECKPOINT_BYTES + _PUBLISH_ACTIVE_TENSOR_BYTES + _RUNTIME_HOST_ALLOWANCE_BYTES
 )
-_MEASURED_BF16_DEVICE_PEAK_BYTES = 29 * GiB
+# MEASURED on this repo's own configuration (batch 1, rank 16, 1008px SAHI
+# tiles, 206 adapters) via torch.cuda.max_memory_reserved on an RTX 6000 Ada:
+# a steady 7.83 GiB across ~130 optimizer steps and a full shuffle of tiles,
+# including the densest. 12 GiB gives ~53% headroom over that.
+#
+# The previous value, 29 GiB, was inherited from the spike's very different
+# setup (batch 4, rank 32, whole-image inputs) and was never a measurement of
+# THIS role. At 3.7x the real figure it refused any card below ~32 GiB --
+# excluding a 24 GB RTX 4090, which the measurement shows is comfortably
+# sufficient. An admission gate calibrated against someone else's
+# configuration rejects hardware that would in fact work.
+_MEASURED_BF16_DEVICE_PEAK_BYTES = 12 * GiB
 # FP32 keeps the same parameters resident but doubles every activation and
 # autograd-saved tensor. Applied to the measured BF16 envelope this is a
 # deliberate OVER-estimate (parameters do not double), which is the safe

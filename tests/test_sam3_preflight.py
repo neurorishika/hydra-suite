@@ -413,7 +413,16 @@ def test_batch_size_increases_collation_and_accelerator_peak(tmp_path):
         batch_two.budget.accelerator_peak_bytes
         > batch_one.budget.accelerator_peak_bytes
     )
-    assert not batch_two.admitted
+    # The growth must carry the full per-extra-batch allowance. batch > 1 has
+    # never been measured for this role, so that allowance stays deliberately
+    # conservative; this pins the scaling, not an admission verdict.
+    # (It previously asserted `not admitted`, which only held because the
+    # batch-1 constant was 3.7x the measured figure -- the test was pinning a
+    # miscalibration rather than a requirement.)
+    assert (
+        batch_two.budget.accelerator_peak_bytes
+        - batch_one.budget.accelerator_peak_bytes
+    ) >= pf._EXTRA_BATCH_DEVICE_BYTES
 
 
 def test_tile_count_does_not_scale_streamed_tensor_or_device_peak(tmp_path):
