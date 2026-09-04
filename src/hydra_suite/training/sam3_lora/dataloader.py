@@ -22,6 +22,7 @@ import cv2
 import numpy as np
 
 from .datapoints import build_shared_query_datapoints, collate_datapoints
+from .polygons import validated_segmentation_polygons
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,10 +120,8 @@ def _segmentation_to_polygons(annotations: list[dict]) -> list[tuple[np.ndarray,
     polygons: list[tuple[np.ndarray, bool]] = []
     for ann in annotations:
         is_crowd = bool(ann.get("iscrowd"))
-        for seg in ann.get("segmentation") or []:
-            pts = np.asarray(seg, dtype=np.float32).reshape(-1, 2)
-            if len(pts) >= 3:
-                polygons.append((pts, is_crowd))
+        for polygon in validated_segmentation_polygons(ann.get("segmentation")):
+            polygons.append((np.asarray(polygon, dtype=np.float32), is_crowd))
     return polygons
 
 

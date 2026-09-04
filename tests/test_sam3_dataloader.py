@@ -78,6 +78,64 @@ def test_segmentation_to_polygons_keeps_crowd_flagged():
     assert crowd1 is True
 
 
+@pytest.mark.parametrize(
+    ("segmentation", "expected"),
+    [
+        ([0, 0, 4, 0, 4, 4], [[[0, 0], [4, 0], [4, 4]]]),
+        ([[0, 0], [4, 0], [4, 4]], [[[0, 0], [4, 0], [4, 4]]]),
+        (
+            [[0, 0, 4, 0, 4, 4], [[10, 10], [12, 10], [12, 12]]],
+            [
+                [[0, 0], [4, 0], [4, 4]],
+                [[10, 10], [12, 10], [12, 12]],
+            ],
+        ),
+        (
+            [
+                [[0, 0], [4, 0], [4, 4]],
+                [[10, 10], [12, 10], [12, 12]],
+            ],
+            [
+                [[0, 0], [4, 0], [4, 4]],
+                [[10, 10], [12, 10], [12, 12]],
+            ],
+        ),
+    ],
+)
+def test_segmentation_polygon_normalization_accepts_flat_and_nested_nx2(
+    segmentation, expected
+):
+    polygons = dl.validated_segmentation_polygons(segmentation)
+
+    assert polygons == tuple(
+        tuple((float(x), float(y)) for x, y in polygon) for polygon in expected
+    )
+    converted = dl._segmentation_to_polygons(
+        [{"segmentation": segmentation, "iscrowd": 0}]
+    )
+    assert len(converted) == len(expected)
+    for (points, _crowd), expected_points in zip(converted, expected):
+        np.testing.assert_allclose(points, expected_points)
+
+
+@pytest.mark.parametrize(
+    "segmentation",
+    [
+        [0, 0, 1, 1],
+        [0, 0, 1, 1, 2],
+        [[0, 0], [1, 1]],
+        [[0, 0], [1, float("nan")], [2, 2]],
+        {"counts": "encoded-rle"},
+    ],
+)
+def test_segmentation_polygon_normalization_rejects_invalid_shapes(segmentation):
+    assert dl.validated_segmentation_polygons(segmentation) == ()
+    assert (
+        dl._segmentation_to_polygons([{"segmentation": segmentation, "iscrowd": 0}])
+        == []
+    )
+
+
 def test_negative_prompts_not_required_when_num_negatives_zero(tmp_path):
     params = Sam3LoraParams(prompt="ant", num_negatives=0, negative_prompts=[])
 

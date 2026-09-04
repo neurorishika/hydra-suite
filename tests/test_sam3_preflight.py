@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 
@@ -24,6 +25,7 @@ def _spec(tmp_path, **param_overrides):
     params = Sam3LoraParams(
         prompt=param_overrides.pop("prompt", "ant"),
         label_quality_acknowledged=param_overrides.pop("ack", True),
+        negative_prompts=param_overrides.pop("negative_prompts", ["background"]),
         **param_overrides,
     )
     return TrainingRunSpec(
@@ -215,6 +217,85 @@ def test_multi_polygon_annotation_counts_one_example_and_multiple_masks(tmp_path
     assert profile.max_active_instances_per_tile == 21
 
 
+@pytest.mark.parametrize(
+    "segmentation",
+    [
+        [0, 0, 2, 0, 2, 2],
+        [[0, 0], [2, 0], [2, 2]],
+    ],
+)
+def test_preflight_uses_loader_polygon_semantics(tmp_path, segmentation):
+    _write_coco(tmp_path, tiles=1, instances_per_tile=20)
+    path = tmp_path / "dataset" / "train" / "_annotations.coco.json"
+    coco = json.loads(path.read_text(encoding="utf-8"))
+    coco["annotations"][0]["segmentation"] = segmentation
+    path.write_text(json.dumps(coco), encoding="utf-8")
+
+    profile = pf._dataset_profile(str(tmp_path / "dataset"))
+
+    assert profile.train_instances == 20
+    assert profile.max_active_instances_per_tile == 20
+    assert profile.polygon_count == 20
+
+
+def test_compact_high_cardinality_metadata_is_rejected_before_json_load(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "many-values.json"
+    path.write_text('{"images":[0,1,2,3,4,5]}', encoding="utf-8")
+    monkeypatch.setattr(pf, "_MAX_JSON_VALUES", 6)
+    monkeypatch.setattr(
+        pf.json,
+        "loads",
+        lambda _raw: pytest.fail("unbounded JSON materialization was reached"),
+    )
+
+    with pytest.raises(ValueError, match="cardinality"):
+        pf._load_coco(path)
+
+
+def test_raw_metadata_read_is_hard_capped_with_compact_fixture(tmp_path, monkeypatch):
+    path = tmp_path / "raw-cap.json"
+    path.write_text('{"images":[]}', encoding="utf-8")
+    monkeypatch.setattr(pf, "_MAX_COCO_METADATA_BYTES", 8)
+    monkeypatch.setattr(
+        pf.json,
+        "loads",
+        lambda _raw: pytest.fail("unbounded JSON materialization was reached"),
+    )
+
+    with pytest.raises(ValueError, match="metadata-only preflight cap"):
+        pf._load_coco(path)
+
+
+def test_compact_deep_metadata_is_rejected_before_json_load(tmp_path, monkeypatch):
+    path = tmp_path / "deep.json"
+    path.write_text('{"images":[[[[[]]]]]}', encoding="utf-8")
+    monkeypatch.setattr(pf, "_MAX_JSON_DEPTH", 4)
+    monkeypatch.setattr(
+        pf.json,
+        "loads",
+        lambda _raw: pytest.fail("unbounded JSON materialization was reached"),
+    )
+
+    with pytest.raises(ValueError, match="nesting"):
+        pf._load_coco(path)
+
+
+def test_estimated_parsed_metadata_is_capped_before_json_load(tmp_path, monkeypatch):
+    path = tmp_path / "expanded.json"
+    path.write_text('{"images":[{"file_name":"abcdefghij"}]}', encoding="utf-8")
+    monkeypatch.setattr(pf, "_MAX_ESTIMATED_PARSED_BYTES", 64)
+    monkeypatch.setattr(
+        pf.json,
+        "loads",
+        lambda _raw: pytest.fail("unbounded JSON materialization was reached"),
+    )
+
+    with pytest.raises(ValueError, match="parsed-memory"):
+        pf._load_coco(path)
+
+
 def test_invalid_or_crowd_polygons_do_not_satisfy_example_floor(tmp_path):
     _write_coco(tmp_path, tiles=1, instances_per_tile=20)
     path = tmp_path / "dataset" / "train" / "_annotations.coco.json"
@@ -288,21 +369,174 @@ def test_absent_validation_and_disabled_publish_remove_inactive_phases(tmp_path)
     assert training.disk_transient_bytes > 0
 
 
+def test_present_but_empty_validation_split_is_refused(tmp_path):
+    _write_coco(tmp_path)
+    _write_coco(tmp_path, tiles=0, instances_per_tile=0, split="valid")
+
+    decision = _decision(_spec(tmp_path))
+
+    assert decision.dataset.validation_present
+    assert decision.dataset.validation_tiles == 0
+    assert not decision.admitted
+    assert any("validation" in reason.lower() for reason in decision.refusals)
+
+
+def test_missing_resolved_negative_prompts_is_refused_before_loading(tmp_path):
+    _write_coco(tmp_path)
+
+    decision = _decision(_spec(tmp_path, num_negatives=1, negative_prompts=[]))
+
+    assert not decision.admitted
+    assert any("negative prompt" in reason.lower() for reason in decision.refusals)
+
+
+def test_manifest_resolved_negative_prompts_match_loader_precedence(tmp_path):
+    _write_coco(tmp_path)
+    (tmp_path / "dataset" / "build_manifest.json").write_text(
+        json.dumps({"negative_prompts": ["manifest-background"]}), encoding="utf-8"
+    )
+
+    decision = _decision(_spec(tmp_path, num_negatives=1, negative_prompts=[]))
+
+    assert decision.admitted
+
+
 def test_lora_scope_changes_optimizer_state_and_adapter_terms(tmp_path):
     _write_coco(tmp_path)
+    _write_coco(tmp_path, split="valid")
     default = _decision(_spec(tmp_path))
     with_text = _decision(_spec(tmp_path, adapt_text_encoder=True))
 
     default_train = next(p for p in default.request.phases if p.name == "training")
     text_train = next(p for p in with_text.request.phases if p.name == "training")
+    default_validation = next(
+        p for p in default.request.phases if p.name == "validation"
+    )
+    text_validation = next(
+        p for p in with_text.request.phases if p.name == "validation"
+    )
     default_publish = next(p for p in default.request.phases if p.name == "publish")
     text_publish = next(p for p in with_text.request.phases if p.name == "publish")
     assert _allocation(text_train, "LoRA and optimizer state") > _allocation(
         default_train, "LoRA and optimizer state"
     )
+    assert _allocation(text_train, "CPU LoRA training state") > _allocation(
+        default_train, "CPU LoRA training state"
+    )
+    assert _allocation(text_validation, "LoRA reload copy") > _allocation(
+        default_validation, "LoRA reload copy"
+    )
     assert _allocation(text_publish, "LoRA adapter") > _allocation(
         default_publish, "LoRA adapter"
     )
+    assert _allocation(text_publish, "LoRA serialization copies") > _allocation(
+        default_publish, "LoRA serialization copies"
+    )
+
+
+def test_rank_and_scope_scale_cpu_state_reload_and_serialization_copies(tmp_path):
+    _write_coco(tmp_path)
+    _write_coco(tmp_path, split="valid")
+    rank_16 = _decision(_spec(tmp_path, rank=16))
+    rank_32 = _decision(_spec(tmp_path, rank=32))
+
+    phases_16 = {phase.name: phase for phase in rank_16.request.phases}
+    phases_32 = {phase.name: phase for phase in rank_32.request.phases}
+    for phase_name, allocation_name in (
+        ("training", "CPU LoRA training state"),
+        ("validation", "LoRA reload copy"),
+        ("publish", "LoRA serialization copies"),
+    ):
+        assert _allocation(phases_32[phase_name], allocation_name) == 2 * _allocation(
+            phases_16[phase_name], allocation_name
+        )
+        assert (
+            phases_32[phase_name].host_peak_bytes
+            > phases_16[phase_name].host_peak_bytes
+        )
+
+
+@pytest.mark.parametrize("rank", [-1, 0, pf._MAX_LORA_RANK + 1])
+def test_unsafe_lora_ranks_are_refused_with_bounded_estimates(tmp_path, rank):
+    _write_coco(tmp_path)
+
+    decision = _decision(_spec(tmp_path, rank=rank))
+
+    assert not decision.admitted
+    assert any("rank" in reason.lower() for reason in decision.refusals)
+    training = next(p for p in decision.request.phases if p.name == "training")
+    assert _allocation(training, "CPU LoRA training state") <= (
+        pf._MAX_LORA_RANK
+        * sum(pf._LORA_PARAMS_PER_RANK.values())
+        * pf._LORA_CPU_TRAINING_BYTES_PER_PARAM
+    )
+
+
+def test_unsafe_combined_rank_and_scope_size_is_refused(tmp_path):
+    _write_coco(tmp_path)
+
+    decision = _decision(
+        _spec(
+            tmp_path,
+            rank=pf._MAX_LORA_RANK,
+            adapt_text_encoder=True,
+        )
+    )
+
+    assert not decision.admitted
+    assert any("parameters" in reason.lower() for reason in decision.refusals)
+
+
+def test_scope_with_no_estimated_trainable_parameters_is_refused(tmp_path):
+    _write_coco(tmp_path)
+
+    decision = _decision(
+        _spec(
+            tmp_path,
+            adapt_vision_encoder=False,
+            adapt_text_encoder=False,
+            adapt_geometry_encoder=False,
+            adapt_detr_encoder=False,
+            adapt_detr_decoder=False,
+            adapt_mask_decoder=True,
+        )
+    )
+
+    assert not decision.admitted
+    assert any("scope" in reason.lower() for reason in decision.refusals)
+
+
+def test_artifact_and_publish_disk_targets_are_observed_separately(
+    tmp_path, monkeypatch
+):
+    _write_coco(tmp_path)
+    run_dir = tmp_path / "run-filesystem" / "run"
+    models_root = tmp_path / "models-filesystem"
+    observed = []
+
+    def fake_free_disk(path):
+        observed.append(str(path))
+        if str(path) == str(run_dir):
+            return 1
+        if str(path) == str(models_root):
+            return 2
+        raise AssertionError(f"unexpected disk target: {path}")
+
+    monkeypatch.setattr(pf, "_free_disk_bytes", fake_free_disk)
+
+    decision = pf.assess_preflight(
+        _spec(tmp_path),
+        cuda_device=_cuda(),
+        observation=_host(),
+        run_dir=run_dir,
+        models_root=models_root,
+    )
+
+    assert observed == [str(run_dir), str(models_root)]
+    assert decision.artifact_free_disk_bytes == 1
+    assert decision.publish_free_disk_bytes == 2
+    assert any("run artifact" in reason.lower() for reason in decision.refusals)
+    assert any("publish" in reason.lower() for reason in decision.refusals)
 
 
 def test_empty_lora_scope_is_refused_instead_of_adapting_everything(tmp_path):
@@ -330,6 +564,12 @@ def test_explicit_empty_cuda_visible_devices_hides_all_devices(monkeypatch):
         pf._visible_device_selector("auto")
 
 
+@pytest.mark.parametrize("device", ["cuda:-1", "cuda:-20"])
+def test_negative_cuda_indices_are_rejected(device):
+    with pytest.raises(ValueError, match="non-negative"):
+        pf._visible_device_selector(device)
+
+
 @pytest.mark.parametrize("device", ["cpu", "mps"])
 def test_non_cuda_device_selection_is_rejected_before_gpu_probe(device):
     with pytest.raises(ValueError, match="CUDA"):
@@ -354,6 +594,54 @@ def test_cuda_visible_remapping_resolves_the_selected_physical_uuid(monkeypatch)
     assert selected is not None
     assert selected.uuid == "GPU-aaaa"
     assert selected.index == 0
+
+
+def test_numeric_cuda_selection_uses_pci_bus_order(monkeypatch):
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    monkeypatch.delenv("CUDA_DEVICE_ORDER", raising=False)
+    call = {}
+    probe = subprocess.CompletedProcess(
+        [],
+        0,
+        stdout=(
+            "0, GPU-later, 0000:02:00.0, Later, 8.9, 49140, 48000\n"
+            "1, GPU-first, 0000:01:00.0, First, 8.9, 49140, 47000\n"
+        ),
+        stderr="",
+    )
+
+    def fake_run(*_args, **kwargs):
+        call.update(kwargs)
+        return probe
+
+    monkeypatch.setattr(pf.subprocess, "run", fake_run)
+
+    selected = pf._probe_cuda_device("cuda:0")
+
+    assert selected is not None
+    assert selected.uuid == "GPU-first"
+    assert "CUDA_DEVICE_ORDER" not in os.environ
+    assert call["env"]["CUDA_DEVICE_ORDER"] == "PCI_BUS_ID"
+
+
+def test_numeric_visible_device_token_maps_to_physical_nvidia_index(monkeypatch):
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "2,0")
+    probe = subprocess.CompletedProcess(
+        [],
+        0,
+        stdout=(
+            "0, GPU-zero, 0000:01:00.0, Zero, 8.9, 49140, 48000\n"
+            "2, GPU-two, 0000:03:00.0, Two, 8.9, 49140, 47000\n"
+        ),
+        stderr="",
+    )
+    monkeypatch.setattr(pf.subprocess, "run", lambda *_args, **_kwargs: probe)
+
+    selected = pf._probe_cuda_device("cuda:0")
+
+    assert selected is not None
+    assert selected.uuid == "GPU-two"
+    assert selected.index == 2
 
 
 def test_prompt_instances_disk_ack_and_resume_refusals_are_preserved(
