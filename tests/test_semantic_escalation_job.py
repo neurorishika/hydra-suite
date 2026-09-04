@@ -10,11 +10,16 @@ from hydra_suite.data.al.merge import MergeMode
 from hydra_suite.detectkit.gui.models import OBBSource
 from hydra_suite.detectkit.jobs import staged_review as sr
 from hydra_suite.detectkit.jobs.semantic_escalation import (
+    CandidateFrameStore,
     SemanticEscalationRequest,
     is_prompt_failure,
     rethreshold_staged,
     run_semantic_escalation,
 )
+
+
+def _candidate_images(staged: Path) -> dict:
+    return dict(CandidateFrameStore(staged).iter_entries())
 
 
 class ScriptedLabeler:
@@ -193,10 +198,9 @@ def test_candidates_cache_is_written_into_the_staging_dir(tmp_path):
     src = _make_source(tmp_path, n_images=1)
     labeler = ScriptedLabeler([SemanticInstance(_blob(200, 200), 0.9)])
     run_semantic_escalation(_request(tmp_path, src), labeler)
-    cache = Path(src.staged_review.staged_path) / "candidates.json"
-    data = json.loads(cache.read_text())
-    assert data["version"] == 1
-    assert "f0.png" in data["images"]
+    staged = Path(src.staged_review.staged_path)
+    assert "f0.png" in _candidate_images(staged)
+    assert not (staged / "candidates.json").exists()
 
 
 def test_rethreshold_rewrites_labels_without_inference(tmp_path):
@@ -251,15 +255,13 @@ def test_fingerprint_mismatch_wipes_the_cache(tmp_path):
 
     # Poison the cache with a candidate that no labeler produced, and
     # invalidate the fingerprint by changing a tiled-geometry parameter.
-    cache_path = staged / "candidates.json"
-    cache = json.loads(cache_path.read_text())
-    cache["images"]["f0.png"]["candidates"].append(
+    store = CandidateFrameStore(staged)
+    entry = _candidate_images(staged)["f0.png"]
+    entry["candidates"].append(
         {"p": [[1.0, 1.0], [9.0, 1.0], [9.0, 9.0]], "c": 0.99, "t": 0}
     )
-    cache_path.write_text(json.dumps(cache))
-    assert (
-        len(json.loads(cache_path.read_text())["images"]["f0.png"]["candidates"]) == 2
-    )
+    store.write("f0.png", tuple(entry["hw"]), entry["candidates"])
+    assert len(_candidate_images(staged)["f0.png"]["candidates"]) == 2
 
     run_semantic_escalation(
         _request(tmp_path, src, prompt="ant", seam_margin_px=17.0, overwrite=True),
@@ -267,9 +269,8 @@ def test_fingerprint_mismatch_wipes_the_cache(tmp_path):
     )
     staged2 = Path(src.staged_review.staged_path)
     assert staged2 == staged, "same prompt+variant must reuse the same staging dir"
-    after = json.loads((staged2 / "candidates.json").read_text())
     # The poisoned entry is gone: the cache was WIPED and rebuilt, not resumed.
-    assert len(after["images"]["f0.png"]["candidates"]) == 1
+    assert len(_candidate_images(staged2)["f0.png"]["candidates"]) == 1
     assert json.loads((staged2 / "run.json").read_text())["seam_margin_px"] == 17.0
 
 
@@ -287,16 +288,11 @@ def test_a_matching_fingerprint_resumes_instead_of_wiping(tmp_path):
     labeler = Counting([SemanticInstance(_blob(200, 200), 0.9)])
     req = _request(tmp_path, src)
     run_semantic_escalation(req, labeler, should_stop=lambda: Counting.calls >= 1)
-    cached_after_cancel = set(
-        json.loads(
-            (Path(src.staged_review.staged_path) / "candidates.json").read_text()
-        )["images"]
-    )
+    staged = Path(src.staged_review.staged_path)
+    cached_after_cancel = set(_candidate_images(staged))
     assert len(cached_after_cancel) == 1
     run_semantic_escalation(req, labeler)
-    cached = json.loads(
-        (Path(src.staged_review.staged_path) / "candidates.json").read_text()
-    )["images"]
+    cached = _candidate_images(staged)
     assert set(cached) == {"f0.png", "f1.png"}
 
 
@@ -506,8 +502,8 @@ def test_candidates_are_cached_below_the_run_confidence(tmp_path):
     )
     run_semantic_escalation(_request(tmp_path, src, confidence=0.35), labeler)
     staged = Path(src.staged_review.staged_path)
-    cache = json.loads((staged / "candidates.json").read_text())
-    confs = sorted(c["c"] for c in cache["images"]["f0.png"]["candidates"])
+    cache = _candidate_images(staged)
+    confs = sorted(c["c"] for c in cache["f0.png"]["candidates"])
     assert confs == [0.25, 0.9], "the 0.25 candidate must survive into the cache"
     # The staged labels still honour the RUN threshold.
     assert len((staged / "labels" / "f0.txt").read_text().strip().splitlines()) == 1
@@ -666,7 +662,7 @@ def test_escalation_reports_each_tile_with_a_running_eta(tmp_path):
 def test_complete_frame_preview_worker_can_be_cancelled_before_inference():
     from hydra_suite.detectkit.jobs.semantic_escalation import FramePreviewWorker
 
-    worker = FramePreviewWorker([], "ant", "sam3", {}, labeler=object())
+    worker = FramePreviewWorker([], "ant", "sam3", {})
     assert worker.cancelled is False
     worker.cancel()
     assert worker.cancelled is True
@@ -702,7 +698,7 @@ def test_resume_is_honoured_through_a_symlinked_project_dir(tmp_path):
     run_semantic_escalation(req, labeler)
     assert src.staged_review is not None
     staged = Path(src.staged_review.staged_path)
-    cached = set(json.loads((staged / "candidates.json").read_text())["images"])
+    cached = set(_candidate_images(staged))
 
     # The very same run must be a RESUME: nothing pending replacement, no
     # skip, and the candidate cache survives.
@@ -711,7 +707,7 @@ def test_resume_is_honoured_through_a_symlinked_project_dir(tmp_path):
     assert resumed.skipped == []
     assert resumed.staged == [src.name]
     assert Path(src.staged_review.staged_path) == staged
-    assert set(json.loads((staged / "candidates.json").read_text())["images"]) == cached
+    assert set(_candidate_images(staged)) == cached
 
 
 def test_a_run_below_the_grid_floor_stages_every_instance(tmp_path):
@@ -732,8 +728,8 @@ def test_a_run_below_the_grid_floor_stages_every_instance(tmp_path):
     result = run_semantic_escalation(_request(tmp_path, src, confidence=0.02), labeler)
     assert result.labelled == 2
     staged = Path(src.staged_review.staged_path)
-    cache = json.loads((staged / "candidates.json").read_text())
-    assert sorted(c["c"] for c in cache["images"]["f0.png"]["candidates"]) == [
+    cache = _candidate_images(staged)
+    assert sorted(c["c"] for c in cache["f0.png"]["candidates"]) == [
         0.03,
         0.9,
     ]
@@ -811,10 +807,7 @@ def test_orphaned_counts_cached_frames_whose_origin_image_is_gone(tmp_path):
 
 def _cached_images(staged: Path) -> set:
     """Keys present in the staging dir's candidate cache (absent file = none)."""
-    path = staged / "candidates.json"
-    if not path.exists():
-        return set()
-    return set(json.loads(path.read_text())["images"])
+    return set(_candidate_images(staged))
 
 
 class _CountingLabeler(ScriptedLabeler):
@@ -952,7 +945,7 @@ def test_a_mid_run_failure_does_not_leave_a_pointer_to_a_deleted_dir(tmp_path):
     ), "pending_escalation points at a deleted directory"
 
 
-def test_calibration_worker_decodes_frames_itself_not_on_the_gui_thread(tmp_path):
+def test_calibration_worker_delegates_decode_out_of_the_gui_process(tmp_path):
     """F4: the decode belongs in the worker, behind the progress dialog.
 
     `_run_calibration` used to build `[... labelled_frames_for(s) ...]` with
@@ -972,18 +965,25 @@ def test_calibration_worker_decodes_frames_itself_not_on_the_gui_thread(tmp_path
             "0 0.4 0.4 0.6 0.4 0.6 0.6 0.4 0.6\n"
         )
 
-    # The worker takes SOURCES and resolves the frames itself.
-    seen = {}
-
-    class _Recording(ScriptedLabeler):
-        pass
-
+    # The thin worker takes source identities; it must never accept a live
+    # model object back into the GUI process.
+    with pytest.raises(ValueError, match="in-process"):
+        CalibrationWorker(
+            [src],
+            "ant",
+            "sam3",
+            {"reference_body_px": 80.0},
+            labeler=object(),
+        )
     worker = CalibrationWorker(
-        [src], "ant", "sam3", {"reference_body_px": 80.0}, labeler=_Recording([])
+        [src],
+        "ant",
+        "sam3",
+        {"reference_body_px": 80.0},
+        project_dir=tmp_path,
     )
-    worker.result_ready.connect(lambda pts: seen.setdefault("points", pts))
-    worker.execute()
-    assert "points" in seen and seen["points"], "the worker must resolve frames itself"
+    assert worker._operation.request.payload["sources"] == [src.to_dict()]
+    assert worker._operation.request.payload["sample_budget"] == 12
 
     # And the GUI path no longer decodes anything before starting the worker.
     src_text = inspect.getsource(dlg.SemanticEscalationDialog._run_calibration)

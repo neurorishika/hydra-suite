@@ -105,7 +105,7 @@ class CalibrationResultsDialog(BaseDialog):
         self.partial = bool(partial)
         self._rows = frontier_rows(points, recommended, project_frames)
         self._chosen = None
-        self._preview_frames = list(preview_frames or [])
+        self._preview_frames = preview_frames if preview_frames is not None else []
         self._merge_iou = float(merge_iou)
         self._frame_index = 0
         self._loaded_image_path = None

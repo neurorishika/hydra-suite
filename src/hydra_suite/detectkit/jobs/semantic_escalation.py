@@ -11,8 +11,11 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+import os
 import random
 import re
+import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -22,7 +25,6 @@ from typing import Callable
 
 import cv2
 import numpy as np
-from PySide6.QtCore import Signal
 
 from hydra_suite.core.inference.semantic.base import SemanticInstance
 from hydra_suite.core.inference.semantic.calibration import CONFIDENCE_GRID
@@ -30,7 +32,6 @@ from hydra_suite.core.inference.semantic.checkpoints import (
     SAM3_VARIANTS,
     resolve_checkpoint,
 )
-from hydra_suite.core.inference.semantic.sam3 import PREDICTOR_IMGSZ
 from hydra_suite.core.inference.semantic.shape_prior import AreaBand
 from hydra_suite.core.inference.semantic.tiling import (
     DEFAULT_MERGE_IOU,
@@ -52,13 +53,19 @@ from hydra_suite.data.project_bundle import ensure_bundle_subdirectory
 from hydra_suite.detectkit.gui.constants import IMG_EXTS
 from hydra_suite.detectkit.gui.models import OBBSource, StagedReview
 from hydra_suite.utils.geometry_levels import GeometryLevel
-from hydra_suite.widgets.workers import BaseWorker
+from hydra_suite.utils.sam3_constants import PREDICTOR_IMGSZ
 
 from .sam2_escalation import remove_staged_escalation_dir
+from .semantic_workers import CalibrationWorker as CalibrationWorker
+from .semantic_workers import FramePreviewWorker as FramePreviewWorker
+from .semantic_workers import SemanticEscalationWorker as SemanticEscalationWorker
+from .semantic_workers import TilePreviewWorker as TilePreviewWorker
 
 logger = logging.getLogger(__name__)
 
 CANDIDATES_FILENAME = "candidates.json"
+CANDIDATE_STORE_DIRNAME = "candidates.v2"
+MAX_CANDIDATE_FRAME_BYTES = 16 * 1024 * 1024
 RUN_FILENAME = "run.json"
 # I4: candidates are CACHED at the bottom of the sweep grid, not at the run's
 # own confidence. Inference cost is identical either way -- the model runs on
@@ -341,6 +348,129 @@ def _save_cache(staged_root: Path, cache: dict) -> None:
     (staged_root / CANDIDATES_FILENAME).write_text(json.dumps(cache))
 
 
+class CandidateFrameStore:
+    """Frame-atomic semantic candidates; memory is independent of source length."""
+
+    def __init__(self, staged_root: str | Path) -> None:
+        self.root = Path(staged_root) / CANDIDATE_STORE_DIRNAME
+
+    @staticmethod
+    def _name(rel: str) -> str:
+        from hashlib import sha256
+
+        return sha256(rel.encode("utf-8")).hexdigest() + ".json"
+
+    def _path(self, rel: str) -> Path:
+        return self.root / self._name(rel)
+
+    def contains(self, rel: str) -> bool:
+        path = self._path(rel)
+        if not path.is_file():
+            return False
+        try:
+            entry = self._read(path)
+        except (OSError, TypeError, ValueError):
+            return False
+        return entry[0] == rel
+
+    @staticmethod
+    def _read(path: Path) -> tuple[str, dict]:
+        with path.open("rb") as stream:
+            encoded = stream.read(MAX_CANDIDATE_FRAME_BYTES + 1)
+        if len(encoded) > MAX_CANDIDATE_FRAME_BYTES:
+            raise ValueError("semantic candidate frame exceeds safe size")
+        raw = json.loads(encoded)
+        if not isinstance(raw, dict) or set(raw) != {
+            "version",
+            "relative_path",
+            "hw",
+            "candidates",
+        }:
+            raise ValueError("semantic candidate frame has invalid fields")
+        rel = raw["relative_path"]
+        hw = raw["hw"]
+        candidates = raw["candidates"]
+        if (
+            raw["version"] != 2
+            or not isinstance(rel, str)
+            or len(rel) > 4096
+            or Path(rel).is_absolute()
+            or ".." in Path(rel).parts
+            or not isinstance(hw, list)
+            or len(hw) != 2
+            or any(not isinstance(value, int) or value < 1 for value in hw)
+            or not isinstance(candidates, list)
+            or len(candidates) > 100_000
+        ):
+            raise ValueError("semantic candidate frame is malformed")
+        for candidate in candidates:
+            if not isinstance(candidate, dict) or set(candidate) != {"p", "c", "t"}:
+                raise ValueError("semantic candidate is malformed")
+            points = candidate["p"]
+            if (
+                not isinstance(points, list)
+                or not 3 <= len(points) <= 1_000_000
+                or any(
+                    not isinstance(point, list)
+                    or len(point) != 2
+                    or any(
+                        not isinstance(value, (int, float))
+                        or isinstance(value, bool)
+                        or not math.isfinite(value)
+                        for value in point
+                    )
+                    for point in points
+                )
+                or not isinstance(candidate["c"], (int, float))
+                or isinstance(candidate["c"], bool)
+                or not math.isfinite(candidate["c"])
+                or not isinstance(candidate["t"], int)
+                or isinstance(candidate["t"], bool)
+                or candidate["t"] < 0
+            ):
+                raise ValueError("semantic candidate polygon is malformed")
+        return rel, {"hw": hw, "candidates": candidates}
+
+    def write(self, rel: str, hw: tuple[int, int], candidates: list[dict]) -> None:
+        payload = {
+            "version": 2,
+            "relative_path": rel,
+            "hw": [int(hw[0]), int(hw[1])],
+            "candidates": candidates,
+        }
+        encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        if len(encoded) > MAX_CANDIDATE_FRAME_BYTES:
+            raise ValueError("semantic candidate frame exceeds safe size")
+        self.root.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary = tempfile.mkstemp(
+            prefix=f".{self._name(rel)}.", suffix=".tmp", dir=self.root
+        )
+        try:
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(encoded)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, self._path(rel))
+        except BaseException:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
+            raise
+
+    def iter_entries(self):
+        if not self.root.is_dir():
+            return
+        for path in sorted(self.root.glob("*.json")):
+            rel, entry = self._read(path)
+            if path.name != self._name(rel):
+                raise ValueError("semantic candidate path identity mismatch")
+            yield rel, entry
+
+    def count(self) -> int:
+        return sum(1 for _item in self.iter_entries())
+
+
 def _image_hw(path: Path) -> tuple[int, int] | None:
     """Read image dimensions without decoding a full frame for ETA planning."""
     try:
@@ -370,12 +500,16 @@ def _remaining_tile_count(
         / staged_dirname_for(src, req.variant, req.prompt)
     )
     fingerprint = _fingerprint(req, src_root, tile_px, floor)
-    cache = {"images": {}}
+    completed: set[str] = set()
     run_path = staged_root / RUN_FILENAME
     if run_path.exists():
         try:
             if json.loads(run_path.read_text()) == fingerprint:
-                cache = _load_cache(staged_root)
+                store = CandidateFrameStore(staged_root)
+                if store.root.is_dir():
+                    completed = {rel for rel, _entry in store.iter_entries()}
+                else:
+                    completed = set(_load_cache(staged_root)["images"])
         except Exception:
             pass
     images_dir = src_root / "images"
@@ -387,7 +521,7 @@ def _remaining_tile_count(
             rel = str(img_path.relative_to(images_dir))
         except ValueError:  # pragma: no cover - defensive filesystem race
             continue
-        if rel in cache["images"]:
+        if rel in completed:
             continue
         hw = _image_hw(img_path)
         if hw is None:
@@ -462,7 +596,7 @@ class _DegenerateCountingLabeler:
 
 def _write_labels_from_candidates(
     staged_root: Path,
-    cache: dict,
+    cache: dict | CandidateFrameStore,
     *,
     confidence: float,
     merge_iou: float,
@@ -478,7 +612,12 @@ def _write_labels_from_candidates(
     """
     written = degenerate = orphaned = 0
     check_origins = origin_images is not None and origin_images.is_dir()
-    for rel, entry in cache["images"].items():
+    entries = (
+        cache.iter_entries()
+        if isinstance(cache, CandidateFrameStore)
+        else cache["images"].items()
+    )
+    for rel, entry in entries:
         if check_origins and _origin_image_for(origin_images, Path(rel)) is None:
             logger.warning("Cached frame %s has no origin image; skipping it.", rel)
             orphaned += 1
@@ -654,7 +793,23 @@ def run_semantic_escalation(
         (staged_root / "labels").mkdir(parents=True, exist_ok=True)
         (staged_root / RUN_FILENAME).write_text(json.dumps(fingerprint))
 
-        cache = {"version": 1, "images": {}} if stale else _load_cache(staged_root)
+        store = CandidateFrameStore(staged_root)
+        legacy_cache = (
+            {"version": 1, "images": {}}
+            if stale or store.root.is_dir()
+            else _load_cache(staged_root)
+        )
+        if legacy_cache["images"]:
+            # One compatibility read of the old monolith, followed by bounded
+            # frame-at-a-time writes. New and resumed writes never rewrite the
+            # whole-source JSON document again.
+            for rel, entry in legacy_cache["images"].items():
+                store.write(
+                    rel,
+                    (int(entry["hw"][0]), int(entry["hw"][1])),
+                    list(entry["candidates"]),
+                )
+            legacy_cache = {"version": 1, "images": {}}
         images = sorted(
             p for p in images_dir.rglob("*") if p.suffix.lower() in IMG_EXTS
         )
@@ -665,7 +820,7 @@ def run_semantic_escalation(
                 result.cancelled = True
                 break
             rel = str(img_path.relative_to(images_dir))
-            if rel in cache["images"]:
+            if store.contains(rel) or rel in legacy_cache["images"]:
                 continue  # already inferred by an earlier, cancelled run
             image = cv2.imread(str(img_path))
             if image is None:
@@ -720,15 +875,11 @@ def run_semantic_escalation(
                 result.cancelled = True
                 break
             tiles_completed += len(plan.tiles)
-            cache["images"][rel] = {
-                "hw": [h, w],
-                "candidates": _candidates_to_json(cands),
-            }
-            _save_cache(staged_root, cache)
+            store.write(rel, (h, w), _candidates_to_json(cands))
 
         written, degenerate, orphaned = _write_labels_from_candidates(
             staged_root,
-            cache,
+            store if store.root.is_dir() else legacy_cache,
             confidence=req.confidence,
             merge_iou=req.merge_iou,
             area_band=band_from_bounds(req.area_min_px2, req.area_max_px2),
@@ -737,13 +888,20 @@ def run_semantic_escalation(
         result.labelled += written
         result.degenerate += degenerate
         result.orphaned += orphaned
-        result.empty_images += sum(
-            1 for e in cache["images"].values() if not e["candidates"]
+        entries = (
+            store.iter_entries()
+            if store.root.is_dir()
+            else legacy_cache["images"].items()
         )
+        processed = empty = 0
+        for _rel, entry in entries:
+            processed += 1
+            empty += int(not entry["candidates"])
+        result.empty_images += empty
         # I1: the prompt-failure denominator. Frames actually inferred (the
         # cache's key set), which under cancellation or resume is NOT
         # len(images) either.
-        result.frames_processed += len(cache["images"])
+        result.frames_processed += processed
         # Deliberately NOT in `_fingerprint`: which class the instances ARE
         # is a labelling decision, not an inference input, so changing it
         # must not wipe a cache full of candidates. Same precedent as the
@@ -857,8 +1015,15 @@ def rethreshold_staged(
             f">= {floor:.2f}, so re-thresholding down to {confidence:.2f} "
             f"would silently return a truncated set. {remedy}"
         )
-    cache = _load_cache(staged_root)
-    if not cache["images"]:
+    store = CandidateFrameStore(staged_root)
+    cache: dict | CandidateFrameStore = (
+        store if store.root.is_dir() else _load_cache(staged_root)
+    )
+    if (
+        store.count() == 0
+        if isinstance(cache, CandidateFrameStore)
+        else not cache["images"]
+    ):
         raise RuntimeError(
             f"The candidate cache for '{source.name}' is missing or empty; "
             "re-run the escalation."
@@ -917,6 +1082,7 @@ MEDIAN_BODY_SAMPLE_FRAMES = 20
 # sample is bounded globally and the truncation is SURFACED (see
 # measure_median_body_px), never silently applied.
 MEDIAN_BODY_TOTAL_FRAMES = 20
+CALIBRATION_SAMPLE_FRAMES = 12
 
 
 def measure_median_body_px(
@@ -1023,6 +1189,26 @@ def labelled_frames_for(
             )
         )
     return out
+
+
+def stratified_calibration_frames(
+    sources, *, budget: int = CALIBRATION_SAMPLE_FRAMES
+) -> list[tuple[Path, list[LabelRecord]]]:
+    """Return a deterministic, globally bounded sample spread across sources."""
+    sources = list(sources)
+    budget = max(1, int(budget))
+    if not sources:
+        return []
+    per_source = max(1, budget // len(sources))
+    sampled = [labelled_frames_for(source, limit=per_source) for source in sources]
+    output: list[tuple[Path, list[LabelRecord]]] = []
+    for row in range(per_source):
+        for frames in sampled:
+            if row < len(frames):
+                output.append(frames[row])
+                if len(output) >= budget:
+                    return output
+    return output
 
 
 @dataclass
@@ -1141,209 +1327,6 @@ def preview_random_frame(
         tile_px=tile_px,
         tiles_per_frame=len(plan.tiles),
     )
-
-
-class FramePreviewWorker(BaseWorker):
-    """QThread wrapper around a random, complete-frame preview."""
-
-    result_ready = Signal(object)  # FramePreviewResult
-
-    def __init__(self, sources, prompt, variant, params, labeler=None, parent=None):
-        super().__init__(parent)
-        self._sources = list(sources)
-        self._prompt = prompt
-        self._variant = variant
-        self._params = dict(params)
-        self._labeler = labeler
-        self._cancel = False
-
-    def cancel(self) -> None:
-        self._cancel = True
-
-    @property
-    def cancelled(self) -> bool:
-        return self._cancel
-
-    def execute(self) -> None:
-        labeler = self._labeler
-        if labeler is None:
-            from hydra_suite.core.inference.semantic.sam3 import Sam3SemanticLabeler
-
-            # F2: the preview must see what the run will see, so its
-            # predictor floor is the same cache floor the run would use.
-            labeler = Sam3SemanticLabeler.from_variant(
-                self._variant,
-                checkpoint=labeler_checkpoint_for(self._variant),
-                confidence_floor=cache_confidence_floor(
-                    self._params.get("confidence", 0.35)
-                ),
-            )
-        self.status.emit("Choosing a random image…")
-        self.result_ready.emit(
-            preview_random_frame(
-                labeler,
-                self._sources,
-                self._prompt,
-                reference_body_px=self._params.get("reference_body_px", 0.0),
-                tile_fraction=self._params.get("tile_fraction"),
-                overlap=self._params.get("overlap", DEFAULT_OVERLAP),
-                seam_margin_px=self._params.get(
-                    "seam_margin_px", DEFAULT_SEAM_MARGIN_PX
-                ),
-                merge_iou=self._params.get("merge_iou", DEFAULT_MERGE_IOU),
-                confidence=self._params.get("confidence", 0.35),
-                max_instances=self._params.get("max_instances", 0),
-                progress=lambda done, total: self.progress.emit(
-                    int(100 * done / max(total, 1))
-                ),
-                status=self.status.emit,
-                should_stop=lambda: self._cancel,
-            )
-        )
-
-
-# Kept as an import-compatible alias for extensions written against the
-# earlier internal worker name. The UI now describes the complete-frame work.
-TilePreviewWorker = FramePreviewWorker
-
-
-class CalibrationWorker(BaseWorker):
-    """QThread wrapper around calibrate(), cancellable between frames.
-
-    F4: takes SOURCES, not decoded frames. The dialog used to build the
-    frame list itself -- ``labelled_frames_for`` cv2.imreads every labelled
-    image of every selected source, with no limit -- on the GUI thread,
-    before the progress dialog even existed. Two hundred 4512^2 frames is
-    minutes of a frozen window with no feedback and no cancel. The decode
-    now happens here, behind the progress dialog and under should_stop.
-    """
-
-    result_ready = Signal(object)  # list[CalibrationPoint]
-
-    def __init__(
-        self, sources, prompt, variant, params, labeler=None, parent=None
-    ) -> None:
-        super().__init__(parent)
-        self._sources = list(sources)
-        self._prompt = prompt
-        self._variant = variant
-        self._params = dict(params)
-        self._labeler = labeler
-        self._cancel = False
-        self.preview_frames: list = []
-
-    def cancel(self) -> None:
-        self._cancel = True
-
-    @property
-    def cancelled(self) -> bool:
-        """True if this sweep was cut short, so its frontier is PARTIAL.
-
-        Read by the results dialog: calibrate() drops fractions whose frames
-        were not fully inferred, which keeps the surviving rows comparable
-        but leaves them resting on fewer frames than the user selected.
-        """
-        return self._cancel
-
-    def execute(self) -> None:
-        from hydra_suite.core.inference.semantic.calibration import calibrate
-
-        frames: list = []
-        for i, source in enumerate(self._sources):
-            if self._cancel:
-                break
-            name = getattr(source, "name", "?")
-            self.status.emit(
-                f"Reading labelled frames from '{name}' "
-                f"({i + 1}/{len(self._sources)})..."
-            )
-            frames.extend(labelled_frames_for(source))
-        if self._cancel or not frames:
-            self.result_ready.emit([])
-            return
-
-        labeler = self._labeler
-        if labeler is None:
-            from hydra_suite.core.inference.semantic.sam3 import Sam3SemanticLabeler
-
-            # F2: the sweep's own bottom cell, so cells 0.05-0.25 are not
-            # all silently identical to 0.25.
-            labeler = Sam3SemanticLabeler.from_variant(
-                self._variant,
-                checkpoint=labeler_checkpoint_for(self._variant),
-                confidence_floor=CONFIDENCE_GRID[0],
-            )
-        points = calibrate(
-            labeler,
-            frames,
-            self._prompt,
-            # The GRID, not the dialog's single fraction: calibration exists
-            # precisely to choose the fraction, so passing the current one
-            # would make the answer its own input.
-            reference_body_px=self._params.get("reference_body_px", 0.0),
-            overlap=self._params.get("overlap", DEFAULT_OVERLAP),
-            seam_margin_px=self._params.get("seam_margin_px", DEFAULT_SEAM_MARGIN_PX),
-            merge_iou=self._params.get("merge_iou", DEFAULT_MERGE_IOU),
-            max_instances=self._params.get("max_instances", 0),
-            progress=lambda pct, msg: (self.progress.emit(pct), self.status.emit(msg)),
-            should_stop=lambda: self._cancel,
-            preview_sink=self.preview_frames.extend,
-        )
-        self.result_ready.emit(points)
-
-
-class SemanticEscalationWorker(BaseWorker):
-    """QThread wrapper around run_semantic_escalation, with cancellation."""
-
-    result_ready = Signal(object)  # SemanticEscalationResult
-    # Emitted from the WORKER thread every time a source's staged_review
-    # changes. Connected with Qt's default AutoConnection, so the slot runs
-    # queued on the receiver's (main) thread -- which is the only place
-    # MainWindow._save_current_project may run, since it touches the dataset
-    # panel and the status bar.
-    project_mutated = Signal()
-
-    def __init__(
-        self, request: SemanticEscalationRequest, labeler=None, parent=None
-    ) -> None:
-        super().__init__(parent)
-        self._request = request
-        self._labeler = labeler
-        self._cancel = False
-
-    def cancel(self) -> None:
-        """Ask the run to stop at the next tile boundary."""
-        self._cancel = True
-
-    def execute(self) -> None:
-        labeler = self._labeler
-        if labeler is None:
-            from hydra_suite.core.inference.semantic.sam3 import Sam3SemanticLabeler
-
-            # F2: the predictor's OWN conf gate must sit at the cache floor,
-            # not ultralytics' 0.25 default, or the cache silently holds
-            # nothing below 0.25 and every offline re-threshold below it lies.
-            labeler = Sam3SemanticLabeler.from_variant(
-                self._request.variant,
-                checkpoint=labeler_checkpoint_for(self._request.variant),
-                confidence_floor=cache_confidence_floor(self._request.confidence),
-            )
-        self.status.emit(
-            f"Segmenting '{self._request.prompt}' across "
-            f"{len(self._request.source_names)} source(s)..."
-        )
-        result = run_semantic_escalation(
-            self._request,
-            labeler,
-            overwrite=self._request.overwrite,
-            progress=lambda pct, msg: (
-                self.progress.emit(pct),
-                self.status.emit(msg),
-            ),
-            should_stop=lambda: self._cancel,
-            on_mutated=self.project_mutated.emit,
-        )
-        self.result_ready.emit(result)
 
 
 def _origin_image_for(origin_images: Path, rel: Path) -> Path | None:

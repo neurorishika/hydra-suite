@@ -177,6 +177,28 @@ def test_label_image_calls_the_predictor_with_a_text_list_prompt():
     assert call["text"] == ["ant"]
 
 
+def test_label_image_applies_instance_cap_before_predictor_materializes_masks():
+    from types import SimpleNamespace
+
+    from hydra_suite.core.inference.semantic.sam3 import Sam3SemanticLabeler
+
+    class FakePredictor:
+        def __init__(self):
+            self.args = SimpleNamespace(max_det=300)
+            self.seen_max_det = None
+
+        def __call__(self, **kwargs):
+            self.seen_max_det = self.args.max_det
+            return []
+
+    fake = FakePredictor()
+    labeler = Sam3SemanticLabeler(predictor=fake, device="cpu")
+    labeler.label_image(np.zeros((4, 4, 3), dtype=np.uint8), "ant", max_instances=17)
+
+    assert fake.seen_max_det == 17
+    assert fake.args.max_det == 300, "the shared predictor setting must be restored"
+
+
 def test_missing_clip_names_an_install_that_can_actually_fix_it(tmp_path, monkeypatch):
     """F: `clip` is NOT in the sam3 extra and cannot be.
 
@@ -263,15 +285,16 @@ def test_from_variant_passes_the_floor_through_to_the_predictor(tmp_path, monkey
 
 
 def test_workers_ask_for_the_cache_floor_not_the_ultralytics_default():
-    """The three construction sites must all thread a floor through."""
+    """All semantic child operations thread a floor through one model seam."""
     import inspect
 
-    from hydra_suite.detectkit.jobs import semantic_escalation as job
+    from hydra_suite.detectkit.sidecars import operations
 
-    src = inspect.getsource(job)
-    assert src.count("from_variant(") == 3
-    # Every from_variant call site passes an explicit floor.
-    assert src.count("confidence_floor=") == 3
+    src = inspect.getsource(operations)
+    assert src.count("_semantic_labeler(") == 4  # definition + three operations
+    helper = inspect.getsource(operations._semantic_labeler)
+    assert helper.count("from_variant(") == 1
+    assert helper.count("confidence_floor=") == 1
 
 
 def test_a_gated_repo_becomes_actionable_guidance_not_a_bare_401(tmp_path, monkeypatch):

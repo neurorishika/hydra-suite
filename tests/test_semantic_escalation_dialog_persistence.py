@@ -174,7 +174,7 @@ def test_completed_calibration_persists_visual_preview_artifact(
     dialog._store_calibration([point], point, "", preview_frames=[preview])
 
     artifact = project.semantic_calibration["preview_artifact"]
-    assert (tmp_path / artifact).is_file()
+    assert (tmp_path / artifact / "manifest.json").is_file()
     assert len(load_calibration_previews(tmp_path, artifact)) == 1
 
 

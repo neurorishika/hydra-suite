@@ -234,7 +234,18 @@ class Sam3SemanticLabeler:
         # them -- the text prompt keyword there is `text` (a list[str]), not
         # `prompt`. Passing `prompt=` would make every call behave as if no
         # prompt were given (falls back to `self.model.names`).
-        results = self._predictor(source=image_bgr, text=[prompt])
+        # Apply the instance ceiling before SAM3 materialises masks. Truncating
+        # only the converted result list still permits an unbounded mask tensor
+        # to exhaust accelerator or unified memory first.
+        args = getattr(self._predictor, "args", None)
+        previous_max_det = getattr(args, "max_det", None) if args is not None else None
+        if args is not None and max_instances > 0:
+            args.max_det = int(max_instances)
+        try:
+            results = self._predictor(source=image_bgr, text=[prompt])
+        finally:
+            if args is not None and max_instances > 0:
+                args.max_det = previous_max_det
         out: list[SemanticInstance] = []
         for res in results:
             masks = getattr(res, "masks", None)
