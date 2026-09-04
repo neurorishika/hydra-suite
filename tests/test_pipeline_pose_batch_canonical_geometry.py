@@ -116,6 +116,8 @@ def _capturing_extract_canonical_crops_batch(captured):
         captured["crop_geometry"] = geometry
         captured["crop_calls"] = captured.get("crop_calls", 0) + 1
         n_total = sum(o.num_detections for o in obb_results)
+        captured.setdefault("crop_batch_sizes", []).append(n_total)
+        captured.setdefault("crop_frame_counts", []).append(len(frames))
         det_ids = (
             np.concatenate([o.detection_ids for o in obb_results])
             if obb_results
@@ -249,3 +251,28 @@ def test_headtail_and_pose_share_one_canonical_extraction():
     assert captured["crop_calls"] == 1
     assert captured["headtail_batch"] is captured["extracted_batch"]
     assert captured["pose_batch"] is captured["extracted_batch"]
+
+
+def test_downstream_crop_extraction_is_frame_local_not_window_sized():
+    captured: dict = {}
+    pipe, _window = _build_pipeline(captured)
+    window = BatchWindow(
+        frames=[np.zeros((4, 4, 3), np.uint8) for _ in range(3)],
+        frame_indices=[0, 1, 2],
+    )
+
+    with (
+        patch("hydra_suite.core.inference.pipeline.run_obb", side_effect=_fake_run_obb),
+        patch(
+            "hydra_suite.core.inference.pipeline.extract_canonical_crops_batch",
+            side_effect=_capturing_extract_canonical_crops_batch(captured),
+        ),
+        patch(
+            "hydra_suite.core.inference.pipeline.run_pose_batch",
+            side_effect=_capturing_run_pose_batch(captured),
+        ),
+    ):
+        pipe._process_window(window)
+
+    assert captured["crop_frame_counts"] == [1, 1, 1]
+    assert captured["crop_batch_sizes"] == [1, 1, 1]

@@ -20,6 +20,19 @@ from .obb import _RawOBBTensors
 # keeps. Multiply by pi/4 to convert rectangle area -> ellipse area for parity.
 _ELLIPSE_AREA_FRACTION = np.pi / 4.0
 
+# Downstream crop consumers are intentionally frame-local. This finite cap is
+# independent of the detection frame batch and bounds canonical/AABB crop
+# materialization even for legacy configs where max_detections=0 meant
+# unlimited. Normal tracker configs use much smaller MAX_TARGETS values.
+MAX_DOWNSTREAM_CROPS_PER_FRAME = 128
+
+
+def _effective_max_detections(config: OBBConfig) -> int:
+    requested = int(getattr(config, "max_detections", 0) or 0)
+    if requested <= 0:
+        return MAX_DOWNSTREAM_CROPS_PER_FRAME
+    return min(requested, MAX_DOWNSTREAM_CROPS_PER_FRAME)
+
 
 def filter_raw(
     raw: OBBResult | _RawOBBTensors,
@@ -81,10 +94,11 @@ def filter_detections(
     if config.iou_threshold < 1.0 and len(indices) > 1:
         indices = _obb_nms(raw, indices, config.iou_threshold)
 
-    if config.max_detections > 0 and len(indices) > config.max_detections:
+    max_detections = _effective_max_detections(config)
+    if len(indices) > max_detections:
         # H5 parity: legacy keeps the LARGEST detections (sort by size), not the
         # most confident — _obb_geometry:587-588.
-        order = np.argsort(raw.sizes[indices])[::-1][: config.max_detections]
+        order = np.argsort(raw.sizes[indices])[::-1][:max_detections]
         indices = indices[order]
 
     return _select(raw, indices)
@@ -173,9 +187,10 @@ def filter_from_tensors(
     if config.iou_threshold < 1.0 and m > 1:
         local_idx = _obb_nms(subset, local_idx, config.iou_threshold)
 
-    if config.max_detections > 0 and len(local_idx) > config.max_detections:
+    max_detections = _effective_max_detections(config)
+    if len(local_idx) > max_detections:
         # H5 parity: keep the LARGEST detections (sort by size) — _obb_geometry:587-588.
-        order = np.argsort(subset.sizes[local_idx])[::-1][: config.max_detections]
+        order = np.argsort(subset.sizes[local_idx])[::-1][:max_detections]
         local_idx = local_idx[order]
 
     return _select(subset, local_idx)
@@ -312,9 +327,10 @@ def filter_with_indices(
         keep_nms = _obb_nms(subset, np.arange(len(indices)), config.iou_threshold)
         indices = indices[keep_nms]
         subset = _select(raw, indices)
-    if config.max_detections > 0 and len(indices) > config.max_detections:
+    max_detections = _effective_max_detections(config)
+    if len(indices) > max_detections:
         # H5 parity: keep the LARGEST detections (sort by size) — _obb_geometry:587-588.
-        order = np.argsort(raw.sizes[indices])[::-1][: config.max_detections]
+        order = np.argsort(raw.sizes[indices])[::-1][:max_detections]
         indices = indices[order]
         subset = _select(raw, indices)
     return subset, indices.astype(np.int32)

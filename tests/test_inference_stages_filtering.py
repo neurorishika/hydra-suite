@@ -6,6 +6,7 @@ from hydra_suite.core.inference.config import OBBConfig, OBBDirectConfig
 from hydra_suite.core.inference.result import OBBResult
 from hydra_suite.core.inference.runtime import RuntimeContext
 from hydra_suite.core.inference.stages.filtering import (
+    MAX_DOWNSTREAM_CROPS_PER_FRAME,
     filter_detections,
     filter_from_tensors,
     filter_raw,
@@ -159,6 +160,23 @@ def test_filter_max_detections():
     raw = _make_obb([[i * 50, 0] for i in range(10)], [0.9] * 10)
     result = filter_detections(raw, _cpu_config(max_detections=3))
     assert result.num_detections == 3
+
+
+def test_unlimited_config_still_has_finite_downstream_crop_cap():
+    n = MAX_DOWNSTREAM_CROPS_PER_FRAME + 7
+    raw = _make_obb(
+        [[i * 100.0, 0.0] for i in range(n)],
+        [0.9] * n,
+        sizes=[float(i + 1) for i in range(n)],
+    )
+
+    result, indices = filter_with_indices(
+        raw,
+        _cpu_config(max_detections=0, iou_threshold=1.0),
+    )
+
+    assert result.num_detections == MAX_DOWNSTREAM_CROPS_PER_FRAME
+    assert len(indices) == MAX_DOWNSTREAM_CROPS_PER_FRAME
 
 
 def test_filter_empty_input():
