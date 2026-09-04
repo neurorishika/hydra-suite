@@ -28,13 +28,17 @@ from hydra_suite.core.inference.config import OBBConfig, OBBDirectConfig, SliceC
 from hydra_suite.core.inference.runtime import RuntimeContext
 from hydra_suite.core.inference.runtime_artifacts import load_obb_executor
 from hydra_suite.core.inference.stages.obb import (
+    _bound_compact_parts,
     _extract_obb_from_boxes,
     _extract_obb_from_masks,
-    build_crops,
     extract_obb_result,
+    iter_crops,
     merge_obb_results,
     merge_per_frame,
-    resize_crops_for_stage2,
+)
+from hydra_suite.core.inference.stages.slicing import (
+    admitted_tile_chunk_size,
+    iter_tile_job_chunks,
 )
 from hydra_suite.utils.slice_geometry import plan_tiles, tile_size_for_mode
 
@@ -73,8 +77,8 @@ def _preview_slice_merge_config(merge_threshold: float) -> OBBConfig:
     backend and ``raw_detection_cap``.
 
     Matches the preview's prior hand-rolled merge byte-for-byte -- ``greedy_nmm``
-    / ``ios`` / cv2, and no raw detection cap (``raw_detection_cap=0`` disables
-    it, so the preview keeps returning every merged detection).
+    / ``ios`` / cv2, with the same finite preview candidate ceiling used by
+    the executor.
     """
     return OBBConfig(
         mode="direct",
@@ -88,7 +92,8 @@ def _preview_slice_merge_config(merge_threshold: float) -> OBBConfig:
                 merge_backend="cv2",
             ),
         ),
-        raw_detection_cap=0,
+        max_detections=_PREVIEW_MAX_DET,
+        raw_detection_cap=_PREVIEW_MAX_DET,
     )
 
 
@@ -343,12 +348,7 @@ def predict_sliced_obb_result(
     )
     plan = plan_tiles((fh, fw), tw, th, overlap, overlap)
     raw_floor = max(1e-4, float(confidence_threshold))
-    tiles_img = []
-    for x0, y0, x1, y1 in plan.tiles:
-        if should_stop is not None and should_stop():
-            return None
-        tiles_img.append(np.ascontiguousarray(frame[y0:y1, x0:x1]))
-    if not tiles_img:
+    if not plan.tiles:
         return _predict_direct(
             executor,
             frame,
@@ -357,30 +357,9 @@ def predict_sliced_obb_result(
             emit_native_geometry=task == "segment",
             should_stop=should_stop,
         )
-    batch_size = _slice_prediction_batch_size(executor)
-    results = []
-    for start in range(0, len(tiles_img), batch_size):
-        if should_stop is not None and should_stop():
-            return None
-        results.extend(
-            executor.predict(
-                tiles_img[start : start + batch_size],
-                conf=raw_floor,
-                iou=float(iou),
-                verbose=False,
-            )
-        )
-        if should_stop is not None and should_stop():
-            return None
 
     # Route extraction + cross-tile merge through the SAME production seam the
-    # ``Grid`` region source uses: ``extract_obb_result``'s native ``offset=``
-    # (retiring the preview's own ``_offset_result``) and the shared
-    # ``merge_per_frame`` overlap-band merge (retiring the preview's hand-rolled
-    # ``band_membership`` + ``merge_obb_detections`` block). The preview keeps
-    # its OWN ``executor.predict`` above -- it runs the executor's within-tile
-    # NMS (``iou=_PREVIEW_IOU``) because, unlike the tracking pipeline, there is
-    # no downstream filtering stage here to dedup within-tile duplicates.
+    # ``Grid`` region source uses.
     def _extract_tile(res, x0: int, y0: int):
         offset = (float(max(0, x0)), float(max(0, y0)))
         if task == "detect":
@@ -393,10 +372,40 @@ def predict_sliced_obb_result(
             )
         return extract_obb_result(res, frame_idx=0, offset=offset)
 
-    parts = [
-        _extract_tile(res, x0, y0)
-        for (x0, y0, _x1, _y1), res in zip(plan.tiles, results)
-    ]
+    batch_size = admitted_tile_chunk_size(
+        plan,
+        imgsz=imgsz,
+        device_tiles=False,
+        requested=_slice_prediction_batch_size(executor),
+    )
+    parts = []
+    for chunk in iter_tile_job_chunks(
+        [frame], plan, device_tiles=False, chunk_size=batch_size
+    ):
+        if should_stop is not None and should_stop():
+            return None
+        tiles_img = [image for _job, image in chunk]
+        results = executor.predict(
+            tiles_img,
+            conf=raw_floor,
+            iou=float(iou),
+            verbose=False,
+        )
+        for (job, _image), result in zip(chunk, results):
+            x0, y0 = job.offset
+            parts.append(_extract_tile(result, int(x0), int(y0)))
+        parts = _bound_compact_parts(parts, 0, _PREVIEW_MAX_DET)
+        if should_stop is not None and should_stop():
+            return None
+
+    # Route extraction + cross-tile merge through the SAME production seam the
+    # ``Grid`` region source uses: ``extract_obb_result``'s native ``offset=``
+    # (retiring the preview's own ``_offset_result``) and the shared
+    # ``merge_per_frame`` overlap-band merge (retiring the preview's hand-rolled
+    # ``band_membership`` + ``merge_obb_detections`` block). The preview keeps
+    # its OWN ``executor.predict`` above -- it runs the executor's within-tile
+    # NMS (``iou=_PREVIEW_IOU``) because, unlike the tracking pipeline, there is
+    # no downstream filtering stage here to dedup within-tile duplicates.
     return merge_per_frame(
         parts,
         "overlap_band_nms",
@@ -419,10 +428,9 @@ def _sequential_obb_result(
     """Two-stage OBB inference on one frame -> merged ``OBBResult``.
 
     Mirrors ``model_test_dialog._run_sequential``: stage-1 detect on the full
-    frame, ``build_crops`` off the boxes, stage-2 OBB on each crop, then
+    frame, lazy crops off the boxes, bounded stage-2 OBB chunks, then
     ``merge_obb_results``. Preview has no explicit stage-2 image size, so crops
-    are fed to the executor at their native size (no ``resize_crops_for_stage2``
-    rescale, scale factor 1.0).
+    are fed to the executor at their native size (no resize; scale factor 1.0).
     """
     if should_stop is not None and should_stop():
         return None
@@ -444,43 +452,49 @@ def _sequential_obb_result(
         return merge_obb_results(0, [])
 
     crop_spec = _SeqCropSpec(crop_pad_ratio=float(crop_pad_ratio))
-    crops, offsets = build_crops(frame, boxes, crop_spec, None)
-    if not crops:
-        return merge_obb_results(0, [])
-
-    orig_sizes = [(c.shape[1], c.shape[0]) for c in crops]
-    # Preview keeps crops at native size (stage2 size unknown here). Kept
-    # explicit so the parallel to model_test_dialog is obvious.
-    crops_for_stage2 = resize_crops_for_stage2(crops, 0)
-
-    if should_stop is None:
-        obb_results = obb_executor.predict(
-            crops_for_stage2,
+    sub = []
+    batch_size = _slice_prediction_batch_size(obb_executor)
+    crop_iter = iter_crops(
+        frame,
+        boxes,
+        crop_spec,
+        None,
+        max_candidates=_PREVIEW_MAX_DET,
+    )
+    pending_crops = []
+    pending_offsets = []
+    for crop, offset in crop_iter:
+        pending_crops.append(crop)
+        pending_offsets.append(offset)
+        if len(pending_crops) < batch_size:
+            continue
+        if should_stop is not None and should_stop():
+            return None
+        results = obb_executor.predict(
+            pending_crops,
             conf=raw_floor,
             iou=float(iou),
             verbose=False,
         )
-    else:
-        obb_results = []
-        batch_size = _slice_prediction_batch_size(obb_executor)
-        for start in range(0, len(crops_for_stage2), batch_size):
-            if should_stop():
-                return None
-            obb_results.extend(
-                obb_executor.predict(
-                    crops_for_stage2[start : start + batch_size],
-                    conf=raw_floor,
-                    iou=float(iou),
-                    verbose=False,
-                )
-            )
-            if should_stop():
-                return None
-
-    sub = []
-    for i, r in enumerate(obb_results):
-        _ = orig_sizes[i]  # native-size crops => scale (1.0, 1.0)
-        sub.append(extract_obb_result(r, 0, offset=offsets[i], scale=(1.0, 1.0)))
+        sub.extend(
+            extract_obb_result(result, 0, offset=offset, scale=(1.0, 1.0))
+            for result, offset in zip(results, pending_offsets)
+        )
+        pending_crops = []
+        pending_offsets = []
+    if pending_crops:
+        if should_stop is not None and should_stop():
+            return None
+        results = obb_executor.predict(
+            pending_crops,
+            conf=raw_floor,
+            iou=float(iou),
+            verbose=False,
+        )
+        sub.extend(
+            extract_obb_result(result, 0, offset=offset, scale=(1.0, 1.0))
+            for result, offset in zip(results, pending_offsets)
+        )
     return merge_obb_results(0, sub)
 
 
