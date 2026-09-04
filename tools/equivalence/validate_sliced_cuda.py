@@ -20,7 +20,7 @@ crash on BOTH tiers went unnoticed.
 
 What it proves:
   1. tier ``gpu`` shape (numpy frames + device-tensor extraction), tiles that do
-     not overlap: ``run_direct_sliced`` returns ``_RawOBBTensors`` still resident
+     not overlap: the production ``run_obb`` path returns ``_RawOBBTensors`` still resident
      on the GPU (``xywhr.is_cuda``) -- the zero-sync fast path really is
      zero-sync, not silently materialised to host.
   2. Same shape with genuinely overlapping tiles: the cross-tile merge runs
@@ -56,12 +56,8 @@ import torch
 
 from hydra_suite.core.inference.config import OBBConfig, OBBDirectConfig, SliceConfig
 from hydra_suite.core.inference.result import OBBResult
-from hydra_suite.core.inference.stages.obb import _RawOBBTensors
-from hydra_suite.core.inference.stages.slicing import (
-    plan_slices,
-    run_direct_sliced,
-    tiles_overlap,
-)
+from hydra_suite.core.inference.stages.obb import OBBModels, _RawOBBTensors, run_obb
+from hydra_suite.core.inference.stages.slicing import plan_slices, tiles_overlap
 
 assert torch.cuda.is_available(), "no CUDA"
 DEV = "cuda"
@@ -130,6 +126,16 @@ class FakeModel:
             r.obb = FakeOBB()
             out.append(r)
         return out
+
+
+def run_direct_sliced(frames, model, config, runtime):
+    """Drive the current production plan/execute/extract/merge path."""
+    return run_obb(
+        frames,
+        OBBModels(mode="direct", direct_model=model),
+        config,
+        runtime,
+    )
 
 
 def cfg(**sk):
