@@ -430,6 +430,7 @@ def _query_systemd_scope_properties(
                 "--user",
                 "show",
                 unit,
+                "--property=LoadState",
                 "--property=ActiveState",
                 "--property=ControlGroup",
             ],
@@ -452,7 +453,10 @@ def _query_systemd_scope_properties(
             )
         )
         return None, absent
-    return _parse_key_value_lines(completed.stdout), False
+    properties = _parse_key_value_lines(completed.stdout)
+    if properties.get("LoadState") in {"not-found", "unloaded"}:
+        return None, True
+    return properties, False
 
 
 def _parse_key_value_lines(text: str) -> dict[str, str]:

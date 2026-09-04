@@ -298,6 +298,21 @@ def test_unloaded_systemd_scope_is_quiescent_but_bus_error_is_unknown(monkeypatc
     assert systemd_scope_is_quiescent("hydra-gone.scope") is None
 
 
+def test_systemd_scope_with_successful_not_found_response_is_unloaded(monkeypatch):
+    """systemd may return success while describing an already-unloaded unit."""
+
+    absent = subprocess.CompletedProcess(
+        [],
+        0,
+        stdout=("LoadState=not-found\n" "ActiveState=inactive\n" "ControlGroup=\n"),
+        stderr="",
+    )
+    monkeypatch.setattr(limits_module.subprocess, "run", lambda *_a, **_k: absent)
+
+    assert systemd_scope_is_quiescent("hydra-gone.scope") is True
+    assert limits_module.systemd_scope_member_pids("hydra-gone.scope") == ()
+
+
 def test_cgroup_unit_matching_uses_an_exact_path_component():
     cgroup = "0::/user.slice/hydra-owned.scope-extra/child\n"
 
