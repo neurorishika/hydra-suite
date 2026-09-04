@@ -508,6 +508,42 @@ def run_obb(
     iterate bounded regions through predict and extraction before advancing;
     whole-frame mode keeps its existing one-window behavior.
     """
+    parts_by_frame, source = collect_obb_parts_by_frame(
+        frames, models, config, runtime, roi_mask=roi_mask, should_stop=should_stop
+    )
+    out: list[OBBResult | _RawOBBTensors] = []
+    with span(N.EXTRACT_RAW):
+        for fi, parts in enumerate(parts_by_frame):
+            if not parts:
+                out.append(_empty_obb_result(fi))
+            else:
+                out.append(
+                    merge_per_frame(
+                        parts,
+                        source.merge_policy,
+                        source.merge_plan(fi),
+                        config,
+                        runtime,
+                    )
+                )
+    return out
+
+
+def collect_obb_parts_by_frame(
+    frames: list,
+    models: OBBModels,
+    config: OBBConfig,
+    runtime: RuntimeContext,
+    roi_mask: np.ndarray | None = None,
+    should_stop: Any = None,
+) -> tuple[list[list], Any]:
+    """Run every region/tile and return PRE-MERGE, frame-space parts per frame.
+
+    The first half of ``run_obb``, verbatim, and it must stay that way: SAHI
+    calibration measures here, then replays merge + filter offline. The
+    ``del`` of the loop locals and the ``_bound_compact_parts`` reservoir are
+    part of the memory contract, not incidental -- keep both.
+    """
     from .regions import select_region_source
 
     source = select_region_source(config)
@@ -556,22 +592,7 @@ def run_obb(
             chunk.clear()
             del chunk, fi, region, result, part
 
-    out: list[OBBResult | _RawOBBTensors] = []
-    with span(N.EXTRACT_RAW):
-        for fi, parts in enumerate(parts_by_frame):
-            if not parts:
-                out.append(_empty_obb_result(fi))
-            else:
-                out.append(
-                    merge_per_frame(
-                        parts,
-                        source.merge_policy,
-                        source.merge_plan(fi),
-                        config,
-                        runtime,
-                    )
-                )
-    return out
+    return parts_by_frame, source
 
 
 def _bound_compact_parts(
