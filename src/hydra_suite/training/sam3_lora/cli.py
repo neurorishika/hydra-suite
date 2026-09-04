@@ -409,12 +409,17 @@ class _LossWindow:
 
     def add(self, loss: Any, loss_dict: Any) -> None:
         self._n += 1
-        self._core += float(loss)
+        # detach(): `float()` on a graph-attached tensor warns, and keeping a
+        # reference to the graph across the whole window would pin every
+        # micro-batch's activations in memory until the window is reset.
+        self._core += float(loss.detach() if hasattr(loss, "detach") else loss)
         if not isinstance(loss_dict, dict):
             return
         for term in LOGGED_LOSS_TERMS:
             value = loss_dict.get(term)
             if value is not None and getattr(value, "numel", lambda: 0)() == 1:
+                if hasattr(value, "detach"):
+                    value = value.detach()
                 self._terms[term] = self._terms.get(term, 0.0) + float(value)
 
     def summary(self) -> str:
