@@ -14,6 +14,13 @@ from hydra_suite.training.dataset_io import fsync_directory, read_bounded_text
 from .dataset_preparation_sidecar import MAX_REQUEST_BYTES, decode_request
 from .training import preflight_sources, prepare_role_datasets
 
+_PATH_METADATA_NAMES = {
+    "dataset.yaml",
+    "manifest.json",
+    "build_manifest.json",
+    ".source_stamp.json",
+}
+
 
 def _emit(kind: str, message: str) -> None:
     print(json.dumps({"type": kind, "message": str(message)[:32_768]}), flush=True)
@@ -26,6 +33,47 @@ def _write_result(path: Path, payload: dict) -> None:
         stream.flush()
         os.fsync(stream.fileno())
     os.replace(temporary, path)
+
+
+def _replace_path_prefix(path: Path, old: bytes, new: bytes) -> None:
+    """Atomically rewrite a path prefix with fixed-size streaming buffers."""
+
+    temporary = path.with_suffix(path.suffix + ".remap")
+    overlap = max(0, len(old) - 1)
+    pending = b""
+    with path.open("rb") as source, temporary.open("wb") as destination:
+        while chunk := source.read(64 * 1024):
+            pending += chunk
+            while (match := pending.find(old)) >= 0:
+                destination.write(pending[:match])
+                destination.write(new)
+                pending = pending[match + len(old) :]
+            if len(pending) > overlap:
+                destination.write(pending[:-overlap] if overlap else pending)
+                pending = pending[-overlap:] if overlap else b""
+        destination.write(pending)
+        destination.flush()
+        os.fsync(destination.fileno())
+    os.replace(temporary, path)
+
+
+def _remap_staging_metadata(staging_root: Path, final_root: Path) -> None:
+    old = str(staging_root).encode("utf-8")
+    new = str(final_root).encode("utf-8")
+
+    def visit(directory: Path) -> None:
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                path = Path(entry.path)
+                if entry.is_dir(follow_symlinks=False):
+                    visit(path)
+                elif (
+                    entry.is_file(follow_symlinks=False)
+                    and path.name in _PATH_METADATA_NAMES
+                ):
+                    _replace_path_prefix(path, old, new)
+
+    visit(staging_root)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -64,6 +112,7 @@ def main(argv: list[str] | None = None) -> int:
             status=lambda message: _emit("status", message),
             should_cancel=lambda: False,
         )
+        _remap_staging_metadata(staging_root, final_root)
         os.replace(staging_root, final_root)
         fsync_directory(final_root.parent)
         remapped = {

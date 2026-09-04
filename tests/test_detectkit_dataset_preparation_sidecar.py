@@ -127,6 +127,9 @@ def test_child_promotes_only_completed_workspace(tmp_path):
     assert "/prepared/dataset-preparation-" in dataset
     assert result.preflight is not None and result.preflight.valid
     assert not staging.exists()
+    dataset_yaml = Path(dataset) / "dataset.yaml"
+    assert str(final) in dataset_yaml.read_text(encoding="utf-8")
+    assert str(staging) not in dataset_yaml.read_text(encoding="utf-8")
 
 
 @pytest.mark.skipif(

@@ -232,7 +232,9 @@ def atomic_output_directory(target: Path) -> Iterator[Path]:
                 os.replace(backup, target)
             raise
         if backup.exists():
-            shutil.rmtree(backup)
+            # Promotion already succeeded. A stale private backup is preferable
+            # to reporting failure after the new complete dataset is visible.
+            shutil.rmtree(backup, ignore_errors=True)
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise
