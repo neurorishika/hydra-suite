@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -27,6 +28,11 @@ from hydra_suite.runtime.resource_budget import (
     WorkLimits,
     evaluate_resource_request,
     probe_resources,
+)
+from hydra_suite.training.contracts import (
+    SAM3_MAX_NEGATIVE_PROMPT_BYTES,
+    SAM3_MAX_NEGATIVE_PROMPT_COUNT,
+    SAM3_MAX_NEGATIVE_QUERIES_PER_TILE,
 )
 from hydra_suite.utils.sam3_constants import PREDICTOR_IMGSZ
 
@@ -52,6 +58,9 @@ _MAX_COCO_METADATA_BYTES = 16 * MiB
 _MAX_JSON_DEPTH = 24
 _MAX_JSON_VALUES = 2_000_000
 _MAX_ESTIMATED_PARSED_BYTES = 96 * MiB
+_MAX_NEGATIVE_QUERIES_PER_TILE = SAM3_MAX_NEGATIVE_QUERIES_PER_TILE
+_MAX_NEGATIVE_PROMPT_COUNT = SAM3_MAX_NEGATIVE_PROMPT_COUNT
+_MAX_NEGATIVE_PROMPT_BYTES = SAM3_MAX_NEGATIVE_PROMPT_BYTES
 # Trainable parameters introduced per rank by the current injection suffixes.
 # Optimizer admission budgets 16 bytes/parameter (weight, grad, Adam m/v).
 _LORA_PARAMS_PER_RANK = {
@@ -121,6 +130,8 @@ class Sam3PreflightDecision:
     free_disk_bytes: int
     artifact_free_disk_bytes: int
     publish_free_disk_bytes: Optional[int]
+    containment_soft_host_bytes: int
+    containment_hard_host_bytes: int
     refusals: tuple[str, ...]
     warnings: tuple[str, ...]
 
@@ -137,6 +148,8 @@ class Sam3PreflightDecision:
             "free_disk_bytes": self.free_disk_bytes,
             "artifact_free_disk_bytes": self.artifact_free_disk_bytes,
             "publish_free_disk_bytes": self.publish_free_disk_bytes,
+            "containment_soft_host_bytes": self.containment_soft_host_bytes,
+            "containment_hard_host_bytes": self.containment_hard_host_bytes,
             "refusals": list(self.refusals),
             "warnings": list(self.warnings),
         }
@@ -341,19 +354,27 @@ def _instance_count(dataset_dir: str) -> int:
     )
 
 
-def _has_resolved_negative_prompts(dataset_dir: str, params: Any) -> bool:
+def _resolved_negative_prompts(dataset_dir: str, params: Any) -> tuple[object, ...]:
     """Mirror dataloader manifest-first negative-prompt resolution safely."""
 
+    configured = getattr(params, "negative_prompts", None) or []
     if int(getattr(params, "num_negatives", 0)) <= 0:
-        return True
+        # These prompts are not queried, but they are still serialized into
+        # spec.json by the parent and therefore remain subject to metadata caps.
+        return (
+            tuple(configured)
+            if isinstance(configured, (list, tuple))
+            else (configured,)
+        )
     manifest_path = Path(dataset_dir).expanduser().resolve() / "build_manifest.json"
     if manifest_path.exists():
         manifest, _size = _load_coco(manifest_path)
         negatives = manifest.get("negative_prompts") or []
         if isinstance(negatives, list) and negatives:
-            return True
-    negatives = getattr(params, "negative_prompts", None) or []
-    return isinstance(negatives, (list, tuple)) and bool(negatives)
+            return tuple(negatives)
+        if negatives:
+            return (negatives,)
+    return tuple(configured) if isinstance(configured, (list, tuple)) else (configured,)
 
 
 def _free_disk_gb(path: str) -> float:
@@ -408,6 +429,10 @@ def _probe_cuda_device(device: str = "auto") -> Optional[CudaDeviceObservation]:
         selector = _visible_device_selector(device)
     except (ValueError, IndexError):
         return None
+    # MIG needs slice-aware memory telemetry and a parent-GPU lease strategy;
+    # accepting it as a full physical GPU would overstate capacity.
+    if selector.upper().startswith("MIG-"):
+        return None
     numeric_selector = selector.isdecimal()
     visible_tokens = [
         item.strip()
@@ -444,15 +469,19 @@ def _probe_cuda_device(device: str = "auto") -> Optional[CudaDeviceObservation]:
             return None
         candidate_rows = [valid_rows[physical_ordinal]]
     else:
-        candidate_rows = valid_rows
+        # CUDA permits a unique leading GPU UUID abbreviation. Resolve it to
+        # the full physical identity used by leases; ambiguity must fail closed.
+        candidate_rows = [
+            row for row in valid_rows if row[1].strip().startswith(selector)
+        ]
+        if len(candidate_rows) != 1:
+            return None
     for row in candidate_rows:
         if len(row) != 7:
             continue
         index, uuid, pci_bus_id, name, capability, total_mib, free_mib = (
             item.strip() for item in row
         )
-        if not numeric_selector and selector != uuid:
-            continue
         try:
             return CudaDeviceObservation(
                 index=int(index),
@@ -483,8 +512,35 @@ def _resource_policy(params: Any) -> ResourcePolicy:
     )
 
 
+def _utf8_size(value: str) -> int:
+    """Count UTF-8 bytes without allocating a second potentially large string."""
+
+    return sum(
+        1 + (codepoint >= 0x80) + (codepoint >= 0x800) + (codepoint >= 0x10000)
+        for codepoint in map(ord, value)
+    )
+
+
+def containment_host_limits(params: Any, host_peak_bytes: int) -> tuple[int, int]:
+    """Return the exact soft/hard host limits that admission must reserve."""
+
+    soft = max(1, math.ceil(host_peak_bytes * 1.10))
+    hard = max(
+        soft,
+        math.ceil(
+            host_peak_bytes
+            * float(getattr(params, "host_limit_headroom_fraction", 1.25))
+        ),
+    )
+    return soft, hard
+
+
 def build_resource_request(
-    spec: Any, dataset: Sam3DatasetProfile, *, params: Any | None = None
+    spec: Any,
+    dataset: Sam3DatasetProfile,
+    *,
+    params: Any | None = None,
+    negative_prompts: tuple[str, ...] = (),
 ) -> ResourceRequest:
     """Estimate phase peaks from streamed work limits and COCO metadata."""
 
@@ -533,7 +589,15 @@ def build_resource_request(
         )
         * 24
     )
-    metadata = dataset.metadata_bytes
+    requested_negatives = max(0, int(getattr(params, "num_negatives", 0)))
+    selected_negatives = min(
+        requested_negatives,
+        len(negative_prompts),
+        _MAX_NEGATIVE_QUERIES_PER_TILE,
+    )
+    prompt_pool_bytes = sum(_utf8_size(prompt) for prompt in negative_prompts)
+    descriptor_query_bytes = dataset.tile_count * (48 + 8 * selected_negatives)
+    metadata = dataset.metadata_bytes + prompt_pool_bytes + descriptor_query_bytes
 
     training_host_dynamic = (
         metadata
@@ -553,6 +617,7 @@ def build_resource_request(
     validation_device_peak = training_device_peak
     common_allocations = (
         ("descriptor metadata", metadata),
+        ("negative query descriptors", descriptor_query_bytes + prompt_pool_bytes),
         ("decoded tiles", decoded_tiles),
         ("transformed tile tensors", transformed_tiles),
         ("collated image tensors", collated_images),
@@ -685,13 +750,29 @@ def assess_preflight(
             "MissingParams", (), {"batch": 1, "num_negatives": 0, "rank": 1}
         )()
     dataset = dataset or _dataset_profile(spec.derived_dataset_dir)
-    request = build_resource_request(spec, dataset, params=params)
+    resolved_negative_prompts = _resolved_negative_prompts(
+        spec.derived_dataset_dir, params
+    )
+    valid_negative_prompts = tuple(
+        prompt
+        for prompt in resolved_negative_prompts
+        if isinstance(prompt, str) and bool(prompt.strip())
+    )
+    request = build_resource_request(
+        spec,
+        dataset,
+        params=params,
+        negative_prompts=valid_negative_prompts,
+    )
     if cuda_device is _UNSET:
         cuda_device = _probe_cuda_device(str(getattr(spec, "device", "auto")))
     assert cuda_device is None or isinstance(cuda_device, CudaDeviceObservation)
     observation = observation or _observe_resources(cuda_device)
     policy = _resource_policy(params)
     budget = evaluate_resource_request(request, observation, policy)
+    containment_soft_host_bytes, containment_hard_host_bytes = containment_host_limits(
+        params, budget.host_peak_bytes
+    )
     artifact_target = run_dir if run_dir is not None else spec.derived_dataset_dir
     artifact_free_disk = _free_disk_bytes(str(artifact_target))
     publish_phase = next(
@@ -706,6 +787,15 @@ def assess_preflight(
         publish_free_disk = _free_disk_bytes(str(publish_target))
     refusals = list(budget.refusals)
     warnings = list(budget.warnings)
+
+    if containment_hard_host_bytes > budget.usable_host_bytes:
+        refusals.append(
+            "SAM3's hard containment limit, including configured headroom, "
+            f"would be {containment_hard_host_bytes / GiB:.1f} GiB, but only "
+            f"{budget.usable_host_bytes / GiB:.1f} GiB is usable after the "
+            "host reserve. Reduce the workload or headroom; the reserve will "
+            "not be exposed to MemoryMax/RLIMIT_AS."
+        )
 
     if getattr(spec, "sam3_params", None) is None:
         refusals.append("SAM3 training requires a sam3_params configuration.")
@@ -763,10 +853,29 @@ def assess_preflight(
             "the child would fail during evaluation. Remove the absent split "
             "metadata or rebuild it with validation tiles."
         )
-    if not _has_resolved_negative_prompts(spec.derived_dataset_dir, params):
+    requested_negatives = int(getattr(params, "num_negatives", 0))
+    if requested_negatives < 0 or requested_negatives > _MAX_NEGATIVE_QUERIES_PER_TILE:
+        refusals.append(
+            "num_negatives must be between 0 and "
+            f"{_MAX_NEGATIVE_QUERIES_PER_TILE}; got {requested_negatives}."
+        )
+    if requested_negatives > 0 and not resolved_negative_prompts:
         refusals.append(
             "num_negatives requests negative queries, but no negative prompts "
             "resolve from build_manifest.json or sam3_params.negative_prompts."
+        )
+    if len(valid_negative_prompts) != len(resolved_negative_prompts):
+        refusals.append("Every resolved negative prompt must be a non-empty string.")
+    if len(valid_negative_prompts) > _MAX_NEGATIVE_PROMPT_COUNT:
+        refusals.append(
+            "Resolved negative prompts exceed the safe metadata cap of "
+            f"{_MAX_NEGATIVE_PROMPT_COUNT} entries."
+        )
+    negative_prompt_bytes = sum(_utf8_size(prompt) for prompt in valid_negative_prompts)
+    if negative_prompt_bytes > _MAX_NEGATIVE_PROMPT_BYTES:
+        refusals.append(
+            "Resolved negative prompt text exceeds the safe metadata cap of "
+            f"{_MAX_NEGATIVE_PROMPT_BYTES} UTF-8 bytes."
         )
     artifact_required = max(
         (
@@ -812,6 +921,8 @@ def assess_preflight(
         free_disk_bytes=artifact_free_disk,
         artifact_free_disk_bytes=artifact_free_disk,
         publish_free_disk_bytes=publish_free_disk,
+        containment_soft_host_bytes=containment_soft_host_bytes,
+        containment_hard_host_bytes=containment_hard_host_bytes,
         refusals=tuple(refusals),
         warnings=tuple(warnings),
     )

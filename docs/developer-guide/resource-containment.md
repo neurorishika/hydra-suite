@@ -160,3 +160,13 @@ For each high-memory operation:
 
 Never apply these limits to the GUI process. Partial artifacts must remain under
 temporary names until a successful child result has been validated.
+
+## SAM3 rollout boundary
+
+SAM3 training is admitted and executed inside the containment boundary above,
+but merged-checkpoint publishing is a separate Set 3 dependency. Until that set
+moves the merge/save/registry transaction into its own freshly admitted,
+leased, hard-capped sidecar, automatic SAM3 publishing still performs multi-GB
+CPU tensor work in the service process and is not production-safe. Do not
+declare the overall SAM3 workflow OOM-hardened, or ship the training integration
+by itself, before the protected atomic publisher lands.

@@ -178,6 +178,45 @@ def test_proportional_host_reserve_can_dominate_absolute_floor(tmp_path):
     assert decision.budget.reserved_host_bytes == 16 * pf.GiB
 
 
+def test_hard_limit_headroom_cannot_consume_reserved_host_memory(tmp_path):
+    _write_coco(tmp_path)
+    spec = _spec(
+        tmp_path,
+        host_reserve_gb=8.0,
+        host_reserve_fraction=0.0,
+        host_limit_headroom_fraction=1.25,
+    )
+    roomy = _decision(spec, host=_host(total_gib=128, available_gib=120))
+    raw_peak = roomy.budget.host_peak_bytes
+    observation = ResourceObservation(
+        total_host_bytes=128 * pf.GiB,
+        available_host_bytes=raw_peak + 8 * pf.GiB,
+        accelerator_kind=AcceleratorKind.CUDA,
+        accelerator_name="Test CUDA",
+        total_accelerator_bytes=48 * pf.GiB,
+        available_accelerator_bytes=48 * pf.GiB,
+    )
+
+    decision = _decision(spec, host=observation)
+
+    assert decision.budget.host_peak_bytes <= decision.budget.usable_host_bytes
+    assert decision.containment_hard_host_bytes > decision.budget.usable_host_bytes
+    assert not decision.admitted
+    assert any("hard containment limit" in reason for reason in decision.refusals)
+
+
+def test_admitted_hard_limit_plus_reserve_never_exceeds_available_host(tmp_path):
+    _write_coco(tmp_path)
+
+    decision = _decision(_spec(tmp_path))
+
+    assert decision.admitted
+    assert (
+        decision.containment_hard_host_bytes + decision.budget.reserved_host_bytes
+        <= decision.budget.available_host_bytes
+    )
+
+
 def test_crowded_tile_increases_dense_mask_peak(tmp_path):
     _write_coco(tmp_path, instances_per_tile=1)
     sparse = _decision(_spec(tmp_path))
@@ -346,10 +385,65 @@ def test_tile_count_does_not_scale_streamed_tensor_or_device_peak(tmp_path):
         one_tile.budget.accelerator_peak_bytes
         == many_tiles.budget.accelerator_peak_bytes
     )
-    assert (
-        many_tiles.budget.host_peak_bytes - one_tile.budget.host_peak_bytes
-        == many_tiles.dataset.metadata_bytes - one_tile.dataset.metadata_bytes
+    assert many_tiles.budget.host_peak_bytes > one_tile.budget.host_peak_bytes
+
+
+def test_negative_query_descriptor_memory_scales_with_tiles_and_query_count(tmp_path):
+    _write_coco(tmp_path, tiles=1000, instances_per_tile=1)
+    prompts = [f"background-{index}" for index in range(100)]
+
+    no_negatives = _decision(_spec(tmp_path, num_negatives=0, negative_prompts=prompts))
+    many_negatives = _decision(
+        _spec(tmp_path, num_negatives=100, negative_prompts=prompts)
     )
+    no_negative_training = next(
+        phase for phase in no_negatives.request.phases if phase.name == "training"
+    )
+    many_negative_training = next(
+        phase for phase in many_negatives.request.phases if phase.name == "training"
+    )
+
+    assert _allocation(
+        many_negative_training, "negative query descriptors"
+    ) > _allocation(no_negative_training, "negative query descriptors")
+    assert many_negatives.budget.host_peak_bytes > no_negatives.budget.host_peak_bytes
+
+
+@pytest.mark.parametrize("num_negatives", [-1, 101])
+def test_negative_query_count_outside_typed_limit_is_refused(tmp_path, num_negatives):
+    _write_coco(tmp_path)
+
+    decision = _decision(_spec(tmp_path, num_negatives=num_negatives))
+
+    assert not decision.admitted
+    assert any("num_negatives" in reason for reason in decision.refusals)
+
+
+def test_negative_prompt_pool_cardinality_and_bytes_are_bounded(tmp_path):
+    _write_coco(tmp_path)
+
+    too_many = _decision(
+        _spec(
+            tmp_path,
+            num_negatives=1,
+            negative_prompts=[
+                f"background-{index}"
+                for index in range(pf._MAX_NEGATIVE_PROMPT_COUNT + 1)
+            ],
+        )
+    )
+    too_large = _decision(
+        _spec(
+            tmp_path,
+            num_negatives=1,
+            negative_prompts=["x" * (pf._MAX_NEGATIVE_PROMPT_BYTES + 1)],
+        )
+    )
+
+    assert not too_many.admitted
+    assert any("entries" in reason for reason in too_many.refusals)
+    assert not too_large.admitted
+    assert any("UTF-8 bytes" in reason for reason in too_large.refusals)
 
 
 def test_absent_validation_and_disabled_publish_remove_inactive_phases(tmp_path):
@@ -594,6 +688,41 @@ def test_cuda_visible_remapping_resolves_the_selected_physical_uuid(monkeypatch)
     assert selected is not None
     assert selected.uuid == "GPU-aaaa"
     assert selected.index == 0
+
+
+def test_unique_cuda_uuid_prefix_resolves_but_ambiguous_prefix_refuses(monkeypatch):
+    probe = subprocess.CompletedProcess(
+        [],
+        0,
+        stdout=(
+            "0, GPU-abcd1111, 0000:01:00.0, First, 8.9, 49140, 48000\n"
+            "1, GPU-abcd2222, 0000:02:00.0, Second, 8.9, 49140, 47000\n"
+        ),
+        stderr="",
+    )
+    monkeypatch.setattr(pf.subprocess, "run", lambda *_args, **_kwargs: probe)
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "GPU-abcd1")
+
+    selected = pf._probe_cuda_device("cuda:0")
+
+    assert selected is not None
+    assert selected.uuid == "GPU-abcd1111"
+
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "GPU-abcd")
+    assert pf._probe_cuda_device("cuda:0") is None
+
+
+def test_mig_device_is_refused_until_slice_telemetry_and_leasing_are_supported(
+    monkeypatch,
+):
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "MIG-012345")
+    monkeypatch.setattr(
+        pf.subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("MIG must fail before GPU probing"),
+    )
+
+    assert pf._probe_cuda_device("cuda:0") is None
 
 
 def test_numeric_cuda_selection_uses_pci_bus_order(monkeypatch):

@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from hydra_suite.training.contracts import (
+    SAM3_MAX_NEGATIVE_PROMPT_COUNT,
+    SAM3_MAX_NEGATIVE_QUERIES_PER_TILE,
     AugmentationProfile,
     PublishPolicy,
     Sam3LoraParams,
@@ -610,6 +612,20 @@ class DetectTrainingPlan:
                 raise TrainingPlanError("sam3.batch must be positive")
             if self.sam3_params.grad_accum <= 0:
                 raise TrainingPlanError("sam3.grad_accum must be positive")
+            if not (
+                0
+                <= self.sam3_params.num_negatives
+                <= SAM3_MAX_NEGATIVE_QUERIES_PER_TILE
+            ):
+                raise TrainingPlanError(
+                    "sam3.num_negatives must be between 0 and "
+                    f"{SAM3_MAX_NEGATIVE_QUERIES_PER_TILE}"
+                )
+            if len(self.sam3_params.negative_prompts) > SAM3_MAX_NEGATIVE_PROMPT_COUNT:
+                raise TrainingPlanError(
+                    "sam3.negative_prompts exceeds the safe cap of "
+                    f"{SAM3_MAX_NEGATIVE_PROMPT_COUNT} entries"
+                )
             # Legacy plans may contain fp16/fp32. Preserve their ability to
             # load so users can inspect/edit them; execution preflight and the
             # sidecar runtime both refuse every mode except CUDA BF16.

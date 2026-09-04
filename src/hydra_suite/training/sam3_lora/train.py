@@ -9,7 +9,6 @@ the selected host boundary before conda, torch, or SAM3 can be imported.
 from __future__ import annotations
 
 import json
-import math
 import os
 import time
 from pathlib import Path
@@ -84,16 +83,10 @@ def _result(
     return payload
 
 
-def _memory_limits(spec: Any, host_peak_bytes: int) -> ProcessMemoryLimits:
-    params = spec.sam3_params
-    soft = max(1, math.ceil(host_peak_bytes * 1.10))
-    hard = max(
-        soft,
-        math.ceil(host_peak_bytes * float(params.host_limit_headroom_fraction)),
-    )
+def _memory_limits(decision: Any) -> ProcessMemoryLimits:
     return ProcessMemoryLimits(
-        soft_host_bytes=soft,
-        hard_host_bytes=hard,
+        soft_host_bytes=decision.containment_soft_host_bytes,
+        hard_host_bytes=decision.containment_hard_host_bytes,
         max_processes=MAX_PROCESSES,
     )
 
@@ -146,7 +139,8 @@ def train_sam3_lora(
     run_dir_path = Path(run_dir).expanduser().resolve()
 
     try:
-        models_root = get_models_root()
+        auto_import = bool(getattr(spec.publish_policy, "auto_import", True))
+        models_root = get_models_root() if auto_import else None
         initial = preflight_module.assess_preflight(
             spec,
             run_dir=run_dir_path,
@@ -193,7 +187,7 @@ def train_sam3_lora(
         # probed, and leased by UUID. Never let the runtime choose another GPU.
         "CUDA_VISIBLE_DEVICES": initial_cuda_device.uuid,
     }
-    limits = _memory_limits(spec, initial.budget.host_peak_bytes)
+    limits = _memory_limits(initial)
     launch = build_limited_launch(
         command,
         limits,

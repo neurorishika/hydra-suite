@@ -130,6 +130,11 @@ class CustomCNNParams:
     head_dropout: float = 0.1
 
 
+SAM3_MAX_NEGATIVE_QUERIES_PER_TILE = 100
+SAM3_MAX_NEGATIVE_PROMPT_COUNT = 4096
+SAM3_MAX_NEGATIVE_PROMPT_BYTES = 256 * 1024
+
+
 @dataclass(slots=True)
 class Sam3LoraParams:
     """SAM3 LoRA finetuning hyperparameters.

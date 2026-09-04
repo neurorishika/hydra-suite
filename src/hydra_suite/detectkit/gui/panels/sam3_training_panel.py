@@ -29,7 +29,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from hydra_suite.training.contracts import Sam3LoraParams
+from hydra_suite.training.contracts import (
+    SAM3_MAX_NEGATIVE_QUERIES_PER_TILE,
+    Sam3LoraParams,
+)
 from hydra_suite.training.sam3_lora.availability import (
     Sam3TrainingAvailability,
     probe_sam3_training_availability,
@@ -238,7 +241,7 @@ class Sam3TrainingPanel(QWidget):
         self.negative_prompts_edit.setMaximumHeight(60)
         prompt_form.addRow("Negative prompts", self.negative_prompts_edit)
         self.num_negatives_spin = QSpinBox()
-        self.num_negatives_spin.setRange(0, 100)
+        self.num_negatives_spin.setRange(0, SAM3_MAX_NEGATIVE_QUERIES_PER_TILE)
         prompt_form.addRow("Num negatives", self.num_negatives_spin)
         layout.addWidget(prompt_group)
 

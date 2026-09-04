@@ -56,6 +56,8 @@ class _Decision:
             host_peak_bytes=10 << 30,
             reserved_host_bytes=8 << 30,
         )
+        self.containment_soft_host_bytes = 11 << 30
+        self.containment_hard_host_bytes = 12 << 30
 
     def to_dict(self):
         return {
@@ -206,6 +208,21 @@ def test_publish_filesystem_probe_failure_is_structured_before_launch(
     assert result["failure_kind"] == "host-admission-refusal"
     assert "publish filesystem unavailable" in result["error_message"]
     assert not (tmp_path / "run").exists()
+
+
+def test_disabled_publish_does_not_probe_or_require_models_root(tmp_path, monkeypatch):
+    spec = _spec(tmp_path)
+    spec.publish_policy.auto_import = False
+    _install(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        tr,
+        "get_models_root",
+        lambda: pytest.fail("disabled publishing must not probe models_root"),
+    )
+
+    result = tr.train_sam3_lora(spec, str(tmp_path / "run"))
+
+    assert result["success"]
 
 
 def test_initial_and_live_preflight_probe_actual_output_filesystems(
@@ -404,6 +421,8 @@ def test_plan_uses_physical_cuda_and_one_immutable_limit_source(tmp_path, monkey
     assert (
         plan.watchdog_policy.soft_tree_rss_bytes == plan.launch.limits.soft_host_bytes
     )
+    assert plan.launch.limits.soft_host_bytes == 11 << 30
+    assert plan.launch.limits.hard_host_bytes == 12 << 30
     assert len(plan.expected_resource_keys) == 2
     assert plan.launch.environment["CUDA_VISIBLE_DEVICES"] == "GPU-physical-0"
 
