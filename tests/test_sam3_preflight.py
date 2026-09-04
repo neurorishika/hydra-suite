@@ -190,7 +190,8 @@ def test_hard_limit_headroom_cannot_consume_reserved_host_memory(tmp_path):
     raw_peak = roomy.budget.host_peak_bytes
     observation = ResourceObservation(
         total_host_bytes=128 * pf.GiB,
-        available_host_bytes=raw_peak + 8 * pf.GiB,
+        available_host_bytes=raw_peak
+        + int(128 * pf.GiB * pf._MINIMUM_HOST_RESERVE_FRACTION),
         accelerator_kind=AcceleratorKind.CUDA,
         accelerator_name="Test CUDA",
         total_accelerator_bytes=48 * pf.GiB,
@@ -211,6 +212,25 @@ def test_admitted_hard_limit_plus_reserve_never_exceeds_available_host(tmp_path)
     decision = _decision(_spec(tmp_path))
 
     assert decision.admitted
+    assert (
+        decision.containment_hard_host_bytes + decision.budget.reserved_host_bytes
+        <= decision.budget.available_host_bytes
+    )
+
+
+def test_zero_configured_reserve_cannot_disable_machine_survival_floor(tmp_path):
+    _write_coco(tmp_path)
+    spec = _spec(tmp_path, host_reserve_gb=0.0, host_reserve_fraction=0.0)
+
+    decision = _decision(spec, host=_host(total_gib=128, available_gib=120))
+
+    assert decision.admitted
+    assert decision.policy.reserve_host_bytes == pf._MINIMUM_HOST_RESERVE_BYTES
+    assert decision.policy.reserve_host_fraction == pf._MINIMUM_HOST_RESERVE_FRACTION
+    assert decision.budget.reserved_host_bytes >= pf._MINIMUM_HOST_RESERVE_BYTES
+    assert decision.budget.reserved_host_bytes >= int(
+        128 * pf.GiB * pf._MINIMUM_HOST_RESERVE_FRACTION
+    )
     assert (
         decision.containment_hard_host_bytes + decision.budget.reserved_host_bytes
         <= decision.budget.available_host_bytes
@@ -446,6 +466,33 @@ def test_negative_prompt_pool_cardinality_and_bytes_are_bounded(tmp_path):
     assert any("UTF-8 bytes" in reason for reason in too_large.refusals)
 
 
+def test_configured_prompt_bytes_are_capped_even_when_manifest_takes_precedence(
+    tmp_path,
+):
+    _write_coco(tmp_path)
+    manifest = tmp_path / "dataset" / "build_manifest.json"
+    manifest.write_text(json.dumps({"negative_prompts": ["small"]}), encoding="utf-8")
+    spec = _spec(
+        tmp_path,
+        num_negatives=1,
+        negative_prompts=["x" * pf.SAM3_MAX_CONFIGURED_PROMPT_BYTES],
+    )
+
+    decision = _decision(spec)
+
+    assert not decision.admitted
+    assert any("configured prompt" in reason.lower() for reason in decision.refusals)
+
+
+def test_non_utf8_encodable_prompt_is_refused(tmp_path):
+    _write_coco(tmp_path)
+
+    decision = _decision(_spec(tmp_path, prompt="\ud800"))
+
+    assert not decision.admitted
+    assert any("prompt" in reason.lower() for reason in decision.refusals)
+
+
 def test_absent_validation_and_disabled_publish_remove_inactive_phases(tmp_path):
     _write_coco(tmp_path)
     spec = _spec(tmp_path)
@@ -676,8 +723,8 @@ def test_cuda_visible_remapping_resolves_the_selected_physical_uuid(monkeypatch)
         [],
         0,
         stdout=(
-            "0, GPU-aaaa, 0000:01:00.0, First, 8.9, 49140, 48000\n"
-            "1, GPU-bbbb, 0000:02:00.0, Second, 8.9, 49140, 47000\n"
+            "0, GPU-aaaa, 0000:01:00.0, First, 8.9, 49140, 48000, Disabled\n"
+            "1, GPU-bbbb, 0000:02:00.0, Second, 8.9, 49140, 47000, Disabled\n"
         ),
         stderr="",
     )
@@ -695,8 +742,8 @@ def test_unique_cuda_uuid_prefix_resolves_but_ambiguous_prefix_refuses(monkeypat
         [],
         0,
         stdout=(
-            "0, GPU-abcd1111, 0000:01:00.0, First, 8.9, 49140, 48000\n"
-            "1, GPU-abcd2222, 0000:02:00.0, Second, 8.9, 49140, 47000\n"
+            "0, GPU-abcd1111, 0000:01:00.0, First, 8.9, 49140, 48000, Disabled\n"
+            "1, GPU-abcd2222, 0000:02:00.0, Second, 8.9, 49140, 47000, Disabled\n"
         ),
         stderr="",
     )
@@ -733,8 +780,8 @@ def test_numeric_cuda_selection_uses_pci_bus_order(monkeypatch):
         [],
         0,
         stdout=(
-            "0, GPU-later, 0000:02:00.0, Later, 8.9, 49140, 48000\n"
-            "1, GPU-first, 0000:01:00.0, First, 8.9, 49140, 47000\n"
+            "0, GPU-later, 0000:02:00.0, Later, 8.9, 49140, 48000, Disabled\n"
+            "1, GPU-first, 0000:01:00.0, First, 8.9, 49140, 47000, Disabled\n"
         ),
         stderr="",
     )
@@ -755,12 +802,14 @@ def test_numeric_cuda_selection_uses_pci_bus_order(monkeypatch):
 
 def test_numeric_visible_device_token_maps_to_physical_nvidia_index(monkeypatch):
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "2,0")
+    monkeypatch.setenv("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
     probe = subprocess.CompletedProcess(
         [],
         0,
         stdout=(
-            "0, GPU-zero, 0000:01:00.0, Zero, 8.9, 49140, 48000\n"
-            "2, GPU-two, 0000:03:00.0, Two, 8.9, 49140, 47000\n"
+            "0, GPU-zero, 0000:01:00.0, Zero, 8.9, 49140, 48000, Disabled\n"
+            "1, GPU-one, 0000:02:00.0, One, 8.9, 49140, 46000, Disabled\n"
+            "2, GPU-two, 0000:03:00.0, Two, 8.9, 49140, 47000, Disabled\n"
         ),
         stderr="",
     )
@@ -771,6 +820,38 @@ def test_numeric_visible_device_token_maps_to_physical_nvidia_index(monkeypatch)
     assert selected is not None
     assert selected.uuid == "GPU-two"
     assert selected.index == 2
+
+
+def test_numeric_visible_device_without_explicit_pci_order_fails_closed(monkeypatch):
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "2,0")
+    monkeypatch.delenv("CUDA_DEVICE_ORDER", raising=False)
+    probe = subprocess.CompletedProcess(
+        [],
+        0,
+        stdout=(
+            "0, GPU-zero, 0000:01:00.0, Zero, 8.9, 49140, 48000, Disabled\n"
+            "2, GPU-two, 0000:03:00.0, Two, 8.9, 49140, 47000, Disabled\n"
+        ),
+        stderr="",
+    )
+    monkeypatch.setattr(pf.subprocess, "run", lambda *_args, **_kwargs: probe)
+
+    assert pf._probe_cuda_device("cuda:0") is None
+
+
+def test_numeric_or_parent_uuid_selection_refuses_mig_enabled_gpu(monkeypatch):
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    probe = subprocess.CompletedProcess(
+        [],
+        0,
+        stdout=("0, GPU-parent, 0000:01:00.0, Parent, 8.9, 49140, 48000, Enabled\n"),
+        stderr="",
+    )
+    monkeypatch.setattr(pf.subprocess, "run", lambda *_args, **_kwargs: probe)
+
+    assert pf._probe_cuda_device("cuda:0") is None
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "GPU-parent")
+    assert pf._probe_cuda_device("cuda:0") is None
 
 
 def test_prompt_instances_disk_ack_and_resume_refusals_are_preserved(

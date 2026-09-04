@@ -30,6 +30,7 @@ from hydra_suite.runtime.resource_budget import (
     probe_resources,
 )
 from hydra_suite.training.contracts import (
+    SAM3_MAX_CONFIGURED_PROMPT_BYTES,
     SAM3_MAX_NEGATIVE_PROMPT_BYTES,
     SAM3_MAX_NEGATIVE_PROMPT_COUNT,
     SAM3_MAX_NEGATIVE_QUERIES_PER_TILE,
@@ -37,6 +38,9 @@ from hydra_suite.training.contracts import (
 from hydra_suite.utils.sam3_constants import PREDICTOR_IMGSZ
 
 from .polygons import validated_segmentation_polygons
+from .sizing import LORA_PARAMS_PER_RANK as _LORA_PARAMS_PER_RANK
+from .sizing import MAX_LORA_RANK as _MAX_LORA_RANK
+from .sizing import MAX_LORA_TRAINABLE_PARAMS as _MAX_LORA_TRAINABLE_PARAMS
 
 GiB = 1024**3
 MiB = 1024**2
@@ -61,23 +65,14 @@ _MAX_ESTIMATED_PARSED_BYTES = 96 * MiB
 _MAX_NEGATIVE_QUERIES_PER_TILE = SAM3_MAX_NEGATIVE_QUERIES_PER_TILE
 _MAX_NEGATIVE_PROMPT_COUNT = SAM3_MAX_NEGATIVE_PROMPT_COUNT
 _MAX_NEGATIVE_PROMPT_BYTES = SAM3_MAX_NEGATIVE_PROMPT_BYTES
-# Trainable parameters introduced per rank by the current injection suffixes.
 # Optimizer admission budgets 16 bytes/parameter (weight, grad, Adam m/v).
-_LORA_PARAMS_PER_RANK = {
-    "adapt_vision_encoder": 565_248,
-    "adapt_text_encoder": 245_760,
-    "adapt_geometry_encoder": 13_824,
-    "adapt_detr_encoder": 27_648,
-    "adapt_detr_decoder": 27_648,
-    "adapt_mask_decoder": 0,
-}
-_MAX_LORA_RANK = 256
-_MAX_LORA_TRAINABLE_PARAMS = 128_000_000
 _LORA_CPU_TRAINING_BYTES_PER_PARAM = 16
 _LORA_RELOAD_BYTES_PER_PARAM = 4
 _LORA_SERIALIZATION_BYTES_PER_PARAM = 8
 _DEFAULT_HOST_RESERVE_GB = 8.0
 _DEFAULT_HOST_RESERVE_FRACTION = 0.15
+_MINIMUM_HOST_RESERVE_BYTES = int(_DEFAULT_HOST_RESERVE_GB * GiB)
+_MINIMUM_HOST_RESERVE_FRACTION = _DEFAULT_HOST_RESERVE_FRACTION
 _DEFAULT_CUDA_SAFETY_FRACTION = 0.85
 _PROBE_TIMEOUT_SECONDS = 5.0
 _UNSET = object()
@@ -94,6 +89,7 @@ class CudaDeviceObservation:
     compute_capability: tuple[int, int]
     free_bytes: int
     total_bytes: int
+    mig_mode: str = "Disabled"
 
 
 @dataclass(frozen=True)
@@ -442,7 +438,7 @@ def _probe_cuda_device(device: str = "auto") -> Optional[CudaDeviceObservation]:
 
     command = [
         "nvidia-smi",
-        "--query-gpu=index,uuid,pci.bus_id,name,compute_cap,memory.total,memory.free",
+        "--query-gpu=index,uuid,pci.bus_id,name,compute_cap,memory.total,memory.free,mig.mode.current",
         "--format=csv,noheader,nounits",
     ]
     try:
@@ -459,9 +455,15 @@ def _probe_cuda_device(device: str = "auto") -> Optional[CudaDeviceObservation]:
     if completed.returncode != 0:
         return None
     rows = list(csv.reader(completed.stdout.splitlines(), skipinitialspace=True))
-    valid_rows = [row for row in rows if len(row) == 7]
+    valid_rows = [row for row in rows if len(row) == 8]
     if numeric_selector and visible_tokens:
-        candidate_rows = [row for row in valid_rows if row[0].strip() == selector]
+        if os.environ.get("CUDA_DEVICE_ORDER", "").upper() != "PCI_BUS_ID":
+            return None
+        physical_ordinal = int(selector)
+        valid_rows.sort(key=lambda row: row[2].strip().upper())
+        if physical_ordinal >= len(valid_rows):
+            return None
+        candidate_rows = [valid_rows[physical_ordinal]]
     elif numeric_selector:
         physical_ordinal = int(selector)
         valid_rows.sort(key=lambda row: row[2].strip().upper())
@@ -477,11 +479,13 @@ def _probe_cuda_device(device: str = "auto") -> Optional[CudaDeviceObservation]:
         if len(candidate_rows) != 1:
             return None
     for row in candidate_rows:
-        if len(row) != 7:
+        if len(row) != 8:
             continue
-        index, uuid, pci_bus_id, name, capability, total_mib, free_mib = (
+        index, uuid, pci_bus_id, name, capability, total_mib, free_mib, mig_mode = (
             item.strip() for item in row
         )
+        if mig_mode.lower() not in {"disabled", "n/a", "[n/a]", "not supported"}:
+            return None
         try:
             return CudaDeviceObservation(
                 index=int(index),
@@ -491,6 +495,7 @@ def _probe_cuda_device(device: str = "auto") -> Optional[CudaDeviceObservation]:
                 compute_capability=_parse_compute_capability(capability),
                 free_bytes=int(float(free_mib) * MiB),
                 total_bytes=int(float(total_mib) * MiB),
+                mig_mode=mig_mode,
             )
         except ValueError:
             return None
@@ -499,11 +504,22 @@ def _probe_cuda_device(device: str = "auto") -> Optional[CudaDeviceObservation]:
 
 def _resource_policy(params: Any) -> ResourcePolicy:
     return ResourcePolicy(
-        reserve_host_bytes=int(
-            float(getattr(params, "host_reserve_gb", _DEFAULT_HOST_RESERVE_GB)) * GiB
+        reserve_host_bytes=max(
+            _MINIMUM_HOST_RESERVE_BYTES,
+            int(
+                float(getattr(params, "host_reserve_gb", _DEFAULT_HOST_RESERVE_GB))
+                * GiB
+            ),
         ),
-        reserve_host_fraction=float(
-            getattr(params, "host_reserve_fraction", _DEFAULT_HOST_RESERVE_FRACTION)
+        reserve_host_fraction=max(
+            _MINIMUM_HOST_RESERVE_FRACTION,
+            float(
+                getattr(
+                    params,
+                    "host_reserve_fraction",
+                    _DEFAULT_HOST_RESERVE_FRACTION,
+                )
+            ),
         ),
         accelerator_safety_fraction=float(
             getattr(params, "cuda_safety_fraction", _DEFAULT_CUDA_SAFETY_FRACTION)
@@ -515,10 +531,15 @@ def _resource_policy(params: Any) -> ResourcePolicy:
 def _utf8_size(value: str) -> int:
     """Count UTF-8 bytes without allocating a second potentially large string."""
 
-    return sum(
-        1 + (codepoint >= 0x80) + (codepoint >= 0x800) + (codepoint >= 0x10000)
-        for codepoint in map(ord, value)
-    )
+    total = 0
+    for codepoint in map(ord, value):
+        if 0xD800 <= codepoint <= 0xDFFF:
+            # JSON may materialize lone surrogate escapes that cannot be
+            # serialized or tokenized as UTF-8. Count them over the cap so
+            # admission fails closed with the normal prompt diagnostic.
+            return SAM3_MAX_CONFIGURED_PROMPT_BYTES + 1
+        total += 1 + (codepoint >= 0x80) + (codepoint >= 0x800) + (codepoint >= 0x10000)
+    return total
 
 
 def containment_host_limits(params: Any, host_peak_bytes: int) -> tuple[int, int]:
@@ -596,8 +617,21 @@ def build_resource_request(
         _MAX_NEGATIVE_QUERIES_PER_TILE,
     )
     prompt_pool_bytes = sum(_utf8_size(prompt) for prompt in negative_prompts)
+    configured_prompt_bytes = _utf8_size(str(getattr(params, "prompt", "") or ""))
+    configured_negatives = getattr(params, "negative_prompts", ()) or ()
+    if isinstance(configured_negatives, (list, tuple)):
+        configured_prompt_bytes += sum(
+            _utf8_size(prompt)
+            for prompt in configured_negatives
+            if isinstance(prompt, str)
+        )
     descriptor_query_bytes = dataset.tile_count * (48 + 8 * selected_negatives)
-    metadata = dataset.metadata_bytes + prompt_pool_bytes + descriptor_query_bytes
+    metadata = (
+        dataset.metadata_bytes
+        + configured_prompt_bytes
+        + prompt_pool_bytes
+        + descriptor_query_bytes
+    )
 
     training_host_dynamic = (
         metadata
@@ -617,6 +651,7 @@ def build_resource_request(
     validation_device_peak = training_device_peak
     common_allocations = (
         ("descriptor metadata", metadata),
+        ("configured prompt serialization", configured_prompt_bytes),
         ("negative query descriptors", descriptor_query_bytes + prompt_pool_bytes),
         ("decoded tiles", decoded_tiles),
         ("transformed tile tensors", transformed_tiles),
@@ -841,6 +876,19 @@ def assess_preflight(
     if not prompt.strip():
         refusals.append(
             "Prompt is empty; SAM3 requires a text prompt to train against."
+        )
+    configured_negatives = getattr(params, "negative_prompts", ()) or ()
+    configured_prompt_bytes = _utf8_size(prompt)
+    if isinstance(configured_negatives, (list, tuple)):
+        configured_prompt_bytes += sum(
+            _utf8_size(value)
+            for value in configured_negatives
+            if isinstance(value, str)
+        )
+    if configured_prompt_bytes > SAM3_MAX_CONFIGURED_PROMPT_BYTES:
+        refusals.append(
+            "Configured prompt text exceeds the safe serialized metadata cap of "
+            f"{SAM3_MAX_CONFIGURED_PROMPT_BYTES} UTF-8 bytes."
         )
     if dataset.train_instances < MIN_TRAIN_INSTANCES:
         refusals.append(

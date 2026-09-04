@@ -56,6 +56,7 @@ from .dataloader import (
 from .lora import adapter_state_dict, inject_adapters, lora_config_from_params
 from .perflib_compat import install_grad_safe_addmm_act
 from .protocol import emit_log, emit_progress
+from .sizing import expected_lora_trainable_params
 
 
 class _SidecarSpec:
@@ -292,6 +293,41 @@ def _runtime_admission_refusal(torch_module: Any, params: Any) -> str | None:
     return None
 
 
+def _validated_lora_trainables(
+    model: Any, *, adapted_modules: int, expected_parameters: int
+) -> tuple[list[Any], int]:
+    """Return LoRA-only tensors or refuse estimator/runtime shape drift."""
+
+    trainable_named = [
+        (name, parameter)
+        for name, parameter in model.named_parameters()
+        if parameter.requires_grad
+    ]
+    unexpected_trainable = [
+        name
+        for name, _parameter in trainable_named
+        if not name.endswith((".lora_A", ".lora_B"))
+    ]
+    actual_parameters = sum(
+        int(parameter.numel()) for _name, parameter in trainable_named
+    )
+    if (
+        adapted_modules < 1
+        or len(trainable_named) != 2 * adapted_modules
+        or unexpected_trainable
+        or actual_parameters != expected_parameters
+    ):
+        unexpected = ", ".join(unexpected_trainable[:5]) or "none"
+        raise RuntimeError(
+            "SAM3 LoRA trainable-parameter invariant failed: "
+            f"adapters={adapted_modules}, trainable={len(trainable_named)}, "
+            f"parameters={actual_parameters}, "
+            f"expected_parameters={expected_parameters}, "
+            f"unexpected={unexpected}"
+        )
+    return [parameter for _name, parameter in trainable_named], actual_parameters
+
+
 def run_training(spec: Any, run_dir_path: Path) -> bool:
     """Run the SAM3 LoRA training loop and write `adapters.pt`.
 
@@ -337,17 +373,27 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
     model = build_sam3_image_model(eval_mode=False)
 
     lora_cfg = lora_config_from_params(params)
+    # The preflight estimate intentionally budgets optimizer and gradient
+    # state for LoRA parameters only.  SAM3 builders do not promise frozen
+    # defaults, so establish that invariant here before adapters are created.
+    model.requires_grad_(False)
     n_adapted = inject_adapters(model, lora_cfg)
     emit_log(f"Injected LoRA adapters into {n_adapted} Linear modules.")
-    # `.to(device)` AFTER injection, not before: `inject_adapters` creates
-    # fresh lora_A/lora_B Parameters on whatever device the module it wraps
-    # was built on, and it does not inherit an earlier `.to()`. Moving the
-    # model first left every adapter on CPU while the frozen base sat on
-    # CUDA, so the first forward died with "Expected all tensors to be on
-    # the same device ... mat2 is on cpu".
+    expected_trainable_params = expected_lora_trainable_params(params)
+    trainable_params, actual_trainable_params = _validated_lora_trainables(
+        model,
+        adapted_modules=n_adapted,
+        expected_parameters=expected_trainable_params,
+    )
+    # Validate exact estimator parity before moving any unexpectedly large
+    # upstream model drift onto VRAM. `.to(device)` remains after injection so
+    # the newly created adapter tensors move with the frozen base.
     model.to(device)
-
-    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    emit_log(
+        "Verified LoRA-only optimizer scope: "
+        f"{actual_trainable_params:,} parameters in {len(trainable_params)} "
+        f"tensors across {n_adapted} adapters."
+    )
 
     # Verified against the real Meta sam3 source on the CUDA box (2026-08-31,
     # sam3-lora env): `inspect.signature` on `Sam3LossWrapper.__init__`,

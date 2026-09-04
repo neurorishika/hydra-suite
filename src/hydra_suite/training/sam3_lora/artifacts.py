@@ -69,11 +69,18 @@ def validate_completion(artifact_path: Path) -> str | None:
     return None
 
 
-def remove_artifact(artifact_path: Path) -> None:
-    """Remove both a final artifact and its completion marker."""
+def remove_artifact(artifact_path: Path, *, remove_staging: bool = False) -> None:
+    """Remove final output and, only when proven safe, private staging files."""
 
     artifact_path.unlink(missing_ok=True)
-    completion_path(artifact_path).unlink(missing_ok=True)
+    marker = completion_path(artifact_path)
+    marker.unlink(missing_ok=True)
+    if not remove_staging:
+        return
+    for staged in artifact_path.parent.glob(f".{artifact_path.name}.*.validated.tmp"):
+        staged.unlink(missing_ok=True)
+    for staged_marker in marker.parent.glob(f".{marker.name}.*.tmp"):
+        staged_marker.unlink(missing_ok=True)
 
 
 def _fsync_directory(directory: Path) -> None:

@@ -211,7 +211,6 @@ def train_sam3_lora(
     def final_live_check() -> None:
         live = preflight_module.assess_preflight(
             spec,
-            dataset=initial.dataset,
             run_dir=run_dir_path,
             models_root=models_root,
         )
@@ -241,7 +240,10 @@ def train_sam3_lora(
             output_max_lines=OUTPUT_MAX_LINES,
             output_max_chars=OUTPUT_MAX_CHARS,
         )
-    except WorkloadStillOwnedError:
+    except WorkloadStillOwnedError as owned_error:
+        owned_error.recovery_cleanup = lambda: remove_artifact(
+            artifact_path, remove_staging=True
+        )
         raise
     except (
         ResourceBusyError,
@@ -281,7 +283,7 @@ def train_sam3_lora(
                 break
             if should_cancel():
                 sidecar.cancel(plan.terminate_grace_seconds)
-                remove_artifact(artifact_path)
+                remove_artifact(artifact_path, remove_staging=True)
                 return _result(
                     success=False,
                     canceled=True,
@@ -306,7 +308,7 @@ def train_sam3_lora(
 
         supervised = sidecar.wait(post_exit_check=validate_artifact)
     except _ArtifactInvalid as exc:
-        remove_artifact(artifact_path)
+        remove_artifact(artifact_path, remove_staging=True)
         return _result(
             success=False,
             message=str(exc),
@@ -316,19 +318,27 @@ def train_sam3_lora(
             resource_preflight=str(diagnostics_path),
             containment=_containment_diagnostic(plan),
         )
+    except WorkloadStillOwnedError as owned_error:
+        owned_error.recovery_cleanup = lambda: remove_artifact(
+            artifact_path, remove_staging=True
+        )
+        raise
     except BaseException:
         try:
             sidecar.cancel(plan.terminate_grace_seconds)
-        except WorkloadStillOwnedError:
+        except WorkloadStillOwnedError as owned_error:
+            owned_error.recovery_cleanup = lambda: remove_artifact(
+                artifact_path, remove_staging=True
+            )
             raise
-        remove_artifact(artifact_path)
+        remove_artifact(artifact_path, remove_staging=True)
         raise
 
     diagnostic["containment"] = _containment_diagnostic(plan, supervised)
     _write_json(diagnostics_path, diagnostic)
     classified = supervised.classified_exit
     if classified.kind is not ExitKind.SUCCESS:
-        remove_artifact(artifact_path)
+        remove_artifact(artifact_path, remove_staging=True)
         tail = "".join(supervised.output_tail).strip() or "(no output)"
         return _result(
             success=False,

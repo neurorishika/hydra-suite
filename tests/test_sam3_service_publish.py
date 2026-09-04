@@ -167,6 +167,34 @@ def test_owned_workload_error_is_reraised_with_recovery_handle(monkeypatch, tmp_
     assert record["containment"]["ownership"] == "retained"
 
 
+def test_registry_failure_never_replaces_owned_workload_error(monkeypatch, tmp_path):
+    import hydra_suite.training.registry as registry
+    from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
+
+    monkeypatch.setattr(registry, "_project_root", lambda: tmp_path)
+    recovery_handle = object()
+    owned_error = WorkloadStillOwnedError("ownership retained", recovery_handle)
+    monkeypatch.setattr(
+        svc,
+        "run_training",
+        lambda *args, **kwargs: (_ for _ in ()).throw(owned_error),
+    )
+    monkeypatch.setattr(
+        svc,
+        "update_run_record",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("registry offline")),
+    )
+
+    with pytest.raises(WorkloadStillOwnedError) as raised:
+        svc.TrainingOrchestrator(tmp_path / "workspace").run_role_training(
+            _registered_spec(tmp_path)
+        )
+
+    assert raised.value is owned_error
+    assert raised.value.sidecar is recovery_handle
+    assert raised.value.registry_update_error == "registry offline"
+
+
 def test_auto_publish_exception_finalizes_registry_with_training_diagnostics(
     monkeypatch, tmp_path
 ):

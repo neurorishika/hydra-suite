@@ -1554,6 +1554,71 @@ def test_constructor_failure_after_popen_kills_reaps_and_releases_lease(
         pass
 
 
+def test_partial_constructor_owner_can_retry_cleanup_after_guardian_start_failure(
+    tmp_path, monkeypatch
+):
+    launch = build_limited_launch(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        ProcessMemoryLimits(soft_host_bytes=1024**3, hard_host_bytes=2 * 1024**3),
+        backend=LimitBackend.WATCHDOG_ONLY,
+        environment=_child_env(),
+    )
+    leases = _cpu_lease_set(tmp_path)
+    resource_key = leases.resource_keys[0]
+    lease_dir = leases.leases[0].path.parent
+    plan = ContainmentPlan(
+        launch=launch,
+        job_name="supervised",
+        minimum_system_available_bytes=0,
+        poll_interval_seconds=0.01,
+    )
+    cleanup_attempts = 0
+
+    def fail_guardian_start(*_args, **_kwargs):
+        raise RuntimeError("guardian failed to start")
+
+    def cleanup_is_initially_uncertain(self, process):
+        nonlocal cleanup_attempts
+        cleanup_attempts += 1
+        process.kill()
+        process.wait(timeout=2)
+        raise WorkloadStillOwnedError("initial cleanup proof failed", self)
+
+    def retry_proves_quiescence(self, _grace_seconds):
+        assert self.process is not None and self.process.poll() is not None
+        return True
+
+    monkeypatch.setattr(supervisor_module, "spawn_parent_guardian", fail_guardian_start)
+    monkeypatch.setattr(
+        SupervisedSidecar,
+        "_kill_and_reap_after_setup_failure",
+        cleanup_is_initially_uncertain,
+    )
+    monkeypatch.setattr(
+        SupervisedSidecar, "_terminate_and_reap", retry_proves_quiescence
+    )
+
+    with pytest.raises(WorkloadStillOwnedError) as raised:
+        SupervisedSidecar(plan)
+
+    owner = raised.value.sidecar
+    assert cleanup_attempts == 1
+    assert owner.process is not None and owner.process.poll() is not None
+    assert owner.watchdog is None
+    assert owner._reader is None
+    assert owner._parent_liveness_write_fd is not None
+    assert owner._guardian_ack_read_fd is not None
+    with pytest.raises(ResourceBusyError):
+        HeavyJobLease(resource_key, "competitor", lease_dir).acquire()
+
+    owner.cancel(grace_seconds=0)
+
+    assert owner._parent_liveness_write_fd is None
+    assert owner._guardian_ack_read_fd is None
+    with HeavyJobLease(resource_key, "after recovery", lease_dir):
+        pass
+
+
 def test_supervisor_process_death_does_not_orphan_watchdog_only_child(tmp_path):
     _require_process_table_scan()
     helper_script = """

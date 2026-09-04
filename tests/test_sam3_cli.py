@@ -18,7 +18,7 @@ import pytest
 
 from hydra_suite.training.contracts import Sam3LoraParams
 from hydra_suite.training.sam3_lora import cli
-from hydra_suite.training.sam3_lora.artifacts import completion_path
+from hydra_suite.training.sam3_lora.artifacts import completion_path, remove_artifact
 
 
 def _write_spec(tmp_path, prompt="ant"):
@@ -186,6 +186,22 @@ def test_atomic_adapter_writer_rejects_incomplete_schema(tmp_path, payload):
         cli._write_validated_adapter_artifact(payload, tmp_path / "adapters.pt", torch)
 
 
+def test_parent_cleanup_removes_only_exact_private_artifact_staging(tmp_path):
+    artifact = tmp_path / "adapters.pt"
+    staging = tmp_path / ".adapters.pt.123.validated.tmp"
+    marker_staging = tmp_path / ".adapters.pt.complete.json.123.tmp"
+    unrelated = tmp_path / ".other.pt.123.validated.tmp"
+    for path in (artifact, staging, marker_staging, unrelated):
+        path.write_bytes(b"partial")
+
+    remove_artifact(artifact, remove_staging=True)
+
+    assert not artifact.exists()
+    assert not staging.exists()
+    assert not marker_staging.exists()
+    assert unrelated.exists()
+
+
 def test_collated_batch_moves_to_device_before_target_conversion_and_forward():
     cpu_input = SimpleNamespace(find_targets=["cpu-target-a", "cpu-target-b"])
     gpu_input = SimpleNamespace(find_targets=["gpu-target-a", "gpu-target-b"])
@@ -282,9 +298,35 @@ def test_adapters_are_injected_before_the_model_moves_to_device():
     from hydra_suite.training.sam3_lora import cli
 
     source = inspect.getsource(cli.run_training)
+    freeze_at = source.index("model.requires_grad_(False)")
     inject_at = source.index("inject_adapters(model")
     move_at = source.index("model.to(device)")
+    assert (
+        freeze_at < inject_at
+    ), "the complete SAM3 base must be frozen before LoRA adapters are injected"
     assert inject_at < move_at, (
         "model.to(device) runs before inject_adapters; the adapters would be "
         "created on CPU and never moved"
     )
+    assert "_validated_lora_trainables" in source
+
+
+def test_lora_trainable_validation_rejects_estimator_shape_drift():
+    torch = pytest.importorskip("torch")
+
+    class Adapter(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.lora_A = torch.nn.Parameter(torch.zeros(2, 3))
+            self.lora_B = torch.nn.Parameter(torch.zeros(4, 2))
+
+    model = torch.nn.Module()
+    model.adapter = Adapter()
+    tensors, count = cli._validated_lora_trainables(
+        model, adapted_modules=1, expected_parameters=14
+    )
+    assert len(tensors) == 2
+    assert count == 14
+
+    with pytest.raises(RuntimeError, match="expected_parameters=13"):
+        cli._validated_lora_trainables(model, adapted_modules=1, expected_parameters=13)

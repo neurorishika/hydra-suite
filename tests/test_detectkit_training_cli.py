@@ -185,6 +185,48 @@ def test_plan_rejects_negative_query_counts_outside_ui_bound(tmp_path):
         load_training_plan(path)
 
 
+def test_plan_read_and_json_materialization_are_bounded(tmp_path):
+    from hydra_suite.detectkit.config import training as config
+
+    oversized = tmp_path / "oversized.json"
+    oversized.write_bytes(b" " * (config._MAX_TRAINING_PLAN_BYTES + 1))
+    with pytest.raises(config.TrainingPlanError, match="safe input cap"):
+        config.load_training_plan(oversized)
+
+    invalid_utf8 = tmp_path / "invalid-utf8.json"
+    invalid_utf8.write_bytes(b'{"version": 1, "bad": "\xff"}')
+    with pytest.raises(config.TrainingPlanError, match="Invalid JSON"):
+        config.load_training_plan(invalid_utf8)
+
+    too_deep = tmp_path / "too-deep.json"
+    too_deep.write_text("[" * 2_000 + "0" + "]" * 2_000, encoding="utf-8")
+    with pytest.raises(config.TrainingPlanError, match="Invalid JSON"):
+        config.load_training_plan(too_deep)
+
+
+def test_plan_rejects_oversized_or_non_utf8_sam3_prompt_text(tmp_path):
+    from hydra_suite.detectkit.config import training as config
+    from hydra_suite.training.contracts import SAM3_MAX_CONFIGURED_PROMPT_BYTES
+
+    payload = _plan_payload(tmp_path)
+    payload["roles"] = [{"role": "semantic_sam3", "imgsz": 1008}]
+    payload["sam3"] = {
+        "prompt": "ant",
+        "negative_prompts": ["x" * SAM3_MAX_CONFIGURED_PROMPT_BYTES],
+        "label_quality_acknowledged": True,
+    }
+    path = tmp_path / "large-prompt.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(config.TrainingPlanError, match="serialized text cap"):
+        config.load_training_plan(path)
+
+    payload["sam3"]["negative_prompts"] = []
+    payload["sam3"]["prompt"] = "\ud800"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(config.TrainingPlanError, match="valid UTF-8"):
+        config.load_training_plan(path)
+
+
 def test_headless_plan_defaults_to_no_server_local_publish(tmp_path):
     from hydra_suite.detectkit.config.training import DetectTrainingPlan
 
@@ -329,6 +371,51 @@ def test_cli_dry_run_is_qt_free_and_does_not_create_workspace(tmp_path, monkeypa
 
     assert cli.main(["--config", str(config_path), "--dry-run"]) == 0
     assert not (tmp_path / "must-not-exist").exists()
+
+
+def test_cli_retries_and_finalizes_retained_workload(monkeypatch):
+    from hydra_suite.detectkit import cli
+    from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
+
+    canceled = []
+    sidecar = type("Sidecar", (), {"cancel": lambda self: canceled.append(True)})()
+    owned = WorkloadStillOwnedError("ownership retained", sidecar)
+    owned.run_id = "run-owned"
+    finalized = []
+    monkeypatch.setattr(cli, "run", lambda _args: (_ for _ in ()).throw(owned))
+    monkeypatch.setattr(
+        cli,
+        "finalize_run_record",
+        lambda run_id, **kwargs: finalized.append((run_id, kwargs)),
+    )
+
+    assert cli.main(["--config", "unused.json"]) == 1
+    assert canceled == [True]
+    assert finalized[0][0] == "run-owned"
+    assert finalized[0][1]["failure_details"]["containment"] == {
+        "ownership": "recovered"
+    }
+
+
+def test_cli_never_flattens_a_still_owned_recovery_handle(monkeypatch):
+    from hydra_suite.detectkit import cli
+    from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
+
+    class Sidecar:
+        def cancel(self):
+            raise retry
+
+    original = WorkloadStillOwnedError("ownership retained", Sidecar())
+    original.run_id = "run-owned"
+    retry = WorkloadStillOwnedError("still owned", original.sidecar)
+    monkeypatch.setattr(cli, "run", lambda _args: (_ for _ in ()).throw(original))
+
+    with pytest.raises(WorkloadStillOwnedError) as raised:
+        cli.main(["--config", "unused.json"])
+
+    assert raised.value is retry
+    assert raised.value.sidecar is original.sidecar
+    assert raised.value.run_id == "run-owned"
 
 
 def test_detectkit_app_dispatches_train_without_importing_qt(monkeypatch):

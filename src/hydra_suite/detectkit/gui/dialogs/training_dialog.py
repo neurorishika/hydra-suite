@@ -61,6 +61,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+MAX_VISIBLE_LOG_BLOCKS = 2_000
+MAX_PERSISTED_ROLE_LOG_LINES = 2_000
+MAX_PERSISTED_ROLE_LOG_CHARS = 512 * 1024
+MAX_PERSISTED_LOG_LINE_CHARS = 32 * 1024
+
 
 def merged_level_and_blocker(sources):
     """Return (min geometry level across sources, the source that set it)."""
@@ -157,6 +162,8 @@ class _TrainingWorker(BaseWorker):
         self.orchestrator = orchestrator
         self.role_entries = role_entries
         self._cancel = False
+        self.recovery_registry_error = ""
+        self.recovery_cleanup_error = ""
 
     def cancel(self) -> None:
         """Request cancellation or retry cleanup of a retained workload."""
@@ -179,23 +186,38 @@ class _TrainingWorker(BaseWorker):
             error.sidecar.cancel()
         except WorkloadStillOwnedError as retry_error:
             retry_error.run_id = error.run_id
+            retry_error.registry_update_error = error.registry_update_error
+            retry_error.recovery_error = error.recovery_error
+            retry_error.recovery_cleanup = error.recovery_cleanup
             self.failure_exception = retry_error
             return False
+        except Exception as retry_error:  # noqa: BLE001 - retain uncertain owner
+            error.recovery_error = str(retry_error)
+            return False
+        if error.recovery_cleanup is not None:
+            try:
+                error.recovery_cleanup()
+            except Exception as cleanup_error:  # noqa: BLE001 - workload is safe
+                error.recovery_error = str(cleanup_error)
+                self.recovery_cleanup_error = str(cleanup_error)
+        self.failure_exception = None
         run_id = str(error.run_id or "")
         if run_id:
-            finalize_run_record(
-                run_id,
-                status="failed",
-                error_message=(
-                    "Containment recovery completed after process ownership "
-                    "was temporarily uncertain."
-                ),
-                failure_details={
-                    "failure_kind": "workload-still-owned",
-                    "containment": {"ownership": "recovered"},
-                },
-            )
-        self.failure_exception = None
+            try:
+                finalize_run_record(
+                    run_id,
+                    status="failed",
+                    error_message=(
+                        "Containment recovery completed after process ownership "
+                        "was temporarily uncertain."
+                    ),
+                    failure_details={
+                        "failure_kind": "workload-still-owned",
+                        "containment": {"ownership": "recovered"},
+                    },
+                )
+            except Exception as registry_exc:  # noqa: BLE001 - workload is safe
+                self.recovery_registry_error = str(registry_exc)
         return True
 
     def _should_cancel(self) -> bool:
@@ -237,6 +259,8 @@ class TrainingDialog(BaseDialog):
         self._worker = None
         self._last_training_results: list[dict] = []
         self._role_logs: dict[str, list[str]] = {}
+        self._role_log_chars: dict[str, int] = {}
+        self._role_log_dropped: dict[str, int] = {}
         self._current_role = ""
         self._dataset_fit_cache_key: tuple | None = None
         self._dataset_fit_cache_text = ""
@@ -1322,6 +1346,7 @@ QTabBar::tab:selected {
     def _build_log(self) -> QTextEdit:
         self.log_view = QTextEdit()
         self.log_view.setReadOnly(True)
+        self.log_view.document().setMaximumBlockCount(MAX_VISIBLE_LOG_BLOCKS)
         self.log_view.setPlaceholderText("Training log output appears here.")
         self.log_view.setMinimumHeight(150)
         return self.log_view
@@ -2233,9 +2258,30 @@ QTabBar::tab:selected {
 
     def _append_log(self, text: str) -> None:
         log_text = str(text)
-        self.log_view.append(log_text)
+        line_was_truncated = len(log_text) > MAX_PERSISTED_LOG_LINE_CHARS
+        if line_was_truncated:
+            log_text = log_text[-MAX_PERSISTED_LOG_LINE_CHARS:]
+        cursor = self.log_view.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        if not self.log_view.document().isEmpty():
+            cursor.insertText("\n")
+        cursor.insertText(log_text)
+        self.log_view.setTextCursor(cursor)
         if self._current_role:
-            self._role_logs.setdefault(self._current_role, []).append(log_text)
+            role = self._current_role
+            retained = self._role_logs.setdefault(role, [])
+            retained_chars = self._role_log_chars.setdefault(role, 0)
+            if line_was_truncated:
+                self._role_log_dropped[role] = self._role_log_dropped.get(role, 0) + 1
+            retained.append(log_text)
+            retained_chars += len(log_text) + 1  # persisted newline separator
+            while (
+                len(retained) > MAX_PERSISTED_ROLE_LOG_LINES
+                or retained_chars > MAX_PERSISTED_ROLE_LOG_CHARS
+            ):
+                retained_chars -= len(retained.pop(0)) + 1
+                self._role_log_dropped[role] = self._role_log_dropped.get(role, 0) + 1
+            self._role_log_chars[role] = retained_chars
         if self.loss_plot is not None:
             self.loss_plot.ingest_log_line(log_text)
 
@@ -2568,6 +2614,8 @@ QTabBar::tab:selected {
         self.progress.setValue(0)
         self.progress.setFormat("Starting…")
         self._role_logs = {}
+        self._role_log_chars = {}
+        self._role_log_dropped = {}
         self._current_role = ""
         if self.loss_plot is not None:
             self.loss_plot.clear()
@@ -2596,6 +2644,18 @@ QTabBar::tab:selected {
                     "and its resource leases are released."
                 )
                 self._set_run_status("Containment recovery completed safely.")
+                if self._worker.recovery_registry_error:
+                    self._append_log(
+                        "WARNING: The workload was contained, but its run "
+                        "registry record could not be finalized: "
+                        f"{self._worker.recovery_registry_error}"
+                    )
+                if self._worker.recovery_cleanup_error:
+                    self._append_log(
+                        "WARNING: The workload was contained, but temporary "
+                        "artifact cleanup failed: "
+                        f"{self._worker.recovery_cleanup_error}"
+                    )
                 self._set_training_running(False)
                 self.progress.setFormat("Recovery complete")
             else:
@@ -2618,6 +2678,8 @@ QTabBar::tab:selected {
     def _on_role_started(self, role: str) -> None:
         self._current_role = role
         self._role_logs.setdefault(role, [])
+        self._role_log_chars.setdefault(role, 0)
+        self._role_log_dropped.setdefault(role, 0)
         self._append_log(f"=== START {role} ===")
         self._set_run_status(f"Running {self._role_display_name(role)}.")
 
@@ -2637,7 +2699,14 @@ QTabBar::tab:selected {
     def _on_done(self, results: list) -> None:
         for result in results:
             role = str(result.get("role", "")).strip()
-            result["training_log"] = "\n".join(self._role_logs.get(role, []))
+            retained_log = list(self._role_logs.get(role, []))
+            dropped = self._role_log_dropped.get(role, 0)
+            if dropped:
+                retained_log.insert(
+                    0,
+                    f"[hydra log retention dropped {dropped} earlier record(s)]",
+                )
+            result["training_log"] = "\n".join(retained_log)
 
         try:
             from ..project import record_training_results
@@ -2785,6 +2854,8 @@ QTabBar::tab:selected {
         self.progress.setValue(0)
         self.progress.setFormat("Resuming…")
         self._role_logs = {}
+        self._role_log_chars = {}
+        self._role_log_dropped = {}
         self._current_role = ""
         self._set_run_status(
             f"Resuming {self._role_display_name(role_str)} from the latest checkpoint."

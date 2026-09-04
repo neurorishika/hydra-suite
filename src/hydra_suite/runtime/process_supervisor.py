@@ -819,6 +819,9 @@ class WorkloadStillOwnedError(RuntimeError):
         # Higher-level orchestration may attach the durable run identity while
         # preserving this same recovery-bearing exception object.
         self.run_id = ""
+        self.registry_update_error = ""
+        self.recovery_error = ""
+        self.recovery_cleanup: Optional[Callable[[], None]] = None
         super().__init__(message)
 
 
@@ -859,10 +862,15 @@ class SupervisedSidecar:
         self._guardian_ack_received = False
         self._guardian_process: Optional[subprocess.Popen[bytes]] = None
         self._fork_excluded_fds: tuple[int, ...] = ()
-        self.process: subprocess.Popen[Any]
-        self.tree: OwnedProcessTree
-        self._reader: threading.Thread
-        self.watchdog: ProcessTreeWatchdog
+        # Construction after ``Popen`` is deliberately recoverable.  Keep
+        # every later component explicit so a WorkloadStillOwnedError can
+        # return this object as a usable cleanup owner even when guardian,
+        # reader, or watchdog setup did not finish.
+        self.process: Optional[subprocess.Popen[Any]] = None
+        self.tree: Optional[OwnedProcessTree] = None
+        self._reader: Optional[threading.Thread] = None
+        self._reader_started = False
+        self.watchdog: Optional[ProcessTreeWatchdog] = None
 
         if self._leases.resource_keys != plan.expected_resource_keys:
             raise RuntimeError("internal canonical lease construction diverged")
@@ -968,6 +976,7 @@ class SupervisedSidecar:
                 self.tree, watchdog_policy, accelerator_probe=accelerator_probe
             )
             self._reader.start()
+            self._reader_started = True
             self.watchdog.start()
         except BaseException:
             for descriptor in (
@@ -995,8 +1004,20 @@ class SupervisedSidecar:
         """Cancel the complete owned process group, escalating after a grace."""
         if grace_seconds < 0:
             raise ValueError("cancel grace must be non-negative")
-        self.watchdog.stop(timeout=1.0)
-        if not self._terminate_and_reap(grace_seconds):
+        if self.watchdog is not None:
+            self.watchdog.stop(timeout=1.0)
+        if self.tree is not None and self.process is not None:
+            teardown_complete = self._terminate_and_reap(grace_seconds)
+        elif self.process is not None:
+            try:
+                self._kill_and_reap_after_setup_failure(self.process)
+            except WorkloadStillOwnedError:
+                teardown_complete = False
+            else:
+                teardown_complete = True
+        else:
+            teardown_complete = True
+        if not teardown_complete:
             raise WorkloadStillOwnedError(
                 "child process tree survived SIGKILL; sidecar and lease remain owned",
                 self,
@@ -1013,6 +1034,15 @@ class SupervisedSidecar:
         """Wait for completion and return bounded output plus classified evidence."""
         if timeout is not None and timeout < 0:
             raise ValueError("wait timeout must be non-negative")
+        if (
+            self.process is None
+            or self.tree is None
+            or self.watchdog is None
+            or self._reader is None
+        ):
+            raise RuntimeError(
+                "sidecar construction did not complete; use cancel() to retry cleanup"
+            )
         deadline = None if timeout is None else time.monotonic() + timeout
         while self.tree.is_alive():
             if self.process.poll() is not None:
@@ -1077,6 +1107,8 @@ class SupervisedSidecar:
             self._release_leases()
 
     def _terminate_and_reap(self, grace_seconds: float) -> bool:
+        if self.tree is None or self.process is None:
+            return False
         self.tree.terminate()
         deadline = time.monotonic() + grace_seconds
         while self.tree.is_alive() and time.monotonic() < deadline:
@@ -1094,11 +1126,18 @@ class SupervisedSidecar:
         return not self.tree.is_alive() and not self.tree.ownership_uncertain
 
     def _finish_local_teardown(self) -> None:
-        if not self._complete_guardian_teardown():
-            raise WorkloadStillOwnedError(
-                "guardian could not prove process-tree quiescence", self
-            )
-        self._reader.join(timeout=2.0)
+        if self._guardian_started:
+            if not self._complete_guardian_teardown():
+                raise WorkloadStillOwnedError(
+                    "guardian could not prove process-tree quiescence", self
+                )
+        else:
+            # Guardian creation itself may have failed.  These descriptors and
+            # the leases intentionally stayed with the returned recovery owner
+            # until local cleanup could be retried and proved complete.
+            self._close_unstarted_guardian_fds()
+        if self._reader is not None and self._reader_started:
+            self._reader.join(timeout=2.0)
         self._release_leases()
 
     def _complete_guardian_teardown(self, timeout: float = 5.0) -> bool:
@@ -1163,7 +1202,7 @@ class SupervisedSidecar:
         self, process: subprocess.Popen[Any]
     ) -> None:
         if process.poll() is None:
-            if hasattr(self, "tree"):
+            if self.tree is not None:
                 self.tree.kill()
             elif os.name == "posix":
                 try:
@@ -1185,7 +1224,7 @@ class SupervisedSidecar:
             raise WorkloadStillOwnedError(
                 "child survived supervisor-construction cleanup", self
             ) from exc
-        if hasattr(self, "tree") and (
+        if self.tree is not None and (
             self.tree.is_alive() or self.tree.ownership_uncertain
         ):
             raise WorkloadStillOwnedError(

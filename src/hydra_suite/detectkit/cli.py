@@ -27,7 +27,9 @@ from hydra_suite.detectkit.jobs.training import (
     prepare_role_datasets,
     run_role_entries,
 )
+from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
 from hydra_suite.training import PublishPolicy, TrainingOrchestrator
+from hydra_suite.training.registry import finalize_run_record
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -309,6 +311,59 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("Training interrupted.", file=sys.stderr)
         return 130
+    except WorkloadStillOwnedError as owned_error:
+        # A CLI invocation has no long-lived GUI owner to retain the recovery
+        # handle. Try synchronous teardown once; if ownership remains
+        # uncertain, preserve the exact exception and sidecar for an in-process
+        # caller instead of flattening it to an exit code.
+        try:
+            owned_error.sidecar.cancel()
+        except WorkloadStillOwnedError as retry_error:
+            retry_error.run_id = owned_error.run_id
+            retry_error.registry_update_error = owned_error.registry_update_error
+            retry_error.recovery_error = owned_error.recovery_error
+            retry_error.recovery_cleanup = owned_error.recovery_cleanup
+            raise
+        except Exception as retry_error:  # noqa: BLE001 - retain exact owner
+            owned_error.recovery_error = str(retry_error)
+            raise owned_error
+        if owned_error.recovery_cleanup is not None:
+            try:
+                owned_error.recovery_cleanup()
+            except Exception as cleanup_error:  # noqa: BLE001 - workload is safe
+                owned_error.recovery_error = str(cleanup_error)
+                print(
+                    "Training containment recovery succeeded, but temporary "
+                    f"artifact cleanup failed: {cleanup_error}",
+                    file=sys.stderr,
+                )
+        if owned_error.run_id:
+            try:
+                finalize_run_record(
+                    owned_error.run_id,
+                    status="failed",
+                    error_message=(
+                        "Containment recovery completed after process ownership "
+                        "was temporarily uncertain."
+                    ),
+                    failure_details={
+                        "failure_kind": "workload-still-owned",
+                        "containment": {"ownership": "recovered"},
+                    },
+                )
+            except Exception as registry_error:  # noqa: BLE001 - workload is safe
+                owned_error.registry_update_error = str(registry_error)
+                print(
+                    "Training containment recovery succeeded, but the run "
+                    f"registry could not be finalized: {registry_error}",
+                    file=sys.stderr,
+                )
+                return 1
+        print(
+            "Training failed, but containment recovery completed safely.",
+            file=sys.stderr,
+        )
+        return 1
     except Exception as exc:
         print(f"Training failed: {exc}", file=sys.stderr)
         return 1

@@ -12,6 +12,7 @@ from hydra_suite.runtime.process_supervisor import (
     ClassifiedExit,
     ExitKind,
     SupervisedResult,
+    WorkloadStillOwnedError,
 )
 from hydra_suite.runtime.resource_lease import ResourceBusyError
 from hydra_suite.training.contracts import (
@@ -247,7 +248,6 @@ def test_initial_and_live_preflight_probe_actual_output_filesystems(
             "models_root": tmp_path / "models",
         },
         {
-            "dataset": decision.dataset,
             "run_dir": (tmp_path / "run").resolve(),
             "models_root": tmp_path / "models",
         },
@@ -407,6 +407,34 @@ def test_conflicting_canonical_lease_is_reported(tmp_path, monkeypatch):
 
     assert not result["success"]
     assert "already leased" in result["error_message"]
+
+
+def test_uncertain_launch_retains_staging_until_post_quiescence_recovery(
+    tmp_path, monkeypatch
+):
+    _install(monkeypatch, tmp_path, write_artifact=False)
+    canceled = []
+    recovery_sidecar = SimpleNamespace(cancel=lambda: canceled.append(True))
+    owned = WorkloadStillOwnedError("ownership retained", recovery_sidecar)
+    staging = tmp_path / "run" / ".adapters.pt.123.validated.tmp"
+
+    class UncertainSidecar:
+        def __init__(self, *_args, **_kwargs):
+            staging.write_bytes(b"partial")
+            raise owned
+
+    monkeypatch.setattr(tr, "SupervisedSidecar", UncertainSidecar)
+
+    with pytest.raises(WorkloadStillOwnedError) as raised:
+        tr.train_sam3_lora(_spec(tmp_path), str(tmp_path / "run"))
+
+    assert raised.value is owned
+    assert staging.exists()
+    assert owned.recovery_cleanup is not None
+    owned.sidecar.cancel()
+    owned.recovery_cleanup()
+    assert canceled == [True]
+    assert not staging.exists()
 
 
 def test_plan_uses_physical_cuda_and_one_immutable_limit_source(tmp_path, monkeypatch):

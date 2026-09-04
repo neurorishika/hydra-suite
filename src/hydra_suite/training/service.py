@@ -552,15 +552,18 @@ class TrainingOrchestrator:
             # The exception owns the still-live sidecar and canonical leases.
             # Preserve that recovery handle for the caller; collapsing it into
             # a dict would orphan the workload and falsely imply finalization.
-            update_run_record(
-                run_id,
-                {
-                    "status": "recovery-required",
-                    "error_message": str(exc),
-                    "failure_kind": "workload-still-owned",
-                    "containment": {"ownership": "retained"},
-                },
-            )
+            try:
+                update_run_record(
+                    run_id,
+                    {
+                        "status": "recovery-required",
+                        "error_message": str(exc),
+                        "failure_kind": "workload-still-owned",
+                        "containment": {"ownership": "retained"},
+                    },
+                )
+            except Exception as registry_exc:  # noqa: BLE001 - preserve owner
+                exc.registry_update_error = str(registry_exc)
             # The GUI recovery owner needs the registry identity so a later
             # successful cleanup can turn this nonterminal record into an
             # explicit failed terminal run.

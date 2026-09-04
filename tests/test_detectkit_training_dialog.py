@@ -234,14 +234,19 @@ def test_training_worker_retains_owned_sidecar_until_recovery(qapp, monkeypatch)
     class _Sidecar:
         def __init__(self):
             self.fail_cleanup = True
+            self.generic_failure = False
 
         def cancel(self):
+            if self.generic_failure:
+                raise OSError("signal transport failed")
             if self.fail_cleanup:
                 raise WorkloadStillOwnedError("still owned", self)
 
     sidecar = _Sidecar()
     owned = WorkloadStillOwnedError("ownership retained", sidecar)
     owned.run_id = "run-owned"
+    recovered_artifacts = []
+    owned.recovery_cleanup = lambda: recovered_artifacts.append(True)
     calls = []
     finalized = []
     monkeypatch.setattr(
@@ -280,15 +285,49 @@ def test_training_worker_retains_owned_sidecar_until_recovery(qapp, monkeypatch)
     assert not worker.retry_containment_cleanup()
     assert worker.containment_recovery_required
     assert worker.failure_exception.sidecar is sidecar
+    assert recovered_artifacts == []
 
     sidecar.fail_cleanup = False
+    sidecar.generic_failure = True
+    retained = worker.failure_exception
+    assert not worker.retry_containment_cleanup()
+    assert worker.failure_exception is retained
+    assert worker.failure_exception.recovery_error == "signal transport failed"
+    assert recovered_artifacts == []
+
+    sidecar.generic_failure = False
     assert worker.retry_containment_cleanup()
     assert worker.failure_exception is None
+    assert recovered_artifacts == [True]
     assert finalized[0][0] == "run-owned"
     assert finalized[0][1]["status"] == "failed"
     assert finalized[0][1]["failure_details"]["containment"]["ownership"] == (
         "recovered"
     )
+
+
+def test_training_worker_reports_registry_failure_after_safe_cleanup(qapp, monkeypatch):
+    from hydra_suite.detectkit.gui.dialogs import training_dialog as td
+    from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
+
+    sidecar = type("Sidecar", (), {"cancel": lambda self: None})()
+    owned = WorkloadStillOwnedError("ownership retained", sidecar)
+    owned.run_id = "run-owned"
+    owned.recovery_cleanup = lambda: (_ for _ in ()).throw(
+        OSError("staging cleanup failed")
+    )
+    worker = td._TrainingWorker(object(), [])
+    worker.failure_exception = owned
+    monkeypatch.setattr(
+        td,
+        "finalize_run_record",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("registry offline")),
+    )
+
+    assert worker.retry_containment_cleanup()
+    assert worker.failure_exception is None
+    assert worker.recovery_registry_error == "registry offline"
+    assert worker.recovery_cleanup_error == "staging cleanup failed"
 
 
 def test_resume_builds_shared_role_entry(qapp, tmp_path, monkeypatch):
@@ -834,3 +873,36 @@ def test_training_dialog_on_done_persists_project_history(qapp, tmp_path, monkey
 
     assert captured["project"] is dlg._project
     assert captured["results"][0]["training_log"] == "line 1\nline 2"
+
+
+def test_training_dialog_bounds_active_and_persisted_noisy_child_logs(
+    qapp, tmp_path, monkeypatch
+):
+    from hydra_suite.detectkit.gui.dialogs import training_dialog as td
+
+    dlg = td.TrainingDialog(_make_proj(tmp_path))
+    dlg._current_role = "semantic_sam3"
+    total = td.MAX_PERSISTED_ROLE_LOG_LINES + 250
+    for index in range(total):
+        dlg._append_log(f"noisy child record {index}:" + ("x" * 512))
+
+    retained = dlg._role_logs["semantic_sam3"]
+    assert len(retained) <= td.MAX_PERSISTED_ROLE_LOG_LINES
+    assert sum(map(len, retained)) <= td.MAX_PERSISTED_ROLE_LOG_CHARS
+    assert dlg._role_log_dropped["semantic_sam3"] > 0
+    assert dlg.log_view.document().blockCount() <= td.MAX_VISIBLE_LOG_BLOCKS
+
+    captured = {}
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.project.record_training_results",
+        lambda _project, results: captured.setdefault("results", results),
+    )
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.dialogs.training_dialog.QMessageBox.warning",
+        lambda *_args, **_kwargs: None,
+    )
+    dlg._on_done([{"role": "semantic_sam3", "success": False}])
+
+    persisted = captured["results"][0]["training_log"]
+    assert "log retention dropped" in persisted
+    assert len(persisted) <= td.MAX_PERSISTED_ROLE_LOG_CHARS + 128
