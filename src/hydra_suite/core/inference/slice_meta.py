@@ -187,6 +187,28 @@ def available_slice_profiles(meta: dict[str, Any]) -> list[dict[str, Any]]:
     return valid
 
 
+def profile_summary(meta: dict[str, Any]) -> dict[str, Any]:
+    """Inventory summary the registry stores; the sidecar stays the source of truth."""
+    profiles = available_slice_profiles(meta)
+    return {
+        "count": len(profiles),
+        "primary_profile_id": str(meta.get("primary_profile_id", "") or ""),
+        "names": [profile["name"] for profile in profiles],
+    }
+
+
+def merge_training_geometry(
+    existing: dict[str, Any] | None, training_geometry: dict[str, Any]
+) -> dict[str, Any]:
+    """Replace training geometry while preserving user-approved profiles.
+
+    Publishing must never destroy calibration a user did before registering.
+    """
+    result = normalized_slice_meta(existing or {})
+    result["training_geometry"] = dict(training_geometry)
+    return result
+
+
 def primary_slice_profile(meta: dict[str, Any]) -> dict[str, Any] | None:
     """Return the explicitly chosen primary profile, if it is still valid."""
     primary_id = str(meta.get("primary_profile_id", "") or "")

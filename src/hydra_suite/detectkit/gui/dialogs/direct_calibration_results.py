@@ -7,6 +7,14 @@ committed with one atomic ``write_slice_meta`` call, so closing the dialog
 without confirmation saves nothing. Scoring, recommendation and profile
 mutation all live in core; this dialog only calls them and renders their
 output.
+
+Note: a calibration done here AFTER a model is already registered edits the
+sidecar directly and does not touch the registry entry. The registry's
+``slice_profiles`` summary is only refreshed the next time the model is
+published (see ``training.model_publish.verify_profile_summary``); until
+then it can be stale. The sidecar is always the source of truth on read --
+any consumer resolving profiles should read it directly rather than trust
+the registry summary as authoritative.
 """
 
 from __future__ import annotations

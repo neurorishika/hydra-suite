@@ -241,3 +241,120 @@ def test_profile_management_refuses_duplicate_names():
     meta = upsert_slice_profile({}, name="Balanced", settings={}, profile_id="first")
     with pytest.raises(ValueError, match="already exists"):
         upsert_slice_profile(meta, name="balanced", settings={}, profile_id="second")
+
+
+def test_publishing_preserves_profiles_saved_before_registration(tmp_path):
+    """Calibrate-then-register must not destroy the user's profiles."""
+    from hydra_suite.core.inference.slice_meta import (
+        available_slice_profiles,
+        merge_training_geometry,
+        upsert_slice_profile,
+    )
+
+    existing = upsert_slice_profile(
+        {"geometry_mode": "auto_object", "imgsz": 640},
+        name="Balanced",
+        settings={"enabled": True},
+        primary=True,
+    )
+    merged = merge_training_geometry(
+        existing, {"geometry_mode": "auto_object", "imgsz": 1024, "overlap": 0.3}
+    )
+    assert merged["training_geometry"]["imgsz"] == 1024
+    assert [p["name"] for p in available_slice_profiles(merged)] == ["Balanced"]
+    assert merged["primary_profile_id"] == existing["primary_profile_id"]
+
+
+def test_registry_records_the_sidecar_profile_summary():
+    from hydra_suite.core.inference.slice_meta import (
+        profile_summary,
+        upsert_slice_profile,
+    )
+
+    meta = upsert_slice_profile(
+        {"geometry_mode": "auto_object", "imgsz": 640},
+        name="Balanced",
+        settings={"enabled": True},
+        primary=True,
+    )
+    assert profile_summary(meta) == {
+        "count": 1,
+        "primary_profile_id": meta["primary_profile_id"],
+        "names": ["Balanced"],
+    }
+
+
+def test_disagreement_between_registry_and_sidecar_raises(tmp_path, monkeypatch):
+    """A second source of truth must fail loudly, not drift."""
+    import hydra_suite.training.model_publish as publish
+
+    monkeypatch.setattr(
+        publish,
+        "profile_summary",
+        lambda meta: {"count": 99, "primary_profile_id": "x", "names": []},
+    )
+    with pytest.raises(RuntimeError, match="profile summary"):
+        publish.verify_profile_summary(
+            tmp_path / "m.pt",
+            {"count": 0, "primary_profile_id": "", "names": []},
+        )
+
+
+def test_publish_end_to_end_preserves_two_profiles_and_updates_training_geometry(
+    tmp_path, monkeypatch
+):
+    """The real bug: calibrate-then-register must not destroy saved profiles."""
+    from hydra_suite.core.inference.slice_meta import (
+        available_slice_profiles,
+        read_slice_meta,
+        upsert_slice_profile,
+        write_slice_meta,
+    )
+
+    monkeypatch.setattr(mp, "get_models_root", lambda: tmp_path)
+
+    src = tmp_path / "weights.pt"
+    src.write_bytes(b"fake-weights")
+
+    # Simulate calibration BEFORE registration: two saved profiles, one primary.
+    pre_meta = upsert_slice_profile(
+        {"geometry_mode": "auto_object", "imgsz": 640},
+        name="Balanced",
+        settings={"enabled": True},
+        profile_id="balanced",
+        primary=True,
+    )
+    pre_meta = upsert_slice_profile(
+        pre_meta,
+        name="Fast scan",
+        settings={"overlap": 0.1},
+        profile_id="fast",
+    )
+    write_slice_meta(src, pre_meta)
+
+    new_geometry = {"geometry_mode": "auto_object", "imgsz": 1024, "overlap": 0.3}
+    key, stored = mp.publish_trained_model(
+        role=TrainingRole.OBB_DIRECT,
+        artifact_path=str(src),
+        size="s",
+        species="ant",
+        model_info="sliced",
+        trained_from_run_id="r1",
+        dataset_fingerprint="fp",
+        base_model="yolo26s-obb.pt",
+        slice_geometry=new_geometry,
+    )
+
+    dst_meta = read_slice_meta(stored)
+    assert dst_meta is not None
+    assert dst_meta["training_geometry"]["imgsz"] == 1024
+    assert [p["id"] for p in available_slice_profiles(dst_meta)] == ["balanced", "fast"]
+    assert dst_meta["primary_profile_id"] == "balanced"
+
+    reg = mp.load_model_registry()
+    summary = reg["entries"][key]["slice_profiles"]
+    assert summary == {
+        "count": 2,
+        "primary_profile_id": "balanced",
+        "names": ["Balanced", "Fast scan"],
+    }
