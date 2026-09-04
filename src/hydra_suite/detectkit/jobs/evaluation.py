@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
+import uuid
+from dataclasses import asdict
 from pathlib import Path
 
 from PySide6.QtCore import Signal
 
 from hydra_suite.widgets.workers import BaseWorker
 
-from ..evaluation import (
-    EvaluationCandidate,
-    EvaluationResult,
-    evaluate_candidate,
-    new_evaluation_id,
-)
+from ..evaluation import EvaluationCandidate, EvaluationResult, new_evaluation_id
+from ..sidecars.protocol import Operation, SidecarRequest
+from ..sidecars.supervisor import ProtectedOperation
 
 
 class EvaluationWorker(BaseWorker):
@@ -36,9 +35,12 @@ class EvaluationWorker(BaseWorker):
         self._device = str(device)
         self._batch = max(1, int(batch))
         self._cancel_requested = False
+        self._operation: ProtectedOperation | None = None
 
     def cancel(self) -> None:
         self._cancel_requested = True
+        if self._operation is not None:
+            self._operation.cancel()
 
     def is_cancelled(self) -> bool:
         return bool(self._cancel_requested)
@@ -53,21 +55,53 @@ class EvaluationWorker(BaseWorker):
                 f"Evaluating {index}/{total}: {candidate.run_id} ({candidate.role})"
             )
             self.log_signal.emit(
-                f"Validation started for {candidate.run_id} on "
-                f"{candidate.dataset_yaml}"
+                f"Validation started for {candidate.run_id} on {candidate.dataset_yaml}"
             )
-            try:
-                result = evaluate_candidate(
-                    candidate,
-                    output_root=self._output_root,
-                    device=self._device,
-                    batch=self._batch,
-                    evaluation_id=evaluation_id,
+            operation = ProtectedOperation(
+                SidecarRequest(
+                    uuid.uuid4().hex,
+                    Operation.EVALUATION,
+                    {
+                        "candidate": asdict(candidate),
+                        "output_root": str(self._output_root.expanduser().resolve()),
+                        "device": self._device,
+                        "batch": self._batch,
+                        "evaluation_id": evaluation_id,
+                    },
+                ),
+                device=self._device,
+                input_paths=(candidate.model_path, candidate.dataset_yaml),
+                cleanup_paths=(self._output_root / evaluation_id,),
+            )
+            self._operation = operation
+            outcome = operation.run(
+                progress=lambda pct, message, index=index: (
+                    self.progress.emit(
+                        int(((index - 1) + pct / 100) * 100 / max(1, total))
+                    ),
+                    self.status.emit(message),
+                ),
+                log=self.log_signal.emit,
+            )
+            self._operation = None
+            if outcome.canceled:
+                self._cancel_requested = True
+                break
+            if not outcome.success:
+                result = EvaluationResult.failed(
+                    candidate, evaluation_id, outcome.message
                 )
-            except Exception as exc:  # noqa: BLE001 - preserve comparison batch
-                result = EvaluationResult.failed(candidate, evaluation_id, str(exc))
-                self.log_signal.emit(f"Validation failed for {candidate.run_id}: {exc}")
+                self.log_signal.emit(
+                    f"Validation failed for {candidate.run_id} "
+                    f"[{outcome.failure_kind}]: {outcome.message}"
+                )
             else:
+                raw_result = outcome.payload.get("evaluation_result")
+                if not isinstance(raw_result, dict):
+                    raise RuntimeError(
+                        "evaluation sidecar returned no bounded metrics record"
+                    )
+                result = EvaluationResult(**raw_result)
                 self.log_signal.emit(
                     f"Validation complete for {candidate.run_id}: "
                     f"mAP50={result.map50:.3f}, "

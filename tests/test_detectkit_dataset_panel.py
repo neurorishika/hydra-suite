@@ -12,6 +12,7 @@ from hydra_suite.detectkit.gui.utils import (
     list_images_in_source,
     parse_obb_label,
     source_class_id_map,
+    source_has_images,
 )
 
 
@@ -23,6 +24,13 @@ def test_list_images_in_source_with_images_dir(tmp_path: Path):
     (img_dir / "c.txt").write_text("not an image")
     images = list_images_in_source(str(tmp_path))
     assert len(images) == 2
+    assert source_has_images(str(tmp_path)) is True
+
+
+def test_source_has_images_does_not_require_a_materialized_listing(tmp_path: Path):
+    (tmp_path / "images" / "nested").mkdir(parents=True)
+    (tmp_path / "images" / "nested" / "notes.txt").write_text("not an image")
+    assert source_has_images(str(tmp_path)) is False
 
 
 def test_find_label_for_image(tmp_path: Path):

@@ -2408,33 +2408,24 @@ def run_training(
     command = build_ultralytics_command(spec, run_dir)
     _safe_log(log_cb, "Running: " + " ".join(command))
 
-    proc = subprocess.Popen(
+    from .ultralytics_supervisor import run_ultralytics_supervised
+
+    supervised = run_ultralytics_supervised(
         command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        bufsize=1,
-        start_new_session=os.name == "posix",
+        spec,
+        log_cb=log_cb,
+        progress_cb=progress_cb,
+        should_cancel=should_cancel,
     )
-    proc._hydra_owns_process_group = os.name == "posix"
-
-    cancel_result = _stream_ultralytics_output(
-        proc, log_cb, progress_cb, should_cancel, command
-    )
-    if cancel_result is not None:
-        return cancel_result
-
-    rc = proc.wait()
-    if rc != 0:
-        _safe_log(log_cb, f"YOLO process exited with code {rc}")
+    if not supervised["success"]:
+        if supervised.get("error_message"):
+            _safe_log(log_cb, str(supervised["error_message"]))
         return {
             "success": False,
-            "exit_code": int(rc),
             "artifact_path": "",
             "metrics_path": "",
             "command": command,
+            **supervised,
         }
 
     weights_dir = run_dir / "weights"

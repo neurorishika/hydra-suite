@@ -520,11 +520,11 @@ def test_calibration_results_dialog_marks_a_cancelled_sweep_as_partial(qtbot=Non
     del app
 
 
-def test_calibration_worker_exposes_its_cancelled_state():
+def test_calibration_worker_exposes_its_cancelled_state(tmp_path):
     """The dialog reads `worker.cancelled` to decide the partial marker."""
     from hydra_suite.detectkit.jobs.semantic_escalation import CalibrationWorker
 
-    w = CalibrationWorker([], "ant", "sam3", {}, labeler=object())
+    w = CalibrationWorker([], "ant", "sam3", {}, project_dir=tmp_path)
     assert w.cancelled is False
     w.cancel()
     assert w.cancelled is True

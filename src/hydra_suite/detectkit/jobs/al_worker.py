@@ -7,6 +7,7 @@ import dataclasses
 import logging
 import shutil
 import tempfile
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -49,6 +50,9 @@ from hydra_suite.utils.geometry import obb_corners_from_dims as _detection_corne
 from hydra_suite.utils.geometry_levels import GeometryLevel
 from hydra_suite.utils.video_artifacts import build_inference_cache_dir
 from hydra_suite.widgets.workers import BaseWorker
+
+from ..sidecars.protocol import Operation, SidecarRequest
+from ..sidecars.supervisor import ProtectedOperation
 
 logger = logging.getLogger(__name__)
 
@@ -662,8 +666,7 @@ def _run_active_learning_with_source(
     skipped = int(manifest["totals"].get("frames_skipped_no_records", 0))
     if skipped:
         logger.warning(
-            "%d of %d picked frame(s) carried no label geometry and were not "
-            "exported.",
+            "%d of %d picked frame(s) carried no label geometry and were not exported.",
             skipped,
             len(written_ids),
         )
@@ -676,7 +679,7 @@ def _run_active_learning_with_source(
 
 
 class ALWorker(BaseWorker):
-    """QThread wrapper around run_active_learning.
+    """Thin GUI coordinator for a protected active-learning sidecar.
 
     Uses the inherited BaseWorker signals (`progress`, `status`, `error`)
     plus an AL-specific `result_ready(source_path, n_picked, selected_frames)`
@@ -689,6 +692,44 @@ class ALWorker(BaseWorker):
     def __init__(self, request: ALRequest):
         super().__init__()
         self._request = request
+        if request.detector is None:
+            raise ValueError("active learning requires a detector specification")
+        payload = {
+            "project_dir": str(
+                Path(request.project.project_dir).expanduser().resolve()
+            ),
+            "input_kind": request.input_kind,
+            "input_path": request.input_path,
+            "budget": request.budget,
+            "preset": request.preset,
+            "weights_override": (
+                dataclasses.asdict(request.weights_override)
+                if request.weights_override is not None
+                else None
+            ),
+            "expected_count": request.expected_count,
+            "detector": dataclasses.asdict(request.detector),
+            "diversity_window": request.diversity_window,
+            "probabilistic": request.probabilistic,
+            "candidate_pool": dataclasses.asdict(request.candidate_pool),
+            "base_conf": request.base_conf,
+            "base_iou": request.base_iou,
+            "export_level": request.export_level,
+            "export_levels": list(request.export_levels),
+            "native_level": request.native_level,
+            "device": request.project.device,
+        }
+        detector_paths = [request.detector.model_path]
+        if request.detector.secondary_model_path:
+            detector_paths.append(request.detector.secondary_model_path)
+        self._operation = ProtectedOperation(
+            SidecarRequest(uuid.uuid4().hex, Operation.ACTIVE_LEARNING, payload),
+            device=request.project.device,
+            input_paths=detector_paths,
+        )
+
+    def cancel(self) -> None:
+        self._operation.cancel()
 
     def execute(self):
         def cb(pct, msg):
@@ -697,20 +738,23 @@ class ALWorker(BaseWorker):
             self.progress.emit(int(pct))
             self.status.emit(str(msg))
 
-        try:
-            result = run_active_learning(
-                self._request,
-                progress=cb,
-                should_stop=self._should_stop,
-            )
-        except ActiveLearningCancelled:
+        outcome = self._operation.run(progress=cb)
+        if outcome.canceled:
             self.status.emit("Active learning cancelled.")
             return
+        if not outcome.success:
+            raise RuntimeError(outcome.message)
+        raw_source = dict(outcome.payload.get("source") or {})
+        source = OBBSource.from_dict(raw_source)
+        if all(
+            existing.path != source.path for existing in self._request.project.sources
+        ):
+            self._request.project.sources.append(source)
         if not self._should_stop():
             self.result_ready.emit(
-                result.source_path,
-                result.n_picked,
-                list(result.selected_frames),
+                str(outcome.payload["source_path"]),
+                int(outcome.payload["n_picked"]),
+                [int(value) for value in outcome.payload["selected_frames"]],
             )
 
     def _should_stop(self) -> bool:

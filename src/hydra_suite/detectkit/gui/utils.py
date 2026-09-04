@@ -116,6 +116,15 @@ def list_images_in_source(source_path: str) -> list[Path]:
     return results
 
 
+def source_has_images(source_path: str) -> bool:
+    """Check image presence without retaining every pathname in the GUI."""
+
+    root = Path(source_path)
+    images_dir = root / "images"
+    search_root = images_dir if images_dir.is_dir() else root
+    return any(path.suffix.lower() in IMG_EXTS for path in search_root.rglob("*"))
+
+
 def ensure_detectkit_source_structure(source_path: str | Path) -> Path:
     """Ensure a DetectKit source has ``images/``, ``labels/``, and ``classes.txt``."""
     root = Path(source_path).expanduser().resolve()

@@ -477,7 +477,9 @@ class SemanticEscalationDialog(BaseDialog):
         self, points, recommended, reason: str, preview_frames=None
     ) -> None:
         self.calibration_points = list(points)
-        self.calibration_preview_frames = list(preview_frames or [])
+        self.calibration_preview_frames = (
+            preview_frames if preview_frames is not None else []
+        )
         # The band belongs to the LABELS, not to the chosen operating point:
         # every point in one sweep shares it. Adopting it here (rather than
         # only in apply_calibration_choice) stops a recalibration that the
@@ -746,7 +748,13 @@ class SemanticEscalationDialog(BaseDialog):
         progress.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         progress.setMinimumWidth(420)
         worker = CalibrationWorker(
-            sources, self.prompt(), self.selected_variant(), self.parameters()
+            sources,
+            self.prompt(),
+            self.selected_variant(),
+            self.parameters(),
+            project_dir=(
+                self._project.project_dir if self._project is not None else None
+            ),
         )
         progress.canceled.connect(worker.cancel)
         worker.progress.connect(progress.setValue)
