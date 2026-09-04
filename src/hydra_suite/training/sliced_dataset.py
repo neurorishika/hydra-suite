@@ -9,6 +9,7 @@ docs/superpowers/specs/2026-07-27-detectkit-sahi-sliced-training-design.md.
 from __future__ import annotations
 
 import json
+import os
 import random
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -29,6 +30,12 @@ from .dataset_builders import (
     IMAGE_EXTS,
     _find_label_for_obb_image,
     _parse_geometry_label_lines,
+)
+from .dataset_io import (
+    DEFAULT_DATASET_IO_LIMITS,
+    iter_indexed_paths,
+    read_bounded_text,
+    sorted_file_index,
 )
 from .geometry_levels import GeometryLevel
 
@@ -142,12 +149,11 @@ def _iter_dataset_items(merged_dir: Path):
         src_lbl = merged_dir / "labels" / split
         if not src_img.exists():
             continue
-        for img_path in sorted(src_img.rglob("*")):
-            if img_path.suffix.lower() not in IMAGE_EXTS:
-                continue
-            lbl_path = _find_label_for_obb_image(img_path, src_img, src_lbl)
-            if lbl_path is not None:
-                yield split, img_path, lbl_path
+        with sorted_file_index(src_img, suffixes=IMAGE_EXTS) as index:
+            for img_path in iter_indexed_paths(index, src_img):
+                lbl_path = _find_label_for_obb_image(img_path, src_img, src_lbl)
+                if lbl_path is not None:
+                    yield split, img_path, lbl_path
 
 
 def _tile_sizes_for_params(params, reference_body_px) -> list[tuple[int, int]]:
@@ -270,7 +276,12 @@ def build_sliced_obb_dataset(
         "slice_geometry": _slice_geometry_manifest(params, measured_reference_body_px),
     }
     manifest_path = out_dir / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    manifest_tmp = manifest_path.with_suffix(".json.tmp")
+    with manifest_tmp.open("w", encoding="utf-8") as stream:
+        json.dump(manifest, stream, indent=2)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(manifest_tmp, manifest_path)
     return DatasetBuildResult(
         dataset_dir=str(out_dir), stats=manifest, manifest_path=str(manifest_path)
     )
@@ -283,7 +294,15 @@ def _read_class_names(merged_dir: Path) -> list[str]:
     try:
         import yaml
 
-        data = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
+        data = (
+            yaml.safe_load(
+                read_bounded_text(
+                    yaml_path,
+                    max_bytes=DEFAULT_DATASET_IO_LIMITS.max_metadata_bytes,
+                )
+            )
+            or {}
+        )
         names = data.get("names", {})
         if isinstance(names, dict):
             return [str(names[k]) for k in sorted(names, key=lambda x: int(x))] or [

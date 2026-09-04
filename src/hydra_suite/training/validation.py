@@ -2,12 +2,130 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 from .contracts import TrainingRole, ValidationIssue, ValidationReport
 from .dataset_inspector import DatasetInspection, inspect_obb_or_detect_dataset
+from .dataset_io import (
+    DEFAULT_DATASET_IO_LIMITS,
+    DatasetLimitError,
+    iter_bounded_text_lines,
+)
+
+MAX_VALIDATION_ISSUES = 1000
+MAX_JSON_NESTING = 128
+
+
+def _record_class_id(stats: dict[str, object], class_id: int) -> None:
+    values = stats["class_ids"]
+    if isinstance(values, set):
+        values.add(class_id)
+        if len(values) > DEFAULT_DATASET_IO_LIMITS.max_classes:
+            raise DatasetLimitError(
+                "Dataset labels exceed the safe cap of "
+                f"{DEFAULT_DATASET_IO_LIMITS.max_classes} distinct class ids"
+            )
+
+
+def _count_coco_arrays(path: Path) -> tuple[int, int]:
+    """Count top-level COCO array items with bounded streaming state."""
+
+    counts = {"images": 0, "annotations": 0}
+    found: set[str] = set()
+    stack: list[str] = []
+    in_string = False
+    escaped = False
+    string_chars: list[str] = []
+    string_overflow = False
+    pending_string: str | None = None
+    pending_key: str | None = None
+    target: str | None = None
+    target_depth = -1
+    expecting_item = False
+    with path.open("r", encoding="utf-8") as stream:
+        while chunk := stream.read(64 * 1024):
+            for char in chunk:
+                if in_string:
+                    if escaped:
+                        escaped = False
+                    elif char == "\\":
+                        escaped = True
+                    elif char == '"':
+                        in_string = False
+                        pending_string = (
+                            None if string_overflow else "".join(string_chars)
+                        )
+                    elif len(string_chars) < 64:
+                        string_chars.append(char)
+                    else:
+                        string_overflow = True
+                    continue
+                if char == '"':
+                    if (
+                        target is not None
+                        and len(stack) == target_depth
+                        and expecting_item
+                    ):
+                        counts[target] += 1
+                        expecting_item = False
+                    in_string = True
+                    escaped = False
+                    string_chars = []
+                    string_overflow = False
+                    continue
+                if char.isspace():
+                    continue
+                if char == ":" and len(stack) == 1 and stack[0] == "object":
+                    pending_key = pending_string
+                    pending_string = None
+                    continue
+                if char in "[{":
+                    if (
+                        target is not None
+                        and len(stack) == target_depth
+                        and expecting_item
+                    ):
+                        counts[target] += 1
+                        expecting_item = False
+                    if (
+                        char == "["
+                        and len(stack) == 1
+                        and stack[0] == "object"
+                        and pending_key in counts
+                    ):
+                        target = pending_key
+                        target_depth = len(stack) + 1
+                        expecting_item = True
+                        found.add(target)
+                    stack.append("array" if char == "[" else "object")
+                    if len(stack) > MAX_JSON_NESTING:
+                        raise DatasetLimitError(
+                            f"COCO JSON exceeds nesting cap {MAX_JSON_NESTING}: {path}"
+                        )
+                    pending_key = None
+                    continue
+                if char in "]}":
+                    expected = "array" if char == "]" else "object"
+                    if not stack or stack[-1] != expected:
+                        raise RuntimeError(f"Malformed COCO JSON structure: {path}")
+                    if target is not None and len(stack) == target_depth:
+                        target = None
+                        target_depth = -1
+                        expecting_item = False
+                    stack.pop()
+                    pending_key = None
+                    continue
+                if target is not None and len(stack) == target_depth:
+                    if char == ",":
+                        expecting_item = True
+                    elif expecting_item:
+                        counts[target] += 1
+                        expecting_item = False
+                pending_string = None
+    if in_string or stack or found != set(counts):
+        raise RuntimeError(f"Malformed or incomplete COCO JSON: {path}")
+    return counts["images"], counts["annotations"]
 
 
 def validate_coco_dataset(
@@ -27,9 +145,7 @@ def validate_coco_dataset(
                     )
                 )
             continue
-        data = json.loads(ann.read_text())
-        n_img = len(data.get("images", []))
-        n_ann = len(data.get("annotations", []))
+        n_img, n_ann = _count_coco_arrays(ann)
         stats[f"{split}_images"] = n_img
         stats[f"{split}_annotations"] = n_ann
         if n_img < floor or (floor > 0 and n_ann == 0):
@@ -48,8 +164,7 @@ def validate_coco_dataset(
 
 def _parse_label_lines(path: Path) -> list[list[str]]:
     lines = []
-    txt = path.read_text(encoding="utf-8").splitlines()
-    for ln in txt:
+    for ln in iter_bounded_text_lines(path):
         ln = ln.strip()
         if not ln:
             continue
@@ -114,9 +229,7 @@ def _validate_obb_line(
             )
         )
         return issues
-    cast = stats["class_ids"]
-    if isinstance(cast, set):
-        cast.add(class_id)
+    _record_class_id(stats, class_id)
     for coord in coords:
         if coord < -1e-6 or coord > 1.0 + 1e-6:
             issues.append(
@@ -160,9 +273,7 @@ def _validate_detect_line(
             )
         )
         return issues
-    cast = stats["class_ids"]
-    if isinstance(cast, set):
-        cast.add(class_id)
+    _record_class_id(stats, class_id)
     for coord in (cx, cy, width, height):
         if coord < -1e-6 or coord > 1.0 + 1e-6:
             issues.append(
@@ -215,9 +326,7 @@ def _validate_segment_line(
             )
         )
         return issues
-    cast = stats["class_ids"]
-    if isinstance(cast, set):
-        cast.add(class_id)
+    _record_class_id(stats, class_id)
     if any(coord < -1e-6 or coord > 1.0 + 1e-6 for coord in coords):
         issues.append(
             ValidationIssue(
@@ -371,6 +480,12 @@ def validate_obb_dataset(
     for split, items in inspection.splits.items():
         for item in items:
             issues.extend(_validate_item_file_pair(item, split, stats))
+            if len(issues) >= MAX_VALIDATION_ISSUES:
+                stats["validation_truncated"] = True
+                issues = issues[:MAX_VALIDATION_ISSUES]
+                break
+        if stats.get("validation_truncated"):
+            break
 
     class_ids = sorted(int(x) for x in stats.get("class_ids", set()))
     if not class_ids:
@@ -436,6 +551,12 @@ def validate_ultralytics_dataset(
                     label_mode=label_mode,
                 )
             )
+            if len(issues) >= MAX_VALIDATION_ISSUES:
+                stats["validation_truncated"] = True
+                issues = issues[:MAX_VALIDATION_ISSUES]
+                break
+        if stats.get("validation_truncated"):
+            break
 
     class_ids = sorted(int(x) for x in stats.get("class_ids", set()))
     if not class_ids:
