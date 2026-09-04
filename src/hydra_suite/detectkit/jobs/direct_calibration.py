@@ -6,12 +6,15 @@ frames, drives the production runner, and persists project-local evidence.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
 import numpy as np
 import yaml as _yaml
+
+_LOGGER = logging.getLogger(__name__)
 
 from hydra_suite.core.inference.direct_calibration_grid import label_set_fingerprint
 from hydra_suite.detectkit.jobs.semantic_escalation import stratified_calibration_frames
@@ -49,6 +52,22 @@ def _recording_key(image_path: Path) -> tuple[str, str]:
     return (str(image_path.parent), prefix)
 
 
+def _labels_dir_for(images_dir: Path) -> Path:
+    """Resolve the labels directory that mirrors ``images_dir``.
+
+    Replaces only the LAST ``images`` path segment with ``labels`` -- naive
+    string substitution (``str.replace("/images/", "/labels/")``) rewrites
+    every occurrence, which corrupts paths where an ancestor directory is
+    also named ``images`` (e.g. a dataset rooted at ``/data/images/pilot1``).
+    """
+    parts = list(images_dir.parts)
+    for index in range(len(parts) - 1, -1, -1):
+        if parts[index] == "images":
+            parts[index] = "labels"
+            return Path(*parts)
+    return images_dir.parent.parent / "labels" / images_dir.name
+
+
 def _split_frames(dataset_yaml: Path, split: str) -> list:
     from hydra_suite.data.al.escalation import LabelRecord
     from hydra_suite.detectkit.gui.utils import parse_obb_label
@@ -60,7 +79,16 @@ def _split_frames(dataset_yaml: Path, split: str) -> list:
     images_dir = (root / rel) if rel else (root / "images" / split)
     if not images_dir.is_dir():
         return []
-    labels_dir = Path(str(images_dir).replace("/images/", "/labels/"))
+    labels_dir = _labels_dir_for(images_dir)
+    if not labels_dir.is_dir():
+        _LOGGER.warning(
+            "No labels directory found for images dir %s (expected %s); "
+            "treating split '%s' as having zero labelled frames.",
+            images_dir,
+            labels_dir,
+            split,
+        )
+        return []
     out = []
     for image_path in sorted(
         p for p in images_dir.rglob("*") if p.suffix.lower() in _IMG_EXTS
@@ -95,7 +123,12 @@ def _split_frames(dataset_yaml: Path, split: str) -> list:
 
 
 def _bounded_by_recording(frames: list, budget: int) -> list:
-    """Take whole recordings until the budget is reached."""
+    """Take whole recordings until the budget is reached.
+
+    A single recording that alone exceeds the budget is truncated to the
+    budget -- the whole-group rule protects against scattering, not against
+    an oversized first group swallowing the entire run unbounded.
+    """
     if not budget or len(frames) <= budget:
         return frames
     grouped: dict[tuple[str, str], list] = {}
@@ -103,6 +136,8 @@ def _bounded_by_recording(frames: list, budget: int) -> list:
         grouped.setdefault(_recording_key(Path(item[0])), []).append(item)
     output: list = []
     for _key, group in sorted(grouped.items()):
+        if not output and len(group) > budget:
+            return group[:budget]
         if output and len(output) + len(group) > budget:
             break
         output.extend(group)

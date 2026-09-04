@@ -64,3 +64,56 @@ def test_evidence_fingerprint_changes_with_labels(tmp_path):
 
 def test_exhaustive_label_warning_is_stated():
     assert "exhaustively labelled" in EXHAUSTIVE_LABEL_WARNING
+
+
+def test_single_oversized_recording_is_truncated_to_budget(tmp_path):
+    yaml = _dataset(tmp_path, "val", [f"recA_{i:03d}" for i in range(10)])
+    evidence = collect_evidence(dataset_yaml=yaml, sources=[], budget=3)
+    assert len(evidence.frames) == 3
+    assert evidence.sampled_from == 10
+
+
+def test_labels_dir_resolved_when_root_path_contains_images_segment(tmp_path):
+    root = tmp_path / "images" / "pilot1"
+    images = root / "images" / "val"
+    labels = root / "labels" / "val"
+    images.mkdir(parents=True)
+    labels.mkdir(parents=True)
+    cv2.imwrite(str(images / "v0.png"), np.zeros((200, 300, 3), np.uint8))
+    (labels / "v0.txt").write_text(LABEL_LINE)
+    yaml = tmp_path / "data.yaml"
+    yaml.write_text(
+        f"path: {root}\ntrain: images/train\nval: images/val\nnames:\n  0: ant\n"
+    )
+    evidence = collect_evidence(dataset_yaml=yaml, sources=[])
+    assert evidence.split == "val"
+    assert len(evidence.frames) == 1 and evidence.instances == 1
+
+
+def test_images_dir_without_images_segment_yields_no_frames(tmp_path):
+    images = tmp_path / "frames" / "val"
+    images.mkdir(parents=True)
+    cv2.imwrite(str(images / "v0.png"), np.zeros((200, 300, 3), np.uint8))
+    yaml = tmp_path / "data.yaml"
+    yaml.write_text(f"path: {tmp_path}\nval: frames/val\nnames:\n  0: ant\n")
+    evidence = collect_evidence(dataset_yaml=yaml, sources=[], split="val")
+    assert evidence.frames == []
+    assert evidence.split in ("val", "train")
+
+
+def test_sources_fallback_reports_split_as_sources(tmp_path, monkeypatch):
+    import hydra_suite.detectkit.jobs.direct_calibration as direct_calibration
+
+    fake_frame = (tmp_path / "s0.png", [])
+
+    def _fake_stratified(sources, *, budget):
+        return [fake_frame]
+
+    monkeypatch.setattr(
+        direct_calibration, "stratified_calibration_frames", _fake_stratified
+    )
+    evidence = direct_calibration.collect_evidence(
+        dataset_yaml=None, sources=["fake-source"]
+    )
+    assert evidence.split == "sources"
+    assert evidence.frames == [fake_frame]
