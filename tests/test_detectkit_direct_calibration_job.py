@@ -429,3 +429,85 @@ def test_corrupt_record_loads_as_none(tmp_path):
     evidence_dir.mkdir(parents=True, exist_ok=True)
     (evidence_dir / "direct_calibration.json").write_text("{not valid json")
     assert load_direct_calibration(evidence_dir) is None
+
+
+def test_one_preview_per_geometry_and_merge_setting(monkeypatch, tmp_path):
+    """Critical 1: a single preview per geometry could only ever depict one
+    merge threshold, so every other row's overlay would be a lie."""
+    from hydra_suite.core.inference.direct_calibration_sweep import MergeSettings
+    from hydra_suite.detectkit.jobs import direct_calibration as job
+
+    monkeypatch.setattr(job, "load_calibration_models", _fake_models)
+    monkeypatch.setattr(
+        job,
+        "collect_obb_parts_by_frame",
+        lambda frames, *a, **k: ([[] for _ in frames], _FakeSource()),
+    )
+    merges = (
+        MergeSettings("greedy_nmm", "ios", 0.3),
+        MergeSettings("greedy_nmm", "ios", 0.5),
+        MergeSettings("greedy_nmm", "ios", 0.7),
+    )
+    request = _request(tmp_path, confidences=(0.05, 0.5), merges=merges)
+    outcome = job.run_direct_calibration(request)
+    assert len(outcome.previews) == len(request.candidates) * len(merges)
+    keys = {(p.candidate_index, p.merge_threshold) for p in outcome.previews}
+    assert len(keys) == len(outcome.previews), "previews must be uniquely keyed"
+    # Every measured row must find exactly one preview by identity.
+    for point in outcome.points:
+        matches = [
+            p
+            for p in outcome.previews
+            if p.candidate_index == point.candidate_index
+            and abs(p.merge_threshold - point.merge_threshold) < 1e-9
+        ]
+        assert len(matches) == 1
+
+
+def test_points_carry_a_stable_candidate_identity(monkeypatch, tmp_path):
+    from hydra_suite.detectkit.jobs import direct_calibration as job
+
+    monkeypatch.setattr(job, "load_calibration_models", _fake_models)
+    monkeypatch.setattr(
+        job,
+        "collect_obb_parts_by_frame",
+        lambda frames, *a, **k: ([[] for _ in frames], _FakeSource()),
+    )
+    request = _request(tmp_path)
+    outcome = job.run_direct_calibration(request)
+    assert {p.candidate_index for p in outcome.points} == set(
+        range(len(request.candidates))
+    )
+
+
+def test_preview_round_trip_keeps_identity_and_per_detection_confidence(tmp_path):
+    import numpy as np
+
+    from hydra_suite.detectkit.jobs import direct_calibration as job
+
+    image = tmp_path / "f.png"
+    preview = job.CalibrationPreview(
+        candidate_label="T",
+        frames=[
+            (
+                image,
+                [],
+                [np.array([[0, 0], [1, 0], [1, 1], [0, 1]], dtype=np.float32)],
+            )
+        ],
+        candidate_index=3,
+        merge_threshold=0.7,
+        pred_confidences=[[0.42]],
+        pred_sizes=[[12.5]],
+    )
+    outcome = job.DirectCalibrationOutcome(points=[], previews=[preview])
+    request = _request(tmp_path)
+    evidence_dir = tmp_path / "ev"
+    job.save_direct_calibration(evidence_dir, outcome, request)
+    loaded = job.load_direct_calibration(evidence_dir)
+    assert loaded is not None
+    restored = loaded.previews[0]
+    assert restored.candidate_index == 3
+    assert restored.merge_threshold == 0.7
+    assert restored.pred_confidences == [[0.42]]
+    assert restored.pred_sizes == [[12.5]]

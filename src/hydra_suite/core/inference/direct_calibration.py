@@ -213,6 +213,11 @@ class DirectCalibrationPoint:
     merge_backend: str
     score: CalibrationScore
     failed_reason: str = ""
+    # Stable identity for this row's GEOMETRY. Candidate labels are not
+    # unique (the grid dedups on geometry, not on label), so nothing may key
+    # a row by ``label`` -- overlays and any other per-row lookup use
+    # ``(candidate_index, merge_threshold, confidence)`` instead.
+    candidate_index: int = -1
 
 
 def _pareto(points: Sequence[DirectCalibrationPoint]) -> list[DirectCalibrationPoint]:

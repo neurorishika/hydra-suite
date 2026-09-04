@@ -105,6 +105,18 @@ _COLUMN_LABELS = [
 ]
 
 
+def _close(left: float, right: float) -> bool:
+    """Float-safe equality for a merge threshold read back from JSON."""
+    return abs(left - right) <= 1e-9
+
+
+def _nth_row(rows, index: int) -> list:
+    try:
+        return list(rows[index])
+    except (IndexError, TypeError):
+        return []
+
+
 def _humanise_duration(seconds: float, frames: int) -> str:
     total = seconds * max(frames, 0)
     total_int = int(round(total))
@@ -245,6 +257,11 @@ class DirectCalibrationResultsDialog(BaseDialog):
         self.canvas = OBBCanvas()
         self.canvas.setMinimumHeight(260)
         preview_layout.addWidget(self.canvas, 1)
+        # The overlay must state which operating point it depicts -- a user
+        # saves a profile from what they SEE here.
+        self.lbl_overlay_caption = QLabel("")
+        self.lbl_overlay_caption.setWordWrap(True)
+        preview_layout.addWidget(self.lbl_overlay_caption)
         splitter.addWidget(preview)
         splitter.setStretchFactor(0, 2)
         splitter.setStretchFactor(1, 3)
@@ -337,12 +354,66 @@ class DirectCalibrationResultsDialog(BaseDialog):
         return self.outcome.points[row]
 
     def _preview_for_point(self, point):
+        """The preview measured at THIS row's geometry and merge threshold.
+
+        Keyed by ``(candidate_index, merge_threshold)`` and never by label:
+        candidate labels are not unique (the grid dedups on geometry), and a
+        label lookup is exactly what made every row of a geometry show the
+        same permissive overlay. Confidence is not part of the key because it
+        is reproduced exactly at render time (see ``_row_predictions``).
+        """
         if point is None:
             return None
         for preview in self._previews:
-            if preview.candidate_label == point.label:
-                return preview
+            if int(getattr(preview, "candidate_index", -1)) != int(
+                point.candidate_index
+            ):
+                continue
+            if not _close(
+                float(getattr(preview, "merge_threshold", -1.0)),
+                float(point.merge_threshold),
+            ):
+                continue
+            return preview
         return None
+
+    @staticmethod
+    def _row_predictions(preview, point, frame_index):
+        """Reproduce one row's post-merge predictions from a stored preview.
+
+        The preview holds this geometry+merge's predictions at the confidence
+        floor with the per-frame cap lifted. Production applies the
+        confidence gate and THEN caps by keeping the largest detections
+        (filtering.py:305/331-335), so replaying those two steps here yields
+        the exact polygons the selected row emitted -- not a permissive
+        superset.
+        """
+        _path, _gt, pred_polygons = preview.frames[frame_index]
+        confidences = _nth_row(getattr(preview, "pred_confidences", []), frame_index)
+        sizes = _nth_row(getattr(preview, "pred_sizes", []), frame_index)
+        if len(confidences) != len(pred_polygons):
+            # Legacy/incomplete preview: nothing to threshold with. Show what
+            # was stored rather than silently hiding predictions.
+            return list(pred_polygons)
+        kept = [
+            index
+            for index in range(len(pred_polygons))
+            if confidences[index] >= float(point.confidence)
+        ]
+        cap = int(point.max_detections)
+        if cap > 0 and len(kept) > cap and len(sizes) == len(pred_polygons):
+            kept = sorted(kept, key=lambda i: sizes[i], reverse=True)[:cap]
+        return [pred_polygons[index] for index in kept]
+
+    def _overlay_caption(self, point) -> str:
+        if point is None:
+            return ""
+        return (
+            f"Overlay depicts: {point.label} · confidence >= "
+            f"{point.confidence:g} · merge {point.merge_policy}/"
+            f"{point.merge_metric}@{point.merge_threshold:g} · max "
+            f"{point.max_detections} detections/frame."
+        )
 
     def _on_row_changed(self, *_unused) -> None:
         self._frame_index = 0
@@ -369,12 +440,14 @@ class DirectCalibrationResultsDialog(BaseDialog):
         self.btn_next_frame.setEnabled(has_frames and len(preview.frames) > 1)
         self.chk_show_gt.setEnabled(has_frames)
         self.chk_show_pred.setEnabled(has_frames)
+        self.lbl_overlay_caption.setText(self._overlay_caption(point))
         if not has_frames:
             self.canvas.clear_all()
             self._frame_label.setText("No visual preview")
             return
         self._frame_index %= len(preview.frames)
-        image_path, gt_polygons, pred_polygons = preview.frames[self._frame_index]
+        image_path, gt_polygons, _all_pred = preview.frames[self._frame_index]
+        pred_polygons = self._row_predictions(preview, point, self._frame_index)
         self._frame_label.setText(
             f"Frame {self._frame_index + 1} of {len(preview.frames)} · "
             f"{Path(image_path).name}"

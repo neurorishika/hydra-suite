@@ -42,6 +42,10 @@ from hydra_suite.detectkit.jobs.semantic_escalation import stratified_calibratio
 from hydra_suite.widgets.workers import BaseWorker
 
 PREVIEW_FRAMES = 8
+# Previews are collected with the per-frame detection cap effectively lifted
+# so that they are a superset of every row that shares their geometry+merge;
+# the real cap is re-applied per row at render time.
+PREVIEW_MAX_TARGETS = 1_000_000
 
 EXHAUSTIVE_LABEL_WARNING = (
     "Confirm these frames are exhaustively labelled. A real animal missing "
@@ -238,14 +242,40 @@ class CalibrationPreview:
     Retains only the image path and polygons -- never a decoded image array,
     which would multiply memory by the frame count for no benefit (the GUI
     re-decodes the image path on demand when the preview is shown).
+
+    One preview exists per ``(candidate_index, merge_threshold)``, NOT per
+    geometry: the cross-tile merge changes which polygons exist at all, so a
+    single preview could never depict a row measured at another merge
+    threshold. Confidence is the one row knob that IS reproducible offline --
+    production order is merge -> filter (direct_calibration_sweep), so the
+    predictions here are collected once at the confidence FLOOR and with the
+    per-frame detection cap lifted, and the GUI reproduces any row exactly by
+    (a) keeping detections whose confidence >= the row's confidence and
+    (b) re-applying the row's cap, which keeps the LARGEST detections
+    (filtering.py:331-335). ``pred_confidences``/``pred_sizes`` are parallel
+    to ``frames[i][2]`` and exist purely to make that reproduction exact.
     """
 
     candidate_label: str
     frames: list  # list[tuple[Path, list[np.ndarray], list[np.ndarray]]]
+    candidate_index: int = -1
+    merge_threshold: float = 0.0
+    pred_confidences: list = field(default_factory=list)  # list[list[float]]
+    pred_sizes: list = field(default_factory=list)  # list[list[float]]
 
 
 EVIDENCE_FILENAME = "direct_calibration.json"
-EVIDENCE_VERSION = 1
+# v2: previews are keyed by (candidate_index, merge_threshold) and carry
+# per-detection confidence/size so a row's exact overlay can be reproduced.
+# v1 previews cannot be reproduced faithfully, so they are DROPPED on load
+# rather than shown as if they described a row (the points are still read --
+# the record's only other job is the partial-overwrite guard).
+EVIDENCE_VERSION = 2
+
+
+def _nth(rows: list, index: int) -> list:
+    """``rows[index]`` or ``[]`` -- parallel preview arrays may be absent."""
+    return list(rows[index]) if index < len(rows) else []
 
 
 def _polygon_to_list(points) -> list[list[float]]:
@@ -272,6 +302,7 @@ def _point_to_dict(point: DirectCalibrationPoint) -> dict:
         "merge_threshold": point.merge_threshold,
         "merge_backend": point.merge_backend,
         "failed_reason": point.failed_reason,
+        "candidate_index": point.candidate_index,
         "score": {
             "frames": score.frames,
             "matched": score.matched,
@@ -317,12 +348,13 @@ def _point_from_dict(raw: dict) -> DirectCalibrationPoint:
         merge_backend=str(raw["merge_backend"]),
         score=score,
         failed_reason=str(raw.get("failed_reason", "")),
+        candidate_index=int(raw.get("candidate_index", -1)),
     )
 
 
 def _preview_to_dict(evidence_dir: Path, preview: CalibrationPreview) -> dict:
     frames = []
-    for image_path, gt_polygons, pred_polygons in preview.frames:
+    for index, (image_path, gt_polygons, pred_polygons) in enumerate(preview.frames):
         image_path = Path(image_path)
         try:
             stored_path = {"relative": os.path.relpath(image_path, evidence_dir)}
@@ -333,13 +365,24 @@ def _preview_to_dict(evidence_dir: Path, preview: CalibrationPreview) -> dict:
                 "image_path": stored_path,
                 "ground_truth": [_polygon_to_list(p) for p in gt_polygons],
                 "predictions": [_polygon_to_list(p) for p in pred_polygons],
+                "prediction_confidences": [
+                    float(v) for v in _nth(preview.pred_confidences, index)
+                ],
+                "prediction_sizes": [float(v) for v in _nth(preview.pred_sizes, index)],
             }
         )
-    return {"candidate_label": preview.candidate_label, "frames": frames}
+    return {
+        "candidate_label": preview.candidate_label,
+        "candidate_index": int(preview.candidate_index),
+        "merge_threshold": float(preview.merge_threshold),
+        "frames": frames,
+    }
 
 
 def _preview_from_dict(evidence_dir: Path, raw: dict) -> CalibrationPreview:
     frames = []
+    confidences: list = []
+    sizes: list = []
     for raw_frame in raw.get("frames", []):
         stored = raw_frame["image_path"]
         if isinstance(stored, dict) and stored.get("relative") is not None:
@@ -357,8 +400,17 @@ def _preview_from_dict(evidence_dir: Path, raw: dict) -> CalibrationPreview:
             for p in raw_frame.get("predictions", [])
         ]
         frames.append((image_path, gt_polygons, pred_polygons))
+        confidences.append(
+            [float(v) for v in raw_frame.get("prediction_confidences", [])]
+        )
+        sizes.append([float(v) for v in raw_frame.get("prediction_sizes", [])])
     return CalibrationPreview(
-        candidate_label=str(raw.get("candidate_label", "")), frames=frames
+        candidate_label=str(raw.get("candidate_label", "")),
+        frames=frames,
+        candidate_index=int(raw.get("candidate_index", -1)),
+        merge_threshold=float(raw.get("merge_threshold", 0.0) or 0.0),
+        pred_confidences=confidences,
+        pred_sizes=sizes,
     )
 
 
@@ -421,10 +473,14 @@ def load_direct_calibration(evidence_dir: Path) -> DirectCalibrationOutcome | No
         if not isinstance(payload, dict):
             return None
         points = [_point_from_dict(raw) for raw in payload.get("points", [])]
-        previews = [
-            _preview_from_dict(Path(evidence_dir), raw)
-            for raw in payload.get("previews", [])
-        ]
+        previews = (
+            [
+                _preview_from_dict(Path(evidence_dir), raw)
+                for raw in payload.get("previews", [])
+            ]
+            if int(payload.get("version", 0) or 0) >= 2
+            else []
+        )
         return DirectCalibrationOutcome(
             points=points,
             previews=previews,
@@ -494,9 +550,11 @@ def _point_for(
     score,
     merge_backend="cv2",
     failed_reason="",
+    candidate_index=-1,
 ):
     return DirectCalibrationPoint(
         label=candidate.label,
+        candidate_index=int(candidate_index),
         enabled=candidate.enabled,
         geometry_mode=candidate.geometry_mode,
         tile_width=candidate.slice_width,
@@ -516,23 +574,43 @@ def _point_for(
     )
 
 
-def _preview_for(request, candidate, parts_per_frame, source, base_config, runtime):
-    """Ground truth vs. post-merge predictions at the training-geometry point.
+def _preview_for(
+    request,
+    candidate,
+    candidate_index,
+    merge,
+    parts_per_frame,
+    source,
+    base_config,
+    runtime,
+):
+    """Ground truth vs. post-merge predictions for ONE (geometry, merge) pair.
 
-    Only the image path and polygons are retained -- never a decoded image
-    array, per the memory contract that governs the whole sweep.
+    Collected at the confidence FLOOR (``request.confidences[0]``, which is
+    also the floor the parts themselves were collected at) and with the
+    per-frame detection cap lifted, so the stored set is a superset of every
+    row that shares this geometry and merge threshold. Production order is
+    merge -> filter, and the merge does not read the confidence threshold, so
+    a row's exact predictions are recovered by re-applying that row's
+    confidence gate and cap -- which the results dialog does at render time.
+
+    Only the image path and polygons (plus each prediction's confidence and
+    size) are retained -- never a decoded image array, per the memory
+    contract that governs the whole sweep.
     """
     frames = request.evidence.frames[: len(parts_per_frame)]
     point_config = config_for_point(
         str(request.model_path),
         slice_params=candidate.slice_params(),
-        merge=request.merge_settings[0],
+        merge=merge,
         confidence=request.confidences[0],
-        max_targets=request.max_targets,
+        max_targets=PREVIEW_MAX_TARGETS,
         runtime_tier=request.runtime_tier,
         model_task=request.task,
     )
     preview_frames = []
+    pred_confidences: list = []
+    pred_sizes: list = []
     for i, (image_path, labels) in enumerate(frames):
         result = rescore_parts(
             parts_per_frame[i], source, point_config, runtime, frame_idx=i
@@ -547,7 +625,21 @@ def _preview_for(request, candidate, parts_per_frame, source, base_config, runti
             for pred in predictions
         ]
         preview_frames.append((Path(image_path), gt_polygons, pred_polygons))
-    return CalibrationPreview(candidate_label=candidate.label, frames=preview_frames)
+        pred_confidences.append([float(pred.confidence) for pred in predictions])
+        sizes = getattr(result, "sizes", None)
+        pred_sizes.append(
+            [float(sizes[j]) for j in range(len(pred_polygons))]
+            if sizes is not None
+            else [0.0] * len(pred_polygons)
+        )
+    return CalibrationPreview(
+        candidate_label=candidate.label,
+        frames=preview_frames,
+        candidate_index=int(candidate_index),
+        merge_threshold=float(merge.threshold),
+        pred_confidences=pred_confidences,
+        pred_sizes=pred_sizes,
+    )
 
 
 def run_direct_calibration(request, *, progress=None, should_stop=None):
@@ -600,6 +692,7 @@ def run_direct_calibration(request, *, progress=None, should_stop=None):
                             seconds=0.0,
                             score=_zero_score(),
                             failed_reason=str(exc),
+                            candidate_index=index,
                         )
                     )
             continue
@@ -654,6 +747,7 @@ def run_direct_calibration(request, *, progress=None, should_stop=None):
                             seconds=0.0,
                             score=_zero_score(),
                             failed_reason=failure or "no regions produced",
+                            candidate_index=index,
                         )
                     )
             continue
@@ -695,18 +789,25 @@ def run_direct_calibration(request, *, progress=None, should_stop=None):
                         seconds=seconds_per_frame,
                         score=score_frames(scored, task=request.task),
                         merge_backend=backend,
+                        candidate_index=index,
                     )
                 )
-        outcome.previews.append(
-            _preview_for(
-                request,
-                candidate,
-                parts_per_frame[:PREVIEW_FRAMES],
-                source,
-                base_config,
-                runtime,
+        # ONE preview per (geometry, merge): the merge changes which polygons
+        # exist, so a single preview could not honestly depict rows measured
+        # at another merge threshold. Confidence stays reproducible offline.
+        for merge in request.merge_settings:
+            outcome.previews.append(
+                _preview_for(
+                    request,
+                    candidate,
+                    index,
+                    merge,
+                    parts_per_frame[:PREVIEW_FRAMES],
+                    source,
+                    base_config,
+                    runtime,
+                )
             )
-        )
         del parts_per_frame
     return outcome
 
