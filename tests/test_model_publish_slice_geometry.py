@@ -226,7 +226,12 @@ def test_profile_management_preserves_training_geometry_and_other_profiles():
     assert meta["training_geometry"] == legacy
     assert meta["primary_profile_id"] == "balanced"
     assert [p["id"] for p in meta["profiles"]] == ["balanced", "fast"]
-    trimmed = remove_slice_profile(meta, "balanced")
+    # The user marks at most one profile Primary: removing the primary must
+    # not silently promote whichever profile happened to be first; it needs
+    # an explicit replacement decision.
+    with pytest.raises(ValueError, match="replacement"):
+        remove_slice_profile(meta, "balanced")
+    trimmed = remove_slice_profile(meta, "balanced", new_primary_id="fast")
     assert trimmed["primary_profile_id"] == "fast"
     assert [p["id"] for p in trimmed["profiles"]] == ["fast"]
     assert normalized_slice_meta(trimmed)["training_geometry"] == legacy

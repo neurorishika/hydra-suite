@@ -115,20 +115,42 @@ def upsert_slice_profile(
     else:
         profiles[replacement] = profile
     result["profiles"] = profiles
-    if primary or not result["primary_profile_id"]:
+    # Primary is a user designation, never a side effect of saving the first
+    # profile: an inferred default is exactly what the spec forbids.
+    if primary:
         result["primary_profile_id"] = selected_id
     return result
 
 
-def remove_slice_profile(meta: dict[str, Any], profile_id: str) -> dict[str, Any]:
-    """Return v2 metadata with one profile removed, preserving all other data."""
+def remove_slice_profile(
+    meta: dict[str, Any],
+    profile_id: str,
+    *,
+    new_primary_id: str | None = None,
+) -> dict[str, Any]:
+    """Remove one profile, preserving weights, geometry and every other profile.
+
+    Removing the PRIMARY requires an explicit decision: ``new_primary_id=""``
+    clears the designation, an id promotes that profile. Silently promoting
+    whatever happened to be first would hand the user an operating point they
+    never chose.
+    """
     result = normalized_slice_meta(meta)
-    profiles = [p for p in result["profiles"] if p["id"] != str(profile_id)]
-    if len(profiles) == len(result["profiles"]):
+    target = str(profile_id)
+    remaining = [p for p in result["profiles"] if p["id"] != target]
+    if len(remaining) == len(result["profiles"]):
         return result
-    result["profiles"] = profiles
-    if result["primary_profile_id"] == str(profile_id):
-        result["primary_profile_id"] = profiles[0]["id"] if profiles else ""
+    if result["primary_profile_id"] == target:
+        if new_primary_id is None:
+            raise ValueError(
+                "Removing the primary SAHI profile needs a replacement "
+                "(pass new_primary_id) or an explicit clear (new_primary_id='')."
+            )
+        chosen = str(new_primary_id)
+        if chosen and chosen not in {p["id"] for p in remaining}:
+            raise ValueError(f"Unknown replacement primary profile {chosen!r}.")
+        result["primary_profile_id"] = chosen
+    result["profiles"] = remaining
     return result
 
 
