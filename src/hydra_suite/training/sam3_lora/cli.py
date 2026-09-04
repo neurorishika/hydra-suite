@@ -337,6 +337,52 @@ def _validated_lora_trainables(
     return [parameter for _name, parameter in trainable_named], actual_parameters
 
 
+# Terms worth logging individually: a collapse shows up as one of these
+# going to zero while the others stay put, which a single core scalar hides.
+LOGGED_LOSS_TERMS = (
+    "loss_ce",
+    "loss_bbox",
+    "loss_giou",
+    "loss_mask",
+    "loss_dice",
+    "presence_loss",
+)
+
+
+def _loss_term_summary(loss_dict: Any) -> str:
+    """Render the headline loss terms, or '' when they are unavailable."""
+    if not isinstance(loss_dict, dict):
+        return ""
+    parts = []
+    for term in LOGGED_LOSS_TERMS:
+        value = loss_dict.get(term)
+        if value is not None and getattr(value, "numel", lambda: 0)() == 1:
+            parts.append(f"{term}={float(value):.4f}")
+    return "  " + " ".join(parts) if parts else ""
+
+
+def _assert_finite_loss(loss: Any, *, epoch: int, step: int, loss_dict: Any) -> None:
+    """Abort the run the moment the loss stops being a number.
+
+    A non-finite loss poisons every subsequent gradient, and SAM3's Hungarian
+    matcher only notices much later -- it raised
+    ``ValueError: matrix contains invalid numeric entries`` some 700 steps
+    after the loss had already gone bad, by which point the run had burned
+    GPU hours producing an unusable adapter. Failing here names the epoch,
+    the step, and the per-term breakdown that led to it.
+    """
+    import torch
+
+    if torch.isfinite(loss).all():
+        return
+    raise RuntimeError(
+        f"SAM3 loss became non-finite at epoch {epoch}, step {step} "
+        f"(value={float(loss)}).{_loss_term_summary(loss_dict)}  Training "
+        "cannot recover from this -- refusing to keep stepping into a "
+        "checkpoint that would be silently worthless."
+    )
+
+
 def run_training(spec: Any, run_dir_path: Path) -> bool:
     """Run the SAM3 LoRA training loop and write `adapters.pt`.
 
@@ -487,6 +533,9 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
                 loss_dict = loss_fn(outputs, targets)
                 loss = _core_loss(loss_dict)
 
+            _assert_finite_loss(
+                loss, epoch=epoch, step=global_step, loss_dict=loss_dict
+            )
             (loss / grad_accum).backward()
 
             is_boundary = (micro_idx + 1) % grad_accum == 0
@@ -498,7 +547,10 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
                 optimizer.zero_grad()
                 global_step += 1
                 if global_step % logging_steps == 0:
-                    emit_log(f"epoch {epoch} step {global_step} loss {float(loss):.4f}")
+                    emit_log(
+                        f"epoch {epoch} step {global_step} "
+                        f"loss {float(loss):.4f}{_loss_term_summary(loss_dict)}"
+                    )
             del batch, model_input, targets, outputs, loss_dict, loss
 
         emit_progress(epoch + 1, params.epochs)

@@ -344,3 +344,61 @@ def test_lora_trainable_validation_rejects_estimator_shape_drift():
 
     with pytest.raises(RuntimeError, match="expected_parameters=13"):
         cli._validated_lora_trainables(model, adapted_modules=1, expected_parameters=13)
+
+
+def test_loss_term_summary_renders_headline_terms():
+    torch = pytest.importorskip("torch")
+    from hydra_suite.training.sam3_lora.cli import _loss_term_summary
+
+    summary = _loss_term_summary(
+        {
+            "loss_ce": torch.tensor(0.45),
+            "loss_mask": torch.tensor(0.0),
+            "loss_ce_aux_0": torch.tensor(9.9),  # not a headline term
+            "indices": [1, 2, 3],  # not a scalar tensor
+        }
+    )
+    assert "loss_ce=0.4500" in summary
+    assert "loss_mask=0.0000" in summary
+    assert "aux" not in summary
+
+
+def test_loss_term_summary_tolerates_a_non_dict():
+    torch = pytest.importorskip("torch")
+    from hydra_suite.training.sam3_lora.cli import _loss_term_summary
+
+    assert _loss_term_summary(torch.tensor(1.0)) == ""
+
+
+def test_finite_loss_passes_and_non_finite_aborts():
+    """A NaN loss must stop the run where it happens, not 700 steps later.
+
+    SAM3's Hungarian matcher only reports the damage downstream, as
+    "matrix contains invalid numeric entries", long after the adapter has
+    become worthless.
+    """
+    torch = pytest.importorskip("torch")
+    from hydra_suite.training.sam3_lora.cli import _assert_finite_loss
+
+    terms = {"loss_ce": torch.tensor(0.5)}
+    _assert_finite_loss(torch.tensor(1.5), epoch=0, step=1, loss_dict=terms)
+
+    for bad in (float("nan"), float("inf")):
+        with pytest.raises(RuntimeError, match="non-finite"):
+            _assert_finite_loss(torch.tensor(bad), epoch=2, step=30, loss_dict=terms)
+
+
+def test_non_finite_abort_names_the_step_and_terms():
+    torch = pytest.importorskip("torch")
+    from hydra_suite.training.sam3_lora.cli import _assert_finite_loss
+
+    with pytest.raises(RuntimeError) as excinfo:
+        _assert_finite_loss(
+            torch.tensor(float("nan")),
+            epoch=4,
+            step=730,
+            loss_dict={"loss_mask": torch.tensor(0.0)},
+        )
+    message = str(excinfo.value)
+    assert "epoch 4" in message and "step 730" in message
+    assert "loss_mask=0.0000" in message
