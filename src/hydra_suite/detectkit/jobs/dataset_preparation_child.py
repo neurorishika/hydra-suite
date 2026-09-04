@@ -9,7 +9,7 @@ import shutil
 from pathlib import Path
 
 from hydra_suite.training import TrainingOrchestrator
-from hydra_suite.training.dataset_io import read_bounded_text
+from hydra_suite.training.dataset_io import fsync_directory, read_bounded_text
 
 from .dataset_preparation_sidecar import MAX_REQUEST_BYTES, decode_request
 from .training import preflight_sources, prepare_role_datasets
@@ -65,6 +65,7 @@ def main(argv: list[str] | None = None) -> int:
             should_cancel=lambda: False,
         )
         os.replace(staging_root, final_root)
+        fsync_directory(final_root.parent)
         remapped = {
             role: str(final_root / Path(path).relative_to(staging_root))
             for role, path in prepared.role_dataset_dirs.items()

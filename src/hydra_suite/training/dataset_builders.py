@@ -33,7 +33,9 @@ from .dataset_inspector import (
 from .dataset_io import (
     DEFAULT_DATASET_IO_LIMITS,
     iter_bounded_text_lines,
+    iter_indexed_paths,
     read_bounded_text,
+    sorted_file_index,
 )
 from .geometry_levels import GeometryLevel
 
@@ -81,6 +83,13 @@ def _hash_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
                 break
             h.update(chunk)
     return h.hexdigest()
+
+
+def _iter_sorted_image_paths(root: Path):
+    """Yield globally ordered images through the bounded disk index."""
+
+    with sorted_file_index(root, suffixes=IMAGE_EXTS) as index:
+        yield from iter_indexed_paths(index, root)
 
 
 def _normalize_split_cfg(cfg: SplitConfig) -> tuple[float, float, float]:
@@ -554,9 +563,7 @@ def derive_detect_dataset_from_obb(
         src_lbl = src / "labels" / split
         if not src_img.exists():
             continue
-        for img_path in sorted(src_img.rglob("*")):
-            if img_path.suffix.lower() not in IMAGE_EXTS:
-                continue
+        for img_path in _iter_sorted_image_paths(src_img):
             lbl_path = _find_label_for_obb_image(img_path, src_img, src_lbl)
             if lbl_path is None:
                 continue
@@ -746,9 +753,7 @@ def derive_crop_obb_dataset_from_obb(
         src_lbl = src / "labels" / split
         if not src_img.exists():
             continue
-        for img_path in sorted(src_img.rglob("*")):
-            if img_path.suffix.lower() not in IMAGE_EXTS:
-                continue
+        for img_path in _iter_sorted_image_paths(src_img):
             lbl_path = _find_label_for_obb_image(img_path, src_img, src_lbl)
             if lbl_path is None:
                 continue
@@ -822,9 +827,7 @@ def derive_segment_dataset_from_source(
         src_lbl = src / "labels" / split
         if not src_img.exists():
             continue
-        for img_path in sorted(src_img.rglob("*")):
-            if img_path.suffix.lower() not in IMAGE_EXTS:
-                continue
+        for img_path in _iter_sorted_image_paths(src_img):
             lbl_path = _find_label_for_obb_image(img_path, src_img, src_lbl)
             if lbl_path is None:
                 continue
@@ -979,9 +982,7 @@ def derive_crop_segment_dataset_from_source(
         src_lbl = src / "labels" / split
         if not src_img.exists():
             continue
-        for img_path in sorted(src_img.rglob("*")):
-            if img_path.suffix.lower() not in IMAGE_EXTS:
-                continue
+        for img_path in _iter_sorted_image_paths(src_img):
             lbl_path = _find_label_for_obb_image(img_path, src_img, src_lbl)
             if lbl_path is None:
                 continue

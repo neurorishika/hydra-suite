@@ -206,13 +206,20 @@ def atomic_output_directory(target: Path) -> Iterator[Path]:
     staging = target.parent / f".{target.name}.staging-{uuid.uuid4().hex}"
     backup = target.parent / f".{target.name}.backup-{uuid.uuid4().hex}"
     staging.mkdir()
+
+    def sync_tree(directory: Path) -> None:
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                path = Path(entry.path)
+                if entry.is_dir(follow_symlinks=False):
+                    sync_tree(path)
+                elif entry.is_file(follow_symlinks=False):
+                    fsync_file(path)
+        fsync_directory(directory)
+
     try:
         yield staging
-        for directory, _subdirs, files in os.walk(staging):
-            directory_path = Path(directory)
-            for name in files:
-                fsync_file(directory_path / name)
-            fsync_directory(directory_path)
+        sync_tree(staging)
         moved_old = False
         if target.exists():
             os.replace(target, backup)

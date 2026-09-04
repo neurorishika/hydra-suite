@@ -65,6 +65,25 @@ def test_request_cardinality_is_checked_before_serialization(tmp_path):
         _bounded_request_payload(_request(tmp_path, sources=sources))
 
 
+def test_request_text_is_bounded_before_json_materialization(tmp_path):
+    request = _request(tmp_path)
+    request = DatasetPreparationRequest(
+        sources=request.sources,
+        roles=request.roles,
+        class_names=("x" * 16_385,),
+        split=request.split,
+        seed=request.seed,
+        dedup=request.dedup,
+        crop_pad_ratio=request.crop_pad_ratio,
+        min_crop_size_px=request.min_crop_size_px,
+        enforce_square=request.enforce_square,
+        imgsz_by_role=request.imgsz_by_role,
+        slice_settings=request.slice_settings,
+    )
+    with pytest.raises(DatasetLimitError, match="before|exceeds 16384"):
+        _bounded_request_payload(request)
+
+
 def test_bounded_request_round_trip(tmp_path):
     request = _request(tmp_path)
     decoded = decode_request(_bounded_request_payload(request))
@@ -203,7 +222,7 @@ def test_hard_limit_classification_is_preserved_and_output_removed(
             return None
 
     monkeypatch.setattr(module, "SupervisedSidecar", Sidecar)
-    with pytest.raises(RuntimeError, match="host hard memory limit"):
+    with pytest.raises(RuntimeError, match="host hard memory limit") as raised:
         module.prepare_role_datasets_contained(
             TrainingOrchestrator(tmp_path / "workspace"),
             _request(source),
@@ -211,4 +230,5 @@ def test_hard_limit_classification_is_preserved_and_output_removed(
             status=lambda _message: None,
             should_cancel=lambda: False,
         )
+    assert raised.value.failure_kind is ExitKind.HOST_HARD_LIMIT
     assert not list((tmp_path / "workspace").glob(".dataset-preparation-*.staging"))

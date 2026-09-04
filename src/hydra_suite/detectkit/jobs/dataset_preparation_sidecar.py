@@ -38,6 +38,7 @@ from hydra_suite.training.contracts import (
     TrainingRole,
     ValidationIssue,
     ValidationReport,
+    sam3_prompt_pool_error,
 )
 from hydra_suite.training.dataset_io import DatasetLimitError, read_bounded_text
 
@@ -56,6 +57,14 @@ MAX_SOURCE_FILES = 1_000_000
 MAX_SOURCE_BYTES = 2 * 1024**4
 OUTPUT_MAX_LINES = 512
 OUTPUT_MAX_CHARS = 256 * 1024
+
+
+class DatasetPreparationSidecarError(RuntimeError):
+    """A classified preparation-child failure with bounded diagnostics."""
+
+    def __init__(self, failure_kind: ExitKind, message: str) -> None:
+        self.failure_kind = failure_kind
+        super().__init__(message)
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,7 +100,52 @@ def _bounded_request_payload(request: DatasetPreparationRequest) -> dict[str, An
         raise DatasetLimitError(f"Preparation request exceeds {MAX_CLASSES} classes")
     if len(request.roles) > MAX_ROLES:
         raise DatasetLimitError(f"Preparation request exceeds {MAX_ROLES} roles")
+    if len(request.imgsz_by_role) > MAX_ROLES:
+        raise DatasetLimitError(
+            f"Preparation request exceeds {MAX_ROLES} role image sizes"
+        )
+
+    serialized_text_bytes = 0
+
+    def bounded_text(value: object, label: str) -> str:
+        nonlocal serialized_text_bytes
+        if type(value) is not str:
+            raise DatasetLimitError(f"{label} must be a string")
+        if len(value) > 16 * 1024:
+            raise DatasetLimitError(f"{label} exceeds 16384 characters")
+        try:
+            encoded_size = len(value.encode("utf-8"))
+        except UnicodeEncodeError as exc:
+            raise DatasetLimitError(f"{label} is not valid UTF-8 text") from exc
+        serialized_text_bytes += encoded_size
+        if serialized_text_bytes > MAX_REQUEST_BYTES:
+            raise DatasetLimitError(
+                f"Preparation request text exceeds {MAX_REQUEST_BYTES} bytes"
+            )
+        return value
+
+    for index, source in enumerate(request.sources):
+        bounded_text(source.path, f"sources[{index}].path")
+        bounded_text(source.source_type, f"sources[{index}].source_type")
+        bounded_text(source.name, f"sources[{index}].name")
+        bounded_text(source.level, f"sources[{index}].level")
+    for index, class_name in enumerate(request.class_names):
+        bounded_text(class_name, f"class_names[{index}]")
+    if request.sam3_params is not None:
+        prompt_error = sam3_prompt_pool_error(
+            request.sam3_params.prompt, request.sam3_params.negative_prompts
+        )
+        if prompt_error is not None:
+            raise DatasetLimitError(
+                f"Invalid SAM3 prompt configuration: {prompt_error}"
+            )
     slice_settings = request.slice_settings
+    for name in ("target_size_fractions", "target_sizes"):
+        values = getattr(slice_settings, name, ())
+        if len(values) > MAX_CLASSES:
+            raise DatasetLimitError(
+                f"slice_settings.{name} exceeds {MAX_CLASSES} entries"
+            )
     slice_payload = (
         slice_settings.to_dict()
         if hasattr(slice_settings, "to_dict")
@@ -415,7 +469,22 @@ def prepare_role_datasets_contained(
 
     try:
         if supervised.classified_exit.kind is not ExitKind.SUCCESS:
-            raise RuntimeError(supervised.classified_exit.message)
+            detail = ""
+            if result_path.exists():
+                try:
+                    failed = json.loads(
+                        read_bounded_text(result_path, max_bytes=MAX_RESULT_BYTES)
+                    )
+                    if type(failed) is dict:
+                        detail = str(failed.get("error", ""))[:32_768]
+                except (OSError, ValueError, TypeError):
+                    detail = ""
+            message = supervised.classified_exit.message
+            if detail:
+                message = f"{message}: {detail}"
+            raise DatasetPreparationSidecarError(
+                supervised.classified_exit.kind, message
+            )
         decoded = _decode_result(result_path)
     except Exception:
         cleanup(remove_final=True)

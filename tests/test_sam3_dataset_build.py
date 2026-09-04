@@ -16,6 +16,7 @@ from hydra_suite.training.sam3_lora.dataset_build import (
     build_sam3_coco_dataset,
     resolve_negative_prompts,
 )
+from hydra_suite.training.validation import validate_coco_dataset
 
 
 def _source(tmp_path, n_frames=3, size=2048):
@@ -57,6 +58,17 @@ def test_category_name_is_the_prompt(tmp_path):
     out = tmp_path / "out"
     build_sam3_coco_dataset(_source(tmp_path / "src"), out, _params())
     assert _load(out, "train")["categories"][0]["name"] == "ant with color patch"
+
+
+def test_streaming_coco_validation_counts_generated_records(tmp_path):
+    out = tmp_path / "out"
+    stats = build_sam3_coco_dataset(
+        _source(tmp_path / "src"), out, _params(keep_empty_tiles=True)
+    )
+    report = validate_coco_dataset(out, min_train=1, min_val=1)
+    assert report.valid
+    assert report.stats["train_images"] == stats["train_images"]
+    assert report.stats["train_annotations"] == stats["train_annotations"]
 
 
 def test_split_is_by_frame_not_by_tile(tmp_path):
