@@ -14,6 +14,7 @@ from pathlib import Path
 
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialogButtonBox,
     QGroupBox,
     QHeaderView,
@@ -48,6 +49,22 @@ _TABLE_COLUMNS = [
     ("failed_reason", "Failure reason"),
 ]
 
+# Same grid shape as core/inference/semantic/calibration.py's CONFIDENCE_GRID
+# (0.05 to 0.95 in steps of 0.05, rounded to 2 decimals) -- deliberately a
+# separate constant, not an import, so the direct-calibration path stays
+# uncoupled from the semantic/SAM3 path. 0.05 is also the floor the parts
+# are collected at, so it must stay the lowest value.
+CONFIDENCE_GRID: tuple[float, ...] = tuple(
+    round(0.05 + 0.05 * step, 2) for step in range(19)
+)
+assert CONFIDENCE_GRID[0] == 0.05 and CONFIDENCE_GRID[-1] == 0.95
+
+# Default merge policy/metric swept across these thresholds -- so the
+# "confidence x merge" label is honest about there being an actual grid.
+MERGE_THRESHOLD_GRID: tuple[float, ...] = (0.3, 0.5, 0.7)
+
+RUNTIME_TIERS: tuple[str, ...] = ("cpu", "gpu", "gpu_fast")
+
 
 def _humanise_tiles(total_tiles: int) -> str:
     """Rough wall-clock proxy from tile count alone (no timing exists yet)."""
@@ -72,6 +89,7 @@ class DirectCalibrationWizard(BaseDialog):
         split: str = "val",
         budget: int = 80,
         max_total_tiles: int = DEFAULT_MAX_TOTAL_TILES,
+        runtime_tier: str = "gpu",
     ) -> None:
         super().__init__(
             "SAHI calibration — Experimental calibration",
@@ -83,6 +101,9 @@ class DirectCalibrationWizard(BaseDialog):
         self._training_geometry = dict(training_geometry)
         self._evidence_dir = Path(evidence_dir)
         self._max_total_tiles = int(max_total_tiles)
+        self._default_runtime_tier = (
+            runtime_tier if runtime_tier in RUNTIME_TIERS else "gpu"
+        )
 
         self._evidence = collect_evidence(
             dataset_yaml=dataset_yaml, sources=sources, split=split, budget=budget
@@ -101,15 +122,24 @@ class DirectCalibrationWizard(BaseDialog):
         self._build_ui()
         self._populate_summary()
         self._populate_table()
-        self._update_run_enabled()
 
         # Run button lives outside the standard box: it needs custom gating
-        # (exhaustive-labels + broad-sweep confirmation), not plain accept.
+        # (exhaustive-labels + broad-sweep confirmation + non-empty evidence),
+        # not plain accept.
         self.btn_run = self._buttons.addButton(
             "Run calibration", QDialogButtonBox.AcceptRole
         )
         self.btn_run.setEnabled(False)
         self.btn_run.clicked.connect(self.accept)
+
+        if not self._evidence.frames or not self._evidence.instances:
+            self.set_calibration_enabled(
+                False,
+                "No labelled evidence frames were found -- calibration "
+                "cannot run against zero evidence.",
+            )
+        else:
+            self._update_run_enabled()
 
     def _build_ui(self) -> None:
         self.lbl_evidence_summary = QLabel()
@@ -148,17 +178,44 @@ class DirectCalibrationWizard(BaseDialog):
         self.table_candidates.setEditTriggers(QTableWidget.NoEditTriggers)
         self.add_content(self.table_candidates)
 
-        merge = MergeSettings()
+        default_merge = MergeSettings()
+        row_count = (
+            len(self.candidates) * len(CONFIDENCE_GRID) * len(MERGE_THRESHOLD_GRID)
+        )
         confidence_group = QGroupBox("Sweep grid (confidence x merge)")
         confidence_layout = QVBoxLayout(confidence_group)
         confidence_layout.addWidget(
             QLabel(
-                "Merge policy: "
-                f"{merge.policy} · metric: {merge.metric} · "
-                f"threshold: {merge.threshold:g}"
+                f"Confidence grid: {CONFIDENCE_GRID[0]:g}-{CONFIDENCE_GRID[-1]:g} "
+                f"step 0.05 ({len(CONFIDENCE_GRID)} values). Merge policy: "
+                f"{default_merge.policy} · metric: {default_merge.metric} · "
+                "thresholds: " + ", ".join(f"{t:g}" for t in MERGE_THRESHOLD_GRID) + "."
+            )
+        )
+        confidence_layout.addWidget(
+            QLabel(
+                f"This measures {len(self.candidates)} candidates x "
+                f"{len(CONFIDENCE_GRID)} confidences x {len(MERGE_THRESHOLD_GRID)} "
+                f"merge settings = {row_count} rows, all replayed offline from "
+                "one model pass per candidate at zero extra model cost."
             )
         )
         self.add_content(confidence_group)
+
+        runtime_label = QLabel("Runtime tier measured (affects s/frame shown):")
+        self.combo_runtime_tier = QComboBox()
+        self.combo_runtime_tier.addItems(list(RUNTIME_TIERS))
+        self.combo_runtime_tier.setCurrentText(self._default_runtime_tier)
+        self.combo_runtime_tier.setToolTip(
+            "The measured seconds/frame is only honest if it is measured on "
+            "the tier the project actually tracks with."
+        )
+        runtime_box = QWidget()
+        runtime_layout = QVBoxLayout(runtime_box)
+        runtime_layout.setContentsMargins(0, 0, 0, 0)
+        runtime_layout.addWidget(runtime_label)
+        runtime_layout.addWidget(self.combo_runtime_tier)
+        self.add_content(runtime_box)
 
         rule_label = QLabel(f"Recommendation rule: {RECOMMENDATION_RULE}")
         rule_label.setWordWrap(True)
@@ -216,6 +273,9 @@ class DirectCalibrationWizard(BaseDialog):
     def _update_run_enabled(self) -> None:
         if not hasattr(self, "btn_run"):
             return
+        if not self._evidence.frames or not self._evidence.instances:
+            self.btn_run.setEnabled(False)
+            return
         enabled = self.chk_exhaustive.isChecked()
         if self._any_over_budget() and not self.chk_confirm_broad_sweep.isChecked():
             enabled = False
@@ -228,25 +288,35 @@ class DirectCalibrationWizard(BaseDialog):
         if not enabled:
             self.btn_run.setEnabled(False)
             if reason:
+                self.btn_run.setToolTip(reason)
                 self.lbl_evidence_summary.setText(
                     self.lbl_evidence_summary.text() + f"\n\n{reason}"
                 )
         else:
+            self.btn_run.setToolTip("")
             self._update_run_enabled()
 
     def evidence(self) -> EvidenceSet:
         return self._evidence
 
     def request(self) -> DirectCalibrationRequest:
-        merge = MergeSettings()
+        default_merge = MergeSettings()
+        merge_settings = tuple(
+            MergeSettings(
+                policy=default_merge.policy,
+                metric=default_merge.metric,
+                threshold=threshold,
+            )
+            for threshold in MERGE_THRESHOLD_GRID
+        )
         return DirectCalibrationRequest(
             model_path=self._model_path,
             task=self._task,
             evidence=self._evidence,
             candidates=self.candidates,
-            confidences=(0.25,),
-            merge_settings=(merge,),
-            runtime_tier="cpu",
+            confidences=CONFIDENCE_GRID,
+            merge_settings=merge_settings,
+            runtime_tier=self.combo_runtime_tier.currentText(),
             max_targets=int(self.spin_max_targets.value()),
             evidence_dir=self._evidence_dir,
         )

@@ -117,3 +117,88 @@ def test_confirm_broad_sweep_reenables_run_when_a_candidate_is_over_budget(tmp_p
         assert wizard.btn_run.isEnabled() is True
     finally:
         wizard.close()
+
+
+def test_request_confidences_are_the_full_grid(calibration_wizard):
+    confidences = calibration_wizard.request().confidences
+    assert len(confidences) == 19
+    assert confidences[0] == 0.05
+    assert confidences[-1] == 0.95
+
+
+def test_request_merge_settings_sweep_three_thresholds(calibration_wizard):
+    merge_settings = calibration_wizard.request().merge_settings
+    assert len(merge_settings) == 3
+    assert {m.threshold for m in merge_settings} == {0.3, 0.5, 0.7}
+    assert len({m.policy for m in merge_settings}) == 1
+    assert len({m.metric for m in merge_settings}) == 1
+
+
+def test_request_runtime_tier_reflects_combo_and_constructor_default(tmp_path):
+    from hydra_suite.detectkit.gui.dialogs.direct_calibration_wizard import (
+        DirectCalibrationWizard,
+    )
+
+    yaml = _dataset(tmp_path, "val", ["rec1_000", "rec1_001"])
+    model = tmp_path / "m.pt"
+    model.write_bytes(b"weights")
+    wizard = DirectCalibrationWizard(
+        None,
+        model_path=model,
+        task="obb",
+        dataset_yaml=yaml,
+        sources=[],
+        training_geometry={
+            "geometry_mode": "auto_object",
+            "imgsz": 640,
+            "object_tile_fraction": 0.4,
+            "overlap": 0.2,
+        },
+        evidence_dir=tmp_path / "evidence",
+        runtime_tier="gpu_fast",
+    )
+    try:
+        assert wizard.combo_runtime_tier.currentText() == "gpu_fast"
+        assert wizard.request().runtime_tier == "gpu_fast"
+        wizard.combo_runtime_tier.setCurrentText("cpu")
+        assert wizard.request().runtime_tier == "cpu"
+    finally:
+        wizard.close()
+
+
+def test_zero_evidence_frames_leaves_run_disabled_even_when_acknowledged(tmp_path):
+    from hydra_suite.detectkit.gui.dialogs.direct_calibration_wizard import (
+        DirectCalibrationWizard,
+    )
+
+    # Empty dataset: no images/labels for either split, and no sources.
+    empty_dir = tmp_path / "empty"
+    (empty_dir / "images" / "val").mkdir(parents=True, exist_ok=True)
+    (empty_dir / "labels" / "val").mkdir(parents=True, exist_ok=True)
+    yaml = empty_dir / "data.yaml"
+    yaml.write_text(
+        f"path: {empty_dir}\ntrain: images/train\nval: images/val\nnames:\n  0: ant\n"
+    )
+    model = tmp_path / "m.pt"
+    model.write_bytes(b"weights")
+    wizard = DirectCalibrationWizard(
+        None,
+        model_path=model,
+        task="obb",
+        dataset_yaml=yaml,
+        sources=[],
+        training_geometry={
+            "geometry_mode": "auto_object",
+            "imgsz": 640,
+            "object_tile_fraction": 0.4,
+            "overlap": 0.2,
+        },
+        evidence_dir=tmp_path / "evidence",
+    )
+    try:
+        assert wizard.evidence().frames == []
+        wizard.chk_exhaustive.setChecked(True)
+        assert wizard.btn_run.isEnabled() is False
+        assert wizard.btn_run.toolTip() != ""
+    finally:
+        wizard.close()
