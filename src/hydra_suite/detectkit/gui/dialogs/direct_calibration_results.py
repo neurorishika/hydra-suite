@@ -420,7 +420,20 @@ class DirectCalibrationResultsDialog(BaseDialog):
             for index in range(len(pred_polygons))
             if confidences[index] >= float(point.confidence)
         ]
-        cap = int(point.max_detections)
+        # The EFFECTIVE cap, exactly as production computes it
+        # (filtering._effective_max_detections clamps to
+        # MAX_DOWNSTREAM_CROPS_PER_FRAME), so a row measured with a larger
+        # requested cap still renders what it actually emitted.
+        from hydra_suite.core.inference.stages.filtering import (
+            MAX_DOWNSTREAM_CROPS_PER_FRAME,
+        )
+
+        requested = int(point.max_detections)
+        cap = (
+            min(requested, MAX_DOWNSTREAM_CROPS_PER_FRAME)
+            if requested > 0
+            else MAX_DOWNSTREAM_CROPS_PER_FRAME
+        )
         if cap > 0 and len(kept) > cap and len(sizes) == len(pred_polygons):
             kept = sorted(kept, key=lambda i: sizes[i], reverse=True)[:cap]
         return [pred_polygons[index] for index in kept]

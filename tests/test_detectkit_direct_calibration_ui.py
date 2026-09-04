@@ -1321,3 +1321,66 @@ def test_accept_leaves_an_unregistered_model_alone(monkeypatch, tmp_path):
     dialog.table_rows.selectRow(0)
     dialog.save_profile("Balanced")
     dialog.accept()
+
+
+def test_overlay_cap_matches_productions_effective_cap(tmp_path):
+    """A requested cap above MAX_DOWNSTREAM_CROPS_PER_FRAME is clamped by
+    production, so the overlay must clamp it too."""
+    from hydra_suite.core.inference.stages.filtering import (
+        MAX_DOWNSTREAM_CROPS_PER_FRAME,
+    )
+    from hydra_suite.detectkit.jobs.direct_calibration import CalibrationPreview
+
+    count = MAX_DOWNSTREAM_CROPS_PER_FRAME + 5
+    point = _overlay_point(
+        confidence=0.1,
+        merge_threshold=0.5,
+        candidate_index=0,
+        label="T",
+        cap=100000,
+    )
+    preview = CalibrationPreview(
+        candidate_label="T",
+        frames=[
+            (tmp_path / "frame.png", [], [_square(10.0 * i) for i in range(count)])
+        ],
+        candidate_index=0,
+        merge_threshold=0.5,
+        pred_confidences=[[0.9] * count],
+        pred_sizes=[[float(i) for i in range(count)]],
+    )
+    dialog = _overlay_dialog(tmp_path, [point], [preview])
+    try:
+        assert (
+            len(dialog._row_predictions(preview, point, 0))
+            == MAX_DOWNSTREAM_CROPS_PER_FRAME
+        )
+    finally:
+        dialog.close()
+
+
+def test_training_dialog_falls_back_to_the_prepared_dataset_dir(monkeypatch, tmp_path):
+    """Belt-and-braces: production entries are run records carrying `spec`,
+    but an entry without one must still resolve the role's prepared dataset."""
+    from hydra_suite.detectkit.gui.dialogs import training_dialog as td
+
+    dataset = _run_dataset(tmp_path)
+    dlg = _make_training_dialog(tmp_path)
+    published = tmp_path / "published" / "m.pt"
+    published.parent.mkdir(parents=True, exist_ok=True)
+    published.write_bytes(b"weights")
+    dlg.role_dataset_dirs = {"obb_direct": str(dataset)}
+    dlg._last_training_results = [
+        {
+            "role": "obb_direct",
+            "success": True,
+            "published_model_path": str(published),
+        }
+    ]
+    seen = {}
+    monkeypatch.setattr(
+        td, "open_direct_calibration", lambda *a, **k: seen.update(k) or []
+    )
+    dlg.calibrate_then_register()
+    dlg.close()
+    assert seen["dataset_yaml"] == dataset / "dataset.yaml"
