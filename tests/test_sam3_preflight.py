@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 
 import pytest
@@ -281,7 +282,10 @@ def test_absent_validation_and_disabled_publish_remove_inactive_phases(tmp_path)
         "model_load",
         "training",
     }
-    assert all(phase.disk_transient_bytes == 0 for phase in decision.request.phases)
+    training = next(
+        phase for phase in decision.request.phases if phase.name == "training"
+    )
+    assert training.disk_transient_bytes > 0
 
 
 def test_lora_scope_changes_optimizer_state_and_adapter_terms(tmp_path):
@@ -306,6 +310,32 @@ def test_explicit_empty_cuda_visible_devices_hides_all_devices(monkeypatch):
 
     with pytest.raises(ValueError, match="hides all"):
         pf._visible_device_selector("auto")
+
+
+@pytest.mark.parametrize("device", ["cpu", "mps"])
+def test_non_cuda_device_selection_is_rejected_before_gpu_probe(device):
+    with pytest.raises(ValueError, match="CUDA"):
+        pf._visible_device_selector(device)
+
+
+def test_cuda_visible_remapping_resolves_the_selected_physical_uuid(monkeypatch):
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "GPU-bbbb,GPU-aaaa")
+    probe = subprocess.CompletedProcess(
+        [],
+        0,
+        stdout=(
+            "0, GPU-aaaa, 0000:01:00.0, First, 8.9, 49140, 48000\n"
+            "1, GPU-bbbb, 0000:02:00.0, Second, 8.9, 49140, 47000\n"
+        ),
+        stderr="",
+    )
+    monkeypatch.setattr(pf.subprocess, "run", lambda *_args, **_kwargs: probe)
+
+    selected = pf._probe_cuda_device("cuda:1")
+
+    assert selected is not None
+    assert selected.uuid == "GPU-aaaa"
+    assert selected.index == 0
 
 
 def test_prompt_instances_disk_ack_and_resume_refusals_are_preserved(

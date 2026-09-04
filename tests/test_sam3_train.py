@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -92,6 +94,8 @@ def _install(
     result=None,
     lines=(),
     write_artifact=True,
+    artifact_bytes=b"adapter",
+    poll_returncode=0,
     decisions=None,
 ):
     decisions = list(decisions or [_Decision(), _Decision()])
@@ -114,14 +118,24 @@ def _install(
         def __init__(self, plan, *, prelaunch_check, **kwargs):
             self.plan = plan
             self.output = _Output(lines)
-            self.process = SimpleNamespace(poll=lambda: supervised.returncode)
+            self.process = SimpleNamespace(poll=lambda: poll_returncode)
             self.canceled = False
             calls.append(self)
             prelaunch_check()
             if write_artifact:
                 artifact = tmp_path / "run" / "adapters.pt"
                 artifact.parent.mkdir(parents=True, exist_ok=True)
-                artifact.write_bytes(b"adapter")
+                artifact.write_bytes(artifact_bytes)
+                (tmp_path / "run" / "adapters.pt.complete.json").write_text(
+                    json.dumps(
+                        {
+                            "version": 1,
+                            "size_bytes": len(artifact_bytes),
+                            "sha256": hashlib.sha256(artifact_bytes).hexdigest(),
+                        }
+                    ),
+                    encoding="utf-8",
+                )
 
         def wait(self, *, post_exit_check=None, **_kwargs):
             if post_exit_check is not None:
@@ -228,8 +242,46 @@ def test_exit_zero_without_nonempty_artifact_is_failure(tmp_path, monkeypatch):
     assert "did not write" in result["error_message"]
 
 
-def test_cancel_is_step_and_output_independent(tmp_path, monkeypatch):
+def test_corrupt_artifact_is_rejected_and_removed(tmp_path, monkeypatch):
+    _install(monkeypatch, tmp_path, artifact_bytes=b"valid-before-corruption")
+    real_sidecar = tr.SupervisedSidecar
+
+    class CorruptingSidecar(real_sidecar):
+        def wait(self, *, post_exit_check=None, **kwargs):
+            (tmp_path / "run" / "adapters.pt").write_bytes(b"truncated")
+            return super().wait(post_exit_check=post_exit_check, **kwargs)
+
+    monkeypatch.setattr(tr, "SupervisedSidecar", CorruptingSidecar)
+
+    result = tr.train_sam3_lora(_spec(tmp_path), str(tmp_path / "run"))
+
+    assert not result["success"]
+    assert "validation" in result["error_message"].lower()
+    assert not (tmp_path / "run" / "adapters.pt").exists()
+    assert not (tmp_path / "run" / "adapters.pt.complete.json").exists()
+
+
+def test_post_exit_cancel_does_not_overwrite_completed_success(tmp_path, monkeypatch):
     calls = _install(monkeypatch, tmp_path, lines=(), write_artifact=True)
+
+    result = tr.train_sam3_lora(
+        _spec(tmp_path), str(tmp_path / "run"), should_cancel=lambda: True
+    )
+
+    assert result["success"]
+    assert not result["canceled"]
+    assert not calls[0].canceled
+    assert (tmp_path / "run" / "adapters.pt").exists()
+
+
+def test_live_cancel_is_step_and_output_independent(tmp_path, monkeypatch):
+    calls = _install(
+        monkeypatch,
+        tmp_path,
+        lines=(),
+        write_artifact=False,
+        poll_returncode=None,
+    )
 
     result = tr.train_sam3_lora(
         _spec(tmp_path), str(tmp_path / "run"), should_cancel=lambda: True
@@ -238,7 +290,6 @@ def test_cancel_is_step_and_output_independent(tmp_path, monkeypatch):
     assert result["canceled"]
     assert result["failure_kind"] == "canceled"
     assert calls[0].canceled
-    assert not (tmp_path / "run" / "adapters.pt").exists()
 
 
 def test_conflicting_canonical_lease_is_reported(tmp_path, monkeypatch):
@@ -274,6 +325,23 @@ def test_plan_uses_physical_cuda_and_one_immutable_limit_source(tmp_path, monkey
         plan.watchdog_policy.soft_tree_rss_bytes == plan.launch.limits.soft_host_bytes
     )
     assert len(plan.expected_resource_keys) == 2
+    assert plan.launch.environment["CUDA_VISIBLE_DEVICES"] == "GPU-physical-0"
+
+
+def test_missing_sam3_params_returns_typed_refusal(tmp_path, monkeypatch):
+    spec = _spec(tmp_path)
+    spec.sam3_params = None
+    monkeypatch.setattr(
+        tr,
+        "SupervisedSidecar",
+        lambda *_args, **_kwargs: pytest.fail("must not launch"),
+    )
+
+    result = tr.train_sam3_lora(spec, str(tmp_path / "run"))
+
+    assert not result["success"]
+    assert result["failure_kind"] == "host-admission-refusal"
+    assert "sam3" in result["error_message"].lower()
 
 
 def test_callback_failure_cancels_and_reaps_sidecar(tmp_path, monkeypatch):

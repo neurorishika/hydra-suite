@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import random
 import sys
 from pathlib import Path
@@ -43,6 +44,7 @@ import numpy as np
 
 from hydra_suite.training.contracts import Sam3LoraParams
 
+from .artifacts import write_completion_marker
 from .dataloader import (
     batch_count,
     build_descriptors,
@@ -69,6 +71,7 @@ class _SidecarSpec:
     def __init__(self, data: dict[str, Any]) -> None:
         self.seed: int = int(data.get("seed", 42))
         self.derived_dataset_dir: str = data["derived_dataset_dir"]
+        self.device: str = str(data.get("device", "cuda"))
         sam3_data = data.get("sam3_params")
         self.sam3_params = Sam3LoraParams(**sam3_data) if sam3_data else None
 
@@ -162,6 +165,66 @@ def _attach_matcher_indices(outputs: Any, targets: list[Any], matcher: Any) -> N
 def _core_loss(loss_result: Any) -> Any:
     """Extract Meta's ``CORE_LOSS_KEY`` without importing SAM3 at module load."""
     return loss_result["core_loss"] if isinstance(loss_result, dict) else loss_result
+
+
+def _validate_adapter_state(adapters: Any, torch_module: Any) -> None:
+    """Reject corrupt, incomplete, non-finite, and mathematical no-op adapters."""
+
+    if not isinstance(adapters, dict) or not adapters:
+        raise ValueError("SAM3 adapter state must be a non-empty mapping")
+    paths: dict[str, set[str]] = {}
+    tensors: dict[str, Any] = {}
+    for key, tensor in adapters.items():
+        if not isinstance(key, str) or not torch_module.is_tensor(tensor):
+            raise ValueError("SAM3 adapter state contains a non-tensor entry")
+        path, separator, suffix = key.rpartition(".")
+        if not separator or suffix not in {"lora_A", "lora_B"}:
+            raise ValueError(f"unexpected SAM3 adapter key {key!r}")
+        if tensor.ndim != 2 or tensor.numel() == 0:
+            raise ValueError(f"SAM3 adapter tensor {key!r} must be non-empty 2-D")
+        if not bool(torch_module.isfinite(tensor).all().item()):
+            raise ValueError(f"SAM3 adapter tensor {key!r} contains non-finite values")
+        paths.setdefault(path, set()).add(suffix)
+        tensors[key] = tensor
+    if any(suffixes != {"lora_A", "lora_B"} for suffixes in paths.values()):
+        raise ValueError("SAM3 adapter state has an incomplete LoRA A/B pair")
+    for path in paths:
+        matrix_a = tensors[f"{path}.lora_A"]
+        matrix_b = tensors[f"{path}.lora_B"]
+        if matrix_a.shape[0] != matrix_b.shape[1]:
+            raise ValueError(f"SAM3 adapter pair {path!r} has incompatible rank")
+    if not any(
+        bool(torch_module.count_nonzero(tensors[f"{path}.lora_B"]).item())
+        for path in paths
+    ):
+        raise ValueError("SAM3 adapter is a mathematical no-op (all LoRA B are zero)")
+
+
+def _write_validated_adapter_artifact(
+    adapters: Any, artifact_path: Path, torch_module: Any
+) -> None:
+    """Serialize, reload, validate, and atomically promote one adapter state."""
+
+    _validate_adapter_state(adapters, torch_module)
+    temporary = artifact_path.with_name(
+        f".{artifact_path.name}.{os.getpid()}.validated.tmp"
+    )
+    try:
+        with temporary.open("wb") as artifact_file:
+            torch_module.save(adapters, artifact_file)
+            artifact_file.flush()
+            os.fsync(artifact_file.fileno())
+        reloaded = torch_module.load(temporary, map_location="cpu", weights_only=True)
+        _validate_adapter_state(reloaded, torch_module)
+        os.replace(temporary, artifact_path)
+        directory_fd = os.open(artifact_path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+        write_completion_marker(artifact_path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _build_dataloader(spec: Any, params: Any, *, split: str) -> list:
@@ -347,10 +410,9 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
 
         emit_progress(epoch + 1, params.epochs)
 
-    # --- Persist artifacts (LAST checkpoint, never best-on-val-loss) -----
-    artifact_path = run_dir_path / "adapters.pt"
-    torch.save(adapter_state_dict(model), artifact_path)
-
+    # Keep adapters in memory until validation completes. A failed evaluation,
+    # kill, or parent death must not expose a seemingly completed artifact.
+    adapters = adapter_state_dict(model)
     _evaluate_and_write(
         model,
         spec,
@@ -362,6 +424,8 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
         True,
         run_dir_path,
     )
+    artifact_path = run_dir_path / "adapters.pt"
+    _write_validated_adapter_artifact(adapters, artifact_path, torch)
     return True
 
 

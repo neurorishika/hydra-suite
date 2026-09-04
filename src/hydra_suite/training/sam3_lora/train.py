@@ -30,6 +30,7 @@ from hydra_suite.runtime.resource_limits import (
 )
 
 from . import preflight as preflight_module
+from .artifacts import remove_artifact, validate_completion
 from .env import resolve_sam3_env, sam3_env_command, sam3_env_environ
 from .protocol import dispatch_record, parse_record
 
@@ -166,7 +167,7 @@ def train_sam3_lora(
     _write_json(spec_path, spec.to_dict())
 
     artifact_path = run_dir_path / "adapters.pt"
-    artifact_path.unlink(missing_ok=True)
+    remove_artifact(artifact_path)
     params = spec.sam3_params
     env_name = resolve_sam3_env(params.env_name)
     command = sam3_env_command(
@@ -179,7 +180,13 @@ def train_sam3_lora(
             str(run_dir_path),
         ],
     )
-    child_environment = {**os.environ, **sam3_env_environ()}
+    child_environment = {
+        **os.environ,
+        **sam3_env_environ(),
+        # Bind the child logical cuda:0 to the exact physical GPU admitted,
+        # probed, and leased by UUID. Never let the runtime choose another GPU.
+        "CUDA_VISIBLE_DEVICES": initial_cuda_device.uuid,
+    }
     limits = _memory_limits(spec, initial.budget.host_peak_bytes)
     launch = build_limited_launch(
         command,
@@ -262,9 +269,12 @@ def train_sam3_lora(
                     dispatch_record(record, log_cb, progress_cb)
             if output_error is not None:
                 raise output_error
+            process_returncode = sidecar.process.poll()
+            if eof and process_returncode is not None:
+                break
             if should_cancel():
                 sidecar.cancel(plan.terminate_grace_seconds)
-                artifact_path.unlink(missing_ok=True)
+                remove_artifact(artifact_path)
                 return _result(
                     success=False,
                     canceled=True,
@@ -273,25 +283,23 @@ def train_sam3_lora(
                     resource_preflight=str(diagnostics_path),
                     containment=_containment_diagnostic(plan),
                 )
-            if eof and sidecar.process.poll() is not None:
-                break
             if eof:
                 # A workload may deliberately close stdout before it exits.
                 # Once the buffer is at EOF, drain() cannot block for us.
                 time.sleep(float(params.watchdog_poll_seconds))
 
         def validate_artifact(result: SupervisedResult) -> None:
-            if result.classified_exit.kind is ExitKind.SUCCESS and (
-                not artifact_path.exists() or artifact_path.stat().st_size == 0
-            ):
+            validation_error = validate_completion(artifact_path)
+            if result.classified_exit.kind is ExitKind.SUCCESS and validation_error:
                 raise _ArtifactInvalid(
                     "SAM3 training subprocess exited successfully but did not "
-                    f"write a non-empty {artifact_path.name}; refusing to report "
-                    "success for a run that trained nothing."
+                    f"produce a validated artifact: {validation_error}; refusing "
+                    "to report success for a run that trained nothing."
                 )
 
         supervised = sidecar.wait(post_exit_check=validate_artifact)
     except _ArtifactInvalid as exc:
+        remove_artifact(artifact_path)
         return _result(
             success=False,
             message=str(exc),
@@ -306,14 +314,14 @@ def train_sam3_lora(
             sidecar.cancel(plan.terminate_grace_seconds)
         except WorkloadStillOwnedError:
             raise
-        artifact_path.unlink(missing_ok=True)
+        remove_artifact(artifact_path)
         raise
 
     diagnostic["containment"] = _containment_diagnostic(plan, supervised)
     _write_json(diagnostics_path, diagnostic)
     classified = supervised.classified_exit
     if classified.kind is not ExitKind.SUCCESS:
-        artifact_path.unlink(missing_ok=True)
+        remove_artifact(artifact_path)
         tail = "".join(supervised.output_tail).strip() or "(no output)"
         return _result(
             success=False,

@@ -14,8 +14,11 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from hydra_suite.training.contracts import Sam3LoraParams
 from hydra_suite.training.sam3_lora import cli
+from hydra_suite.training.sam3_lora.artifacts import completion_path
 
 
 def _write_spec(tmp_path, prompt="ant"):
@@ -100,6 +103,42 @@ def test_runtime_precision_matrix_fails_closed():
     assert "8.0" in cli._runtime_admission_refusal(
         SimpleNamespace(cuda=_FakeCuda(capability=(7, 5))), Sam3LoraParams()
     )
+
+
+def test_atomic_adapter_writer_rejects_noop_and_promotes_valid_pairs(tmp_path):
+    torch = pytest.importorskip("torch")
+    artifact = tmp_path / "adapters.pt"
+    noop = {
+        "block.lora_A": torch.ones((2, 3)),
+        "block.lora_B": torch.zeros((4, 2)),
+    }
+
+    with pytest.raises(ValueError, match="no-op"):
+        cli._write_validated_adapter_artifact(noop, artifact, torch)
+    assert not artifact.exists()
+    assert not completion_path(artifact).exists()
+
+    valid = {**noop, "block.lora_B": torch.ones((4, 2))}
+    cli._write_validated_adapter_artifact(valid, artifact, torch)
+
+    assert artifact.exists()
+    assert completion_path(artifact).exists()
+    loaded = torch.load(artifact, map_location="cpu", weights_only=True)
+    assert set(loaded) == set(valid)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"block.lora_A": object()},
+    ],
+)
+def test_atomic_adapter_writer_rejects_incomplete_schema(tmp_path, payload):
+    torch = pytest.importorskip("torch")
+
+    with pytest.raises(ValueError):
+        cli._write_validated_adapter_artifact(payload, tmp_path / "adapters.pt", torch)
 
 
 def test_collated_batch_moves_to_device_before_target_conversion_and_forward():

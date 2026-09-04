@@ -271,6 +271,10 @@ def _parse_compute_capability(value: str) -> tuple[int, int]:
 
 
 def _visible_device_selector(device: str) -> str:
+    if device not in {"auto", "cuda"} and not device.startswith("cuda:"):
+        raise ValueError(
+            f"SAM3 training requires an explicit CUDA runtime, not {device!r}"
+        )
     if (
         "CUDA_VISIBLE_DEVICES" in os.environ
         and not os.environ["CUDA_VISIBLE_DEVICES"].strip()
@@ -324,7 +328,7 @@ def _probe_cuda_device(device: str = "auto") -> Optional[CudaDeviceObservation]:
         index, uuid, pci_bus_id, name, capability, total_mib, free_mib = (
             item.strip() for item in row
         )
-        if selector not in {index, uuid} and not uuid.endswith(selector):
+        if selector not in {index, uuid}:
             continue
         try:
             return CudaDeviceObservation(
@@ -356,10 +360,22 @@ def _resource_policy(params: Any) -> ResourcePolicy:
     )
 
 
-def build_resource_request(spec: Any, dataset: Sam3DatasetProfile) -> ResourceRequest:
+def build_resource_request(
+    spec: Any, dataset: Sam3DatasetProfile, *, params: Any | None = None
+) -> ResourceRequest:
     """Estimate phase peaks from streamed work limits and COCO metadata."""
 
-    params = spec.sam3_params
+    params = params if params is not None else getattr(spec, "sam3_params", None)
+    if params is None:
+        params = type(
+            "MissingParams",
+            (),
+            {
+                "batch": 1,
+                "rank": 1,
+                **{flag: False for flag in _LORA_PARAMS_PER_RANK},
+            },
+        )()
     batch_size = max(1, int(params.batch))
     inflight_tiles = min(batch_size, max(1, dataset.tile_count))
     image_pixels = PREDICTOR_IMGSZ * PREDICTOR_IMGSZ
@@ -436,6 +452,7 @@ def build_resource_request(spec: Any, dataset: Sam3DatasetProfile) -> ResourceRe
             host_peak_bytes=training_host_peak,
             accelerator_steady_bytes=_DEVICE_STEADY_BYTES + lora_training_state,
             accelerator_peak_bytes=training_device_peak,
+            disk_transient_bytes=2 * lora_artifact,
             dominant_allocations=common_allocations
             + (
                 (
@@ -522,7 +539,7 @@ def assess_preflight(
             "MissingParams", (), {"batch": 1, "num_negatives": 0, "rank": 1}
         )()
     dataset = dataset or _dataset_profile(spec.derived_dataset_dir)
-    request = build_resource_request(spec, dataset)
+    request = build_resource_request(spec, dataset, params=params)
     if cuda_device is _UNSET:
         cuda_device = _probe_cuda_device(str(getattr(spec, "device", "auto")))
     assert cuda_device is None or isinstance(cuda_device, CudaDeviceObservation)
@@ -532,6 +549,9 @@ def assess_preflight(
     free_disk = _free_disk_bytes(spec.derived_dataset_dir)
     refusals = list(budget.refusals)
     warnings = list(budget.warnings)
+
+    if getattr(spec, "sam3_params", None) is None:
+        refusals.append("SAM3 training requires a sam3_params configuration.")
 
     if cuda_device is None:
         refusals.append(

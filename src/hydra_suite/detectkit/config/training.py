@@ -610,11 +610,9 @@ class DetectTrainingPlan:
                 raise TrainingPlanError("sam3.batch must be positive")
             if self.sam3_params.grad_accum <= 0:
                 raise TrainingPlanError("sam3.grad_accum must be positive")
-            if self.sam3_params.mixed_precision != "bf16":
-                raise TrainingPlanError(
-                    "SAM3 training currently supports only CUDA BF16; "
-                    "fp16/fp32 modes are unsafe and disabled"
-                )
+            # Legacy plans may contain fp16/fp32. Preserve their ability to
+            # load so users can inspect/edit them; execution preflight and the
+            # sidecar runtime both refuse every mode except CUDA BF16.
             if self.sam3_params.host_reserve_gb < 0.0:
                 raise TrainingPlanError("sam3.host_reserve_gb must not be negative")
             if not 0.0 <= self.sam3_params.host_reserve_fraction <= 1.0:

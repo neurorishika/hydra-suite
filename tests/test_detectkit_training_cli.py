@@ -152,8 +152,8 @@ def test_plan_rejects_nonfinite_numbers_and_empty_sam3_prompt(tmp_path):
     payload["sam3"]["prompt"] = "ant"
     payload["sam3"]["mixed_precision"] = "fp32"
     path.write_text(json.dumps(payload), encoding="utf-8")
-    with pytest.raises(TrainingPlanError, match="only CUDA BF16"):
-        load_training_plan(path)
+    legacy_plan = load_training_plan(path)
+    assert legacy_plan.sam3_params.mixed_precision == "fp32"
 
     payload = _plan_payload(tmp_path)
     payload["dataset"]["split"] = {"train": 0.9, "val": 0.2}
