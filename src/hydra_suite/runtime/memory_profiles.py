@@ -384,6 +384,9 @@ def resource_telemetry(
             ),
             "peak_accelerator_bytes": getattr(result, "peak_accelerator_bytes", None),
             "queue_high_water_bytes": max(0, int(queue_high_water_bytes)),
+            "output_high_water_chars": int(
+                getattr(result, "output_high_water_chars", 0)
+            ),
             "cache_chunk_size": cache_chunk_size,
         },
         "exit_kind": (
