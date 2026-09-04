@@ -86,6 +86,12 @@ class SliceConfig:
     merge_backend: Literal["cv2", "gpu"] = "cv2"
     # extra full-frame pass in addition to tiles (catches > tile-size objects).
     perform_standard_pred: bool = False
+    # Maximum tile images presented to a model call. CPU tiles are copied only
+    # for this active chunk; CUDA inputs remain views where supported.
+    tile_batch_size: int = 16
+    # Hard upper bound for active tile pixels + float model inputs. Values over
+    # the internal safety ceiling are reduced by the admission helper.
+    tile_memory_budget_bytes: int = 256 * 1024 * 1024
 
     _GEOMETRY_MODES = ("auto_model", "auto_object", "custom")
     _MERGE_POLICIES = ("nms", "nmm", "greedy_nmm")
@@ -97,6 +103,12 @@ class SliceConfig:
         self._validate_choice("merge_policy", self.merge_policy, self._MERGE_POLICIES)
         self._validate_choice("merge_metric", self.merge_metric, self._MERGE_METRICS)
         self._validate_choice("merge_backend", self.merge_backend, self._MERGE_BACKENDS)
+        if self.tile_batch_size < 1:
+            raise InferenceConfigError("SliceConfig.tile_batch_size must be >= 1")
+        if self.tile_memory_budget_bytes < 1:
+            raise InferenceConfigError(
+                "SliceConfig.tile_memory_budget_bytes must be >= 1"
+            )
 
     @staticmethod
     def _validate_choice(field_name: str, value: str, allowed: tuple[str, ...]) -> None:
@@ -188,7 +200,9 @@ class OBBConfig:
     max_detections: int = 20
     # Cap on RAW detections per frame, applied at OBB extraction (sorted by
     # confidence descending, top-k) BEFORE size/aspect/IoU filtering. Mirrors
-    # legacy ``_obb_geometry._raw_detection_cap`` (= 2 * MAX_TARGETS). 0 disables.
+    # legacy ``_obb_geometry._raw_detection_cap`` (= 2 * MAX_TARGETS). Zero
+    # derives a finite 2 * max_detections cap; positive expert values are still
+    # bounded by the inference resource ceiling.
     raw_detection_cap: int = 0
     min_object_size: float = 0.0
     max_object_size: float = float("inf")
@@ -634,6 +648,14 @@ def _slice_config_from_params(
         ),
         merge_backend=(_merge_backend if _merge_backend in {"cv2", "gpu"} else "cv2"),
         perform_standard_pred=bool(params.get(f"{prefix}PERFORM_STANDARD_PRED", False)),
+        tile_batch_size=_clamped_int(
+            params.get(f"{prefix}TILE_BATCH_SIZE", 16), 16, 1, 128
+        ),
+        tile_memory_budget_bytes=(
+            _clamped_int(params.get(f"{prefix}MEMORY_BUDGET_MIB", 256), 256, 1, 256)
+            * 1024
+            * 1024
+        ),
     )
 
 

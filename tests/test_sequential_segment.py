@@ -175,8 +175,8 @@ def test_run_sequential_segment_dispatch(monkeypatch):
     # _FakeSegResult's orig_shape is (80, 80); build one matching 80x80 crop.
     monkeypatch.setattr(
         obb_stage,
-        "build_crops",
-        lambda *a, **kw: ([np.zeros((80, 80, 3), np.uint8)], [(20.0, 30.0)]),
+        "iter_crops",
+        lambda *a, **kw: iter([(np.zeros((80, 80, 3), np.uint8), (20.0, 30.0))]),
     )
 
     frame = np.zeros((200, 200, 3), np.uint8)

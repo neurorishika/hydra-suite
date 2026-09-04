@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
-from typing import Any, NamedTuple
+from typing import Any, Iterator, NamedTuple
 
 import cv2
 import numpy as np
@@ -28,6 +28,22 @@ from ..runtime_artifacts import DirectExecutorAdapter, load_obb_executor  # noqa
 logger = logging.getLogger(__name__)
 
 _FALLBACK_IMGSZ = 1024
+
+# Production inference must retain only a finite compact candidate set before
+# downstream crop or mask expansion. Normal configs use ``2 * MAX_TARGETS``;
+# this ceiling also protects legacy/hand-built configs where zero meant
+# "unlimited".
+MAX_RAW_CANDIDATES_PER_FRAME = 1024
+
+
+def effective_raw_detection_cap(config: Any) -> int:
+    """Resolve a finite per-frame compact-candidate cap."""
+
+    requested = int(getattr(config, "raw_detection_cap", 0) or 0)
+    if requested <= 0:
+        final_cap = max(1, int(getattr(config, "max_detections", 20) or 20))
+        requested = 2 * final_cap
+    return min(requested, MAX_RAW_CANDIDATES_PER_FRAME)
 
 
 def _resolve_imgsz(model: Any) -> int:
@@ -472,6 +488,7 @@ def run_obb(
     config: OBBConfig,
     runtime: RuntimeContext,
     roi_mask: np.ndarray | None = None,
+    should_stop: Any = None,
 ) -> list[OBBResult | _RawOBBTensors]:
     """Run OBB detection on a batch of frames.
 
@@ -486,48 +503,113 @@ def run_obb(
     and the disabled-slicing behaviour stays byte-identical to before this
     feature).
 
-    Phase C (region-source unification): every mode is now
-    ``plan -> execute -> extract -> merge`` through a single ``RegionSource``
-    (``regions.py``) -- the standalone ``_run_direct``/``_run_sequential``/
-    ``run_direct_sliced`` orchestrators are retired; their predict routines
-    now live verbatim in each source's ``execute``.
+    Every mode uses a ``RegionSource`` from ``regions.py``. Tile/proposal modes
+    iterate bounded regions through predict and extraction before advancing;
+    whole-frame mode keeps its existing one-window behavior.
     """
     from .regions import select_region_source
 
     source = select_region_source(config)
-    per_frame_regions = source.plan(frames, models, config, runtime, roi_mask=roi_mask)
-    with span(N.MODEL_EXECUTE, gpu=True):
-        per_frame_results = source.execute(per_frame_regions, models, config, runtime)
     task = source.task(config)
     seg_source = source.seg_source(config)
 
+    # Tile/proposal sources yield one bounded image/result chunk at a time.
+    # Extraction happens before requesting the next chunk, so vendor result
+    # objects and tile pixels cannot accumulate across the full grid.
+    parts_by_frame: list[list[OBBResult | _RawOBBTensors]] = [[] for _ in frames]
+    with span(N.MODEL_EXECUTE, gpu=True):
+        iterator_kwargs = {"roi_mask": roi_mask}
+        if should_stop is not None:
+            iterator_kwargs["should_stop"] = should_stop
+        chunks = source.iter_region_results(
+            frames,
+            models,
+            config,
+            runtime,
+            **iterator_kwargs,
+        )
+        for chunk in chunks:
+            with span(N.EXTRACT_RAW):
+                for fi, region, result in chunk:
+                    part = extract_with_transform(
+                        result,
+                        fi,
+                        task,
+                        region.affine,
+                        config,
+                        runtime,
+                        seg_source=seg_source,
+                        force_numpy=source.force_numpy,
+                    )
+                    if not isinstance(part, (OBBResult, _RawOBBTensors)) or (
+                        int(part.xywhr.shape[0])
+                        if isinstance(part, _RawOBBTensors)
+                        else part.num_detections
+                    ):
+                        parts_by_frame[fi].append(part)
+                    parts_by_frame[fi] = _bound_compact_parts(
+                        parts_by_frame[fi], fi, effective_raw_detection_cap(config)
+                    )
+
     out: list[OBBResult | _RawOBBTensors] = []
     with span(N.EXTRACT_RAW):
-        for fi, (regions, results) in enumerate(
-            zip(per_frame_regions, per_frame_results)
-        ):
-            if not regions:
+        for fi, parts in enumerate(parts_by_frame):
+            if not parts:
                 out.append(_empty_obb_result(fi))
-                continue
-            parts = [
-                extract_with_transform(
-                    res,
-                    fi,
-                    task,
-                    region.affine,
-                    config,
-                    runtime,
-                    seg_source=seg_source,
-                    force_numpy=source.force_numpy,
+            else:
+                out.append(
+                    merge_per_frame(
+                        parts,
+                        source.merge_policy,
+                        source.merge_plan(fi),
+                        config,
+                        runtime,
+                    )
                 )
-                for region, res in zip(regions, results)
-            ]
-            out.append(
-                merge_per_frame(
-                    parts, source.merge_policy, source.merge_plan(fi), config, runtime
-                )
-            )
     return out
+
+
+def _bound_compact_parts(
+    parts: list[OBBResult | _RawOBBTensors], frame_idx: int, cap: int
+) -> list[OBBResult | _RawOBBTensors]:
+    """Keep an incrementally bounded top-confidence candidate reservoir."""
+
+    # A few seam tests replace extraction with opaque sentinels. Production
+    # extraction returns only these two concrete compact result types.
+    if any(not isinstance(part, (OBBResult, _RawOBBTensors)) for part in parts):
+        return parts
+    total = sum(
+        (
+            int(part.xywhr.shape[0])
+            if isinstance(part, _RawOBBTensors)
+            else part.num_detections
+        )
+        for part in parts
+    )
+    if total <= 2 * cap:
+        return parts
+    if isinstance(parts[0], _RawOBBTensors):
+        from .slicing_cuda import _concat_raw
+
+        merged = _concat_raw(parts, frame_idx)
+        if int(merged.conf.shape[0]) <= cap:
+            return [merged]
+        keep = torch.topk(merged.conf, cap).indices
+        return [
+            _RawOBBTensors(
+                frame_idx=frame_idx,
+                xywhr=merged.xywhr[keep],
+                corners=merged.corners[keep],
+                conf=merged.conf[keep],
+                cls=merged.cls[keep] if merged.cls is not None else None,
+            )
+        ]
+    return [
+        _apply_raw_detection_cap(
+            merge_obb_results(frame_idx, parts),
+            cap,
+        )
+    ]
 
 
 def resize_crops_for_stage2(
@@ -557,6 +639,24 @@ def build_crops(
     seq: Any,
     runtime: RuntimeContext,
 ) -> tuple[list[np.ndarray], list[tuple[float, float]]]:
+    crops: list[np.ndarray] = []
+    offsets: list[tuple[float, float]] = []
+    for crop, offset in iter_crops(frame, boxes, seq, runtime):
+        crops.append(crop)
+        offsets.append(offset)
+    return crops, offsets
+
+
+def iter_crops(
+    frame: np.ndarray | torch.Tensor,
+    boxes: Any,
+    seq: Any,
+    runtime: RuntimeContext,
+    *,
+    max_candidates: int | None = None,
+) -> Iterator[tuple[np.ndarray, tuple[float, float]]]:
+    """Yield sequential crops without retaining the complete crop set."""
+
     if isinstance(frame, torch.Tensor):
         arr = frame.cpu().numpy()
         if arr.ndim == 3 and arr.shape[0] == 3:
@@ -564,9 +664,10 @@ def build_crops(
     else:
         arr = frame
     h, w = arr.shape[:2]
-    crops: list[np.ndarray] = []
-    offsets: list[tuple[float, float]] = []
-    for x1, y1, x2, y2 in boxes.xyxy.cpu().numpy():
+    coordinates = boxes.xyxy.cpu().numpy()
+    if max_candidates is not None:
+        coordinates = coordinates[: max(0, int(max_candidates))]
+    for x1, y1, x2, y2 in coordinates:
         # Mirrors legacy yolo_detector._build_sequential_crop exactly (padded
         # square box centered on the stage-1 bbox, floor/ceil-clipped to the
         # frame) so stage-2 sees byte-identical crop content to legacy.
@@ -584,9 +685,7 @@ def build_crops(
         crop = arr[oy1:oy2, ox1:ox2]
         if crop.size == 0:
             continue
-        crops.append(crop)
-        offsets.append((float(ox1), float(oy1)))
-    return crops, offsets
+        yield crop, (float(ox1), float(oy1))
 
 
 def _extract_raw_tensors(result: Any, frame_idx: int, device: str) -> _RawOBBTensors:
@@ -700,6 +799,7 @@ def extract_with_transform(
     ox, oy = affine.offset
     sx, sy = affine.scale
     seg = seg_source if seg_source is not None else config.direct
+    raw_cap = effective_raw_detection_cap(config)
     if runtime.tensor_on_cuda and affine.is_translate_only and not force_numpy:
         # Guaranteed translate-only by the `if` above; defensive check only.
         assert (
@@ -718,7 +818,7 @@ def extract_with_transform(
                 result,
                 frame_idx,
                 runtime.device,
-                config.raw_detection_cap,
+                raw_cap,
                 num_angles=seg.seg_num_angles,
                 crop_size=seg.seg_crop_size,
                 pad_ratio=seg.seg_pad_ratio,
@@ -741,7 +841,7 @@ def extract_with_transform(
         return _extract_obb_from_masks(
             result,
             frame_idx,
-            config.raw_detection_cap,
+            raw_cap,
             num_angles=seg.seg_num_angles,
             crop_size=seg.seg_crop_size,
             pad_ratio=seg.seg_pad_ratio,
@@ -1293,6 +1393,7 @@ def merge_per_frame(
 
     fi = parts[0].frame_idx
     is_raw = isinstance(parts[0], _RawOBBTensors)
+    raw_cap = effective_raw_detection_cap(config)
 
     if merge_policy == "plain":
         if is_raw:
@@ -1306,9 +1407,7 @@ def merge_per_frame(
             # exactly once, wherever the raw tensors are eventually
             # materialized (`materialize_tensors` always caps at the end).
             return _concat_raw(parts, fi)
-        return _apply_raw_detection_cap(
-            merge_obb_results(fi, parts), config.raw_detection_cap
-        )
+        return _apply_raw_detection_cap(merge_obb_results(fi, parts), raw_cap)
 
     # merge_policy == "overlap_band_nms"
     if is_raw:
@@ -1332,7 +1431,8 @@ def _merge_numpy_overlap_band_nms(
     # path selecting the SAME detections as the device-tensor path (which
     # caps inside `materialize_tensors`). Cap again after merging so a nmm
     # union that reduces the count still yields cap-ordered ids.
-    concat = _apply_raw_detection_cap(concat, config.raw_detection_cap)
+    raw_cap = effective_raw_detection_cap(config)
+    concat = _apply_raw_detection_cap(concat, raw_cap)
     if concat.num_detections <= 1:
         return concat
     slice_cfg = config.direct.slice
@@ -1353,7 +1453,7 @@ def _merge_numpy_overlap_band_nms(
         overlap_bands=bands,
         runtime=runtime,
     )
-    return _apply_raw_detection_cap(merged, config.raw_detection_cap)
+    return _apply_raw_detection_cap(merged, raw_cap)
 
 
 def _merge_raw_overlap_band_nms(
@@ -1388,7 +1488,8 @@ def _merge_raw_overlap_band_nms(
     # Overlap possible: materialize for the cross-tile merge (this is the
     # only sync point). materialize_tensors applies the raw detection cap,
     # so the O(n^2) merge input is bounded exactly as on the host path.
-    materialized = materialize_tensors(concat, config.raw_detection_cap)
+    raw_cap = effective_raw_detection_cap(config)
+    materialized = materialize_tensors(concat, raw_cap)
     bands = band_membership(materialized.corners, plan.tiles)
     slice_cfg = config.direct.slice
     merged = merge_obb_detections(
@@ -1400,7 +1501,7 @@ def _merge_raw_overlap_band_nms(
         overlap_bands=bands,
         runtime=runtime,
     )
-    return _apply_raw_detection_cap(merged, config.raw_detection_cap)
+    return _apply_raw_detection_cap(merged, raw_cap)
 
 
 def _load_yolo(

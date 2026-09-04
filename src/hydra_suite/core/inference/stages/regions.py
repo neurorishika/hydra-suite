@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Iterator
 
 import numpy as np
 import torch
@@ -87,6 +87,30 @@ class RegionSource:
         per-mode logic ``RegionSource`` does not unify.
         """
         raise NotImplementedError
+
+    def iter_region_results(
+        self, frames, models, config, runtime, roi_mask=None, should_stop=None
+    ) -> Iterator[list[tuple[int, Region, Any]]]:
+        """Yield prediction results in bounded chunks.
+
+        Whole-frame sources are already bounded by the admitted frame window,
+        so the compatibility implementation may use their existing plan and
+        execute methods. Tile and proposal sources override this method to
+        avoid materializing every region image or vendor result.
+        """
+
+        if should_stop is not None and should_stop():
+            return
+        planned = self.plan(frames, models, config, runtime, roi_mask=roi_mask)
+        predicted = self.execute(planned, models, config, runtime)
+        if should_stop is not None and should_stop():
+            return
+        for frame_idx, (regions, results) in enumerate(zip(planned, predicted)):
+            if regions:
+                yield [
+                    (frame_idx, region, result)
+                    for region, result in zip(regions, results)
+                ]
 
     def task(self, config) -> str:
         """The OBB task ('obb'/'detect'/'segment') this source's regions predict."""
@@ -288,6 +312,88 @@ class Grid(RegionSource):
             idx += n
         return out
 
+    def iter_region_results(
+        self, frames, models, config, runtime, roi_mask=None, should_stop=None
+    ) -> Iterator[list[tuple[int, Region, Any]]]:
+        """Predict tiles without retaining a frame-window's tile pixels/results."""
+
+        if not frames:
+            self._plan = None
+            return
+
+        from .obb import DirectExecutorAdapter, _frames_are_cuda_tensors, _resolve_imgsz
+        from .slicing import (
+            MAX_TILE_CHUNK,
+            _predict_tiles,
+            admitted_tile_chunk_size,
+            iter_tile_job_chunks,
+            plan_slices,
+        )
+
+        slice_cfg = config.direct.slice
+        model = models.direct_model
+        imgsz = _resolve_imgsz(model)
+        device_frames = _frames_are_cuda_tensors(frames)
+        first = frames[0]
+        plan = plan_slices(
+            (int(first.shape[0]), int(first.shape[1])),
+            slice_cfg,
+            imgsz,
+            roi_mask=roi_mask,
+            ref_object_px=slice_cfg.reference_body_px,
+        )
+        self._plan = plan
+        requested = min(
+            plan.jobs_per_frame,
+            int(getattr(slice_cfg, "tile_batch_size", MAX_TILE_CHUNK)),
+        )
+        byte_budget = int(
+            getattr(slice_cfg, "tile_memory_budget_bytes", 256 * 1024 * 1024)
+        )
+        chunk_size = admitted_tile_chunk_size(
+            plan,
+            imgsz=imgsz,
+            device_tiles=device_frames,
+            requested=requested,
+            byte_budget=byte_budget,
+        )
+        letterbox = device_frames and not isinstance(model, DirectExecutorAdapter)
+
+        for chunk in iter_tile_job_chunks(
+            frames,
+            plan,
+            device_tiles=device_frames,
+            chunk_size=chunk_size,
+        ):
+            if should_stop is not None and should_stop():
+                return
+            images = [image for _, image in chunk]
+            results = _predict_tiles(
+                images,
+                model,
+                config,
+                runtime,
+                imgsz,
+                letterbox=letterbox,
+                chunk_size=chunk_size,
+            )
+            if should_stop is not None and should_stop():
+                return
+            entries: list[tuple[int, Region, Any]] = []
+            for (job, image), result in zip(chunk, results):
+                entries.append(
+                    (
+                        job.frame_idx,
+                        Region(
+                            image=image,
+                            affine=Affine(offset=job.offset),
+                            frame_idx=job.frame_idx,
+                        ),
+                        result,
+                    )
+                )
+            yield entries
+
     def merge_plan(self, frame_idx: int) -> Any:
         return self._plan
 
@@ -295,10 +401,10 @@ class Grid(RegionSource):
 class Stage1Proposals(RegionSource):
     """Stage-1 detector proposals: one region per stage-1 crop (sequential mode).
 
-    Mirrors ``_run_sequential``'s stage-1-predict + crop-building exactly
-    (same kwargs, same ``build_crops``/``resize_crops_for_stage2`` calls) so
-    region images and offset/scale affines are byte-identical to what
-    ``_run_sequential`` fed to stage-2. ``force_numpy=True`` matches A.5's
+    Mirrors ``_run_sequential``'s stage-1 predict and crop geometry exactly,
+    but creates/resizes only the next admitted stage-2 batch. Region images and
+    offset/scale affines stay byte-identical to what ``_run_sequential`` fed to
+    stage-2. ``force_numpy=True`` matches A.5's
     always-numpy stage-2 extraction (spec S5.2): a pixel-exact crop yields a
     translate-only affine that would otherwise slip into the (unproven for
     sequential) raw branch on the gpu-native tier.
@@ -307,6 +413,9 @@ class Stage1Proposals(RegionSource):
     merge_policy = "plain"
     device_residency = "cpu_crop_boundary"
     force_numpy = True
+
+    DEFAULT_STAGE2_BATCH_SIZE = 16
+    MAX_STAGE2_BATCH_SIZE = 128
 
     def plan(
         self, frames, models, config, runtime, roi_mask=None
@@ -372,7 +481,7 @@ class Stage1Proposals(RegionSource):
                 out.append([])
                 continue
             crops = [r.image for r in regions]
-            batch_size = seq.stage2_batch_size or len(crops)
+            batch_size = self._stage2_batch_size(seq)
             frame_results: list[Any] = []
             for i in range(0, len(crops), batch_size):
                 batch = crops[i : i + batch_size]
@@ -387,6 +496,137 @@ class Stage1Proposals(RegionSource):
                 frame_results.extend(s2)
             out.append(frame_results)
         return out
+
+    @classmethod
+    def _stage2_batch_size(cls, seq: Any) -> int:
+        requested = int(getattr(seq, "stage2_batch_size", 0) or 0)
+        if requested <= 0:
+            requested = cls.DEFAULT_STAGE2_BATCH_SIZE
+        return max(1, min(requested, cls.MAX_STAGE2_BATCH_SIZE))
+
+    def iter_region_results(
+        self, frames, models, config, runtime, roi_mask=None, should_stop=None
+    ) -> Iterator[list[tuple[int, Region, Any]]]:
+        """Run stage 2 over crop chunks created just in time."""
+
+        from .obb import MAX_RAW_CANDIDATES_PER_FRAME, effective_raw_detection_cap
+
+        seq = config.sequential
+        stage1_kwargs: dict[str, Any] = {}
+        if seq.detect_image_size > 0:
+            stage1_kwargs["imgsz"] = seq.detect_image_size
+        stage1 = models.detect_model.predict(
+            frames,
+            conf=seq.detect_confidence_threshold,
+            iou=1.0,
+            classes=config.target_classes or None,
+            verbose=False,
+            device=runtime.device,
+            **stage1_kwargs,
+        )
+        if should_stop is not None and should_stop():
+            return
+        candidate_cap = effective_raw_detection_cap(config)
+        batch_size = self._stage2_batch_size(seq)
+        for frame_idx, (frame, stage1_result) in enumerate(zip(frames, stage1)):
+            boxes = stage1_result.boxes
+            if boxes is None or len(boxes) == 0:
+                continue
+            if len(boxes) > MAX_RAW_CANDIDATES_PER_FRAME:
+                raise ValueError(
+                    "Sequential stage-1 proposals are not resource-admissible: "
+                    f"frame {frame_idx} produced {len(boxes)} candidates, above "
+                    f"the hard {MAX_RAW_CANDIDATES_PER_FRAME}-candidate ceiling; "
+                    "increase the confidence threshold"
+                )
+            yield from self._iter_stage2_for_boxes(
+                frame_idx,
+                frame,
+                boxes,
+                models,
+                config,
+                runtime,
+                candidate_cap,
+                batch_size,
+                should_stop,
+            )
+
+    def _iter_stage2_for_boxes(
+        self,
+        frame_idx: int,
+        frame: Any,
+        boxes: Any,
+        models: Any,
+        config: Any,
+        runtime: Any,
+        candidate_cap: int,
+        batch_size: int,
+        should_stop: Any = None,
+    ) -> Iterator[list[tuple[int, Region, Any]]]:
+        from .obb import iter_crops
+
+        seq = config.sequential
+        pending: list[Region] = []
+        for crop, offset in iter_crops(
+            frame,
+            boxes,
+            seq,
+            runtime,
+            max_candidates=candidate_cap,
+        ):
+            orig_h, orig_w = crop.shape[:2]
+            if seq.stage2_image_size > 0 and (
+                orig_h != seq.stage2_image_size or orig_w != seq.stage2_image_size
+            ):
+                import cv2
+
+                resized = cv2.resize(
+                    crop,
+                    (seq.stage2_image_size, seq.stage2_image_size),
+                    interpolation=cv2.INTER_LINEAR,
+                )
+            else:
+                resized = crop
+            scale = (
+                (
+                    orig_w / seq.stage2_image_size,
+                    orig_h / seq.stage2_image_size,
+                )
+                if seq.stage2_image_size > 0
+                else (1.0, 1.0)
+            )
+            pending.append(
+                Region(
+                    image=resized,
+                    affine=Affine(offset=offset, scale=scale),
+                    frame_idx=frame_idx,
+                )
+            )
+            if len(pending) == batch_size:
+                if should_stop is not None and should_stop():
+                    return
+                yield self._predict_stage2_chunk(
+                    frame_idx, pending, models, seq, runtime
+                )
+                pending = []
+        if pending:
+            if should_stop is not None and should_stop():
+                return
+            yield self._predict_stage2_chunk(frame_idx, pending, models, seq, runtime)
+
+    @staticmethod
+    def _predict_stage2_chunk(
+        frame_idx: int, regions: list[Region], models, seq, runtime
+    ) -> list[tuple[int, Region, Any]]:
+        results = models.obb_model.predict(
+            [region.image for region in regions],
+            conf=seq.obb_confidence_threshold,
+            iou=1.0,
+            verbose=False,
+            device=runtime.device,
+            imgsz=seq.stage2_image_size,
+        )
+        return [(frame_idx, region, result) for region, result in zip(regions, results)]
 
 
 class _FrameSpaceBoxes:
@@ -608,6 +848,141 @@ class SlicedStage1Proposals(Stage1Proposals):
                 )
             per_frame.append(regions)
         return per_frame
+
+    def iter_region_results(
+        self, frames, models, config, runtime, roi_mask=None, should_stop=None
+    ) -> Iterator[list[tuple[int, Region, Any]]]:
+        """Stream stage-1 tiles, retain bounded boxes, then stream stage 2."""
+
+        if not frames:
+            return
+
+        from .obb import (
+            MAX_RAW_CANDIDATES_PER_FRAME,
+            _frames_are_cuda_tensors,
+            _resolve_imgsz,
+            effective_raw_detection_cap,
+        )
+        from .slicing import (
+            MAX_TILE_CHUNK,
+            admitted_tile_chunk_size,
+            iter_tile_job_chunks,
+            plan_slices,
+        )
+
+        seq = config.sequential
+        slice_cfg = seq.stage1_slice
+        model = models.detect_model
+        imgsz = _resolve_imgsz(model)
+        device_frames = _frames_are_cuda_tensors(frames)
+        first = frames[0]
+        plan = plan_slices(
+            (int(first.shape[0]), int(first.shape[1])),
+            slice_cfg,
+            imgsz,
+            roi_mask=roi_mask,
+            ref_object_px=slice_cfg.reference_body_px,
+        )
+        requested = min(
+            plan.jobs_per_frame,
+            int(getattr(slice_cfg, "tile_batch_size", MAX_TILE_CHUNK)),
+        )
+        chunk_size = admitted_tile_chunk_size(
+            plan,
+            imgsz=imgsz,
+            device_tiles=device_frames,
+            requested=requested,
+            byte_budget=int(
+                getattr(slice_cfg, "tile_memory_budget_bytes", 256 * 1024 * 1024)
+            ),
+        )
+        candidate_cap = effective_raw_detection_cap(config)
+        boxes_by_frame = [np.zeros((0, 4), dtype=np.float64) for _ in frames]
+        scores_by_frame = [np.zeros(0, dtype=np.float64) for _ in frames]
+
+        stage1_kwargs: dict[str, Any] = {}
+        if seq.detect_image_size > 0:
+            stage1_kwargs["imgsz"] = seq.detect_image_size
+        for chunk in iter_tile_job_chunks(
+            frames,
+            plan,
+            device_tiles=device_frames,
+            chunk_size=chunk_size,
+        ):
+            if should_stop is not None and should_stop():
+                return
+            results = model.predict(
+                [image for _, image in chunk],
+                conf=seq.detect_confidence_threshold,
+                iou=1.0,
+                classes=config.target_classes or None,
+                verbose=False,
+                device=runtime.device,
+                **stage1_kwargs,
+            )
+            if should_stop is not None and should_stop():
+                return
+            for (job, _image), result in zip(chunk, results):
+                boxes = getattr(result, "boxes", None)
+                if boxes is None or len(boxes) == 0:
+                    continue
+                if len(boxes) > MAX_RAW_CANDIDATES_PER_FRAME:
+                    raise ValueError(
+                        "Sliced sequential stage-1 proposals are not "
+                        f"resource-admissible: one tile produced {len(boxes)} "
+                        f"candidates, above the hard "
+                        f"{MAX_RAW_CANDIDATES_PER_FRAME}-candidate ceiling; "
+                        "increase the confidence threshold"
+                    )
+                xyxy = np.asarray(
+                    boxes.xyxy.detach().cpu().numpy(), dtype=np.float64
+                ).copy()
+                ox, oy = job.offset
+                xyxy[:, [0, 2]] += ox
+                xyxy[:, [1, 3]] += oy
+                conf = getattr(boxes, "conf", None)
+                scores = (
+                    np.asarray(conf.detach().cpu().numpy(), dtype=np.float64)
+                    if conf is not None
+                    else np.ones(xyxy.shape[0], dtype=np.float64)
+                )
+                frame_idx = job.frame_idx
+                combined_boxes = np.concatenate(
+                    (boxes_by_frame[frame_idx], xyxy), axis=0
+                )
+                combined_scores = np.concatenate(
+                    (scores_by_frame[frame_idx], scores), axis=0
+                )
+                order = np.argsort(-combined_scores, kind="stable")[:candidate_cap]
+                boxes_by_frame[frame_idx] = combined_boxes[order]
+                scores_by_frame[frame_idx] = combined_scores[order]
+
+        batch_size = self._stage2_batch_size(seq)
+        for frame_idx, frame in enumerate(frames):
+            boxes = boxes_by_frame[frame_idx]
+            if boxes.shape[0] == 0:
+                continue
+            merged = _merge_axis_aligned_boxes(
+                boxes,
+                scores_by_frame[frame_idx],
+                policy=slice_cfg.merge_policy,
+                metric=slice_cfg.merge_metric,
+                threshold=slice_cfg.merge_threshold,
+            )[:candidate_cap]
+            if merged.shape[0] == 0:
+                continue
+            frame_boxes = _FrameSpaceBoxes(torch.as_tensor(merged, dtype=torch.float32))
+            yield from self._iter_stage2_for_boxes(
+                frame_idx,
+                frame,
+                frame_boxes,
+                models,
+                config,
+                runtime,
+                candidate_cap,
+                batch_size,
+                should_stop,
+            )
 
 
 def select_region_source(config) -> RegionSource:
