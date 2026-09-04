@@ -50,6 +50,7 @@ class _FakeDetectionHandle:
 class _FakeCaches:
     def __init__(self, detection_handle):
         self.detection = detection_handle
+        self.set_manifest_valid = True
 
 
 def test_preview_worker_opens_new_format_cache_and_does_not_close_it(
@@ -58,10 +59,11 @@ def test_preview_worker_opens_new_format_cache_and_does_not_close_it(
     fake_handle = _FakeDetectionHandle()
     calls = {}
 
-    def _fake_open_caches(cfg, cache_dir, video_sig, roi_mask=None):
+    def _fake_open_caches(cfg, cache_dir, video_sig, roi_mask=None, *, read_only=False):
         calls["cache_dir"] = cache_dir
         calls["video_sig"] = video_sig
         calls["roi_mask"] = roi_mask
+        calls["read_only"] = read_only
         return _FakeCaches(fake_handle)
 
     def _fake_video_signature(video_path):
@@ -118,6 +120,7 @@ def test_preview_worker_opens_new_format_cache_and_does_not_close_it(
     assert calls.get("cache_dir") is not None
     assert emitted["finished"] is True
     assert fake_handle.closed is False
+    assert calls["read_only"] is True
 
 
 def test_preview_worker_no_longer_imports_legacy_DetectionCache_directly():

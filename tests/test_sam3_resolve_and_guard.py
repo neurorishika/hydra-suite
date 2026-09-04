@@ -124,10 +124,9 @@ def test_guard_against_a_real_published_sidecar(tmp_path):
     RuntimeError naming the offending key (tuned weights NOT resident) --
     never KeyError either way.
     """
-    from pathlib import Path
 
     from hydra_suite.training.contracts import Sam3LoraParams
-    from hydra_suite.training.sam3_lora.publish import publish_sam3_model
+    from hydra_suite.training.sam3_lora.publish_worker import publish_sam3_artifact
 
     # bf16 (not float32): both `_tensor_sha256` implementations normalise
     # with `.float()` before hashing. With float32 fixtures that call is a
@@ -143,16 +142,16 @@ def test_guard_against_a_real_published_sidecar(tmp_path):
         },
         tmp_path / "adapters.pt",
     )
-    _, art = publish_sam3_model(
+    art, sidecar = publish_sam3_artifact(
         run_id="r1",
         adapters_path=tmp_path / "adapters.pt",
         base_checkpoint=tmp_path / "base.pt",
         build_manifest={"tile_px": 1007, "reference_body_px": 55.4},
-        params=Sam3LoraParams(prompt="ant"),
+        params=Sam3LoraParams(prompt="ant", rank=2, alpha=4),
         source_fingerprint="fp1",
         models_root=tmp_path / "models",
     )
-    meta = json.loads(Path(str(art) + ".sam3_meta.json").read_text())
+    meta = json.loads(sidecar.read_text())
 
     merged = torch.load(art, map_location="cpu", weights_only=True)
     # The live model's state dict is what ultralytics hands back AFTER its

@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from hydra_suite.core.inference.config import (
+    HeadTailConfig,
     InferenceConfig,
     OBBConfig,
     OBBDirectConfig,
@@ -53,7 +54,7 @@ def test_caches_invalidated_when_video_file_changes(tmp_path):
     # Write a detection cache bound to this exact video's signature.
     caches = _open_caches(cfg, tmp_path, runner._video_sig)
     caches.detection.write_frame(0, result=_make_obb(2, 0))
-    caches.detection.close()
+    caches.close()
     assert runner.caches_all_valid() is True
 
     # Regenerate the video under the same name with different content/size.
@@ -61,6 +62,145 @@ def test_caches_invalidated_when_video_file_changes(tmp_path):
     with patch("hydra_suite.core.inference.runner._load_all_models"):
         runner2 = InferenceRunner(cfg, cache_dir=tmp_path, video_path=str(video))
     assert runner2.caches_all_valid() is False
+
+
+def test_open_caches_propagates_coordinated_access_mode(tmp_path):
+    from hydra_suite.core.inference.runner import _open_caches
+
+    caches = _open_caches(_cfg(), tmp_path, read_only=True, write_mode="resume")
+    assert caches.all_handles()
+    assert all(handle.read_only for handle in caches.all_handles())
+    assert all(handle.write_mode == "resume" for handle in caches.all_handles())
+
+
+@pytest.mark.parametrize("crash_after_handle", [0, 1])
+def test_cache_set_promotion_keeps_old_generation_after_each_handle_crash(
+    tmp_path, monkeypatch, crash_after_handle
+):
+    from hydra_suite.core.inference.runner import _open_caches
+
+    cfg = _cfg()
+    cfg.headtail = HeadTailConfig(model_path="/ht.pt")
+
+    old = _open_caches(cfg, tmp_path, write_mode="fresh")
+    old.detection.write_frame(0, result=_make_obb(1, 0))
+    old.headtail.write_frame(
+        0,
+        det_indices=np.asarray([0], np.int32),
+        heading_hints=np.asarray([0.5], np.float32),
+        heading_confidences=np.asarray([0.9], np.float32),
+        directed_mask=np.asarray([1], np.uint8),
+    )
+    old.close()
+    old_generation = old.generation_id
+
+    replacement = _open_caches(cfg, tmp_path, write_mode="fresh")
+    replacement.detection.write_frame(0, result=_make_obb(2, 0))
+    replacement.headtail.write_frame(
+        0,
+        det_indices=np.asarray([0, 1], np.int32),
+        heading_hints=np.asarray([0.5, 0.6], np.float32),
+        heading_confidences=np.asarray([0.9, 0.8], np.float32),
+        directed_mask=np.asarray([1, 1], np.uint8),
+    )
+    victim = replacement.all_handles()[crash_after_handle]
+    real_close = victim.close
+
+    def close_then_crash(*args, **kwargs):
+        real_close(*args, **kwargs)
+        raise RuntimeError("simulated crash during set preparation")
+
+    monkeypatch.setattr(victim, "close", close_then_crash)
+    with pytest.raises(RuntimeError, match="set preparation"):
+        replacement.close()
+
+    recovered = _open_caches(cfg, tmp_path, read_only=True)
+    assert recovered.generation_id == old_generation
+    assert recovered.detection.read_frame(0).num_detections == 1
+
+
+@pytest.mark.parametrize("crash_after_handle", [0, 1])
+def test_cache_set_resume_keeps_old_revision_after_each_handle_crash(
+    tmp_path, monkeypatch, crash_after_handle
+):
+    from hydra_suite.core.inference.runner import _open_caches
+
+    cfg = _cfg()
+    cfg.headtail = HeadTailConfig(model_path="/ht.pt")
+    old = _open_caches(cfg, tmp_path, write_mode="fresh")
+    old.detection.write_frame(0, result=_make_obb(1, 0))
+    old.headtail.write_frame(
+        0,
+        det_indices=np.asarray([0], np.int32),
+        heading_hints=np.asarray([0.5], np.float32),
+        heading_confidences=np.asarray([0.9], np.float32),
+        directed_mask=np.asarray([1], np.uint8),
+    )
+    old.close()
+    old_revision = old.revision_id
+
+    resumed = _open_caches(cfg, tmp_path, write_mode="resume")
+    resumed.detection.write_frame(1, result=_make_obb(1, 1))
+    resumed.headtail.write_frame(
+        1,
+        det_indices=np.asarray([0], np.int32),
+        heading_hints=np.asarray([0.6], np.float32),
+        heading_confidences=np.asarray([0.8], np.float32),
+        directed_mask=np.asarray([1], np.uint8),
+    )
+    victim = resumed.all_handles()[crash_after_handle]
+    real_close = victim.close
+
+    def close_then_crash(*args, **kwargs):
+        real_close(*args, **kwargs)
+        raise RuntimeError("simulated resume crash")
+
+    monkeypatch.setattr(victim, "close", close_then_crash)
+    with pytest.raises(RuntimeError, match="resume crash"):
+        resumed.close()
+
+    recovered = _open_caches(cfg, tmp_path, read_only=True)
+    assert recovered.revision_id == old_revision
+    assert recovered.detection.read_frame(0).num_detections == 1
+    assert recovered.detection.read_frame(1) is None
+
+
+def test_coordinated_resume_skips_covered_frames_without_duplicate_chunks(tmp_path):
+    from hydra_suite.core.inference.runner import _open_caches
+
+    first = _open_caches(_cfg(), tmp_path, write_mode="fresh")
+    first.detection.write_frame(0, result=_make_obb(1, 0))
+    first.close()
+    generation = first.generation_id
+    chunk_root = tmp_path / ".cache-generations" / generation
+    before = list(chunk_root.rglob("chunk-*.npz"))
+
+    resumed = _open_caches(_cfg(), tmp_path, write_mode="resume")
+    resumed.detection.write_frame(0, result=_make_obb(3, 0))
+    resumed.close()
+
+    assert resumed.generation_id == generation
+    assert list(chunk_root.rglob("chunk-*.npz")) == before
+    reader = _open_caches(_cfg(), tmp_path, read_only=True)
+    assert reader.detection.read_frame(0).num_detections == 1
+
+
+def test_cache_set_rejects_member_manifest_from_other_generation(tmp_path):
+    from hydra_suite.core.inference.cache import chunked
+    from hydra_suite.core.inference.runner import InferenceRunner, _open_caches
+
+    caches = _open_caches(_cfg(), tmp_path, write_mode="fresh")
+    caches.detection.write_frame(0, result=_make_obb(1, 0))
+    caches.close()
+    path = caches.detection.path
+    with np.load(path, allow_pickle=False) as raw:
+        manifest = {name: raw[name] for name in raw.files}
+    manifest["generation_id"] = np.asarray(["f" * 32])
+    chunked._atomic_npz_save(path, **manifest)
+
+    with patch("hydra_suite.core.inference.runner._load_all_models"):
+        runner = InferenceRunner(_cfg(), cache_dir=tmp_path)
+    assert runner.caches_all_valid() is False
 
 
 def test_run_batch_pass_raises_without_cache_dir():
@@ -350,6 +490,38 @@ def test_process_obb_results_applies_roi_mask_filter(tmp_path):
         f"{results[0].obb.num_detections} surviving"
     )
     np.testing.assert_allclose(results[0].obb.centroids[0], [5.0, 5.0])
+
+
+def test_process_window_records_downstream_empty_coverage(tmp_path):
+    from hydra_suite.core.inference.pipeline import BatchWindow
+    from hydra_suite.core.inference.runner import InferenceRunner, _CacheSet
+
+    cfg = _cfg()
+    handles = {
+        name: MagicMock() for name in ("detection", "headtail", "pose", "apriltag")
+    }
+    caches = _CacheSet(**handles)
+
+    with (
+        patch("hydra_suite.core.inference.runner._load_all_models") as load,
+        patch(
+            "hydra_suite.core.inference.pipeline.run_obb",
+            return_value=[_make_obb(n=0, frame_idx=5)],
+        ),
+    ):
+        load.return_value = MagicMock(
+            obb=MagicMock(), headtail=None, cnn=[], pose=None, apriltag=None
+        )
+        runner = InferenceRunner(cfg, cache_dir=tmp_path)
+        pipeline = runner._build_pipeline(caches)
+        pipeline._process_window(
+            BatchWindow(frames=[np.zeros((8, 8, 3), dtype=np.uint8)], frame_indices=[5])
+        )
+        pipeline.cache_writer.flush()
+        pipeline.cache_writer.close()
+
+    for name in ("headtail", "pose", "apriltag"):
+        handles[name].write_frame.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

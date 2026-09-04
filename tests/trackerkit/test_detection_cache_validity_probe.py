@@ -8,14 +8,10 @@ from pathlib import Path
 
 import numpy as np
 
-from hydra_suite.core.inference.cache.keys import (
-    detection_cache_key,
-    video_signature,
-    with_video_signature,
-)
-from hydra_suite.core.inference.cache.store import DetectionCacheHandle
+from hydra_suite.core.inference.cache.keys import video_signature
 from hydra_suite.core.inference.config import build_inference_config_from_params
 from hydra_suite.core.inference.result import OBBResult
+from hydra_suite.core.inference.runner import _open_caches
 from hydra_suite.trackerkit.gui.orchestrators.config import (
     detection_cache_dir_covers_range,
 )
@@ -35,19 +31,20 @@ def _make_obb_result(frame_idx: int) -> OBBResult:
 
 
 def _write_modern_detection_cache_dir(cache_dir: Path, params: dict, frames: range):
-    """Populate a modern ``.inference_cache_<stem>/detection.npz`` dir whose
-    key matches what ``detection_cache_dir_covers_range`` will reconstruct
-    from ``params`` via ``build_inference_config_from_params``."""
+    """Populate the atomic cache-set layout written by ``InferenceRunner``."""
     cfg = build_inference_config_from_params(params)
-    key = with_video_signature(
-        detection_cache_key(cfg.obb, params.get("ROI_MASK", None)),
+    caches = _open_caches(
+        cfg,
+        cache_dir,
         video_signature(""),
+        params.get("ROI_MASK", None),
+        write_mode="fresh",
     )
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    handle = DetectionCacheHandle(path=cache_dir / "detection.npz", key=key)
+    handle = caches.detection
+    assert handle is not None
     for frame_idx in frames:
         handle.write_frame(frame_idx, result=_make_obb_result(frame_idx))
-    handle.close()
+    caches.close()
 
 
 def test_modern_cache_dir_covering_range_is_valid(tmp_path):
@@ -55,12 +52,14 @@ def test_modern_cache_dir_covering_range_is_valid(tmp_path):
     cache_dir = tmp_path / ".inference_cache_clip"
     _write_modern_detection_cache_dir(cache_dir, params, frames=range(0, 5))
 
+    active_before = (cache_dir / "cache_set.json").read_bytes()
     assert (
         detection_cache_dir_covers_range(
             str(cache_dir), "", params, start_frame=0, end_frame=4
         )
         is True
     )
+    assert (cache_dir / "cache_set.json").read_bytes() == active_before
 
 
 def test_modern_cache_file_path_covering_range_is_valid(tmp_path):
@@ -88,6 +87,20 @@ def test_modern_cache_dir_missing_frames_is_not_valid(tmp_path):
     assert (
         detection_cache_dir_covers_range(
             str(cache_dir), "", params, start_frame=0, end_frame=9
+        )
+        is False
+    )
+
+
+def test_modern_cache_with_corrupt_set_manifest_is_not_valid(tmp_path):
+    params: dict = {}
+    cache_dir = tmp_path / ".inference_cache_clip"
+    _write_modern_detection_cache_dir(cache_dir, params, frames=range(0, 5))
+    (cache_dir / "cache_set.json").write_text("{}", encoding="utf-8")
+
+    assert (
+        detection_cache_dir_covers_range(
+            str(cache_dir), "", params, start_frame=0, end_frame=4
         )
         is False
     )

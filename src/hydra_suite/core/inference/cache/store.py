@@ -1,10 +1,17 @@
+"""Bounded, crash-resumable inference cache handles.
+
+New writes use immutable NPZ payload chunks and an atomic manifest. Existing
+monolithic NPZ caches remain readable through the same public handle classes.
+"""
+
 from __future__ import annotations
 
 import json
+import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import numpy as np
 
@@ -15,237 +22,487 @@ from ..result import (
     OBBResult,
 )
 from .base import CacheKey
+from .chunked import (
+    DEFAULT_CHUNK_FRAMES,
+    MAX_LEGACY_BYTES,
+    ChunkedArrayStore,
+    _atomic_npz_save,
+    _load_npz_bounded,
+)
+from .set_manifest import resolve_cache_member
 
 
 class CacheHandle(ABC):
     @abstractmethod
     def is_valid(self) -> bool:
-        """Return True if the cache file matches the expected key."""
+        """Return True if the cache matches the expected key and is intact."""
 
     @abstractmethod
     def write_frame(self, frame_idx: int, **kwargs) -> None:
-        """Buffer a frame's result for write on close()."""
+        """Buffer one frame, flushing automatically at the chunk boundary."""
 
     @abstractmethod
     def read_frame(self, frame_idx: int) -> Any:
-        """Return the cached result for `frame_idx`, or None if invalid."""
+        """Return a cached result, or None for invalid/missing frames."""
 
     @abstractmethod
     def close(self) -> None:
-        """Flush the buffered writes to disk."""
+        """Publish the final bounded chunk."""
+
+    @abstractmethod
+    def written_frames(self) -> set[int]:
+        """Return explicitly processed frame IDs."""
+
+    @abstractmethod
+    def coverage_ranges(self) -> tuple[tuple[int, int], ...]:
+        """Return normalized processed-frame intervals."""
 
 
 def _check_key(path: Path, key: CacheKey) -> bool:
-    if not path.exists():
+    """Legacy helper retained for callers/tests that inspect monolithic NPZ."""
+    if not path.is_file():
         return False
     try:
-        data = np.load(path)
+        data = _load_npz_bounded(path, max_bytes=MAX_LEGACY_BYTES)
         return str(data["cache_key"][0]) == key.as_string()
     except Exception:
         return False
 
 
 def _npz_save(path: Path, key: CacheKey, **arrays) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez(path, cache_key=np.array([key.as_string()]), **arrays)
+    """Write a legacy monolithic NPZ fixture atomically.
+
+    Production handles no longer call this function. It remains available for
+    compatibility tests and third-party code that deliberately creates legacy
+    caches.
+    """
+    payload = {"cache_key": np.asarray([key.as_string()]), **arrays}
+    _atomic_npz_save(Path(path), **payload)
 
 
-# ---- DetectionCacheHandle ----
+def _rows_for_frame(arrays: dict[str, np.ndarray], frame_idx: int) -> np.ndarray:
+    return np.asarray(arrays["frame_indices"]) == int(frame_idx)
 
 
-@dataclass
-class DetectionCacheHandle(CacheHandle):
+def _concat(parts: list[np.ndarray], shape: tuple[int, ...], dtype) -> np.ndarray:
+    nonempty = [part for part in parts if len(part)]
+    return np.concatenate(nonempty) if nonempty else np.zeros(shape, dtype=dtype)
+
+
+def _require_unique_increasing(name: str, values: np.ndarray) -> None:
+    array = np.asarray(values)
+    if array.ndim != 1 or (
+        len(array) > 1 and np.any(np.diff(array.astype(np.int64)) <= 0)
+    ):
+        raise ValueError(f"{name} must be one-dimensional, unique, and increasing")
+
+
+def _buffer_value_bytes(value: Any, seen: set[int] | None = None) -> int:
+    """Estimate bytes retained by a handle without double-counting arrays."""
+    if seen is None:
+        seen = set()
+    identity = id(value)
+    if identity in seen:
+        return 0
+    seen.add(identity)
+    if isinstance(value, np.ndarray):
+        return int(value.nbytes) + sys.getsizeof(value)
+    if isinstance(value, dict):
+        return sys.getsizeof(value) + sum(
+            _buffer_value_bytes(key, seen) + _buffer_value_bytes(item, seen)
+            for key, item in value.items()
+        )
+    if isinstance(value, (list, tuple)):
+        return sys.getsizeof(value) + sum(
+            _buffer_value_bytes(item, seen) for item in value
+        )
+    fields = getattr(value, "__dict__", None)
+    if fields is not None:
+        return sys.getsizeof(value) + _buffer_value_bytes(fields, seen)
+    return sys.getsizeof(value)
+
+
+class _ChunkedHandleMixin:
     path: Path
     key: CacheKey
-    require_key: bool = True
-    # Read-only handles (see cache/reader.py) carry a PLACEHOLDER key and never
-    # buffer a write. `close()` flushes unconditionally when `_buffer` is empty,
-    # so closing such a handle would overwrite a fully populated detection.npz
-    # with a zero-detection cache stamped with that placeholder -- destroying
-    # every cached detection AND making the key unmatchable, so the next run
-    # re-runs full inference no matter what "reuse cache" is set to. Guard it
-    # here rather than relying on every caller remembering not to close.
-    read_only: bool = False
-    _buffer: list[OBBResult] = field(default_factory=list, repr=False)
-    _data: dict | None = field(default=None, repr=False)
-    _valid: bool | None = field(default=None, repr=False)
-    _written: set[int] | None = field(default=None, repr=False)
+    require_key: bool
+    chunk_size: int
+    _store: ChunkedArrayStore
+    _legacy_data: dict[str, np.ndarray] | None
+    read_only: bool
+    write_mode: str
+    max_buffer_bytes: int
+
+    _kind = ""
+
+    def _init_store(self) -> None:
+        if int(self.chunk_size) < 1:
+            raise ValueError("chunk_size must be >= 1")
+        self.path = Path(self.path)
+        if self.read_only:
+            self.path, resolved_generation = resolve_cache_member(self.path)
+            if resolved_generation is not None:
+                self.generation_id = resolved_generation
+        self._store = ChunkedArrayStore(
+            self.path,
+            self.key,
+            self._kind,
+            require_key=self.require_key,
+            generation_id=getattr(self, "generation_id", None),
+        )
+        self._write_started = False
+        self._buffer_bytes = 0
+        self._last_buffered_frame: int | None = None
+        if self.write_mode not in {"auto", "fresh", "resume"}:
+            raise ValueError("write_mode must be 'auto', 'fresh', or 'resume'")
+        if int(self.max_buffer_bytes) < 1:
+            raise ValueError("max_buffer_bytes must be >= 1")
+
+    @property
+    def buffered_bytes(self) -> int:
+        return self._buffer_bytes
+
+    def set_buffer_limit(self, value: int) -> None:
+        if int(value) < 1:
+            raise ValueError("cache handle buffer limit must be >= 1")
+        self.max_buffer_bytes = int(value)
+        if self._buffer_bytes > self.max_buffer_bytes:
+            self._flush()
+
+    def _append_buffered(self, frame_idx: int, value: Any) -> None:
+        frame = int(frame_idx)
+        if frame < 0:
+            raise ValueError("frame_idx must be nonnegative")
+        if self._last_buffered_frame is not None and frame <= self._last_buffered_frame:
+            raise ValueError("cache frame indices must be unique and increasing")
+        value_bytes = _buffer_value_bytes(value)
+        if value_bytes > self.max_buffer_bytes:
+            raise ValueError(
+                "cache frame payload exceeds max_buffer_bytes: "
+                f"{value_bytes} > {self.max_buffer_bytes}"
+            )
+        if self._buffer and self._buffer_bytes + value_bytes > self.max_buffer_bytes:
+            self._flush()
+        self._buffer.append(value)
+        self._buffer_bytes += value_bytes
+        self._last_buffered_frame = frame
+        if (
+            len(self._buffer) >= self.chunk_size
+            or self._buffer_bytes >= self.max_buffer_bytes
+        ):
+            self._flush()
+
+    def _clear_buffer(self) -> None:
+        self._buffer.clear()
+        self._buffer_bytes = 0
+
+    def _finish_close(self, *, commit_generation: bool = True) -> None:
+        if self.read_only:
+            return
+        self._flush()
+        if not self.path.exists():
+            self._store.ensure_manifest()
+        if commit_generation:
+            self._store.commit_generation()
+
+    def _prepare_frame_write(self, frame_idx: int) -> bool:
+        if self.read_only:
+            raise RuntimeError("cannot write through a read-only cache handle")
+        if self.write_mode == "resume" and self._store.contains_frame(int(frame_idx)):
+            return False
+        if self._write_started:
+            return True
+        if self.write_mode == "fresh" or (
+            self.write_mode == "auto"
+            and self._store.is_valid()
+            and (self._store.is_legacy or self._store.contains_frame(int(frame_idx)))
+        ):
+            # A pass beginning on an already-covered frame is a deliberate
+            # recomputation, not a resume. Build a new generation so a crash
+            # cannot make the old manifest point at overwritten chunks.
+            self._store.start_fresh()
+        self._write_started = True
+        return True
 
     def is_valid(self) -> bool:
-        if self._valid is None:
-            if self.require_key:
-                self._valid = _check_key(self.path, self.key)
-            else:
-                # Read-only mode: existence + written-frame bookkeeping alone
-                # is sufficient; the caller does not care which run produced
-                # the cache, only that the geometry on disk is usable.
-                self._valid = self.path.exists()
-        return self._valid
+        return self._store.is_valid()
 
-    def write_frame(self, frame_idx: int, *, result: OBBResult, **_) -> None:
-        self._buffer.append(result)
+    def is_reusable(self) -> bool:
+        return self._store.is_reusable()
 
-    def _ensure_data(self) -> None:
-        if self._data is None:
-            self._data = dict(np.load(self.path))
-
-    def _written_frames(self) -> set[int]:
-        """Set of frame indices actually processed into this cache.
-
-        Recorded explicitly so a frame that was processed but had zero
-        detections (which contributes no rows to ``frame_indices``) is still
-        distinguishable from a frame that was never processed. Falls back to
-        the unique ``frame_indices`` for caches written before this field
-        existed.
-        """
-        if self._written is None:
-            self._ensure_data()
-            d = self._data or {}
-            if "written_frames" in d:
-                self._written = {int(f) for f in d["written_frames"]}
-            else:
-                self._written = {int(f) for f in d.get("frame_indices", [])}
-        return self._written
-
-    def covers_frame_range(self, start_frame: int, end_frame: int) -> bool:
-        """Return True iff every frame in ``[start, end]`` was processed.
-
-        Mirrors legacy ``DetectionCache.covers_frame_range`` so a truncated or
-        interrupted forward pass (valid key, but fewer frames) is not silently
-        reused for a backward/replay pass over a wider range.
-        """
+    def contains_frame(self, frame_idx: int) -> bool:
         if not self.is_valid():
             return False
-        written = self._written_frames()
-        return all(fi in written for fi in range(int(start_frame), int(end_frame) + 1))
+        if self._store.is_legacy:
+            if self._legacy_data is None:
+                self._legacy_data = self._store.load_legacy()
+            return int(frame_idx) in self._legacy_written_frames(
+                self._legacy_data or {}
+            )
+        return self._store.contains_frame(int(frame_idx))
+
+    def iter_covered_frames(self, start_frame: int, end_frame: int) -> Iterator[int]:
+        start_bound, end_bound = int(start_frame), int(end_frame)
+        for start, end in self.coverage_ranges():
+            lo, hi = max(start, start_bound), min(end, end_bound)
+            if lo <= hi:
+                yield from range(lo, hi + 1)
+
+    @property
+    def is_legacy(self) -> bool:
+        return self._store.is_legacy
+
+    def _arrays_for_frame(self, frame_idx: int) -> dict[str, np.ndarray] | None:
+        if not self.is_valid():
+            return None
+        if self._store.is_legacy:
+            if self._legacy_data is None:
+                self._legacy_data = self._store.load_legacy()
+            if self._legacy_data is None:
+                return None
+            written = self._legacy_written_frames(self._legacy_data)
+            return self._legacy_data if int(frame_idx) in written else None
+        return self._store.read_frame_arrays(int(frame_idx))
+
+    def _legacy_written_frames(self, data: dict[str, np.ndarray]) -> set[int]:
+        if "written_frames" in data:
+            return {int(v) for v in data["written_frames"]}
+        return {int(v) for v in data.get("frame_indices", np.zeros(0, np.int32))}
+
+    def written_frames(self) -> set[int]:
+        if not self.is_valid():
+            return set()
+        if self._store.is_legacy:
+            if self._legacy_data is None:
+                self._legacy_data = self._store.load_legacy()
+            return self._legacy_written_frames(self._legacy_data or {})
+        return self._store.written_frames()
+
+    def coverage_ranges(self) -> tuple[tuple[int, int], ...]:
+        """Normalized coverage intervals without an O(frame-count) set."""
+        if not self.is_valid():
+            return ()
+        if self._store.is_legacy:
+            frames = sorted(self.written_frames())
+            if not frames:
+                return ()
+            ranges: list[tuple[int, int]] = []
+            start = previous = frames[0]
+            for frame in frames[1:]:
+                if frame == previous + 1:
+                    previous = frame
+                    continue
+                ranges.append((start, previous))
+                start = previous = frame
+            ranges.append((start, previous))
+            return tuple(ranges)
+        return self._store.covered_ranges()
+
+    def covers_frame_range(self, start_frame: int, end_frame: int) -> bool:
+        start = int(start_frame)
+        end = int(end_frame)
+        return self.is_valid() and any(
+            range_start <= start and range_end >= end
+            for range_start, range_end in self.coverage_ranges()
+        )
 
     def get_missing_frames(
         self, start_frame: int, end_frame: int, max_report: int = 10
     ) -> list[int]:
-        """Return up to ``max_report`` frame indices missing from ``[start, end]``."""
+        ranges = self.coverage_ranges()
+        missing: list[int] = []
+        for frame in range(int(start_frame), int(end_frame) + 1):
+            if not any(start <= frame <= end for start, end in ranges):
+                missing.append(frame)
+                if len(missing) >= max_report:
+                    break
+        return missing
+
+    def iter_arrays(self) -> Iterator[dict[str, np.ndarray]]:
+        """Yield legacy data once or new payload chunks one at a time."""
         if not self.is_valid():
-            return list(range(int(start_frame), int(end_frame) + 1))[:max_report]
-        written = self._written_frames()
-        missing = [
-            fi
-            for fi in range(int(start_frame), int(end_frame) + 1)
-            if fi not in written
-        ]
-        return missing[:max_report]
-
-    def read_frame(self, frame_idx: int) -> OBBResult | None:
-        if not self.is_valid():
-            return None
-        # A frame that was never processed must read back as None (KeyError
-        # upstream) rather than a misleading empty "no animals" result.
-        if int(frame_idx) not in self._written_frames():
-            return None
-        self._ensure_data()
-        d = self._data
-        mask = d["frame_indices"] == frame_idx
-        # Backward compatibility: caches written before class_ids existed have
-        # no such key. Fall back to None (-> all class 0 via
-        # class_ids_or_zeros) rather than a KeyError.
-        class_ids = d["class_ids"][mask] if "class_ids" in d else None
-        return OBBResult(
-            frame_idx=frame_idx,
-            centroids=d["centroids"][mask],
-            angles=d["angles"][mask],
-            sizes=d["sizes"][mask],
-            shapes=d["shapes"][mask],
-            confidences=d["confidences"][mask],
-            corners=d["corners"][mask],
-            detection_ids=d["detection_ids"][mask],
-            class_ids=class_ids,
-        )
-
-    def close(self) -> None:
-        if self.read_only:
-            # Nothing to flush, and flushing would clobber the file. See the
-            # `read_only` field comment above.
             return
-        if not self._buffer:
-            _npz_save(
-                self.path,
-                self.key,
-                frame_count=np.array([0]),
-                frame_indices=np.zeros(0, np.int32),
-                written_frames=np.zeros(0, np.int32),
-                centroids=np.zeros((0, 2), np.float32),
-                angles=np.zeros(0, np.float32),
-                sizes=np.zeros(0, np.float32),
-                shapes=np.zeros((0, 2), np.float32),
-                confidences=np.zeros(0, np.float32),
-                corners=np.zeros((0, 4, 2), np.float32),
-                detection_ids=np.zeros(0, np.int64),
-                class_ids=np.zeros(0, np.int64),
-            )
+        if self._store.is_legacy:
+            data = self._store.load_legacy()
+            if data is not None:
+                yield data
             return
-        fi_list = []
-        cents, angs, szs, shps, confs, corns, dids, clss = (
-            [],
-            [],
-            [],
-            [],
-            [],
-            [],
-            [],
-            [],
-        )
-        for r in self._buffer:
-            n = r.num_detections
-            fi_list.extend([r.frame_idx] * n)
-            if n > 0:
-                cents.append(r.centroids)
-                angs.append(r.angles)
-                szs.append(r.sizes)
-                shps.append(r.shapes)
-                confs.append(r.confidences)
-                corns.append(r.corners)
-                dids.append(r.detection_ids)
-                clss.append(r.class_ids_or_zeros)
-        _npz_save(
-            self.path,
-            self.key,
-            frame_count=np.array([len(self._buffer)]),
-            frame_indices=np.array(fi_list, dtype=np.int32),
-            written_frames=np.array(
-                [r.frame_idx for r in self._buffer], dtype=np.int32
-            ),
-            centroids=(
-                np.concatenate(cents) if cents else np.zeros((0, 2), np.float32)
-            ),
-            angles=np.concatenate(angs) if angs else np.zeros(0, np.float32),
-            sizes=np.concatenate(szs) if szs else np.zeros(0, np.float32),
-            shapes=(np.concatenate(shps) if shps else np.zeros((0, 2), np.float32)),
-            confidences=(np.concatenate(confs) if confs else np.zeros(0, np.float32)),
-            corners=(
-                np.concatenate(corns) if corns else np.zeros((0, 4, 2), np.float32)
-            ),
-            detection_ids=(np.concatenate(dids) if dids else np.zeros(0, np.int64)),
-            class_ids=(np.concatenate(clss) if clss else np.zeros(0, np.int64)),
-        )
-
-
-# ---- HeadTailCacheHandle ----
+        yield from self._store.iter_chunk_arrays()
 
 
 @dataclass
-class HeadTailCacheHandle(CacheHandle):
+class DetectionCacheHandle(_ChunkedHandleMixin, CacheHandle):
     path: Path
     key: CacheKey
-    _buf_fi: list[int] = field(default_factory=list, repr=False)
-    _buf_det: list[np.ndarray] = field(default_factory=list, repr=False)
-    _buf_hints: list[np.ndarray] = field(default_factory=list, repr=False)
-    _buf_confs: list[np.ndarray] = field(default_factory=list, repr=False)
-    _buf_dir: list[np.ndarray] = field(default_factory=list, repr=False)
-    _data: dict | None = field(default=None, repr=False)
-    _valid: bool | None = field(default=None, repr=False)
+    require_key: bool = True
+    read_only: bool = False
+    write_mode: str = "auto"
+    generation_id: str | None = None
+    chunk_size: int = DEFAULT_CHUNK_FRAMES
+    max_buffer_bytes: int = 16 * 1024 * 1024
+    _buffer: list[OBBResult] = field(default_factory=list, repr=False)
+    _legacy_data: dict[str, np.ndarray] | None = field(default=None, repr=False)
+    _store: ChunkedArrayStore = field(init=False, repr=False)
 
-    def is_valid(self) -> bool:
-        if self._valid is None:
-            self._valid = _check_key(self.path, self.key)
-        return self._valid
+    _kind = "detection"
+
+    def __post_init__(self) -> None:
+        self._init_store()
+
+    @property
+    def _data(self) -> dict[str, np.ndarray] | None:
+        """Compatibility alias for legacy-only callers."""
+        return self._legacy_data
+
+    @_data.setter
+    def _data(self, value: dict[str, np.ndarray] | None) -> None:
+        self._legacy_data = value
+
+    def write_frame(self, frame_idx: int, *, result: OBBResult, **_) -> None:
+        if int(frame_idx) != int(result.frame_idx):
+            raise ValueError("result.frame_idx must match frame_idx")
+        row_lengths = [
+            len(result.centroids),
+            len(result.angles),
+            len(result.sizes),
+            len(result.shapes),
+            len(result.confidences),
+            len(result.corners),
+            len(result.detection_ids),
+            len(result.class_ids_or_zeros),
+        ]
+        if len(set(row_lengths)) != 1:
+            raise ValueError("detection result arrays must have aligned lengths")
+        expected_shapes = {
+            "centroids": (row_lengths[0], 2),
+            "angles": (row_lengths[0],),
+            "sizes": (row_lengths[0],),
+            "shapes": (row_lengths[0], 2),
+            "confidences": (row_lengths[0],),
+            "corners": (row_lengths[0], 4, 2),
+            "detection_ids": (row_lengths[0],),
+            "class_ids": (row_lengths[0],),
+        }
+        for name, shape in expected_shapes.items():
+            value = (
+                result.class_ids_or_zeros
+                if name == "class_ids"
+                else np.asarray(getattr(result, name))
+            )
+            if value.shape != shape:
+                raise ValueError(f"detection result {name} has invalid shape")
+        _require_unique_increasing("detection_ids", result.detection_ids)
+        if not self._prepare_frame_write(frame_idx):
+            return
+        self._append_buffered(frame_idx, result)
+
+    def _flush(self) -> None:
+        if not self._buffer:
+            return
+        rows = self._buffer
+        frame_indices: list[int] = []
+        arrays: dict[str, list[np.ndarray]] = {
+            name: []
+            for name in (
+                "centroids",
+                "angles",
+                "sizes",
+                "shapes",
+                "confidences",
+                "corners",
+                "detection_ids",
+                "class_ids",
+            )
+        }
+        for result in rows:
+            count = result.num_detections
+            frame_indices.extend([result.frame_idx] * count)
+            if count:
+                arrays["centroids"].append(result.centroids)
+                arrays["angles"].append(result.angles)
+                arrays["sizes"].append(result.sizes)
+                arrays["shapes"].append(result.shapes)
+                arrays["confidences"].append(result.confidences)
+                arrays["corners"].append(result.corners)
+                arrays["detection_ids"].append(result.detection_ids)
+                arrays["class_ids"].append(result.class_ids_or_zeros)
+        empty_shapes = {
+            "centroids": (0, 2),
+            "angles": (0,),
+            "sizes": (0,),
+            "shapes": (0, 2),
+            "confidences": (0,),
+            "corners": (0, 4, 2),
+            "detection_ids": (0,),
+            "class_ids": (0,),
+        }
+        dtypes = {
+            "centroids": np.float32,
+            "angles": np.float32,
+            "sizes": np.float32,
+            "shapes": np.float32,
+            "confidences": np.float32,
+            "corners": np.float32,
+            "detection_ids": np.int64,
+            "class_ids": np.int64,
+        }
+        payload = {
+            name: np.asarray(
+                (
+                    np.concatenate(parts)
+                    if parts
+                    else np.zeros(empty_shapes[name], dtype=dtypes[name])
+                ),
+                dtype=dtypes[name],
+            )
+            for name, parts in arrays.items()
+        }
+        payload["frame_indices"] = np.asarray(frame_indices, dtype=np.int64)
+        self._store.append_chunk([result.frame_idx for result in rows], payload)
+        self._clear_buffer()
+
+    def read_frame(self, frame_idx: int) -> OBBResult | None:
+        arrays = self._arrays_for_frame(frame_idx)
+        if arrays is None:
+            return None
+        mask = _rows_for_frame(arrays, frame_idx)
+        class_ids = arrays["class_ids"][mask] if "class_ids" in arrays else None
+        return OBBResult(
+            frame_idx=int(frame_idx),
+            centroids=arrays["centroids"][mask],
+            angles=arrays["angles"][mask],
+            sizes=arrays["sizes"][mask],
+            shapes=arrays["shapes"][mask],
+            confidences=arrays["confidences"][mask],
+            corners=arrays["corners"][mask],
+            detection_ids=arrays["detection_ids"][mask],
+            class_ids=class_ids,
+        )
+
+    def close(self, *, commit_generation: bool = True) -> None:
+        self._finish_close(commit_generation=commit_generation)
+
+
+@dataclass
+class HeadTailCacheHandle(_ChunkedHandleMixin, CacheHandle):
+    path: Path
+    key: CacheKey
+    require_key: bool = True
+    read_only: bool = False
+    write_mode: str = "auto"
+    generation_id: str | None = None
+    chunk_size: int = DEFAULT_CHUNK_FRAMES
+    max_buffer_bytes: int = 16 * 1024 * 1024
+    _buffer: list[tuple[int, np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = field(
+        default_factory=list, repr=False
+    )
+    _legacy_data: dict[str, np.ndarray] | None = field(default=None, repr=False)
+    _store: ChunkedArrayStore = field(init=False, repr=False)
+
+    _kind = "headtail"
+
+    def __post_init__(self) -> None:
+        self._init_store()
 
     def write_frame(
         self,
@@ -257,184 +514,218 @@ class HeadTailCacheHandle(CacheHandle):
         directed_mask: np.ndarray,
         **_,
     ) -> None:
-        n = len(det_indices)
-        self._buf_fi.extend([frame_idx] * n)
-        self._buf_det.append(det_indices)
-        self._buf_hints.append(heading_hints)
-        self._buf_confs.append(heading_confidences)
-        self._buf_dir.append(directed_mask)
+        arrays = (
+            int(frame_idx),
+            np.asarray(det_indices, dtype=np.int32),
+            np.asarray(heading_hints, dtype=np.float32),
+            np.asarray(heading_confidences, dtype=np.float32),
+            np.asarray(directed_mask, dtype=np.uint8),
+        )
+        lengths = [len(value) for value in arrays[1:]]
+        if len(set(lengths)) != 1 or any(value.ndim != 1 for value in arrays[1:]):
+            raise ValueError("headtail arrays must have aligned lengths")
+        _require_unique_increasing("headtail det_indices", arrays[1])
+        if not self._prepare_frame_write(frame_idx):
+            return
+        self._append_buffered(frame_idx, arrays)
+
+    def _flush(self) -> None:
+        if not self._buffer:
+            return
+        frames = [row[0] for row in self._buffer]
+        counts = [len(row[1]) for row in self._buffer]
+        payload = {
+            "frame_indices": np.repeat(frames, counts).astype(np.int64),
+            "det_indices": _concat([row[1] for row in self._buffer], (0,), np.int32),
+            "heading_hints": _concat(
+                [row[2] for row in self._buffer], (0,), np.float32
+            ),
+            "heading_confidences": _concat(
+                [row[3] for row in self._buffer], (0,), np.float32
+            ),
+            "directed_mask": _concat([row[4] for row in self._buffer], (0,), np.uint8),
+        }
+        self._store.append_chunk(frames, payload)
+        self._clear_buffer()
 
     def read_frame(self, frame_idx: int):
-        if not self.is_valid():
+        arrays = self._arrays_for_frame(frame_idx)
+        if arrays is None:
             return None
-        if self._data is None:
-            self._data = dict(np.load(self.path))
-        d = self._data
-        mask = d["frame_indices"] == frame_idx
+        mask = _rows_for_frame(arrays, frame_idx)
         return (
-            d["det_indices"][mask].astype(np.int32),
-            d["heading_hints"][mask],
-            d["heading_confidences"][mask],
-            d["directed_mask"][mask],
+            arrays["det_indices"][mask].astype(np.int32),
+            arrays["heading_hints"][mask],
+            arrays["heading_confidences"][mask],
+            arrays["directed_mask"][mask],
         )
 
-    def close(self) -> None:
-        _npz_save(
-            self.path,
-            self.key,
-            frame_indices=np.array(self._buf_fi, dtype=np.int32),
-            det_indices=(
-                np.concatenate(self._buf_det)
-                if self._buf_det
-                else np.zeros(0, np.int32)
-            ),
-            heading_hints=(
-                np.concatenate(self._buf_hints)
-                if self._buf_hints
-                else np.zeros(0, np.float32)
-            ),
-            heading_confidences=(
-                np.concatenate(self._buf_confs)
-                if self._buf_confs
-                else np.zeros(0, np.float32)
-            ),
-            directed_mask=(
-                np.concatenate(self._buf_dir)
-                if self._buf_dir
-                else np.zeros(0, np.uint8)
-            ),
-        )
-
-
-# ---- CNNCacheHandle ----
+    def close(self, *, commit_generation: bool = True) -> None:
+        self._finish_close(commit_generation=commit_generation)
 
 
 @dataclass
-class CNNCacheHandle(CacheHandle):
+class CNNCacheHandle(_ChunkedHandleMixin, CacheHandle):
     path: Path
     key: CacheKey
     label: str
-    _buf_fi: list[int] = field(default_factory=list, repr=False)
-    _buf_det: list[int] = field(default_factory=list, repr=False)
-    _buf_probs: list[list[np.ndarray]] = field(default_factory=list, repr=False)
-    _factor_names: list[str] | None = field(default=None, repr=False)
-    _class_names: list[list[str]] | None = field(default=None, repr=False)
-    _data: dict | None = field(default=None, repr=False)
-    _valid: bool | None = field(default=None, repr=False)
+    require_key: bool = True
+    read_only: bool = False
+    write_mode: str = "auto"
+    generation_id: str | None = None
+    chunk_size: int = DEFAULT_CHUNK_FRAMES
+    max_buffer_bytes: int = 16 * 1024 * 1024
+    _buffer: list[tuple[int, list[CNNDetectionPrediction]]] = field(
+        default_factory=list, repr=False
+    )
+    _legacy_data: dict[str, np.ndarray] | None = field(default=None, repr=False)
+    _store: ChunkedArrayStore = field(init=False, repr=False)
 
-    def is_valid(self) -> bool:
-        if self._valid is None:
-            self._valid = _check_key(self.path, self.key)
-        return self._valid
+    _kind = "cnn"
+
+    def __post_init__(self) -> None:
+        self._init_store()
+        self._factor_schema: list[tuple[str, tuple[str, ...]]] | None = None
 
     def write_frame(
-        self,
-        frame_idx: int,
-        *,
-        predictions: list[CNNDetectionPrediction],
-        **_,
+        self, frame_idx: int, *, predictions: list[CNNDetectionPrediction], **_
     ) -> None:
-        for pred in predictions:
-            if self._factor_names is None and pred.factors:
-                self._factor_names = [f.factor_name for f in pred.factors]
-                self._class_names = [f.class_names for f in pred.factors]
-            self._buf_fi.append(frame_idx)
-            self._buf_det.append(pred.det_index)
-            # Store one ragged-padded row of shape (F, c_max). c_max is fixed
-            # at close() time, so here we just keep the per-factor probability
-            # arrays and pad/stack on close.
+        det_indices = np.asarray([prediction.det_index for prediction in predictions])
+        _require_unique_increasing("CNN det_indices", det_indices)
+        expected = None
+        for prediction in predictions:
+            if any(
+                not isinstance(factor.factor_name, str)
+                or not factor.factor_name
+                or any(
+                    not isinstance(class_name, str) or not class_name
+                    for class_name in factor.class_names
+                )
+                or len(set(factor.class_names)) != len(factor.class_names)
+                for factor in prediction.factors
+            ):
+                raise ValueError("CNN factor and class names must be unique strings")
+            signature = [
+                (factor.factor_name, tuple(factor.class_names))
+                for factor in prediction.factors
+            ]
+            if expected is None:
+                expected = signature
+            elif signature != expected:
+                raise ValueError("CNN factor schemas must match within a frame")
+            if any(
+                np.asarray(factor.raw_probabilities).shape != (len(factor.class_names),)
+                for factor in prediction.factors
+            ):
+                raise ValueError("CNN probability rows must match class names")
+        if expected:
+            if self._factor_schema is None:
+                self._factor_schema = expected
+            elif expected != self._factor_schema:
+                raise ValueError("CNN factor schemas must match across frames")
+        if not self._prepare_frame_write(frame_idx):
+            return
+        self._append_buffered(frame_idx, (int(frame_idx), predictions))
+
+    def _flush(self) -> None:
+        if not self._buffer:
+            return
+        frames = [row[0] for row in self._buffer]
+        all_predictions = [
+            pred for _, predictions in self._buffer for pred in predictions
+        ]
+        factor_names: list[str] = []
+        class_names: list[list[str]] = []
+        for pred in all_predictions:
             if pred.factors:
-                self._buf_probs.append([f.raw_probabilities for f in pred.factors])
-            else:
-                self._buf_probs.append([])
+                factor_names = [factor.factor_name for factor in pred.factors]
+                class_names = [factor.class_names for factor in pred.factors]
+                break
+        class_counts = np.asarray([len(names) for names in class_names], dtype=np.int32)
+        class_max = int(class_counts.max()) if class_counts.size else 0
+        probabilities = np.full(
+            (len(all_predictions), len(factor_names), class_max),
+            np.nan,
+            dtype=np.float32,
+        )
+        for row_idx, pred in enumerate(all_predictions):
+            for factor_idx, factor in enumerate(pred.factors[: len(factor_names)]):
+                count = min(len(factor.raw_probabilities), class_max)
+                probabilities[row_idx, factor_idx, :count] = factor.raw_probabilities[
+                    :count
+                ]
+        row_frames = [
+            frame
+            for frame, predictions in self._buffer
+            for _ in range(len(predictions))
+        ]
+        payload = {
+            "frame_indices": np.asarray(row_frames, dtype=np.int64),
+            "det_indices": np.asarray(
+                [pred.det_index for pred in all_predictions], dtype=np.int32
+            ),
+            "factor_names_json": np.asarray([json.dumps(factor_names)]),
+            "class_names_json": np.asarray([json.dumps(class_names)]),
+            "class_counts": class_counts,
+            "probabilities": probabilities,
+        }
+        self._store.append_chunk(frames, payload)
+        self._clear_buffer()
 
     def read_frame(self, frame_idx: int) -> list[CNNDetectionPrediction] | None:
-        if not self.is_valid():
+        arrays = self._arrays_for_frame(frame_idx)
+        if arrays is None:
             return None
-        if self._data is None:
-            self._data = dict(np.load(self.path))
-        d = self._data
-        fi = d["frame_indices"]
-        mask = fi == frame_idx
+        mask = _rows_for_frame(arrays, frame_idx)
         if not mask.any():
             return []
-        factor_names = json.loads(str(d["factor_names_json"][0]))
-        class_names_list = json.loads(str(d["class_names_json"][0]))
-        class_counts = d["class_counts"].astype(int)
-        probs_all = d["probabilities"]
-        det_indices = d["det_indices"][mask]
-        probs_frame = probs_all[mask]
-        results = []
-        for k, det_idx in enumerate(det_indices):
-            factors = [
-                CNNFactorPrediction(
-                    factor_name=factor_names[f],
-                    class_names=class_names_list[f],
-                    raw_probabilities=probs_frame[k, f, : class_counts[f]].copy(),
-                )
-                for f in range(len(factor_names))
-            ]
-            results.append(
-                CNNDetectionPrediction(det_index=int(det_idx), factors=factors)
+        factor_names = json.loads(str(arrays["factor_names_json"][0]))
+        class_names = json.loads(str(arrays["class_names_json"][0]))
+        class_counts = arrays["class_counts"].astype(int)
+        det_indices = arrays["det_indices"][mask]
+        probabilities = arrays["probabilities"][mask]
+        return [
+            CNNDetectionPrediction(
+                det_index=int(det_idx),
+                factors=[
+                    CNNFactorPrediction(
+                        factor_name=factor_names[factor_idx],
+                        class_names=class_names[factor_idx],
+                        raw_probabilities=probabilities[
+                            row_idx, factor_idx, : class_counts[factor_idx]
+                        ].copy(),
+                    )
+                    for factor_idx in range(len(factor_names))
+                ],
             )
-        return results
+            for row_idx, det_idx in enumerate(det_indices)
+        ]
 
-    def close(self) -> None:
-        if not self._buf_probs or self._factor_names is None:
-            _npz_save(
-                self.path,
-                self.key,
-                frame_indices=np.zeros(0, np.int32),
-                det_indices=np.zeros(0, np.int32),
-                factor_names_json=np.array([json.dumps([])]),
-                class_names_json=np.array([json.dumps([])]),
-                class_counts=np.zeros(0, np.int32),
-                probabilities=np.zeros((0, 0, 0), np.float32),
-            )
-            return
-        class_counts = np.array([len(cn) for cn in self._class_names], dtype=np.int32)
-        c_max = int(class_counts.max())
-        f_count = len(self._factor_names)
-        probs_stack = np.full(
-            (len(self._buf_probs), f_count, c_max), np.nan, dtype=np.float32
-        )
-        for m, probs in enumerate(self._buf_probs):
-            if not probs:
-                continue
-            for f_idx in range(min(f_count, len(probs))):
-                arr = probs[f_idx]
-                n_cls = int(arr.shape[0])
-                probs_stack[m, f_idx, :n_cls] = arr[:n_cls]
-        _npz_save(
-            self.path,
-            self.key,
-            frame_indices=np.array(self._buf_fi, dtype=np.int32),
-            det_indices=np.array(self._buf_det, dtype=np.int32),
-            factor_names_json=np.array([json.dumps(self._factor_names)]),
-            class_names_json=np.array([json.dumps(self._class_names)]),
-            class_counts=class_counts,
-            probabilities=probs_stack,
-        )
-
-
-# ---- PoseCacheHandle ----
+    def close(self, *, commit_generation: bool = True) -> None:
+        self._finish_close(commit_generation=commit_generation)
 
 
 @dataclass
-class PoseCacheHandle(CacheHandle):
+class PoseCacheHandle(_ChunkedHandleMixin, CacheHandle):
     path: Path
     key: CacheKey
-    _buf_fi: list[int] = field(default_factory=list, repr=False)
-    _buf_det: list[np.ndarray] = field(default_factory=list, repr=False)
-    _buf_kp: list[np.ndarray] = field(default_factory=list, repr=False)
-    _buf_valid: list[np.ndarray] = field(default_factory=list, repr=False)
-    _data: dict | None = field(default=None, repr=False)
-    _valid: bool | None = field(default=None, repr=False)
+    require_key: bool = True
+    read_only: bool = False
+    write_mode: str = "auto"
+    generation_id: str | None = None
+    chunk_size: int = DEFAULT_CHUNK_FRAMES
+    max_buffer_bytes: int = 16 * 1024 * 1024
+    _buffer: list[tuple[int, np.ndarray, np.ndarray, np.ndarray]] = field(
+        default_factory=list, repr=False
+    )
+    _legacy_data: dict[str, np.ndarray] | None = field(default=None, repr=False)
+    _store: ChunkedArrayStore = field(init=False, repr=False)
 
-    def is_valid(self) -> bool:
-        if self._valid is None:
-            self._valid = _check_key(self.path, self.key)
-        return self._valid
+    _kind = "pose"
+
+    def __post_init__(self) -> None:
+        self._init_store()
+        self._keypoint_shape: tuple[int, ...] | None = None
 
     def write_frame(
         self,
@@ -445,116 +736,144 @@ class PoseCacheHandle(CacheHandle):
         valid_mask: np.ndarray,
         **_,
     ) -> None:
-        n = len(det_indices)
-        self._buf_fi.extend([frame_idx] * n)
-        self._buf_det.append(det_indices)
-        self._buf_kp.append(keypoints)
-        self._buf_valid.append(valid_mask.astype(np.uint8))
+        arrays = (
+            int(frame_idx),
+            np.asarray(det_indices, dtype=np.int32),
+            np.asarray(keypoints, dtype=np.float32),
+            np.asarray(valid_mask, dtype=np.uint8),
+        )
+        if len(arrays[1]) != len(arrays[2]) or len(arrays[1]) != len(arrays[3]):
+            raise ValueError("pose arrays must have aligned lengths")
+        if arrays[1].ndim != 1 or arrays[2].ndim != 3 or arrays[2].shape[-1:] != (3,):
+            raise ValueError("pose arrays have invalid ranks or shapes")
+        if arrays[3].ndim != 1:
+            raise ValueError("pose valid_mask must be one-dimensional")
+        _require_unique_increasing("pose det_indices", arrays[1])
+        keypoint_shape = tuple(int(value) for value in arrays[2].shape[1:])
+        if self._keypoint_shape is None:
+            self._keypoint_shape = keypoint_shape
+        elif keypoint_shape != self._keypoint_shape:
+            raise ValueError("pose keypoint dimensions must remain constant")
+        if not self._prepare_frame_write(frame_idx):
+            return
+        self._append_buffered(frame_idx, arrays)
+
+    def _flush(self) -> None:
+        if not self._buffer:
+            return
+        frames = [row[0] for row in self._buffer]
+        counts = [len(row[1]) for row in self._buffer]
+        keypoint_shape = next(
+            (row[2].shape[1:] for row in self._buffer if row[2].ndim == 3), (0, 3)
+        )
+        payload = {
+            "frame_indices": np.repeat(frames, counts).astype(np.int64),
+            "det_indices": _concat([row[1] for row in self._buffer], (0,), np.int32),
+            "keypoints": _concat(
+                [row[2] for row in self._buffer], (0, *keypoint_shape), np.float32
+            ),
+            "valid_mask": _concat([row[3] for row in self._buffer], (0,), np.uint8),
+        }
+        self._store.append_chunk(frames, payload)
+        self._clear_buffer()
 
     def read_frame(self, frame_idx: int):
-        if not self.is_valid():
+        arrays = self._arrays_for_frame(frame_idx)
+        if arrays is None:
             return None
-        if self._data is None:
-            self._data = dict(np.load(self.path))
-        d = self._data
-        mask = d["frame_indices"] == frame_idx
+        mask = _rows_for_frame(arrays, frame_idx)
         return (
-            d["keypoints"][mask],
-            d["det_indices"][mask],
-            d["valid_mask"][mask].astype(bool),
+            arrays["keypoints"][mask],
+            arrays["det_indices"][mask],
+            arrays["valid_mask"][mask].astype(bool),
         )
 
-    def close(self) -> None:
-        _npz_save(
-            self.path,
-            self.key,
-            frame_indices=np.array(self._buf_fi, dtype=np.int32),
-            det_indices=(
-                np.concatenate(self._buf_det)
-                if self._buf_det
-                else np.zeros(0, np.int32)
-            ),
-            keypoints=(
-                np.concatenate(self._buf_kp)
-                if self._buf_kp
-                else np.zeros((0, 0, 3), np.float32)
-            ),
-            valid_mask=(
-                np.concatenate(self._buf_valid)
-                if self._buf_valid
-                else np.zeros(0, np.uint8)
-            ),
-        )
-
-
-# ---- AprilTagCacheHandle ----
+    def close(self, *, commit_generation: bool = True) -> None:
+        self._finish_close(commit_generation=commit_generation)
 
 
 @dataclass
-class AprilTagCacheHandle(CacheHandle):
+class AprilTagCacheHandle(_ChunkedHandleMixin, CacheHandle):
     path: Path
     key: CacheKey
-    _buf_fi: list[int] = field(default_factory=list, repr=False)
-    _buf_tag_ids: list[np.ndarray] = field(default_factory=list, repr=False)
-    _buf_det: list[np.ndarray] = field(default_factory=list, repr=False)
-    _buf_centers: list[np.ndarray] = field(default_factory=list, repr=False)
-    _buf_corners: list[np.ndarray] = field(default_factory=list, repr=False)
-    _data: dict | None = field(default=None, repr=False)
-    _valid: bool | None = field(default=None, repr=False)
+    require_key: bool = True
+    read_only: bool = False
+    write_mode: str = "auto"
+    generation_id: str | None = None
+    chunk_size: int = DEFAULT_CHUNK_FRAMES
+    max_buffer_bytes: int = 16 * 1024 * 1024
+    _buffer: list[tuple[int, AprilTagResult]] = field(default_factory=list, repr=False)
+    _legacy_data: dict[str, np.ndarray] | None = field(default=None, repr=False)
+    _store: ChunkedArrayStore = field(init=False, repr=False)
 
-    def is_valid(self) -> bool:
-        if self._valid is None:
-            self._valid = _check_key(self.path, self.key)
-        return self._valid
+    _kind = "apriltag"
+
+    def __post_init__(self) -> None:
+        self._init_store()
 
     def write_frame(self, frame_idx: int, *, result: AprilTagResult, **_) -> None:
-        # Convert list inputs to numpy arrays for storage uniformity.
-        tag_ids = np.asarray(result.tag_ids, dtype=np.int32)
-        det_indices = np.asarray(result.det_indices, dtype=np.int32)
-        t = len(tag_ids)
-        self._buf_fi.extend([frame_idx] * t)
-        self._buf_tag_ids.append(tag_ids)
-        self._buf_det.append(det_indices)
-        self._buf_centers.append(result.centers)
-        self._buf_corners.append(result.corners)
+        lengths = [
+            len(result.tag_ids),
+            len(result.det_indices),
+            len(result.centers),
+            len(result.corners),
+        ]
+        if len(set(lengths)) != 1:
+            raise ValueError("apriltag arrays must have aligned lengths")
+        if (
+            np.asarray(result.tag_ids).ndim != 1
+            or np.asarray(result.det_indices).ndim != 1
+            or np.asarray(result.centers).shape != (lengths[0], 2)
+            or np.asarray(result.corners).shape != (lengths[0], 4, 2)
+        ):
+            raise ValueError("apriltag arrays have invalid ranks or shapes")
+        _require_unique_increasing("apriltag det_indices", result.det_indices)
+        if not self._prepare_frame_write(frame_idx):
+            return
+        self._append_buffered(frame_idx, (int(frame_idx), result))
+
+    def _flush(self) -> None:
+        if not self._buffer:
+            return
+        frames = [row[0] for row in self._buffer]
+        tag_ids = [np.asarray(row[1].tag_ids, dtype=np.int32) for row in self._buffer]
+        counts = [len(values) for values in tag_ids]
+        payload = {
+            "frame_indices": np.repeat(frames, counts).astype(np.int64),
+            "tag_ids": _concat(tag_ids, (0,), np.int32),
+            "det_indices": _concat(
+                [
+                    np.asarray(row[1].det_indices, dtype=np.int32)
+                    for row in self._buffer
+                ],
+                (0,),
+                np.int32,
+            ),
+            "centers": _concat(
+                [np.asarray(row[1].centers, dtype=np.float32) for row in self._buffer],
+                (0, 2),
+                np.float32,
+            ),
+            "corners": _concat(
+                [np.asarray(row[1].corners, dtype=np.float32) for row in self._buffer],
+                (0, 4, 2),
+                np.float32,
+            ),
+        }
+        self._store.append_chunk(frames, payload)
+        self._clear_buffer()
 
     def read_frame(self, frame_idx: int) -> AprilTagResult | None:
-        if not self.is_valid():
+        arrays = self._arrays_for_frame(frame_idx)
+        if arrays is None:
             return None
-        if self._data is None:
-            self._data = dict(np.load(self.path))
-        d = self._data
-        mask = d["frame_indices"] == frame_idx
+        mask = _rows_for_frame(arrays, frame_idx)
         return AprilTagResult(
-            tag_ids=d["tag_ids"][mask],
-            det_indices=d["det_indices"][mask],
-            centers=d["centers"][mask],
-            corners=d["corners"][mask],
+            tag_ids=arrays["tag_ids"][mask],
+            det_indices=arrays["det_indices"][mask],
+            centers=arrays["centers"][mask],
+            corners=arrays["corners"][mask],
         )
 
-    def close(self) -> None:
-        _npz_save(
-            self.path,
-            self.key,
-            frame_indices=np.array(self._buf_fi, dtype=np.int32),
-            tag_ids=(
-                np.concatenate(self._buf_tag_ids)
-                if self._buf_tag_ids
-                else np.zeros(0, np.int32)
-            ),
-            det_indices=(
-                np.concatenate(self._buf_det)
-                if self._buf_det
-                else np.zeros(0, np.int32)
-            ),
-            centers=(
-                np.concatenate(self._buf_centers)
-                if self._buf_centers
-                else np.zeros((0, 2), np.float32)
-            ),
-            corners=(
-                np.concatenate(self._buf_corners)
-                if self._buf_corners
-                else np.zeros((0, 4, 2), np.float32)
-            ),
-        )
+    def close(self, *, commit_generation: bool = True) -> None:
+        self._finish_close(commit_generation=commit_generation)

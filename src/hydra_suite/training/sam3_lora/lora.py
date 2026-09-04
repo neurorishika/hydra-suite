@@ -178,7 +178,7 @@ def merge_adapters(
     *,
     prefix: str = "detector.",
 ) -> dict[str, torch.Tensor]:
-    """Fold every adapter into the base state dict, in the base's key layout.
+    """Fold every adapter into ``base`` one tensor at a time.
 
     Adapters are trained against Meta's un-prefixed model; the published
     checkpoint is `detector.`-prefixed. An adapter that resolves to no base key
@@ -186,20 +186,99 @@ def merge_adapters(
     from base in bytes but not in behaviour, which is indistinguishable from a
     successful merge.
     """
-    merged = {k: v.clone() for k, v in base.items()}
-    paths = sorted({k.rsplit(".", 1)[0] for k in adapters})
-    for path in paths:
+    validated = _validated_adapter_pairs(base, adapters, cfg, prefix=prefix)
+
+    # A state dict can contain tied tensors. The previous full-dict clone broke
+    # those aliases before updating one key; preserve that observable behaviour
+    # without cloning unrelated tensors by separating only a touched alias.
+    storage_owners: dict[int, int] = {}
+    for tensor in base.values():
+        storage_id = tensor.untyped_storage().data_ptr()
+        storage_owners[storage_id] = storage_owners.get(storage_id, 0) + 1
+
+    with torch.no_grad():
+        for _path, key, matrix_a, matrix_b in validated:
+            target = base[key]
+            if storage_owners[target.untyped_storage().data_ptr()] > 1:
+                target = target.clone()
+                base[key] = target
+            # matmul owns the sole output-sized temporary. ``add_`` performs
+            # destination-dtype conversion internally, avoiding both a second
+            # converted delta and a replacement tensor for the base weight.
+            delta = torch.matmul(matrix_b, matrix_a)
+            delta.mul_(cfg.scaling)
+            target.add_(delta)
+            del delta
+    return base
+
+
+def _validated_adapter_pairs(
+    base: dict[str, torch.Tensor],
+    adapters: dict[str, torch.Tensor],
+    cfg: LoraConfig,
+    *,
+    prefix: str,
+) -> list[tuple[str, str, torch.Tensor, torch.Tensor]]:
+    """Resolve and validate the complete adapter plan before mutation."""
+
+    if not isinstance(base, dict) or not base:
+        raise ValueError("base checkpoint state must be a non-empty mapping")
+    if not isinstance(adapters, dict) or not adapters:
+        raise ValueError("adapter state must be a non-empty mapping")
+
+    by_path: dict[str, dict[str, torch.Tensor]] = {}
+    for adapter_key, tensor in adapters.items():
+        if not isinstance(adapter_key, str) or not torch.is_tensor(tensor):
+            raise ValueError("adapter state contains a non-tensor entry")
+        path, separator, suffix = adapter_key.rpartition(".")
+        if not separator or suffix not in {"lora_A", "lora_B"}:
+            raise ValueError(f"unexpected adapter key {adapter_key!r}")
+        if suffix in by_path.setdefault(path, {}):
+            raise ValueError(f"duplicate adapter tensor {adapter_key!r}")
+        by_path[path][suffix] = tensor
+
+    validated: list[tuple[str, str, torch.Tensor, torch.Tensor]] = []
+    for path in sorted(by_path):
+        pair = by_path[path]
+        if set(pair) != {"lora_A", "lora_B"}:
+            raise ValueError(f"adapter {path!r} has an incomplete LoRA A/B pair")
         key = f"{prefix}{path}.weight"
-        if key not in merged:
+        if key not in base:
             raise KeyError(
                 f"adapter {path!r} resolves to {key!r}, which is not in the "
-                f"base checkpoint; refusing a partial merge"
+                "base checkpoint; refusing a partial merge"
             )
-        a = adapters[f"{path}.lora_A"]
-        b = adapters[f"{path}.lora_B"]
-        delta = (b @ a) * cfg.scaling
-        merged[key] = merged[key] + delta.to(merged[key].dtype)
-    return merged
+        target = base[key]
+        matrix_a = pair["lora_A"]
+        matrix_b = pair["lora_B"]
+        if not torch.is_tensor(target):
+            raise ValueError(f"base checkpoint key {key!r} is not a tensor")
+        if target.ndim != 2 or matrix_a.ndim != 2 or matrix_b.ndim != 2:
+            raise ValueError(f"adapter {path!r} and its base weight must be 2-D")
+        if not (
+            target.is_floating_point()
+            and matrix_a.is_floating_point()
+            and matrix_b.is_floating_point()
+        ):
+            raise ValueError(
+                f"adapter {path!r} and its base weight must be floating point"
+            )
+        if matrix_a.shape[0] != cfg.rank or matrix_b.shape[1] != cfg.rank:
+            raise ValueError(
+                f"adapter {path!r} rank does not match configured rank {cfg.rank}"
+            )
+        expected_shape = (matrix_b.shape[0], matrix_a.shape[1])
+        if (
+            matrix_a.shape[0] != matrix_b.shape[1]
+            or tuple(target.shape) != expected_shape
+        ):
+            raise ValueError(
+                f"adapter {path!r} shapes {tuple(matrix_b.shape)} @ "
+                f"{tuple(matrix_a.shape)} do not match base weight "
+                f"{tuple(target.shape)}"
+            )
+        validated.append((path, key, matrix_a, matrix_b))
+    return validated
 
 
 def adapter_touched_keys(
