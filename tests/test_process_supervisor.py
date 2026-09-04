@@ -738,6 +738,9 @@ def test_guardian_baselines_inaccessible_unrelated_process_before_gate(monkeypat
                 raise psutil.AccessDenied(self.pid)
             return {"HYDRA_CONTAINMENT_TOKEN": token} if self._owned else {}
 
+        def ppid(self):
+            return 1
+
     root = FakeProcess(10, owned=True)
     unrelated = FakeProcess(20, deny_environment=True)
 
@@ -770,7 +773,7 @@ def test_guardian_baselines_inaccessible_unrelated_process_before_gate(monkeypat
         max_identities=8,
     )
     assert set(owned) == {10}
-    assert set(external) == {20}
+    assert set(external) == {5, 20}
 
     complete, overflowed = guardian_module._scan_token_identities(
         token,
@@ -794,6 +797,9 @@ def test_guardian_fails_closed_for_new_or_owned_inaccessible_identity(monkeypatc
         def environ(self):
             raise psutil.AccessDenied(self.pid)
 
+        def ppid(self):
+            return 1
+
     monkeypatch.setattr(
         guardian_module.psutil,
         "process_iter",
@@ -806,6 +812,50 @@ def test_guardian_fails_closed_for_new_or_owned_inaccessible_identity(monkeypatc
         "owned-token", {}, external_identities={}, max_identities=8
     )
     assert not complete
+
+
+def test_guardian_accepts_new_inaccessible_identity_with_captured_external_ancestor(
+    monkeypatch,
+):
+    class InaccessibleProcess:
+        pid = 30
+        info = {"uids": type("Uids", (), {"real": 501})()}
+
+        def create_time(self):
+            return 30.0
+
+        def environ(self):
+            raise psutil.AccessDenied(self.pid)
+
+        def ppid(self):
+            return 20
+
+    external_parent = guardian_module.GuardedIdentity(20, 20.0)
+    monkeypatch.setattr(
+        guardian_module.psutil,
+        "process_iter",
+        lambda _attrs: iter((InaccessibleProcess(),)),
+    )
+    monkeypatch.setattr(guardian_module.os, "getpid", lambda: 999)
+    monkeypatch.setattr(guardian_module.os, "getuid", lambda: 501)
+    monkeypatch.setattr(
+        guardian_module.GuardedIdentity,
+        "resolve",
+        lambda identity: (
+            (object(), False) if identity == external_parent else (None, True)
+        ),
+    )
+
+    complete, overflowed = guardian_module._scan_token_identities(
+        "owned-token",
+        {},
+        external_identities={20: external_parent},
+        launch_started_at=10.0,
+        max_identities=8,
+    )
+
+    assert complete
+    assert not overflowed
 
     owned = {30: guardian_module.GuardedIdentity(30, 30.0)}
     complete, _ = guardian_module._scan_token_identities(

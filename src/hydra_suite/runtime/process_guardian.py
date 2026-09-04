@@ -293,13 +293,19 @@ def _baseline_guardian_identities(
                 continue
             try:
                 uids = process.info.get("uids")
-                if uids is not None and uids.real != os.getuid():
-                    continue
                 identity = GuardedIdentity(process.pid, float(process.create_time()))
                 if (
                     process.pid != workload_pid
                     and identity.create_time < launch_started_at - 0.01
                 ):
+                    if len(external_identities) >= max_identities:
+                        return False
+                    external_identities[identity.pid] = identity
+                    continue
+                if uids is not None and uids.real != os.getuid():
+                    if len(external_identities) >= max_identities:
+                        return False
+                    external_identities[identity.pid] = identity
                     continue
                 process_environment = process.environ()
                 if abs(float(process.create_time()) - identity.create_time) >= 0.01:
@@ -328,6 +334,9 @@ def _baseline_guardian_identities(
                 external_identities[identity.pid] = identity
                 continue
             if process_environment.get(_TOKEN_ENV) != token:
+                if len(external_identities) >= max_identities:
+                    return False
+                external_identities[identity.pid] = identity
                 continue
             if len(identities) >= max_identities:
                 return False
@@ -382,6 +391,12 @@ def _scan_token_identities(
                     continue
                 if identity.create_time < launch_started_at - 0.01:
                     continue
+                if _has_captured_external_ancestor(
+                    process,
+                    identities=identities,
+                    external_identities=external_identities,
+                ):
+                    continue
                 # A new inaccessible identity was not proven external while
                 # the child was gated. It may be an escaped descendant.
                 return False, overflowed
@@ -403,6 +418,39 @@ def _scan_token_identities(
         return True, overflowed
     except (psutil.Error, OSError, RuntimeError):
         return False, overflowed
+
+
+def _has_captured_external_ancestor(
+    process: psutil.Process,
+    *,
+    identities: dict[int, GuardedIdentity],
+    external_identities: dict[int, GuardedIdentity],
+) -> bool:
+    """Prove an inaccessible process descends from the prelaunch baseline."""
+
+    current = process
+    visited: set[int] = set()
+    for _ in range(64):
+        try:
+            parent_pid = int(current.ppid())
+        except (psutil.Error, OSError):
+            return False
+        if parent_pid <= 1 or parent_pid in visited:
+            return False
+        visited.add(parent_pid)
+        if parent_pid in identities:
+            return False
+        external = external_identities.get(parent_pid)
+        if external is not None:
+            parent, gone = external.resolve()
+            return parent is not None and not gone
+        try:
+            current = psutil.Process(parent_pid)
+        except (psutil.NoSuchProcess, psutil.ZombieProcess):
+            return False
+        except (psutil.AccessDenied, OSError):
+            return False
+    return False
 
 
 def _prune_gone_identities(identities: dict[int, GuardedIdentity]) -> None:
