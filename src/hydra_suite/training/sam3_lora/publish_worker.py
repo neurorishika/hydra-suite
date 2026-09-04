@@ -221,7 +221,7 @@ def publish_sam3_artifact(
         # own defensive validation because the original fingerprints below
         # must describe a wholly unmodified checkpoint.
         _validated_adapter_pairs(base, adapters, cfg, prefix="detector.")
-        touched_keys = adapter_touched_keys(adapters)
+        touched_keys = adapter_touched_keys(adapters, base)
         fingerprint_keys = sorted(touched_keys)[:3]
         original_fingerprints = {
             key: tensor_sha256(base[key]) for key in fingerprint_keys
