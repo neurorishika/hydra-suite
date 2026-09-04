@@ -4,7 +4,7 @@
 
 ::: hydra_suite.core.tracking.worker
 
-::: hydra_suite.core.detectors
+::: hydra_suite.core.inference
 
 ::: hydra_suite.core.background.model
 
