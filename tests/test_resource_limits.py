@@ -106,22 +106,33 @@ def test_rlimit_launch_documents_virtual_memory_and_sets_mps_before_exec():
     assert any("does not cap discrete GPU VRAM" in item for item in launch.limitations)
 
 
-def test_bootstrap_sets_mps_guard_before_replacing_itself_with_workload():
+@pytest.mark.parametrize(
+    ("high_ratio", "expected_low_ratio"),
+    [(0.65, 0.65), (1.7, 1.4)],
+)
+def test_bootstrap_sets_compatible_mps_watermarks_before_exec(
+    high_ratio, expected_low_ratio
+):
     command = [
         sys.executable,
         "-c",
-        "import os; print(os.environ['PYTORCH_MPS_HIGH_WATERMARK_RATIO'])",
+        (
+            "import os; print(os.environ['PYTORCH_MPS_HIGH_WATERMARK_RATIO'], "
+            "os.environ['PYTORCH_MPS_LOW_WATERMARK_RATIO'])"
+        ),
     ]
+    environment = _test_env()
+    environment["PYTORCH_MPS_LOW_WATERMARK_RATIO"] = "1.4"
     launch = build_limited_launch(
         command,
         ProcessMemoryLimits(
             soft_host_bytes=100,
             hard_host_bytes=200,
-            mps_high_watermark_ratio=0.65,
+            mps_high_watermark_ratio=high_ratio,
         ),
         backend=LimitBackend.WATCHDOG_ONLY,
         accelerator_kind="mps",
-        environment=_test_env(),
+        environment=environment,
     )
 
     result = subprocess.run(
@@ -133,7 +144,7 @@ def test_bootstrap_sets_mps_guard_before_replacing_itself_with_workload():
         check=True,
     )
 
-    assert result.stdout.strip() == "0.65"
+    assert result.stdout.strip() == f"{high_ratio} {expected_low_ratio}"
 
 
 def test_mps_launch_requires_an_explicit_allocator_high_watermark():
