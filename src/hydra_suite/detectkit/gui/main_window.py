@@ -1715,11 +1715,24 @@ class DetectKitMainWindow(QMainWindow):
         )
         worker.progress.connect(progress.setValue)
         worker.status.connect(progress.setLabelText)
-        worker.error.connect(
-            lambda msg: QMessageBox.warning(self, "Run Inference", msg)
-        )
+
+        def _handle_error(message: str) -> None:
+            if worker.containment_recovery_required:
+                message = (
+                    "Inference stopped because DetectKit could not yet prove that "
+                    "its protected process tree exited. Resource ownership is "
+                    "retained for safety. Use Retry cleanup before starting another "
+                    "inference run.\n\n"
+                    f"Details: {message}"
+                )
+            QMessageBox.warning(self, "Run Inference", message)
+
+        worker.error.connect(_handle_error)
 
         def _request_cancel() -> None:
+            if worker.containment_recovery_required:
+                self._retry_inference_containment_cleanup(worker, progress)
+                return
             worker.cancel()
             progress.setLabelText(
                 "Cancelling inference… waiting for the current model call to stop."
@@ -1734,11 +1747,7 @@ class DetectKitMainWindow(QMainWindow):
         progress.canceled.connect(_request_cancel)
 
         def _finish() -> None:
-            progress.close()
-            self._inference_worker = None
-            self._inference_progress_dialog = None
-            if worker.is_cancelled():
-                self.statusBar().showMessage("Inference cancelled.", 5000)
+            self._finish_inference_worker(worker, progress)
 
         def _handle_success(result: dict) -> None:
             old_cache = self._dataset_prediction_cache
@@ -1768,6 +1777,68 @@ class DetectKitMainWindow(QMainWindow):
         self._inference_progress_dialog = progress
         progress.show()
         worker.start()
+
+    def _finish_inference_worker(
+        self, worker: _DetectKitDatasetInferenceWorker, progress: QProgressDialog
+    ) -> None:
+        """Retain a recovery owner until containment can prove teardown."""
+
+        if worker.containment_recovery_required:
+            progress.setLabelText(
+                "Containment recovery required. Click Retry cleanup to confirm "
+                "the protected process tree has stopped."
+            )
+            progress.setCancelButtonText("Retry cleanup")
+            progress.show()
+            self.statusBar().showMessage(
+                "Containment recovery required; do not start another inference run."
+            )
+            return
+        progress.close()
+        if self._inference_worker is worker:
+            self._inference_worker = None
+            self._inference_progress_dialog = None
+        if worker.is_cancelled():
+            self.statusBar().showMessage("Inference cancelled.", 5000)
+
+    def _retry_inference_containment_cleanup(
+        self, worker: _DetectKitDatasetInferenceWorker, progress: QProgressDialog
+    ) -> None:
+        """Retry a retained sidecar teardown while preserving failed ownership."""
+
+        progress.setLabelText("Retrying safe containment cleanup…")
+        progress.setCancelButtonText("Retrying…")
+        cancel_button = progress.findChild(QPushButton)
+        if cancel_button is not None:
+            cancel_button.setEnabled(False)
+        if not worker.retry_containment_cleanup():
+            progress.setLabelText(
+                "Containment is still unproven. Retry cleanup again before "
+                "starting another inference run."
+            )
+            progress.setCancelButtonText("Retry cleanup")
+            if cancel_button is not None:
+                cancel_button.setEnabled(True)
+            self.statusBar().showMessage(
+                "Containment recovery is still required; resource ownership remains retained."
+            )
+            return
+        progress.close()
+        if self._inference_worker is worker:
+            self._inference_worker = None
+            self._inference_progress_dialog = None
+        cleanup_note = (
+            f" Temporary cleanup issue: {worker.recovery_cleanup_error}"
+            if worker.recovery_cleanup_error
+            else ""
+        )
+        QMessageBox.information(
+            self,
+            "Containment Recovery Complete",
+            "The protected inference process has stopped and its resources were "
+            "released. This inference did not complete; run it again." + cleanup_note,
+        )
+        self.statusBar().showMessage("Containment recovery completed safely.", 5000)
 
     # ------------------------------------------------------------------
     # SAM2 escalation

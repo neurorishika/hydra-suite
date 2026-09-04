@@ -8,6 +8,8 @@ from pathlib import Path
 
 from PySide6.QtCore import Signal
 
+from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
+from hydra_suite.runtime.safe_text import bounded_terminal_text
 from hydra_suite.widgets.workers import BaseWorker
 
 from ..sidecars.protocol import Operation, SidecarRequest
@@ -42,6 +44,7 @@ class DatasetInferenceWorker(BaseWorker):
     ) -> None:
         super().__init__()
         self._cancel_requested = False
+        self.recovery_cleanup_error = ""
         settings = {
             "inference_kind": str(inference_kind),
             "device": str(device_preference or "auto"),
@@ -86,11 +89,47 @@ class DatasetInferenceWorker(BaseWorker):
         )
 
     def cancel(self) -> None:
+        if self.containment_recovery_required:
+            self.retry_containment_cleanup()
+            return
         self._cancel_requested = True
         self._operation.cancel()
 
     def is_cancelled(self) -> bool:
         return self._cancel_requested or self._operation.cancelled
+
+    @property
+    def containment_recovery_required(self) -> bool:
+        """Whether the sidecar remains the durable owner of a workload."""
+
+        return isinstance(self.failure_exception, WorkloadStillOwnedError)
+
+    def retry_containment_cleanup(self) -> bool:
+        """Retry teardown without dropping an owner whose exit is unproven."""
+
+        error = self.failure_exception
+        if not isinstance(error, WorkloadStillOwnedError):
+            return True
+        try:
+            error.sidecar.cancel()
+        except WorkloadStillOwnedError as retry_error:
+            retry_error.recovery_cleanup = error.recovery_cleanup
+            self.failure_exception = retry_error
+            return False
+        except Exception as retry_error:  # noqa: BLE001 - retain uncertain owner
+            error.recovery_error = bounded_terminal_text(
+                retry_error, include_exception_type=False
+            )
+            return False
+        if error.recovery_cleanup is not None:
+            try:
+                error.recovery_cleanup()
+            except Exception as cleanup_error:  # noqa: BLE001 - workload is safe
+                self.recovery_cleanup_error = bounded_terminal_text(
+                    cleanup_error, include_exception_type=False
+                )
+        self.failure_exception = None
+        return True
 
     def execute(self) -> None:
         outcome = self._operation.run(
