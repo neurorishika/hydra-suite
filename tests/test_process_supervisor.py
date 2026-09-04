@@ -1328,7 +1328,17 @@ def test_wait_timeout_returns_explicit_owner_when_exit_cannot_be_proved(
             HeavyJobLease(resource_key, "competitor", lease_dir).acquire()
     finally:
         monkeypatch.setattr(sidecar, "_terminate_and_reap", real_teardown)
-        sidecar.cancel(grace_seconds=0.05)
+        # A guardian acknowledgement is explicitly nonterminal: a delayed
+        # process-table observation must retain ownership for a later retry,
+        # not make test cleanup assume the first five-second window is enough.
+        for attempt in range(3):
+            try:
+                sidecar.cancel(grace_seconds=0.05)
+            except WorkloadStillOwnedError:
+                if attempt == 2:
+                    raise
+            else:
+                break
 
 
 def test_final_admission_runs_under_supervisor_owned_lease_before_popen(
