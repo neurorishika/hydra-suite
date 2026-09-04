@@ -50,11 +50,13 @@ def _probe() -> dict:
     torch = imported["torch"]
     cuda_available = bool(torch.cuda.is_available())
     capability = list(torch.cuda.get_device_capability()) if cuda_available else None
+    bf16_supported = bool(torch.cuda.is_bf16_supported()) if cuda_available else False
     return {
         "ok": True,
         "missing": [],
         "cuda_available": cuda_available,
         "cuda_compute_capability": capability,
+        "cuda_bf16_supported": bf16_supported,
     }
 
 

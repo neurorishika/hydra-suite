@@ -87,6 +87,9 @@ class _FakeCuda:
     def get_device_capability(self):
         return self._capability
 
+    def is_bf16_supported(self):
+        return self._available and self._capability[0] >= 8
+
 
 def test_runtime_precision_matrix_fails_closed():
     torch = SimpleNamespace(cuda=_FakeCuda())
@@ -102,6 +105,30 @@ def test_runtime_precision_matrix_fails_closed():
     )
     assert "8.0" in cli._runtime_admission_refusal(
         SimpleNamespace(cuda=_FakeCuda(capability=(7, 5))), Sam3LoraParams()
+    )
+
+    cuda = _FakeCuda()
+    cuda.is_bf16_supported = lambda: False
+    assert "BF16" in cli._runtime_admission_refusal(
+        SimpleNamespace(cuda=cuda), Sam3LoraParams()
+    )
+
+
+def test_runtime_refuses_empty_adapter_scope():
+    params = Sam3LoraParams(
+        adapt_vision_encoder=False,
+        adapt_text_encoder=False,
+        adapt_geometry_encoder=False,
+        adapt_detr_encoder=False,
+        adapt_detr_decoder=False,
+        adapt_mask_decoder=False,
+    )
+
+    assert (
+        "adapter"
+        in cli._runtime_admission_refusal(
+            SimpleNamespace(cuda=_FakeCuda()), params
+        ).lower()
     )
 
 

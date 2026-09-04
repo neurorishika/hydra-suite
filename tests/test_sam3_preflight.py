@@ -305,6 +305,24 @@ def test_lora_scope_changes_optimizer_state_and_adapter_terms(tmp_path):
     )
 
 
+def test_empty_lora_scope_is_refused_instead_of_adapting_everything(tmp_path):
+    _write_coco(tmp_path)
+    decision = _decision(
+        _spec(
+            tmp_path,
+            adapt_vision_encoder=False,
+            adapt_text_encoder=False,
+            adapt_geometry_encoder=False,
+            adapt_detr_encoder=False,
+            adapt_detr_decoder=False,
+            adapt_mask_decoder=False,
+        )
+    )
+
+    assert not decision.admitted
+    assert any("adapter" in reason.lower() for reason in decision.refusals)
+
+
 def test_explicit_empty_cuda_visible_devices_hides_all_devices(monkeypatch):
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "")
 

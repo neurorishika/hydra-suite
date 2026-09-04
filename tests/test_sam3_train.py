@@ -63,12 +63,13 @@ class _Decision:
 
 
 class _Output:
-    def __init__(self, lines=()):
+    def __init__(self, lines=(), *, eof=True):
         self.lines = list(lines)
+        self.eof = eof
 
     def drain(self, timeout=0):
         lines, self.lines = self.lines, []
-        return lines, True, None
+        return lines, self.eof, None
 
 
 def _supervised(kind=ExitKind.SUCCESS, *, returncode=0, tail=()):
@@ -96,6 +97,7 @@ def _install(
     write_artifact=True,
     artifact_bytes=b"adapter",
     poll_returncode=0,
+    output_eof=True,
     decisions=None,
 ):
     decisions = list(decisions or [_Decision(), _Decision()])
@@ -117,7 +119,7 @@ def _install(
     class FakeSidecar:
         def __init__(self, plan, *, prelaunch_check, **kwargs):
             self.plan = plan
-            self.output = _Output(lines)
+            self.output = _Output(lines, eof=output_eof)
             self.process = SimpleNamespace(poll=lambda: poll_returncode)
             self.canceled = False
             calls.append(self)
@@ -290,6 +292,17 @@ def test_live_cancel_is_step_and_output_independent(tmp_path, monkeypatch):
     assert result["canceled"]
     assert result["failure_kind"] == "canceled"
     assert calls[0].canceled
+
+
+def test_root_exit_transitions_to_wait_when_descendant_holds_stdout(
+    tmp_path, monkeypatch
+):
+    calls = _install(monkeypatch, tmp_path, output_eof=False, poll_returncode=0)
+
+    result = tr.train_sam3_lora(_spec(tmp_path), str(tmp_path / "run"))
+
+    assert result["success"]
+    assert not calls[0].canceled
 
 
 def test_conflicting_canonical_lease_is_reported(tmp_path, monkeypatch):

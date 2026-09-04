@@ -177,6 +177,12 @@ def probe_sam3_training_availability(
             "SAM3 training requires CUDA BF16 and compute capability >= 8.0; "
             f"the sidecar reports {major}.{minor}. FP32 fallback is disabled.",
         )
+    if not payload.get("cuda_bf16_supported", False):
+        return Sam3TrainingAvailability(
+            False,
+            "The sidecar CUDA runtime reports that BF16 operations are not "
+            "supported. SAM3 training has no safe FP32 fallback.",
+        )
 
     if not _checkpoint_present(cache_dir):
         return Sam3TrainingAvailability(

@@ -568,6 +568,11 @@ def assess_preflight(
             "SAM3 LoRA training currently supports only CUDA BF16; fp16/fp32 "
             "modes fail against SAM3's BF16 activation path and are disabled."
         )
+    if not any(bool(getattr(params, flag, False)) for flag in _LORA_PARAMS_PER_RANK):
+        refusals.append(
+            "SAM3 training requires at least one enabled adapter scope; all "
+            "adapt_* flags are disabled."
+        )
     prompt = str(getattr(params, "prompt", "") or "")
     if not prompt.strip():
         refusals.append(

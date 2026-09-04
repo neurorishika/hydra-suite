@@ -251,6 +251,26 @@ def _runtime_admission_refusal(torch_module: Any, params: Any) -> str | None:
             "SAM3 training requires CUDA BF16 on compute capability >= 8.0; "
             f"the selected GPU reports {major}.{minor}. FP32 fallback is disabled."
         )
+    if not bool(torch_module.cuda.is_bf16_supported()):
+        return (
+            "The selected CUDA runtime reports that BF16 operations are not "
+            "supported; SAM3 training has no safe FP32 fallback."
+        )
+    if not any(
+        bool(getattr(params, flag, False))
+        for flag in (
+            "adapt_vision_encoder",
+            "adapt_text_encoder",
+            "adapt_geometry_encoder",
+            "adapt_detr_encoder",
+            "adapt_detr_decoder",
+            "adapt_mask_decoder",
+        )
+    ):
+        return (
+            "SAM3 training requires at least one enabled adapter scope; all "
+            "adapt_* flags are disabled."
+        )
     return None
 
 

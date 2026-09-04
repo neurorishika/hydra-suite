@@ -73,6 +73,7 @@ def _healthy_payload():
         "missing": [],
         "cuda_available": True,
         "cuda_compute_capability": [8, 9],
+        "cuda_bf16_supported": True,
     }
 
 
@@ -202,6 +203,16 @@ def test_no_cuda_and_pre_ampere_are_unavailable(monkeypatch):
                 "cuda_compute_capability": [7, 5],
             },
             "8.0",
+        ),
+        (
+            {
+                "ok": True,
+                "missing": [],
+                "cuda_available": True,
+                "cuda_compute_capability": [8, 9],
+                "cuda_bf16_supported": False,
+            },
+            "BF16",
         ),
     ):
         monkeypatch.setattr(

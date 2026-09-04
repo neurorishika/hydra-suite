@@ -270,7 +270,9 @@ def train_sam3_lora(
             if output_error is not None:
                 raise output_error
             process_returncode = sidecar.process.poll()
-            if eof and process_returncode is not None:
+            # Root exit transfers control to wait(), which owns final tree
+            # quiescence. A descendant may inherit stdout and hold EOF open.
+            if process_returncode is not None:
                 break
             if should_cancel():
                 sidecar.cancel(plan.terminate_grace_seconds)

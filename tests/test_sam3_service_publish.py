@@ -1,5 +1,7 @@
 """SEMANTIC_SAM3 must fork to publish_sam3_model, never publish_trained_model."""
 
+import pytest
+
 import hydra_suite.training.service as svc
 from hydra_suite.training.contracts import (
     PublishPolicy,
@@ -135,6 +137,30 @@ def test_training_exception_finalizes_registry_and_preserves_run_identity(
     assert record["finished_at"]
     assert record["failure_kind"] == "training-exception"
     assert record["error_message"] == "sidecar bootstrap exploded"
+
+
+def test_owned_workload_error_is_reraised_with_recovery_handle(monkeypatch, tmp_path):
+    import hydra_suite.training.registry as registry
+    from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
+
+    monkeypatch.setattr(registry, "_project_root", lambda: tmp_path)
+    recovery_handle = object()
+    owned_error = WorkloadStillOwnedError("ownership retained", recovery_handle)
+    monkeypatch.setattr(
+        svc,
+        "run_training",
+        lambda *args, **kwargs: (_ for _ in ()).throw(owned_error),
+    )
+
+    with pytest.raises(WorkloadStillOwnedError) as raised:
+        svc.TrainingOrchestrator(tmp_path / "workspace").run_role_training(
+            _registered_spec(tmp_path)
+        )
+
+    assert raised.value is owned_error
+    assert raised.value.sidecar is recovery_handle
+    record = load_registry()["runs"][0]
+    assert record["status"] == "running"
 
 
 def test_auto_publish_exception_finalizes_registry_with_training_diagnostics(

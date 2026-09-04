@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Callable
 
 from hydra_suite.core.inference.semantic.checkpoints import ensure_checkpoint
+from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
 
 from .contracts import (
     DatasetBuildResult,
@@ -546,6 +547,11 @@ class TrainingOrchestrator:
                 progress_cb=progress_cb,
                 should_cancel=should_cancel,
             )
+        except WorkloadStillOwnedError:
+            # The exception owns the still-live sidecar and canonical leases.
+            # Preserve that recovery handle for the caller; collapsing it into
+            # a dict would orphan the workload and falsely imply finalization.
+            raise
         except Exception as exc:
             result = {
                 "success": False,
