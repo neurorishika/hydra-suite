@@ -146,13 +146,19 @@ def detection_cache_dir_covers_range(
         from hydra_suite.core.inference.runner import _open_caches, video_signature
 
         _cfg = build_inference_config_from_params(params)
-        handle = _open_caches(
+        caches = _open_caches(
             _cfg,
             cache_dir,
             video_signature(video_path),
             params.get("ROI_MASK", None),
-        ).detection
-        return handle is not None and handle.covers_frame_range(start_frame, end_frame)
+            read_only=True,
+        )
+        handle = caches.detection
+        return (
+            caches.set_manifest_valid
+            and handle is not None
+            and handle.covers_frame_range(start_frame, end_frame)
+        )
     except Exception:
         return False
 

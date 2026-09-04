@@ -1,15 +1,4 @@
-"""Shared cache-reuse helper: read a fully-covered on-disk detection cache, or
-recompute the whole requested frame set fresh in one batched pass and persist
-it as a new complete cache session.
-
-No incremental merge -- matches this codebase's existing all-or-nothing cache
-convention (see ``core/tracking/worker.py``'s backward-pass cache handling,
-and ``InferenceRunner.detection_cache_covers_frame_range`` /
-``caches_all_valid`` in ``core/inference/runner.py``): a cache is either fully
-usable as-is, or the entire requested set is recomputed and rewritten. This is
-the ONE shared implementation of that pattern for callers outside
-``InferenceRunner`` itself -- do not copy-paste it.
-"""
+"""Shared cache-reuse helper with bounded incremental chunk resume."""
 
 from __future__ import annotations
 
@@ -20,6 +9,7 @@ import numpy as np
 from ..result import OBBResult
 from .base import CacheKey
 from .keys import bgsub_detection_cache_key, detection_cache_key, with_video_signature
+from .set_manifest import load_cache_set, resolve_cache_member
 from .store import DetectionCacheHandle
 
 # Placeholder key for callers that cannot offer a real OBBConfig-derived key
@@ -94,51 +84,98 @@ def get_or_compute_raw(
 ) -> "dict[int, OBBResult]":
     """Return raw (unfiltered) per-frame OBB detections for ``frame_indices``.
 
-    Reads ``<cache_dir>/detection.npz`` if it exists, is valid, and covers
-    every requested frame index -- a pure read, zero calls to
-    ``runner.detect_batch_raw``. Otherwise recomputes the WHOLE requested set
-    fresh in a single ``detect_batch_raw`` call (not just the missing
-    subset) and persists it as one new complete cache write.
+    Reads every available requested frame from ``<cache_dir>/detection.npz``.
+    A chunked cache miss recomputes and appends only missing frames. A partial
+    legacy cache is recomputed as one complete new-format session because
+    legacy files cannot be appended without destructive migration.
 
-    ``write=False`` makes the miss path read-only: the whole requested set is
-    still recomputed and returned, but NOTHING is written -- no write handle is
+    ``write=False`` makes the miss path read-only: missing requested frames are
+    recomputed and returned, but NOTHING is written -- no write handle is
     constructed and ``<cache_dir>/detection.npz`` is never touched. This is for
     callers that merely *borrow* a cache file another subsystem owns (notably
     TrackerKit's dataset export, which points at tracking's own
     ``.inference_cache_<stem>/detection.npz``). Persisting there would be
-    destructive, not merely wasteful: ``DetectionCacheHandle.close()`` rewrites
-    the file from the current call's buffer alone (this repo's documented
-    no-merge convention), so one miss would replace tracking's complete
-    detection cache with just the frames this call happened to ask for --
-    breaking backward/replay tracking, which requires a full-range cache. The
-    cache-HIT path is identical either way (it is already a pure read), so
-    ``write=False`` gives up nothing on the common, fast path.
+    destructive for legacy stores. Chunked stores can append safely, but a
+    borrower still must not mutate a cache owned by tracking. The cache-hit path
+    is identical either way, so ``write=False`` gives up nothing there.
 
     ``runner`` must implement ``detect_batch_raw(frames, frame_indices=...)
     -> list[OBBResult]`` (``InferenceRunner.detect_batch_raw``, Task 2).
     """
     frame_indices = list(frame_indices)
+    frames = list(frames)
+    if len(frames) != len(frame_indices):
+        raise ValueError("frames and frame_indices must have the same length")
+    if any(not isinstance(idx, (int, np.integer)) for idx in frame_indices):
+        raise ValueError("frame indices must be integers")
+    if any(int(idx) < 0 for idx in frame_indices):
+        raise ValueError("frame indices must be nonnegative")
+    if len({int(idx) for idx in frame_indices}) != len(frame_indices):
+        raise ValueError("frame indices must be unique")
+    if any(right <= left for left, right in zip(frame_indices, frame_indices[1:])):
+        raise ValueError("frame indices must be strictly increasing")
     cache_path = Path(cache_dir) / "detection.npz"
     read_handle = cache_reader or open_raw_detection_cache_reader(runner, cache_dir)
-    if read_handle.is_valid():
+    cached: dict[int, OBBResult | None] = {}
+    missing_indices = list(frame_indices)
+    missing_frames = list(frames)
+    structurally_valid = read_handle.is_valid()
+    reusable = read_handle.is_reusable() if structurally_valid else False
+    replacement_required = structurally_valid and not reusable
+    if reusable:
         cached = {idx: read_handle.read_frame(idx) for idx in frame_indices}
-        if all(result is not None for result in cached.values()):
-            return cached
+        missing_indices = [idx for idx in frame_indices if cached[idx] is None]
+        if not missing_indices:
+            return {idx: cached[idx] for idx in frame_indices}
+        if not read_handle.is_legacy:
+            frame_by_index = dict(zip(frame_indices, frames))
+            missing_frames = [frame_by_index[idx] for idx in missing_indices]
+        else:
+            # Preserve the old file until a complete replacement is ready.
+            cached = {}
+            missing_indices = list(frame_indices)
+            missing_frames = list(frames)
+            replacement_required = True
 
-    raw_results = runner.detect_batch_raw(frames, frame_indices=frame_indices)
+    raw_results = runner.detect_batch_raw(missing_frames, frame_indices=missing_indices)
+    if len(raw_results) != len(missing_indices):
+        raise ValueError("detect_batch_raw must return one result per frame")
+    if any(
+        int(result.frame_idx) != int(idx)
+        for idx, result in zip(missing_indices, raw_results)
+    ):
+        raise ValueError(
+            "detect_batch_raw result.frame_idx must match its requested frame"
+        )
 
     if not write:
-        return dict(zip(frame_indices, raw_results))
+        computed = dict(zip(missing_indices, raw_results))
+        return {
+            idx: cached.get(idx) if cached.get(idx) is not None else computed[idx]
+            for idx in frame_indices
+        }
 
     key, require_key = _cache_key_for(runner)
+    active_set = load_cache_set(Path(cache_dir))
+    if active_set is not None and len(active_set.members) > 1:
+        raise RuntimeError(
+            "cannot append detection frames independently to a coordinated cache set"
+        )
+    write_path, generation_id = resolve_cache_member(cache_path)
     write_handle = DetectionCacheHandle(
-        path=cache_path,
+        path=write_path,
         key=key,
         require_key=require_key,
         read_only=False,
+        write_mode="fresh" if replacement_required else "resume",
+        generation_id=generation_id,
     )
-    for idx, result in zip(frame_indices, raw_results):
+    for idx, result in zip(missing_indices, raw_results):
         write_handle.write_frame(idx, result=result)
     write_handle.close()
 
-    return dict(zip(frame_indices, raw_results))
+    computed = dict(zip(missing_indices, raw_results))
+    return {
+        idx: cached.get(idx) if cached.get(idx) is not None else computed[idx]
+        for idx in frame_indices
+    }
