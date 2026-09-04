@@ -113,13 +113,6 @@ def _close(left: float, right: float) -> bool:
     return abs(left - right) <= 1e-9
 
 
-def _nth_row(rows, index: int) -> list:
-    try:
-        return list(rows[index])
-    except (IndexError, TypeError):
-        return []
-
-
 def _humanise_duration(seconds: float, frames: int) -> str:
     total = seconds * max(frames, 0)
     total_int = int(round(total))
@@ -374,13 +367,15 @@ class DirectCalibrationResultsDialog(BaseDialog):
         return self.outcome.points[row]
 
     def _preview_for_point(self, point):
-        """The preview measured at THIS row's geometry and merge threshold.
+        """The preview measured at THIS row's geometry, merge AND confidence.
 
-        Keyed by ``(candidate_index, merge_threshold)`` and never by label:
-        candidate labels are not unique (the grid dedups on geometry), and a
-        label lookup is exactly what made every row of a geometry show the
-        same permissive overlay. Confidence is not part of the key because it
-        is reproduced exactly at render time (see ``_row_predictions``).
+        Keyed by ``(candidate_index, merge_threshold, confidence)`` and never
+        by label: candidate labels are not unique (the grid dedups on
+        geometry), and a label lookup is exactly what made every row of a
+        geometry show the same permissive overlay. Confidence is part of the
+        key because it is NOT reproducible from a permissive preview -- it
+        gates detections before the raw cap and the merge, both of which
+        change which polygons exist.
         """
         if point is None:
             return None
@@ -394,49 +389,27 @@ class DirectCalibrationResultsDialog(BaseDialog):
                 float(point.merge_threshold),
             ):
                 continue
+            if not _close(
+                float(getattr(preview, "confidence", -1.0)),
+                float(point.confidence),
+            ):
+                continue
             return preview
         return None
 
     @staticmethod
     def _row_predictions(preview, point, frame_index):
-        """Reproduce one row's post-merge predictions from a stored preview.
+        """The selected row's post-merge predictions, verbatim.
 
-        The preview holds this geometry+merge's predictions at the confidence
-        floor with the per-frame cap lifted. Production applies the
-        confidence gate and THEN caps by keeping the largest detections
-        (filtering.py:305/331-335), so replaying those two steps here yields
-        the exact polygons the selected row emitted -- not a permissive
-        superset.
+        The preview was collected by ``_preview_for`` at this row's own
+        geometry, merge threshold, confidence AND ``max_targets``, so it IS
+        the row's output. Nothing is replayed here: the previous replay
+        (confidence gate + largest-first cap over a permissive preview) could
+        not be exact, because ``max_targets`` also derives a raw cap applied
+        by confidence around the merge.
         """
         _path, _gt, pred_polygons = preview.frames[frame_index]
-        confidences = _nth_row(getattr(preview, "pred_confidences", []), frame_index)
-        sizes = _nth_row(getattr(preview, "pred_sizes", []), frame_index)
-        if len(confidences) != len(pred_polygons):
-            # Legacy/incomplete preview: nothing to threshold with. Show what
-            # was stored rather than silently hiding predictions.
-            return list(pred_polygons)
-        kept = [
-            index
-            for index in range(len(pred_polygons))
-            if confidences[index] >= float(point.confidence)
-        ]
-        # The EFFECTIVE cap, exactly as production computes it
-        # (filtering._effective_max_detections clamps to
-        # MAX_DOWNSTREAM_CROPS_PER_FRAME), so a row measured with a larger
-        # requested cap still renders what it actually emitted.
-        from hydra_suite.core.inference.stages.filtering import (
-            MAX_DOWNSTREAM_CROPS_PER_FRAME,
-        )
-
-        requested = int(point.max_detections)
-        cap = (
-            min(requested, MAX_DOWNSTREAM_CROPS_PER_FRAME)
-            if requested > 0
-            else MAX_DOWNSTREAM_CROPS_PER_FRAME
-        )
-        if cap > 0 and len(kept) > cap and len(sizes) == len(pred_polygons):
-            kept = sorted(kept, key=lambda i: sizes[i], reverse=True)[:cap]
-        return [pred_polygons[index] for index in kept]
+        return list(pred_polygons)
 
     def _overlay_caption(self, point) -> str:
         if point is None:

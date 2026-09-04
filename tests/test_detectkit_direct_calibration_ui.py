@@ -880,63 +880,53 @@ def _square(x):
     )
 
 
-def _overlay_preview(tmp_path, *, candidate_index, merge_threshold, confidences):
+def _overlay_preview(
+    tmp_path, *, candidate_index, merge_threshold, confidence, count=1
+):
+    """A preview as the sweep now stores them: one per MEASURED ROW.
+
+    ``count`` polygons stand in for that row's own post-merge predictions --
+    there is no gate or cap to replay, so the dialog must render exactly
+    these. That the stored set really is the row's output is proven
+    non-tautologically in
+    ``tests/test_detectkit_direct_calibration_overlay_parity.py``.
+    """
     from hydra_suite.detectkit.jobs.direct_calibration import CalibrationPreview
 
-    polygons = [_square(10.0 * i) for i in range(len(confidences))]
+    polygons = [_square(10.0 * i) for i in range(count)]
     return CalibrationPreview(
         candidate_label="Training geometry",
         frames=[(tmp_path / "frame.png", [], polygons)],
         candidate_index=candidate_index,
         merge_threshold=merge_threshold,
-        pred_confidences=[list(confidences)],
-        pred_sizes=[[100.0] * len(confidences)],
+        confidence=confidence,
     )
 
 
-def test_overlay_shows_only_detections_the_selected_row_emits(tmp_path):
-    """Selecting a strict-confidence row must not render the 0.05 overlay."""
+def test_each_confidence_row_has_its_own_overlay(tmp_path):
+    """Two rows of one geometry+merge differ only in confidence -- and they
+    must NOT share an overlay. Confidence gates detections BEFORE the raw cap
+    and the merge, so no single permissive preview can depict both."""
     low = _overlay_point(
         confidence=0.05, merge_threshold=0.5, candidate_index=0, label="Training"
     )
     high = _overlay_point(
         confidence=0.65, merge_threshold=0.5, candidate_index=0, label="Training"
     )
-    preview = _overlay_preview(
-        tmp_path,
-        candidate_index=0,
-        merge_threshold=0.5,
-        confidences=[0.1, 0.7, 0.9],
+    p_low = _overlay_preview(
+        tmp_path, candidate_index=0, merge_threshold=0.5, confidence=0.05, count=3
     )
-    dialog = _overlay_dialog(tmp_path, [low, high], [preview])
+    p_high = _overlay_preview(
+        tmp_path, candidate_index=0, merge_threshold=0.5, confidence=0.65, count=2
+    )
+    dialog = _overlay_dialog(tmp_path, [low, high], [p_low, p_high])
     try:
-        assert len(dialog._row_predictions(preview, low, 0)) == 3
-        assert len(dialog._row_predictions(preview, high, 0)) == 2
+        assert dialog._preview_for_point(low) is p_low
+        assert dialog._preview_for_point(high) is p_high
+        assert len(dialog._row_predictions(p_low, low, 0)) == 3
+        assert len(dialog._row_predictions(p_high, high, 0)) == 2
         dialog.table_rows.selectRow(1)
         assert "0.65" in dialog.lbl_overlay_caption.text()
-    finally:
-        dialog.close()
-
-
-def test_overlay_reapplies_the_rows_detection_cap_largest_first(tmp_path):
-    from hydra_suite.detectkit.jobs.direct_calibration import CalibrationPreview
-
-    point = _overlay_point(
-        confidence=0.1, merge_threshold=0.5, candidate_index=0, label="T", cap=2
-    )
-    preview = CalibrationPreview(
-        candidate_label="T",
-        frames=[(tmp_path / "frame.png", [], [_square(0), _square(20), _square(40)])],
-        candidate_index=0,
-        merge_threshold=0.5,
-        pred_confidences=[[0.9, 0.9, 0.9]],
-        pred_sizes=[[1.0, 300.0, 200.0]],
-    )
-    dialog = _overlay_dialog(tmp_path, [point], [preview])
-    try:
-        kept = dialog._row_predictions(preview, point, 0)
-        assert len(kept) == 2
-        assert [float(p[0][0]) for p in kept] == [20.0, 40.0]
     finally:
         dialog.close()
 
@@ -950,10 +940,10 @@ def test_rows_are_matched_to_previews_by_identity_not_label(tmp_path):
         confidence=0.3, merge_threshold=0.5, candidate_index=1, label="same"
     )
     preview_a = _overlay_preview(
-        tmp_path, candidate_index=0, merge_threshold=0.5, confidences=[0.9]
+        tmp_path, candidate_index=0, merge_threshold=0.5, confidence=0.3
     )
     preview_b = _overlay_preview(
-        tmp_path, candidate_index=1, merge_threshold=0.5, confidences=[0.9, 0.9]
+        tmp_path, candidate_index=1, merge_threshold=0.5, confidence=0.3, count=2
     )
     dialog = _overlay_dialog(tmp_path, [a, b], [preview_a, preview_b])
     try:
@@ -971,10 +961,10 @@ def test_each_merge_setting_has_its_own_overlay(tmp_path):
         confidence=0.3, merge_threshold=0.7, candidate_index=0, label="T"
     )
     p3 = _overlay_preview(
-        tmp_path, candidate_index=0, merge_threshold=0.3, confidences=[0.9]
+        tmp_path, candidate_index=0, merge_threshold=0.3, confidence=0.3
     )
     p7 = _overlay_preview(
-        tmp_path, candidate_index=0, merge_threshold=0.7, confidences=[0.9, 0.9]
+        tmp_path, candidate_index=0, merge_threshold=0.7, confidence=0.3, count=2
     )
     dialog = _overlay_dialog(tmp_path, [strict, loose], [p3, p7])
     try:
@@ -1321,42 +1311,6 @@ def test_accept_leaves_an_unregistered_model_alone(monkeypatch, tmp_path):
     dialog.table_rows.selectRow(0)
     dialog.save_profile("Balanced")
     dialog.accept()
-
-
-def test_overlay_cap_matches_productions_effective_cap(tmp_path):
-    """A requested cap above MAX_DOWNSTREAM_CROPS_PER_FRAME is clamped by
-    production, so the overlay must clamp it too."""
-    from hydra_suite.core.inference.stages.filtering import (
-        MAX_DOWNSTREAM_CROPS_PER_FRAME,
-    )
-    from hydra_suite.detectkit.jobs.direct_calibration import CalibrationPreview
-
-    count = MAX_DOWNSTREAM_CROPS_PER_FRAME + 5
-    point = _overlay_point(
-        confidence=0.1,
-        merge_threshold=0.5,
-        candidate_index=0,
-        label="T",
-        cap=100000,
-    )
-    preview = CalibrationPreview(
-        candidate_label="T",
-        frames=[
-            (tmp_path / "frame.png", [], [_square(10.0 * i) for i in range(count)])
-        ],
-        candidate_index=0,
-        merge_threshold=0.5,
-        pred_confidences=[[0.9] * count],
-        pred_sizes=[[float(i) for i in range(count)]],
-    )
-    dialog = _overlay_dialog(tmp_path, [point], [preview])
-    try:
-        assert (
-            len(dialog._row_predictions(preview, point, 0))
-            == MAX_DOWNSTREAM_CROPS_PER_FRAME
-        )
-    finally:
-        dialog.close()
 
 
 def test_training_dialog_falls_back_to_the_prepared_dataset_dir(monkeypatch, tmp_path):
