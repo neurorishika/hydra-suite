@@ -339,6 +339,10 @@ def _validated_lora_trainables(
 
 # Terms worth logging individually: a collapse shows up as one of these
 # going to zero while the others stay put, which a single core scalar hides.
+# A handful of skipped steps is normal on an overflow; a long run of them
+# means the model is not recovering and the run should stop, not grind on.
+MAX_CONSECUTIVE_SKIPPED_STEPS = 25
+
 LOGGED_LOSS_TERMS = (
     "loss_ce",
     "loss_bbox",
@@ -558,6 +562,8 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
     global_step = 0
     logging_steps = 10
     loss_window = _LossWindow()
+    skipped_steps = 0
+    consecutive_skipped = 0
     optimizer.zero_grad()
 
     for epoch in range(params.epochs):
@@ -588,19 +594,47 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
             _assert_finite_loss(
                 loss, epoch=epoch, step=global_step, loss_dict=loss_dict
             )
+            loss_window.add(loss, loss_dict)
             (loss / grad_accum).backward()
 
             is_boundary = (micro_idx + 1) % grad_accum == 0
             is_final_micro_batch = (micro_idx + 1) == n_epoch_batches
             if is_boundary or is_final_micro_batch:
-                torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
-                optimizer.step()
+                # clip_grad_norm_ does NOT sanitise non-finite gradients -- it
+                # scales by a norm that is itself inf/NaN, writing NaN straight
+                # into every adapter weight. From then on the model emits NaN
+                # logits, and the failure only surfaces later as a NaN loss (or,
+                # before the loss guard existed, as the Hungarian matcher
+                # rejecting the cost matrix hundreds of steps downstream).
+                # Skipping the step is what torch's own GradScaler does on
+                # overflow: drop the batch, keep the weights finite, continue.
+                total_norm = torch.nn.utils.clip_grad_norm_(
+                    trainable_params, max_norm=1.0
+                )
+                if torch.isfinite(total_norm):
+                    optimizer.step()
+                    consecutive_skipped = 0
+                else:
+                    consecutive_skipped += 1
+                    skipped_steps += 1
+                    if consecutive_skipped >= MAX_CONSECUTIVE_SKIPPED_STEPS:
+                        raise RuntimeError(
+                            f"SAM3 training skipped {consecutive_skipped} "
+                            "consecutive optimizer steps on non-finite "
+                            f"gradients (epoch {epoch}, step {global_step}). "
+                            "The run is no longer learning -- refusing to "
+                            "continue into a worthless checkpoint."
+                        )
+                # The schedule advances either way: it tracks intended
+                # progress through the run, not the number of accepted steps.
                 scheduler.step()
                 optimizer.zero_grad()
                 global_step += 1
                 if global_step % logging_steps == 0:
                     emit_log(
-                        f"epoch {epoch} step {global_step} " f"{loss_window.summary()}"
+                        f"epoch {epoch} step {global_step} "
+                        f"{loss_window.summary()}"
+                        + (f"  skipped={skipped_steps}" if skipped_steps else "")
                     )
                 loss_window.reset()
             del batch, model_input, targets, outputs, loss_dict, loss

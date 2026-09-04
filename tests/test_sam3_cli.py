@@ -436,3 +436,54 @@ def test_loss_window_reset_clears_the_previous_window():
     assert window.summary() == "loss n/a"
     window.add(torch.tensor(2.0), {"loss_ce": torch.tensor(1.0)})
     assert "loss 2.0000" in window.summary()
+
+
+def test_training_loop_feeds_every_micro_batch_into_the_loss_window():
+    """Regression: the accumulate call was silently missing.
+
+    `_LossWindow` was created and logged, but nothing ever called `.add()`,
+    so every line in a 2000-step run read "loss n/a" and the run produced no
+    usable loss trace at all. Source-level because the loop needs CUDA.
+    """
+    import inspect
+
+    from hydra_suite.training.sam3_lora import cli
+
+    source = inspect.getsource(cli.run_training)
+    add_at = source.index("loss_window.add(")
+    backward_at = source.index("grad_accum).backward()")
+    reset_at = source.index("loss_window.reset()")
+
+    assert add_at < backward_at, "the window must see the loss before backward"
+    assert add_at < reset_at, "accumulate must precede the window reset"
+    assert source.count("loss_window.add(") == 1
+
+
+def test_optimizer_step_is_skipped_on_non_finite_gradients():
+    """clip_grad_norm_ propagates inf/NaN into the weights rather than
+    blocking it, so the step must be gated on the returned norm.
+
+    Once adapter weights go NaN the model emits NaN logits forever; the
+    failure then surfaces far downstream (a NaN loss, or the Hungarian
+    matcher rejecting the cost matrix hundreds of steps later).
+    """
+    import inspect
+
+    from hydra_suite.training.sam3_lora import cli
+
+    source = inspect.getsource(cli.run_training)
+    assert "total_norm = torch.nn.utils.clip_grad_norm_(" in source
+    guard_at = source.index("if torch.isfinite(total_norm):")
+    step_at = source.index("optimizer.step()")
+    assert guard_at < step_at, "optimizer.step() must sit behind the finite check"
+    # The schedule must advance regardless, or a skipped step stalls the LR.
+    assert source.index("scheduler.step()") > source.index("consecutive_skipped += 1")
+
+
+def test_a_long_run_of_skipped_steps_aborts():
+    from hydra_suite.training.sam3_lora import cli
+
+    assert cli.MAX_CONSECUTIVE_SKIPPED_STEPS > 0
+    source = __import__("inspect").getsource(cli.run_training)
+    assert "MAX_CONSECUTIVE_SKIPPED_STEPS" in source
+    assert "no longer learning" in source
