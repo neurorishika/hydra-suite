@@ -1,7 +1,7 @@
 # DetectKit SAHI Calibration Profiles — Design
 
 **Date:** 2026-09-01
-**Status:** Proposed
+**Status:** Shipped — merged to main
 **Depends on:** shipped SAHI sliced inference and DetectKit sliced-dataset training; the existing DetectKit SAM3 semantic-escalation calibration flow.
 
 ## Summary
