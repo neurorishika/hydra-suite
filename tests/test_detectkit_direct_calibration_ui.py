@@ -391,3 +391,114 @@ def test_removing_the_primary_profile_prompts_for_a_replacement(results_dialog):
         dialog.remove_profile(staged[0]["id"])
     dialog.remove_profile(staged[0]["id"], new_primary_id=staged[1]["id"])
     assert [p["name"] for p in dialog.staged_profiles()] == ["High recall"]
+
+
+def test_typing_a_name_and_clicking_save_stages_a_profile(results_dialog, tmp_path):
+    from hydra_suite.core.inference.slice_meta import sidecar_path
+
+    dialog = results_dialog
+    dialog.table_rows.setCurrentCell(1, 0)
+    dialog.edit_profile_name.setText("Balanced")
+    assert dialog.btn_save_profile.isEnabled()
+    dialog.btn_save_profile.click()
+    names = [p["name"] for p in dialog.staged_profiles()]
+    assert names == ["Balanced"]
+    assert not sidecar_path(tmp_path / "m.pt").exists()
+
+
+def test_save_button_disabled_for_empty_name_and_failed_row(results_dialog):
+    dialog = results_dialog
+    dialog.table_rows.setCurrentCell(1, 0)
+    dialog.edit_profile_name.setText("")
+    assert not dialog.btn_save_profile.isEnabled()
+    dialog.edit_profile_name.setText("Something")
+    assert dialog.btn_save_profile.isEnabled()
+    failed_row = next(i for i, p in enumerate(dialog.outcome.points) if p.failed_reason)
+    dialog.table_rows.setCurrentCell(failed_row, 0)
+    assert not dialog.btn_save_profile.isEnabled()
+
+
+def test_duplicate_name_save_click_warns_and_does_not_add_a_second_profile(
+    results_dialog, monkeypatch
+):
+    from PySide6.QtWidgets import QMessageBox
+
+    warnings = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda *args, **kwargs: warnings.append(args) or QMessageBox.Ok,
+    )
+
+    dialog = results_dialog
+    dialog.table_rows.setCurrentCell(1, 0)
+    dialog.edit_profile_name.setText("Balanced")
+    dialog.btn_save_profile.click()
+    dialog.table_rows.setCurrentCell(2, 0)
+    dialog.edit_profile_name.setText("balanced")
+    dialog.btn_save_profile.click()
+
+    assert len(warnings) == 1
+    assert [p["name"] for p in dialog.staged_profiles()] == ["Balanced"]
+
+
+def test_selecting_a_different_primary_combo_entry_changes_staged_primary(
+    results_dialog,
+):
+    dialog = results_dialog
+    dialog.table_rows.setCurrentCell(1, 0)
+    dialog.edit_profile_name.setText("Balanced")
+    dialog.btn_save_profile.click()
+    dialog.table_rows.setCurrentCell(2, 0)
+    dialog.edit_profile_name.setText("High recall")
+    dialog.btn_save_profile.click()
+
+    staged = dialog.staged_profiles()
+    high_recall_id = next(p["id"] for p in staged if p["name"] == "High recall")
+    index = dialog.combo_primary.findData(high_recall_id)
+    assert index >= 0
+    dialog.combo_primary.setCurrentIndex(index)
+
+    assert dialog.staged_meta()["primary_profile_id"] == high_recall_id
+
+
+def test_removing_the_staged_primary_prompts_and_honours_the_choice(
+    results_dialog, monkeypatch
+):
+    dialog = results_dialog
+    dialog.table_rows.setCurrentCell(1, 0)
+    dialog.edit_profile_name.setText("Balanced")
+    dialog.chk_make_primary.setChecked(True)
+    dialog.btn_save_profile.click()
+    dialog.table_rows.setCurrentCell(2, 0)
+    dialog.edit_profile_name.setText("High recall")
+    dialog.btn_save_profile.click()
+
+    staged = dialog.staged_profiles()
+    balanced_id = next(p["id"] for p in staged if p["name"] == "Balanced")
+    high_recall_id = next(p["id"] for p in staged if p["name"] == "High recall")
+
+    prompted = {}
+
+    def fake_prompt(candidates):
+        prompted["candidates"] = [c["id"] for c in candidates]
+        return high_recall_id
+
+    monkeypatch.setattr(dialog, "_prompt_replacement_primary", fake_prompt)
+
+    index = dialog.combo_primary.findData(balanced_id)
+    dialog.combo_primary.setCurrentIndex(index)
+    dialog.btn_remove_profile.click()
+
+    assert prompted["candidates"] == [high_recall_id]
+    assert [p["name"] for p in dialog.staged_profiles()] == ["High recall"]
+    assert dialog.staged_meta()["primary_profile_id"] == high_recall_id
+
+
+def test_accept_with_nothing_staged_does_not_create_the_sidecar(
+    results_dialog, tmp_path
+):
+    from hydra_suite.core.inference.slice_meta import sidecar_path
+
+    results_dialog.accept()
+    assert not sidecar_path(tmp_path / "m.pt").exists()

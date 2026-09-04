@@ -22,7 +22,10 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
+    QLineEdit,
+    QMessageBox,
     QPushButton,
     QSplitter,
     QTableWidget,
@@ -164,6 +167,11 @@ class DirectCalibrationResultsDialog(BaseDialog):
             if existing is not None
             else {"training_geometry": self._training_geometry}
         )
+        # Snapshot for accept()'s "nothing was staged" guard -- comparing by
+        # value, not identity, since save/remove/primary-change all rebind
+        # self._staged_meta to a new dict.
+        self._initial_meta_snapshot = dict(self._staged_meta)
+        self._updating_primary_combo = False
 
         self._build_ui()
         self._populate_table()
@@ -171,6 +179,7 @@ class DirectCalibrationResultsDialog(BaseDialog):
         if outcome.points:
             self.table_rows.selectRow(0)
         self._render_preview()
+        self._update_save_enabled()
 
     # ------------------------------------------------------------------
     # UI construction
@@ -233,10 +242,32 @@ class DirectCalibrationResultsDialog(BaseDialog):
         splitter.setStretchFactor(1, 3)
         outer.addWidget(splitter, 1)
 
+        entry_row = QHBoxLayout()
+        self.edit_profile_name = QLineEdit()
+        self.edit_profile_name.setPlaceholderText("Balanced")
+        self.edit_profile_name.textChanged.connect(self._update_save_enabled)
+        entry_row.addWidget(QLabel("Name:"))
+        entry_row.addWidget(self.edit_profile_name, 1)
+        self.edit_profile_note = QLineEdit()
+        self.edit_profile_note.setPlaceholderText("Purpose note (optional)")
+        entry_row.addWidget(QLabel("Note:"))
+        entry_row.addWidget(self.edit_profile_note, 1)
+        self.chk_make_primary = QCheckBox("Make primary")
+        self.chk_make_primary.setChecked(False)
+        entry_row.addWidget(self.chk_make_primary)
+        self.btn_save_profile = QPushButton("Save as profile")
+        self.btn_save_profile.clicked.connect(self._on_save_profile_clicked)
+        entry_row.addWidget(self.btn_save_profile)
+        outer.addLayout(entry_row)
+
         save_row = QHBoxLayout()
         self.combo_primary = QComboBox()
+        self.combo_primary.currentIndexChanged.connect(self._on_primary_combo_changed)
         save_row.addWidget(QLabel("Staged profiles (primary marked):"))
         save_row.addWidget(self.combo_primary, 1)
+        self.btn_remove_profile = QPushButton("Remove selected")
+        self.btn_remove_profile.clicked.connect(self._on_remove_profile_clicked)
+        save_row.addWidget(self.btn_remove_profile)
         outer.addLayout(save_row)
 
         self.add_content(container)
@@ -308,6 +339,7 @@ class DirectCalibrationResultsDialog(BaseDialog):
     def _on_row_changed(self, *_unused) -> None:
         self._frame_index = 0
         self._render_preview()
+        self._update_save_enabled()
 
     def _step_frame(self, amount: int) -> None:
         preview = self._preview_for_point(self._current_point())
@@ -433,20 +465,123 @@ class DirectCalibrationResultsDialog(BaseDialog):
         return self._staged_meta
 
     def _refresh_profile_list(self) -> None:
-        self.combo_primary.clear()
-        primary_id = self._staged_meta.get("primary_profile_id", "")
-        for profile in self.staged_profiles():
-            label = profile["name"]
-            if profile["id"] == primary_id:
-                label += " (primary)"
-            self.combo_primary.addItem(label, profile["id"])
+        # Guard against signal recursion while repopulating -- the same
+        # pattern the codebase's other combos use (see training_dialog.py's
+        # blockSignals around programmatic rebuilds).
+        self._updating_primary_combo = True
+        try:
+            self.combo_primary.clear()
+            primary_id = self._staged_meta.get("primary_profile_id", "")
+            selected_index = -1
+            for index, profile in enumerate(self.staged_profiles()):
+                label = profile["name"]
+                if profile["id"] == primary_id:
+                    label += " (primary)"
+                    selected_index = index
+                self.combo_primary.addItem(label, profile["id"])
+            if selected_index >= 0:
+                self.combo_primary.setCurrentIndex(selected_index)
+        finally:
+            self._updating_primary_combo = False
+        self._update_save_enabled()
+
+    # ------------------------------------------------------------------
+    # Widget wiring (save / remove / primary selection)
+    # ------------------------------------------------------------------
+
+    def _update_save_enabled(self) -> None:
+        if not hasattr(self, "btn_save_profile"):
+            return
+        point = self._current_point()
+        name_present = bool(self.edit_profile_name.text().strip())
+        row_ok = point is not None and not point.failed_reason
+        self.btn_save_profile.setEnabled(name_present and row_ok)
+
+    def _on_save_profile_clicked(self) -> None:
+        name = self.edit_profile_name.text().strip()
+        note = self.edit_profile_note.text()
+        primary = self.chk_make_primary.isChecked()
+        try:
+            self.save_profile(name, note=note, primary=primary)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Could not save profile", str(exc))
+            return
+        self.edit_profile_name.clear()
+        self.edit_profile_note.clear()
+        self.chk_make_primary.setChecked(False)
+
+    def _prompt_replacement_primary(
+        self, candidates: list[dict[str, Any]]
+    ) -> str | None:
+        """Ask the user which staged profile becomes primary, or to clear it.
+
+        Returns the chosen profile id, ``""`` to clear the designation, or
+        ``None`` if the user cancelled (in which case the removal must not
+        proceed). Never picks a replacement on the user's behalf -- that is
+        exactly what Task 6 removed from the core.
+        """
+        options = ["(clear primary designation)"] + [c["name"] for c in candidates]
+        choice, accepted = QInputDialog.getItem(
+            self,
+            "Choose a new primary profile",
+            "The profile you removed was the primary. Pick its replacement:",
+            options,
+            editable=False,
+        )
+        if not accepted:
+            return None
+        if choice == options[0]:
+            return ""
+        index = options.index(choice) - 1
+        return candidates[index]["id"]
+
+    def _on_remove_profile_clicked(self) -> None:
+        index = self.combo_primary.currentIndex()
+        if index < 0:
+            return
+        profile_id = self.combo_primary.itemData(index)
+        if not profile_id:
+            return
+        try:
+            self.remove_profile(profile_id)
+        except ValueError:
+            remaining = [p for p in self.staged_profiles() if p["id"] != profile_id]
+            chosen = self._prompt_replacement_primary(remaining)
+            if chosen is None:
+                return
+            self.remove_profile(profile_id, new_primary_id=chosen)
+
+    def _on_primary_combo_changed(self, index: int) -> None:
+        if self._updating_primary_combo or index < 0:
+            return
+        profile_id = self.combo_primary.itemData(index)
+        if not profile_id:
+            return
+        if self._staged_meta.get("primary_profile_id") == profile_id:
+            return
+        # Re-designate primary without touching any profile's settings --
+        # upsert_slice_profile's contract (primary is only ever an explicit
+        # decision) is preserved by re-upserting the same profile unchanged
+        # with primary=True.
+        profile = next(p for p in self.staged_profiles() if p["id"] == profile_id)
+        self._staged_meta = upsert_slice_profile(
+            self._staged_meta,
+            name=profile["name"],
+            settings=profile["settings"],
+            profile_id=profile["id"],
+            note=profile["note"],
+            measurement=profile["measurement"],
+            primary=True,
+        )
+        self._refresh_profile_list()
 
     # ------------------------------------------------------------------
     # Commit
     # ------------------------------------------------------------------
 
     def accept(self) -> None:
-        write_slice_meta(self._model_path, self._staged_meta)
+        if self._staged_meta != self._initial_meta_snapshot:
+            write_slice_meta(self._model_path, self._staged_meta)
         super().accept()
 
     def reject(self) -> None:
