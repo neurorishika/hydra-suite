@@ -9,6 +9,7 @@ import threading
 import time
 import tracemalloc
 from pathlib import Path
+from types import SimpleNamespace
 
 import psutil
 import pytest
@@ -1420,6 +1421,48 @@ def test_watchdog_records_bounded_accelerator_pressure_telemetry():
     assert watchdog.accelerator_observation_error is None
     assert watchdog.peak_tree_rss_bytes > 0
     assert watchdog.minimum_system_available_bytes is not None
+
+
+def test_watchdog_checks_host_reserve_before_slow_accelerator_probe(monkeypatch):
+    killed = []
+
+    class Tree:
+        root = SimpleNamespace(pid=42)
+        identity_overflowed = False
+
+        def is_alive(self):
+            return True
+
+        def rss_bytes(self):
+            return 100
+
+        def kill(self):
+            killed.append(True)
+            return True
+
+    monkeypatch.setattr(
+        supervisor_module.psutil,
+        "virtual_memory",
+        lambda: SimpleNamespace(available=10),
+    )
+    watchdog = ProcessTreeWatchdog(
+        Tree(),
+        WatchdogPolicy(
+            soft_tree_rss_bytes=1000,
+            hard_tree_rss_bytes=2000,
+            minimum_system_available_bytes=20,
+            poll_interval_seconds=0.1,
+        ),
+        accelerator_probe=lambda: pytest.fail(
+            "slow accelerator telemetry ran before the host safety checks"
+        ),
+    )
+
+    watchdog._monitor_until_stopped()
+
+    assert killed == [True]
+    assert watchdog.outcome is not None
+    assert watchdog.outcome.trigger is WatchdogTrigger.SYSTEM_RESERVE
 
 
 def test_containment_plan_derives_canonical_keys_and_internal_lease_contends(

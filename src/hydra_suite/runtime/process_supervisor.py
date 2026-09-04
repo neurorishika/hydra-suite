@@ -527,16 +527,6 @@ class ProcessTreeWatchdog:
 
     def _monitor_until_stopped(self) -> None:
         while not self._stop.is_set():
-            if self._accelerator_probe is not None:
-                try:
-                    observed = int(self._accelerator_probe())
-                    if observed < 0:
-                        raise ValueError("accelerator usage cannot be negative")
-                    self.peak_accelerator_bytes = max(
-                        self.peak_accelerator_bytes or 0, observed
-                    )
-                except Exception as exc:  # telemetry is not a CUDA hard cap
-                    self.accelerator_observation_error = str(exc)
             tree_alive = self.tree.is_alive()
             if self.tree.identity_overflowed:
                 self.tree.kill()
@@ -584,6 +574,18 @@ class ProcessTreeWatchdog:
             if rss >= self.policy.soft_tree_rss_bytes:
                 self._handle_soft_limit(rss, available)
                 return
+            # CUDA telemetry is deliberately last: nvidia-smi may be slow or
+            # wedged, while the host reserve/RSS checks are the survival guard.
+            if self._accelerator_probe is not None:
+                try:
+                    observed = int(self._accelerator_probe())
+                    if observed < 0:
+                        raise ValueError("accelerator usage cannot be negative")
+                    self.peak_accelerator_bytes = max(
+                        self.peak_accelerator_bytes or 0, observed
+                    )
+                except Exception as exc:  # telemetry is not a CUDA hard cap
+                    self.accelerator_observation_error = str(exc)
             self._stop.wait(self.policy.poll_interval_seconds)
 
     def _handle_soft_limit(self, rss: int, available: int) -> None:
