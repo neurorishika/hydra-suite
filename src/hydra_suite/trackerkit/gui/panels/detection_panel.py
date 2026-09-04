@@ -783,6 +783,7 @@ class DetectionPanel(QWidget):
         self._slice_profile_requested_id = None
         self._slice_profile_applied_id = None
         self._slice_profile_applied_name = "Training geometry"
+        self._slice_profile_resolution = "training"
         self.lbl_slice_profile_status = QLabel("")
         self.lbl_slice_profile_status.setWordWrap(True)
         self.lbl_slice_profile_status.setStyleSheet("color: #b58900;")
@@ -2626,6 +2627,7 @@ class DetectionPanel(QWidget):
         values = slice_meta_to_panel_values(self._slice_meta, profile_id)
         self._slice_profile_applied_id = values["profile_id"]
         self._slice_profile_applied_name = values["profile_name"]
+        self._slice_profile_resolution = values.get("resolution", "training")
         self._applying_slice_profile = True
         try:
             self.chk_slice_enabled.setChecked(bool(values["enabled"]))
@@ -2720,11 +2722,17 @@ class DetectionPanel(QWidget):
 
         requested = self._slice_profile_requested_id
         applied_id = self._slice_profile_applied_id
-        if (
+        was_unknown_request = (
             requested
             and requested not in ("__training__", "__custom__")
             and applied_id != requested
-        ):
+        )
+        if was_unknown_request:
+            if self._slice_profile_resolution == "primary":
+                return (
+                    "The saved profile is no longer in this model's sidecar; "
+                    f"using '{applied_name}' (the primary profile)."
+                )
             return (
                 "Training geometry: the saved profile is no longer in this "
                 "model's sidecar; using Training geometry."

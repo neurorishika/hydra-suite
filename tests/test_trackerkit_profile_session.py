@@ -59,3 +59,30 @@ def test_unknown_saved_profile_falls_back_visibly(monkeypatch):
     status = panel.slice_profile_status_text()
     assert "Training geometry" in status and "no longer" in status
     window.close()
+
+
+def test_unknown_saved_profile_with_primary_names_the_applied_profile(monkeypatch):
+    from tests.test_main_window_config_persistence import _make_main_window
+
+    window = _make_main_window(monkeypatch)
+    panel = window._detection_panel
+    panel._slice_meta = {
+        "schema_version": 2,
+        "training_geometry": {"geometry_mode": "auto_object", "imgsz": 640},
+        "primary_profile_id": "balanced",
+        "profiles": [
+            {
+                "id": "balanced",
+                "name": "Balanced",
+                "settings": {"enabled": True, "geometry_mode": "auto_object"},
+                "measurement": {},
+            }
+        ],
+    }
+    window.advanced_config["slice_profile_id"] = "gone-1234"
+    panel._apply_slice_meta_values("gone-1234")
+    status = panel.slice_profile_status_text()
+    assert "no longer" in status
+    assert "Balanced" in status
+    assert "Training geometry" not in status
+    window.close()

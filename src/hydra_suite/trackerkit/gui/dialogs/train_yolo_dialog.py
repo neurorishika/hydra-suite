@@ -1530,9 +1530,7 @@ class TrainYoloDialog(BaseDialog):
             QMessageBox.warning(
                 self,
                 "Training Completed with Failures",
-                f"Succeeded: {
-                    len(succeeded)}\nFailed: {
-                    len(failed)}\nSee logs for details.",
+                f"Succeeded: {len(succeeded)}\nFailed: {len(failed)}\nSee logs for details.",
             )
         else:
             QMessageBox.information(

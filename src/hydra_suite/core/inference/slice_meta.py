@@ -321,13 +321,27 @@ def _training_values(geometry: dict[str, Any]) -> dict[str, Any]:
 def slice_meta_to_panel_values(
     meta: dict[str, Any], profile_id: str | None = None
 ) -> dict[str, Any]:
-    """Translate metadata (and an optional profile) into safe TrackerKit values."""
+    """Translate metadata (and an optional profile) into safe TrackerKit values.
+
+    ``values["resolution"]`` explains WHY the returned profile is the one it
+    is, so callers never have to infer a fallback by comparing ids:
+    ``"requested"`` (the asked-for profile id was found), ``"primary"``
+    (the requested id -- if any -- was not found, so the sidecar's explicit
+    primary profile was used instead), or ``"training"`` (no profile applies
+    at all -- either ``"__training__"`` was requested, or nothing resolved).
+    """
     values = _training_values(training_geometry(meta))
     profile = profile_by_id(meta, profile_id)
     if profile is None:
         values["profile_id"] = None
         values["profile_name"] = "Training geometry"
+        values["resolution"] = "training"
         return values
+
+    if profile_id and str(profile_id) == str(profile.get("id", "")):
+        values["resolution"] = "requested"
+    else:
+        values["resolution"] = "primary"
 
     settings = profile["settings"]
     values.update(
