@@ -218,6 +218,20 @@ def run(args: argparse.Namespace) -> int:
             plan,
             publish_policy=PublishPolicy(auto_import=False, auto_select=False),
         )
+    if not plan.publish_policy.auto_import:
+        # Headless plans deliberately default to no server-local publish (see
+        # test_headless_plan_defaults_to_no_server_local_publish) -- a training
+        # box should not import artifacts into its own registry uninvited. That
+        # default is right, but it was INVISIBLE: a SAM3 run trained for hours,
+        # wrote its adapter, reported success, and published nothing, with no
+        # line anywhere saying so. Say it plainly, up front.
+        print(
+            "publish: auto_import is off, so trained artifacts stay in the run "
+            "workspace and are NOT added to this machine's model registry. "
+            'Set "publish": {"auto_import": true} in the plan to publish here.',
+            flush=True,
+        )
+
     resume_checkpoint = _validate_resume_request(plan, args.resume, config_path.parent)
 
     if args.dry_run:

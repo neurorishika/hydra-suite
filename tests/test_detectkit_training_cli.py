@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import subprocess
@@ -731,3 +732,52 @@ def test_cli_returns_configuration_error_for_invalid_json(tmp_path, capsys):
 
     assert cli.main(["--config", str(config_path)]) == 2
     assert "Invalid JSON" in capsys.readouterr().err
+
+
+def test_cli_announces_when_publishing_is_disabled(tmp_path, capsys):
+    """The `False` default is deliberate, but it was invisible.
+
+    A headless SAM3 run trained for hours, wrote its adapter, reported
+    success, and published nothing -- with no line anywhere saying so.
+    """
+    from hydra_suite.detectkit import cli
+
+    payload = _plan_payload(tmp_path)
+    payload.pop("publish")
+    config = tmp_path / "plan.json"
+    config.write_text(json.dumps(payload), encoding="utf-8")
+
+    cli.run(
+        argparse.Namespace(
+            config=str(config),
+            dry_run=True,
+            prepare_only=False,
+            no_publish=False,
+            resume=None,
+        )
+    )
+
+    out = capsys.readouterr().out
+    assert "auto_import is off" in out
+    assert '"auto_import": true' in out
+
+
+def test_cli_stays_quiet_when_publishing_is_enabled(tmp_path, capsys):
+    from hydra_suite.detectkit import cli
+
+    payload = _plan_payload(tmp_path)
+    payload["publish"] = {"auto_import": True, "auto_select": False}
+    config = tmp_path / "plan.json"
+    config.write_text(json.dumps(payload), encoding="utf-8")
+
+    cli.run(
+        argparse.Namespace(
+            config=str(config),
+            dry_run=True,
+            prepare_only=False,
+            no_publish=False,
+            resume=None,
+        )
+    )
+
+    assert "auto_import is off" not in capsys.readouterr().out
