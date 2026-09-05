@@ -149,3 +149,51 @@ def test_scoring_head_adapters_merge_onto_their_own_base_weights():
     assert torch.equal(
         merged["detector.dot_prod_scoring.proj.weight"], torch.zeros(8, 8)
     )
+
+
+def test_an_exact_path_matching_no_module_is_a_hard_error():
+    """An inert scope must not pass silently.
+
+    Wrong paths wrap zero modules; the trainable count then matches the
+    estimate that omits the scope, every parity check passes, and the training
+    run reads as a refuted hypothesis when nothing was ever adapted.
+    """
+    from hydra_suite.training.sam3_lora.lora import LoraConfig
+
+    cfg = LoraConfig(
+        rank=2,
+        alpha=4,
+        dropout=0.0,
+        target_suffixes=(),
+        include_module_paths=("backbone.dot_prod_scoring.prompt_proj",),
+    )
+
+    with pytest.raises(KeyError, match="match no nn.Linear"):
+        inject_adapters(_Sam3Stub(), cfg)
+
+
+def test_the_real_two_path_scope_does_not_trip_the_missing_path_error():
+    model = _Sam3Stub()
+    cfg = lora_config_from_params(_params(adapt_scoring_head=True))
+    assert inject_adapters(model, cfg) == 2
+
+
+def test_publish_provenance_records_every_adapter_scope():
+    """A RUN A checkpoint must be distinguishable from a baseline one."""
+    from hydra_suite.training.sam3_lora.publish import _PARAM_FIELDS
+
+    for flag in (*SUBMODULE_PREFIXES, *SUBMODULE_PATHS):
+        assert flag in _PARAM_FIELDS
+
+
+def test_scope_refusal_covers_path_scopes_and_unmeasured_coefficients():
+    from hydra_suite.training.sam3_lora import cli
+
+    refusal = cli._lora_scope_refusal(_params(adapt_scoring_head=True))
+    assert refusal is not None
+    # Not refused as "all flags disabled" -- refused for the real reason.
+    assert "coefficient" in refusal
+    assert "adapt_scoring_head" in refusal
+
+    assert "disabled" in (cli._lora_scope_refusal(_params()) or "")
+    assert cli._lora_scope_refusal(_params(adapt_vision_encoder=True)) is None

@@ -502,6 +502,7 @@ class DetectTrainingPlan:
                 "adapt_detr_encoder",
                 "adapt_detr_decoder",
                 "adapt_mask_decoder",
+                "adapt_scoring_head",
                 "keep_empty_tiles",
                 "label_quality_acknowledged",
             ):

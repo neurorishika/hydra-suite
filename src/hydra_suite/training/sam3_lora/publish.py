@@ -74,6 +74,10 @@ _PARAM_FIELDS = (
     "adapt_detr_encoder",
     "adapt_detr_decoder",
     "adapt_mask_decoder",
+    # Without this the manifest cannot distinguish a scoring-head run from a
+    # baseline one, destroying the single-variable attribution the flag exists
+    # for.
+    "adapt_scoring_head",
 )
 
 

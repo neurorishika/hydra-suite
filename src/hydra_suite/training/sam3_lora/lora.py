@@ -455,6 +455,23 @@ def inject_adapters(model: nn.Module, cfg: LoraConfig) -> int:
         )
         and not _parent_uses_weights_directly(name)
     ]
+    # An exact dotted path that matches nothing is ALWAYS a bug, and a silent
+    # one in the worst direction: the scope wraps zero modules, the trainable
+    # count then equals the estimate that omits it, every downstream parity
+    # check passes, and the resulting training run reads as "the hypothesis was
+    # refuted" when in truth nothing was ever adapted. Prefixes have legitimate
+    # zero-match cases (adapt_mask_decoder is 0 on the real model); an exact
+    # path does not. Refuse, mirroring `merge_adapters`' hard error on an
+    # adapter key that resolves to no base weight.
+    matched = {name for name, _ in targets}
+    missing = [path for path in cfg.include_module_paths if path not in matched]
+    if missing:
+        raise KeyError(
+            "LoRA scope names exact module path(s) "
+            f"{missing!r} that match no nn.Linear in this model; refusing an "
+            "inert adapter scope"
+        )
+
     for name, mod in targets:
         *parent_path, attr = name.split(".")
         parent = model

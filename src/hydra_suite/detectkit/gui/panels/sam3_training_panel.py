@@ -434,6 +434,8 @@ class Sam3TrainingPanel(QWidget):
         self.chk_adapt_detr_encoder = QCheckBox("DETR encoder")
         self.chk_adapt_detr_decoder = QCheckBox("DETR decoder")
         self.chk_adapt_mask_decoder = QCheckBox("Mask decoder")
+        # Headless-only scope; see the params builder for why it has no widget.
+        self._adapt_scoring_head = False
         for chk in (
             self.chk_adapt_vision_encoder,
             self.chk_adapt_text_encoder,
@@ -525,6 +527,13 @@ class Sam3TrainingPanel(QWidget):
             adapt_detr_encoder=self.chk_adapt_detr_encoder.isChecked(),
             adapt_detr_decoder=self.chk_adapt_detr_decoder.isChecked(),
             adapt_mask_decoder=self.chk_adapt_mask_decoder.isChecked(),
+            # Deliberately NOT a checkbox: the scoring-head scope is an
+            # unvalidated experiment (default off, pending its paired retrain)
+            # and has no measured sizing coefficient yet, so exposing it in the
+            # GUI would invite an unbudgeted run. It is still carried through
+            # the round-trip so loading a spec that enables it -- e.g. one
+            # written by hand for that retrain -- is not silently reset here.
+            adapt_scoring_head=self._adapt_scoring_head,
             geometry_mode=self.geometry_mode_combo.currentText(),
             object_tile_fraction=self.object_tile_fraction_spin.value(),
             slice_width=self.slice_width_spin.value(),
@@ -562,6 +571,7 @@ class Sam3TrainingPanel(QWidget):
         self.chk_adapt_detr_encoder.setChecked(p.adapt_detr_encoder)
         self.chk_adapt_detr_decoder.setChecked(p.adapt_detr_decoder)
         self.chk_adapt_mask_decoder.setChecked(p.adapt_mask_decoder)
+        self._adapt_scoring_head = bool(p.adapt_scoring_head)
         idx = self.geometry_mode_combo.findText(p.geometry_mode)
         if idx >= 0:
             self.geometry_mode_combo.setCurrentIndex(idx)

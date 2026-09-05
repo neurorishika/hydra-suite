@@ -59,10 +59,16 @@ from .dataloader import (
     query_count,
     try_build_descriptors,
 )
-from .lora import adapter_state_dict, inject_adapters, lora_config_from_params
+from .lora import (
+    SUBMODULE_PATHS,
+    SUBMODULE_PREFIXES,
+    adapter_state_dict,
+    inject_adapters,
+    lora_config_from_params,
+)
 from .perflib_compat import install_grad_safe_addmm_act
 from .protocol import emit_log, emit_progress
-from .sizing import expected_lora_trainable_params
+from .sizing import LORA_PARAMS_PER_RANK, expected_lora_trainable_params
 
 
 class _SidecarSpec:
@@ -302,6 +308,39 @@ def _build_dataloader(spec: Any, params: Any, *, split: str) -> list:
     return build_descriptors(spec.derived_dataset_dir, params, split, seed=spec.seed)
 
 
+def _lora_scope_refusal(params: Any) -> str | None:
+    """Refuse a LoRA scope selection that cannot be trained as configured.
+
+    Split out of `_runtime_admission_refusal` so it is provable without CUDA.
+    """
+    # Derived from the injector's own scope tables rather than hardcoded, so a
+    # new scope flag cannot be refused here as "disabled" while
+    # `lora_config_from_params` happily accepts it.
+    scopes = (*SUBMODULE_PREFIXES, *SUBMODULE_PATHS)
+    if not any(bool(getattr(params, flag, False)) for flag in scopes):
+        return (
+            "SAM3 training requires at least one enabled adapter scope; all "
+            "adapt_* flags are disabled."
+        )
+    # A scope with no measured LORA_PARAMS_PER_RANK coefficient would inject
+    # adapters the estimator does not budget; `_validated_lora_trainables`
+    # would then refuse with a confusing "estimator drift" message deep into
+    # the run. Say what is actually wrong, here, before anything is built.
+    unmeasured = [
+        flag
+        for flag in scopes
+        if bool(getattr(params, flag, False)) and flag not in LORA_PARAMS_PER_RANK
+    ]
+    if unmeasured:
+        return (
+            "SAM3 adapter scope(s) "
+            f"{', '.join(sorted(unmeasured))} have no measured trainable-parameter "
+            "coefficient. Measure them against a live build_sam3_image_model and "
+            "add them to LORA_PARAMS_PER_RANK before enabling."
+        )
+    return None
+
+
 def _runtime_admission_refusal(torch_module: Any, params: Any) -> str | None:
     """Repeat the parent precision/hardware gate before importing SAM3."""
     prompt_error = sam3_prompt_text_error(getattr(params, "prompt", None))
@@ -331,22 +370,7 @@ def _runtime_admission_refusal(torch_module: Any, params: Any) -> str | None:
             "The selected CUDA runtime reports that BF16 operations are not "
             "supported; SAM3 training has no safe FP32 fallback."
         )
-    if not any(
-        bool(getattr(params, flag, False))
-        for flag in (
-            "adapt_vision_encoder",
-            "adapt_text_encoder",
-            "adapt_geometry_encoder",
-            "adapt_detr_encoder",
-            "adapt_detr_decoder",
-            "adapt_mask_decoder",
-        )
-    ):
-        return (
-            "SAM3 training requires at least one enabled adapter scope; all "
-            "adapt_* flags are disabled."
-        )
-    return None
+    return _lora_scope_refusal(params)
 
 
 def _validated_lora_trainables(
