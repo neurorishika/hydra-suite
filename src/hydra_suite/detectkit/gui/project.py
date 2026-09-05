@@ -11,6 +11,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+from hydra_suite.core.inference.model_paths import MODEL_METADATA_SIDECAR_SUFFIXES
+from hydra_suite.core.inference.model_paths import (
+    copy_model_metadata_sidecars as _copy_model_metadata_sidecars_shared,
+)
 from hydra_suite.data.project_bundle import (
     DEFAULT_BUNDLE_HISTORY_DIRNAME,
     DEFAULT_BUNDLE_STATE_DIRNAME,
@@ -32,11 +36,7 @@ _MAX_RECENT = 20
 _KIT_NAME = "detectkit"
 _LEGACY_ARCHIVE_PREFIX = "legacy_"
 _PROJECT_MODELS_DIRNAME = "models"
-_MODEL_METADATA_SIDECAR_SUFFIXES = (
-    ".slice_meta.json",
-    ".canonical_meta.json",
-    ".runtime_meta.json",
-)
+_MODEL_METADATA_SIDECAR_SUFFIXES = MODEL_METADATA_SIDECAR_SUFFIXES
 # Every detector training role is usable for inference.  The old name and
 # two-role set reflected the original OBB-only overlay implementation; keeping
 # that policy here made a successfully trained direct detect/segment model look
@@ -192,19 +192,7 @@ def _dedupe_path(dest_dir: Path, desired_name: str) -> Path:
 
 def _copy_model_metadata_sidecars(source: Path, destination: Path) -> None:
     """Copy inference metadata stored beside a model, preserving its naming convention."""
-    sidecars = [
-        (
-            source.with_suffix(source.suffix + suffix),
-            destination.with_suffix(destination.suffix + suffix),
-        )
-        for suffix in _MODEL_METADATA_SIDECAR_SUFFIXES
-    ]
-    sidecars.append(
-        (source.with_suffix(".v2meta.json"), destination.with_suffix(".v2meta.json"))
-    )
-    for src_sidecar, dst_sidecar in sidecars:
-        if src_sidecar.exists():
-            shutil.copy2(str(src_sidecar), str(dst_sidecar))
+    _copy_model_metadata_sidecars_shared(source, destination)
 
 
 def _path_within_project(project_dir: Path, candidate: str | Path) -> Path | None:

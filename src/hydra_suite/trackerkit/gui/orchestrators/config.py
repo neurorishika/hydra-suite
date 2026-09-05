@@ -29,6 +29,7 @@ from hydra_suite.core.inference.config import migrate_runtime_to_tier
 from hydra_suite.core.inference.model_paths import (
     _normalize_usage_role,
     _sanitize_model_token,
+    copy_model_metadata_sidecars,
     get_pose_models_directory,
     get_yolo_model_metadata,
     get_yolo_model_repository_directory,
@@ -37,6 +38,7 @@ from hydra_suite.core.inference.model_paths import (
     register_yolo_model,
     remove_model_from_repository,
 )
+from hydra_suite.core.inference.slice_meta import profile_summary, read_slice_meta
 from hydra_suite.trackerkit.cli_config import legacy_detection_runtime_fields
 from hydra_suite.trackerkit.engine_params import (
     RuntimeContext,
@@ -3695,6 +3697,11 @@ class ConfigOrchestrator:
             )
             return None
 
+        try:
+            copy_model_metadata_sidecars(Path(src), Path(dest_path))
+        except Exception as exc:  # sidecars are best-effort, weights are not
+            logger.warning("Could not copy model metadata sidecars: %s", exc)
+
         rel_path = make_model_path_relative(dest_path)
         metadata = {
             "size": model_size,
@@ -3708,6 +3715,9 @@ class ConfigOrchestrator:
             metadata["task_family"] = str(task_family).strip().lower()
         if usage_role:
             metadata["usage_role"] = str(usage_role).strip().lower()
+        imported_meta = read_slice_meta(dest_path)
+        if imported_meta:
+            metadata["slice_profiles"] = profile_summary(imported_meta)
         register_yolo_model(rel_path, metadata)
         logger.info(f"Imported model to repository: {dest_path}")
         return rel_path
