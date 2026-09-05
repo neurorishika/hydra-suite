@@ -260,6 +260,21 @@ def test_numeric_string_merge_threshold_is_coerced_to_float(tmp_path):
     assert isinstance(params["SLICE_MERGE_THRESHOLD"], float)
 
 
+def test_missing_requested_id_warns_and_falls_back(tmp_path, caplog):
+    with caplog.at_level("WARNING"):
+        params = _build(_cfg(_profiled(tmp_path), slice_profile_id="gone"))
+    assert params["SLICE_OVERLAP"] == 0.31  # primary applied
+    assert any("gone" in record.message for record in caplog.records)
+
+
+def test_custom_without_snapshot_does_not_warn_about_a_missing_profile(
+    tmp_path, caplog
+):
+    with caplog.at_level("WARNING"):
+        _build(_cfg(_profiled(tmp_path), slice_profile_id="__custom__"))
+    assert not [r for r in caplog.records if "not in" in r.message]
+
+
 def test_non_numeric_merge_threshold_falls_back_to_default(tmp_path):
     settings = dict(SETTINGS, merge_threshold="bogus")
     model = _sidecar(
