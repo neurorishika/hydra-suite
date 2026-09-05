@@ -25,6 +25,7 @@ from hydra_suite.training.sam3_lora.lora import (
     LoraConfig,
     LoraLinear,
     SplitMultiheadAttention,
+    SplitSam3Attention,
     adapter_state_dict,
     adapter_touched_keys,
     inject_adapters,
@@ -392,3 +393,407 @@ def test_adapters_on_the_split_projections_are_alive():
         attn.q_proj.lora_B.add_(1.0)
         perturbed, _ = attn(x, x, x, need_weights=False)
     assert not torch.equal(perturbed, baseline)
+
+
+# ---------------------------------------------------------------------------
+# SAM3's own clone MHA (model_misc.MultiheadAttention)
+#
+# The spike adapted 314 modules to our 206; 100 of the 108 missing ones live
+# inside SAM3's own fused attention clone, which `inject_adapters` used to
+# skip.  The stub below is a FAITHFUL TRANSCRIPTION of that clone's forward
+# from the real source read on the CUDA box
+# (`~/sam3_spike/sam3/sam3/model/model_misc.py:230-470,586-733`, verified
+# 2026-09-05), restricted to the configuration every one of the 25 clones in a
+# live `build_sam3_image_model` actually uses (Vanilla attention, no fa3, no
+# activation checkpointing, fused qkv, no bias_k/add_zero_attn -- measured on
+# mehek the same day).  It is the oracle these parity tests compare against;
+# `import sam3` is unavailable on macOS (triton), so the live-model check is a
+# separate `importorskip` test plus an out-of-band run on the CUDA box.
+# ---------------------------------------------------------------------------
+
+
+class _Sam3CloneAttention(nn.Module):
+    """Transcription of ``sam3.model.model_misc.MultiheadAttention``."""
+
+    def __init__(self, embed_dim, num_heads, *, dropout=0.0, batch_first=False):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.head_dim = embed_dim // num_heads
+        self.dropout = dropout
+        self.batch_first = batch_first
+        self.kdim = self.vdim = embed_dim
+        self._qkv_same_embed_dim = True
+        self.in_proj_weight = nn.Parameter(torch.empty(3 * embed_dim, embed_dim))
+        self.in_proj_bias = nn.Parameter(torch.empty(3 * embed_dim))
+        self.out_proj = nn.Linear(embed_dim, embed_dim)
+        self.bias_k = self.bias_v = None
+        self.add_zero_attn = False
+        self.attn_type = "Vanilla"
+        self.sparsity = 0.0
+        self.use_fa3 = False
+        self.use_act_checkpoint = False
+        nn.init.xavier_uniform_(self.in_proj_weight)
+        nn.init.normal_(self.in_proj_bias, std=0.1)
+
+    def forward(
+        self,
+        query,
+        key,
+        value,
+        key_padding_mask=None,
+        need_weights=False,
+        attn_mask=None,
+        average_attn_weights=True,
+        attn_bias=None,
+    ):
+        if self.batch_first:
+            query, key, value = (x.transpose(1, 0) for x in (query, key, value))
+        tgt_len, bsz, embed_dim = query.shape
+        src_len = key.shape[0]
+        num_heads, head_dim = self.num_heads, self.head_dim
+        q, k, v = torch.nn.functional._in_projection_packed(
+            query, key, value, self.in_proj_weight, self.in_proj_bias
+        )
+        if attn_mask is not None and attn_mask.dim() == 2:
+            attn_mask = attn_mask.unsqueeze(0)
+        q = q.contiguous().view(tgt_len, bsz * num_heads, head_dim).transpose(0, 1)
+        k = k.contiguous().view(src_len, bsz * num_heads, head_dim).transpose(0, 1)
+        v = v.contiguous().view(src_len, bsz * num_heads, head_dim).transpose(0, 1)
+        if key_padding_mask is not None:
+            key_padding_mask = (
+                key_padding_mask.view(bsz, 1, 1, src_len)
+                .expand(-1, num_heads, -1, -1)
+                .reshape(bsz * num_heads, 1, src_len)
+            )
+            if attn_mask is None:
+                attn_mask = key_padding_mask
+            elif attn_mask.dtype == torch.bool:
+                attn_mask = attn_mask.logical_or(key_padding_mask)
+            else:
+                attn_mask = attn_mask.masked_fill(key_padding_mask, float("-inf"))
+        if attn_mask is not None and attn_mask.dtype == torch.bool:
+            new_attn_mask = torch.zeros_like(attn_mask, dtype=q.dtype)
+            new_attn_mask.masked_fill_(attn_mask, float("-inf"))
+            attn_mask = new_attn_mask
+        dropout_p = self.dropout if self.training else 0.0
+        if attn_mask is not None:
+            if attn_mask.size(0) == 1:
+                attn_mask = attn_mask.unsqueeze(0)
+            else:
+                attn_mask = attn_mask.view(bsz, num_heads, -1, src_len)
+        if attn_bias is not None:
+            assert attn_bias.shape == (bsz, num_heads, tgt_len, src_len)
+            attn_mask = attn_bias if attn_mask is None else attn_mask + attn_bias
+        q = q.view(bsz, num_heads, tgt_len, head_dim)
+        k = k.view(bsz, num_heads, src_len, head_dim)
+        v = v.view(bsz, num_heads, src_len, head_dim)
+        attn_output = torch.nn.functional.scaled_dot_product_attention(
+            q, k, v, attn_mask, dropout_p, False
+        )
+        attn_output = (
+            attn_output.permute(2, 0, 1, 3).contiguous().view(bsz * tgt_len, embed_dim)
+        )
+        attn_output = torch.nn.functional.linear(
+            attn_output, self.out_proj.weight, self.out_proj.bias
+        )
+        attn_output = attn_output.view(tgt_len, bsz, attn_output.size(1))
+        weights = None
+        if need_weights:
+            weights = (q * head_dim**-0.5) @ k.transpose(-2, -1)
+            weights = weights.softmax(dim=-1)
+            weights = weights.view(bsz, num_heads, tgt_len, src_len)
+            if average_attn_weights:
+                weights = weights.sum(dim=1) / num_heads
+        if self.batch_first:
+            return attn_output.transpose(1, 0), weights
+        return attn_output, weights
+
+
+def _clone_pair(embed, heads, *, batch_first, dropout=0.0, seed=0):
+    torch.manual_seed(seed)
+    clone = _Sam3CloneAttention(
+        embed, heads, dropout=dropout, batch_first=batch_first
+    )
+    split = SplitSam3Attention.from_sam3_mha(clone)
+    return clone.eval(), split.eval()
+
+
+# Tolerance rationale: both sides run the SAME `F.scaled_dot_product_attention`
+# on the same fp32 CPU inputs, so the only divergence is the in-projection --
+# stock packs q/k/v into ONE (3E, E) matmul, the split module runs three (E, E)
+# matmuls, which differ only in GEMM tiling/reduction order (~1e-7 relative on
+# E=256).  Bitwise equality is therefore unattainable by construction (and even
+# less so on CUDA, where SDPA may pick a different backend for a different
+# input shape), so these assert a tolerance one order above the observed float32
+# noise rather than equality.
+_RTOL, _ATOL = 1e-5, 1e-6
+
+
+def _assert_clone_parity(clone, split, q, k, v, **kwargs):
+    ref_out, ref_w = clone(q, k, v, need_weights=True, **kwargs)
+    got_out, got_w = split(q, k, v, need_weights=True, **kwargs)
+    torch.testing.assert_close(got_out, ref_out, rtol=_RTOL, atol=_ATOL)
+    torch.testing.assert_close(got_w, ref_w, rtol=_RTOL, atol=_ATOL)
+    # The arity the real call sites rely on (`...(...)[0]`, need_weights left
+    # at the clone's False default).
+    got_default = split(q, k, v, **kwargs)
+    assert len(got_default) == 2 and got_default[1] is None
+    torch.testing.assert_close(got_default[0], ref_out, rtol=_RTOL, atol=_ATOL)
+
+
+def test_sam3_clone_split_weights_are_the_fused_row_slices():
+    clone, split = _clone_pair(32, 4, batch_first=False)
+    E = 32
+    assert torch.equal(split.q_proj.weight, clone.in_proj_weight[0:E])
+    assert torch.equal(split.k_proj.weight, clone.in_proj_weight[E : 2 * E])
+    assert torch.equal(split.v_proj.weight, clone.in_proj_weight[2 * E : 3 * E])
+    assert torch.equal(split.out_proj.weight, clone.out_proj.weight)
+    assert torch.equal(split.q_proj.bias, clone.in_proj_bias[0:E])
+    assert torch.equal(split.out_proj.bias, clone.out_proj.bias)
+    # A retained `in_proj_weight` attribute (even a None-registered one) would
+    # make `_parent_uses_weights_directly` skip the new projections.
+    assert not hasattr(split, "in_proj_weight")
+
+
+def test_sam3_clone_parity_decoder_cross_attn_with_attn_bias():
+    """`transformer.decoder.layers.*.cross_attn`: seq-first + attn_bias."""
+    E, H, L, S, B = 256, 8, 7, 11, 2
+    clone, split = _clone_pair(E, H, batch_first=False, dropout=0.1, seed=21)
+    torch.manual_seed(22)
+    q = torch.randn(L, B, E)
+    mem = torch.randn(S, B, E)
+    bias = torch.randn(B, H, L, S) * 0.3
+    _assert_clone_parity(clone, split, q, mem, mem, attn_bias=bias)
+
+
+def test_sam3_clone_parity_attn_bias_combined_with_masks():
+    E, H, L, S, B = 64, 4, 5, 9, 3
+    clone, split = _clone_pair(E, H, batch_first=False, seed=23)
+    torch.manual_seed(24)
+    q = torch.randn(L, B, E)
+    mem = torch.randn(S, B, E)
+    bias = torch.randn(B, H, L, S) * 0.3
+    kpm = torch.zeros(B, S, dtype=torch.bool)
+    kpm[:, -2:] = True
+    _assert_clone_parity(
+        clone, split, q, mem, mem, attn_mask=torch.randn(L, S) * 0.1, attn_bias=bias
+    )
+    _assert_clone_parity(clone, split, q, mem, mem, key_padding_mask=kpm)
+
+
+@pytest.mark.parametrize("mask_kind", ["float2d", "bool2d", "float3d", "bool3d"])
+def test_sam3_clone_parity_with_attn_mask(mask_kind):
+    E, H, L, B = 64, 4, 5, 3
+    clone, split = _clone_pair(E, H, batch_first=False, seed=25)
+    torch.manual_seed(26)
+    q = torch.randn(L, B, E)
+    if mask_kind == "float2d":
+        mask = torch.randn(L, L) * 0.1
+    elif mask_kind == "bool2d":
+        mask = torch.rand(L, L) > 0.7
+        mask.fill_diagonal_(False)
+    elif mask_kind == "float3d":
+        mask = torch.randn(B * H, L, L) * 0.1
+    else:
+        mask = torch.rand(B * H, L, L) > 0.7
+        mask[:, torch.arange(L), torch.arange(L)] = False
+    _assert_clone_parity(clone, split, q, q, q, attn_mask=mask)
+
+
+def test_sam3_clone_parity_encoder_batch_first():
+    """`transformer.encoder.layers.*`: the clone with batch_first=True."""
+    E, H, B, S = 256, 8, 2, 6
+    clone, split = _clone_pair(E, H, batch_first=True, seed=27)
+    torch.manual_seed(28)
+    x = torch.randn(B, S, E)
+    _assert_clone_parity(clone, split, x, x, x)
+    assert split(x, x, x)[0].shape == (B, S, E)
+
+
+def test_sam3_clone_conversion_refuses_unvalidated_variants():
+    clone = _Sam3CloneAttention(32, 4)
+    clone.use_fa3 = True
+    with pytest.raises(ValueError, match="use_fa3"):
+        SplitSam3Attention.from_sam3_mha(clone)
+    clone = _Sam3CloneAttention(32, 4)
+    clone.attn_type = "Xformer"
+    with pytest.raises(ValueError, match="attn_type"):
+        SplitSam3Attention.from_sam3_mha(clone)
+    clone = _Sam3CloneAttention(32, 4)
+    clone.use_act_checkpoint = True
+    with pytest.raises(ValueError, match="use_act_checkpoint"):
+        SplitSam3Attention.from_sam3_mha(clone)
+    clone = _Sam3CloneAttention(32, 4)
+    clone._qkv_same_embed_dim = False
+    with pytest.raises(ValueError, match="separate q/k/v"):
+        SplitSam3Attention.from_sam3_mha(clone)
+    with pytest.raises(TypeError):
+        SplitSam3Attention.from_sam3_mha(nn.Linear(4, 4))
+
+
+# ---------------------------------------------------------------------------
+# Injection scope for the clone
+# ---------------------------------------------------------------------------
+
+
+class _CloneHost(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.self_attn = _Sam3CloneAttention(16, 4)
+        self.cross_attn_image = _Sam3CloneAttention(16, 4, batch_first=True)
+        self.linear1 = nn.Linear(16, 16)
+        self.linear2 = nn.Linear(16, 16)
+
+
+def test_inject_replaces_the_sam3_clone_and_wraps_its_projections():
+    model = _CloneHost()
+    n = inject_adapters(model, _cfg())
+    for attn in (model.self_attn, model.cross_attn_image):
+        assert isinstance(attn, SplitSam3Attention)
+        for proj in ("q_proj", "k_proj", "v_proj", "out_proj"):
+            assert isinstance(getattr(attn, proj), LoraLinear)
+    assert n == 10  # 2 clones x 4 projections + linear1 + linear2
+
+
+def test_inject_leaves_out_of_scope_clones_untouched():
+    model = nn.ModuleDict({"inside": _CloneHost(), "outside": _CloneHost()})
+    inject_adapters(model, _cfg(include=("inside",)))
+    assert isinstance(model["inside"].self_attn, SplitSam3Attention)
+    assert isinstance(model["outside"].self_attn, _Sam3CloneAttention)
+    assert not isinstance(model["outside"].self_attn.out_proj, LoraLinear)
+
+
+def test_a_fused_module_without_attn_bias_is_still_skipped():
+    """The conservative fallback: only the clone's exact forward contract is
+    reinterpreted.  Any OTHER module that fuses q/k/v is left alone rather
+    than reinterpreted through semantics it may not share."""
+    model = _Host()  # holds `_CloneLikeMHA`, whose forward takes no attn_bias
+    inject_adapters(model, _cfg())
+    assert isinstance(model.clone_attn, _CloneLikeMHA)
+    assert not isinstance(model.clone_attn.out_proj, LoraLinear)
+
+
+def test_clone_adapters_are_alive_and_merge_into_in_proj():
+    torch.manual_seed(29)
+    model = _CloneHost()
+    model.requires_grad_(False)
+    inject_adapters(model, _cfg(rank=4))
+    x = torch.randn(5, 2, 16)
+    out, _ = model.self_attn(x, x, x)
+    out.sum().backward()
+    for leaf in ("q_proj", "k_proj", "v_proj", "out_proj"):
+        grad = getattr(model.self_attn, leaf).lora_B.grad
+        assert grad is not None and grad.abs().sum() > 0, leaf
+    # The clone stores its weights under exactly the stock fused key names, so
+    # the existing q/k/v -> in_proj_weight row-slice resolution applies.
+    adapters = {
+        k: v for k, v in adapter_state_dict(model).items() if k.startswith("self_attn")
+    }
+    base = _mha_base(16)
+    assert adapter_touched_keys(adapters, base) == {
+        "detector.self_attn.in_proj_weight",
+        "detector.self_attn.out_proj.weight",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Geometry-encoder plain Linears (the last 6 of the spike's 314)
+# ---------------------------------------------------------------------------
+
+
+class _GeometryEncoder(nn.Module):
+    """Module paths mirror `sam3.model.geometry_encoders` VERBATIM."""
+
+    def __init__(self):
+        super().__init__()
+        self.points_direct_project = nn.Linear(2, 16)
+        self.points_pool_project = nn.Linear(16, 16)
+        self.points_pos_enc_project = nn.Linear(16, 16)
+        self.boxes_direct_project = nn.Linear(4, 16)
+        self.boxes_pos_enc_project = nn.Linear(18, 16)
+        # A Conv2d in the real model -- it must NOT be counted or wrapped.
+        self.boxes_pool_project = nn.Conv2d(16, 16, 1)
+        self.final_proj = nn.Linear(16, 16)
+        self.encode = nn.ModuleList([_CloneHost() for _ in range(3)])
+
+
+def test_geometry_scope_reaches_the_spikes_36_modules():
+    from hydra_suite.training.sam3_lora.lora import SUBMODULE_PATHS
+
+    model = nn.ModuleDict({"geometry_encoder": _GeometryEncoder()})
+    paths = SUBMODULE_PATHS["adapt_geometry_encoder"]
+    assert len(paths) == 6
+    cfg = LoraConfig(
+        rank=4,
+        alpha=8,
+        dropout=0.0,
+        target_suffixes=TARGET_SUFFIXES,
+        include_prefixes=("geometry_encoder",),
+        include_module_paths=paths,
+    )
+    n = inject_adapters(model, cfg)
+    # 3 layers x (2 clones x 4 + linear1 + linear2) = 30, plus the 6 plain
+    # Linears = the spike checkpoint's 36 `geometry_encoder.*` modules.
+    assert n == 36
+    geo = model["geometry_encoder"]
+    for leaf in (p.split(".")[-1] for p in paths):
+        assert isinstance(getattr(geo, leaf), LoraLinear), leaf
+    assert isinstance(geo.boxes_pool_project, nn.Conv2d)
+
+
+def test_geometry_paths_are_exactly_the_spike_set():
+    from hydra_suite.training.sam3_lora.lora import SUBMODULE_PATHS
+
+    assert set(SUBMODULE_PATHS["adapt_geometry_encoder"]) == {
+        "geometry_encoder.boxes_direct_project",
+        "geometry_encoder.boxes_pos_enc_project",
+        "geometry_encoder.points_direct_project",
+        "geometry_encoder.points_pool_project",
+        "geometry_encoder.points_pos_enc_project",
+        "geometry_encoder.final_proj",
+    }
+
+
+# ---------------------------------------------------------------------------
+# The live gate: 308 after the clone pass, 314 with the geometry Linears.
+# Skipped everywhere `sam3` cannot be imported (macOS: triton).  The numbers
+# below were also verified out-of-band on the CUDA box -- see the task report.
+# ---------------------------------------------------------------------------
+
+
+def test_live_model_reaches_the_spike_module_counts():
+    pytest.importorskip("sam3")
+    from sam3.model_builder import build_sam3_image_model
+
+    from hydra_suite.training.sam3_lora.lora import (
+        SUBMODULE_PATHS,
+        SUBMODULE_PREFIXES,
+    )
+
+    prefixes = tuple(
+        p
+        for flag, pref in SUBMODULE_PREFIXES.items()
+        if flag != "adapt_text_encoder"  # OFF, as the spike ran it
+        for p in pref
+    )
+    scoring = SUBMODULE_PATHS["adapt_scoring_head"]
+    geometry = SUBMODULE_PATHS["adapt_geometry_encoder"]
+
+    def _count(paths):
+        model = build_sam3_image_model(eval_mode=False)
+        model.requires_grad_(False)
+        return inject_adapters(
+            model,
+            LoraConfig(
+                rank=4,
+                alpha=8,
+                dropout=0.0,
+                target_suffixes=TARGET_SUFFIXES,
+                include_prefixes=prefixes,
+                include_module_paths=paths,
+            ),
+        )
+
+    assert _count(scoring) == 308
+    assert _count(scoring + geometry) == 314
