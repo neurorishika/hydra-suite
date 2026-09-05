@@ -140,6 +140,65 @@ def load_tracker_cli_config(config_path: str | None) -> dict[str, Any]:
     return payload
 
 
+def apply_sahi_profile_override(cfg: Mapping[str, Any], profile: str) -> dict[str, Any]:
+    """Return ``cfg`` with an explicitly requested SAHI profile selected.
+
+    An explicit ``--sahi-profile`` that does not resolve is a HARD ERROR,
+    deliberately unlike a config's own saved id (which falls back down the
+    ladder with a warning). The user named an operating point; quietly
+    running a different one is the exact failure this feature exists to
+    remove.
+    """
+    from hydra_suite.core.inference.model_paths import resolve_model_path
+    from hydra_suite.core.inference.slice_meta import (
+        available_slice_profiles,
+        read_slice_meta,
+    )
+
+    requested = str(profile).strip()
+    result = dict(cfg)
+    if requested == "__training__":
+        result["slice_profile_id"] = "__training__"
+        result.pop("slice_profile_settings", None)
+        return result
+
+    # Preflight ruling P1: report the REAL reason first. Checking the mode
+    # after the name lookup made a sequential config with an unknown profile
+    # report "not a profile of X", hiding why profiles do not apply at all.
+    if str(result.get("yolo_obb_mode", "direct")).strip().lower() != "direct":
+        raise ValueError(
+            "--sahi-profile applies to direct-detector inference only; this "
+            "config runs in sequential mode, where profiles are not consumed."
+        )
+
+    model_path = resolve_model_path(
+        str(
+            result.get("yolo_obb_direct_model_path")
+            or result.get("yolo_model_path")
+            or ""
+        )
+    )
+    meta = read_slice_meta(model_path) if model_path else None
+    profiles = available_slice_profiles(meta) if meta else []
+    match = next(
+        (item for item in profiles if item["id"] == requested),
+        None,
+    ) or next((item for item in profiles if item["name"] == requested), None)
+    if match is None:
+        known = ", ".join(f"{item['name']!r} ({item['id']})" for item in profiles)
+        raise ValueError(
+            f"--sahi-profile {requested!r} is not a profile of "
+            f"{model_path or '<no direct model in config>'}. "
+            f"Available: {known or '(none)'}"
+        )
+    result["slice_profile_id"] = match["id"]
+    # A snapshot captured under a DIFFERENT profile would win the ladder over
+    # the id we just set (rung 3 beats a missing id, and an explicit override
+    # must beat both).
+    result.pop("slice_profile_settings", None)
+    return result
+
+
 def probe_video(video_path: str) -> TrackerCliVideoProbe:
     """Read the minimum video metadata needed for headless defaults."""
     cap = cv2.VideoCapture(video_path)

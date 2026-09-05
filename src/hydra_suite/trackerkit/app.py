@@ -108,6 +108,16 @@ Examples:
         action="store_true",
         help="Force all later batch videos to use the first video's effective config when no explicit batch config was supplied.",
     )
+    track_parser.add_argument(
+        "--sahi-profile",
+        type=str,
+        help=(
+            "Name or id of a calibration profile from the direct model's "
+            ".slice_meta.json sidecar. Overrides the profile saved in the "
+            "config. Use __training__ for the model's training geometry. "
+            "Applies to every video in the batch."
+        ),
+    )
 
     args = parser.parse_args(argv)
 
@@ -240,6 +250,7 @@ def main(argv: list[str] | None = None) -> object:
                 resolved_videos,
                 config_path=args.config,
                 keystone_override=bool(args.keystone_override),
+                sahi_profile=getattr(args, "sahi_profile", None),
             )
         except Exception as e:
             logger.error("Tracker CLI failed: %s", e, exc_info=True)
