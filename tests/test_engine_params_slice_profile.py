@@ -224,3 +224,52 @@ def test_sequential_mode_gets_no_overlay(tmp_path):
         )
     )
     assert params["SLICE_OVERLAP"] == 0.2
+
+
+def test_non_numeric_confidence_threshold_does_not_raise(tmp_path):
+    """A malformed sidecar confidence_threshold must never take down the run."""
+    settings = dict(SETTINGS, confidence_threshold="bogus")
+    model = _sidecar(
+        tmp_path,
+        {
+            "schema_version": 2,
+            "training_geometry": {"geometry_mode": "auto_model"},
+            "primary_profile_id": "balanced",
+            "profiles": [{"id": "balanced", "name": "Balanced", "settings": settings}],
+        },
+    )
+    params = _build(_cfg(model, slice_profile_id="balanced"))
+    # Still applies the nine geometry/merge keys despite the bad confidence.
+    assert params["SLICE_OVERLAP"] == 0.31
+    assert params["SLICE_MERGE_POLICY"] == "nmm"
+
+
+def test_numeric_string_merge_threshold_is_coerced_to_float(tmp_path):
+    settings = dict(SETTINGS, merge_threshold="0.6")
+    model = _sidecar(
+        tmp_path,
+        {
+            "schema_version": 2,
+            "training_geometry": {"geometry_mode": "auto_model"},
+            "primary_profile_id": "balanced",
+            "profiles": [{"id": "balanced", "name": "Balanced", "settings": settings}],
+        },
+    )
+    params = _build(_cfg(model, slice_profile_id="balanced"))
+    assert params["SLICE_MERGE_THRESHOLD"] == 0.6
+    assert isinstance(params["SLICE_MERGE_THRESHOLD"], float)
+
+
+def test_non_numeric_merge_threshold_falls_back_to_default(tmp_path):
+    settings = dict(SETTINGS, merge_threshold="bogus")
+    model = _sidecar(
+        tmp_path,
+        {
+            "schema_version": 2,
+            "training_geometry": {"geometry_mode": "auto_model"},
+            "primary_profile_id": "balanced",
+            "profiles": [{"id": "balanced", "name": "Balanced", "settings": settings}],
+        },
+    )
+    params = _build(_cfg(model, slice_profile_id="balanced"))
+    assert params["SLICE_MERGE_THRESHOLD"] == SLICE_MERGE_DEFAULTS["merge_threshold"]

@@ -410,18 +410,26 @@ def _slice_profile_overlay(
             )
     claimed = values.get("confidence_threshold")
     if claimed is not None:
-        configured = float(_cfg_get(cfg, "yolo_confidence_threshold", default=0.25))
-        if abs(float(claimed) - configured) > 1e-9:
-            # The config wins (design ruling R1) -- but silently running an
-            # operating point the profile never measured is the provenance lie
-            # this whole feature exists to remove.
-            logger.warning(
-                "SAHI profile %r was measured at confidence %.3f; this config "
-                "overrides it with %.3f.",
-                values.get("profile_name"),
-                float(claimed),
-                configured,
-            )
+        try:
+            claimed_float = float(claimed)
+        except (TypeError, ValueError):
+            # A malformed sidecar must degrade to "no warning", never raise
+            # (Global Constraint: build_engine_params never raises on bad
+            # metadata).
+            claimed_float = None
+        if claimed_float is not None:
+            configured = float(_cfg_get(cfg, "yolo_confidence_threshold", default=0.25))
+            if abs(claimed_float - configured) > 1e-9:
+                # The config wins (design ruling R1) -- but silently running an
+                # operating point the profile never measured is the provenance
+                # lie this whole feature exists to remove.
+                logger.warning(
+                    "SAHI profile %r was measured at confidence %.3f; this "
+                    "config overrides it with %.3f.",
+                    values.get("profile_name"),
+                    claimed_float,
+                    configured,
+                )
     logger.info(
         "SAHI calibration: %s (id=%s, resolution=%s)",
         values.get("profile_name", "?"),
@@ -976,6 +984,11 @@ def build_engine_params(
             "merge_backend",
         ):
             _value = _profile_values[_key]
+            if _key == "merge_threshold" and _value is not None:
+                try:
+                    _value = float(_value)
+                except (TypeError, ValueError):
+                    _value = None
             advanced[f"slice_{_key}"] = (
                 SLICE_MERGE_DEFAULTS[_key] if _value is None else _value
             )
